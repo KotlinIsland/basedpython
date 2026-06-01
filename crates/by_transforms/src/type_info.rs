@@ -55,6 +55,16 @@ pub(crate) trait TypeInfo {
     /// hash to the same class shape.
     fn promoted_type_display(&self, expr: &Expr) -> Option<String>;
 
+    /// rendered exact (non-promoted) type of `expr` in a type position. used to
+    /// fold symbolic operations such as `1 + 1` → `Literal[2]` or `A + B` →
+    /// `Literal[3]`: ty already evaluates these in `infer_type_expression`, so
+    /// this just reads the resolved type back as source text. unlike
+    /// [`promoted_type_display`](TypeInfo::promoted_type_display) literals are
+    /// kept precise. returns `None` when ty resolves no concrete type — e.g. an
+    /// unsupported operation inferred as `Unknown` — so the caller leaves the
+    /// source unchanged and ty's own diagnostic stands
+    fn symbolic_type_fold(&self, expr: &Expr) -> Option<String>;
+
     /// names + rendered default types of the type parameters of the class
     /// referenced by `expr`. element is `(name, Some(default))` if the
     /// typevar has a declared default, `(name, None)` otherwise. returns
@@ -145,6 +155,22 @@ impl TypeInfo for SemanticModel<'_> {
         // emitted Python source. strip it before returning so the rendered
         // type is a syntactically valid type expression
         Some(strip_binding_context_suffix(&rendered))
+    }
+
+    fn symbolic_type_fold(&self, expr: &Expr) -> Option<String> {
+        let ty = expr.inferred_type(self)?;
+        // fold concrete types and explicit `Any` (e.g. `dynamic + 1`, which ty
+        // resolves to `Any`), but not the `Unknown` / Todo dynamics an
+        // *unsupported* operation (`A + B` between two classes) resolves to —
+        // leave those untouched so ty's own diagnostic stands
+        if ty.is_dynamic() && !matches!(ty, Type::Dynamic(DynamicType::Any)) {
+            return None;
+        }
+        // display with the standard (non-basedpython) renderer so literals come
+        // out as `Literal[..]` rather than bare — the transpiler emits python
+        Some(strip_binding_context_suffix(
+            &ty.display(self.db()).to_string(),
+        ))
     }
 
     fn class_typevars(&self, expr: &Expr) -> Option<Vec<(String, Option<String>)>> {

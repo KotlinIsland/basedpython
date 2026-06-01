@@ -39,8 +39,9 @@ use super::{
     float_const, force_unwrap, generic_call, generics, identity_swap, implicit_typing, init_method,
     intersection, just_float, kw_subscript, literal_types, main_function, modifiers,
     mutable_defaults, none_chain, not_type, optional_type, overload, postfix_await, propagate,
-    repeated_underscore, sentinel, some_ctor, super_keyword, top_star, tuple_index, type_is,
-    typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
+    repeated_underscore, sentinel, some_ctor, super_keyword, symbolic_type_op, top_star,
+    tuple_index, type_is, typed_dict_literal, typed_lambda, typeof_keyword, unpack,
+    use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -84,6 +85,11 @@ pub(crate) struct PassContext {
     /// Lines to append AFTER the spliced body (e.g. modifiers' auto-
     /// generated `__all__ = [...]`). Driver emits each as its own line
     pub(crate) epilogue: Vec<String>,
+    /// Source ranges of operations that `symbolic_type_op` resolved up front
+    /// (e.g. `1 + 1` → `Literal[2]`). Type-aware passes skip these via
+    /// [`walk_type_positions_skipping`](super::type_expr_walker::walk_type_positions_skipping)
+    /// so they don't re-process an operation that no longer appears in the output
+    pub(crate) claimed_type_op_ranges: Vec<TextRange>,
 }
 
 /// A single AST-level rewrite pass.
@@ -286,6 +292,17 @@ pub(crate) fn run_against_source<'a>(
         text_edits: RefCell::new(vec![]),
     };
 
+    // resolve symbolic operations in type positions (`1 + 1` → `Literal[2]`)
+    // up front, from the original parse where `typeof` operands are still
+    // intact for ty to read. the pass replaces each operation node and must run
+    // before `typeof` lowering so a `typeof` operand is consumed here
+    let symbolic_folds =
+        symbolic_type_op::collect_symbolic_folds(parsed_handle.suite(), &semantic_model);
+    let symbolic_needs_literal_import = symbolic_folds.needs_literal_import;
+    let symbolic_needs_any_import = symbolic_folds.needs_any_import;
+    ctx.claimed_type_op_ranges = symbolic_folds.claimed_ranges();
+    let symbolic_pass = symbolic_type_op::SymbolicTypeOp::new(symbolic_folds);
+
     let tuple_index_inner = tuple_index::TupleIndex::new();
     let tuple_index_pass = VisitorPass {
         inner: &tuple_index_inner,
@@ -395,7 +412,12 @@ pub(crate) fn run_against_source<'a>(
         &decorator_keyword_pass,
         &unpack_pass,
         &typed_dict_literal_pass,
-        // AST-mutation passes second (may zero node ranges)
+        // AST-mutation passes second (may zero node ranges).
+        // symbolic_type_op replaces whole operation nodes (consuming any
+        // `typeof` operand) and reads original source ranges, so it must run
+        // first among the mutation passes — before `typeof` and before any
+        // pass that zeroes ranges
+        &symbolic_pass,
         &coalesce_pass,
         &cast_pass,
         &typeof_pass,
@@ -462,6 +484,18 @@ pub(crate) fn run_against_source<'a>(
     if typeof_inner.ever_changed() {
         ctx.required_imports
             .push("from ty_extensions import TypeOf".to_owned());
+    }
+    // symbolic folds that produced a `Literal[..]` need the import, unless the
+    // source already binds `Literal`
+    if symbolic_needs_literal_import && !literal_types::literal_already_imported(&semantic_model) {
+        ctx.required_imports
+            .push("from typing import Literal".to_owned());
+    }
+    // symbolic folds that produced `Any` (e.g. `dynamic + 1`) need the import,
+    // unless the source already binds `Any`
+    if symbolic_needs_any_import && !semantic_model.is_bound_globally("Any") {
+        ctx.required_imports
+            .push("from typing import Any".to_owned());
     }
     if sentinel_inner.ever_changed() {
         ctx.required_imports

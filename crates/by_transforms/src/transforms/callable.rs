@@ -518,7 +518,12 @@ impl<'ast> ruff_python_ast::visitor::Visitor<'ast> for ValueCallableWalker<'_, '
 impl TypeAwarePass for CallableSyntaxPass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = CallableSyntax::new(self.source).with_types(types);
-        crate::transforms::type_expr_walker::walk_type_positions(stmts, Some(types), &mut inner);
+        crate::transforms::type_expr_walker::walk_type_positions_skipping(
+            stmts,
+            Some(types),
+            &ctx.claimed_type_op_ranges,
+            &mut inner,
+        );
         // also lower callable types appearing in value positions; duplicate
         // edits over type-position callables dedup in the splice
         {

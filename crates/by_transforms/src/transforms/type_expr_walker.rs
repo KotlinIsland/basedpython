@@ -35,6 +35,7 @@
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Operator, Parameters, Stmt, TypeParam, UnaryOp};
+use ruff_text_size::{Ranged, TextRange};
 
 use crate::type_info::TypeInfo;
 
@@ -75,7 +76,25 @@ pub(crate) fn walk_type_positions(
     types: Option<&dyn TypeInfo>,
     visitor: &mut dyn TypeExprVisitor,
 ) {
-    let mut walker = TypePosWalker { types, visitor };
+    walk_type_positions_skipping(stmts, types, &[], visitor);
+}
+
+/// like [`walk_type_positions`] but skips any type expression whose range falls
+/// within one of `claimed` — subtrees another pass has already resolved
+/// wholesale (e.g. `symbolic_type_op` folding `1 + 1` to `Literal[2]`). this
+/// keeps later passes from emitting now-stale edits or import requests for an
+/// operation that no longer appears in the output
+pub(crate) fn walk_type_positions_skipping(
+    stmts: &[Stmt],
+    types: Option<&dyn TypeInfo>,
+    claimed: &[TextRange],
+    visitor: &mut dyn TypeExprVisitor,
+) {
+    let mut walker = TypePosWalker {
+        types,
+        claimed,
+        visitor,
+    };
     for stmt in stmts {
         walker.visit_stmt(stmt);
     }
@@ -87,6 +106,7 @@ pub(crate) fn walk_type_positions(
 pub(crate) fn walk_one_type_expr(expr: &Expr, visitor: &mut dyn TypeExprVisitor) {
     let mut walker = TypePosWalker {
         types: None,
+        claimed: &[],
         visitor,
     };
     walker.visit_type_expr(expr, TypePos::Root);
@@ -94,11 +114,17 @@ pub(crate) fn walk_one_type_expr(expr: &Expr, visitor: &mut dyn TypeExprVisitor)
 
 struct TypePosWalker<'a> {
     types: Option<&'a dyn TypeInfo>,
+    claimed: &'a [TextRange],
     visitor: &'a mut dyn TypeExprVisitor,
 }
 
 impl TypePosWalker<'_> {
     fn visit_type_expr(&mut self, expr: &Expr, pos: TypePos) {
+        // a claimed subtree has already been resolved by an earlier pass; don't
+        // visit or descend into it
+        if self.claimed.iter().any(|c| c.contains_range(expr.range())) {
+            return;
+        }
         if self.visitor.visit(expr, pos) == Recurse::Stop {
             return;
         }

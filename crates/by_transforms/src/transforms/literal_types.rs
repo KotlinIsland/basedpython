@@ -14,7 +14,9 @@ use ruff_python_ast::{Expr, ExprSubscript, Operator, Stmt, UnaryOp};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
-use crate::transforms::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
+use crate::transforms::type_expr_walker::{
+    Recurse, TypeExprVisitor, TypePos, walk_type_positions_skipping,
+};
 use crate::type_info::TypeInfo;
 
 pub(crate) struct LiteralType<'src> {
@@ -378,7 +380,7 @@ impl<'src> LiteralTypePass<'src> {
 impl TypeAwarePass for LiteralTypePass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut inner = LiteralType::new(self.source, types);
-        walk_type_positions(stmts, Some(types), &mut inner);
+        walk_type_positions_skipping(stmts, Some(types), &ctx.claimed_type_op_ranges, &mut inner);
         if inner.needs_literal_import && !literal_already_imported(types) {
             ctx.required_imports
                 .push("from typing import Literal".to_owned());

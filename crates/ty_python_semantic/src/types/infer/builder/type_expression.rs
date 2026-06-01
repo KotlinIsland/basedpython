@@ -500,6 +500,36 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     }
                     // anything else is an invalid annotation:
                     op => {
+                        // basedpython: a symbolic operation in a type expression,
+                        // e.g. `1 + 1`, `A + B`, `1 + typeof d`. evaluate the
+                        // operands as types and apply the operator with the same
+                        // type-level binary logic ty uses for value expressions, so
+                        // `1 + 1` resolves to `Literal[2]`. this reuses literal/type
+                        // alias/typevar handling for free via
+                        // `infer_binary_expression_type`
+                        if self.is_basedpython_file() {
+                            let left_ty = self.infer_type_expression(&binary.left);
+                            let right_ty = self.infer_type_expression(&binary.right);
+                            if let Some(result) = self.infer_binary_expression_type(
+                                binary.into(),
+                                false,
+                                left_ty,
+                                right_ty,
+                                op,
+                            ) {
+                                return result;
+                            }
+                            // operands are already inferred as type expressions
+                            // above; the operator just isn't supported between them
+                            self.report_invalid_type_expression(
+                                expression,
+                                format_args!(
+                                    "Invalid binary operator `{}` in type annotation",
+                                    op.as_str()
+                                ),
+                            );
+                            return Type::unknown();
+                        }
                         // Avoid inferring the types of invalid binary expressions that have been
                         // parsed from a string annotation, as they are not present in the semantic
                         // index.
@@ -808,9 +838,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     return inner.negate(self.db());
                 }
                 // basedpython: `-float.inf` is the negative-infinity float
-                // literal (`-float.nan` stays nan). only the exact
-                // `-float.<inf|nan>` shape enters the type-aware path, so every
-                // other unary form keeps reporting the usual error below
+                // literal (`-float.nan` stays nan). the exact `-float.<inf|nan>`
+                // shape produces an *unpromotable* float literal, which the
+                // generic numeric handling below would not preserve
                 if self.is_basedpython_file()
                     && matches!(unary.op, ast::UnaryOp::USub)
                     && let ast::Expr::Attribute(attr) = &*unary.operand
@@ -856,6 +886,20 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         self.db(),
                         [inner, Type::none(self.db())],
                     );
+                }
+                // basedpython: a unary numeric operation in a type expression,
+                // e.g. `-3` → `Literal[-3]` or `~0` → `Literal[-1]`. evaluate the
+                // operand as a type and apply the operator with the same unary
+                // logic ty uses for value expressions, mirroring the symbolic
+                // binary-operation handling above
+                if self.is_basedpython_file()
+                    && matches!(
+                        unary.op,
+                        ast::UnaryOp::USub | ast::UnaryOp::UAdd | ast::UnaryOp::Invert
+                    )
+                {
+                    let operand_ty = self.infer_type_expression(&unary.operand);
+                    return self.infer_unary_expression_type(unary.op, operand_ty, unary);
                 }
                 if !self.in_string_annotation() {
                     self.infer_unary_expression(unary);
