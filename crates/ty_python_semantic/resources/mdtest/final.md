@@ -1491,9 +1491,44 @@ a = A()
 a.foo = 200  # ok — no Final qualifier inside class
 ```
 
-### `final x = v` is bare assignment
+### bare `final` on a variable is rejected
+
+`final` is a class/method modifier. on a bare assignment it lowers to a plain assignment and makes
+the variable no more final than before, so it is flagged and the user is steered to `let` (which
+lowers to `Final`). the assignment is still erased to a plain binding, so the reassignment below is
+allowed:
 
 ```by
+# snapshot: final-on-variable
 final a = 1
-a = 2  # ok — `final` keyword on assignment is erased
+a = 2  # the `final` modifier was erased, so `a` is a plain variable
+```
+
+```snapshot
+error[final-on-variable]: `final` on variable `a` has no effect; use `let` instead
+ --> src/mdtest_snippet.by:2:1
+  |
+2 | final a = 1
+  | ^^^^^^
+  |
+info: a final variable is declared with `let`, which lowers to `Final`
+```
+
+### `final override` on a variable is allowed
+
+`final override` is a legitimate assignment marker, so it is not flagged:
+
+```by
+final override b = 1
+b = 2  # the modifiers were erased; `b` is a plain variable
+```
+
+### bare `final` inside a class body is allowed
+
+inside a class body a bare `final` assignment is a plain attribute, matching the `let`-in-class
+behavior, so it is not flagged:
+
+```by
+class C:
+    final c = 1
 ```

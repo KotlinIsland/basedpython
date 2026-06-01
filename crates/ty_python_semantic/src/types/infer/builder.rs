@@ -51,21 +51,21 @@ use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
 use crate::types::diagnostic::{
     self, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS, CYCLIC_TYPE_ALIAS_DEFINITION,
-    GeneratorMismatchKind, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT,
-    INVALID_ATTRIBUTE_ACCESS, INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION,
-    INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE,
-    INVALID_TYPE_FORM, INVALID_TYPE_GUARD_CALL, INVALID_TYPE_VARIABLE_BOUND,
-    INVALID_TYPE_VARIABLE_CONSTRAINTS, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
-    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
-    UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, hint_if_stdlib_attribute_exists_on_other_versions,
-    report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
-    report_bad_dunder_delete_call, report_bad_dunder_set_call, report_call_to_abstract_method,
-    report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
-    report_invalid_attribute_assignment, report_invalid_class_match_pattern,
-    report_invalid_exception_caught, report_invalid_exception_cause,
-    report_invalid_exception_raised, report_invalid_exception_tuple_caught,
-    report_invalid_generator_yield_type, report_invalid_key_on_typed_dict,
-    report_invalid_type_checking_constant,
+    FINAL_ON_VARIABLE, GeneratorMismatchKind, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE,
+    INVALID_ASSIGNMENT, INVALID_ATTRIBUTE_ACCESS, INVALID_DECLARATION,
+    INVALID_ENUM_MEMBER_ANNOTATION, INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE,
+    INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM, INVALID_TYPE_GUARD_CALL,
+    INVALID_TYPE_VARIABLE_BOUND, INVALID_TYPE_VARIABLE_CONSTRAINTS, POSSIBLY_MISSING_IMPLICIT_CALL,
+    POSSIBLY_MISSING_SUBMODULE, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL,
+    UNRESOLVED_REFERENCE, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
+    hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
+    report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_bad_dunder_set_call,
+    report_call_to_abstract_method, report_cannot_pop_required_field_on_typed_dict,
+    report_invalid_assignment, report_invalid_attribute_assignment,
+    report_invalid_class_match_pattern, report_invalid_exception_caught,
+    report_invalid_exception_cause, report_invalid_exception_raised,
+    report_invalid_exception_tuple_caught, report_invalid_generator_yield_type,
+    report_invalid_key_on_typed_dict, report_invalid_type_checking_constant,
     report_match_pattern_against_non_runtime_checkable_protocol,
     report_match_pattern_against_typed_dict, report_mismatched_type_name,
     report_possibly_missing_attribute, report_possibly_unresolved_reference,
@@ -4319,6 +4319,37 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 &DeclaredAndInferredType::are_the_same_type(inferred_ty),
             );
             return;
+        }
+
+        // basedpython: a bare `final` modifier on an assignment (`final a = 1`)
+        // lowers to a plain assignment and leaves the variable no more final
+        // than before — the user almost certainly meant `let`. `final override`
+        // is a real marker, so only fire when `override` is absent. inside a
+        // class body a bare `final` assignment is a plain attribute, matching
+        // `let`-in-class, so restrict this to non-class scopes.
+        if let ast::Expr::Name(ann_name) = annotation
+            && ann_name.id.as_str() == "__modifier_assign__"
+            && let ast::Expr::Name(target_name) = target
+            && self
+                .index
+                .scope(self.scope().file_scope_id(self.db()))
+                .kind()
+                != ScopeKind::Class
+        {
+            let source = source_text(self.db(), self.file());
+            let modifiers = &source[ann_name.range()];
+            let has_final = modifiers.split_whitespace().any(|kw| kw == "final");
+            let has_override = modifiers.split_whitespace().any(|kw| kw == "override");
+            if has_final
+                && !has_override
+                && let Some(builder) = self.context.report_lint(&FINAL_ON_VARIABLE, ann_name)
+            {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "`final` on variable `{name}` has no effect; use `let` instead",
+                    name = target_name.id
+                ));
+                diagnostic.info("a final variable is declared with `let`, which lowers to `Final`");
+            }
         }
 
         let mut declared = self.infer_annotation_expression_allow_pep_613(

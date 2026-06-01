@@ -63,6 +63,12 @@ and annotated assignments. the modifier keyword is stripped at transpile time:
 these are compile-time-only markers — they constrain how the symbol is
 checked but emit no runtime artefact
 
+a bare `final x = 1` (with no `override`) is not an assignment modifier: it would
+strip to a plain `x = 1` and declare nothing final. outside a class body ty
+rejects it with `final-on-variable` and points you to `let`, which lowers to
+`Final`. inside a class body it is a plain attribute, matching `let` there, and
+is not flagged
+
 ## export / public / private
 
 basedpython infers `__all__` from explicit visibility keywords:
