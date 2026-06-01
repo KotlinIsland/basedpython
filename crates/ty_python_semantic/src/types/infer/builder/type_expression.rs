@@ -180,7 +180,30 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 if is_dotted_name(expression) {
                     match attribute_expression.ctx {
                         ast::ExprContext::Load => {
-                            let ty = self.infer_attribute_expression(attribute_expression);
+                            // basedpython: `float.inf` / `float.nan` in a type
+                            // position are the infinity / not-a-number float
+                            // literals. infer the receiver once so the builtin
+                            // check and the non-`float` fallback share it
+                            let ty = if self.is_basedpython_file()
+                                && let Some(value) =
+                                    basedpython_float_constant(&attribute_expression.attr)
+                            {
+                                let receiver = self.infer_maybe_standalone_expression(
+                                    &attribute_expression.value,
+                                    TypeContext::default(),
+                                );
+                                if let Type::ClassLiteral(class) = receiver
+                                    && class.is_known(self.db(), KnownClass::Float)
+                                {
+                                    return Type::unpromotable_float_literal(value);
+                                }
+                                // receiver isn't the builtin `float` — finish
+                                // the normal attribute load with the type we
+                                // already inferred, so it isn't inferred twice
+                                self.infer_attribute_load_impl(attribute_expression, receiver)
+                            } else {
+                                self.infer_attribute_expression(attribute_expression)
+                            };
                             if let Some(materialized) = self.intercept_nested_top_bottom(ty) {
                                 return materialized;
                             }
@@ -783,6 +806,35 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 if matches!(unary.op, ast::UnaryOp::Not) && self.is_basedpython_file() {
                     let inner = self.infer_type_expression(&unary.operand);
                     return inner.negate(self.db());
+                }
+                // basedpython: `-float.inf` is the negative-infinity float
+                // literal (`-float.nan` stays nan). only the exact
+                // `-float.<inf|nan>` shape enters the type-aware path, so every
+                // other unary form keeps reporting the usual error below
+                if self.is_basedpython_file()
+                    && matches!(unary.op, ast::UnaryOp::USub)
+                    && let ast::Expr::Attribute(attr) = &*unary.operand
+                    && basedpython_float_constant(&attr.attr).is_some()
+                    && let ast::Expr::Name(name) = &*attr.value
+                    && name.id.as_str() == "float"
+                {
+                    let inner = self.infer_type_expression(&unary.operand);
+                    if let Type::LiteralValue(literal) = inner
+                        && let LiteralValueTypeKind::Float(value) = literal.kind()
+                    {
+                        return Type::unpromotable_float_literal(-value.as_f64());
+                    }
+                    // shape matched but `float` was shadowed — `inner` is
+                    // already inferred and stored, so report without re-running
+                    // value inference on the operand
+                    self.report_invalid_type_expression(
+                        expression,
+                        format_args!(
+                            "Unary operations are not allowed in {}s",
+                            self.type_expression_context()
+                        ),
+                    );
+                    return Type::unknown();
                 }
                 if !self.in_string_annotation() {
                     self.infer_unary_expression(unary);
@@ -3482,6 +3534,16 @@ struct VarianceSliceElement<'ast> {
     /// expression inside the marker; for non-marker elements the element
     /// itself.
     inner: &'ast ast::Expr,
+}
+
+/// basedpython: map the attribute name of `float.inf` / `float.nan` to its
+/// `f64` value, or `None` for any other attribute
+fn basedpython_float_constant(attr: &ast::Identifier) -> Option<f64> {
+    match attr.as_str() {
+        "inf" => Some(f64::INFINITY),
+        "nan" => Some(f64::NAN),
+        _ => None,
+    }
 }
 
 /// If `slice` contains at least one use-site variance marker, return the

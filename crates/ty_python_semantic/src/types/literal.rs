@@ -344,7 +344,14 @@ pub(crate) struct FloatLiteralType {
 
 impl FloatLiteralType {
     pub(crate) fn from_f64(value: f64) -> Self {
-        let bits = value.to_bits();
+        // canonicalize nan so every not-a-number literal is the same type,
+        // whatever bit pattern (or sign) produced it. infinities keep their
+        // sign and so stay distinct
+        let bits = if value.is_nan() {
+            f64::NAN.to_bits()
+        } else {
+            value.to_bits()
+        };
         Self {
             high: (bits >> 32) as u32,
             #[expect(clippy::cast_possible_truncation)]
@@ -360,7 +367,10 @@ impl FloatLiteralType {
 impl std::fmt::Display for FloatLiteralType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let v = self.as_f64();
-        if v.fract() == 0.0 && v.is_finite() {
+        if v.is_nan() {
+            // python spells it `nan`; rust's f64 `Display` spells it `NaN`
+            f.write_str("nan")
+        } else if v.fract() == 0.0 && v.is_finite() {
             write!(f, "{v:.1}")
         } else {
             std::fmt::Display::fmt(&v, f)

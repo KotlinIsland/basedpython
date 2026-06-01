@@ -1723,6 +1723,14 @@ impl<'db> Type<'db> {
         ))
     }
 
+    /// basedpython: create an unpromotable float literal, used for explicit
+    /// `float.inf` / `float.nan` annotations that must not widen to `float`
+    pub(crate) fn unpromotable_float_literal(value: f64) -> Self {
+        Self::LiteralValue(LiteralValueType::unpromotable(
+            literal::FloatLiteralType::from_f64(value),
+        ))
+    }
+
     /// basedpython: create a promotable complex literal
     pub(crate) fn complex_literal(db: &'db dyn Db, re: f64, im: f64) -> Self {
         Self::LiteralValue(LiteralValueType::promotable(

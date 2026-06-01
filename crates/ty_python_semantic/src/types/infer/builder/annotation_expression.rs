@@ -162,6 +162,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 if !is_dotted_name(annotation) {
                     return TypeAndQualifiers::declared(self.infer_type_expression(annotation));
                 }
+                // basedpython: `float.inf` / `float.nan` are float-literal
+                // types — defer to the type-expression path, which resolves
+                // them (and the shadowed-`float` fallback) correctly
+                if self.is_basedpython_file() && matches!(attribute.attr.as_str(), "inf" | "nan") {
+                    return TypeAndQualifiers::declared(self.infer_type_expression(annotation));
+                }
                 match attribute.ctx {
                     ast::ExprContext::Load => infer_name_or_attribute(
                         self.infer_attribute_expression(attribute),

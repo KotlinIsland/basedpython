@@ -35,8 +35,9 @@ use ruff_text_size::{Ranged, TextRange};
 
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, cast, coalesce, coalesce_chain, compat,
-    decl_site_variance, decorator_keyword, dedent_string, empty_declarations, generic_call,
-    generics, identity_swap, implicit_typing, init_method, intersection, just_float, kw_subscript,
+    decl_site_variance, decorator_keyword, dedent_string, empty_declarations, float_const,
+    generic_call, generics, identity_swap, implicit_typing, init_method, intersection, just_float,
+    kw_subscript,
     literal_types, modifiers, mutable_defaults, none_chain, not_type, overload,
     repeated_underscore, sentinel, super_keyword, top_star, tuple_index, type_is,
     typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
@@ -343,6 +344,7 @@ pub(crate) fn run_against_source<'a>(
     let unpack_pass = unpack::UnpackSyntax::new(config.clone());
     let typed_dict_literal_pass = typed_dict_literal::TypedDictLiteralPass::new(source_ref);
     let just_float_pass = just_float::JustFloatPass::new();
+    let float_const_pass = float_const::FloatConstPass::new();
     let kw_subscript_pass = kw_subscript::KwSubscriptPass::new(source_ref);
     let generic_call_pass = generic_call::GenericCallStripPass::new(source_ref);
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
@@ -401,6 +403,7 @@ pub(crate) fn run_against_source<'a>(
         &not_type_pass,
         &intersection_pass,
         &just_float_pass,
+        &float_const_pass,
         &kw_subscript_pass,
         &generic_call_pass,
         &implicit_typing_pass,
