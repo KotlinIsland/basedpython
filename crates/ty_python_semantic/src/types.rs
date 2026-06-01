@@ -5432,6 +5432,16 @@ impl<'db> Type<'db> {
             // rewrite to `JustFloat` / `JustComplex`, which preserves the
             // strict meaning for .py consumers
             Type::ClassLiteral(class) => {
+                // a based-enum sum type (`enum Shape:`) denotes the union of its
+                // variants' instance types (`Circle | Square | Empty`) when used
+                // as a type, so annotations, assignability, and match
+                // exhaustiveness all see the closed set of variants
+                if let ClassLiteral::Static(static_class) = class
+                    && let Some(union) =
+                        crate::types::class::based_enum_variant_union(db, *static_class)
+                {
+                    return Ok(union);
+                }
                 let is_by_ext = |ext: Option<&str>| matches!(ext, Some("by" | "byi"));
                 let is_by = match scope_id.file(db).path(db) {
                     ruff_db::files::FilePath::System(p) => is_by_ext(p.extension()),
@@ -5445,7 +5455,18 @@ impl<'db> Type<'db> {
                 };
                 Ok(ty)
             }
-            Type::GenericAlias(alias) => Ok(Type::instance(db, ClassType::from(*alias))),
+            Type::GenericAlias(alias) => {
+                // a subscripted based-enum sum type (`Tree[int]`) denotes the
+                // union of its variants specialized by the type arguments
+                // (`Node[int] | Leaf`), mirroring the bare-enum case above so
+                // generic enums see the same closed variant set
+                if let Some(union) =
+                    crate::types::class::based_enum_variant_union(db, alias.origin(db))
+                {
+                    return Ok(union.apply_specialization(db, alias.specialization(db)));
+                }
+                Ok(Type::instance(db, ClassType::from(*alias)))
+            }
 
             Type::SubclassOf(_)
             | Type::EnumComplement(_)

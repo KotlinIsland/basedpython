@@ -665,41 +665,7 @@ impl Parser<'_> {
     ) -> ast::PatternMatchClass {
         let arguments_start = self.node_start();
 
-        let cls = match cls {
-            Pattern::MatchAs(ast::PatternMatchAs {
-                pattern: None,
-                name: Some(ident),
-                ..
-            }) => {
-                if ident.is_valid() {
-                    Box::new(Expr::Name(ast::ExprName {
-                        range: ident.range(),
-                        id: ident.id,
-                        ctx: ExprContext::Load,
-                        node_index: AtomicNodeIndex::NONE,
-                    }))
-                } else {
-                    Box::new(Expr::Name(ast::ExprName {
-                        range: ident.range(),
-                        id: Name::empty(),
-                        ctx: ExprContext::Invalid,
-                        node_index: AtomicNodeIndex::NONE,
-                    }))
-                }
-            }
-            Pattern::MatchValue(ast::PatternMatchValue { value, .. })
-                if matches!(&*value, Expr::Attribute(_)) =>
-            {
-                value
-            }
-            pattern => {
-                self.add_error(
-                    ParseErrorType::OtherError("Invalid value for a class pattern".to_string()),
-                    &pattern,
-                );
-                Box::new(recovery::pattern_to_expr(pattern))
-            }
-        };
+        let cls = Box::new(self.class_pattern_target(cls));
 
         self.bump(TokenKind::Lpar);
 
@@ -775,6 +741,47 @@ impl Parser<'_> {
             },
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+        }
+    }
+
+    /// Converts the already-parsed class portion of a class pattern (a name or
+    /// dotted attribute) into the class expression. Shared by the `(…)` and
+    /// basedpython `{…}` class-pattern forms.
+    fn class_pattern_target(&mut self, cls: Pattern) -> Expr {
+        match cls {
+            Pattern::MatchAs(ast::PatternMatchAs {
+                pattern: None,
+                name: Some(ident),
+                ..
+            }) => {
+                if ident.is_valid() {
+                    Expr::Name(ast::ExprName {
+                        range: ident.range(),
+                        id: ident.id,
+                        ctx: ExprContext::Load,
+                        node_index: AtomicNodeIndex::NONE,
+                    })
+                } else {
+                    Expr::Name(ast::ExprName {
+                        range: ident.range(),
+                        id: Name::empty(),
+                        ctx: ExprContext::Invalid,
+                        node_index: AtomicNodeIndex::NONE,
+                    })
+                }
+            }
+            Pattern::MatchValue(ast::PatternMatchValue { value, .. })
+                if matches!(&*value, Expr::Attribute(_)) =>
+            {
+                *value
+            }
+            pattern => {
+                self.add_error(
+                    ParseErrorType::OtherError("Invalid value for a class pattern".to_string()),
+                    &pattern,
+                );
+                recovery::pattern_to_expr(pattern)
+            }
         }
     }
 }

@@ -1,0 +1,15 @@
+enum class Color:
+    case Red, Green
+    case Blue
+
+
+enum class Expr:
+    case Lit(value: int)
+    case Add(left: int, right: int)
+
+    def eval(self) -> int:
+        match self:
+            case Lit(v):
+                return v
+            case Add(a, b):
+                return a + b

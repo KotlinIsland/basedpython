@@ -90,12 +90,29 @@ fn is_modifier_kw(text: &str) -> bool {
             | "override"
             | "static"
             | "data"
-            | "enum"
             | "frozen"
             | "export"
             | "public"
             | "private"
     )
+}
+
+/// Builds a synthetic marker [`Decorator`](ast::Decorator) (a zero-width `Name`
+/// with [`ExprContext::Invalid`]) used to tag a based-enum variant `ClassDef`
+/// with its kind. The lowering phase reads the marker; it never appears in
+/// output and is hidden from name resolution.
+fn synthetic_variant_decorator(marker: &'static str, at: TextSize) -> ast::Decorator {
+    let range = TextRange::empty(at);
+    ast::Decorator {
+        expression: Expr::Name(ast::ExprName {
+            id: Name::new_static(marker),
+            ctx: ExprContext::Invalid,
+            range,
+            node_index: AtomicNodeIndex::NONE,
+        }),
+        range,
+        node_index: AtomicNodeIndex::NONE,
+    }
 }
 
 impl<'src> Parser<'src> {
@@ -230,6 +247,28 @@ impl<'src> Parser<'src> {
                 "`protocol` class syntax is not valid in .py files".to_string(),
             );
             return Some(self.parse_protocol_def(start));
+        }
+        // `enum class E:` / `enum class E[T]:` — a "based enum" (an algebraic
+        // sum type when its body has payload variants, an idiomatic `Enum` when
+        // its variants are all unit). the `class` keyword is part of the
+        // declaration
+        if kw == "enum" && self.peek() == TokenKind::Class && self.peek_nth(1).0 == TokenKind::Name
+        {
+            self.error_if_not_basedpython(
+                "`enum class` declarations are not valid in .py files".to_string(),
+            );
+            return Some(self.parse_enum_def(start));
+        }
+        // a bare `enum E:` (no `class`) is not valid — based enums are written
+        // `enum class E:`. report it but still parse the body for recovery
+        if kw == "enum" && self.peek() == TokenKind::Name {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "based enums must be written `enum class E:`, not `enum E:`".to_string(),
+                ),
+                self.current_token_range(),
+            );
+            return Some(self.parse_enum_def(start));
         }
         if kw == "decorator" && self.peek() == TokenKind::Def {
             self.error_if_not_basedpython(
@@ -415,10 +454,6 @@ impl<'src> Parser<'src> {
                     "data" => {
                         self.bump(TokenKind::Name);
                         "data_class"
-                    }
-                    "enum" => {
-                        self.bump(TokenKind::Name);
-                        "enum_class"
                     }
                     "final" => {
                         self.bump(TokenKind::Name);
@@ -838,6 +873,290 @@ impl<'src> Parser<'src> {
             type_params: type_params.map(Box::new),
             arguments,
             body,
+            node_index: AtomicNodeIndex::NONE,
+        })
+    }
+
+    /// Parses a based-enum declaration `enum Name[T]:` — an algebraic sum type.
+    ///
+    /// Produces a [`ClassDef`] carrying a synthetic `enum_def` marker decorator.
+    /// The body holds one nested [`ClassDef`] per variant (each tagged with a
+    /// `variant_unit` / `variant_tuple` marker decorator and holding its fields
+    /// as [`AnnAssign`]s) plus any ordinary members (methods, classmethods,
+    /// constants). The `enum` lowering phase consumes this shape.
+    ///
+    /// [`ClassDef`]: ast::StmtClassDef
+    /// [`AnnAssign`]: ast::StmtAnnAssign
+    fn parse_enum_def(&mut self, start: TextSize) -> Stmt {
+        let enum_start = self.current_token_range().start();
+        self.bump(TokenKind::Name); // consume "enum"
+        // the canonical surface is `enum class E:`; the `class` keyword is part
+        // of the declaration. (a bare `enum E:` is reported as an error by the
+        // caller and recovered here by leaving `class` un-consumed.)
+        self.eat(TokenKind::Class);
+        let name_start = self.current_token_range().start();
+        let decorator_range = TextRange::new(enum_start, name_start);
+
+        let decorator = ast::Decorator {
+            expression: Expr::Name(ast::ExprName {
+                id: Name::new_static("enum_def"),
+                ctx: ExprContext::Invalid,
+                range: decorator_range,
+                node_index: AtomicNodeIndex::NONE,
+            }),
+            range: decorator_range,
+            node_index: AtomicNodeIndex::NONE,
+        };
+
+        let name = self.parse_identifier();
+        let type_params = self.try_parse_type_params();
+
+        // sealed: a based enum has no declared base classes
+        if self.at(TokenKind::Lpar) {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "`enum` declarations cannot have base classes".to_string(),
+                ),
+                self.current_token_range(),
+            );
+        }
+
+        let body = if self.eat(TokenKind::Colon) {
+            self.class_body_depth += 1;
+            let body = self.parse_enum_body();
+            self.class_body_depth -= 1;
+            body
+        } else {
+            self.add_error(
+                ParseErrorType::OtherError("Expected `:` after `enum` declaration".to_string()),
+                self.current_token_range(),
+            );
+            Suite::new()
+        };
+
+        Stmt::ClassDef(ast::StmtClassDef {
+            range: self.node_range(start),
+            decorator_list: vec![decorator].into(),
+            name,
+            type_params: type_params.map(Box::new),
+            arguments: None,
+            body,
+            node_index: AtomicNodeIndex::NONE,
+        })
+    }
+
+    /// Parses the indented body of an `enum` declaration, dispatching each item
+    /// to either a `case` variant-declaration line or ordinary statement parsing.
+    fn parse_enum_body(&mut self) -> Suite {
+        let newline_range = self.current_token_range();
+        if self.eat(TokenKind::Newline) {
+            if self.at(TokenKind::Indent) {
+                self.bump(TokenKind::Indent);
+                let mut statements = Suite::new();
+                if self
+                    .with_recursion(|parser| {
+                        parser.parse_list(RecoveryContextKind::BlockStatements, |p| {
+                            p.parse_enum_item_into(&mut statements);
+                        });
+                    })
+                    .is_none()
+                {
+                    self.report_recursion_limit_exceeded(self.current_token_range());
+                }
+                statements.shrink_to_fit();
+                self.expect(TokenKind::Dedent);
+                return statements;
+            }
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "Expected an indented block after `enum` declaration".to_string(),
+                ),
+                if self.current_token_range().is_empty() {
+                    newline_range
+                } else {
+                    self.current_token_range()
+                },
+            );
+        } else {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "Expected an indented block after `enum` declaration".to_string(),
+                ),
+                self.current_token_range(),
+            );
+        }
+        Suite::new()
+    }
+
+    /// Parses one item in an `enum` body into `statements`: a `case` line
+    /// declaring one or more comma-separated variants, or an ordinary
+    /// class-body statement (method, classmethod, constant, …).
+    fn parse_enum_item_into(&mut self, statements: &mut Suite) {
+        // `case` followed by a name declares variant(s) — `case A`,
+        // `case A, B, C`, `case Circle(radius: float), Empty`. any other use of
+        // `case` (`case = 1`, `case.x`, …) is an ordinary identifier statement
+        if self.at(TokenKind::Case)
+            && (self.peek() == TokenKind::Name || self.peek().is_soft_keyword())
+        {
+            self.parse_case_variants(statements);
+            return;
+        }
+        // a bare name statement is a no-op in a class body and is almost
+        // certainly a variant missing its `case` — say so rather than letting
+        // it silently parse to dead code
+        if self.at(TokenKind::Name) && matches!(self.peek(), TokenKind::Newline | TokenKind::Semi) {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "enum variants must be declared with `case`, e.g. `case Red, Green`"
+                        .to_string(),
+                ),
+                self.current_token_range(),
+            );
+        }
+        statements.push(self.parse_statement());
+    }
+
+    /// Parses one `case` line of an `enum` body: `case` followed by one or more
+    /// comma-separated variants, each a unit (`Point`) or tuple
+    /// (`Circle(radius: float)`, fields optionally defaulted) form. Each
+    /// variant becomes its own marked [`ClassDef`].
+    ///
+    /// [`ClassDef`]: ast::StmtClassDef
+    fn parse_case_variants(&mut self, statements: &mut Suite) {
+        self.bump(TokenKind::Case);
+        loop {
+            let start = self.node_start();
+            let name = self.parse_identifier();
+            let stmt = match self.current_token_kind() {
+                TokenKind::Lpar => self.parse_tuple_variant(start, name),
+                _ => {
+                    // a brace payload would otherwise parse as a stray dict
+                    // display after a unit variant, surfacing as a confusing
+                    // unresolved-reference — reject it with the fix spelled out
+                    if self.at(TokenKind::Lbrace) {
+                        self.add_error(
+                            ParseErrorType::OtherError(format!(
+                                "variant fields are declared in parentheses, e.g. `case {}(x: int)`",
+                                name.id
+                            )),
+                            self.current_token_range(),
+                        );
+                        self.skip_brace_group();
+                    }
+                    let decorator = synthetic_variant_decorator("variant_unit", name.range.start());
+                    Stmt::ClassDef(ast::StmtClassDef {
+                        range: self.node_range(start),
+                        decorator_list: vec![decorator].into(),
+                        name,
+                        type_params: None,
+                        arguments: None,
+                        body: Suite::new(),
+                        node_index: AtomicNodeIndex::NONE,
+                    })
+                }
+            };
+            statements.push(stmt);
+            if !self.eat(TokenKind::Comma) {
+                break;
+            }
+            // a trailing comma ends the list
+            if !(self.at(TokenKind::Name) || self.current_token_kind().is_soft_keyword()) {
+                break;
+            }
+        }
+        self.eat(TokenKind::Semi);
+        self.eat(TokenKind::Newline);
+    }
+
+    /// Consumes a balanced `{ … }` group for error recovery.
+    fn skip_brace_group(&mut self) {
+        self.bump(TokenKind::Lbrace);
+        let mut depth = 1usize;
+        while depth > 0 && !self.at(TokenKind::EndOfFile) {
+            match self.current_token_kind() {
+                TokenKind::Lbrace => depth += 1,
+                TokenKind::Rbrace => depth -= 1,
+                _ => {}
+            }
+            self.bump_any();
+        }
+    }
+
+    /// Parses the payload of a tuple variant `Circle(radius: float)` /
+    /// `Node(T, Tree[T])` — positional construction. Fields may be named
+    /// (`radius: float`) or anonymous (`T`), in which case they take the
+    /// synthetic names `_0`, `_1`, …
+    fn parse_tuple_variant(&mut self, start: TextSize, name: ast::Identifier) -> Stmt {
+        self.bump(TokenKind::Lpar);
+        let mut body = Suite::new();
+        let mut index = 0usize;
+        while !self.at(TokenKind::Rpar) && !self.at(TokenKind::EndOfFile) {
+            let field_start = self.node_start();
+            let (target_id, target_range) =
+                if self.at(TokenKind::Name) && self.peek() == TokenKind::Colon {
+                    let ident = self.parse_identifier();
+                    self.bump(TokenKind::Colon);
+                    (ident.id, ident.range)
+                } else {
+                    (
+                        Name::from(format!("_{index}").as_str()),
+                        TextRange::empty(self.current_token_range().start()),
+                    )
+                };
+            let annotation = self.parse_conditional_expression_or_higher().expr;
+            let value = if self.eat(TokenKind::Equal) {
+                Some(Box::new(self.parse_conditional_expression_or_higher().expr))
+            } else {
+                None
+            };
+            body.push(self.make_variant_field(
+                field_start,
+                target_id,
+                target_range,
+                annotation,
+                value,
+            ));
+            index += 1;
+            if !self.eat(TokenKind::Comma) {
+                break;
+            }
+        }
+        self.expect(TokenKind::Rpar);
+        let decorator = synthetic_variant_decorator("variant_tuple", name.range.start());
+        Stmt::ClassDef(ast::StmtClassDef {
+            range: self.node_range(start),
+            decorator_list: vec![decorator].into(),
+            name,
+            type_params: None,
+            arguments: None,
+            body,
+            node_index: AtomicNodeIndex::NONE,
+        })
+    }
+
+    /// Builds a variant field as a synthetic [`AnnAssign`]. The annotation keeps
+    /// its real source range so the lowering phase can slice the original type
+    /// text (preserving any basedpython type syntax it contains).
+    fn make_variant_field(
+        &self,
+        start: TextSize,
+        target_id: Name,
+        target_range: TextRange,
+        annotation: Expr,
+        value: Option<Box<Expr>>,
+    ) -> Stmt {
+        let target = Expr::Name(ast::ExprName {
+            id: target_id,
+            ctx: ExprContext::Store,
+            range: target_range,
+            node_index: AtomicNodeIndex::NONE,
+        });
+        Stmt::AnnAssign(ast::StmtAnnAssign {
+            target: Box::new(target),
+            annotation: Box::new(annotation),
+            value,
+            simple: true,
+            range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         })
     }

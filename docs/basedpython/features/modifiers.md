@@ -13,15 +13,14 @@ boilerplate decorator/annotation pairs at transpile time
 | `open class Foo`        | `class Foo` (keyword stripped, no decorator)        |
 | `data class Foo`        | `@dataclass(slots=True)` + `class Foo`              |
 | `frozen data class Foo` | `@dataclass(frozen=True, slots=True)` + `class Foo` |
-| `enum class Color`      | `class Color(Enum)` (base added)                    |
 | `protocol Foo`          | `class Foo(Protocol)` (base added)                  |
 
 `abstract` is a marker for the type checker; it has no runtime decorator.
 `open` is the inverse of `final` — a marker that the class is intended to be
 subclassed. neither emits a runtime artefact
 
-bases are preserved when the modifier injects one — `enum class Color(str)` becomes
-`class Color(str, Enum): ...`
+`enum class` is not a modifier but its own declaration form — see
+[based enums](enums.md)
 
 ## function modifiers
 

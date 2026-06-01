@@ -19,6 +19,7 @@ pub(crate) mod constraints;
 pub(crate) mod dedent_string;
 pub(crate) mod dynamic_keyword;
 pub(crate) mod empty_declarations;
+pub(crate) mod enums;
 pub(crate) mod generics;
 pub(crate) mod identity_swap;
 pub(crate) mod intersection;

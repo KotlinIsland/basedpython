@@ -1,9 +1,5 @@
 # based enums
 
-> **STATUS: planned for version 0.2, not yet implemented.** the `enum`
-> keyword described below is not recognised by the parser. tracking item:
-> based enums v0.2
-
 basedpython supports algebraic sum types — "based enums" — modeled after
 rust and swift enums but with pythonic surface syntax. variants can carry
 typed payloads, support pattern matching, and integrate with ty's
@@ -16,71 +12,82 @@ to a sealed dataclass hierarchy at runtime
 - sum types (tagged unions) like rust/swift
 - pythonic body: `def` for methods, `[T]` for generics, no foreign keywords
 - type-directed emit: clean surface, valid python 3.10+ runtime
-- no syntax cages: variants can be unit, tuple, or struct-like; methods,
-    properties, classmethods, and staticmethods all live on the enum;
-    recursive and generic forms supported
+- no syntax cages: variants can be payload-less or carry typed fields with
+    defaults; methods, properties, classmethods, and staticmethods all live on
+    the enum; recursive and generic forms supported
 
 ## surface syntax
 
+variants are declared with the `case` keyword (as in swift/scala); one `case`
+line may declare several comma-separated variants. anything that isn't a
+`case` line is an ordinary class-body statement
+
 ```by
-enum Shape:
-    Circle(radius: float)
-    Rectangle(width: float, height: float)
-    Point
-    Polygon { sides: list[Point], closed: bool = True }
+enum class Shape:
+    case Circle(radius: float)
+    case Rectangle(width: float, height: float)
+    case Point
+    case Polygon(sides: list[Point], closed: bool = True)
 
     def area(self) -> float:
         match self:
-            case Circle(r): 3.14 * r * r
-            case Rectangle(w, h): w * h
-            case Point: 0.0
-            case Polygon { sides, closed: True }: shoelace(sides)
-            case Polygon: 0.0
+            case Shape.Circle(r): 3.14 * r * r
+            case Shape.Rectangle(w, h): w * h
+            case Shape.Point: 0.0
+            case Shape.Polygon(sides, closed=True): shoelace(sides)
+            case Shape.Polygon(): 0.0
 
     @classmethod
     def unit_circle(cls) -> Shape:
-        return Circle(1.0)
+        return Shape.Circle(1.0)
 ```
 
-four variant kinds, mix freely within one enum:
+three variant forms, mix freely within one enum (and within one `case` line):
 
-- **unit** — `Point` — singleton, no payload
-- **tuple positional** — `Circle(float)` — positional construct, anonymous fields
-- **tuple named** — `Circle(radius: float)` — positional construct,
-    named fields available for pattern matching and attribute access
-- **struct-like** — `Polygon { sides: ..., closed: bool = True }` —
-    kwargs construct, named-only pattern, supports defaults
+- **unit** — `case Point` — a singleton *value* (reached as `Shape.Point`, matched `case Shape.Point:`), no payload
+- **positional** — `case Circle(float)` — positional construct, anonymous fields
+- **named** — `case Circle(radius: float)` — named fields available for
+    pattern matching, attribute access, and keyword construction; fields may
+    carry defaults (`case Polygon(sides: int, closed: bool = True)`), defaulted
+    fields last
+
+the compact comma form reads best for unit variants:
+
+```by
+enum class Color:
+    case Red, Green, Blue
+```
 
 generic and recursive forms:
 
 ```by
-enum Tree[T]:
-    Leaf
-    Node(T, Tree[T], Tree[T])
+enum class Tree[T]:
+    case Leaf
+    case Node(T, Tree[T], Tree[T])
 
     def depth(self) -> int:
         match self:
-            case Leaf: 0
-            case Node(_, l, r): 1 + max(l.depth(), r.depth())
+            case Tree.Leaf: 0
+            case Tree.Node(_, l, r): 1 + max(l.depth(), r.depth())
 
-enum Result[T, E]:
-    Ok(T)
-    Err(E)
+enum class Result[T, E]:
+    case Ok(T)
+    case Err(E)
 ```
 
 bounds use the same syntax as based generics elsewhere:
-`enum E[T: Hashable]`, `enum E[T: constraints (int, str)]`
+`enum class E[T: Hashable]`, `enum class E[T: constraints (int, str)]`
 
 ## variant access
 
-inside the enum body and in pattern contexts, variants are referred to bare
-(`Circle(2.0)`). outside the body, the qualified form is `Shape.Circle(2.0)`.
-both are legal at module scope — ty resolves which `Circle` is meant from the
-expected type. when there is no expected type, qualification is required to
-disambiguate
-
-variant constructors are real classes at runtime, so `isinstance(x, Circle)`
-works, and `type(x) is Circle` is fast
+variants lower to **subclasses** of the enum attached as class attributes, so
+they are reached qualified through the enum name — `Shape.Circle(2.0)`,
+`Shape.Point` — everywhere: inside the enum body, in pattern contexts
+(`case Shape.Circle(r):`), and at module scope. variant constructors are real
+classes at runtime, so `x is Shape.Circle` works (recall `is` is basedpython's
+[`isinstance`](identity-swap.md); use `type(x) === Shape.Circle` for an
+exact-class check). because variants are qualified, the same variant name may
+appear in two different enums (`A.Same` vs `B.Same`) without collision.
 
 ## methods and other members
 
@@ -92,8 +99,8 @@ body can appear in an enum body:
 - nested types
 - class-level constants
 
-methods attach to the sealed base class. variant-specific methods can be
-declared by narrowing the receiver type: `def f(self: Circle) -> float`
+methods live in the enum class body. variant-specific methods can be
+declared by narrowing the receiver type: `def f(self: Shape.Circle) -> float`
 
 ## pattern matching
 
@@ -102,11 +109,11 @@ use the variant constructor form:
 
 ```by
 match shape:
-    case Circle(r): ...
-    case Rectangle(w, h): ...
-    case Point: ...
-    case Polygon { sides, closed: True }: ...
-    case Polygon { sides, closed }: ...
+    case Shape.Circle(r): ...
+    case Shape.Rectangle(w, h): ...
+    case Shape.Point: ...
+    case Shape.Polygon(sides=s, closed=True): ...
+    case Shape.Polygon(sides=s, closed=c): ...
 ```
 
 ty checks **exhaustiveness**: a `match` over a based enum that fails to
@@ -122,9 +129,9 @@ method, the rhs of `=`):
 ```by
 def area(self) -> float:
     match self:
-        case Circle(r): 3.14 * r * r
-        case Rectangle(w, h): w * h
-        case Point: 0.0
+        case Shape.Circle(r): 3.14 * r * r
+        case Shape.Rectangle(w, h): w * h
+        case Shape.Point: 0.0
 ```
 
 every arm's body must produce a value of the common type. ty infers the
@@ -136,37 +143,21 @@ a single variant name is usable as a type. ty narrows the receiver:
 
 ```by
 def double_radius(c: Shape.Circle) -> Shape.Circle:
-    return Circle(c.radius * 2)
+    return Shape.Circle(c.radius * 2)
 ```
 
 assignability follows the obvious rule: `Shape.Circle` is a subtype of
 `Shape`, but `Shape` is not a subtype of `Shape.Circle`
 
-## destructuring with `if let`
+## derived behaviour
 
-shorthand for one-variant peel:
+payload variants lower to frozen dataclasses, so they come with `__eq__`,
+`__hash__`, `__repr__`, and `__match_args__` derived from their fields.
+equality is structural (two `Circle(2.0)` values compare equal), values are
+hashable (usable as dict keys / in sets) when every payload field is hashable,
+and `repr` reads as the construction form (`Shape.Circle(radius=2.0)`)
 
-```by
-if let Some(x) := opt:
-    use(x)
-```
-
-equivalent to a single-arm `match` followed by the else branch. extends the
-walrus operator with pattern syntax
-
-## auto-derive
-
-based enums auto-derive `__eq__`, `__hash__`, `__repr__`, and
-`__match_args__` from the variant shape. opt-out via decorator:
-
-```by
-@no_derive(hash)
-enum Big:
-    Blob(bytes)
-```
-
-equality is structural: two `Circle(2.0)` values compare equal. hashing
-requires every payload field to be hashable; ty flags violations
+see also: [destructuring with `if let`](if-let.md) (planned)
 
 ## prelude enums
 
@@ -187,86 +178,45 @@ python `None` for ergonomic interop (open question, see below)
 
 ## transpiler output
 
-each variant lowers to a frozen dataclass subclassing a sealed base. the
-enum name becomes a union alias:
+an enum whose variants are **all unit** (no payloads) lowers to an idiomatic
+`enum.Enum` with `auto()` members — `enum class Color: case Red, Green` becomes
+`class Color(Enum): Red = auto(); Green = auto()`. this is the form the reverse
+transform recognises.
+
+any other enum (one or more payload-carrying variants) lowers to a sealed
+hierarchy: the enum class holds the shared members, and each variant becomes a
+module-level **subclass** of the enum attached back as `Shape.Circle` — payload
+variants as frozen dataclasses, unit variants as singleton *values*. subclassing
+is what makes methods declared on the enum body dispatch on the variants.
+`Shape.Circle(2.0)` constructs; the enum name itself is the type (the type
+checker treats it as the union of its variants). the output is prefixed with
+`from __future__ import annotations` so mutually-recursive references
+(recursive enums → themselves) resolve lazily:
 
 ```python
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import final
 
-class _ShapeBase:
-    def area(self) -> float: ...  # methods attach here
+class Shape:
+    def area(self) -> float: ...  # methods live in the enum body
 
 @final
 @dataclass(frozen=True, slots=True)
-class Circle(_ShapeBase):
+class _Shape_Circle(Shape):
     radius: float
+_Shape_Circle.__name__ = "Circle"
+_Shape_Circle.__qualname__ = "Shape.Circle"
+Shape.Circle = _Shape_Circle
 
-@final
-@dataclass(frozen=True, slots=True)
-class Rectangle(_ShapeBase):
-    width: float
-    height: float
-
-@final
-class Point(_ShapeBase):
-    _instance = None
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
-@final
-@dataclass(frozen=True, slots=True)
-class Polygon(_ShapeBase):
-    sides: list[Point]
-    closed: bool = True
-
-Shape = Circle | Rectangle | Point | Polygon
+class _Shape_Point(Shape):
+    __slots__ = ()
+    def __repr__(self): return "Point"
+_Shape_Point.__name__ = "Point"
+_Shape_Point.__qualname__ = "Shape.Point"
+Shape.Point = _Shape_Point()  # the variant is the singleton value, not the class
 ```
 
-method bodies are emitted on `_ShapeBase`. `match` arms with bare variant
-names lower to qualified class patterns when the runtime emitter requires
-them. `__match_args__` comes from dataclass for tuple variants and is set
-explicitly for struct-like variants
-
-generic enums lower to `Generic[T]` subclasses of the base; the alias
-becomes a `TypeAlias`
-
-## lowering provenance
-
-new `LoweringKind` tags so later passes can identify enum-derived constructs
-without re-parsing:
-
-- `EnumBase` — the synthesized sealed base class
-- `EnumVariant` — each variant dataclass
-- `EnumUnionAlias` — the `Shape = Circle | ...` line
-- `EnumMatchArm` — match arms whose pattern targets an enum variant
-
-reverse transforms use these tags to reconstruct surface `enum` blocks from
-the lowered python
-
-## limitations / open questions
-
-- **variant namespace at module scope** — bare `Circle` vs `Shape.Circle`.
-    leaning: both legal, ty resolves; collisions across enums require
-    qualification
-- **mutability** — frozen by default. open: per-variant `mut` modifier? a
-    project-wide `mut` keyword may make more sense
-- **enum extension across modules** — rust forbids, swift allows. leaning:
-    sealed (rust-style) for exhaustiveness
-- **prelude `None` vs python `None`** — runtime identity vs equality
-    semantics; needs a concrete decision before prelude lands
-- **`match self` shorthand in methods** — `match: case ...:` with implicit
-    `self`. nice ergonomics, ambiguous lookup. leaning: not in v1
-- **derivable traits beyond eq/hash/repr** — `Ord`, `Copy`-equivalent,
-    serialization hooks. probably opt-in via decorators rather than syntax
-
-## next steps
-
-1. pick variant-namespace rule and mutability default
-1. prototype `enum` parser extension in `ruff_python_parser`
-1. implement lowering transform in `crates/by_transforms/src/transforms/`
-    emitting the dataclass tree
-1. wire ty exhaustiveness check for `match` over enum types
-1. write reverse transform consuming the new `LoweringKind` tags
+`__match_args__` comes from dataclass for payload variants. generic enums lower
+to a `class Shape[T]:` (PEP 695) with the variant subclasses parametrised the
+same way.

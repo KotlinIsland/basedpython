@@ -105,6 +105,30 @@ fn finite_single_valued_union_alternatives<'db>(
         Type::NominalInstance(instance) if instance.has_known_class(db, KnownClass::Bool) => {
             Some(vec![Type::bool_literal(true), Type::bool_literal(false)])
         }
+        // a based payload enum (`enum class Expr: Lit(..) Add(..)`) splits into its
+        // closed set of variant types, so `match` over an enum *instance* (e.g.
+        // `self` in a method) is exhaustive — mirroring how a standard enum splits
+        // into its member literals below
+        Type::NominalInstance(instance)
+            if instance
+                .class_literal(db)
+                .as_static()
+                .and_then(|static_class| {
+                    crate::types::class::based_enum_variant_union(db, static_class)
+                })
+                .is_some() =>
+        {
+            let union = instance
+                .class_literal(db)
+                .as_static()
+                .and_then(|static_class| {
+                    crate::types::class::based_enum_variant_union(db, static_class)
+                })?;
+            Some(match union {
+                Type::Union(u) => u.elements(db).to_vec(),
+                other => vec![other],
+            })
+        }
         Type::NominalInstance(instance)
             if enum_metadata(db, instance.class_literal(db)).is_some()
                 && !ty.overrides_equality(db) =>

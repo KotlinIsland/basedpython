@@ -44,6 +44,11 @@ pub(crate) struct GenericPolyfill<'src> {
     parameters_targets: HashSet<String>,
     /// set when a Parameters spec lowering used `Any` for a named-only field
     pub(crate) needed_imports_any: bool,
+    /// generic class name → its `T`→`_T` rename map. based-enum variants lower
+    /// to module-level subclasses of the enum (`class _Tree_Node(Tree)`) that
+    /// reference the enum's type params in their field annotations; those refs
+    /// sit outside the enum body, so they are renamed here using the enum's map
+    generic_class_renames: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Default)]
@@ -116,6 +121,7 @@ impl<'src> GenericPolyfill<'src> {
             typevar_suffix_counter: 0,
             parameters_targets: HashSet::new(),
             needed_imports_any: false,
+            generic_class_renames: HashMap::new(),
         }
     }
 
@@ -424,6 +430,10 @@ impl<'src> GenericPolyfill<'src> {
 
     fn process_class(&mut self, class: &StmtClassDef) {
         let Some(tp) = &class.type_params else {
+            // a based-enum variant lowers to a module-level subclass of the enum
+            // with no type params of its own; rename the enum's params in its
+            // field annotations using the enum's recorded map
+            self.rename_variant_of_generic_enum(class);
             return;
         };
         if has_parameters_bound(&tp.type_params) {
@@ -437,6 +447,9 @@ impl<'src> GenericPolyfill<'src> {
         }
 
         let (generic_args, defs, rename_map) = self.process_type_params(&tp.type_params);
+        // record for module-level variant subclasses that reference these params
+        self.generic_class_renames
+            .insert(class.name.id.as_str().to_owned(), rename_map.clone());
         let generic_str = format!("Generic[{}]", generic_args.join(", "));
         self.needed_imports.generic = true;
 
@@ -492,6 +505,24 @@ impl<'src> GenericPolyfill<'src> {
         // Rename type param references in class body.
         for stmt in &class.body {
             rename_in_stmt(stmt, &rename_map, &mut self.edits);
+        }
+    }
+
+    /// Rename a generic enum's type params in a module-level variant subclass.
+    /// A variant lowers to `class _Enum_Variant(Enum): field: T`; its `T` refs
+    /// live outside the (already-processed) enum body, so they are renamed using
+    /// the enum's recorded `T`→`_T` map.
+    fn rename_variant_of_generic_enum(&mut self, class: &StmtClassDef) {
+        let Some(args) = &class.arguments else {
+            return;
+        };
+        let Some(Expr::Name(base)) = args.args.first() else {
+            return;
+        };
+        if let Some(rename_map) = self.generic_class_renames.get(base.id.as_str()).cloned() {
+            for stmt in &class.body {
+                rename_in_stmt(stmt, &rename_map, &mut self.edits);
+            }
         }
     }
 
@@ -903,6 +934,22 @@ fn rename_in_stmt(stmt: &Stmt, renames: &HashMap<String, String>, edits: &mut Ve
                 for s in &clause.body {
                     rename_in_stmt(s, renames, edits);
                 }
+            }
+        }
+        // descend into a nested class (e.g. an enum's nested variant classes)
+        // so the enclosing class's type-param references in its bases and field
+        // annotations are renamed too — after the polyfill the mangled `TypeVar`
+        // is bound at module scope, so the nested reference resolves to it. a
+        // nested class that introduces its *own* type params is polyfilled
+        // independently and may shadow the name, so skip it
+        Stmt::ClassDef(c) if c.type_params.is_none() => {
+            if let Some(args) = &c.arguments {
+                for base in &args.args {
+                    rename_in_expr(base, renames, edits);
+                }
+            }
+            for s in &c.body {
+                rename_in_stmt(s, renames, edits);
             }
         }
         _ => {}

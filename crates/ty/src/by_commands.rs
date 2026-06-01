@@ -31,7 +31,18 @@ pub(crate) fn parse_version(s: &str) -> anyhow::Result<Config> {
 
 #[allow(clippy::exit, clippy::print_stderr)]
 pub(crate) fn cmd_run(module: &str, min_version: &str) -> anyhow::Result<ExitStatus> {
-    let config = parse_version(min_version)?;
+    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    // `run` executes on a specific interpreter, so target *its* version: the
+    // emitted code (dataclass `slots=`, PEP 695 syntax, …) must match what that
+    // python actually supports. fall back to the `--min-version` flag only if
+    // the interpreter can't be probed
+    let config = match detect_python_version(&python) {
+        Some(version) => Config {
+            min_version: version,
+            ..Config::default()
+        },
+        None => parse_version(min_version)?,
+    };
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let tmp = tempfile::TempDir::new().context("failed to create temp directory")?;
 
@@ -63,7 +74,6 @@ pub(crate) fn cmd_run(module: &str, min_version: &str) -> anyhow::Result<ExitSta
 
     write_traceback_runtime(tmp.path(), &traceback_entries)?;
 
-    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
     let status = Command::new(&python)
         .arg(BY_RUNNER_FILENAME)
         .arg(module)
@@ -76,6 +86,21 @@ pub(crate) fn cmd_run(module: &str, min_version: &str) -> anyhow::Result<ExitSta
     // exiting while it's still in scope would leak the directory
     drop(tmp);
     std::process::exit(code);
+}
+
+/// Probe `python`'s `major.minor` version (e.g. `3.9`) so `run` can target the
+/// interpreter it will execute on. Returns `None` if the interpreter can't be
+/// run or its output can't be parsed.
+fn detect_python_version(python: &str) -> Option<PythonVersion> {
+    let output = Command::new(python)
+        .arg("-c")
+        .arg("import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()?.trim().parse().ok()
 }
 
 // ── build ────────────────────────────────────────────────────────────────────

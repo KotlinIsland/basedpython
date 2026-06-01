@@ -1,0 +1,41 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/based_enum.by
+---
+## Input
+```bython
+enum class Color:
+    case Red, Green
+    case Blue
+
+
+enum class Expr:
+    case Lit(value: int)
+    case Add(left: int, right: int)
+
+    def eval(self) -> int:
+        match self:
+            case Lit(v):
+                return v
+            case Add(a, b):
+                return a + b
+```
+
+## Output
+```bython
+enum class Color:
+    case Red, Green
+    case Blue
+
+
+enum class Expr:
+    case Lit(value: int)
+    case Add(left: int, right: int)
+
+    def eval(self) -> int:
+        match self:
+            case Lit(v):
+                return v
+            case Add(a, b):
+                return a + b
+```

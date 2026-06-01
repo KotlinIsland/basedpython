@@ -41,6 +41,14 @@ pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
         return Ok(source.to_owned());
     }
 
+    // --- Enum lowering: rewrite `enum` sum types to Python before the main
+    // pipeline, so member bodies (copied verbatim) are lowered downstream ---
+    let enum_lowered = transforms::enums::lower(source, config.min_version);
+    if let Some(first) = enum_lowered.errors.first() {
+        return Err(first.clone());
+    }
+    let source = enum_lowered.output.as_ref();
+
     // --- Phase 0: AST rewrite passes ---
     let (source, ast_errors, _phase0_map) =
         transforms::ast_driver::run_against_source(source, config, None);
@@ -113,16 +121,39 @@ pub fn transpile_typed_with_map(
         return Ok((out, source_map::line_table(original_source, &[])));
     }
 
-    // phase 0: AST passes, using the project db so type-aware passes resolve
-    // cross-module imports. `phase0_map` maps spliced lines → original lines
+    // enum lowering: rewrite `enum` sum types to Python first. when it fires,
+    // the working source differs from the project file, so type-aware passes
+    // and the final lowering run against a single-file db built from it
+    let enum_lowered = transforms::enums::lower(original_source, config.min_version);
+    if let Some(first) = enum_lowered.errors.first() {
+        return Err(first.clone().into());
+    }
+    let working_source = enum_lowered.output.as_ref();
+    let enum_changed = matches!(enum_lowered.output, std::borrow::Cow::Owned(_));
+
+    // phase 0: AST passes. with the project db (no enums) type-aware passes
+    // resolve cross-module imports; `phase0_map` maps spliced lines → working
+    // (post-enum) lines
+    let project = if enum_changed { None } else { Some((db, file)) };
     let (spliced, ast_errors, phase0_map) =
-        transforms::ast_driver::run_against_source(original_source, config, Some((db, file)));
+        transforms::ast_driver::run_against_source(working_source, config, project);
     if let Some(first) = ast_errors.first() {
         return Err(first.clone().into());
     }
     let spliced_lines = newline_count(spliced.as_ref());
     let (output, errors) = if let std::borrow::Cow::Owned(modified) = spliced {
         let (local_db, local_file) = make_in_memory_db(&modified);
+        let local_source_ref = ruff_db::source::source_text(&local_db, local_file);
+        let src = local_source_ref.as_str();
+        let module = ruff_db::parsed::parsed_module(&local_db, local_file).load(&local_db);
+        let model = ty_python_semantic::SemanticModel::new(&local_db, local_file);
+        let LoweringResult { output, errors } =
+            run_lowering_phase(src, module.suite(), config, &model);
+        (output, errors)
+    } else if enum_changed {
+        // ast_driver made no further changes, but the working source differs
+        // from the project file — parse it in a single-file db
+        let (local_db, local_file) = make_in_memory_db(working_source);
         let local_source_ref = ruff_db::source::source_text(&local_db, local_file);
         let src = local_source_ref.as_str();
         let module = ruff_db::parsed::parsed_module(&local_db, local_file).load(&local_db);
@@ -147,11 +178,28 @@ pub fn transpile_typed_with_map(
 
     // phases 1-2c only prepend preambles at the top and edit within lines, so
     // the spliced body keeps its line correspondence: prepend one `None` per
-    // generated leading line to lift `phase0_map` into final-output coordinates
+    // generated leading line to lift `phase0_map` into final-output coordinates.
+    // when the enum phase fired, also compose `working → original .by` lines
     let prepended = newline_count(&final_output).saturating_sub(spliced_lines);
-    let mut line_map: Vec<Option<u32>> = Vec::with_capacity(prepended + phase0_map.len());
+    let composed: Vec<Option<u32>> = if enum_changed {
+        phase0_map
+            .into_iter()
+            .map(|m| {
+                m.and_then(|working_line| {
+                    enum_lowered
+                        .line_map
+                        .get(working_line as usize)
+                        .copied()
+                        .flatten()
+                })
+            })
+            .collect()
+    } else {
+        phase0_map
+    };
+    let mut line_map: Vec<Option<u32>> = Vec::with_capacity(prepended + composed.len());
     line_map.extend(std::iter::repeat_n(None, prepended));
-    line_map.extend(phase0_map);
+    line_map.extend(composed);
 
     // verify last: on failure, map the generated span back to a `.by` range
     if let Err(mut err) = verify_syntax(&final_output) {
@@ -507,6 +555,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let mut unpack = reverse_transforms::unpack::UnpackReverse::new(src, &model);
     let mut overload = reverse_transforms::overload::OverloadReverse::new(src);
     let mut modifiers_rev = reverse_transforms::modifiers::ModifiersReverse::new(src);
+    let mut enums_rev = reverse_transforms::enums::EnumsReverse::new();
     let mut coalesce_rev = reverse_transforms::coalesce::CoalesceReverse::new(src);
     let mut generics_rev = reverse_transforms::generics::GenericsReverse::new(src);
     let mut auto_quote_rev = reverse_transforms::auto_quote::AutoQuoteReverse::new(src);
@@ -528,6 +577,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         tuple_type.visit_stmt(stmt);
         unpack.visit_stmt(stmt);
         modifiers_rev.visit_stmt(stmt);
+        enums_rev.visit_stmt(stmt);
         coalesce_rev.visit_stmt(stmt);
         auto_quote_rev.visit_stmt(stmt);
         compat_rev.visit_stmt(stmt);
@@ -575,6 +625,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(tuple_type.edits);
     fixes.extend(overload.edits);
     fixes.extend(modifiers_rev.edits);
+    fixes.extend(enums_rev.edits);
     fixes.extend(coalesce_rev.edits);
     fixes.extend(generics_rev.edits);
     fixes.extend(auto_quote_rev.edits);
@@ -774,6 +825,41 @@ mod python_parse_errors {
         assert!(
             errs[0].contains("sentinel"),
             "expected error mentioning `sentinel`, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn enum_sumtype_in_py_errors() {
+        let errs = parse_errors_in_py("enum class Color:\n    case Red\n");
+        assert!(
+            !errs.is_empty(),
+            "expected parse error for sum-type `enum` in .py file"
+        );
+        assert!(
+            errs[0].contains("enum"),
+            "expected error mentioning `enum`, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn enum_sumtype_in_by_no_errors() {
+        let (db, file) = make_in_memory_db("enum class Color:\n    case Red, Green\n");
+        let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
+        assert!(
+            module.errors().is_empty(),
+            "unexpected parse errors in .by file: {:?}",
+            module.errors()
+        );
+    }
+
+    #[test]
+    fn enum_module_attr_access_unaffected_in_py() {
+        // `enum.Enum` / `enum = …` are ordinary Python and must not be mistaken
+        // for a based-enum declaration
+        let errs = parse_errors_in_py("import enum\nx = enum.Enum\nenum = 5\n");
+        assert!(
+            errs.is_empty(),
+            "unexpected parse errors in .py file: {errs:?}"
         );
     }
 

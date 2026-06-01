@@ -47,6 +47,7 @@ basedpython is a Python-like language that transpiles to pure Python
 ## syntax extensions
 
 - [modifiers and visibility](features/modifiers.md)
+- [based enums (`enum class`)](features/enums.md)
 - [init method shorthand](features/init-method.md)
 - [empty declarations](features/empty-declarations.md)
 - [main function](features/main-function.md)
@@ -64,6 +65,10 @@ basedpython is a Python-like language that transpiles to pure Python
 - [`sentinel` declarations](features/sentinel.md)
 - [lazy imports](features/lazy-imports.md)
 - [repeated `_` parameters](features/repeated-underscore.md)
+
+## planned
+
+- [destructuring with `if let`](features/if-let.md)
 
 ## development
 

@@ -4,6 +4,7 @@ use std::collections::hash_map::Entry;
 use std::fmt::Display;
 
 use itertools::{Either, Itertools};
+use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -128,7 +129,17 @@ pub(crate) fn bind_typevar<'db>(
         {
             return Some(bound);
         }
-        if is_class_scope {
+        // a based-enum variant is conceptually generic in its enum's type
+        // parameters (`Tree[T]`'s `Node` variant carries `T`), so it is allowed
+        // to reach through to the enclosing enum's type params even though it is
+        // an inner class. treat its class scope as transparent for that purpose
+        if is_class_scope
+            && !ancestor_scope.node().as_class().is_some_and(|class_ref| {
+                let definition = index.expect_single_definition(class_ref);
+                let module = parsed_module(db, definition.file(db)).load(db);
+                class_ref.node(&module).is_enum_variant()
+            })
+        {
             crossed_class_scope = true;
         }
     }
@@ -159,10 +170,15 @@ pub(crate) fn typing_self<'db>(
         None,
         TypeVarKind::TypingSelf,
     );
-    let bounds = TypeVarBoundOrConstraints::UpperBound(Type::instance(
-        db,
-        class.identity_specialization(db),
-    ));
+    // for a based payload enum, `Self` ranges over the closed set of variant
+    // types rather than the (abstract) enum instance, so `match self` in a
+    // method is exhaustive over the variants — the same closed domain that a
+    // bare `Expr` annotation denotes
+    let self_bound = class
+        .as_static()
+        .and_then(|static_class| crate::types::class::based_enum_variant_union(db, static_class))
+        .unwrap_or_else(|| Type::instance(db, class.identity_specialization(db)));
+    let bounds = TypeVarBoundOrConstraints::UpperBound(self_bound);
     let typevar = TypeVarInstance::new(
         db,
         identity,

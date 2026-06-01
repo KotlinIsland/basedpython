@@ -849,7 +849,10 @@ pub(crate) fn check_static_class_definitions<'db>(
         }
 
         let scope = class.body_scope(db).scope(db);
-        if let Some(parent) = scope.parent() {
+        // a based-enum variant deliberately inherits and references the type
+        // parameters of its enclosing enum (`Tree[T]`'s `Node` carries `T`), so
+        // the usual "inner class shadows an outer typevar" checks do not apply
+        if let Some(parent) = scope.parent().filter(|_| !class_node.is_enum_variant()) {
             // Check that the class's own type parameters don't shadow
             // type variables from enclosing scopes (by name).
             if let Some(generic_context) = class.generic_context(db) {

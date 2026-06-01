@@ -18,11 +18,12 @@ use crate::{
     reachability::{DeclarationsIteratorExtension, binding_reachability},
     types::{
         ApplyTypeMappingVisitor, BoundTypeVarInstance, CallArguments, CallableType, ClassBase,
-        ClassLiteral, ClassType, DATACLASS_FLAGS, DataclassFlags, DataclassParams, GenericAlias,
-        GenericContext, KnownClass, KnownInstanceType, MaterializationKind, MemberLookupPolicy,
-        MetaclassCandidate, MetaclassTransformInfo, Parameter, Parameters, PropertyInstanceType,
-        Signature, SpecialFormType, StaticMroError, SubclassOfType, Truthiness, Type, TypeContext,
-        TypeMapping, TypeVarVariance, UnionBuilder, UnionType,
+        ClassLiteral, ClassType, DATACLASS_FLAGS, DataclassFlags, DataclassParams, EnumLiteralType,
+        GenericAlias, GenericContext, KnownClass, KnownInstanceType, MaterializationKind,
+        MemberLookupPolicy, MetaclassCandidate, MetaclassTransformInfo, Parameter, Parameters,
+        PropertyInstanceType, Signature, SpecialFormType, StaticMroError, SubclassOfType,
+        Truthiness, Type, TypeContext, TypeMapping, TypeVarVariance, UnionBuilder, UnionType,
+        binding_type,
         call::{CallError, CallErrorKind},
         callable::{CallableFunctionProvenance, CallableTypeKind},
         class::{
@@ -40,7 +41,7 @@ use crate::{
             is_implicit_staticmethod,
         },
         generics::Specialization,
-        infer::infer_unpack_types,
+        infer::{infer_unpack_types, original_class_type},
         infer_expression_type,
         known_instance::DeprecatedInstance,
         member::{Member, class_member},
@@ -267,11 +268,35 @@ impl<'db> StaticClassLiteral<'db> {
         let file = scope.file(db);
         let parsed = parsed_module(db, file).load(db);
         let class_def_node = scope.node(db).expect_class().node(&parsed);
-        class_def_node.type_params.as_ref().map(|type_params| {
-            let index = semantic_index(db, scope.file(db));
+        if let Some(type_params) = class_def_node.type_params.as_ref() {
+            let index = semantic_index(db, file);
             let definition = index.expect_single_definition(class_def_node);
-            GenericContext::from_type_params(db, index, definition, type_params)
-        })
+            return Some(GenericContext::from_type_params(
+                db,
+                index,
+                definition,
+                type_params,
+            ));
+        }
+        // a based-enum variant has no type params of its own but is conceptually
+        // generic in its enum's type parameters (`Tree[T]`'s `Node` carries `T`).
+        // it inherits the enclosing enum's generic context so that variant
+        // constructors infer the enum's typevars from their arguments. (the enum
+        // is also injected as a base in `explicit_bases`, giving the variant the
+        // matching subtype relationship)
+        if class_def_node.is_enum_variant() {
+            let index = semantic_index(db, file);
+            return index
+                .ancestor_scopes(scope.file_scope_id(db))
+                .skip(1)
+                .find_map(|(_, ancestor_scope)| {
+                    let class = ancestor_scope.node().as_class()?;
+                    let definition = index.expect_single_definition(class);
+                    original_class_type(db, definition)?.as_static()
+                })
+                .and_then(|enum_literal| enum_literal.pep695_generic_context(db));
+        }
+        None
     }
 
     pub(crate) fn legacy_generic_context(self, db: &'db dyn Db) -> Option<GenericContext<'db>> {
@@ -482,6 +507,26 @@ impl<'db> StaticClassLiteral<'db> {
             };
             if let Some(ty) = injected {
                 bases.push(ty);
+            }
+        }
+
+        // a based-enum variant subclasses its enum: so methods/classmethods/
+        // properties defined on the enum body are inherited by the variant, and
+        // a variant instance is a subtype of the enum. the enum is added
+        // specialized by its own typevars (`Tree[T]`) so a generic variant stays
+        // generic in the enum's type parameters
+        if class_stmt.is_enum_variant() {
+            let index = semantic_index(db, self.file(db));
+            if let Some(enum_literal) = index
+                .ancestor_scopes(self.body_scope(db).file_scope_id(db))
+                .skip(1)
+                .find_map(|(_, ancestor_scope)| {
+                    let class = ancestor_scope.node().as_class()?;
+                    let definition = index.expect_single_definition(class);
+                    original_class_type(db, definition)?.as_static()
+                })
+            {
+                bases.push(Type::from(enum_literal.identity_specialization(db)));
             }
         }
 
@@ -3027,6 +3072,89 @@ impl InheritanceCycle {
     pub(crate) const fn is_participant(self) -> bool {
         matches!(self, InheritanceCycle::Participant)
     }
+}
+
+/// For a based-enum sum type (`enum Shape:`), the union of its variants'
+/// instance types (`Circle | Square | Empty`) — what `Shape` denotes in a
+/// type-expression position, mirroring the transpiler's
+/// `Shape = Circle | Square | Empty` lowering. Returns `None` for any class
+/// that is not a based enum.
+///
+/// Tracked with a `None` cycle seed so a recursive enum (a variant whose field
+/// is annotated with the enum itself, e.g. `Tree`) terminates.
+#[salsa::tracked(cycle_initial=|_, _, _| None, heap_size=ruff_memory_usage::heap_size)]
+pub(crate) fn based_enum_variant_union<'db>(
+    db: &'db dyn Db,
+    class: StaticClassLiteral<'db>,
+) -> Option<Type<'db>> {
+    let module = parsed_module(db, class.file(db)).load(db);
+    let class_stmt = class.node(db, &module);
+    // only payload-bearing based enums denote a union of variant classes; an
+    // all-unit enum is an idiomatic `Enum` (its name is the enum type itself)
+    if !class_stmt.is_based_enum() || class_stmt.is_all_unit_enum() {
+        return None;
+    }
+    let index = semantic_index(db, class.file(db));
+    let mut elements: Vec<Type<'db>> = Vec::new();
+    for stmt in &class_stmt.body {
+        if let ast::Stmt::ClassDef(variant) = stmt
+            && variant.is_enum_variant()
+        {
+            if variant.has_synthetic_marker("variant_unit") {
+                // a payload-less variant is a *value* — model it as an
+                // enum-literal member (single-valued), so `A.Baz` is a value and
+                // `match` over it stays exhaustive
+                elements.push(Type::enum_literal(EnumLiteralType::new(
+                    db,
+                    ClassLiteral::Static(class),
+                    variant.name.id.clone(),
+                )));
+            } else {
+                let definition = index.expect_single_definition(variant);
+                // use the *identity* specialization (`W[T@Enum]`) rather than the
+                // default (`W[Unknown]`) so that subscripting the enum
+                // (`Enum[int]`) can substitute the type argument into the variant;
+                // otherwise the argument is lost and `W[str]` would pass as `W[int]`
+                if let Some(variant_literal) = binding_type(db, definition)
+                    .as_class_literal()
+                    .and_then(ClassLiteral::as_static)
+                {
+                    elements.push(Type::instance(
+                        db,
+                        variant_literal.identity_specialization(db),
+                    ));
+                } else if let Some(instance) = binding_type(db, definition).to_instance(db) {
+                    elements.push(instance);
+                }
+            }
+        }
+    }
+    (!elements.is_empty()).then(|| UnionType::from_elements(db, elements))
+}
+
+/// The payload-less (unit) variant names of a based enum, in declaration order —
+/// its enum-literal members, reached qualified as `A.Baz`. Returns `None` for a
+/// class that is not a based enum or that has no unit variants.
+pub(crate) fn based_enum_unit_member_names<'db>(
+    db: &'db dyn Db,
+    class: StaticClassLiteral<'db>,
+) -> Option<Vec<Name>> {
+    let module = parsed_module(db, class.file(db)).load(db);
+    let class_stmt = class.node(db, &module);
+    if !class_stmt.is_based_enum() {
+        return None;
+    }
+    let names: Vec<Name> = class_stmt
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            ast::Stmt::ClassDef(variant) if variant.has_synthetic_marker("variant_unit") => {
+                Some(variant.name.id.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    (!names.is_empty()).then_some(names)
 }
 
 fn explicit_bases_cycle_initial<'db>(

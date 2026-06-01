@@ -609,6 +609,33 @@ pub(crate) fn enum_metadata<'db>(
         }
     };
 
+    // basedpython all-unit `enum class Color: Red; Green` lowers to an idiomatic
+    // `Enum` whose members are the unit-variant names. they are nested class defs
+    // on the surface rather than `NAME = value` assignments, so synthesize the
+    // metadata directly (each member's value is an `auto()`-style int)
+    if let Some(names) = crate::types::class::based_enum_unit_member_names(db, class) {
+        let int_ty = KnownClass::Int.to_instance(db);
+        let mut members = FxIndexMap::default();
+        let mut auto_members = FxHashSet::default();
+        for name in names {
+            members.insert(name.clone(), int_ty);
+            auto_members.insert(name);
+        }
+        if members.is_empty() {
+            return None;
+        }
+        return Some(EnumMetadata {
+            members,
+            aliases: FxHashMap::default(),
+            auto_members,
+            value_annotation: None,
+            init_function: None,
+            new_function: None,
+            generate_next_value_function: None,
+            custom_enum_metaclass_new: false,
+        });
+    }
+
     // This is a fast path to avoid traversing the MRO of known classes
     if class
         .known(db)

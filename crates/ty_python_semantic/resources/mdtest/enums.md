@@ -3144,32 +3144,5 @@ reveal_type(into_regular_callable(StrEnum))
 - Typing spec: <https://typing.python.org/en/latest/spec/enums.html>
 - Documentation: <https://docs.python.org/3/library/enum.html>
 
-## basedpython: `enum class` modifier
-
-in basedpython, `enum class Foo` parses to a class with a synthetic `enum_class` decorator. ty
-injects `enum.Enum` as a base so the class behaves as an enum without needing the explicit `(Enum)`
-arg
-
-### enum members reachable as instances
-
-```by
-enum class Color:
-    RED = 1
-    GREEN = 2
-    BLUE = 3
-
-reveal_type(Color.RED)  # revealed: Color.RED
-```
-
-### `enum class` with explicit base
-
-```by
-enum class Color(str):
-    RED = "r"
-    GREEN = "g"
-
-reveal_type(Color.RED)  # revealed: Color.RED
-```
-
 [class-private names]: https://docs.python.org/3/reference/lexical_analysis.html#reserved-classes-of-identifiers
 [typing spec]: https://typing.python.org/en/latest/spec/enums.html#enum-members

@@ -35,12 +35,12 @@ use ruff_text_size::{Ranged, TextRange};
 
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, cast, coalesce, coalesce_chain, compat,
-    decl_site_variance, decorator_keyword, dedent_string, dynamic_keyword, empty_declarations, float_const,
-    generic_call, generics, identity_swap, implicit_typing, init_method, intersection, just_float,
-    kw_subscript,
-    literal_types, main_function, modifiers, mutable_defaults, none_chain, not_type, overload, postfix_await,
-    repeated_underscore, sentinel, super_keyword, top_star, tuple_index, type_is,
-    typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
+    decl_site_variance, decorator_keyword, dedent_string, dynamic_keyword, empty_declarations,
+    float_const, generic_call, generics, identity_swap, implicit_typing, init_method, intersection,
+    just_float, kw_subscript, literal_types, main_function, modifiers, mutable_defaults,
+    none_chain, not_type, overload, postfix_await, repeated_underscore, sentinel, super_keyword,
+    top_star, tuple_index, type_is, typed_dict_literal, typed_lambda, typeof_keyword, unpack,
+    use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -619,7 +619,17 @@ pub(crate) fn run_against_source<'a>(
             prefix.push_str(imp);
             prefix.push('\n');
         }
-        out.insert_str(0, &prefix);
+        // a `from __future__ import …` line must stay first (it's a syntax error
+        // anywhere else), so splice required imports in after it when present.
+        // every leading line here maps to `None`, so the order among them
+        // doesn't affect the line table built above
+        let future = "from __future__ import annotations\n";
+        let at = if out.starts_with(future) {
+            future.len()
+        } else {
+            0
+        };
+        out.insert_str(at, &prefix);
     }
     if !ctx.epilogue.is_empty() {
         if !out.ends_with('\n') {

@@ -1,5 +1,5 @@
 use ruff_formatter::write;
-use ruff_python_ast::{Decorator, Expr, NodeKind, StmtClassDef};
+use ruff_python_ast::{Decorator, Expr, ExprContext, NodeKind, StmtClassDef};
 use ruff_python_trivia::lines_after_ignoring_end_of_line_trivia;
 use ruff_text_size::Ranged;
 
@@ -10,12 +10,36 @@ use crate::comments::{SourceComment, leading_comments, trailing_comments};
 use crate::prelude::*;
 use crate::statement::clause::{ClauseHeader, clause};
 use crate::statement::suite::SuiteKind;
+use crate::verbatim::verbatim_text;
+
+/// True when this class is a basedpython `enum class` declaration: the parser
+/// tags it with a synthetic `enum_def` marker decorator (a zero-binding `Name`
+/// with `ExprContext::Invalid`). The formatter has no printer for the based-enum
+/// surface (`enum class Name:` + bare variants), so reformatting from the AST
+/// would mangle it into plain `class Name:` / `class Variant`. Render it
+/// verbatim instead.
+fn is_based_enum(item: &StmtClassDef) -> bool {
+    item.decorator_list.iter().any(|decorator| {
+        matches!(
+            &decorator.expression,
+            Expr::Name(name)
+                if name.id.as_str() == "enum_def" && name.ctx == ExprContext::Invalid
+        )
+    })
+}
 
 #[derive(Default)]
 pub struct FormatStmtClassDef;
 
 impl FormatNodeRule<StmtClassDef> for FormatStmtClassDef {
     fn fmt_fields(&self, item: &StmtClassDef, f: &mut PyFormatter) -> FormatResult<()> {
+        // basedpython `enum` blocks have no AST-faithful surface printer; emit
+        // them verbatim so formatting doesn't rewrite `enum Name:` / bare
+        // variants into `enum class Name:` / `class Variant`
+        if is_based_enum(item) {
+            return write!(f, [verbatim_text(item.range())]);
+        }
+
         let StmtClassDef {
             range: _,
             node_index: _,

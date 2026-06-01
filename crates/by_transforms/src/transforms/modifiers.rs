@@ -17,7 +17,6 @@
 //! `class def`             → `@classmethod`
 //! `data class`            → `@dataclass(slots=True)` (from `dataclasses`)
 //! `frozen data class`     → `@dataclass(frozen=True, slots=True)`
-//! `enum class`            → base class `Enum` added (from `enum`)
 //! `let x = 5`             → `x: Final = 5` (from `typing`)
 //! `class a = 1`           → `a: ClassVar = 1` (from `typing`)
 //! `newtype Foo = int`     → `Foo = NewType("Foo", int)` (from `typing`)
@@ -44,7 +43,6 @@ pub(crate) struct Modifiers<'src> {
     pub(crate) needs_abstractmethod: bool,
     pub(crate) needs_override: bool,
     pub(crate) needs_dataclass: bool,
-    pub(crate) needs_enum: bool,
     pub(crate) needs_protocol: bool,
     pub(crate) needs_classvar: bool,
     pub(crate) needs_newtype: bool,
@@ -67,7 +65,6 @@ impl<'src> Modifiers<'src> {
             needs_abstractmethod: false,
             needs_override: false,
             needs_dataclass: false,
-            needs_enum: false,
             needs_protocol: false,
             needs_classvar: false,
             needs_newtype: false,
@@ -130,13 +127,6 @@ impl<'src> Modifiers<'src> {
                         format!("@dataclass(frozen=True, slots=True)\n{indent}"),
                         dec.range(),
                     )));
-                }
-                "enum_class" => {
-                    self.needs_enum = true;
-                    // Remove the modifier prefix; the enum base class is inserted separately.
-                    self.edits
-                        .push(Fix::safe_edit(Edit::range_deletion(dec.range())));
-                    self.insert_enum_base(class);
                 }
                 "protocol_class" => {
                     self.needs_protocol = true;
@@ -371,10 +361,6 @@ impl<'src> Modifiers<'src> {
         }
     }
 
-    fn insert_enum_base(&mut self, class: &StmtClassDef) {
-        self.insert_base_class(class, "Enum");
-    }
-
     fn insert_protocol_base(&mut self, class: &StmtClassDef) {
         self.insert_base_class(class, "Protocol");
     }
@@ -489,10 +475,6 @@ impl AstPass for ModifiersPass<'_> {
         if inner.needs_dataclass {
             ctx.required_imports
                 .push("from dataclasses import dataclass".to_owned());
-        }
-        if inner.needs_enum {
-            ctx.required_imports
-                .push("from enum import Enum".to_owned());
         }
         if inner.needs_protocol {
             ctx.required_imports
@@ -669,39 +651,6 @@ mod tests {
                 from dataclasses import dataclass
                 @dataclass(frozen=True, slots=True)
                 class Point: ...
-            "},
-        );
-    }
-
-    #[test]
-    fn enum_class() {
-        check(
-            "enum class Color: ...\n",
-            indoc! {"
-                from enum import Enum
-                class Color(Enum): ...
-            "},
-        );
-    }
-
-    #[test]
-    fn enum_class_no_body() {
-        check(
-            "enum class Color\n",
-            indoc! {"
-                from enum import Enum
-                class Color(Enum): ...
-            "},
-        );
-    }
-
-    #[test]
-    fn enum_class_with_base() {
-        check(
-            "enum class Color(str): ...\n",
-            indoc! {"
-                from enum import Enum
-                class Color(str, Enum): ...
             "},
         );
     }

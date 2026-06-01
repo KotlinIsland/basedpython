@@ -156,6 +156,89 @@ Grid()[(1, 2)]
 }
 
 #[test]
+fn enum_lowers_to_sealed_dataclass_hierarchy() {
+    let out = transpile(
+        "\
+enum class Shape:
+    case Circle(radius: int)
+    case Point
+
+    def kind(self) -> str:
+        return type(self).__name__
+",
+    );
+    assert!(out.contains("class Shape:"), "got:\n{out}");
+    // variants are module-level subclasses of the enum, attached back as
+    // `Shape.Circle` / `Shape.Point` (the unit variant as its singleton value)
+    assert!(out.contains("class _Shape_Circle(Shape):"), "got:\n{out}");
+    assert!(out.contains("class _Shape_Point(Shape):"), "got:\n{out}");
+    assert!(out.contains("Shape.Circle = _Shape_Circle"), "got:\n{out}");
+    assert!(out.contains("Shape.Point = _Shape_Point()"), "got:\n{out}");
+    // unit variants get a derived repr (the bare name), not the default object repr
+    assert!(
+        out.contains("def __repr__(self): return \"Point\""),
+        "unit variant should have a derived __repr__\n{out}"
+    );
+}
+
+#[test]
+fn enum_bounded_generic_lowers_type_args_not_declaration() {
+    // a bounded generic enum must not leak the declaration text
+    // `[T: constraints (int, str)]` (invalid python) into the output; on the
+    // 3.10 polyfill path the params become constrained `TypeVar`s and the
+    // variant field annotations are renamed to match
+    let out = transpile(
+        "\
+enum class Box[T: constraints (int, str)]:
+    case Full(T)
+    case Empty
+",
+    );
+    assert!(
+        !out.contains("constraints ("),
+        "constraints leaked into output\n{out}"
+    );
+    assert!(
+        out.contains("class _Box_Full(Box):"),
+        "variant should subclass the enum\n{out}"
+    );
+    assert!(
+        out.contains("_0: _T"),
+        "variant field should use the mangled typevar\n{out}"
+    );
+}
+
+#[test]
+fn enum_all_unit_runs_as_python_enum() {
+    // an all-unit enum lowers to `enum.Enum` + `auto()`, which runs on any
+    // supported Python (no match/union syntax involved)
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+enum class Color:
+    case Red, Green, Blue
+
+print(Color.Green.name)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "Green");
+}
+
+#[test]
 fn run_traceback_rewritten_to_by_source() {
     // a runtime error must surface a traceback in `.by` coordinates: the
     // original file path, the original line numbers, and the original surface

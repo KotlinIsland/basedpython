@@ -1,7 +1,7 @@
 use crate::place::Place;
 use crate::types::{
-    CallArguments, DataclassParams, KnownClass, KnownInstanceType, MemberLookupPolicy,
-    SpecialFormType, StaticClassLiteral, SubclassOfType, Type, TypeContext,
+    CallArguments, DataclassFlags, DataclassParams, KnownClass, KnownInstanceType,
+    MemberLookupPolicy, SpecialFormType, StaticClassLiteral, SubclassOfType, Type, TypeContext,
     call::CallError,
     callable::CallableFunctionProvenance,
     function::KnownFunction,
@@ -89,7 +89,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // decorator, so applying it here would resolve to `Unknown` and poison
             // the whole class type
             if let ast::Expr::Name(name) = &decorator.expression
-                && matches!(name.id.as_str(), "enum_class" | "protocol_class")
+                && matches!(
+                    name.id.as_str(),
+                    "enum_class"
+                        | "protocol_class"
+                        | "enum_def"
+                        | "variant_unit"
+                        | "variant_tuple"
+                )
                 && source
                     .as_bytes()
                     .get(usize::from(decorator.range.start()))
@@ -121,6 +128,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let mut deprecated = None;
         let mut type_check_only = false;
         let mut dataclass_params = None;
+        // based-enum payload variants construct like frozen dataclasses: ty
+        // synthesizes a positional `__init__` from their annotated fields. unit
+        // variants are payload-less *values* and are modelled as enum-literal
+        // members (see `enum_metadata`), so they need no dataclass synthesis
+        if class_node.has_synthetic_marker("variant_tuple") {
+            dataclass_params = Some(DataclassParams::from_flags(
+                db,
+                DataclassFlags::default() | DataclassFlags::FROZEN,
+            ));
+        }
         let mut dataclass_transformer_params = None;
         let mut total_ordering = false;
         let infer_original_class_ty = |deprecated,
