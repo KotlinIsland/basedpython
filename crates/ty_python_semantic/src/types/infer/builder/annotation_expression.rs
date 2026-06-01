@@ -183,12 +183,23 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             }
 
             ast::Expr::Name(name) => match name.ctx {
-                ast::ExprContext::Load => infer_name_or_attribute(
-                    self.infer_name_expression(name),
-                    annotation,
-                    self,
-                    pep_613_policy,
-                ),
+                ast::ExprContext::Load => {
+                    // resolve the bare name with `IN_TYPE_EXPRESSION` set so the
+                    // basedpython `dynamic` keyword resolves to `Any` here, just
+                    // as it does in a nested type expression. only the name
+                    // lookup is wrapped — no recursion happens, so the
+                    // nested-type-expression tracking is unaffected
+                    let previously_in_type_expression = self
+                        .context
+                        .inference_flags
+                        .replace(InferenceFlags::IN_TYPE_EXPRESSION, true);
+                    let name_ty = self.infer_name_expression(name);
+                    self.context.inference_flags.set(
+                        InferenceFlags::IN_TYPE_EXPRESSION,
+                        previously_in_type_expression,
+                    );
+                    infer_name_or_attribute(name_ty, annotation, self, pep_613_policy)
+                }
                 ast::ExprContext::Invalid => TypeAndQualifiers::declared(Type::unknown()),
                 ast::ExprContext::Store | ast::ExprContext::Del => TypeAndQualifiers::declared(
                     todo_type!("Name expression annotation in Store/Del context"),

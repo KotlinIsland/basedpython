@@ -35,7 +35,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, cast, coalesce, coalesce_chain, compat,
-    decl_site_variance, decorator_keyword, dedent_string, empty_declarations, float_const,
+    decl_site_variance, decorator_keyword, dedent_string, dynamic_keyword, empty_declarations, float_const,
     generic_call, generics, identity_swap, implicit_typing, init_method, intersection, just_float,
     kw_subscript,
     literal_types, main_function, modifiers, mutable_defaults, none_chain, not_type, overload, postfix_await,
@@ -324,6 +324,7 @@ pub(crate) fn run_against_source<'a>(
 
     let not_type_pass = not_type::NotType::new();
     let intersection_pass = intersection::IntersectionType::new();
+    let dynamic_keyword_pass = dynamic_keyword::DynamicKeywordPass::new();
     let type_is_pass = type_is::TypeIs::new();
     let top_star_pass = top_star::TopStar::new();
     let identity_swap_pass = identity_swap::IdentitySwap::new(source_ref);
@@ -409,6 +410,7 @@ pub(crate) fn run_against_source<'a>(
     let type_aware: &[&dyn TypeAwarePass] = &[
         &not_type_pass,
         &intersection_pass,
+        &dynamic_keyword_pass,
         &just_float_pass,
         &float_const_pass,
         &kw_subscript_pass,

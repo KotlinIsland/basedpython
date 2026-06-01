@@ -9131,6 +9131,25 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 } else {
                     Place::Undefined.into()
                 }
+            })
+            // basedpython only: `dynamic` is the surface spelling of
+            // `typing.Any` in a type expression, lowered to `Any` by the
+            // transpiler. resolve the bare keyword to the `Any` special form so
+            // type checking matches. gated on type-expression position so a
+            // value-position `dynamic` stays an ordinary identifier; only
+            // reached when otherwise unbound, so a local `dynamic = …` binding
+            // still shadows it
+            .or_fall_back_to(db, || {
+                if self.is_basedpython_file()
+                    && symbol_name == "dynamic"
+                    && self
+                        .inference_flags()
+                        .contains(InferenceFlags::IN_TYPE_EXPRESSION)
+                {
+                    typing_symbol(db, "Any")
+                } else {
+                    Place::Undefined.into()
+                }
             });
 
         let ty =

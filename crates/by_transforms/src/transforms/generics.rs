@@ -1102,6 +1102,24 @@ mod tests {
     }
 
     #[test]
+    fn class_bound_float_constant_typevar() {
+        // `float.inf` in a bound must be erased to `float` when the bound is
+        // copied into the synthesized `TypeVar(...)` call, or it `AttributeError`s
+        // at runtime (the bound expression IS evaluated, unlike a native PEP 695
+        // bound on 3.12+ under `from __future__ import annotations`).
+        check(
+            indoc! {"
+                class Foo[T: float.inf]: ...
+            "},
+            indoc! {"
+                from typing import TypeVar, Generic
+                _T = TypeVar(\"_T\", bound=float)
+                class Foo(Generic[_T]): ...
+            "},
+        );
+    }
+
+    #[test]
     fn class_bound_literal_typevar() {
         // Bound `1 | 2` must be rewritten to `Literal[1, 2]`, and the default
         // must not be silently dropped when a bound is present.

@@ -6,7 +6,7 @@ use crate::types::{
     callable::CallableFunctionProvenance,
     function::KnownFunction,
     infer::{
-        TypeInferenceBuilder,
+        InferenceFlags, TypeInferenceBuilder,
         builder::{DeclaredAndInferredType, DeferredExpressionState},
         original_class_type,
     },
@@ -403,6 +403,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     ) {
         let previous_typevar_binding_context = self.typevar_binding_context.replace(definition);
         let defer_class_args = self.in_stub() || self.is_basedpython_file();
+        // resolve bases with `IN_TYPE_EXPRESSION` set so the basedpython
+        // `dynamic` keyword resolves to `Any` in a base list (`class C(dynamic)`),
+        // matching the transpiler's `dynamic → Any` rewrite. only `dynamic` name
+        // resolution consults this flag, so other bases are unaffected
+        let previously_in_type_expression = self
+            .context
+            .inference_flags
+            .replace(InferenceFlags::IN_TYPE_EXPRESSION, true);
         for base in class.bases() {
             if defer_class_args {
                 self.infer_expression_with_state(
@@ -414,6 +422,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 self.infer_expression(base, TypeContext::default());
             }
         }
+        self.context.inference_flags.set(
+            InferenceFlags::IN_TYPE_EXPRESSION,
+            previously_in_type_expression,
+        );
         self.typevar_binding_context = previous_typevar_binding_context;
 
         if let Some(arguments) = class.arguments.as_deref()

@@ -700,10 +700,20 @@ impl<'a> SemanticModel<'a> {
     }
 
     /// True if `name` is a basedpython pseudo-keyword that has no Python
-    /// binding but is recognized by the transpiler. Currently this is just
-    /// `constraints`, used in typevar bound syntax (`T: constraints(int, str)`)
+    /// binding but is recognized by the transpiler:
+    /// - `constraints`, used in typevar bound syntax (`T: constraints(int, str)`)
+    /// - `dynamic`, the surface spelling of `typing.Any`, in any type position.
+    ///   in value position `dynamic` is an ordinary identifier, so it stays
+    ///   subject to the usual undefined-name check
     fn is_basedpython_pseudo_keyword(&self, name: &ast::ExprName) -> bool {
-        self.in_basedpython_file() && name.id.as_str() == "constraints"
+        if !self.in_basedpython_file() {
+            return false;
+        }
+        match name.id.as_str() {
+            "constraints" => true,
+            "dynamic" => self.in_type_definition(),
+            _ => false,
+        }
     }
 
     /// True if `name` is the LHS of a `name is T` `TypeIs`-style annotation

@@ -20,3 +20,11 @@ F821 Undefined name `Z`
    |              ^
 11 |     pass
    |
+
+F821 Undefined name `dynamic`
+  --> F821_basedpython.by:19:7
+   |
+18 | # in value position `dynamic` is an ordinary name — still flagged when unbound
+19 | print(dynamic)
+   |       ^^^^^^^
+   |

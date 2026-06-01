@@ -2,6 +2,7 @@
 
 use ruff_python_ast::{Expr, ExprName};
 use ty_python_core::{global_scope, place_table, semantic_index};
+use ty_python_semantic::types::{DynamicType, Type};
 use ty_python_semantic::{HasType, SemanticModel};
 
 pub(crate) trait TypeInfo {
@@ -20,6 +21,12 @@ pub(crate) trait TypeInfo {
     fn attr_base_is_type_context(&self, base: &ExprName) -> bool;
 
     fn is_function(&self, name: &ExprName) -> bool;
+
+    /// whether `expr` resolves to `typing.Any` (the explicitly-annotated
+    /// dynamic type). distinguishes the special form from a shadowing binding
+    /// or the `Unknown` that an unresolved / invalid type expression yields,
+    /// both of which are also dynamic types
+    fn is_any(&self, expr: &Expr) -> bool;
 
     /// whether `name` is unbound at the scope enclosing `anchor`
     /// (used to pick a fresh temp-variable name)
@@ -74,6 +81,11 @@ impl TypeInfo for SemanticModel<'_> {
     fn is_function(&self, name: &ExprName) -> bool {
         name.inferred_type(self)
             .is_some_and(|ty| ty.as_function_literal().is_some())
+    }
+
+    fn is_any(&self, expr: &Expr) -> bool {
+        expr.inferred_type(self)
+            .is_some_and(|ty| matches!(ty, Type::Dynamic(DynamicType::Any)))
     }
 
     fn is_unbound_at(&self, name: &str, anchor: &Expr) -> bool {

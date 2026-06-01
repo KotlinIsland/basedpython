@@ -9,3 +9,11 @@ class C(C):
 
 class D(list[Z]):
     pass
+
+# `dynamic` is the surface spelling of `typing.Any` in type position — not undefined
+x: dynamic
+def f(a: dynamic) -> dynamic: ...
+xs: list[dynamic]
+
+# in value position `dynamic` is an ordinary name — still flagged when unbound
+print(dynamic)

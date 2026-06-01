@@ -141,6 +141,24 @@ pub(crate) fn rewrite_type_expr(source: &str, types: &dyn TypeInfo, expr: &Expr)
         all_edits.extend(fix.into_edits());
     }
 
+    // `dynamic` → `Any` in the same composed rewrite, so a `type X = dynamic`
+    // / `def f[T: dynamic]` polyfilled on Python < 3.12 doesn't leak the bare
+    // keyword (an undefined name the final parse can't catch)
+    let mut dk = crate::transforms::dynamic_keyword::DynamicKeyword::new(types);
+    dk.emit_in_type_expr(expr);
+    for fix in dk.edits {
+        all_edits.extend(fix.into_edits());
+    }
+
+    // `float.inf` / `-float.inf` / `float.nan` → `float`, likewise — a
+    // `def f[T: float.inf]` polyfilled to `TypeVar("_T", bound=…)` would
+    // otherwise copy the bound verbatim and `AttributeError` at runtime
+    let mut fc = crate::transforms::float_const::FloatConst::new(types);
+    fc.emit_in_type_expr(expr);
+    for fix in fc.edits {
+        all_edits.extend(fix.into_edits());
+    }
+
     if all_edits.is_empty() {
         return None;
     }
