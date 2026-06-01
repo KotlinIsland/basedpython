@@ -207,6 +207,7 @@ impl From<Operator> for AugmentedOperator {
             Operator::RShift => Self::RShift,
             Operator::Sub => Self::Sub,
             Operator::Coalesce => unreachable!("?? has no augmented assignment form"),
+            Operator::Result => unreachable!("? has no augmented assignment form"),
         }
     }
 }

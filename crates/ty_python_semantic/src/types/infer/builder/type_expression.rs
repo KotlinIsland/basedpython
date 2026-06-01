@@ -21,7 +21,7 @@ use crate::types::tuple::{TupleSpecBuilder, TupleType};
 use ty_python_core::scope::ScopeKind;
 
 use crate::types::{
-    BindingContext, CallableType, DynamicType, GenericContext, IntersectionBuilder,
+    BindingContext, CallableType, DynamicType, GenericContext, InternedType, IntersectionBuilder,
     IntersectionType, KnownClass, KnownInstanceType, LintDiagnosticGuard, LiteralValueTypeKind,
     Parameter, Parameters, SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeContext,
     TypeFormType, TypeGuardType, TypeIsType, TypeMapping, TypeVarKind, UnionBuilder, UnionType,
@@ -835,6 +835,27 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         ),
                     );
                     return Type::unknown();
+                }
+                // basedpython: `T?` in type position is the optional type
+                // `T | None`. a nested optional (`T??`) cannot collapse into a
+                // union (the outer- and inner-`None` states would merge), so
+                // each extra layer wraps the inner type in `WrappedOptional`
+                if matches!(unary.op, ast::UnaryOp::Optional) && self.is_basedpython_file() {
+                    let inner = self.infer_type_expression(&unary.operand);
+                    let operand_is_optional = matches!(
+                        &*unary.operand,
+                        ast::Expr::UnaryOp(operand)
+                            if matches!(operand.op, ast::UnaryOp::Optional)
+                    );
+                    if operand_is_optional {
+                        return Type::KnownInstance(KnownInstanceType::WrappedOptional(
+                            InternedType::new(self.db(), inner),
+                        ));
+                    }
+                    return UnionType::from_elements_leave_aliases(
+                        self.db(),
+                        [inner, Type::none(self.db())],
+                    );
                 }
                 if !self.in_string_annotation() {
                     self.infer_unary_expression(unary);
@@ -2067,6 +2088,17 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         builder.into_diagnostic(format_args!(
                             "`{ty}` is not a generic class",
                             ty = ty.inner(self.db()).display(self.db())
+                        ));
+                    }
+                    Type::unknown()
+                }
+                KnownInstanceType::WrappedOptional(_) => {
+                    if !self.in_string_annotation() {
+                        self.infer_expression(slice, TypeContext::default());
+                    }
+                    if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, subscript) {
+                        builder.into_diagnostic(format_args!(
+                            "a wrapped optional cannot be specialized",
                         ));
                     }
                     Type::unknown()

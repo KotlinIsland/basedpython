@@ -1382,7 +1382,7 @@ impl From<Operator> for OperatorPrecedence {
             Operator::BitOr => OperatorPrecedence::BitwiseOr,
             Operator::BitXor => OperatorPrecedence::BitwiseXor,
             Operator::BitAnd => OperatorPrecedence::BitwiseAnd,
-            Operator::Coalesce => OperatorPrecedence::BooleanOperation,
+            Operator::Coalesce | Operator::Result => OperatorPrecedence::BooleanOperation,
         }
     }
 }

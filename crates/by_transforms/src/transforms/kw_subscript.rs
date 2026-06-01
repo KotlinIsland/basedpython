@@ -33,6 +33,16 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
         &self.source[usize::from(range.start())..usize::from(range.end())]
     }
 
+    /// render a subscript argument value, lowering any postfix `?` it carries
+    /// (`M[V=int?]`). our whole-subscript replacement subsumes `optional_type`'s
+    /// narrow edits, so we lower the optional here; the runtime `Optional[...]`
+    /// import for nested `??` is still raised by `OptionalTypePass`, which walks
+    /// every expression independently
+    fn value_src(&self, expr: &Expr) -> String {
+        crate::transforms::optional_type::rewrite_type_expr(self.source, expr)
+            .unwrap_or_else(|| self.src(expr.range()).to_owned())
+    }
+
     fn rewrite_subscript(&mut self, sub: &ruff_python_ast::ExprSubscript) {
         // single keyword arg, e.g. `A[T=int]` (no surrounding tuple).
         // for a multi-typevar class with declared defaults, expand to a
@@ -47,7 +57,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
                 && let Some(typevars) = types.class_typevars(&sub.value)
                 && typevars.len() > 1
             {
-                let value_src = self.src(n.value.range()).to_owned();
+                let value_src = self.value_src(n.value.as_ref());
                 let mut parts: Vec<String> = Vec::with_capacity(typevars.len());
                 for (tv_name, tv_default) in &typevars {
                     if tv_name == target.id.as_str() {
@@ -58,7 +68,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
                         // typevar has no default and no kw arg — fall back
                         // to drop-name behavior; ty's diagnostics will catch
                         // the missing-arg case
-                        let value_src = self.src(n.value.range()).to_owned();
+                        let value_src = self.value_src(n.value.as_ref());
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
                             value_src,
                             n.range(),
@@ -74,7 +84,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
                 )));
                 return;
             }
-            let value_src = self.src(n.value.range()).to_owned();
+            let value_src = self.value_src(n.value.as_ref());
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
                 value_src,
                 n.range(),
@@ -129,7 +139,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
             let mut filled_all = true;
             for (tv_name, tv_default) in &typevars {
                 if let Some(value_expr) = by_name.get(tv_name.as_str()) {
-                    parts.push(self.src(value_expr.range()).to_owned());
+                    parts.push(self.value_src(value_expr));
                 } else if let Some(default) = tv_default {
                     parts.push(default.clone());
                 } else {
@@ -161,9 +171,13 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
                     && let Expr::Name(target) = n.target.as_ref()
                     && matches!(target.ctx, ruff_python_ast::ExprContext::Invalid)
                 {
-                    return format!("{}={}", target.id.as_str(), self.src(n.value.range()));
+                    return format!(
+                        "{}={}",
+                        target.id.as_str(),
+                        self.value_src(n.value.as_ref())
+                    );
                 }
-                self.src(e.range()).to_owned()
+                self.value_src(e)
             })
             .collect();
         let replacement = format!("{value_src}.__getitem__({})", parts.join(", "));
@@ -249,6 +263,21 @@ mod tests {
     #[test]
     fn single_kw_drops_name() {
         check("a: A[T=int]\n", "a: A[int]\n");
+    }
+
+    /// a `?` on a kw-subscript value lowers instead of leaking the bare token
+    /// (our whole-subscript edit would otherwise subsume `optional_type`'s)
+    #[test]
+    fn single_kw_value_optional_lowers() {
+        check("a: A[T=int?]\n", "a: A[int | None]\n");
+    }
+
+    #[test]
+    fn getitem_kw_value_optional_lowers() {
+        check(
+            "d = data[idx, mode=int?]\n",
+            "d = data.__getitem__(idx, mode=int | None)\n",
+        );
     }
 
     #[test]

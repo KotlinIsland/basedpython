@@ -38,6 +38,7 @@ impl FormatRule<Operator, PyFormatContext<'_>> for FormatOperator {
             Operator::BitAnd => "&",
             Operator::FloorDiv => "//",
             Operator::Coalesce => "??",
+            Operator::Result => "?",
         };
 
         token(operator).fmt(f)

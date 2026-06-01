@@ -71,6 +71,27 @@ fn run_executes_module() {
 }
 
 #[test]
+fn run_force_unwrap_yields_inner_value() {
+    // `Some(x)` lowers to the `Optional(x)` wrapper; force-unwrapping it must
+    // yield the inner value, not the wrapper object
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "x = Some(5)\nprint(x! + 1)\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "6");
+}
+
+#[test]
 fn run_invokes_top_level_main() {
     // a top-level `def main` with no hand-written call still executes when the
     // module is run, via the synthesised `if __name__ == "__main__"` guard

@@ -816,6 +816,61 @@ mod python_parse_errors {
     }
 
     #[test]
+    fn optional_type_in_py_errors() {
+        let errs = parse_errors_in_py("x: int?\n");
+        assert!(
+            !errs.is_empty(),
+            "expected parse error for `T?` optional type in .py file"
+        );
+        assert!(
+            errs[0].contains("optional/result type"),
+            "expected error mentioning optional/result type, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn result_type_in_py_errors() {
+        let errs = parse_errors_in_py("x: int ? ValueError\n");
+        assert!(
+            !errs.is_empty(),
+            "expected parse error for `T ? E` result type in .py file"
+        );
+    }
+
+    #[test]
+    fn propagate_operator_in_py_errors() {
+        let errs = parse_errors_in_py("x = foo()^\n");
+        assert!(
+            !errs.is_empty(),
+            "expected parse error for `^` propagate in .py file"
+        );
+        assert!(
+            errs[0].contains("propagate"),
+            "expected error mentioning propagate, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn force_unwrap_in_py_errors() {
+        let errs = parse_errors_in_py("x = foo()!\n");
+        assert!(
+            !errs.is_empty(),
+            "expected parse error for `!` force-unwrap in .py file"
+        );
+        assert!(
+            errs[0].contains("force-unwrap"),
+            "expected error mentioning force-unwrap, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn xor_still_valid_in_py() {
+        // a real bitwise-xor expression must NOT be flagged as basedpython-only
+        let errs = parse_errors_in_py("x = a ^ b\n");
+        assert!(errs.is_empty(), "unexpected parse errors: {errs:?}");
+    }
+
+    #[test]
     fn sentinel_in_py_errors() {
         let errs = parse_errors_in_py("sentinel A\n");
         assert!(

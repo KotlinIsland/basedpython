@@ -478,7 +478,10 @@ impl<'src> Lexer<'src> {
                 } else if self.cursor.eat_char('.') {
                     TokenKind::QuestionDot
                 } else {
-                    TokenKind::Unknown
+                    // basedpython: a lone `?` is the postfix optional-type
+                    // marker (`T?`) and the result-type separator (`T ? E`).
+                    // the parser gates it behind `is_basedpython`
+                    TokenKind::Question
                 }
             }
 

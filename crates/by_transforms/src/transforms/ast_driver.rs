@@ -36,11 +36,11 @@ use ruff_text_size::{Ranged, TextRange};
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, cast, coalesce, coalesce_chain, compat,
     decl_site_variance, decorator_keyword, dedent_string, dynamic_keyword, empty_declarations,
-    float_const, generic_call, generics, identity_swap, implicit_typing, init_method, intersection,
-    just_float, kw_subscript, literal_types, main_function, modifiers, mutable_defaults,
-    none_chain, not_type, overload, postfix_await, repeated_underscore, sentinel, super_keyword,
-    top_star, tuple_index, type_is, typed_dict_literal, typed_lambda, typeof_keyword, unpack,
-    use_site_variance,
+    float_const, force_unwrap, generic_call, generics, identity_swap, implicit_typing, init_method,
+    intersection, just_float, kw_subscript, literal_types, main_function, modifiers,
+    mutable_defaults, none_chain, not_type, optional_type, overload, postfix_await, propagate,
+    repeated_underscore, sentinel, some_ctor, super_keyword, top_star, tuple_index, type_is,
+    typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -355,7 +355,11 @@ pub(crate) fn run_against_source<'a>(
     let literal_types_pass = literal_types::LiteralTypePass::new(source_ref);
     let callable_pass = callable::CallableSyntaxPass::new(source_ref);
     let coalesce_text_pass = coalesce::NoneCoalescePass::new(source_ref);
+    let force_unwrap_pass = force_unwrap::ForceUnwrapPass::new(source_ref);
+    let some_ctor_pass = some_ctor::SomeCtorPass::new();
+    let propagate_pass = propagate::PropagatePass::new(source_ref);
     let none_chain_pass = none_chain::NoneChainPass::new(source_ref);
+    let optional_type_pass = optional_type::OptionalTypePass::new(source_ref);
     let generics_pass = generics::GenericPolyfillPass::new(source_ref, config.clone());
     let variance_pass = decl_site_variance::VarianceStripPass::new();
     let anon_named_tuple_pass =
@@ -419,10 +423,20 @@ pub(crate) fn run_against_source<'a>(
         &tuple_types_pass,
         &literal_types_pass,
         &callable_pass,
+        // `T?` → `T | None`; a type-position edit, disjoint from the
+        // value-position `??` / `?.` lowerings below
+        &optional_type_pass,
         // coalesce sees `?.` LHS via source ranges; must run BEFORE
         // none_chain so its wider `??` edit wins over none_chain's narrow
         // `?.` edit when both target the same span
         &coalesce_text_pass,
+        // `expr!` → `_force_unwrap(expr)`; narrow insert/replace edits that compose
+        // with sibling operator lowerings inside the operand
+        &force_unwrap_pass,
+        // `Some(x)` → `Optional(x)`; a narrow identifier rename
+        &some_ctor_pass,
+        // `expr^` → guard hoisted before the enclosing statement + unwrapped value
+        &propagate_pass,
         &none_chain_pass,
         // generics emits wide replacements covering whole type-params
         // headers; variance's narrow def-site deletion gets dropped by

@@ -114,7 +114,10 @@ impl TypePosWalker<'_> {
                 self.visit_type_expr(&b.left, TypePos::Nested);
                 self.visit_type_expr(&b.right, TypePos::Nested);
             }
-            Expr::UnaryOp(u) if matches!(u.op, UnaryOp::Not) => {
+            // `not T` (negation) and `T?` (optional) both carry a nested type
+            // expression in their operand, so descend so sibling transforms
+            // (intersection, not, float, …) apply inside `(not A)?`, `(A & B)?`
+            Expr::UnaryOp(u) if matches!(u.op, UnaryOp::Not | UnaryOp::Optional) => {
                 self.visit_type_expr(&u.operand, TypePos::Nested);
             }
             Expr::Subscript(s) => {

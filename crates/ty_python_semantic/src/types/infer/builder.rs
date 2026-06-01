@@ -9150,6 +9150,24 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 } else {
                     Place::Undefined.into()
                 }
+            })
+            // basedpython only: `Some` is the present-case optional constructor.
+            // It has no runtime definition in real Python — the transpiler lowers
+            // `Some(x)` to the injected `Optional(x)` wrapper — so it's resolved
+            // magically here rather than via a typeshed stub. Only reached when
+            // otherwise unbound, so a local `Some = …` binding still shadows it.
+            // It takes exactly one value (so `Some()` / `Some(1, 2)` are arity
+            // errors); the return is `Any` until the wrapped-optional value type
+            // is settled.
+            .or_fall_back_to(db, || {
+                if self.is_basedpython_file() && symbol_name == "Some" {
+                    let value = Parameter::positional_only(Some(Name::new_static("value")))
+                        .with_annotated_type(Type::object());
+                    let signature = Signature::new(Parameters::new(db, [value]), Type::any());
+                    Place::bound(Type::single_callable(db, signature)).into()
+                } else {
+                    Place::Undefined.into()
+                }
             });
 
         let ty =
@@ -10184,6 +10202,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ast::UnaryOp::Not => {
                     unreachable!("Not operator is handled in its own case");
                 }
+                ast::UnaryOp::Optional | ast::UnaryOp::Propagate | ast::UnaryOp::Force => {
+                    unreachable!("basedpython postfix operators are handled in their own case");
+                }
             };
 
             match operand_type.try_call_dunder(
@@ -10213,6 +10234,44 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             (_, Type::TypeAlias(alias)) => {
                 self.infer_unary_expression_type(op, alias.value_type(self.db()), unary)
+            }
+
+            // basedpython postfix `!` force-unwrap and `^` propagate both peel
+            // one absent layer. On a `WrappedOptional` they yield the wrapped
+            // inner type; on a union they strip the absent arms — `None` for an
+            // optional (`T | None`) and any `BaseException` subtype for a
+            // result-like union (`int | TypeError`) — leaving the present value
+            (
+                ast::UnaryOp::Force | ast::UnaryOp::Propagate,
+                Type::KnownInstance(KnownInstanceType::WrappedOptional(inner)),
+            ) => inner.inner(self.db()),
+            (ast::UnaryOp::Force | ast::UnaryOp::Propagate, Type::Union(union)) => {
+                let none = Type::none(self.db());
+                let base_exception = KnownClass::BaseException.to_instance(self.db());
+                let is_absent = |element: Type<'db>| {
+                    element == none
+                        || (!element.is_dynamic()
+                            && element.is_subtype_of(self.db(), base_exception))
+                };
+                let present: Vec<Type<'db>> = union
+                    .elements(self.db())
+                    .iter()
+                    .copied()
+                    .filter(|element| !is_absent(*element))
+                    .collect();
+                if present.len() == union.elements(self.db()).len() {
+                    // nothing to unwrap — unwrap of a non-optional union
+                    todo_type!("basedpython unwrap of non-optional")
+                } else {
+                    UnionType::from_elements(self.db(), present)
+                }
+            }
+
+            // basedpython postfix `?` and `^` / `!` on non-optional operands.
+            // These are wrapped-type surface syntax that the transpiler lowers
+            // away; ty does not yet model the remaining unwrap/propagate cases
+            (ast::UnaryOp::Optional | ast::UnaryOp::Propagate | ast::UnaryOp::Force, _) => {
+                todo_type!("basedpython wrapped-type operator")
             }
 
             (ast::UnaryOp::UAdd, Type::LiteralValue(literal)) => match literal.kind() {
@@ -10274,6 +10333,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     ast::UnaryOp::UAdd => "__pos__",
                     ast::UnaryOp::USub => "__neg__",
                     ast::UnaryOp::Not => unreachable!(),
+                    ast::UnaryOp::Optional | ast::UnaryOp::Propagate | ast::UnaryOp::Force => {
+                        unreachable!()
+                    }
                 };
 
                 match tvar.typevar(self.db()).bound_or_constraints(self.db()) {

@@ -39,30 +39,10 @@ impl<'ast> Visitor<'ast> for NoneCoalesce<'_> {
         if let Expr::BinOp(b) = expr
             && matches!(b.op, Operator::Coalesce)
         {
-            // a literal LHS that is statically known to be non-None has no
-            // need for the `is not None` guard. emit just the LHS — python's
-            // own constant-fold will warn on `1 is not None` otherwise
-            if is_non_none_literal(&b.left) {
-                let lhs = self.src(b.left.range());
-                self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    lhs.to_owned(),
-                    expr.range(),
-                )));
-                return;
-            }
-            let rhs = self.src(b.right.range());
-            let replacement = match expand_none_chain(&b.left, self.source) {
-                Some(expanded) => format!("_t if (_t := {expanded}) is not None else {rhs}"),
-                None => {
-                    let lhs = self.src(b.left.range());
-                    if is_trivially_pure(&b.left) {
-                        format!("{lhs} if {lhs} is not None else {rhs}")
-                    } else {
-                        // hoist to walrus so LHS is evaluated exactly once
-                        format!("_t if (_t := {lhs}) is not None else {rhs}")
-                    }
-                }
-            };
+            // build the whole (possibly chained) `??` expansion in one edit over
+            // the outer expression's range, then stop — recursing into the
+            // operands here would emit overlapping edits for any nested `??`
+            let replacement = self.expand_coalesce(expr);
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
                 replacement,
                 expr.range(),
@@ -70,6 +50,56 @@ impl<'ast> Visitor<'ast> for NoneCoalesce<'_> {
             return;
         }
         walk_expr(self, expr);
+    }
+}
+
+impl NoneCoalesce<'_> {
+    /// Lower a `??` expression to a conditional. Chained `??` recurses, so
+    /// `a ?? b ?? c` becomes a nested `… if … is not None else …` rather than
+    /// stranding the inner `??` as verbatim source. The walrus temp `_t` is
+    /// reused safely: a nested `_t` only lives inside a branch that is no longer
+    /// referenced once the enclosing `(_t := …)` is taken.
+    fn expand_coalesce(&self, expr: &Expr) -> String {
+        let Expr::BinOp(b) = expr else {
+            return self.operand_value(expr);
+        };
+        if !matches!(b.op, Operator::Coalesce) {
+            return self.operand_value(expr);
+        }
+        // a literal LHS statically known to be non-None short-circuits to the LHS
+        // (avoids a `1 is not None` constant-fold warning)
+        if is_non_none_literal(&b.left) {
+            return self.operand_value(&b.left);
+        }
+        let rhs = self.operand_value(&b.right);
+        match expand_none_chain(&b.left, self.source) {
+            Some(expanded) => format!("_t if (_t := {expanded}) is not None else {rhs}"),
+            None if is_trivially_pure(&b.left) => {
+                let lhs = self.src(b.left.range());
+                format!("{lhs} if {lhs} is not None else {rhs}")
+            }
+            None => {
+                // a chained (left-associative) `??` puts another coalesce on the
+                // left; recurse through `operand_value` so it is lowered rather
+                // than copied verbatim. hoist to walrus so the LHS runs once
+                let lhs = self.operand_value(&b.left);
+                format!("_t if (_t := {lhs}) is not None else {rhs}")
+            }
+        }
+    }
+
+    /// Render an operand as a plain value: a nested `??` is expanded, a `?.`
+    /// chain is lowered, otherwise its source is used verbatim.
+    fn operand_value(&self, expr: &Expr) -> String {
+        if let Expr::BinOp(b) = expr
+            && matches!(b.op, Operator::Coalesce)
+        {
+            return self.expand_coalesce(expr);
+        }
+        if let Some(expanded) = expand_none_chain(expr, self.source) {
+            return expanded;
+        }
+        self.src(expr.range()).to_owned()
     }
 }
 
@@ -147,6 +177,32 @@ mod tests {
     #[test]
     fn basic_coalesce() {
         check("x = a ?? b\n", "x = a if a is not None else b\n");
+    }
+
+    #[test]
+    fn chained_coalesce_recurses() {
+        // chained `??` lowers in one edit, recursing into the nested coalesce
+        // rather than stranding it as verbatim `??` source
+        check(
+            "x = a ?? b ?? c\n",
+            "x = _t if (_t := a if a is not None else b) is not None else c\n",
+        );
+    }
+
+    #[test]
+    fn chained_coalesce_composes_with_optional_annotation() {
+        // the chain and the `int?` annotation are lowered by disjoint edits in
+        // the same statement — neither clobbers the other
+        check(
+            indoc::indoc! {"
+                def f(a: int?, b: int?, c: int) -> int:
+                    return a ?? b ?? c
+            "},
+            indoc::indoc! {"
+                def f(a: int | None, b: int | None, c: int) -> int:
+                    return _t if (_t := a if a is not None else b) is not None else c
+            "},
+        );
     }
 
     #[test]

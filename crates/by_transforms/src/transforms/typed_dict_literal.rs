@@ -99,6 +99,8 @@ pub(crate) struct TypedDictLiteral<'src> {
     /// Lib's preamble step turns this into the `from typing import Literal`
     /// import.
     pub(crate) needs_literal_import: bool,
+    /// set when a nested `T??` field needs the runtime `Optional[...]` wrapper
+    pub(crate) needs_optional_runtime: bool,
 }
 
 impl<'src> TypedDictLiteral<'src> {
@@ -111,6 +113,7 @@ impl<'src> TypedDictLiteral<'src> {
             range_to_class: Vec::new(),
             needs_import: false,
             needs_literal_import: false,
+            needs_optional_runtime: false,
         }
     }
 
@@ -233,6 +236,28 @@ impl<'src> TypedDictLiteral<'src> {
             Expr::Tuple(t) if t.parenthesized && !t.elts.is_empty() => {
                 let parts: Vec<String> = t.elts.iter().map(|e| self.render_field_type(e)).collect();
                 format!("tuple[{}]", parts.join(", "))
+            }
+            // `T?` → `T | None` (nested `T??` → `Optional[T | None]`) so an
+            // optional field type composes instead of leaking `?`
+            Expr::UnaryOp(u) if matches!(u.op, ruff_python_ast::UnaryOp::Optional) => {
+                let mut depth: usize = 1;
+                let mut inner: &Expr = u.operand.as_ref();
+                while let Expr::UnaryOp(u2) = inner {
+                    if u2.op != ruff_python_ast::UnaryOp::Optional {
+                        break;
+                    }
+                    depth += 1;
+                    inner = u2.operand.as_ref();
+                }
+                let inner_str = self.render_field_type(inner);
+                if depth >= 2 {
+                    self.needs_optional_runtime = true;
+                }
+                format!(
+                    "{}{inner_str} | None{}",
+                    "Optional[".repeat(depth - 1),
+                    "]".repeat(depth - 1)
+                )
             }
             _ if is_literal_value(expr) => {
                 self.needs_literal_import = true;
@@ -398,6 +423,10 @@ impl AstPass for TypedDictLiteralPass<'_> {
         if inner.needs_literal_import {
             ctx.required_imports
                 .push("from typing import Literal".to_owned());
+        }
+        if inner.needs_optional_runtime {
+            ctx.required_imports
+                .push(super::wrapped_runtime::OPTIONAL_RUNTIME.to_owned());
         }
         if inner.needs_import {
             // synthesized classes use `closed=True` / `extra_items=T` (PEP 728),

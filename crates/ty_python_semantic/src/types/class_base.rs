@@ -191,6 +191,7 @@ impl<'db> ClassBase<'db> {
                 | KnownInstanceType::Specialization(_)
                 | KnownInstanceType::UnionType(_)
                 | KnownInstanceType::Literal(_)
+                | KnownInstanceType::WrappedOptional(_)
                 | KnownInstanceType::LiteralStringAlias(_)
                 | KnownInstanceType::NamedTupleSpec(_)
                 | KnownInstanceType::Sentinel(_)

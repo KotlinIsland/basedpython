@@ -2,8 +2,21 @@
 
 use ruff_python_ast::{Expr, ExprName};
 use ty_python_core::{global_scope, place_table, semantic_index};
-use ty_python_semantic::types::{DynamicType, Type};
+use ty_python_semantic::types::{DynamicType, KnownClass, Type};
 use ty_python_semantic::{HasType, SemanticModel};
+
+/// How the postfix `^` / `!` operators test the "absent" arm of an operand's
+/// wrapped type. `T?` lowers to `T | None`, so its absent arm is `None`; a
+/// result-like `T | E` (e.g. `int | TypeError`) signals absence with an error
+/// value, so the guard tests against `BaseException` instead
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum AbsentTest {
+    /// optional form — guard tests `x is None` and returns the `None`
+    IsNone,
+    /// result form — guard tests `isinstance(x, BaseException)` and returns
+    /// the error value
+    IsException,
+}
 
 pub(crate) trait TypeInfo {
     /// whether `X[…]` where `X` is `name` treats the slice as type arguments.
@@ -52,6 +65,13 @@ pub(crate) trait TypeInfo {
     /// is a `ParamSpec` (e.g. `class A[**P]` or `class A[P: Parameters]`).
     /// returns `false` when `expr` is not a generic class
     fn class_first_typevar_is_paramspec(&self, expr: &Expr) -> bool;
+
+    /// classify the "absent" arm of `expr`'s type for `^` / `!` propagation.
+    /// returns [`AbsentTest::IsException`] when any arm of the (possibly union)
+    /// type is a `BaseException` subtype — a result-like `T | E` — else
+    /// [`AbsentTest::IsNone`] when the type admits `None`. `None` when ty
+    /// resolves no type, or the type is neither optional nor result-like
+    fn propagate_absent_test(&self, expr: &Expr) -> Option<AbsentTest>;
 }
 
 impl TypeInfo for SemanticModel<'_> {
@@ -157,6 +177,29 @@ impl TypeInfo for SemanticModel<'_> {
         ctx.variables(self.db())
             .next()
             .is_some_and(|tv| tv.is_paramspec(self.db()))
+    }
+
+    fn propagate_absent_test(&self, expr: &Expr) -> Option<AbsentTest> {
+        let ty = expr.inferred_type(self)?;
+        let db = self.db();
+        let base_exception = KnownClass::BaseException.to_instance(db);
+        let elements: Vec<Type> = match ty {
+            Type::Union(union) => union.elements(db).to_vec(),
+            other => vec![other],
+        };
+        // an exception arm wins over a `None` arm: a `T | E` (or a decomposed
+        // `(T ? E)?` carrying both) propagates the error. `Any`/`Unknown` arms
+        // are assignable to anything, so exclude them from the exception probe
+        if elements
+            .iter()
+            .any(|t| !t.is_dynamic() && t.is_assignable_to(db, base_exception))
+        {
+            Some(AbsentTest::IsException)
+        } else if elements.iter().any(|t| t.is_none(db)) {
+            Some(AbsentTest::IsNone)
+        } else {
+            None
+        }
     }
 }
 

@@ -51,6 +51,7 @@ pub enum ComparableOperator {
     BitAnd,
     FloorDiv,
     Coalesce,
+    Result,
 }
 
 impl From<ast::Operator> for ComparableOperator {
@@ -70,6 +71,7 @@ impl From<ast::Operator> for ComparableOperator {
             ast::Operator::BitAnd => Self::BitAnd,
             ast::Operator::FloorDiv => Self::FloorDiv,
             ast::Operator::Coalesce => Self::Coalesce,
+            ast::Operator::Result => Self::Result,
         }
     }
 }
@@ -80,6 +82,9 @@ pub enum ComparableUnaryOp {
     Not,
     UAdd,
     USub,
+    Optional,
+    Propagate,
+    Force,
 }
 
 impl From<ast::UnaryOp> for ComparableUnaryOp {
@@ -89,6 +94,9 @@ impl From<ast::UnaryOp> for ComparableUnaryOp {
             ast::UnaryOp::Not => Self::Not,
             ast::UnaryOp::UAdd => Self::UAdd,
             ast::UnaryOp::USub => Self::USub,
+            ast::UnaryOp::Optional => Self::Optional,
+            ast::UnaryOp::Propagate => Self::Propagate,
+            ast::UnaryOp::Force => Self::Force,
         }
     }
 }

@@ -137,6 +137,11 @@ impl From<&Expr> for ResolvedPythonType {
                     ResolvedPythonType::Atom(_) => ResolvedPythonType::TypeError,
                     _ => ResolvedPythonType::Unknown,
                 },
+                // basedpython postfix `?` / `^` / `!` — lowered away before
+                // python-level type inference
+                UnaryOp::Optional | UnaryOp::Propagate | UnaryOp::Force => {
+                    ResolvedPythonType::Unknown
+                }
             },
 
             // Binary operators.
@@ -335,7 +340,9 @@ impl From<&Expr> for ResolvedPythonType {
                             _ => {}
                         }
                     }
-                    Operator::MatMult | Operator::Coalesce => {}
+                    // basedpython surface syntax, lowered away before reaching
+                    // python-level type inference
+                    Operator::MatMult | Operator::Coalesce | Operator::Result => {}
                 }
                 ResolvedPythonType::Unknown
             }

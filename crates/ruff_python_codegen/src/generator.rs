@@ -297,7 +297,11 @@ impl<'a> Generator<'a> {
                     self.p(")");
                     if let Some(returns) = returns {
                         self.p(" -> ");
-                        self.unparse_expr(returns, precedence::MAX);
+                        // render at the same precedence as a variable annotation
+                        // so a union return type stays unparenthesised
+                        // (`-> int | None`) while a bare tuple still groups
+                        // (`-> (int, str)`)
+                        self.unparse_expr(returns, precedence::COMMA);
                     }
                     self.p(":");
                 });
@@ -420,6 +424,7 @@ impl<'a> Generator<'a> {
                         Operator::BitAnd => "&",
                         Operator::FloorDiv => "//",
                         Operator::Coalesce => unreachable!("??= is not valid Python"),
+                        Operator::Result => unreachable!("?= is not valid Python"),
                     });
                     self.p("= ");
                     self.unparse_expr(value, precedence::AUG_ASSIGN);
@@ -1006,6 +1011,7 @@ impl<'a> Generator<'a> {
                     BitAnd("&", BIT_AND),
                     FloorDiv("//", FLOORDIV),
                     Coalesce("??", OR),
+                    Result("?", OR),
                 );
                 group_if!(prec, {
                     self.unparse_expr(left, prec + u8::from(rassoc));
@@ -1019,6 +1025,7 @@ impl<'a> Generator<'a> {
                 range: _,
                 node_index: _,
             }) => {
+                let op_is_postfix = op.is_postfix();
                 let (op, prec) = opprec!(
                     un,
                     op,
@@ -1026,11 +1033,22 @@ impl<'a> Generator<'a> {
                     Invert("~", INVERT),
                     Not("not ", NOT),
                     UAdd("+", UADD),
-                    USub("-", USUB)
+                    USub("-", USUB),
+                    // basedpython postfix operators render after the operand;
+                    // MAX precedence so they read as trailers (`load()^.value`)
+                    // and parenthesise looser operands (`(a + b)!`)
+                    Optional("?", MAX),
+                    Propagate("^", MAX),
+                    Force("!", MAX),
                 );
                 group_if!(prec, {
-                    self.p(op);
-                    self.unparse_expr(operand, prec);
+                    if op_is_postfix {
+                        self.unparse_expr(operand, prec);
+                        self.p(op);
+                    } else {
+                        self.p(op);
+                        self.unparse_expr(operand, prec);
+                    }
                 });
             }
             Expr::Lambda(ast::ExprLambda {
@@ -1554,6 +1572,12 @@ impl<'a> Generator<'a> {
     ) {
         let mut generator = Generator::new(self.indent, self.line_ending);
         generator.unparse_expr(val, precedence::FORMATTED_VALUE);
+        // basedpython: a value rendering with a trailing `!` (a force-unwrap)
+        // would be misread as the `!` conversion-flag marker, so parenthesise it
+        if generator.buffer.ends_with('!') {
+            generator.buffer.insert(0, '(');
+            generator.buffer.push(')');
+        }
         let brace = if generator.buffer.starts_with('{') {
             // put a space to avoid escaping the bracket
             "{ "
@@ -1711,6 +1735,26 @@ mod tests {
         let module = parse_module(contents).unwrap();
         let mut generator = Generator::new(indentation, line_ending).with_mode(unparse_mode);
         generator.unparse_suite(module.suite());
+        generator.generate()
+    }
+
+    /// Round-trip basedpython source: parse with the basedpython grammar and
+    /// re-render in [`Mode::BasedPython`] so basedpython-only surface syntax
+    /// (`T?`, `T ? E`, `expr^`, `expr!`, `?.`) is preserved.
+    fn based_round_trip(contents: &str) -> String {
+        let indentation = Indentation::default();
+        let line_ending = LineEnding::default();
+        let parsed = ruff_python_parser::parse(
+            contents,
+            ParseOptions::from(ruff_python_ast::PySourceType::BasedPython),
+        )
+        .expect("basedpython source should parse without errors");
+        let Mod::Module(ModModule { body, .. }) = parsed.into_syntax() else {
+            panic!("source code didn't return ModModule")
+        };
+        let mut generator =
+            Generator::new(&indentation, line_ending).with_mode(UnparseMode::BasedPython);
+        generator.unparse_suite(&body);
         generator.generate()
     }
 
@@ -2211,5 +2255,41 @@ if True:
             inp,
         );
         assert_eq!(got, out);
+    }
+
+    #[test_case::test_case("x: int?" ; "optional bare")]
+    #[test_case::test_case("def f() -> int?:\n    return None" ; "optional return ann")]
+    #[test_case::test_case("x: list[int?]" ; "optional nested in subscript")]
+    #[test_case::test_case("x: int ? TypeError" ; "result")]
+    #[test_case::test_case("x: int | str ? KeyError | IndexError" ; "result over unions")]
+    #[test_case::test_case("x: dict[str, int]? ? ValueError" ; "result of optional value")]
+    #[test_case::test_case("x = foo()^" ; "propagate")]
+    #[test_case::test_case("x = load()^.value" ; "propagate then attribute")]
+    #[test_case::test_case("x = foo()!" ; "force")]
+    #[test_case::test_case("x = (a + b)!" ; "force parenthesises looser operand")]
+    #[test_case::test_case("x = a?.b" ; "optional chain still works")]
+    fn basedpython_wrapped_round_trip(contents: &str) {
+        // `based_round_trip` emits the platform line ending, so normalise the
+        // expected value the same way (mirrors the other round-trip tests);
+        // otherwise the multi-line cases fail on windows (CRLF vs LF)
+        assert_eq!(
+            based_round_trip(contents),
+            contents.replace('\n', LineEnding::default().as_str())
+        );
+    }
+
+    /// infix bitwise-xor must NOT be swallowed by the postfix `^` operator
+    #[test]
+    fn caret_stays_infix_xor_when_operand_follows() {
+        assert_eq!(based_round_trip("x = a ^ b"), "x = a ^ b");
+        assert_eq!(based_round_trip("x = a ^ b ^ c"), "x = a ^ b ^ c");
+    }
+
+    /// a trailing `!` inside an interpolation is the conversion flag, not the
+    /// force-unwrap operator; a parenthesised `(x!)` re-enables force-unwrap
+    #[test]
+    fn force_unwrap_yields_to_fstring_conversion() {
+        assert_eq!(based_round_trip(r#"x = f"{y!r}""#), r#"x = f"{y!r}""#);
+        assert_eq!(based_round_trip(r#"x = f"{(y!)}""#), r#"x = f"{(y!)}""#);
     }
 }

@@ -610,6 +610,9 @@ impl From<UnaryOp> for TokenKind {
             UnaryOp::Not => TokenKind::Not,
             UnaryOp::UAdd => TokenKind::Plus,
             UnaryOp::USub => TokenKind::Minus,
+            UnaryOp::Optional => TokenKind::Question,
+            UnaryOp::Propagate => TokenKind::CircumFlex,
+            UnaryOp::Force => TokenKind::Exclamation,
         }
     }
 }
@@ -632,6 +635,7 @@ impl From<Operator> for TokenKind {
             Operator::BitAnd => TokenKind::Amper,
             Operator::FloorDiv => TokenKind::DoubleSlash,
             Operator::Coalesce => TokenKind::DoubleQuestion,
+            Operator::Result => TokenKind::Question,
         }
     }
 }

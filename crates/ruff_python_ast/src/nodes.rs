@@ -2691,6 +2691,10 @@ pub enum Operator {
     FloorDiv,
     /// basedpython: `a ?? b` — None-coalescing operator
     Coalesce,
+    /// basedpython: `T ? E` — result-type separator (`Result[T, E]`). This is
+    /// type-level surface syntax, never a runtime operator; it is lowered
+    /// away before codegen of the final python
+    Result,
 }
 
 impl Operator {
@@ -2710,6 +2714,7 @@ impl Operator {
             Operator::BitAnd => "&",
             Operator::FloorDiv => "//",
             Operator::Coalesce => "??",
+            Operator::Result => "?",
         }
     }
 
@@ -2730,6 +2735,8 @@ impl Operator {
             Operator::BitAnd => "__and__",
             Operator::FloorDiv => "__floordiv__",
             Operator::Coalesce => "__coalesce__",
+            // type-level syntax, never dispatched at runtime
+            Operator::Result => "__result__",
         }
     }
 
@@ -2750,6 +2757,7 @@ impl Operator {
             Operator::BitAnd => "__iand__",
             Operator::FloorDiv => "__ifloordiv__",
             Operator::Coalesce => "__icoalesce__",
+            Operator::Result => "__iresult__",
         }
     }
 
@@ -2770,6 +2778,7 @@ impl Operator {
             Operator::BitAnd => "__rand__",
             Operator::FloorDiv => "__rfloordiv__",
             Operator::Coalesce => "__rcoalesce__",
+            Operator::Result => "__rresult__",
         }
     }
 }
@@ -2788,6 +2797,14 @@ pub enum UnaryOp {
     Not,
     UAdd,
     USub,
+    /// basedpython: postfix `?` optional-type marker — `T?` (`Optional[T]`)
+    Optional,
+    /// basedpython: postfix `^` propagate operator — `expr^` early-returns
+    /// the absent case of a wrapped value
+    Propagate,
+    /// basedpython: postfix `!` force-unwrap operator — `expr!` panics on
+    /// the absent case of a wrapped value
+    Force,
 }
 
 impl UnaryOp {
@@ -2797,7 +2814,19 @@ impl UnaryOp {
             UnaryOp::Not => "not",
             UnaryOp::UAdd => "+",
             UnaryOp::USub => "-",
+            UnaryOp::Optional => "?",
+            UnaryOp::Propagate => "^",
+            UnaryOp::Force => "!",
         }
+    }
+
+    /// basedpython postfix operators render *after* their operand (`T?`,
+    /// `expr^`, `expr!`); the standard unary operators are prefix.
+    pub const fn is_postfix(self) -> bool {
+        matches!(
+            self,
+            UnaryOp::Optional | UnaryOp::Propagate | UnaryOp::Force
+        )
     }
 }
 

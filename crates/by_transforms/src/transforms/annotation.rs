@@ -3,8 +3,8 @@ use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::Ranged;
 
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
-use crate::transforms::literal_types;
 use crate::transforms::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
+use crate::transforms::{literal_types, optional_type};
 use crate::type_info::TypeInfo;
 
 /// Rewrites tuple literal types in type positions.
@@ -224,8 +224,12 @@ impl<'src> TupleLiteralType<'src> {
                     .unwrap_or_else(|| self.src(s.value.range()).to_owned());
                 format!("*tuple[{value_src}, ...]")
             }
+            // a plain element type — also lower a nested `?` (`(int, str?)`),
+            // which `transform_annotation` doesn't handle. element-scoped, so the
+            // tuple's whole-expression edit subsumes the optional pass's edit
             _ => self
                 .transform_annotation(elt)
+                .or_else(|| optional_type::rewrite_type_expr(self.source, elt))
                 .unwrap_or_else(|| self.src(elt.range()).to_owned()),
         }
     }
@@ -324,6 +328,14 @@ mod tests {
     #[test]
     fn tuple_in_union() {
         check("a: (int, str) | None\n", "a: tuple[int, str] | None\n");
+    }
+
+    /// a `?` on a tuple element lowers inside the `tuple[...]` rendering —
+    /// `transform_annotation` doesn't itself handle optionals, so the element
+    /// lowering routes through `optional_type`
+    #[test]
+    fn tuple_element_optional() {
+        check("a: (int, str?)\n", "a: tuple[int, str | None]\n");
     }
 
     #[test]

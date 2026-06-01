@@ -1,9 +1,25 @@
 # wrapped optional and result types
 
-> **STATUS: planned for version 0.2, not yet implemented.** the `T?`,
-> `T ? E` type forms, auto-wrap at return sites, and the `^` / `!` / `??` /
-> `?.` postfix operators against wrapped values are not yet recognized by
-> the parser. `??` and `?.` against plain `T | None` work today — see
+> **status.** the `T?` / `T ? E` type forms and the postfix `^` / `!`
+> operators are recognized by the parser. a single `T?` lowers to `T | None`
+> and is understood by the type checker. a nested optional is a distinct
+> wrapped type: `T??` lowers to the runtime `Optional[T | None]` wrapper and the
+> type checker renders it in `?` notation (`int??`), keeping it distinct from
+> `int | None`. the postfix `!` force-unwrap and `^` propagate each peel one
+> optional layer — the type checker reduces `int?? ! → int | None → int` (and the
+> same for `^`). both operators also peel a result-like union (`T | E`, the error
+> arm a `BaseException` subtype): the type checker yields the value type, the
+> transpiler's `^` guard tests `isinstance(x, BaseException)` (returning the error
+> early) and `expr!` raises `RuntimeError` chaining the error as `__cause__`. the
+> transpiler lowers `expr!` to a `_force_unwrap(...)` call that raises on the
+> absent value, and `expr^` to a guard hoisted before the enclosing statement
+> (`if x is None: return x` for an optional). the present-case constructor `Some(x)`
+> lowers to the runtime `Optional(x)` wrapper; `Some` is magically resolved in
+> the builtin scope (no import, no stub). the runtime `Optional` machine — the
+> value wrapper and the subscriptable type — is injected as a polyfill class. the
+> `Result` runtime shape, auto-wrap at return sites, a precise `Some` signature,
+> and the type error for `^` in a non-optional-returning function are still being
+> settled. `??` and `?.` against plain `T | None` work today — see
 > [none-coalesce](none-coalesce.md) and [optional-chaining](optional-chaining.md)
 
 basedpython provides first-class wrapped types for absence (`Optional`) and
@@ -21,7 +37,9 @@ def f() -> int?:
 ```
 
 `T ? E` declares a result with value type `T` and error type `E`
-(Rust-style `Result<T, E>`):
+(Rust-style `Result<T, E>`). **not yet implemented** — the `?`-infix result
+form does not parse today (only the `T?` optional form does); the example below
+is the intended design:
 
 ```by
 def g() -> int ? TypeError:
@@ -32,6 +50,11 @@ def g() -> int ? TypeError:
 both forms compose: `T?? E`, `T ? E?`, etc
 
 ## auto-wrap
+
+> **not yet implemented** (see the status banner). a bare `return` is currently
+> emitted unchanged; it only type-checks for `T?` because `T?` *is* `T | None`.
+> the `T ? E` result form and `Some`/`Ok`/`Err` auto-wrapping are still being
+> settled.
 
 `return` inside a function whose return annotation is `T?` or `T ? E`
 auto-wraps the bare value into the corresponding constructor:
@@ -92,6 +115,11 @@ wrapped error as `__cause__` when the value was an `Err`
 
 ### `??` — coalesce
 
+> against a genuine wrapped type (`int??`, `T ? E`) the wrapper-aware behaviour
+> below is **not yet implemented** — `??` only lowers the plain `is not None`
+> form today (see [none-coalesce](none-coalesce.md)), so it does not yet consume
+> a wrapper layer.
+
 `expr ?? default` evaluates to the inner value on the present case, and to
 `default` on the absent case:
 
@@ -126,6 +154,11 @@ see [optional chaining](optional-chaining.md) for the temp-variable
 mechanism — wrapped receivers reuse the same caching strategy
 
 ## auto-unwrap
+
+> **not yet implemented** (see the status banner). a lossy assignment is
+> currently a hard `invalid-assignment` error, not the implicit-unwrap-with-
+> warning described here. suppress it today with an explicit `x!` / `x ?? d` /
+> `match x:`.
 
 assigning a wrapped value to a target whose type does not name the wrapper
 triggers an implicit unwrap. when the target type still encodes every state
