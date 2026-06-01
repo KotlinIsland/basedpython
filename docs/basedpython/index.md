@@ -48,6 +48,7 @@ basedpython is a Python-like language that transpiles to pure Python
 
 - [modifiers and visibility](features/modifiers.md)
 - [based enums (`enum class`)](features/enums.md)
+- [sealed classes](features/sealed-classes.md)
 - [init method shorthand](features/init-method.md)
 - [empty declarations](features/empty-declarations.md)
 - [main function](features/main-function.md)

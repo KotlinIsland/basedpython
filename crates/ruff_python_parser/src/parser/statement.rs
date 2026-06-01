@@ -87,6 +87,7 @@ fn is_modifier_kw(text: &str) -> bool {
         "final"
             | "abstract"
             | "open"
+            | "sealed"
             | "override"
             | "static"
             | "data"
@@ -378,6 +379,17 @@ impl<'src> Parser<'src> {
                             ));
                             Some(self.parse_visibility_annot_decl(start))
                         }
+                        TokenKind::Colon if idx >= 1 => {
+                            // any other modifier chain on an annotated assignment
+                            // (`override x: T`, `final override x: T`, …) — strip
+                            // the prefix, keep `x: T [= v]`. mirrors the
+                            // `[modifiers] name = value` form so the two are
+                            // symmetric rather than annotated-only being rejected
+                            self.error_if_not_basedpython(format!(
+                                "`{kw}` modifier on annotated assignments is not valid in .py files"
+                            ));
+                            Some(self.parse_modifier_annot_decl(start, "__modifier_annot__"))
+                        }
                         _ => None,
                     };
                 }
@@ -471,6 +483,10 @@ impl<'src> Parser<'src> {
                         self.bump(TokenKind::Name);
                         "open"
                     }
+                    "sealed" => {
+                        self.bump(TokenKind::Name);
+                        "sealed"
+                    }
                     "static" => {
                         self.bump(TokenKind::Name);
                         "static"
@@ -511,19 +527,11 @@ impl<'src> Parser<'src> {
             // another modifier keyword follows — keep looping
             if self.at(TokenKind::Name) {
                 let kw = self.src_text(self.current_token_range());
-                if matches!(
-                    kw,
-                    "data"
-                        | "enum"
-                        | "frozen"
-                        | "abstract"
-                        | "open"
-                        | "static"
-                        | "export"
-                        | "public"
-                        | "private"
-                        | "override"
-                ) {
+                // any modifier keyword may follow another, in any order — reuse
+                // the canonical set so none is accidentally omitted (a missing
+                // `final` here used to drop the chain into `parse_class_definition`
+                // with the modifier still current, panicking on `bump(Class)`)
+                if is_modifier_kw(kw) {
                     continue;
                 }
             }
@@ -769,7 +777,15 @@ impl<'src> Parser<'src> {
     /// text, leaving `name: T [= v]` behind.
     fn parse_modifier_annot_decl(&mut self, start: TextSize, synthetic_id: &'static str) -> Stmt {
         let modifier_range = self.current_token_range();
-        self.bump(TokenKind::Name); // consume modifier keyword
+        // consume modifier keywords until we reach the variable name (the Name
+        // token immediately followed by `:`), so chains like `final override x: T`
+        // strip in full — not just the first modifier
+        loop {
+            if self.peek() == TokenKind::Colon {
+                break;
+            }
+            self.bump(TokenKind::Name);
+        }
         let name = self.parse_identifier();
         self.bump(TokenKind::Colon); // consume ":"
         let annotation_expr = self

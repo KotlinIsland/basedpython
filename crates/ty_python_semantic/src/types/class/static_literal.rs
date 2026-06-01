@@ -89,6 +89,11 @@ pub struct StaticClassLiteral<'db> {
 
     /// Whether this class is decorated with `@functools.total_ordering`
     pub(crate) total_ordering: bool,
+
+    /// basedpython: whether this class is declared `sealed`. A sealed class may
+    /// only be subclassed from within its own workspace, and exposes a
+    /// `__sealed_members__` tuple of its same-module direct subclasses.
+    pub(crate) is_sealed: bool,
 }
 
 // The Salsa heap is tracked separately.
@@ -154,6 +159,7 @@ impl<'db> StaticClassLiteral<'db> {
             dataclass_params,
             self.dataclass_transformer_params(db),
             self.total_ordering(db),
+            self.is_sealed(db),
         )
     }
 
@@ -649,6 +655,33 @@ impl<'db> StaticClassLiteral<'db> {
                 .as_function_literal()
                 .is_some_and(|function| function.is_known(db, KnownFunction::Dataclass))
         })
+    }
+
+    /// basedpython: the module-level direct subclasses of this `sealed` class,
+    /// in source order. These make up the `__sealed_members__` tuple and match
+    /// what the runtime transform emits (it only sees same-file subclasses).
+    #[salsa::tracked(returns(deref), heap_size=ruff_memory_usage::heap_size)]
+    pub(crate) fn sealed_members(self, db: &'db dyn Db) -> Box<[StaticClassLiteral<'db>]> {
+        let global = ty_python_core::global_scope(db, self.file(db));
+        let mut members = Vec::new();
+        for symbol in place_table(db, global).symbols() {
+            let Some(Type::ClassLiteral(ClassLiteral::Static(candidate))) =
+                class_member(db, global, symbol.name()).ignore_possibly_undefined()
+            else {
+                continue;
+            };
+            if candidate == self {
+                continue;
+            }
+            let is_direct_subclass = candidate.explicit_bases(db).iter().any(|base| {
+                base.to_class_type(db)
+                    .is_some_and(|class| class.class_literal(db) == ClassLiteral::Static(self))
+            });
+            if is_direct_subclass {
+                members.push(candidate);
+            }
+        }
+        members.into_boxed_slice()
     }
 
     /// Is this class final?
@@ -1244,6 +1277,15 @@ impl<'db> StaticClassLiteral<'db> {
         inherited_generic_context: Option<GenericContext<'db>>,
         name: &str,
     ) -> Option<Type<'db>> {
+        // basedpython: a `sealed` class exposes `__sealed_members__`, a tuple of
+        // its same-module direct subclasses (matching the runtime transform).
+        if name == "__sealed_members__" && self.is_sealed(db) {
+            let elements = self.sealed_members(db).iter().map(|member| {
+                SubclassOfType::from(db, ClassLiteral::Static(*member).default_specialization(db))
+            });
+            return Some(Type::heterogeneous_tuple(db, elements));
+        }
+
         // Handle `@functools.total_ordering`: synthesize comparison methods
         // for classes that have `@total_ordering` and define at least one
         // ordering method. The decorator requires at least one of __lt__,
