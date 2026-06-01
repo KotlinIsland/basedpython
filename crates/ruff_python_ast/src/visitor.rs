@@ -502,6 +502,7 @@ pub fn walk_expr<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, expr: &'a Expr) {
         }
         Expr::Await(ast::ExprAwait {
             value,
+            postfix: _,
             range: _,
             node_index: _,
         }) => visitor.visit_expr(value),

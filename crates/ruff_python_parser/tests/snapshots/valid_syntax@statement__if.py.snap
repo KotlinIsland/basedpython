@@ -648,6 +648,7 @@ Module(
                                     ctx: Load,
                                 },
                             ),
+                            postfix: false,
                         },
                     ),
                     body: [
@@ -681,6 +682,7 @@ Module(
                                                 ctx: Load,
                                             },
                                         ),
+                                        postfix: false,
                                     },
                                 ),
                             ),

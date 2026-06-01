@@ -486,6 +486,7 @@ pub fn walk_expr<V: Transformer + ?Sized>(visitor: &V, expr: &mut Expr) {
         }
         Expr::Await(ast::ExprAwait {
             value,
+            postfix: _,
             range: _,
             node_index: _,
         }) => visitor.visit_expr(value),

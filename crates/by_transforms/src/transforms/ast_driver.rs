@@ -38,7 +38,7 @@ use super::{
     decl_site_variance, decorator_keyword, dedent_string, empty_declarations, float_const,
     generic_call, generics, identity_swap, implicit_typing, init_method, intersection, just_float,
     kw_subscript,
-    literal_types, main_function, modifiers, mutable_defaults, none_chain, not_type, overload,
+    literal_types, main_function, modifiers, mutable_defaults, none_chain, not_type, overload, postfix_await,
     repeated_underscore, sentinel, super_keyword, top_star, tuple_index, type_is,
     typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
 };
@@ -330,6 +330,7 @@ pub(crate) fn run_against_source<'a>(
     let compat_pass = compat::CompatRewrite::new(source_ref, config.clone());
     let dedent_string_pass = dedent_string::DedentString::new(source_ref);
     let super_keyword_pass = super_keyword::SuperKeyword::new();
+    let postfix_await_pass = postfix_await::PostfixAwait::new(source_ref);
     let mutable_defaults_pass = mutable_defaults::MutableDefaults::new();
     let auto_quote_pass = auto_quote::AutoQuote::new(
         source_ref,
@@ -376,6 +377,7 @@ pub(crate) fn run_against_source<'a>(
         &compat_pass,
         &dedent_string_pass,
         &super_keyword_pass,
+        &postfix_await_pass,
         &auto_quote_pass,
         &init_method_pass,
         &modifiers_pass,

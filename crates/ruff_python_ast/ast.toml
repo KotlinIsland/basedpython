@@ -401,7 +401,12 @@ fields = [
 
 [Expr.nodes.ExprAwait]
 doc = "See also [Await](https://docs.python.org/3/library/ast.html#ast.Await)"
-fields = [{ name = "value", type = "Expr" }]
+fields = [
+  { name = "value", type = "Expr" },
+  { name = "postfix", type = "bool", doc = """basedpython: `true` when written as the postfix `expr.await` form
+(Rust-style). Semantically identical to a prefix `await expr`; lowered to a
+prefix `await (expr)` with precedence-driven parentheses""" },
+]
 
 [Expr.nodes.ExprYield]
 doc = "See also [Yield](https://docs.python.org/3/library/ast.html#ast.Yield)"

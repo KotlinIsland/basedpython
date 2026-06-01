@@ -661,6 +661,7 @@ Module(
                                             ctx: Load,
                                         },
                                     ),
+                                    postfix: false,
                                 },
                             ),
                             generators: [
@@ -754,6 +755,7 @@ Module(
                                                     ctx: Load,
                                                 },
                                             ),
+                                            postfix: false,
                                         },
                                     ),
                                     ifs: [
@@ -915,6 +917,7 @@ Module(
                                                             ctx: Load,
                                                         },
                                                     ),
+                                                    postfix: false,
                                                 },
                                             ),
                                             orelse: Name(
@@ -1005,6 +1008,7 @@ Module(
                                                     ),
                                                 },
                                             ),
+                                            postfix: false,
                                         },
                                     ),
                                     ifs: [

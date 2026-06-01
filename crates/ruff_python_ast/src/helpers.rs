@@ -374,6 +374,7 @@ where
             }
             Expr::Await(ast::ExprAwait {
                 value,
+                postfix: _,
                 range: _,
                 node_index: _,
             })

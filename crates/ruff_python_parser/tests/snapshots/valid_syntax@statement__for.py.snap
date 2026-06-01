@@ -522,6 +522,7 @@ Module(
                                     ctx: Load,
                                 },
                             ),
+                            postfix: false,
                         },
                     ),
                     body: [

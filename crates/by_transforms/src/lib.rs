@@ -796,6 +796,30 @@ mod python_parse_errors {
             "unexpected parse errors in .py file: {errs:?}"
         );
     }
+
+    #[test]
+    fn postfix_await_in_py_errors() {
+        let errs = parse_errors_in_py("async def f():\n    g().await\n");
+        assert!(
+            !errs.is_empty(),
+            "expected parse error for postfix `.await` in .py file"
+        );
+        assert!(
+            errs[0].contains("await"),
+            "expected error mentioning `await`, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn postfix_await_in_by_no_errors() {
+        let (db, file) = make_in_memory_db("async def f():\n    g().await\n");
+        let module = ruff_db::parsed::parsed_module(&db, file).load(&db);
+        assert!(
+            module.errors().is_empty(),
+            "unexpected parse errors in .by file: {:?}",
+            module.errors()
+        );
+    }
 }
 
 #[cfg(test)]

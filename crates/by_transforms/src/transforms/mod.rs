@@ -28,6 +28,7 @@ pub(crate) mod mutable_defaults;
 pub(crate) mod none_chain;
 pub(crate) mod not_type;
 pub(crate) mod overload;
+pub(crate) mod postfix_await;
 pub(crate) mod repeated_underscore;
 pub(crate) mod sentinel;
 pub(crate) mod source_util;

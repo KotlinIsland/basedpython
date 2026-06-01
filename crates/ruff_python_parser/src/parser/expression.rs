@@ -1009,7 +1009,26 @@ impl<'src> Parser<'src> {
                     Expr::Subscript(self.parse_subscript_expression(lhs, start))
                 }
                 TokenKind::Dot => {
-                    Expr::Attribute(self.parse_attribute_expression(lhs, start, context))
+                    // basedpython: postfix `.await` is sugar for a prefix
+                    // `await (expr)`. it binds as tightly as attribute access,
+                    // so it chains (`g().await.bar().await`). produce a standard
+                    // `Await` node tagged `postfix` so lowering can rewrite it
+                    // and `.py` files reject it
+                    if self.peek() == TokenKind::Await {
+                        self.error_if_not_basedpython(
+                            "postfix `.await` is not valid in .py files".to_string(),
+                        );
+                        self.bump(TokenKind::Dot);
+                        self.bump(TokenKind::Await);
+                        Expr::Await(ast::ExprAwait {
+                            value: Box::new(lhs),
+                            range: self.node_range(start),
+                            node_index: AtomicNodeIndex::NONE,
+                            postfix: true,
+                        })
+                    } else {
+                        Expr::Attribute(self.parse_attribute_expression(lhs, start, context))
+                    }
                 }
                 TokenKind::QuestionDot => {
                     self.error_if_not_basedpython(
@@ -3985,6 +4004,7 @@ impl<'src> Parser<'src> {
             value: Box::new(parsed_expr.expr),
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            postfix: false,
         }
     }
 

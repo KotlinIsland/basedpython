@@ -614,6 +614,7 @@ Module(
                                     ctx: Load,
                                 },
                             ),
+                            postfix: false,
                         },
                     ),
                     op: Add,

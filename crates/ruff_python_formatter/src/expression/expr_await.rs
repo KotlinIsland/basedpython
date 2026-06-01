@@ -1,6 +1,6 @@
 use ruff_formatter::write;
 use ruff_python_ast::AnyNodeRef;
-use ruff_python_ast::ExprAwait;
+use ruff_python_ast::{Expr, ExprAwait};
 use ruff_text_size::Ranged;
 
 use crate::expression::maybe_parenthesize_expression;
@@ -19,7 +19,27 @@ impl FormatNodeRule<ExprAwait> for FormatExprAwait {
             range: _,
             node_index: _,
             value,
+            postfix,
         } = item;
+
+        // basedpython postfix `.await` binds like attribute access and renders
+        // after its operand (`g().await`). the operand must be parenthesised
+        // unless it is itself a trailer chain, so `(a + b).await` keeps its
+        // parens rather than becoming `a + b.await`
+        if *postfix {
+            let trailer = matches!(
+                value.as_ref(),
+                Expr::Name(_)
+                    | Expr::Call(_)
+                    | Expr::Attribute(_)
+                    | Expr::Subscript(_)
+                    | Expr::Await(_)
+            );
+            if trailer {
+                return write!(f, [value.format(), token(".await")]);
+            }
+            return write!(f, [token("("), value.format(), token(")"), token(".await")]);
+        }
 
         write!(
             f,

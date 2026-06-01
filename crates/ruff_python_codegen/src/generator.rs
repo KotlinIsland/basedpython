@@ -1154,6 +1154,10 @@ impl<'a> Generator<'a> {
             }
             Expr::Await(ast::ExprAwait {
                 value,
+                // basedpython: a postfix `expr.await` is semantically a prefix
+                // `await expr`, so it always renders in prefix form. re-rendering
+                // a statement that still carries the flag therefore lowers it
+                postfix: _,
                 range: _,
                 node_index: _,
             }) => {

@@ -52,6 +52,7 @@ fn match_async_exit_stack(semantic: &SemanticModel) -> bool {
     };
     let Expr::Await(ast::ExprAwait {
         value,
+        postfix: _,
         range: _,
         node_index: _,
     }) = expr

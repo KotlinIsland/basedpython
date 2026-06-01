@@ -556,6 +556,7 @@ Module(
                                     is_cast: false,
                                 },
                             ),
+                            postfix: false,
                         },
                     ),
                     cases: [

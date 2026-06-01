@@ -53,6 +53,7 @@ basedpython is a Python-like language that transpiles to pure Python
 - [identity and isinstance (`===` / `!==` / `is`)](features/identity-swap.md)
 - [optional chaining (`?.`)](features/optional-chaining.md)
 - [none-coalesce operator (`??`)](features/none-coalesce.md)
+- [postfix await (`.await`)](features/await-attribute.md)
 - [mutable default arguments](features/mutable-defaults.md)
 - [dedented triple-quoted strings](features/dedent-strings.md)
 - [tuple member access (`expr.N`)](features/tuple-index.md)

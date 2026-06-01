@@ -8924,6 +8924,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             range: _,
             node_index: _,
             value,
+            postfix: _,
         } = await_expression;
 
         let expr_type = self.infer_expression(

@@ -239,6 +239,7 @@ Module(
                                     ctx: Load,
                                 },
                             ),
+                            postfix: false,
                         },
                     ),
                     iter: Name(

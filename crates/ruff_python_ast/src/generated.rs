@@ -9520,6 +9520,10 @@ pub struct ExprAwait {
     pub node_index: crate::AtomicNodeIndex,
     pub range: ruff_text_size::TextRange,
     pub value: Box<Expr>,
+    /// basedpython: `true` when written as the postfix `expr.await` form
+    /// (Rust-style). Semantically identical to a prefix `await expr`; lowered to a
+    /// prefix `await (expr)` with precedence-driven parentheses
+    pub postfix: bool,
 }
 
 /// See also [Yield](https://docs.python.org/3/library/ast.html#ast.Yield)
@@ -10613,6 +10617,7 @@ impl ExprAwait {
     {
         let ExprAwait {
             value,
+            postfix: _,
             range: _,
             node_index: _,
         } = self;

@@ -1214,6 +1214,7 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
             }),
             ast::Expr::Await(ast::ExprAwait {
                 value,
+                postfix: _,
                 range: _,
                 node_index: _,
             }) => Self::Await(ExprAwait {
