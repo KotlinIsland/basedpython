@@ -31,6 +31,7 @@ basedpython is a Python-like language that transpiles to pure Python
 - [strict `float` and `complex`](features/no-number-promotions.md)
 - [infinity and nan float literals](features/float-literals.md)
 - [literal type promotion](features/literal-types.md)
+- [symbolic operations in types](features/symbolic-type-ops.md)
 - [typed dict literals](features/typed-dict-literal.md)
 - [anonymous named tuple types](features/anonymous-named-tuple.md)
 - [explicit typevar constraints](features/constraints.md)

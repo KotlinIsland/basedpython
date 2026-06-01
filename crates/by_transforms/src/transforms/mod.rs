@@ -39,6 +39,7 @@ pub(crate) mod sentinel;
 pub(crate) mod some_ctor;
 pub(crate) mod source_util;
 pub(crate) mod super_keyword;
+pub(crate) mod symbolic_type_op;
 pub(crate) mod top_star;
 pub(crate) mod tuple_index;
 pub(crate) mod type_expr_walker;

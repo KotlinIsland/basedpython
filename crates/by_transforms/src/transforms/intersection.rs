@@ -19,7 +19,7 @@ use ruff_python_ast::{
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{PassContext, TypeAwarePass, render_expr};
-use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
+use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions_skipping};
 use crate::type_info::TypeInfo;
 
 pub(crate) struct IntersectionType;
@@ -36,7 +36,7 @@ impl TypeAwarePass for IntersectionType {
             edits: Vec::new(),
             needs_import: false,
         };
-        walk_type_positions(stmts, Some(types), &mut state);
+        walk_type_positions_skipping(stmts, Some(types), &ctx.claimed_type_op_ranges, &mut state);
         ctx.text_edits.extend(state.edits);
         if state.needs_import {
             ctx.required_imports
