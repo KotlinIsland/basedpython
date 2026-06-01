@@ -14,10 +14,14 @@ boilerplate decorator/annotation pairs at transpile time
 | `data class Foo`        | `@dataclass(slots=True)` + `class Foo`              |
 | `frozen data class Foo` | `@dataclass(frozen=True, slots=True)` + `class Foo` |
 | `protocol Foo`          | `class Foo(Protocol)` (base added)                  |
+| `sealed class Foo`      | `class Foo` + `Foo.__sealed_members__ = (...)`      |
 
 `abstract` is a marker for the type checker; it has no runtime decorator.
 `open` is the inverse of `final` — a marker that the class is intended to be
 subclassed. neither emits a runtime artefact
+
+`sealed` declares a closed subclass hierarchy — see
+[sealed classes](sealed-classes.md)
 
 `enum class` is not a modifier but its own declaration form — see
 [based enums](enums.md)

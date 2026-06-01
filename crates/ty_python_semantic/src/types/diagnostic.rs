@@ -128,6 +128,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&POSSIBLY_UNRESOLVED_REFERENCE);
     registry.register_lint(&SHADOWED_TYPE_VARIABLE);
     registry.register_lint(&SUBCLASS_OF_FINAL_CLASS);
+    registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
     registry.register_lint(&OVERRIDE_OF_FINAL_METHOD);
     registry.register_lint(&OVERRIDE_OF_FINAL_VARIABLE);
     registry.register_lint(&INEFFECTIVE_FINAL);
@@ -2304,6 +2305,32 @@ declare_lint! {
     /// ```
     pub(crate) static SUBCLASS_OF_FINAL_CLASS = {
         summary: "detects subclasses of final classes",
+        status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for classes that subclass a basedpython `sealed` class from outside
+    /// the workspace in which the sealed class is defined.
+    ///
+    /// ## Why is this bad?
+    /// A `sealed` class declares a closed set of subclasses. It may be subclassed
+    /// freely from anywhere within its own workspace, but not from a dependency,
+    /// so that the set of subclasses is fully known.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// # in a dependency:
+    /// sealed class Shape
+    ///
+    /// # in your workspace:
+    /// class Circle(Shape): ...  # error: `Shape` is sealed in another workspace
+    /// ```
+    pub(crate) static SUBCLASS_OF_SEALED_CLASS = {
+        summary: "detects subclasses of sealed classes from outside their workspace",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
     }

@@ -177,6 +177,35 @@ Grid()[(1, 2)]
 }
 
 #[test]
+fn sealed_class_exposes_members_at_runtime() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+sealed class A
+class B(A)
+class C(A)
+
+print(A.__sealed_members__ == (B, C))
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "True");
+}
+
+#[test]
 fn enum_lowers_to_sealed_dataclass_hierarchy() {
     let out = transpile(
         "\

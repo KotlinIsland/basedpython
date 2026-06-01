@@ -79,20 +79,22 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
         let mut decorator_types_and_nodes: Vec<(Type<'db>, &ast::Decorator)> =
             Vec::with_capacity(decorator_list.len());
+        let mut is_sealed = false;
         let source = ruff_db::source::source_text(db, self.file());
         for decorator in decorator_list {
             let decorator_ty = self.infer_decorator(decorator);
-            // basedpython `enum class Foo` / `protocol Foo` parse to synthetic
-            // `enum_class` / `protocol_class` marker decorators (no `@` in the
-            // source). their effect — the injected `Enum` / `Protocol` base — is
-            // applied in `explicit_bases`; the marker itself is not a runtime
-            // decorator, so applying it here would resolve to `Unknown` and poison
-            // the whole class type
+            // basedpython `enum class Foo` / `protocol Foo` / `sealed class Foo`
+            // parse to synthetic `enum_class` / `protocol_class` / `sealed` marker
+            // decorators (no `@` in the source). their effect is applied here (the
+            // `sealed` flag) or in `explicit_bases` (the injected `Enum` /
+            // `Protocol` base); the marker itself is not a runtime decorator, so
+            // applying it would resolve to `Unknown` and poison the whole class type
             if let ast::Expr::Name(name) = &decorator.expression
                 && matches!(
                     name.id.as_str(),
                     "enum_class"
                         | "protocol_class"
+                        | "sealed"
                         | "enum_def"
                         | "variant_unit"
                         | "variant_tuple"
@@ -103,6 +105,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     .copied()
                     != Some(b'@')
             {
+                if name.id.as_str() == "sealed" {
+                    is_sealed = true;
+                }
                 continue;
             }
             decorator_types_and_nodes.push((decorator_ty, decorator));
@@ -163,6 +168,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     dataclass_params,
                     dataclass_transformer_params,
                     total_ordering,
+                    is_sealed,
                 )),
             }
         };

@@ -29,12 +29,13 @@ use crate::{
             INCONSISTENT_MRO, INVALID_ARGUMENT_TYPE, INVALID_BASE, INVALID_DATACLASS,
             INVALID_GENERIC_CLASS, INVALID_GENERIC_ENUM, INVALID_METACLASS, INVALID_NAMED_TUPLE,
             INVALID_PROTOCOL, INVALID_TYPED_DICT_HEADER, IncompatibleBases,
-            SUBCLASS_OF_DATACLASS_WITH_ORDER, SUBCLASS_OF_FINAL_CLASS, UNKNOWN_ARGUMENT,
-            report_bad_frozen_dataclass_inheritance, report_conflicting_metaclass_from_bases,
-            report_duplicate_bases, report_inconsistent_generic_bases,
-            report_instance_layout_conflict, report_invalid_attribute_assignment,
-            report_invalid_or_unsupported_base, report_invalid_total_ordering,
-            report_invalid_type_param_order, report_invalid_typevar_default_reference,
+            SUBCLASS_OF_DATACLASS_WITH_ORDER, SUBCLASS_OF_FINAL_CLASS, SUBCLASS_OF_SEALED_CLASS,
+            UNKNOWN_ARGUMENT, report_bad_frozen_dataclass_inheritance,
+            report_conflicting_metaclass_from_bases, report_duplicate_bases,
+            report_inconsistent_generic_bases, report_instance_layout_conflict,
+            report_invalid_attribute_assignment, report_invalid_or_unsupported_base,
+            report_invalid_total_ordering, report_invalid_type_param_order,
+            report_invalid_typevar_default_reference,
             report_named_tuple_field_with_leading_underscore,
             report_namedtuple_field_without_default_after_field_with_default,
             report_shadowed_type_variable,
@@ -54,6 +55,7 @@ use crate::{
     },
 };
 use crate::{attribute_assignments, types::diagnostic::abstract_method_span};
+use ty_module_resolver::{SearchPath, file_to_module};
 use ty_python_core::{
     SemanticIndex, attribute_scopes, definition::DefinitionKind, scope::ScopeId, semantic_index,
 };
@@ -399,6 +401,24 @@ pub(crate) fn check_static_class_definitions<'db>(
         {
             builder.into_diagnostic(format_args!(
                 "Class `{}` cannot inherit from final class `{}`",
+                class.name(db),
+                base_class.name(db),
+            ));
+        }
+
+        // basedpython: a `sealed` class may only be subclassed from within its
+        // own workspace. The class under inference is first-party (that's what we
+        // emit diagnostics for), so subclassing a sealed base that lives in a
+        // non-first-party file (a dependency) is forbidden.
+        if base_class.is_sealed(db)
+            && !file_to_module(db, base_class.class_literal(db).file(db))
+                .and_then(|module| module.search_path(db))
+                .is_some_and(SearchPath::is_first_party)
+            && let Some(node) = source_node
+            && let Some(builder) = context.report_lint(&SUBCLASS_OF_SEALED_CLASS, node)
+        {
+            builder.into_diagnostic(format_args!(
+                "Class `{}` cannot inherit from sealed class `{}` defined in another workspace",
                 class.name(db),
                 base_class.name(db),
             ));

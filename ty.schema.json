@@ -1340,6 +1340,16 @@
             }
           ]
         },
+        "subclass-of-sealed-class": {
+          "title": "detects subclasses of sealed classes from outside their workspace",
+          "description": "## What it does\nChecks for classes that subclass a basedpython `sealed` class from outside\nthe workspace in which the sealed class is defined.\n\n## Why is this bad?\nA `sealed` class declares a closed set of subclasses. It may be subclassed\nfreely from anywhere within its own workspace, but not from a dependency,\nso that the set of subclasses is fully known.\n\n## Example\n\n```by\n# in a dependency:\nsealed class Shape\n\n# in your workspace:\nclass Circle(Shape): ...  # error: `Shape` is sealed in another workspace\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "super-call-in-named-tuple-method": {
           "title": "detects `super()` calls in methods of `NamedTuple` classes",
           "description": "## What it does\nChecks for calls to `super()` inside methods of `NamedTuple` classes.\n\n## Why is this bad?\nUsing `super()` in a method of a `NamedTuple` class will raise an exception at runtime.\n\n## Examples\n```python\nfrom typing import NamedTuple\n\nclass F(NamedTuple):\n    x: int\n\n    def method(self):\n        super()  # error: super() is not supported in methods of NamedTuple classes\n```\n\n## References\n- [Python documentation: super()](https://docs.python.org/3/library/functions.html#super)",
