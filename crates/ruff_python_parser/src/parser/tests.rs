@@ -1,4 +1,4 @@
-use ruff_python_ast::{ModModule, Stmt};
+use ruff_python_ast::{Expr, ModModule, Operator, Stmt, UnaryOp};
 
 use crate::{Mode, ParseErrorType, ParseOptions, Parsed, parse, parse_expression, parse_module};
 
@@ -412,6 +412,80 @@ fn test_top_star_subscript_in_py_errors() {
         errors.iter().any(|e| e.contains("bare `*`")),
         "expected parse error mentioning bare `*`, got: {errors:?}"
     );
+}
+
+#[test]
+fn glued_circumflex_before_unary_is_xor_in_py() {
+    // `a^-b`, `a^+b`, `a^~b` are valid standard Python — `a ^ (-b)` and friends.
+    // basedpython reads a glued `^` before a unary sign as the postfix propagate
+    // operator (`(a^) - b`), but that disambiguation must stay off in `.py`
+    // mode: stealing it turns valid python into a parse error, which the
+    // formatter ecosystem check (it parses `.py` with basedpython disabled)
+    // counts as a syntax error and trips over.
+    for source in ["a^-b\n", "a^+b\n", "a^~b\n"] {
+        let parsed = crate::parse_unchecked(source, ParseOptions::from(Mode::Module));
+        assert!(
+            parsed.errors().is_empty(),
+            "expected {source:?} to parse cleanly in .py mode, got: {:?}",
+            parsed.errors()
+        );
+        let module = parsed.try_into_module().unwrap();
+        let Some(Stmt::Expr(stmt)) = module.suite().first() else {
+            panic!("expected an expression statement for {source:?}");
+        };
+        let Expr::BinOp(binop) = &*stmt.value else {
+            panic!(
+                "expected `a ^ <unary>` for {source:?}, got {:?}",
+                stmt.value
+            );
+        };
+        assert_eq!(binop.op, Operator::BitXor, "operator for {source:?}");
+        assert!(
+            matches!(&*binop.right, Expr::UnaryOp(_)),
+            "rhs of {source:?} should be the unary operand, got {:?}",
+            binop.right
+        );
+    }
+
+    // the same glued source keeps its basedpython meaning in `.by`: a postfix
+    // propagate followed by a binary subtract, i.e. `(a^) - b`
+    let parsed = parse_basedpython_module("a^-b\n");
+    let Some(Stmt::Expr(stmt)) = parsed.syntax().body.first() else {
+        panic!("expected an expression statement");
+    };
+    let Expr::BinOp(binop) = &*stmt.value else {
+        panic!("expected a binary op, got {:?}", stmt.value);
+    };
+    assert_eq!(binop.op, Operator::Sub);
+    assert!(
+        matches!(&*binop.left, Expr::UnaryOp(unary) if unary.op == UnaryOp::Propagate),
+        "lhs should be the postfix propagate, got {:?}",
+        binop.left
+    );
+}
+
+#[test]
+fn fstring_conversion_after_ternary_is_not_force_unwrap() {
+    // the `!s` / `!r` in an interpolation is the conversion flag, not the
+    // basedpython postfix force-unwrap. for a conditional the conversion lands
+    // on the `else` tail, which must inherit the interpolation context so the
+    // `!` isn't eaten as force-unwrap. regression: poetry's
+    // `f"{p if not W else g(p)!s}"` became a spurious `.py` syntax error and
+    // tipped the formatter ecosystem check over its allowed error count.
+    for source in [
+        r#"f"{a if b else c!s}""#,
+        r#"f"{a if b else c!r:>{w}}""#,
+        r#"f"{a if b else c if d else e!s}""#,
+        r#"f"{x!r}""#,
+        r#"f"{a + b!s}""#,
+    ] {
+        let parsed = crate::parse_unchecked(source, ParseOptions::from(Mode::Module));
+        assert!(
+            parsed.errors().is_empty(),
+            "expected {source:?} to parse cleanly in .py mode, got: {:?}",
+            parsed.errors()
+        );
+    }
 }
 
 #[test]

@@ -1028,6 +1028,8 @@ pub fn definitions_for_unary_op<'db>(
         ast::UnaryOp::UAdd => "__pos__",
         ast::UnaryOp::USub => "__neg__",
         ast::UnaryOp::Not => "__bool__",
+        // basedpython postfix operators dispatch to no runtime dunder
+        ast::UnaryOp::Optional | ast::UnaryOp::Propagate | ast::UnaryOp::Force => return None,
     };
 
     let bindings = match operand_ty.try_call_dunder(

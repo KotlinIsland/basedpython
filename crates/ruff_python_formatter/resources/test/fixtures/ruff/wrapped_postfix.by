@@ -1,0 +1,18 @@
+a: int?
+b: int??
+c: list[int?]
+
+
+def f(x: int?) -> None: ...
+
+
+def h(g) -> int?:
+    x = g()!
+    y = g()^
+    return y
+
+
+async def af(g):
+    g().await
+    g().await.bar().await
+    (g()).await

@@ -22,11 +22,27 @@ impl FormatNodeRule<ExprUnaryOp> for FormatExprUnaryOp {
             operand,
         } = item;
 
+        // basedpython postfix type/value operators bind like attribute access
+        // and render *after* the operand (`int?`, `x!`, `x^`); rendering them as
+        // a prefix (`?int`) produces invalid / wrong-meaning source. nested
+        // `int??` is `Optional(Optional(int))`, so recursion yields `int??`.
+        if let UnaryOp::Optional | UnaryOp::Propagate | UnaryOp::Force = op {
+            let operator = match op {
+                UnaryOp::Optional => "?",
+                UnaryOp::Propagate => "^",
+                UnaryOp::Force => "!",
+                _ => unreachable!(),
+            };
+            operand.format().fmt(f)?;
+            return token(operator).fmt(f);
+        }
+
         let operator = match op {
             UnaryOp::Invert => "~",
             UnaryOp::Not => "not",
             UnaryOp::UAdd => "+",
             UnaryOp::USub => "-",
+            UnaryOp::Optional | UnaryOp::Propagate | UnaryOp::Force => unreachable!(),
         };
 
         token(operator).fmt(f)?;

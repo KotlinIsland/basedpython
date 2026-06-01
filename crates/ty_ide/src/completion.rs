@@ -6054,10 +6054,12 @@ from sys import (
 
     #[test]
     fn from_import_unknown_in_module() {
+        // `$` is a token the lexer cannot recognise. (`?` is no longer suitable
+        // here: it is the basedpython optional/result marker, a real token.)
         let builder = completion_test_builder(
             "\
 foo = 1
-from ? import <CURSOR>
+from $ import <CURSOR>
 ",
         );
         assert_snapshot!(
@@ -6068,9 +6070,11 @@ from ? import <CURSOR>
 
     #[test]
     fn from_import_unknown_in_import_names1() {
+        // `$` is a token the lexer cannot recognise. (`?` is no longer suitable
+        // here: it is the basedpython optional/result marker, a real token.)
         let builder = completion_test_builder(
             "\
-from sys import ?, <CURSOR>
+from sys import $, <CURSOR>
 ",
         );
         builder.build().contains("getsizeof");
@@ -6305,9 +6309,11 @@ import re as regexp, \\
 
     #[test]
     fn import_unknown_in_module() {
+        // `$` is a token the lexer cannot recognise. (`?` is no longer suitable
+        // here: it is the basedpython optional/result marker, a real token.)
         let builder = completion_test_builder(
             "\
-import ?, <CURSOR>
+import $, <CURSOR>
 ",
         );
         builder.build().contains("collections");

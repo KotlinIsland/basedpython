@@ -3199,6 +3199,26 @@ pub(crate) struct DisplayKnownInstanceRepr<'db> {
     pub(crate) db: &'db dyn Db,
 }
 
+/// If `ty` is a union that contains `None`, return the union of its remaining
+/// (non-`None`) members; otherwise `None`. Used to render the innermost layer
+/// of a wrapped optional (`int | None` -> base `int`) in `?` notation.
+fn strip_none<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Type<'db>> {
+    let Type::Union(union) = ty else {
+        return None;
+    };
+    let none = Type::none(db);
+    let others: Vec<Type<'db>> = union
+        .elements(db)
+        .iter()
+        .copied()
+        .filter(|elem| *elem != none)
+        .collect();
+    if others.len() == union.elements(db).len() || others.is_empty() {
+        return None;
+    }
+    Some(UnionType::from_elements(db, others))
+}
+
 impl<'db> KnownInstanceType<'db> {
     pub(crate) fn display_with(
         self,
@@ -3325,6 +3345,33 @@ impl<'db> FmtDetailed<'db> for DisplayKnownInstanceRepr<'db> {
                 f.write_char('[')?;
                 inner.inner(self.db).display(self.db).fmt_detailed(f)?;
                 f.write_str(", <metadata>]'>")
+            }
+            KnownInstanceType::WrappedOptional(inner) => {
+                // render a nested optional in surface `?` notation: count the
+                // wrapper layers, then the innermost `base | None` union adds
+                // one more `?`. e.g. `WrappedOptional(int | None)` -> `int??`
+                let mut depth = 1usize;
+                let mut current = inner.inner(self.db);
+                while let Type::KnownInstance(KnownInstanceType::WrappedOptional(next)) = current {
+                    depth += 1;
+                    current = next.inner(self.db);
+                }
+                let (base, extra) = match strip_none(self.db, current) {
+                    Some(base) => (base, 1),
+                    None => (current, 0),
+                };
+                let parenthesize = matches!(base, Type::Union(_) | Type::Intersection(_));
+                if parenthesize {
+                    f.write_char('(')?;
+                }
+                base.display(self.db).fmt_detailed(f)?;
+                if parenthesize {
+                    f.write_char(')')?;
+                }
+                for _ in 0..(depth + extra) {
+                    f.write_char('?')?;
+                }
+                Ok(())
             }
             KnownInstanceType::Callable(callable) => {
                 f.set_invalid_type_annotation();

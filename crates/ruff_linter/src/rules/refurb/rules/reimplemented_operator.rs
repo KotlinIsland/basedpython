@@ -396,6 +396,8 @@ fn unary_op(expr: &ast::ExprUnaryOp, params: &Parameters) -> Option<&'static str
         ast::UnaryOp::Not => "not_",
         ast::UnaryOp::UAdd => "pos",
         ast::UnaryOp::USub => "neg",
+        // basedpython postfix operators have no `operator` module equivalent
+        ast::UnaryOp::Optional | ast::UnaryOp::Propagate | ast::UnaryOp::Force => return None,
     })
 }
 
@@ -421,7 +423,7 @@ fn bin_op(expr: &ast::ExprBinOp, params: &Parameters) -> Option<&'static str> {
         ast::Operator::BitXor => "xor",
         ast::Operator::BitAnd => "and_",
         ast::Operator::FloorDiv => "floordiv",
-        ast::Operator::Coalesce => return None,
+        ast::Operator::Coalesce | ast::Operator::Result => return None,
     })
 }
 

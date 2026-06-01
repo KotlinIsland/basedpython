@@ -90,6 +90,8 @@ impl OperatorPrecedence {
             ExprRef::UnaryOp(operator) => match operator.op {
                 UnaryOp::UAdd | UnaryOp::USub | UnaryOp::Invert => Self::PosNegBitNot,
                 UnaryOp::Not => Self::Not,
+                // basedpython postfix `?`/`^`/`!` bind like a trailer
+                UnaryOp::Optional | UnaryOp::Propagate | UnaryOp::Force => Self::CallAttribute,
             },
 
             // Math binary ops
@@ -175,6 +177,9 @@ impl From<Operator> for OperatorPrecedence {
             Operator::Pow => Self::Exponent,
             // basedpython: None-coalescing ?? has same precedence as boolean or
             Operator::Coalesce => Self::Or,
+            // basedpython: result-type `?` binds looser than `|` so the error
+            // and value operands each absorb a full union
+            Operator::Result => Self::Or,
         }
     }
 }
@@ -193,6 +198,7 @@ impl From<UnaryOp> for OperatorPrecedence {
         match unary_op {
             UnaryOp::UAdd | UnaryOp::USub | UnaryOp::Invert => Self::PosNegBitNot,
             UnaryOp::Not => Self::Not,
+            UnaryOp::Optional | UnaryOp::Propagate | UnaryOp::Force => Self::CallAttribute,
         }
     }
 }

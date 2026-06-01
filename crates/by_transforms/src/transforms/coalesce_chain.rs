@@ -234,15 +234,19 @@ fn scan_expr(expr: &Expr, state: &mut State) {
     if state.needs {
         return;
     }
+    // only `??` inside a function parameter default needs the AST rewrite: the
+    // text-edit `coalesce` transform's visitor doesn't descend into Parameters.
+    // chained `??` in statement bodies is handled by that text-edit pass
+    // (recursively), which — unlike a whole-statement AST re-render — composes
+    // with sibling text-lowered syntax (`int?` annotations, `?.`, …) in the
+    // same statement
     if let Expr::BinOp(b) = expr
         && matches!(b.op, Operator::Coalesce)
         && !contains_optional_attribute(&b.left)
+        && state.in_parameter_default
     {
-        let nested = contains_coalesce(&b.left) || contains_coalesce(&b.right);
-        if nested || state.in_parameter_default {
-            state.needs = true;
-            return;
-        }
+        state.needs = true;
+        return;
     }
     match expr {
         Expr::BinOp(b) => {
@@ -315,34 +319,6 @@ fn contains_optional_attribute(expr: &Expr) -> bool {
             contains_optional_attribute(&c.func)
                 || c.arguments.args.iter().any(contains_optional_attribute)
         }
-        _ => false,
-    }
-}
-
-fn contains_coalesce(expr: &Expr) -> bool {
-    match expr {
-        Expr::BinOp(b) if matches!(b.op, Operator::Coalesce) => true,
-        Expr::BinOp(b) => contains_coalesce(&b.left) || contains_coalesce(&b.right),
-        Expr::UnaryOp(u) => contains_coalesce(&u.operand),
-        Expr::If(i) => {
-            contains_coalesce(&i.test) || contains_coalesce(&i.body) || contains_coalesce(&i.orelse)
-        }
-        Expr::Call(c) => {
-            contains_coalesce(&c.func)
-                || c.arguments.args.iter().any(contains_coalesce)
-                || c.arguments
-                    .keywords
-                    .iter()
-                    .any(|kw| contains_coalesce(&kw.value))
-        }
-        Expr::Subscript(s) => contains_coalesce(&s.value) || contains_coalesce(&s.slice),
-        Expr::Attribute(a) => contains_coalesce(&a.value),
-        Expr::Tuple(t) => t.elts.iter().any(contains_coalesce),
-        Expr::List(l) => l.elts.iter().any(contains_coalesce),
-        Expr::Set(s) => s.elts.iter().any(contains_coalesce),
-        Expr::Lambda(l) => contains_coalesce(&l.body),
-        Expr::Named(n) => contains_coalesce(&n.value),
-        Expr::BoolOp(b) => b.values.iter().any(contains_coalesce),
         _ => false,
     }
 }
@@ -473,28 +449,24 @@ mod tests {
     // `statement_needs_ast_rewrite`. The AST pass tests here cover the
     // cases where the gate fires (chained, default-arg)
 
+    // chained `??` in a statement body is now owned by the text-edit `coalesce`
+    // transform (it composes with sibling text-lowered syntax in the same
+    // statement, which a whole-statement AST re-render cannot). these go through
+    // the full pipeline; the AST `CoalesceFold` only fires for parameter defaults
     #[test]
-    fn chained_chooses_walrus_for_safe_lhs() {
-        // chained — gate fires; inner `a ?? b` rewritten because the
-        // surrounding outer Coalesce engaged the pass
-        let out = rewrite("x = a ?? b ?? c\n");
+    fn chained_safe_lhs_end_to_end() {
+        let out = crate::transpile("x = a ?? b ?? c\n", &crate::Config::test_default()).unwrap();
         assert!(!out.contains("??"), "still has ??: {out}");
     }
 
     #[test]
-    fn chained_coalesce_fully_expanded() {
-        let out = rewrite("x = a ?? b ?? c ?? \"fallback\"\n");
-        // left-associative: `((a ?? b) ?? c) ?? "fallback"`
-        // a,b,c all safe; literal "fallback" is just a string
-        // post-order builds outermost form:
-        //   inner1 = a if a is not None else b
-        //   inner2 = inner1 if inner1 is not None else c
-        //   outer  = inner2 if inner2 is not None else "fallback"
-        let expected = "x = (a if a is not None else b if (a if a is not None else b) is not None else c) if ((a if a is not None else b if (a if a is not None else b) is not None else c) is not None) else \"fallback\"";
-        // exact parenthesization depends on the printer; just verify no `??`
-        // and no `_t` (since all operands are safe Names / literals)
+    fn chained_coalesce_fully_expanded_end_to_end() {
+        let out = crate::transpile(
+            "x = a ?? b ?? c ?? \"fallback\"\n",
+            &crate::Config::test_default(),
+        )
+        .unwrap();
         assert!(!out.contains("??"), "leftover ??: {out}");
-        let _ = expected; // illustrative
     }
 
     #[test]

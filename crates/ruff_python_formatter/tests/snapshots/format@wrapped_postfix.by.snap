@@ -1,0 +1,47 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/wrapped_postfix.by
+---
+## Input
+```bython
+a: int?
+b: int??
+c: list[int?]
+
+
+def f(x: int?) -> None: ...
+
+
+def h(g) -> int?:
+    x = g()!
+    y = g()^
+    return y
+
+
+async def af(g):
+    g().await
+    g().await.bar().await
+    (g()).await
+```
+
+## Output
+```bython
+a: int?
+b: int??
+c: list[int?]
+
+
+def f(x: int?) -> None: ...
+
+
+def h(g) -> int?:
+    x = g()!
+    y = g()^
+    return y
+
+
+async def af(g):
+    g().await
+    g().await.bar().await
+    (g()).await
+```

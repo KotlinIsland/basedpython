@@ -289,7 +289,7 @@ impl<'src> Parser<'src> {
             let parsed_expr = self.parse_simple_expression(context);
 
             if self.at(TokenKind::If) {
-                Expr::If(self.parse_if_expression(parsed_expr.expr, start)).into()
+                Expr::If(self.parse_if_expression(parsed_expr.expr, start, context)).into()
             } else {
                 parsed_expr
             }
@@ -427,6 +427,75 @@ impl<'src> Parser<'src> {
                     }),
                     is_parenthesized: false,
                 };
+                continue;
+            }
+
+            // basedpython wrapped types: `T?` (optional) and `T ? E` (result).
+            // `?` binds looser than `|` (same precedence as `??`), so the value
+            // and error operands each absorb a full union. Whether an error type
+            // follows the `?` distinguishes the result form from the optional
+            // form. In ipython mode `?` is the help-end command, handled at the
+            // statement level, so the intercept stands down there.
+            if current_token == TokenKind::Question && self.options.mode != Mode::Ipython {
+                if OperatorPrecedence::Or <= left_precedence {
+                    break;
+                }
+                self.error_if_not_basedpython(
+                    "`?` (optional/result type) syntax is not valid in .py files".to_string(),
+                );
+                self.bump(TokenKind::Question);
+                left.expr = if self.at_expr() {
+                    let error =
+                        self.parse_binary_expression_or_higher(OperatorPrecedence::Or, context);
+                    Expr::BinOp(ast::ExprBinOp {
+                        left: Box::new(left.expr),
+                        op: ast::Operator::Result,
+                        right: Box::new(error.expr),
+                        range: self.node_range(start),
+                        node_index: AtomicNodeIndex::NONE,
+                    })
+                } else {
+                    Expr::UnaryOp(ast::ExprUnaryOp {
+                        op: ast::UnaryOp::Optional,
+                        operand: Box::new(left.expr),
+                        range: self.node_range(start),
+                        node_index: AtomicNodeIndex::NONE,
+                    })
+                };
+                left.is_parenthesized = false;
+                continue;
+            }
+
+            // basedpython doubly-wrapped optional: glued `T??` lowers to
+            // `(T?)?`. The `??` token is otherwise the none-coalesce operator,
+            // but coalesce is binary and requires a right operand, so a `??`
+            // with no following expression is unambiguously the double-optional
+            // type marker. (`T?? E` with an error operand remains coalesce for
+            // now — its result-of-optional runtime is still being settled.)
+            if current_token == TokenKind::DoubleQuestion
+                && self.options.mode != Mode::Ipython
+                && !(EXPR_SET.contains(self.peek()) || self.peek().is_soft_keyword())
+            {
+                if OperatorPrecedence::Or <= left_precedence {
+                    break;
+                }
+                self.error_if_not_basedpython(
+                    "`?` (optional/result type) syntax is not valid in .py files".to_string(),
+                );
+                self.bump(TokenKind::DoubleQuestion);
+                let inner = Expr::UnaryOp(ast::ExprUnaryOp {
+                    op: ast::UnaryOp::Optional,
+                    operand: Box::new(left.expr),
+                    range: self.node_range(start),
+                    node_index: AtomicNodeIndex::NONE,
+                });
+                left.expr = Expr::UnaryOp(ast::ExprUnaryOp {
+                    op: ast::UnaryOp::Optional,
+                    operand: Box::new(inner),
+                    range: self.node_range(start),
+                    node_index: AtomicNodeIndex::NONE,
+                });
+                left.is_parenthesized = false;
                 continue;
             }
 
@@ -1035,6 +1104,58 @@ impl<'src> Parser<'src> {
                         "`?.` (optional-chain) operator is not valid in .py files".to_string(),
                     );
                     Expr::Attribute(self.parse_optional_attribute_expression(lhs, start))
+                }
+                // basedpython postfix `^` propagate. `^` is otherwise the infix
+                // bitwise-xor operator, so it is only postfix when no operand
+                // follows; an operand on the right means it is xor (left for the
+                // binary loop). exception: in basedpython a `^` *glued* to its
+                // operand (no whitespace, as one writes `expr^`) followed by a
+                // unary-capable arithmetic token (`+ - ~ * **`) is
+                // postfix-then-binary (`p(a)^ + b` → `(p(a)^) + b`), not
+                // xor-of-unary. that disambiguation must not apply in `.py` mode,
+                // where glued `a^-b` is plain `a ^ (-b)` — stealing it would make
+                // valid python a syntax error.
+                TokenKind::CircumFlex
+                    if self.options.mode != Mode::Ipython
+                        && (!(EXPR_SET.contains(self.peek()) || self.peek().is_soft_keyword())
+                            || (self.options.is_basedpython
+                                && lhs.range().end() == self.current_token_range().start()
+                                && matches!(
+                                    self.peek(),
+                                    TokenKind::Plus
+                                        | TokenKind::Minus
+                                        | TokenKind::Tilde
+                                        | TokenKind::Star
+                                        | TokenKind::DoubleStar
+                                ))) =>
+                {
+                    self.error_if_not_basedpython(
+                        "`^` (propagate) operator is not valid in .py files".to_string(),
+                    );
+                    self.bump(TokenKind::CircumFlex);
+                    Expr::UnaryOp(ast::ExprUnaryOp {
+                        op: ast::UnaryOp::Propagate,
+                        operand: Box::new(lhs),
+                        range: self.node_range(start),
+                        node_index: AtomicNodeIndex::NONE,
+                    })
+                }
+                // basedpython postfix `!` force-unwrap. Inside an interpolated
+                // string replacement field a trailing `!` is the conversion flag
+                // (`f"{x!r}"`), so it is suppressed there.
+                TokenKind::Exclamation
+                    if self.options.mode != Mode::Ipython && !context.is_in_interpolation() =>
+                {
+                    self.error_if_not_basedpython(
+                        "`!` (force-unwrap) operator is not valid in .py files".to_string(),
+                    );
+                    self.bump(TokenKind::Exclamation);
+                    Expr::UnaryOp(ast::ExprUnaryOp {
+                        op: ast::UnaryOp::Force,
+                        operand: Box::new(lhs),
+                        range: self.node_range(start),
+                        node_index: AtomicNodeIndex::NONE,
+                    })
                 }
                 TokenKind::Float => match self.parse_tuple_member_expression(lhs, start) {
                     Ok(expr) => Expr::Attribute(expr),
@@ -2299,7 +2420,9 @@ impl<'src> Parser<'src> {
         // t"{*x and y}"
         // t"{*yield x}"
 
-        let value = self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or());
+        let value = self.parse_expression_list(
+            ExpressionContext::yield_or_starred_bitwise_or().with_in_interpolation(),
+        );
 
         if !value.is_parenthesized && value.expr.is_lambda_expr() {
             // TODO(dhruvmanila): This requires making some changes in lambda expression
@@ -4222,18 +4345,34 @@ impl<'src> Parser<'src> {
     /// If the parser isn't positioned at an `if` token.
     ///
     /// See: <https://docs.python.org/3/reference/expressions.html#conditional-expressions>
-    pub(super) fn parse_if_expression(&mut self, body: Expr, start: TextSize) -> ast::ExprIf {
+    pub(super) fn parse_if_expression(
+        &mut self,
+        body: Expr,
+        start: TextSize,
+        context: ExpressionContext,
+    ) -> ast::ExprIf {
         self.bump(TokenKind::If);
 
         let test = self.parse_simple_expression(ExpressionContext::default());
 
         self.expect(TokenKind::Else);
 
+        // the `else` value is the tail of the conditional, so a trailing
+        // interpolation conversion (`f"{a if b else c!s}"`) lands here — carry
+        // only the interpolation flag so the `!` stays the conversion flag
+        // rather than being eaten as a postfix force-unwrap. the other context
+        // flags (excluded `in`/`for`, starred precedence, …) must not leak into
+        // the `else` value, which otherwise parses as an ordinary expression.
+        let orelse_context = if context.is_in_interpolation() {
+            ExpressionContext::default().with_in_interpolation()
+        } else {
+            ExpressionContext::default()
+        };
         // `a if b else a if b else ...` recurses through `orelse` at the
         // conditional layer, which is not covered by the `parse_lhs_expression`
         // guard (that scope is released once each atom is parsed). Guard here.
         let orelse = if let Some(orelse) =
-            self.with_recursion(Self::parse_conditional_expression_or_higher)
+            self.with_recursion(|p| p.parse_conditional_expression_or_higher_impl(orelse_context))
         {
             orelse
         } else {
@@ -4449,6 +4588,12 @@ bitflags! {
         /// This flag is set when the `for` keyword, or `async` starting `async for`, should be
         /// excluded from an expression.
         const EXCLUDE_FOR = 1 << 5;
+
+        /// basedpython: set while parsing the top-level value of an interpolated
+        /// string replacement field (`f"{value!r}"`). Suppresses the postfix
+        /// `!` force-unwrap operator so the trailing `!` stays available as the
+        /// conversion flag. A parenthesised `(value!)` resets the context.
+        const IN_INTERPOLATION = 1 << 6;
     }
 }
 
@@ -4521,6 +4666,19 @@ impl ExpressionContext {
     /// basedpython: returns `true` if currently parsing a subscript slice element
     pub(super) const fn is_subscript_slice(self) -> bool {
         self.0.contains(ExpressionContextFlags::SUBSCRIPT_SLICE)
+    }
+
+    /// basedpython: returns a new context that marks parsing as being inside the
+    /// value of an interpolated-string replacement field
+    pub(super) fn with_in_interpolation(self) -> Self {
+        ExpressionContext(self.0 | ExpressionContextFlags::IN_INTERPOLATION)
+    }
+
+    /// basedpython: returns `true` if parsing the value of an interpolated-string
+    /// replacement field, where a trailing `!` is the conversion flag rather
+    /// than the postfix force-unwrap operator
+    pub(super) const fn is_in_interpolation(self) -> bool {
+        self.0.contains(ExpressionContextFlags::IN_INTERPOLATION)
     }
 
     /// Returns `true` if starred expressions are allowed.
