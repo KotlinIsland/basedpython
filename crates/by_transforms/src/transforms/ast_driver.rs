@@ -38,7 +38,7 @@ use super::{
     decl_site_variance, decorator_keyword, dedent_string, empty_declarations, float_const,
     generic_call, generics, identity_swap, implicit_typing, init_method, intersection, just_float,
     kw_subscript,
-    literal_types, modifiers, mutable_defaults, none_chain, not_type, overload,
+    literal_types, main_function, modifiers, mutable_defaults, none_chain, not_type, overload,
     repeated_underscore, sentinel, super_keyword, top_star, tuple_index, type_is,
     typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
 };
@@ -338,6 +338,7 @@ pub(crate) fn run_against_source<'a>(
     );
     let init_method_pass = init_method::InitMethod::new(source_ref);
     let modifiers_pass = modifiers::ModifiersPass::new(source_ref);
+    let main_function_pass = main_function::MainFunction::new(source_ref, config.is_stub);
     let empty_declarations_pass = empty_declarations::EmptyDeclarations::new();
     let overload_pass = overload::Overload::new(source_ref, config.is_stub);
     let decorator_keyword_pass = decorator_keyword::DecoratorKeyword::new(source_ref);
@@ -378,6 +379,10 @@ pub(crate) fn run_against_source<'a>(
         &auto_quote_pass,
         &init_method_pass,
         &modifiers_pass,
+        // after modifiers so the entry-point guard follows any `__all__` it
+        // emits, and before the AST-mutation passes so `main`'s decorator
+        // ranges are still valid for the `private` check
+        &main_function_pass,
         &empty_declarations_pass,
         &overload_pass,
         &decorator_keyword_pass,

@@ -22,6 +22,7 @@ pub(crate) mod just_float;
 pub(crate) mod kw_subscript;
 pub(crate) mod lazy_import;
 pub(crate) mod literal_types;
+pub(crate) mod main_function;
 pub(crate) mod modifiers;
 pub(crate) mod mutable_defaults;
 pub(crate) mod none_chain;

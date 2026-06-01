@@ -71,6 +71,58 @@ fn run_executes_module() {
 }
 
 #[test]
+fn run_invokes_top_level_main() {
+    // a top-level `def main` with no hand-written call still executes when the
+    // module is run, via the synthesised `if __name__ == "__main__"` guard
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "def main():\n    print('ran main')\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ran main");
+}
+
+#[test]
+fn run_invokes_async_main_via_asyncio() {
+    // an `async def main` entry point is driven through `asyncio.run`
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "async def main():\n    print('ran async main')\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "ran async main"
+    );
+}
+
+#[test]
 fn run_applies_transforms() {
     // Sanity check: tuple subscripts pass through unchanged after the
     // forward subscript-normalization transform was shelved. __getitem__

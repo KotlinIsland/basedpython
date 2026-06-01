@@ -49,6 +49,7 @@ basedpython is a Python-like language that transpiles to pure Python
 - [modifiers and visibility](features/modifiers.md)
 - [init method shorthand](features/init-method.md)
 - [empty declarations](features/empty-declarations.md)
+- [main function](features/main-function.md)
 - [identity and isinstance (`===` / `!==` / `is`)](features/identity-swap.md)
 - [optional chaining (`?.`)](features/optional-chaining.md)
 - [none-coalesce operator (`??`)](features/none-coalesce.md)
