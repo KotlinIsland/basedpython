@@ -61,6 +61,7 @@ basedpython is a Python-like language that transpiles to pure Python
 - [mutable default arguments](features/mutable-defaults.md)
 - [dedented triple-quoted strings](features/dedent-strings.md)
 - [custom string tags](features/string-tags.md)
+- [extensions](features/extensions.md)
 - [tuple member access (`expr.N`)](features/tuple-index.md)
 - [keyword arguments in subscripts](features/kw-subscript.md)
 - [unpack syntax](features/unpack-syntax.md)
