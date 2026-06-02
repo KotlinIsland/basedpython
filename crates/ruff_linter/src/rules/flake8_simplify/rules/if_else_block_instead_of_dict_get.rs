@@ -213,6 +213,7 @@ pub(crate) fn if_else_block_instead_of_dict_get(checker: &Checker, stmt_if: &ast
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
         is_cast: false,
+        is_string_tag: false,
     };
     let node4 = expected_var.clone();
     let node5 = ast::StmtAssign {
@@ -324,6 +325,7 @@ pub(crate) fn if_exp_instead_of_dict_get(
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
         is_cast: false,
+        is_string_tag: false,
     };
 
     let contents = checker.generator().expr(&fixed_node.into());

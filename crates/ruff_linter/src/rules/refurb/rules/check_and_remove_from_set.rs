@@ -201,6 +201,7 @@ fn make_suggestion(set: &ast::ExprName, element: &Expr, generator: Generator) ->
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
         is_cast: false,
+        is_string_tag: false,
     };
     // And finally, turn it into a statement.
     let stmt = ast::StmtExpr {

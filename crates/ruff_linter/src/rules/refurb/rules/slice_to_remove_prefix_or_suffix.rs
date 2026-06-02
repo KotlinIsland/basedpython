@@ -361,6 +361,7 @@ fn affix_matches_slice_bound(data: &RemoveAffixData, semantic: &SemanticModel) -
                 range: _,
                 node_index: _,
                 is_cast: _,
+                is_string_tag: _,
                 func,
                 arguments,
             }),
@@ -410,6 +411,7 @@ fn affix_matches_slice_bound(data: &RemoveAffixData, semantic: &SemanticModel) -
                  range: _,
                  node_index: _,
                  is_cast: _,
+                 is_string_tag: _,
                  func,
                  arguments,
              }| {

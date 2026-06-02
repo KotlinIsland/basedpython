@@ -1,0 +1,56 @@
+---
+source: crates/ruff_python_parser/src/lexer.rs
+expression: lex_source(source)
+---
+## Tokens
+```
+[
+    (
+        Not,
+        0..3,
+    ),
+    (
+        String(
+            "x",
+        ),
+        3..6,
+        TokenFlags(
+            DOUBLE_QUOTES,
+        ),
+    ),
+    (
+        If,
+        7..9,
+    ),
+    (
+        Match,
+        10..15,
+    ),
+    (
+        String(
+            "y",
+        ),
+        15..18,
+        TokenFlags(
+            DOUBLE_QUOTES,
+        ),
+    ),
+    (
+        Else,
+        19..23,
+    ),
+    (
+        String(
+            "z",
+        ),
+        23..26,
+        TokenFlags(
+            DOUBLE_QUOTES,
+        ),
+    ),
+    (
+        Newline,
+        26..26,
+    ),
+]
+```

@@ -128,6 +128,7 @@ Module(
                                         keywords: [],
                                     },
                                     is_cast: false,
+                                    is_string_tag: false,
                                 },
                             ),
                             ctx: Load,

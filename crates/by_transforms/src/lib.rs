@@ -566,6 +566,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let mut auto_quote_rev = reverse_transforms::auto_quote::AutoQuoteReverse::new(src);
     let mut compat_rev = reverse_transforms::compat::CompatReverse::new();
     let mut none_chain_rev = reverse_transforms::none_chain::NoneChainReverse::new(src);
+    let mut string_tag_rev = reverse_transforms::string_tag::StringTagReverse::new(src);
     let mut typing_redirect_rev = reverse_transforms::typing_redirect::TypingRedirectReverse::new();
 
     for stmt in module.suite() {
@@ -587,6 +588,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         auto_quote_rev.visit_stmt(stmt);
         compat_rev.visit_stmt(stmt);
         none_chain_rev.visit_stmt(stmt);
+        string_tag_rev.visit_stmt(stmt);
         // `callable` rewrites callable annotations to the arrow form. it runs
         // for stubs too, but in a restricted "stub" mode (set above) that only
         // touches the gradual `Callable[..., R]` form — the `Callable[[A, B],
@@ -636,6 +638,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(auto_quote_rev.edits);
     fixes.extend(compat_rev.edits);
     fixes.extend(none_chain_rev.edits);
+    fixes.extend(string_tag_rev.edits);
     fixes.extend(typing_redirect_rev.edits);
 
     let body = apply_transforms_once(src, fixes).0;

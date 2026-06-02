@@ -63,6 +63,7 @@ fn key_in_dict(checker: &Checker, left: &Expr, right: &Expr, operator: CmpOp, pa
         range: _,
         node_index: _,
         is_cast: _,
+        is_string_tag: _,
     }) = &right
     else {
         return;

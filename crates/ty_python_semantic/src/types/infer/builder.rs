@@ -8301,6 +8301,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             func,
             arguments,
             is_cast: _,
+            is_string_tag: _,
         } = call_expression;
 
         if callable_type

@@ -1,0 +1,165 @@
+---
+source: crates/ruff_python_parser/src/lexer.rs
+expression: lex_source(source)
+---
+## Tokens
+```
+[
+    (
+        Name(
+            Name("sql"),
+        ),
+        0..3,
+    ),
+    (
+        TStringStart,
+        3..4,
+        TokenFlags(
+            DOUBLE_QUOTES | T_STRING,
+        ),
+    ),
+    (
+        InterpolatedStringMiddle(
+            "select ",
+        ),
+        4..11,
+        TokenFlags(
+            DOUBLE_QUOTES | T_STRING,
+        ),
+    ),
+    (
+        Lbrace,
+        11..12,
+    ),
+    (
+        Name(
+            Name("x"),
+        ),
+        12..13,
+    ),
+    (
+        Rbrace,
+        13..14,
+    ),
+    (
+        TStringEnd,
+        14..15,
+        TokenFlags(
+            DOUBLE_QUOTES | T_STRING,
+        ),
+    ),
+    (
+        Name(
+            Name("ff"),
+        ),
+        16..18,
+    ),
+    (
+        TStringStart,
+        18..19,
+        TokenFlags(
+            T_STRING,
+        ),
+    ),
+    (
+        Lbrace,
+        19..20,
+    ),
+    (
+        Name(
+            Name("y"),
+        ),
+        20..21,
+    ),
+    (
+        Rbrace,
+        21..22,
+    ),
+    (
+        TStringEnd,
+        22..23,
+        TokenFlags(
+            T_STRING,
+        ),
+    ),
+    (
+        Name(
+            Name("sqlr"),
+        ),
+        24..28,
+    ),
+    (
+        TStringStart,
+        28..29,
+        TokenFlags(
+            DOUBLE_QUOTES | T_STRING,
+        ),
+    ),
+    (
+        InterpolatedStringMiddle(
+            "raw ",
+        ),
+        29..33,
+        TokenFlags(
+            DOUBLE_QUOTES | T_STRING,
+        ),
+    ),
+    (
+        Lbrace,
+        33..34,
+    ),
+    (
+        Name(
+            Name("z"),
+        ),
+        34..35,
+    ),
+    (
+        Rbrace,
+        35..36,
+    ),
+    (
+        TStringEnd,
+        36..37,
+        TokenFlags(
+            DOUBLE_QUOTES | T_STRING,
+        ),
+    ),
+    (
+        String(
+            "bytes",
+        ),
+        38..47,
+        TokenFlags(
+            DOUBLE_QUOTES | BYTE_STRING | RAW_STRING_LOWERCASE,
+        ),
+    ),
+    (
+        FStringStart,
+        48..50,
+        TokenFlags(
+            DOUBLE_QUOTES | F_STRING,
+        ),
+    ),
+    (
+        InterpolatedStringMiddle(
+            "fstring",
+        ),
+        50..57,
+        TokenFlags(
+            DOUBLE_QUOTES | F_STRING,
+        ),
+    ),
+    (
+        FStringEnd,
+        57..58,
+        TokenFlags(
+            DOUBLE_QUOTES | F_STRING,
+        ),
+    ),
+    (
+        Newline,
+        58..58,
+    ),
+]
+```

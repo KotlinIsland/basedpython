@@ -93,6 +93,7 @@ pub(crate) fn multiple_starts_ends_with(checker: &Checker, expr: &Expr) {
             range: _,
             node_index: _,
             is_cast: _,
+            is_string_tag: _,
         }) = &call
         else {
             continue;
@@ -155,6 +156,7 @@ pub(crate) fn multiple_starts_ends_with(checker: &Checker, expr: &Expr) {
                         range: _,
                         node_index: _,
                         is_cast: _,
+                        is_string_tag: _,
                     }) = expr
                     else {
                         unreachable!(
@@ -214,6 +216,7 @@ pub(crate) fn multiple_starts_ends_with(checker: &Checker, expr: &Expr) {
                 range: TextRange::default(),
                 node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                 is_cast: false,
+                is_string_tag: false,
             });
             let call = node3;
 

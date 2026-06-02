@@ -82,6 +82,7 @@ impl Transformer for Sentinel {
                     keywords: Box::new([]),
                 },
                 is_cast: false,
+                is_string_tag: false,
             });
             *stmt = Stmt::Assign(StmtAssign {
                 node_index: AtomicNodeIndex::NONE,

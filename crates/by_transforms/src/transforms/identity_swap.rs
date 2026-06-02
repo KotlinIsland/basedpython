@@ -102,6 +102,7 @@ fn isinstance_call(lhs: Expr, rhs: Expr, negate: bool) -> Expr {
             keywords: Box::new([]),
         },
         is_cast: false,
+        is_string_tag: false,
     });
     if negate {
         Expr::UnaryOp(ExprUnaryOp {

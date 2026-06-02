@@ -47,6 +47,7 @@ Module(
                                 keywords: [],
                             },
                             is_cast: false,
+                            is_string_tag: false,
                         },
                     ),
                 },
@@ -82,6 +83,7 @@ Module(
                                                 keywords: [],
                                             },
                                             is_cast: false,
+                                            is_string_tag: false,
                                         },
                                     ),
                                     arguments: Arguments {
@@ -91,6 +93,7 @@ Module(
                                         keywords: [],
                                     },
                                     is_cast: false,
+                                    is_string_tag: false,
                                 },
                             ),
                             arguments: Arguments {
@@ -100,6 +103,7 @@ Module(
                                 keywords: [],
                             },
                             is_cast: false,
+                            is_string_tag: false,
                         },
                     ),
                 },

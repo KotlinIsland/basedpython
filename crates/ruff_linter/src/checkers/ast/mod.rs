@@ -1725,6 +1725,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 range: _,
                 node_index: _,
                 is_cast: _,
+                is_string_tag: _,
             }) => {
                 if let Expr::Name(ast::ExprName {
                     id,
@@ -1847,6 +1848,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 range: _,
                 node_index: _,
                 is_cast: _,
+                is_string_tag: _,
             }) => {
                 self.visit_expr(func);
 
