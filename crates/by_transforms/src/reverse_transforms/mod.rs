@@ -29,6 +29,7 @@ pub(crate) mod none_chain;
 pub(crate) mod not_type;
 pub(crate) mod overload;
 pub(crate) mod prune_imports;
+pub(crate) mod reified_generic;
 pub(crate) mod string_tag;
 pub(crate) mod subscript;
 pub(crate) mod super_keyword;

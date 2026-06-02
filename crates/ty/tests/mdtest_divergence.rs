@@ -164,6 +164,15 @@ fn clean_mdtest_blocks_run() {
         return;
     };
 
+    // reified generics emit native pep 695 syntax (the closure mechanism), so
+    // they only transpile on a 3.12+ target — on an older interpreter those
+    // blocks legitimately can't run, and their transpile error is documented,
+    // not a divergence
+    let supports_reification = version
+        .split_once('.')
+        .and_then(|(_, minor)| minor.parse::<u32>().ok())
+        .is_some_and(|minor| minor >= 12);
+
     // third-party runtime deps are environment-dependent; skip blocks that
     // need one the interpreter doesn't have
     let has_typing_extensions = Command::new(&python)
@@ -232,6 +241,11 @@ fn clean_mdtest_blocks_run() {
                     let transpiled = match transpile(block, &version) {
                         Ok(t) => t,
                         Err(e) => {
+                            // a reified generic on a <3.12 interpreter is a
+                            // documented transpile error, not a divergence
+                            if !supports_reification && e.contains("python 3.12 or newer") {
+                                continue;
+                            }
                             failures.lock().unwrap().push(format!(
                                 "{name} block {i}: transpile failed:\n{e}\n--- block ---\n{block}"
                             ));

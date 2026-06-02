@@ -661,3 +661,94 @@ fn transpile_directory_round_trips_through_build() {
         "coalesce lowered back to python:\n{built}"
     );
 }
+
+/// transpile with `--min-version 3.13` — reified generics require native PEP
+/// 695 syntax in the output (the closure mechanism), available from 3.12+.
+fn transpile_at_313(source: &str) -> String {
+    run_transpile(source, &["--min-version", "3.13"])
+}
+
+#[test]
+fn reified_generic_wraps_and_preserves_call_site() {
+    // `T` in a value position reifies: the function is wrapped in `@generic`
+    // and the specialized call site keeps its `[int]` (routes through the
+    // wrapper) instead of being stripped like an erased generic
+    let out = transpile_at_313(
+        "\
+def f[T](t: object):
+    return isinstance(t, T)
+
+f[int](1)
+",
+    );
+    assert!(
+        out.contains("@generic  # basedpython: reified"),
+        "reified function should be wrapped:\n{out}"
+    );
+    assert!(
+        out.contains("f[int](1)"),
+        "reified call site must keep its type args:\n{out}"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn reified_generic_runs_value_position() {
+    // run only on a 3.13+ interpreter — the source's `def g[T = int]()` uses a
+    // PEP 696 type-param default, which parses natively only from 3.13 (a 3.12
+    // interpreter rejects it). probe `python3.13`; skip cleanly when it's absent
+    let Some(python) = ["python3.13"].into_iter().find(|p| {
+        Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }) else {
+        eprintln!("skipping: no python 3.13 interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def f[T](t: object):
+    print(T)
+    return isinstance(t, T)
+
+def g[T = int]():
+    print(T)
+
+class Box:
+    def kind[T](self) -> object:
+        print(T)
+        return T
+
+print(f[int](1))
+print(f[str](1))
+g()
+g[bytes]()
+Box().kind[float]()
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "<class 'int'>\nTrue\n<class 'str'>\nFalse\n<class 'int'>\n<class 'bytes'>\n<class 'float'>"
+    );
+}

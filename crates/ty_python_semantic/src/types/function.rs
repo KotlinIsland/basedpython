@@ -424,6 +424,45 @@ impl<'db> OverloadLiteral<'db> {
         false
     }
 
+    /// basedpython: names of the pep 695 type parameters this definition
+    /// reifies (referenced in a value position in the body), in declaration
+    /// order. always empty outside basedpython files
+    #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+    pub(crate) fn reified_type_params(self, db: &'db dyn Db) -> Box<[ast::name::Name]> {
+        let file = self.file(db);
+        if !file.source_type(db).is_basedpython() {
+            return Box::default();
+        }
+        let module = parsed_module(db, file).load(db);
+        let node = self.body_scope(db).node(db).expect_function().node(&module);
+        crate::reified::reified_type_param_names(node).into_boxed_slice()
+    }
+
+    /// basedpython: reified type parameters with no pep 696 default — these
+    /// make explicit specialization mandatory at call sites
+    #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+    pub(crate) fn reified_type_params_without_default(
+        self,
+        db: &'db dyn Db,
+    ) -> Box<[ast::name::Name]> {
+        let reified = self.reified_type_params(db);
+        if reified.is_empty() {
+            return Box::default();
+        }
+        let file = self.file(db);
+        let module = parsed_module(db, file).load(db);
+        let node = self.body_scope(db).node(db).expect_function().node(&module);
+        let Some(type_params) = node.type_params.as_deref() else {
+            return Box::default();
+        };
+        type_params
+            .type_params
+            .iter()
+            .filter(|param| param.default().is_none() && reified.contains(&param.name().id))
+            .map(|param| param.name().id.clone())
+            .collect()
+    }
+
     /// Returns true if this overload is decorated with `@staticmethod`, or if it is implicitly a
     /// staticmethod.
     pub(crate) fn is_staticmethod(self, db: &dyn Db) -> bool {
@@ -1239,6 +1278,36 @@ impl<'db> FunctionType<'db> {
     /// conditions.
     pub(crate) fn has_known_decorator(self, db: &dyn Db, decorator: FunctionDecorators) -> bool {
         self.literal(db).has_known_decorator(db, decorator)
+    }
+
+    /// basedpython: whether this function has reified type parameters (a pep
+    /// 695 type parameter referenced in a value position in the body). a
+    /// reified generic is structurally a two-step callable — `f[…]` then
+    /// `(…)` — so it is distinct from a plain callable
+    pub fn is_reified(self, db: &'db dyn Db) -> bool {
+        !self
+            .literal(db)
+            .last_definition
+            .reified_type_params(db)
+            .is_empty()
+    }
+
+    /// basedpython: reified type parameters with no pep 696 default
+    pub(crate) fn reified_type_params_without_default(
+        self,
+        db: &'db dyn Db,
+    ) -> &'db [ast::name::Name] {
+        self.literal(db)
+            .last_definition
+            .reified_type_params_without_default(db)
+    }
+
+    /// basedpython: a *pristine* reified generic — reified and not yet put
+    /// through the `f[...]` specialization step (or any other type mapping).
+    /// only this form is the two-step callable; a specialized reified generic
+    /// behaves as a plain callable again
+    pub(crate) fn is_unspecialized_reified(self, db: &'db dyn Db) -> bool {
+        self.updated_signature(db).is_none() && self.is_reified(db)
     }
 
     /// Returns true if this method is decorated with `@classmethod`, or if it is implicitly a

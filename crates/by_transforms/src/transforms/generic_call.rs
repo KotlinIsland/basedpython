@@ -67,7 +67,10 @@ impl<'ast> Visitor<'ast> for GenericCallStrip<'_> {
         if let Expr::Call(call) = expr {
             if let Expr::Subscript(sub) = call.func.as_ref() {
                 if let Expr::Name(name) = sub.value.as_ref() {
-                    if self.types.is_function(name) {
+                    // a reified generic keeps its `[…]`: the `@generic` wrapper
+                    // routes the specialization through `generic.__getitem__`,
+                    // so stripping it would erase a runtime-significant step
+                    if self.types.is_function(name) && !self.types.is_reified_function(name) {
                         let fn_src = self.src(sub.value.range()).to_owned();
                         self.edits
                             .push(Fix::safe_edit(Edit::range_replacement(fn_src, sub.range())));

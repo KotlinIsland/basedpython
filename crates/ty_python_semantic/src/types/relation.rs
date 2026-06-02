@@ -1704,6 +1704,15 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                     self.check_callable_pair(db, source_callable, target_callable)
                 }),
 
+            // basedpython: an unspecialized reified generic is structurally a
+            // two-step callable (`f[...]` then `(...)`) — a plain callable has
+            // no slot for the specialization step, so it is never assignable
+            (Type::FunctionLiteral(function), Type::Callable(_))
+                if function.is_unspecialized_reified(db) =>
+            {
+                self.never()
+            }
+
             (_, Type::Callable(target_callable)) => {
                 self.with_recursion_guard(source, target, || {
                     let Some(callables) = source
