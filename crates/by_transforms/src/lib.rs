@@ -566,6 +566,8 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let mut auto_quote_rev = reverse_transforms::auto_quote::AutoQuoteReverse::new(src);
     let mut compat_rev = reverse_transforms::compat::CompatReverse::new();
     let mut none_chain_rev = reverse_transforms::none_chain::NoneChainReverse::new(src);
+    let mut reified_generic_rev =
+        reverse_transforms::reified_generic::ReifiedGenericReverse::new(src);
     let mut string_tag_rev = reverse_transforms::string_tag::StringTagReverse::new(src);
     let mut typing_redirect_rev = reverse_transforms::typing_redirect::TypingRedirectReverse::new();
 
@@ -588,6 +590,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         auto_quote_rev.visit_stmt(stmt);
         compat_rev.visit_stmt(stmt);
         none_chain_rev.visit_stmt(stmt);
+        reified_generic_rev.visit_stmt(stmt);
         string_tag_rev.visit_stmt(stmt);
         // `callable` rewrites callable annotations to the arrow form. it runs
         // for stubs too, but in a restricted "stub" mode (set above) that only
@@ -638,6 +641,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(auto_quote_rev.edits);
     fixes.extend(compat_rev.edits);
     fixes.extend(none_chain_rev.edits);
+    fixes.extend(reified_generic_rev.edits);
     fixes.extend(string_tag_rev.edits);
     fixes.extend(typing_redirect_rev.edits);
 
@@ -1058,6 +1062,30 @@ mod cross_file {
         assert!(
             !out.contains("f[int]"),
             "type args should be gone, got:\n{out}"
+        );
+    }
+
+    /// an imported *reified* generic function keeps its `[int]` specialization
+    /// — the `@generic` wrapper routes it through `__getitem__`. only the
+    /// cross-module type tells us `f` reifies `T` (value-position use), so the
+    /// single-file path can't make this call
+    #[test]
+    fn imported_reified_function_call_site_preserved() {
+        let db = project_db(&[
+            (
+                "/mod_a.by",
+                "def f[T](t: object) -> bool:\n    return isinstance(t, T)\n",
+            ),
+            ("/mod_b.by", "from mod_a import f\nresult = f[int](1)\n"),
+        ]);
+        let config = Config {
+            min_version: PythonVersion::PY312,
+            ..Config::test_default()
+        };
+        let out = transpile_file(&db, "/mod_b.by", &config);
+        assert!(
+            out.contains("f[int](1)"),
+            "reified call site must keep its type args, got:\n{out}"
         );
     }
 

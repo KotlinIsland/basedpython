@@ -54,6 +54,7 @@ mod fixes;
 pub mod lint;
 pub(crate) mod place;
 mod reachability;
+pub mod reified;
 mod semantic_model;
 mod subscript;
 mod suppression;

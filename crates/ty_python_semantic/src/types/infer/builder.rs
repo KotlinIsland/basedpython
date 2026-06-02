@@ -57,7 +57,7 @@ use crate::types::diagnostic::{
     INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM, INVALID_TYPE_GUARD_CALL,
     INVALID_TYPE_VARIABLE_BOUND, INVALID_TYPE_VARIABLE_CONSTRAINTS, POSSIBLY_MISSING_IMPLICIT_CALL,
     POSSIBLY_MISSING_SUBMODULE, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL,
-    UNRESOLVED_REFERENCE, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
+    UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
     hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
     report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_bad_dunder_set_call,
     report_call_to_abstract_method, report_cannot_pop_required_field_on_typed_dict,
@@ -8365,6 +8365,41 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return Type::unknown();
         }
 
+        // basedpython: a reified generic must be specialized (`f[...]`) before
+        // it is called — python carries no runtime type information, so a
+        // reified type parameter cannot be inferred from the arguments. a pep
+        // 696 default fills its reified slot when omitted. a reified *method*
+        // (`obj.m()`) is the same: its underlying function carries the reified
+        // type parameters
+        let reified_target = match callable_type {
+            Type::FunctionLiteral(function) => Some(function),
+            Type::BoundMethod(bound_method) => Some(bound_method.function(self.db())),
+            _ => None,
+        };
+        if self.is_basedpython_file()
+            && let Some(function) = reified_target
+            && function.is_unspecialized_reified(self.db())
+        {
+            let missing = function.reified_type_params_without_default(self.db());
+            if !missing.is_empty()
+                && let Some(builder) = self
+                    .context
+                    .report_lint(&UNSPECIALIZED_REIFIED_GENERIC, call_expression)
+            {
+                let name = function.name(self.db());
+                let s = if missing.len() > 1 { "s" } else { "" };
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "Cannot call reified generic function `{name}` \
+                     without explicit specialization"
+                ));
+                diagnostic.info(format_args!(
+                    "reified type parameter{s} `{}` cannot be inferred from arguments — \
+                     specialize with `{name}[...]`",
+                    missing.iter().format("`, `"),
+                ));
+            }
+        }
+
         let class = match callable_type {
             Type::ClassLiteral(class) => Some(ClassType::NonGeneric(class)),
             Type::GenericAlias(generic) => Some(ClassType::Generic(generic)),
@@ -9194,7 +9229,36 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
             });
 
-        ty.inner_type()
+        let ty = ty.inner_type();
+
+        // basedpython: a pep 695 function type parameter referenced in a value
+        // position is reified — the runtime value is the supplied type
+        // argument, so the reference types as `type[T]` rather than as the
+        // `TypeVar` object
+        if self.is_basedpython_file()
+            && !self
+                .inference_flags()
+                .contains(InferenceFlags::IN_TYPE_EXPRESSION)
+            && let Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) = ty
+            && matches!(typevar.kind(db), TypeVarKind::Pep695)
+            && typevar.definition(db).is_some_and(|definition| {
+                matches!(
+                    definition.scope(db).node(db),
+                    NodeWithScopeKind::FunctionTypeParameters(_)
+                )
+            })
+            && let Some(bound_typevar) = bind_typevar(
+                db,
+                self.index,
+                self.scope().file_scope_id(db),
+                self.typevar_binding_context,
+                typevar,
+            )
+        {
+            return Type::TypeVar(bound_typevar).to_meta_type(db);
+        }
+
+        ty
     }
 
     fn infer_local_place_load(

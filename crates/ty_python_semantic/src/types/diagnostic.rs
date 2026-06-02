@@ -129,6 +129,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SHADOWED_TYPE_VARIABLE);
     registry.register_lint(&SUBCLASS_OF_FINAL_CLASS);
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
+    registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
     registry.register_lint(&OVERRIDE_OF_FINAL_METHOD);
     registry.register_lint(&OVERRIDE_OF_FINAL_VARIABLE);
     registry.register_lint(&INEFFECTIVE_FINAL);
@@ -2332,6 +2333,36 @@ declare_lint! {
     pub(crate) static SUBCLASS_OF_SEALED_CLASS = {
         summary: "detects subclasses of sealed classes from outside their workspace",
         status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for calls to a basedpython reified generic function without an
+    /// explicit specialization.
+    ///
+    /// ## Why is this bad?
+    /// A function whose type parameter is referenced in a value position is
+    /// *reified*: the type parameter behaves like a positional parameter that
+    /// is filled by the `[...]` specialization step. Python carries no runtime
+    /// type information, so a reified type parameter cannot be inferred from
+    /// the arguments — calling without `f[...]` leaves it without a value.
+    /// The only exception is a type parameter with a PEP 696 default, which
+    /// fills the reified slot when omitted.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def f[T]():
+    ///     print(T)
+    ///
+    /// f[int]()  # ok
+    /// f()       # error: `T` is reified and has no value
+    /// ```
+    pub(crate) static UNSPECIALIZED_REIFIED_GENERIC = {
+        summary: "detects calls to reified generic functions without explicit specialization",
+        status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
     }
 }

@@ -39,9 +39,9 @@ use super::{
     float_const, force_unwrap, generic_call, generics, identity_swap, implicit_typing, init_method,
     intersection, just_float, kw_subscript, literal_types, main_function, modifiers,
     mutable_defaults, none_chain, not_type, optional_type, overload, postfix_await, propagate,
-    repeated_underscore, sentinel, some_ctor, string_tag, super_keyword, symbolic_type_op,
-    top_star, tuple_index, type_is, typed_dict_literal, typed_lambda, typeof_keyword, unpack,
-    use_site_variance,
+    reified_generic, repeated_underscore, sentinel, some_ctor, string_tag, super_keyword,
+    symbolic_type_op, top_star, tuple_index, type_is, typed_dict_literal, typed_lambda,
+    typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -454,6 +454,8 @@ pub(crate) fn run_against_source<'a>(
     let float_const_pass = float_const::FloatConstPass::new();
     let kw_subscript_pass = kw_subscript::KwSubscriptPass::new(source_ref);
     let generic_call_pass = generic_call::GenericCallStripPass::new(source_ref);
+    let reified_generic_pass =
+        reified_generic::ReifiedGenericPass::new(source_ref, config.min_version);
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
     let tuple_types_pass = annotation::TupleLiteralTypePass::new(source_ref);
     let literal_types_pass = literal_types::LiteralTypePass::new(source_ref);
@@ -529,6 +531,10 @@ pub(crate) fn run_against_source<'a>(
         &just_float_pass,
         &float_const_pass,
         &kw_subscript_pass,
+        // reified generics wrap `def f[T]` (value-position `T`) in `@generic`;
+        // must precede generic_call so the call-site strip skips the wrapped
+        // function's specialized calls (they route through `generic.__getitem__`)
+        &reified_generic_pass,
         &generic_call_pass,
         &implicit_typing_pass,
         &tuple_types_pass,

@@ -1129,24 +1129,35 @@ reveal_type(D().x)  # revealed: Unknown
 ## basedpython: explicit constraints keyword
 
 in basedpython, `T: (int, str)` is an upper bound of type `tuple[int, str]`, not constraints. use
-`T: constraints (int, str)` to declare constraints explicitly
+`T: constraints (int, str)` to declare constraints explicitly.
+
+the bound / constraints are observed through `T` in _annotation_ position. a value-position
+reference to `T` would instead make the function a
+[reified generic](../../../../../../docs/basedpython/features/reified-generics.md), typing the
+reference as `type[T]` rather than as the `TypeVar` object.
 
 ### `T: (int, str)` is an upper bound
 
-in basedpython, a parenthesized tuple is an upper bound, not constraints
+in basedpython, a parenthesized tuple is an upper bound, not constraints — so a `T`-typed value is a
+`tuple[int, str]`:
 
 ```by
-def f[T: (int, str)]():
-    reveal_type(T.__bound__)        # revealed: (int, str)
-    reveal_type(T.__constraints__)  # revealed: ()
+def f[T: (int, str)](x: T):
+    reveal_type(x)  # revealed: T@f
+    # the bound flows through: T is usable wherever a tuple[int, str] is
+    reveal_type(x[0])  # revealed: int
 ```
 
 ### `T: constraints (int, str)` is constraints
 
+a constrained typevar resolves to exactly one constraint per specialization:
+
 ```by
-def f[T: constraints (int, str)]():
-    reveal_type(T.__constraints__)  # revealed: (int, str)
-    reveal_type(T.__bound__)        # revealed: None
+def f[T: constraints (int, str)](x: T) -> T:
+    return x
+
+reveal_type(f(1))    # revealed: int
+reveal_type(f("a"))  # revealed: str
 ```
 
 [pep 695]: https://peps.python.org/pep-0695/

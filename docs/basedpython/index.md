@@ -37,6 +37,7 @@ basedpython is a Python-like language that transpiles to pure Python
 - [explicit typevar constraints](features/constraints.md)
 - [typevar variance keywords](features/variance.md)
 - [explicit generic call sites](features/generic-calls.md)
+- [reified type parameters](features/reified-generics.md)
 - [automatic forward references](features/forward-references.md)
 - [implicit typing imports](features/implicit-typing.md)
 - [typed lambda](features/typed-lambda.md)

@@ -38,6 +38,13 @@ pub(crate) trait TypeInfo {
 
     fn is_function(&self, name: &ExprName) -> bool;
 
+    /// whether `name` resolves to a basedpython *reified* generic function (a
+    /// pep 695 type parameter referenced in a value position). these are
+    /// wrapped in the `generic` polyfill, so their specialized call sites
+    /// (`f[int](…)`) must NOT have their `[…]` stripped — they route through
+    /// `generic.__getitem__`
+    fn is_reified_function(&self, name: &ExprName) -> bool;
+
     /// whether `expr` resolves to `typing.Any` (the explicitly-annotated
     /// dynamic type). distinguishes the special form from a shadowing binding
     /// or the `Unknown` that an unresolved / invalid type expression yields,
@@ -119,6 +126,12 @@ impl TypeInfo for SemanticModel<'_> {
     fn is_function(&self, name: &ExprName) -> bool {
         name.inferred_type(self)
             .is_some_and(|ty| ty.as_function_literal().is_some())
+    }
+
+    fn is_reified_function(&self, name: &ExprName) -> bool {
+        name.inferred_type(self)
+            .and_then(Type::as_function_literal)
+            .is_some_and(|function| function.is_reified(self.db()))
     }
 
     fn is_any(&self, expr: &Expr) -> bool {

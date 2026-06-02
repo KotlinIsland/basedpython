@@ -256,6 +256,25 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     );
                 }
             }
+            // basedpython: a reified generic *method* is specialized through
+            // `obj.m[int]` just like a free function. the explicit
+            // specialization applies to the underlying function and re-wraps as
+            // a bound method; gated on reification so erased generic methods are
+            // unaffected
+            Type::BoundMethod(bound_method) => {
+                let function = bound_method.function(db);
+                let signature = function.signature(db);
+                if function.is_reified(db)
+                    && let Some(overload) = signature.overloads.first()
+                    && let Some(generic_context) = overload.generic_context
+                {
+                    return self.infer_explicit_function_specialization(
+                        subscript,
+                        value_ty,
+                        generic_context,
+                    );
+                }
+            }
             Type::KnownInstance(KnownInstanceType::TypeAliasType(TypeAliasType::ManualPEP695(
                 _,
             ))) => {
