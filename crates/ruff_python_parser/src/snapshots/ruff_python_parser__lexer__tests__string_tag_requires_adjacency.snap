@@ -1,0 +1,28 @@
+---
+source: crates/ruff_python_parser/src/lexer.rs
+expression: lex_source(source)
+---
+## Tokens
+```
+[
+    (
+        Name(
+            Name("sql"),
+        ),
+        0..3,
+    ),
+    (
+        String(
+            "select",
+        ),
+        4..12,
+        TokenFlags(
+            DOUBLE_QUOTES,
+        ),
+    ),
+    (
+        Newline,
+        12..12,
+    ),
+]
+```

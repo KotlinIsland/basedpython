@@ -39,8 +39,8 @@ use super::{
     float_const, force_unwrap, generic_call, generics, identity_swap, implicit_typing, init_method,
     intersection, just_float, kw_subscript, literal_types, main_function, modifiers,
     mutable_defaults, none_chain, not_type, optional_type, overload, postfix_await, propagate,
-    repeated_underscore, sentinel, some_ctor, super_keyword, symbolic_type_op, top_star,
-    tuple_index, type_is, typed_dict_literal, typed_lambda, typeof_keyword, unpack,
+    repeated_underscore, sentinel, some_ctor, string_tag, super_keyword, symbolic_type_op,
+    top_star, tuple_index, type_is, typed_dict_literal, typed_lambda, typeof_keyword, unpack,
     use_site_variance,
 };
 use crate::Config;
@@ -432,6 +432,7 @@ pub(crate) fn run_against_source<'a>(
     let top_star_pass = top_star::TopStar::new();
     let identity_swap_pass = identity_swap::IdentitySwap::new(source_ref);
     let compat_pass = compat::CompatRewrite::new(source_ref, config.clone());
+    let string_tag_pass = string_tag::StringTagPass::new(source_ref, config.clone());
     let dedent_string_pass = dedent_string::DedentString::new(source_ref);
     let super_keyword_pass = super_keyword::SuperKeyword::new();
     let postfix_await_pass = postfix_await::PostfixAwait::new(source_ref);
@@ -483,6 +484,10 @@ pub(crate) fn run_against_source<'a>(
         &top_star_pass,
         &identity_swap_pass,
         &compat_pass,
+        // a custom string tag wraps a template literal whose interpolations may
+        // themselves lower; its template-edit passes interpolation source
+        // through as `Src` fragments so those inner edits still compose
+        &string_tag_pass,
         &dedent_string_pass,
         &super_keyword_pass,
         &postfix_await_pass,

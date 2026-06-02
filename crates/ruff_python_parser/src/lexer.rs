@@ -408,7 +408,29 @@ impl<'src> Lexer<'src> {
             c if is_ascii_identifier_start(c) => self.lex_identifier(c),
             '0'..='9' => self.lex_number(c),
             '#' => return self.lex_comment(),
-            '\'' | '"' => self.lex_string(c),
+            '\'' | '"' => {
+                // basedpython: a quote glued to a preceding identifier is a
+                // custom string tag (`sql"..."`); the content lexes as a
+                // t-string so interpolations are parsed. builtin prefix
+                // combinations never reach here — `lex_identifier` consumes
+                // them as part of the string token. the rule is suppressed
+                // inside an interpolated string body, where a name abutting a
+                // quote is a nested/closing string in a replacement field or
+                // format spec, not a tag
+                if self.current_kind == TokenKind::Name
+                    && self.current_range.end() == self.token_start()
+                    && self.interpolated_strings.current().is_none()
+                {
+                    self.current_flags |= TokenFlags::T_STRING;
+                    if let Some(kind) = self.lex_interpolated_string_start(c) {
+                        kind
+                    } else {
+                        self.lex_string(c)
+                    }
+                } else {
+                    self.lex_string(c)
+                }
+            }
             '=' => {
                 if self.cursor.eat_char('=') {
                     // basedpython: `===` is the identity-comparison
@@ -2726,6 +2748,28 @@ f"{(lambda x:{x})}"
     #[test]
     fn test_empty_tstrings() {
         let source = r#"t"" "" t"" t'' '' t"""""" t''''''"#;
+        assert_snapshot!(lex_source(source));
+    }
+
+    #[test]
+    fn test_string_tag() {
+        // an identifier glued to a quote lexes as a tag name plus a t-string;
+        // valid builtin prefix combinations stay builtin strings
+        let source = r#"sql"select {x}" ff'{y}' sqlr"raw {z}" rb"bytes" f"fstring""#;
+        assert_snapshot!(lex_source(source));
+    }
+
+    #[test]
+    fn test_string_tag_requires_adjacency() {
+        // a space between the identifier and the quote is two ordinary tokens
+        let source = r#"sql "select""#;
+        assert_snapshot!(lex_source(source));
+    }
+
+    #[test]
+    fn test_string_tag_keyword_not_tagged() {
+        // hard and soft keywords glued to a quote keep their python meaning
+        let source = r#"not"x" if match"y" else"z""#;
         assert_snapshot!(lex_source(source));
     }
 

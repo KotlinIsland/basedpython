@@ -33,9 +33,11 @@ except (TimeoutError, ConnectionRefusedError):
 
 ### template strings / t-strings (PEP 750)
 
-*requires grammar support — planned for a future release.*
-
-`t'...'` literals produce `string.templatelib.Template` objects. basedpython will rewrite them to explicit constructor calls
+`t'...'` literals produce `string.templatelib.Template` objects. below 3.14 there is no runtime
+t-string, so a [custom string tag](string-tags.md) — the only construct that currently emits one —
+has its template rewritten to an explicit `Template(...)` constructor over a polyfill with the same
+`strings` / `interpolations` shape. lowering of a bare standalone `t'...'` literal is planned for a
+future release
 
 ### `operator.is_none` / `operator.is_not_none`
 

@@ -79,6 +79,7 @@ pub(crate) fn unnecessary_list_cast(checker: &Checker, iter: &Expr, body: &[Stmt
         range: list_range,
         node_index: _,
         is_cast: _,
+        is_string_tag: _,
     }) = iter
     else {
         return;

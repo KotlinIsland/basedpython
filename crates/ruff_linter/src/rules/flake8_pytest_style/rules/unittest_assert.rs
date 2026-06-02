@@ -400,6 +400,7 @@ impl UnittestAssert {
                     range: TextRange::default(),
                     node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                     is_cast: false,
+                    is_string_tag: false,
                 };
                 let isinstance = node1.into();
                 if matches!(self, UnittestAssert::IsInstance) {
@@ -451,6 +452,7 @@ impl UnittestAssert {
                     range: TextRange::default(),
                     node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                     is_cast: false,
+                    is_string_tag: false,
                 };
                 let re_search = node2.into();
                 if matches!(self, UnittestAssert::Regex | UnittestAssert::RegexpMatches) {

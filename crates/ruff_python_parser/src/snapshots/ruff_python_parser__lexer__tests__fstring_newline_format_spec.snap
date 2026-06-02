@@ -67,17 +67,18 @@ expression: "lex_invalid(source, Mode::Module)"
         16..18,
     ),
     (
-        String(
-            "",
-        ),
+        TStringStart,
         18..19,
         TokenFlags(
-            UNCLOSED_STRING,
+            T_STRING,
         ),
     ),
     (
         Newline,
         19..20,
+        TokenFlags(
+            UNCLOSED_STRING,
+        ),
     ),
     (
         FStringStart,
@@ -155,17 +156,18 @@ expression: "lex_invalid(source, Mode::Module)"
         45..47,
     ),
     (
-        String(
-            "",
-        ),
+        TStringStart,
         47..48,
         TokenFlags(
-            UNCLOSED_STRING,
+            T_STRING,
         ),
     ),
     (
         Newline,
         48..49,
+        TokenFlags(
+            UNCLOSED_STRING,
+        ),
     ),
 ]
 ```
@@ -179,8 +181,10 @@ expression: "lex_invalid(source, Mode::Module)"
         location: 13..14,
     },
     LexicalError {
-        error: UnclosedStringError,
-        location: 18..19,
+        error: TStringError(
+            UnterminatedString,
+        ),
+        location: 19..19,
     },
     LexicalError {
         error: FStringError(
@@ -189,8 +193,10 @@ expression: "lex_invalid(source, Mode::Module)"
         location: 32..33,
     },
     LexicalError {
-        error: UnclosedStringError,
-        location: 47..48,
+        error: TStringError(
+            UnterminatedString,
+        ),
+        location: 48..48,
     },
 ]
 ```

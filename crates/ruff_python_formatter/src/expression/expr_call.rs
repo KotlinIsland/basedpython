@@ -29,6 +29,7 @@ impl FormatNodeRule<ExprCall> for FormatExprCall {
             range: _,
             node_index: _,
             is_cast: _,
+            is_string_tag: _,
             func,
             arguments,
         } = item;

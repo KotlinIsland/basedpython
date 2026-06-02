@@ -544,6 +544,7 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
                 range: _,
                 node_index: _,
                 is_cast: _,
+                is_string_tag: _,
             },
         ) => {
             if checker.any_rule_enabled(&[

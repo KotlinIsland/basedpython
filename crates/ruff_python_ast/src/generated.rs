@@ -9569,6 +9569,12 @@ pub struct ExprCall {
     /// source — surface form is `<value> cast <type>`. Lowered to `cast(<type>, <value>)`
     /// with an injected `from typing import cast`
     pub is_cast: bool,
+    /// basedpython: when true, this call is a custom string tag `tag"..."`.
+    /// The `func` is the tag identifier and `arguments` holds exactly the template
+    /// literal, whose opening quote directly abuts the tag name — no parentheses or
+    /// `t` prefix are present in the source. Lowered to `tag(t"...")` (or a `Template`
+    /// polyfill construction below 3.14)
+    pub is_string_tag: bool,
 }
 
 /// An AST node that represents either a single-part f-string literal
@@ -10665,6 +10671,7 @@ impl ExprCall {
             func,
             arguments,
             is_cast: _,
+            is_string_tag: _,
             range: _,
             node_index: _,
         } = self;

@@ -424,6 +424,7 @@ impl<'src> Parser<'src> {
                         range: self.node_range(start),
                         node_index: AtomicNodeIndex::NONE,
                         is_cast: true,
+                        is_string_tag: false,
                     }),
                     is_parenthesized: false,
                 };
@@ -1105,6 +1106,33 @@ impl<'src> Parser<'src> {
                     );
                     Expr::Attribute(self.parse_optional_attribute_expression(lhs, start))
                 }
+                // basedpython custom string tag: the lexer lexes a string
+                // glued to an identifier as a t-string, so a `TStringStart`
+                // abutting a name is `tag"..."` — a call receiving the
+                // template. lowered to `tag(t"...")`
+                TokenKind::TStringStart
+                    if matches!(lhs, Expr::Name(_))
+                        && lhs.range().end() == self.current_token_range().start() =>
+                {
+                    self.error_if_not_basedpython(
+                        "custom string tags are not valid in .py files".to_string(),
+                    );
+                    let template = self.parse_strings();
+                    let arguments = ast::Arguments {
+                        range: template.range(),
+                        node_index: AtomicNodeIndex::NONE,
+                        args: Box::from([template]),
+                        keywords: Box::from([]),
+                    };
+                    Expr::Call(ast::ExprCall {
+                        func: Box::new(lhs),
+                        arguments,
+                        range: self.node_range(start),
+                        node_index: AtomicNodeIndex::NONE,
+                        is_cast: false,
+                        is_string_tag: true,
+                    })
+                }
                 // basedpython postfix `^` propagate. `^` is otherwise the infix
                 // bitwise-xor operator, so it is only postfix when no operand
                 // follows; an operand on the right means it is xor (left for the
@@ -1219,6 +1247,7 @@ impl<'src> Parser<'src> {
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             is_cast: false,
+            is_string_tag: false,
         }
     }
 

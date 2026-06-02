@@ -199,6 +199,7 @@ pub(crate) fn if_expr_with_true_false(
                     range: TextRange::default(),
                     node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                     is_cast: false,
+                    is_string_tag: false,
                 }
                 .into(),
             ),

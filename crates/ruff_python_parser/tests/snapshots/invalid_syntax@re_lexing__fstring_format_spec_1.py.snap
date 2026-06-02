@@ -108,40 +108,49 @@ Module(
             Expr(
                 StmtExpr {
                     node_index: NodeIndex(None),
-                    range: 199..203,
-                    value: Name(
-                        ExprName {
+                    range: 199..205,
+                    value: Call(
+                        ExprCall {
                             node_index: NodeIndex(None),
-                            range: 199..203,
-                            id: Name("spec"),
-                            ctx: Load,
-                        },
-                    ),
-                },
-            ),
-            Expr(
-                StmtExpr {
-                    node_index: NodeIndex(None),
-                    range: 203..205,
-                    value: StringLiteral(
-                        ExprStringLiteral {
-                            node_index: NodeIndex(None),
-                            range: 203..205,
-                            value: StringLiteralValue {
-                                inner: Single(
-                                    StringLiteral {
-                                        range: 203..205,
-                                        node_index: NodeIndex(None),
-                                        value: "}",
-                                        flags: StringLiteralFlags {
-                                            quote_style: Single,
-                                            prefix: Empty,
-                                            triple_quoted: false,
-                                            unclosed: true,
+                            range: 199..205,
+                            func: Name(
+                                ExprName {
+                                    node_index: NodeIndex(None),
+                                    range: 199..203,
+                                    id: Name("spec"),
+                                    ctx: Load,
+                                },
+                            ),
+                            arguments: Arguments {
+                                range: 203..205,
+                                node_index: NodeIndex(None),
+                                args: [
+                                    TString(
+                                        ExprTString {
+                                            node_index: NodeIndex(None),
+                                            range: 203..205,
+                                            value: TStringValue {
+                                                inner: Single(
+                                                    TString {
+                                                        range: 203..205,
+                                                        node_index: NodeIndex(None),
+                                                        elements: [],
+                                                        flags: TStringFlags {
+                                                            quote_style: Single,
+                                                            prefix: Regular,
+                                                            triple_quoted: false,
+                                                            unclosed: true,
+                                                        },
+                                                    },
+                                                ),
+                                            },
                                         },
-                                    },
-                                ),
+                                    ),
+                                ],
+                                keywords: [],
                             },
+                            is_cast: false,
+                            is_string_tag: true,
                         },
                     ),
                 },
@@ -352,40 +361,49 @@ Module(
             Expr(
                 StmtExpr {
                     node_index: NodeIndex(None),
-                    range: 292..296,
-                    value: Name(
-                        ExprName {
+                    range: 292..298,
+                    value: Call(
+                        ExprCall {
                             node_index: NodeIndex(None),
-                            range: 292..296,
-                            id: Name("spec"),
-                            ctx: Load,
-                        },
-                    ),
-                },
-            ),
-            Expr(
-                StmtExpr {
-                    node_index: NodeIndex(None),
-                    range: 296..298,
-                    value: StringLiteral(
-                        ExprStringLiteral {
-                            node_index: NodeIndex(None),
-                            range: 296..298,
-                            value: StringLiteralValue {
-                                inner: Single(
-                                    StringLiteral {
-                                        range: 296..298,
-                                        node_index: NodeIndex(None),
-                                        value: "}",
-                                        flags: StringLiteralFlags {
-                                            quote_style: Single,
-                                            prefix: Empty,
-                                            triple_quoted: false,
-                                            unclosed: true,
+                            range: 292..298,
+                            func: Name(
+                                ExprName {
+                                    node_index: NodeIndex(None),
+                                    range: 292..296,
+                                    id: Name("spec"),
+                                    ctx: Load,
+                                },
+                            ),
+                            arguments: Arguments {
+                                range: 296..298,
+                                node_index: NodeIndex(None),
+                                args: [
+                                    TString(
+                                        ExprTString {
+                                            node_index: NodeIndex(None),
+                                            range: 296..298,
+                                            value: TStringValue {
+                                                inner: Single(
+                                                    TString {
+                                                        range: 296..298,
+                                                        node_index: NodeIndex(None),
+                                                        elements: [],
+                                                        flags: TStringFlags {
+                                                            quote_style: Single,
+                                                            prefix: Regular,
+                                                            triple_quoted: false,
+                                                            unclosed: true,
+                                                        },
+                                                    },
+                                                ),
+                                            },
                                         },
-                                    },
-                                ),
+                                    ),
+                                ],
+                                keywords: [],
                             },
+                            is_cast: false,
+                            is_string_tag: true,
                         },
                     ),
                 },
@@ -426,7 +444,25 @@ Module(
   |
 5 | f'middle {'string':\
 6 |         'format spec'}
-  |                     ^^ Syntax Error: missing closing quote in string literal
+  |                     ^ Syntax Error: custom string tags are not valid in .py files
+7 |
+8 | f'middle {'string':\\
+  |
+
+
+  |
+5 | f'middle {'string':\
+6 |         'format spec'}
+  |                      ^ Syntax Error: t-string: single `}` is not allowed
+7 |
+8 | f'middle {'string':\\
+  |
+
+
+  |
+5 | f'middle {'string':\
+6 |         'format spec'}
+  |                       ^ Syntax Error: t-string: unterminated string
 7 |
 8 | f'middle {'string':\\
   |
@@ -513,5 +549,19 @@ Module(
    |
 11 | f'middle {'string':\\\
 12 |         'format spec'}
-   |                     ^^ Syntax Error: missing closing quote in string literal
+   |                     ^ Syntax Error: custom string tags are not valid in .py files
+   |
+
+
+   |
+11 | f'middle {'string':\\\
+12 |         'format spec'}
+   |                      ^ Syntax Error: t-string: single `}` is not allowed
+   |
+
+
+   |
+11 | f'middle {'string':\\\
+12 |         'format spec'}
+   |                       ^ Syntax Error: t-string: unterminated string
    |

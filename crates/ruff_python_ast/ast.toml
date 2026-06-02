@@ -436,6 +436,11 @@ expression. The `func` is a synthetic `Name(\"cast\")`, and `arguments` holds
 `[type, value]` in `typing.cast` order. The parentheses are not present in the
 source — surface form is `<value> cast <type>`. Lowered to `cast(<type>, <value>)`
 with an injected `from typing import cast`""" },
+  { name = "is_string_tag", type = "bool", doc = """basedpython: when true, this call is a custom string tag `tag"..."`.
+The `func` is the tag identifier and `arguments` holds exactly the template
+literal, whose opening quote directly abuts the tag name — no parentheses or
+`t` prefix are present in the source. Lowered to `tag(t"...")` (or a `Template`
+polyfill construction below 3.14)""" },
 ]
 
 [Expr.nodes.ExprFString]

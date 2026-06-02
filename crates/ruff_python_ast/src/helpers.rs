@@ -416,6 +416,7 @@ where
                 range: _,
                 node_index: _,
                 is_cast: _,
+                is_string_tag: _,
             }) => {
                 any_over_expr(call_func, &mut *func)
                     // Note that this is the evaluation order but not necessarily the declaration order

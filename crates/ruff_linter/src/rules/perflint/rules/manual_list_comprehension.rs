@@ -149,6 +149,7 @@ pub(crate) fn manual_list_comprehension(checker: &Checker, for_stmt: &ast::StmtF
         range,
         node_index: _,
         is_cast: _,
+        is_string_tag: _,
     }) = value.as_ref()
     else {
         return;

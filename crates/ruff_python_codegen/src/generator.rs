@@ -1241,6 +1241,7 @@ impl<'a> Generator<'a> {
                 range: _,
                 node_index: _,
                 is_cast: _,
+                is_string_tag: _,
             }) => {
                 self.unparse_expr(func, precedence::MAX);
                 self.p("(");
