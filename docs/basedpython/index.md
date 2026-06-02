@@ -36,6 +36,7 @@ basedpython is a Python-like language that transpiles to pure Python
 - [anonymous named tuple types](features/anonymous-named-tuple.md)
 - [explicit typevar constraints](features/constraints.md)
 - [typevar variance keywords](features/variance.md)
+- [safe variance](features/safe-variance.md)
 - [explicit generic call sites](features/generic-calls.md)
 - [reified type parameters](features/reified-generics.md)
 - [automatic forward references](features/forward-references.md)
