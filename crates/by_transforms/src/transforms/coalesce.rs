@@ -12,20 +12,22 @@ use crate::type_info::TypeInfo;
 /// inside the rewrite instead of being clobbered by first-wins overlap dedup
 pub(crate) struct NoneCoalesce<'src> {
     source: &'src str,
+    types: &'src dyn TypeInfo,
     pub(crate) edits: Vec<(TextRange, Vec<Fragment>)>,
 }
 
 impl<'src> NoneCoalesce<'src> {
-    pub(crate) fn new(source: &'src str) -> Self {
+    pub(crate) fn new(source: &'src str, types: &'src dyn TypeInfo) -> Self {
         Self {
             source,
+            types,
             edits: Vec::new(),
         }
     }
 }
 
-fn expand_none_chain(expr: &Expr, source: &str) -> Option<String> {
-    let (form, guards) = super::none_chain::expand_chain(expr, source)?;
+fn expand_none_chain(expr: &Expr, source: &str, types: &dyn TypeInfo) -> Option<String> {
+    let (form, guards) = super::none_chain::expand_chain(expr, source, types)?;
     Some(super::none_chain::build_expansion(&guards, &form, "_t"))
 }
 
@@ -68,10 +70,17 @@ impl NoneCoalesce<'_> {
             return self.operand_value(&b.left);
         }
         let rhs = self.operand_value(&b.right);
-        match expand_none_chain(&b.left, self.source) {
+        // a wrapped optional (`int??`, a generic `T?`) keeps its present value
+        // inside the runtime wrapper — the present branch unwraps with `.value`
+        let unwrap = if self.types.wrapped_optional(&b.left) {
+            ".value"
+        } else {
+            ""
+        };
+        match expand_none_chain(&b.left, self.source, self.types) {
             Some(expanded) => {
                 let mut t = vec![
-                    Fragment::Lit("_t if (_t := ".to_owned()),
+                    Fragment::Lit(format!("_t{unwrap} if (_t := ")),
                     Fragment::Lit(expanded),
                     Fragment::Lit(") is not None else ".to_owned()),
                 ];
@@ -81,7 +90,7 @@ impl NoneCoalesce<'_> {
             None if is_trivially_pure(&b.left) => {
                 let mut t = vec![
                     Fragment::Src(b.left.range()),
-                    Fragment::Lit(" if ".to_owned()),
+                    Fragment::Lit(format!("{unwrap} if ")),
                     Fragment::Src(b.left.range()),
                     Fragment::Lit(" is not None else ".to_owned()),
                 ];
@@ -92,7 +101,7 @@ impl NoneCoalesce<'_> {
                 // a chained (left-associative) `??` puts another coalesce on the
                 // left; recurse through `operand_value` so it is lowered rather
                 // than copied verbatim. hoist to walrus so the LHS runs once
-                let mut t = vec![Fragment::Lit("_t if (_t := ".to_owned())];
+                let mut t = vec![Fragment::Lit(format!("_t{unwrap} if (_t := "))];
                 t.extend(self.operand_value(&b.left));
                 t.push(Fragment::Lit(") is not None else ".to_owned()));
                 t.extend(rhs);
@@ -110,7 +119,7 @@ impl NoneCoalesce<'_> {
         {
             return self.expand_coalesce(expr);
         }
-        if let Some(expanded) = expand_none_chain(expr, self.source) {
+        if let Some(expanded) = expand_none_chain(expr, self.source, self.types) {
             return vec![Fragment::Lit(expanded)];
         }
         vec![Fragment::Src(expr.range())]
@@ -161,8 +170,8 @@ impl<'src> NoneCoalescePass<'src> {
 }
 
 impl TypeAwarePass for NoneCoalescePass<'_> {
-    fn run(&self, stmts: &[Stmt], _types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = NoneCoalesce::new(self.source);
+    fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
+        let mut inner = NoneCoalesce::new(self.source, types);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
@@ -250,6 +259,21 @@ mod tests {
         let out = transpile("x = f()! ?? 1\n", &Config::test_default()).unwrap();
         assert!(
             out.contains("x = _t if (_t := _force_unwrap(f())) is not None else 1\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn wrapped_lhs_unwraps_present_value() {
+        // a wrapped optional's present value lives inside the runtime wrapper —
+        // the present branch reads `.value`
+        let out = transpile(
+            "def g() -> int??:\n    return Some(5)\nx = g() ?? -1\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("x = _t.value if (_t := g()) is not None else -1\n"),
             "got: {out}"
         );
     }

@@ -49,6 +49,31 @@ def g() -> int ? TypeError:
 
 both forms compose: `T?? E`, `T ? E?`, etc
 
+### `?` over a type variable is the wrapped form
+
+a plain union `T | None` would flatten when `T` binds to an optional — calling
+`f[T](t: T) -> T?` with an `int?` argument must yield `int??`, keeping the
+outer absence distinct from a present-inner-`None`. so `?` applied to a bare
+type variable denotes the *wrapped* optional (`Optional[T | None]` at runtime),
+and the function constructs its result with `Some(…)` / `None` regardless of
+what `T` binds to:
+
+```by
+def f[T](t: T) -> T?:
+    return Some(t)   # the present case is wrapped
+    return None      # the absent case
+
+def g(x: int?):
+    reveal_type(f(x))   # int??
+    print(f(x))         # Some(1) / Some(None)
+    print(f(x) ?? -1)   # 1 / None — `??` unwraps the wrapper
+```
+
+a bare `return t` is a type error: the unwrapped value carries no layer.
+consumers unwrap as with any wrapped optional — `!`, `^`, `??`, and `?.` all
+read the wrapper's present value. compound operands are unaffected (`list[T]?`
+stays the plain union — substitution cannot introduce a top-level `None` there)
+
 ## auto-wrap
 
 > **not yet implemented** (see the status banner). a bare `return` is currently

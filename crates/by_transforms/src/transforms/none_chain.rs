@@ -40,18 +40,31 @@ fn pick_temp_var(types: &dyn TypeInfo, anchor: &Expr) -> &'static str {
 /// walks an attribute-access chain and returns `Some((python_form, guards))` when
 /// any `?.` is present, where `python_form` has all `?.` replaced by `.` and
 /// `guards` is the ordered list of accumulated sub-expressions that must be
-/// non-None before each subsequent optional access is safe
-pub(super) fn expand_chain(expr: &Expr, source: &str) -> Option<(String, Vec<String>)> {
+/// non-None before each subsequent optional access is safe.
+///
+/// a `?.` whose base is a *wrapped* optional (`int??`, a generic `T?`)
+/// reaches its present value through the runtime wrapper: the guard still
+/// tests the wrapper against `None`, but the access reads `.value` first
+pub(super) fn expand_chain(
+    expr: &Expr,
+    source: &str,
+    types: &dyn TypeInfo,
+) -> Option<(String, Vec<String>)> {
     let Expr::Attribute(attr) = expr else {
         return None;
     };
     let field = attr.attr.as_str();
-    match expand_chain(&attr.value, source) {
+    let unwrap = if attr.optional && types.wrapped_optional(&attr.value) {
+        ".value"
+    } else {
+        ""
+    };
+    match expand_chain(&attr.value, source, types) {
         Some((v_form, mut guards)) => {
             if attr.optional {
                 guards.push(v_form.clone());
             }
-            Some((format!("{v_form}.{field}"), guards))
+            Some((format!("{v_form}{unwrap}.{field}"), guards))
         }
         None => {
             if !attr.optional {
@@ -60,7 +73,7 @@ pub(super) fn expand_chain(expr: &Expr, source: &str) -> Option<(String, Vec<Str
             let start = usize::from(attr.value.range().start());
             let end = usize::from(attr.value.range().end());
             let v_form = source[start..end].to_owned();
-            Some((format!("{v_form}.{field}"), vec![v_form]))
+            Some((format!("{v_form}{unwrap}.{field}"), vec![v_form]))
         }
     }
 }
@@ -132,7 +145,7 @@ impl<'ast> Visitor<'ast> for NoneChain<'_> {
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
         if let Expr::Attribute(_) = expr {
-            if let Some((form, guards)) = expand_chain(expr, self.source) {
+            if let Some((form, guards)) = expand_chain(expr, self.source, self.types) {
                 let temp = pick_temp_var(self.types, expr);
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
                     build_expansion(&guards, &form, temp),
@@ -154,6 +167,22 @@ mod tests {
         assert_eq!(
             transpile(input, &Config::test_default()).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    #[test]
+    fn wrapped_base_unwraps_value() {
+        // `?.` on a wrapped optional reads the present value through the
+        // runtime wrapper: the guard tests the wrapper, the access goes
+        // through `.value`
+        let out = transpile(
+            "def g() -> int??:\n    return Some(5)\nw = g()\nx = w?.bit_length\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("x = None if w is None else w.value.bit_length\n"),
+            "got: {out}"
         );
     }
 

@@ -869,7 +869,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 // basedpython: `T?` in type position is the optional type
                 // `T | None`. a nested optional (`T??`) cannot collapse into a
                 // union (the outer- and inner-`None` states would merge), so
-                // each extra layer wraps the inner type in `WrappedOptional`
+                // each extra layer wraps the inner type in `WrappedOptional` —
+                // and `?` over a *bare type variable* is wrapped too
+                // (`WrappedOptional(T | None)`), because specializing a plain
+                // `T | None` with an optional `T` would flatten the layer
+                // (`f[T](t: T) -> T?` called with `int | None` must yield
+                // `int??`, not `int | None`). a generic optional's values are
+                // therefore constructed with `Some(…)` / `None`, matching the
+                // wrapped runtime convention regardless of what `T` binds to
                 if matches!(unary.op, ast::UnaryOp::Optional) && self.is_basedpython_file() {
                     let inner = self.infer_type_expression(&unary.operand);
                     let operand_is_optional = matches!(
@@ -882,10 +889,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             InternedType::new(self.db(), inner),
                         ));
                     }
-                    return UnionType::from_elements_leave_aliases(
+                    let decomposition = UnionType::from_elements_leave_aliases(
                         self.db(),
                         [inner, Type::none(self.db())],
                     );
+                    if matches!(inner, Type::TypeVar(_)) {
+                        return Type::KnownInstance(KnownInstanceType::WrappedOptional(
+                            InternedType::new(self.db(), decomposition),
+                        ));
+                    }
+                    return decomposition;
                 }
                 // basedpython: a unary numeric operation in a type expression,
                 // e.g. `-3` → `Literal[-3]` or `~0` → `Literal[-1]`. evaluate the

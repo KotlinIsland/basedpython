@@ -2070,14 +2070,12 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                 Type::KnownInstance(KnownInstanceType::WrappedOptional(target_inner)),
             ) => self.check_type_pair(db, source_inner.inner(db), target_inner.inner(db)),
 
-            // basedpython: a wrapped optional `WrappedOptional(inner)` accepts
-            // any value of its decomposition `inner | None` — the wrapped value
-            // itself, or `None` for the absent outer state. (Identical wrapped
-            // optionals are already handled by the reflexivity short-circuit
-            // above.)
-            (_, Type::KnownInstance(KnownInstanceType::WrappedOptional(inner))) => {
-                let decomposition = UnionType::from_elements(db, [inner.inner(db), Type::none(db)]);
-                self.check_type_pair(db, source, decomposition)
+            // basedpython: a wrapped optional's values are the absent outer
+            // state (`None`) and wrapped values (`Some(…)`, handled by the
+            // covariance arm above) — a bare inner value is *not* one of them
+            // (it carries no wrapper), so only `None` remains assignable here
+            (_, Type::KnownInstance(KnownInstanceType::WrappedOptional(_))) => {
+                self.check_type_pair(db, source, Type::none(db))
             }
 
             (Type::KnownInstance(source), _) => {

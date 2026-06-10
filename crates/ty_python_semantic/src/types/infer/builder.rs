@@ -9157,13 +9157,24 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // magically here rather than via a typeshed stub. Only reached when
             // otherwise unbound, so a local `Some = …` binding still shadows it.
             // It takes exactly one value (so `Some()` / `Some(1, 2)` are arity
-            // errors); the return is `Any` until the wrapped-optional value type
-            // is settled.
+            // errors) and produces the wrapped optional of that value's type
             .or_fall_back_to(db, || {
                 if self.is_basedpython_file() && symbol_name == "Some" {
+                    let value_typevar = BoundTypeVarInstance::synthetic(
+                        db,
+                        Name::new_static("_SomeT"),
+                        TypeVarVariance::Covariant,
+                    );
+                    let value_ty = Type::TypeVar(value_typevar);
                     let value = Parameter::positional_only(Some(Name::new_static("value")))
-                        .with_annotated_type(Type::object());
-                    let signature = Signature::new(Parameters::new(db, [value]), Type::any());
+                        .with_annotated_type(value_ty);
+                    let signature = Signature::new_generic(
+                        Some(GenericContext::from_typevar_instances(db, [value_typevar])),
+                        Parameters::new(db, [value]),
+                        Type::KnownInstance(KnownInstanceType::WrappedOptional(InternedType::new(
+                            db, value_ty,
+                        ))),
+                    );
                     Place::bound(Type::single_callable(db, signature)).into()
                 } else {
                     Place::Undefined.into()
@@ -9791,6 +9802,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // performed the narrowing so we know to re-add None
         let mut none_chain_was_optional = false;
         if self.is_basedpython_file() && attribute.optional {
+            // a wrapped optional's present value is its inner type — peel the
+            // wrapper before the lookup (the runtime reads `.value`); the
+            // wrapper's absent outer state short-circuits to `None`
+            if let Type::KnownInstance(KnownInstanceType::WrappedOptional(inner)) = value_type {
+                value_type = inner.inner(db);
+                none_chain_was_optional = true;
+            }
             let none = Type::none(db);
             let narrowed = match value_type {
                 Type::Union(u) => u.map(db, |elem| {

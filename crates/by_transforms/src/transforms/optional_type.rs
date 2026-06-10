@@ -36,6 +36,11 @@ struct OptionalLower<'src> {
     /// set when any lowered optional produced a runtime `Optional[...]` wrapper
     needs_runtime: bool,
     source: &'src str,
+    /// stack of in-scope PEP 695 type-parameter names. `?` over a bare type
+    /// variable lowers to the *wrapped* form (`Optional[T | None]`) — a plain
+    /// union would flatten when `T` binds to an optional (mirrors ty's typing
+    /// of a generic `T?`)
+    typevar_scopes: Vec<Vec<String>>,
 }
 
 impl<'src> OptionalLower<'src> {
@@ -44,13 +49,39 @@ impl<'src> OptionalLower<'src> {
             edits: Vec::new(),
             needs_runtime: false,
             source,
+            typevar_scopes: Vec::new(),
         }
+    }
+
+    fn in_scope_typevar(&self, name: &str) -> bool {
+        self.typevar_scopes
+            .iter()
+            .any(|scope| scope.iter().any(|n| n == name))
     }
 }
 
 impl<'ast> Visitor<'ast> for OptionalLower<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        let type_params = match stmt {
+            Stmt::FunctionDef(f) => f.type_params.as_deref(),
+            Stmt::ClassDef(c) => c.type_params.as_deref(),
+            _ => None,
+        };
+        let pushed = if let Some(tp) = type_params {
+            self.typevar_scopes.push(
+                tp.type_params
+                    .iter()
+                    .map(|p| p.name().id.as_str().to_owned())
+                    .collect(),
+            );
+            true
+        } else {
+            false
+        };
         walk_stmt(self, stmt);
+        if pushed {
+            self.typevar_scopes.pop();
+        }
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
@@ -82,16 +113,21 @@ impl<'ast> Visitor<'ast> for OptionalLower<'_> {
         let node = unary.range;
         let tail = &self.source[usize::from(inner.range().end())..usize::from(node.end())];
         let close_parens: String = tail.chars().filter(|c| *c == ')').collect();
-        if depth >= 2 {
+        // a bare in-scope type variable gets one extra wrapper layer: `T?` is
+        // `Optional[T | None]`, matching ty's wrapped typing of a generic `?`
+        let generic_operand =
+            matches!(inner, Expr::Name(n) if self.in_scope_typevar(n.id.as_str()));
+        let wrap_layers = (depth - 1) as usize + usize::from(generic_operand);
+        if wrap_layers >= 1 {
             self.needs_runtime = true;
             self.edits.push((
                 TextRange::empty(node.start()),
-                "Optional[".repeat((depth - 1) as usize),
+                "Optional[".repeat(wrap_layers),
             ));
         }
         let mut replacement = close_parens;
         replacement.push_str(" | None");
-        for _ in 1..depth {
+        for _ in 0..wrap_layers {
             replacement.push(']');
         }
         self.edits
@@ -207,6 +243,32 @@ class Optional:
         assert_eq!(
             crate::transpile("x: int? = None\n", &config).unwrap(),
             "from __future__ import annotations\nx: int | None = None\n"
+        );
+    }
+
+    #[test]
+    fn generic_typevar_optional_wraps() {
+        // `?` over a bare in-scope type variable is the wrapped form — a plain
+        // union would flatten when `T` binds to an optional. (the 3.10 generics
+        // polyfill's `T` → `_T` rename composes inside the wrapper)
+        check(
+            indoc! {"
+                def f[T](t: T) -> T?:
+                    return Some(t)
+            "},
+            &format!(
+                "from typing import TypeVar\n{RUNTIME}_T = TypeVar(\"_T\")\ndef f(t: _T) -> Optional[_T | None]:\n    return Optional(t)\n"
+            ),
+        );
+    }
+
+    #[test]
+    fn non_typevar_name_optional_stays_union() {
+        // a name that is not an in-scope type parameter lowers to the plain
+        // union as before
+        check(
+            "def f(x: int?) -> None: ...\n",
+            "def f(x: int | None) -> None: ...\n",
         );
     }
 

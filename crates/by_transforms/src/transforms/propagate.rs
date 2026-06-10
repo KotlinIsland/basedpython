@@ -34,8 +34,8 @@ use crate::type_info::{AbsentTest, TypeInfo};
 /// result-like `T | E` tests `isinstance(_, BaseException)`.
 fn absent_condition(test: AbsentTest, target: &str) -> String {
     match test {
-        AbsentTest::IsNone => format!("{target} is None"),
-        AbsentTest::IsException => format!("isinstance({target}, BaseException)"),
+        AbsentTest::Optional | AbsentTest::WrappedOptional => format!("{target} is None"),
+        AbsentTest::Result => format!("isinstance({target}, BaseException)"),
     }
 }
 
@@ -168,13 +168,19 @@ impl<'ast> Visitor<'ast> for Propagate<'_> {
             let absent = self
                 .types
                 .propagate_absent_test(&unary.operand)
-                .unwrap_or(AbsentTest::IsNone);
+                .unwrap_or(AbsentTest::Optional);
             let operand_src = self.src(unary.operand.range()).to_owned();
+            // a wrapped optional's present value is inside the runtime wrapper
+            let unwrap = if absent == AbsentTest::WrappedOptional {
+                ".value"
+            } else {
+                ""
+            };
             let (guard, value) = if is_trivially_pure(&unary.operand) {
                 let cond = absent_condition(absent, &operand_src);
                 (
                     format!("if {cond}: return {operand_src}\n{indent}"),
-                    operand_src,
+                    format!("{operand_src}{unwrap}"),
                 )
             } else {
                 let temp = format!("_prop{}", self.counter);
@@ -182,7 +188,7 @@ impl<'ast> Visitor<'ast> for Propagate<'_> {
                 let cond = absent_condition(absent, &temp);
                 (
                     format!("{temp} = {operand_src}\n{indent}if {cond}: return {temp}\n{indent}"),
-                    temp,
+                    format!("{temp}{unwrap}"),
                 )
             };
             // hoist the guard immediately before the enclosing statement, then
@@ -233,6 +239,42 @@ mod tests {
     fn check_err(input: &str, needle: &str) {
         let err = transpile(input, &Config::test_default()).unwrap_err();
         assert!(err.contains(needle), "got: {err}");
+    }
+
+    #[test]
+    fn wrapped_operand_unwraps_value() {
+        // a wrapped optional's present value lives inside the runtime wrapper:
+        // the guard returns the absent `None`, the use site reads `.value`
+        check(
+            indoc::indoc! {"
+                def g() -> int??:
+                    return Some(5)
+
+                def f() -> int?:
+                    x = g()^
+                    return x
+            "},
+            indoc::indoc! {"
+                class Optional:
+                    def __init__(self, value):
+                        self.value = value
+
+                    def __class_getitem__(cls, item):
+                        return cls
+
+                    def __repr__(self):
+                        return f\"Some({self.value!r})\"
+
+                def g() -> Optional[int | None]:
+                    return Optional(5)
+
+                def f() -> int | None:
+                    _prop0 = g()
+                    if _prop0 is None: return _prop0
+                    x = _prop0.value
+                    return x
+            "},
+        );
     }
 
     #[test]

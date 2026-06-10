@@ -69,15 +69,55 @@ def h() -> int???:
 reveal_type(h())  # revealed: int???
 ```
 
-## wrapped optionals are covariant in their inner type
+## `?` over a bare type variable is the wrapped form
 
-a narrower wrapped optional is assignable to a wider one — `Literal[1]??` to `int??`:
+specializing a plain `T | None` with an optional `T` would flatten the layer, so `T?` denotes
+`WrappedOptional(T | None)`: calling with `T = int | None` yields `int??` — the outer absence and
+the present-inner-`None` stay distinguishable. the function constructs its result with `Some(…)` /
+`None` (the wrapped runtime convention), and a bare `return t` is rejected:
 
 ```by
-def f[T](t: T) -> T??:
+def f[T](t: T) -> T?:
     return Some(t)
 
+def g(x: int?) -> None:
+    reveal_type(f(x))  # revealed: int??
+
 x: int?? = f(1)
+```
+
+returning the unwrapped value is an error — the wrapper is what preserves the layer:
+
+```by
+def bad[T](t: T) -> T?:
+    return t  # error: [invalid-return-type]
+```
+
+## wrapped optionals are covariant in their inner type
+
+a narrower wrapped optional is assignable to a wider one (`Literal[1]` wrapped, to `int??` — see `x`
+above), and a bare value is *not* assignable to a wrapped type (it carries no wrapper):
+
+```by
+# error: [invalid-assignment]
+y: int?? = 5
+```
+
+## `?.` on a wrapped optional reaches the present value
+
+the chain short-circuits on the wrapper's absent `None` and reads the attribute through the present
+value (the runtime unwraps with `.value`):
+
+```by
+class A:
+    v: int = 7
+
+def f[T](t: T) -> T?:
+    return Some(t)
+
+def g(a: A):
+    w = f(a)
+    reveal_type(w?.v)  # revealed: int | None
 ```
 
 ## force-unwrap `!` peels one optional layer
