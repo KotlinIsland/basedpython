@@ -43,6 +43,18 @@ def f(e: 1 + typeof d) -> None:
     reveal_type(e)  # revealed: 3
 ```
 
+## a `typeof` operand folds inside a subscript too
+
+the fold reaches operations nested in a generic subscript — the whole operation collapses to its
+type and the `typeof` is consumed, so no `TypeOf` leaks into the slice
+
+```by
+let d = 2
+
+def f(xs: list[1 + typeof d]) -> None:
+    reveal_type(xs[0])  # revealed: 3
+```
+
 ## the user's full example
 
 ```by

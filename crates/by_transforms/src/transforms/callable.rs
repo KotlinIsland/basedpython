@@ -37,6 +37,11 @@ use crate::type_info::TypeInfo;
 pub(crate) struct CallableSyntax<'src> {
     source: &'src str,
     types: Option<&'src (dyn TypeInfo + 'src)>,
+    /// ranges already folded by `symbolic_type_op` (e.g. `1 + typeof d` →
+    /// `Literal[3]`). a claimed sub-expression is opaque here: descending into
+    /// it would re-render its `typeof`/operator surface and the wider edit
+    /// would clobber the fold, so `rewrite` leaves it for the fold's own edit
+    claimed_ranges: &'src [TextRange],
     pub(crate) edits: Vec<Fix>,
     pub(crate) needs_import: bool,
     pub(crate) needs_protocol_import: bool,
@@ -64,6 +69,7 @@ impl<'src> CallableSyntax<'src> {
         Self {
             source,
             types: None,
+            claimed_ranges: &[],
             edits: Vec::new(),
             needs_import: false,
             needs_protocol_import: false,
@@ -78,6 +84,11 @@ impl<'src> CallableSyntax<'src> {
 
     pub(crate) fn with_types(mut self, types: &'src dyn TypeInfo) -> Self {
         self.types = Some(types);
+        self
+    }
+
+    pub(crate) fn with_claimed_ranges(mut self, claimed: &'src [TextRange]) -> Self {
+        self.claimed_ranges = claimed;
         self
     }
 
@@ -228,6 +239,12 @@ impl<'src> CallableSyntax<'src> {
     }
 
     pub(crate) fn rewrite(&mut self, expr: &Expr) -> Option<String> {
+        // a symbolic-fold-claimed sub-expression is opaque: the fold emits its
+        // own edit over this exact range, so re-rendering here (and clobbering
+        // it with a wider edit) must not happen
+        if self.claimed_ranges.contains(&expr.range()) {
+            return None;
+        }
         match expr {
             Expr::CallableType(ct) if self.is_non_denotable(ct) => {
                 self.needs_protocol_import = true;
@@ -517,7 +534,12 @@ impl<'ast> ruff_python_ast::visitor::Visitor<'ast> for ValueCallableWalker<'_, '
 
 impl TypeAwarePass for CallableSyntaxPass<'_> {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut inner = CallableSyntax::new(self.source).with_types(types);
+        // owned copy so `inner`'s borrow doesn't pin `ctx` against the mutable
+        // `required_imports` / `edits` uses below
+        let claimed = ctx.claimed_type_op_ranges.clone();
+        let mut inner = CallableSyntax::new(self.source)
+            .with_types(types)
+            .with_claimed_ranges(&claimed);
         crate::transforms::type_expr_walker::walk_type_positions_skipping(
             stmts,
             Some(types),

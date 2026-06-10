@@ -416,6 +416,20 @@ mod tests {
     }
 
     #[test]
+    fn typeof_operand_nested_in_subscript() {
+        // the fold consumes the `typeof` operand even inside a subscript slice,
+        // so no `TypeOf` survives and the whole operation collapses to its type
+        check(
+            "let d = 2\nx: list[1 + typeof d]\n",
+            indoc! {"
+                from typing import Final, Literal
+                d: Final = 2
+                x: list[Literal[3]]
+            "},
+        );
+    }
+
+    #[test]
     fn chained_addition() {
         check(
             "a: 1 + 2 + 3\n",
