@@ -272,6 +272,27 @@ def f(e: WithConst) -> str:
             return "b"
 ```
 
+## visibility modifiers compose with `enum class`
+
+a `private` or `export` modifier may precede `enum class`. `export` registers the enum in the
+module's `__all__`; `private` renames the enum — and every reference the lowering synthesizes (the
+variant subclasses, their attachments) — to an underscore-prefixed module-private name, so the
+public surface stays consistent. the variants are still reached qualified through the declared name.
+
+```by
+export enum class Color:
+    case Red, Green
+
+private enum class Shape:
+    case Circle(radius: float)
+    case Square(side: float)
+
+reveal_type(Color.Red)  # revealed: Color.Red
+c = Shape.Circle(2.0)
+reveal_type(c.radius)  # revealed: float
+reveal_type(Shape.Square(1.0))  # revealed: Square
+```
+
 ## variants require `case`
 
 a bare name in an `enum class` body is a no-op statement, almost certainly a variant missing its
