@@ -11,6 +11,7 @@ class A(list[A]):
     pass
 
 a = A()
+a.append(a)
 reveal_type(a[0])  # revealed: A
 ```
 
@@ -21,6 +22,7 @@ class A(list[A | None]):
     pass
 
 a = A()
+a.append(None)
 reveal_type(a[0])  # revealed: A | None
 ```
 
@@ -31,6 +33,7 @@ class A(dict[str, list[A]]):
     pass
 
 a = A()
+a["k"] = []
 reveal_type(a["k"])  # revealed: list[A]
 ```
 
