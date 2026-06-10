@@ -29,6 +29,7 @@ basedpython is a Python-like language that transpiles to pure Python
 - [`typeof` keyword](features/typeof.md)
 - [star projections (`X[*]`)](features/star-projection.md)
 - [strict `float` and `complex`](features/no-number-promotions.md)
+- [infinity and nan float literals](features/float-literals.md)
 - [literal type promotion](features/literal-types.md)
 - [symbolic operations in types](features/symbolic-type-ops.md)
 - [typed dict literals](features/typed-dict-literal.md)
