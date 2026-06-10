@@ -361,10 +361,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // expression name is `decorator_keyword` (with `ExprContext::Invalid`).
             // the transpile expands the function into overloads + a runtime
             // dispatcher; ty doesn't model that rewrite, so we skip the synthetic
-            // decorator entirely to avoid polluting the function's type
+            // decorator entirely to avoid polluting the function's type. the
+            // visibility markers (`private`/`export`/`open`) are likewise
+            // transpile-only — a rename or `__all__` entry with no type-level
+            // effect — and would otherwise resolve to `Unknown` and poison the
+            // function type. (`final`/`abstract`/`static`/… map to real stdlib
+            // decorators via `synthetic_decorator_target_type` and are kept.)
             if let ast::Expr::Name(n) = &decorator.expression
                 && matches!(n.ctx, ast::ExprContext::Invalid)
-                && n.id.as_str() == "decorator_keyword"
+                && matches!(
+                    n.id.as_str(),
+                    "decorator_keyword" | "private" | "export" | "open"
+                )
             {
                 continue;
             }

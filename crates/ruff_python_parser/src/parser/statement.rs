@@ -247,7 +247,7 @@ impl<'src> Parser<'src> {
             self.error_if_not_basedpython(
                 "`protocol` class syntax is not valid in .py files".to_string(),
             );
-            return Some(self.parse_protocol_def(start));
+            return Some(self.parse_protocol_def(start, DecoratorList::new()));
         }
         // `enum class E:` / `enum class E[T]:` — a "based enum" (an algebraic
         // sum type when its body has payload variants, an idiomatic `Enum` when
@@ -258,7 +258,7 @@ impl<'src> Parser<'src> {
             self.error_if_not_basedpython(
                 "`enum class` declarations are not valid in .py files".to_string(),
             );
-            return Some(self.parse_enum_def(start));
+            return Some(self.parse_enum_def(start, DecoratorList::new()));
         }
         // a bare `enum E:` (no `class`) is not valid — based enums are written
         // `enum class E:`. report it but still parse the body for recovery
@@ -269,7 +269,7 @@ impl<'src> Parser<'src> {
                 ),
                 self.current_token_range(),
             );
-            return Some(self.parse_enum_def(start));
+            return Some(self.parse_enum_def(start, DecoratorList::new()));
         }
         if kw == "decorator" && self.peek() == TokenKind::Def {
             self.error_if_not_basedpython(
@@ -358,6 +358,18 @@ impl<'src> Parser<'src> {
                     } else {
                         self.peek_nth(idx).0
                     };
+                    // an introducer keyword (`enum class`, `protocol`) after a
+                    // modifier chain — `private enum class E:`, `export protocol P:`.
+                    // dispatch through the modifier path so the chain is carried
+                    // as decorators on the introduced class
+                    if (text == "protocol" && following == TokenKind::Name)
+                        || (text == "enum" && following == TokenKind::Class)
+                    {
+                        self.error_if_not_basedpython(format!(
+                            "`{kw}` is a basedpython modifier and is not valid in .py files"
+                        ));
+                        return Some(self.parse_with_modifier(start, DecoratorList::new()));
+                    }
                     return match following {
                         TokenKind::Equal if idx > 0 => {
                             self.error_if_not_basedpython(format!(
@@ -524,7 +536,8 @@ impl<'src> Parser<'src> {
             if self.at(TokenKind::Def) || self.at(TokenKind::Class) || self.at(TokenKind::Async) {
                 break;
             }
-            // another modifier keyword follows — keep looping
+            // another modifier keyword follows — keep looping. an `enum class` /
+            // `protocol` introducer also ends the chain (handled after the loop)
             if self.at(TokenKind::Name) {
                 let kw = self.src_text(self.current_token_range());
                 // any modifier keyword may follow another, in any order — reuse
@@ -548,6 +561,20 @@ impl<'src> Parser<'src> {
             })
         } else if self.at(TokenKind::Def) {
             Stmt::FunctionDef(self.parse_function_definition(decorators, start))
+        } else if self.at(TokenKind::Name)
+            && self.src_text(self.current_token_range()) == "protocol"
+            && self.peek() == TokenKind::Name
+        {
+            // `private protocol P:` — the modifier decorators ride alongside the
+            // synthetic `protocol_class` marker; both lower by disjoint edits
+            self.parse_protocol_def(start, decorators)
+        } else if self.at(TokenKind::Name)
+            && self.src_text(self.current_token_range()) == "enum"
+            && self.peek() == TokenKind::Class
+        {
+            // `private enum class E:` — the enum lowering reads the visibility
+            // markers to prefix its synthesized `class` line
+            self.parse_enum_def(start, decorators)
         } else {
             Stmt::ClassDef(self.parse_class_definition(decorators, start))
         }
@@ -853,13 +880,16 @@ impl<'src> Parser<'src> {
     /// requiring an explicit `class` keyword. Produces a `ClassDef` with a synthetic
     /// `Decorator` (name `"protocol_class"`) that the `modifiers` transform rewrites
     /// to `class Foo(Protocol):`.
-    fn parse_protocol_def(&mut self, start: TextSize) -> Stmt {
+    fn parse_protocol_def(&mut self, start: TextSize, mut decorators: DecoratorList) -> Stmt {
         let protocol_start = self.current_token_range().start();
         self.bump(TokenKind::Name); // consume "protocol"
         let class_name_start = self.current_token_range().start();
         let decorator_range = TextRange::new(protocol_start, class_name_start);
 
-        let decorator = ast::Decorator {
+        // the synthetic `protocol_class` marker follows any modifier decorators
+        // (`private protocol P:`); the `modifiers` transform consumes each by a
+        // disjoint range edit, so order between them does not matter
+        decorators.push(ast::Decorator {
             expression: Expr::Name(ast::ExprName {
                 id: Name::new_static("protocol_class"),
                 ctx: ExprContext::Invalid,
@@ -868,7 +898,7 @@ impl<'src> Parser<'src> {
             }),
             range: decorator_range,
             node_index: AtomicNodeIndex::NONE,
-        };
+        });
 
         let name = self.parse_identifier();
         let type_params = self.try_parse_type_params();
@@ -884,7 +914,7 @@ impl<'src> Parser<'src> {
 
         Stmt::ClassDef(ast::StmtClassDef {
             range: self.node_range(start),
-            decorator_list: vec![decorator].into(),
+            decorator_list: decorators,
             name,
             type_params: type_params.map(Box::new),
             arguments,
@@ -903,7 +933,7 @@ impl<'src> Parser<'src> {
     ///
     /// [`ClassDef`]: ast::StmtClassDef
     /// [`AnnAssign`]: ast::StmtAnnAssign
-    fn parse_enum_def(&mut self, start: TextSize) -> Stmt {
+    fn parse_enum_def(&mut self, start: TextSize, mut decorators: DecoratorList) -> Stmt {
         let enum_start = self.current_token_range().start();
         self.bump(TokenKind::Name); // consume "enum"
         // the canonical surface is `enum class E:`; the `class` keyword is part
@@ -913,7 +943,11 @@ impl<'src> Parser<'src> {
         let name_start = self.current_token_range().start();
         let decorator_range = TextRange::new(enum_start, name_start);
 
-        let decorator = ast::Decorator {
+        // the synthetic `enum_def` marker follows any modifier decorators
+        // (`private enum class E:`); the enum lowering re-emits the enum from
+        // scratch and reads the visibility markers to prefix the synthesized
+        // `class` line, so the standard `private`/`export` class path applies
+        decorators.push(ast::Decorator {
             expression: Expr::Name(ast::ExprName {
                 id: Name::new_static("enum_def"),
                 ctx: ExprContext::Invalid,
@@ -922,7 +956,7 @@ impl<'src> Parser<'src> {
             }),
             range: decorator_range,
             node_index: AtomicNodeIndex::NONE,
-        };
+        });
 
         let name = self.parse_identifier();
         let type_params = self.try_parse_type_params();
@@ -952,7 +986,7 @@ impl<'src> Parser<'src> {
 
         Stmt::ClassDef(ast::StmtClassDef {
             range: self.node_range(start),
-            decorator_list: vec![decorator].into(),
+            decorator_list: decorators,
             name,
             type_params: type_params.map(Box::new),
             arguments: None,

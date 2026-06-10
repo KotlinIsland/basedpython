@@ -193,6 +193,19 @@ fn has_marker(class: &StmtClassDef, source: &str, marker: &str) -> bool {
     })
 }
 
+/// The visibility keyword prefix (`"private "` / `"export "`) to emit ahead of
+/// the enum's synthesized `class` line, or `""` for the default. `public` is
+/// normalized to the `export` marker by the parser.
+fn enum_visibility_prefix(class: &StmtClassDef, source: &str) -> &'static str {
+    if has_marker(class, source, "private") {
+        "private "
+    } else if has_marker(class, source, "export") {
+        "export "
+    } else {
+        ""
+    }
+}
+
 fn check_no_nested_enums(body: &[Stmt], source: &str, nested: bool, errors: &mut Vec<String>) {
     for stmt in body {
         match stmt {
@@ -302,12 +315,20 @@ fn emit_enum(
     let name = class.name.as_str();
     let is_generic = class.type_params.is_some();
 
+    // a `private`/`export` modifier on the enum (`private enum class E:`) rides
+    // through as a keyword prefix on the synthesized base class: phase-1's
+    // `modifiers` pass then renames every module-level reference to the private
+    // name (variant bases `class _E_V(E)`, attachments `E.V`) or registers the
+    // export in `__all__` — the enum owns no visibility logic of its own.
+    // each emitter derives the prefix from the class it already has
+
     // `is_all_unit_enum` is the shared predicate with ty (it models such enums
     // as idiomatic `Enum`s): all variants unit AND no assignment members —
     // python's `Enum` would turn a class-body constant into a *member*,
     // silently diverging from the constant semantics the checker models
     if class.is_all_unit_enum() && !is_generic {
-        emit_plain_enum(out, source, name, &variants, &members, imports);
+        let vis = enum_visibility_prefix(class, source);
+        emit_plain_enum(out, source, name, vis, &variants, &members, imports);
     } else {
         emit_sealed_hierarchy(
             out,
@@ -331,6 +352,7 @@ fn emit_plain_enum(
     out: &mut Out,
     source: &str,
     name: &str,
+    vis: &str,
     variants: &[Variant],
     members: &[&Stmt],
     imports: &mut ImportSet,
@@ -338,7 +360,7 @@ fn emit_plain_enum(
     imports.add("enum", "Enum");
     imports.add("enum", "auto");
 
-    out.push_gen(&format!("class {name}(Enum):\n"));
+    out.push_gen(&format!("{vis}class {name}(Enum):\n"));
     for variant in variants {
         out.push_gen(&format!("{}{} = auto()\n", variant.indent, variant.name));
     }
@@ -369,6 +391,9 @@ fn emit_sealed_hierarchy(
     imports: &mut ImportSet,
     min_version: PythonVersion,
 ) {
+    // visibility prefix derived from the class (see `lower`): `private`/`export`
+    // ride through to phase-1's `modifiers` pass on the synthesized base line
+    let vis = enum_visibility_prefix(class, source);
     // payload variants lower to `@final` frozen dataclasses; unit variants are
     // plain singleton values needing neither import
     if variants.iter().any(|v| v.kind != VariantKind::Unit) {
@@ -385,7 +410,7 @@ fn emit_sealed_hierarchy(
         .map(|tp| slice(source, tp.range()).to_string())
         .unwrap_or_default();
 
-    out.push_gen(&format!("class {name}{params}:\n"));
+    out.push_gen(&format!("{vis}class {name}{params}:\n"));
     // ordinary members (methods, classmethods, constants) — copied verbatim,
     // already indented under the enum in the source. they may refer to variants
     // (`A.Foo`) freely: the references resolve lazily at call time, by which
@@ -616,6 +641,54 @@ mod tests {
                     Red = auto()
                     Green = auto()
                     Blue = auto()
+            "},
+        );
+    }
+
+    #[test]
+    fn export_enum_registers_in_all() {
+        // `export enum class` rides through as an `export class` prefix on the
+        // synthesized enum, so phase-1's modifiers pass registers it in `__all__`
+        check(
+            indoc! {"
+                export enum class Color:
+                    case Red, Green
+            "},
+            indoc! {"
+                from __future__ import annotations
+                from enum import Enum, auto
+                class Color(Enum):
+                    Red = auto()
+                    Green = auto()
+                __all__ = [\"Color\"]
+            "},
+        );
+    }
+
+    #[test]
+    fn private_enum_renames_whole_hierarchy() {
+        // `private enum class` becomes a `private class` prefix; modifiers renames
+        // the declaration *and* every module-level reference (the variant bases and
+        // attachments the enum synthesized), so the private name stays consistent
+        check(
+            indoc! {"
+                private enum class Shape:
+                    case Circle(radius: int)
+            "},
+            indoc! {"
+                from __future__ import annotations
+                from dataclasses import dataclass
+                from typing import final
+                class _Shape:
+                    pass
+
+                @final
+                @dataclass(frozen=True, slots=True)
+                class _Shape_Circle(_Shape):
+                    radius: int
+                _Shape_Circle.__name__ = \"Circle\"
+                _Shape_Circle.__qualname__ = \"Shape.Circle\"
+                _Shape.Circle = _Shape_Circle
             "},
         );
     }

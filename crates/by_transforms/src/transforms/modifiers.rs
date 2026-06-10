@@ -824,6 +824,31 @@ mod tests {
     }
 
     #[test]
+    fn private_protocol() {
+        // a visibility modifier composes with the `protocol` introducer: both the
+        // `private` rename and the `protocol_class` rewrite lower by disjoint edits
+        check(
+            "private protocol Foo: ...\n",
+            indoc! {"
+                from typing import Protocol
+                class _Foo(Protocol): ...
+            "},
+        );
+    }
+
+    #[test]
+    fn export_protocol() {
+        check(
+            "export protocol Foo: ...\n",
+            indoc! {"
+                from typing import Protocol
+                class Foo(Protocol): ...
+                __all__ = [\"Foo\"]
+            "},
+        );
+    }
+
+    #[test]
     fn let_decl() {
         check(
             "let MAX = 100\n",

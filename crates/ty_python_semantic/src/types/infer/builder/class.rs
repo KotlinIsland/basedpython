@@ -88,7 +88,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // decorators (no `@` in the source). their effect is applied here (the
             // `sealed` flag) or in `explicit_bases` (the injected `Enum` /
             // `Protocol` base); the marker itself is not a runtime decorator, so
-            // applying it would resolve to `Unknown` and poison the whole class type
+            // applying it would resolve to `Unknown` and poison the whole class type.
+            // the visibility markers (`private`/`export`/`open`) are transpile-time
+            // only — a rename or `__all__` entry, with no type-level effect — so they
+            // are skipped here for the same reason. (`final`/`abstract`/`data` carry
+            // real type semantics and are recognized further down instead.)
             if let ast::Expr::Name(name) = &decorator.expression
                 && matches!(
                     name.id.as_str(),
@@ -98,6 +102,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         | "enum_def"
                         | "variant_unit"
                         | "variant_tuple"
+                        | "private"
+                        | "export"
+                        | "open"
                 )
                 && source
                     .as_bytes()
