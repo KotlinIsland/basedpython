@@ -22,3 +22,11 @@ slow-timeout =  { period = "1s", terminate-after = 60 }
 
 # Show slow jobs in the final summary
 final-status-level = "slow"
+
+# The divergence harness runs its blocks in parallel, but on a 2-core CI runner
+# it still spends up to a minute or two spawning ~200 transpile/python subprocess
+# pairs (plus a possible one-off uv python download), so exempt it from the
+# aggressive 60s deadlock cutoff that would otherwise kill it mid-run.
+[[profile.ci.overrides]]
+filter = 'test(clean_mdtest_blocks_run)'
+slow-timeout = { period = "60s", terminate-after = 3 }

@@ -416,7 +416,7 @@ pub(crate) fn run_against_source<'a>(
         text_edits: RefCell::new(vec![]),
     };
 
-    let typed_lambda_inner = typed_lambda::TypedLambda::new();
+    let typed_lambda_inner = typed_lambda::TypedLambda::new(source_ref);
     let typed_lambda_pass = VisitorPass {
         inner: &typed_lambda_inner,
         changed_cell: typed_lambda_inner.changed_cell(),

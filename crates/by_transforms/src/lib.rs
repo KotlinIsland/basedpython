@@ -508,7 +508,12 @@ fn run_lowering_phase(
     _types: &dyn TypeInfo,
 ) -> LoweringResult {
     let mut output = String::new();
-    if config.inject_future_annotations && !config.is_stub && !has_future_annotations(stmts) {
+    // below 3.10 the runtime cannot evaluate pep 604 `X | Y` annotations —
+    // which the optional lowering itself produces — so annotation evaluation
+    // must always be deferred on those targets
+    let needs_lazy_annotations =
+        config.inject_future_annotations || config.min_version < PythonVersion::PY310;
+    if needs_lazy_annotations && !config.is_stub && !has_future_annotations(stmts) {
         output.push_str("from __future__ import annotations\n");
     }
     output.push_str(source);

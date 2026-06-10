@@ -233,6 +233,20 @@ class Optional:
     }
 
     #[test]
+    fn py39_target_defers_annotation_evaluation() {
+        // below 3.10 the runtime cannot evaluate the pep 604 union this very
+        // lowering produces, so the future import is mandatory
+        let config = crate::Config {
+            min_version: crate::PythonVersion::PY39,
+            ..crate::Config::test_default()
+        };
+        assert_eq!(
+            crate::transpile("x: int? = None\n", &config).unwrap(),
+            "from __future__ import annotations\nx: int | None = None\n"
+        );
+    }
+
+    #[test]
     fn generic_typevar_optional_wraps() {
         // `?` over a bare in-scope type variable is the wrapped form — a plain
         // union would flatten when `T` binds to an optional. (the 3.10 generics

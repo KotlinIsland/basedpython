@@ -127,7 +127,7 @@ def g(a: A):
 
 ```by
 def g() -> int??:
-    return None
+    return Some(5)
 
 result = g()
 reveal_type(result)  # revealed: int??

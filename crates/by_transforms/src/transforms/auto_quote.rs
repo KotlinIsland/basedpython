@@ -45,16 +45,16 @@ impl<'src> AutoQuote<'src> {
 
 impl AstPass for AutoQuote<'_> {
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
-        // skip quoting whenever annotations won't be eagerly evaluated:
-        // native deferral on 3.14+, or a future import that defers them all
-        if self.min_version.defers_annotations()
+        // annotation positions need no quoting when they won't be eagerly
+        // evaluated: native deferral on 3.14+ (PEP 649), or a future import
+        // that defers them all. class *bases* and value-position subscripts
+        // (`class A(list[A])`, `list[A]()`) evaluate eagerly regardless, so
+        // their self-references are always quoted
+        let quote_annotations = !(self.min_version.defers_annotations()
             || self.inject_future
-            || has_future_annotations(&module.body)
-        {
-            return;
-        }
+            || has_future_annotations(&module.body));
         let mut edits: Vec<(TextRange, String)> = Vec::new();
-        process_stmts(&module.body, self.source, &mut edits);
+        process_stmts(&module.body, self.source, &mut edits, quote_annotations);
         ctx.text_edits.extend(edits);
     }
 }
@@ -67,51 +67,66 @@ fn has_future_annotations(stmts: &[Stmt]) -> bool {
     })
 }
 
-fn process_stmts(stmts: &[Stmt], source: &str, edits: &mut Vec<(TextRange, String)>) {
+fn process_stmts(
+    stmts: &[Stmt],
+    source: &str,
+    edits: &mut Vec<(TextRange, String)>,
+    quote_annotations: bool,
+) {
     for stmt in stmts {
         if let Stmt::ClassDef(c) = stmt {
-            process_class(c, source, edits);
+            process_class(c, source, edits, quote_annotations);
             // nested classes inside this one's body are recursed into by
             // process_class so the inner ClassDef walks with its own name
         } else {
             // top-level non-class statements may contain nested classes via
             // function bodies — descend
-            walk_for_nested_classes(stmt, source, edits);
+            walk_for_nested_classes(stmt, source, edits, quote_annotations);
         }
     }
 }
 
-fn walk_for_nested_classes(stmt: &Stmt, source: &str, edits: &mut Vec<(TextRange, String)>) {
+fn walk_for_nested_classes(
+    stmt: &Stmt,
+    source: &str,
+    edits: &mut Vec<(TextRange, String)>,
+    quote_annotations: bool,
+) {
     // only walk into structures that may contain nested class defs.
     // function bodies, if/while/try blocks, etc.
     match stmt {
-        Stmt::FunctionDef(f) => process_stmts(&f.body, source, edits),
+        Stmt::FunctionDef(f) => process_stmts(&f.body, source, edits, quote_annotations),
         Stmt::If(i) => {
-            process_stmts(&i.body, source, edits);
+            process_stmts(&i.body, source, edits, quote_annotations);
             for clause in &i.elif_else_clauses {
-                process_stmts(&clause.body, source, edits);
+                process_stmts(&clause.body, source, edits, quote_annotations);
             }
         }
-        Stmt::While(w) => process_stmts(&w.body, source, edits),
+        Stmt::While(w) => process_stmts(&w.body, source, edits, quote_annotations),
         Stmt::For(f) => {
-            process_stmts(&f.body, source, edits);
-            process_stmts(&f.orelse, source, edits);
+            process_stmts(&f.body, source, edits, quote_annotations);
+            process_stmts(&f.orelse, source, edits, quote_annotations);
         }
-        Stmt::With(w) => process_stmts(&w.body, source, edits),
+        Stmt::With(w) => process_stmts(&w.body, source, edits, quote_annotations),
         Stmt::Try(t) => {
-            process_stmts(&t.body, source, edits);
+            process_stmts(&t.body, source, edits, quote_annotations);
             for h in &t.handlers {
                 let ruff_python_ast::ExceptHandler::ExceptHandler(eh) = h;
-                process_stmts(&eh.body, source, edits);
+                process_stmts(&eh.body, source, edits, quote_annotations);
             }
-            process_stmts(&t.orelse, source, edits);
-            process_stmts(&t.finalbody, source, edits);
+            process_stmts(&t.orelse, source, edits, quote_annotations);
+            process_stmts(&t.finalbody, source, edits, quote_annotations);
         }
         _ => {}
     }
 }
 
-fn process_class(class: &StmtClassDef, source: &str, edits: &mut Vec<(TextRange, String)>) {
+fn process_class(
+    class: &StmtClassDef,
+    source: &str,
+    edits: &mut Vec<(TextRange, String)>,
+    quote_annotations: bool,
+) {
     let class_name = class.name.id.as_str();
     let typevar_names: Vec<String> = class
         .type_params
@@ -148,25 +163,30 @@ fn process_class(class: &StmtClassDef, source: &str, edits: &mut Vec<(TextRange,
     // (handled by walker), method bodies need separate descent for
     // `list[A]()` patterns
     for stmt in &class.body {
-        process_class_body_stmt(stmt, &mut visitor);
+        process_class_body_stmt(stmt, &mut visitor, quote_annotations);
     }
 
     // recurse into nested classes inside the body so they get their own
     // class-context walk (the `visitor` borrow of `edits` ends above)
-    process_stmts(&class.body, source, edits);
+    process_stmts(&class.body, source, edits, quote_annotations);
 }
 
-fn process_class_body_stmt(stmt: &Stmt, visitor: &mut Visitor<'_>) {
+fn process_class_body_stmt(stmt: &Stmt, visitor: &mut Visitor<'_>, quote_annotations: bool) {
     match stmt {
         Stmt::Expr(e) => walk_value_subscripts(e.value.as_ref(), visitor),
         Stmt::Assign(a) => walk_value_subscripts(a.value.as_ref(), visitor),
         Stmt::AnnAssign(a) => {
-            walk_one_type_expr(a.annotation.as_ref(), visitor);
+            if quote_annotations {
+                walk_one_type_expr(a.annotation.as_ref(), visitor);
+            }
             if let Some(value) = &a.value {
                 walk_value_subscripts(value.as_ref(), visitor);
             }
         }
         Stmt::FunctionDef(f) => {
+            if !quote_annotations {
+                return;
+            }
             for param in f.parameters.iter_non_variadic_params() {
                 if let Some(ann) = &param.parameter.annotation {
                     walk_one_type_expr(ann, visitor);
@@ -513,6 +533,21 @@ mod tests {
         assert!(
             out.contains("-> A:"),
             "should leave the self-ref bare on 3.14+, got: {out}"
+        );
+    }
+
+    #[test]
+    fn class_base_still_quoted_when_version_defers_annotations() {
+        // pep 649 defers annotations only — a class *base* evaluates eagerly,
+        // so its self-reference still needs the quote
+        let config = Config {
+            min_version: PythonVersion::from((3, 14)),
+            ..Config::test_default()
+        };
+        let out = transpile_with("class A(list[A]):\n    pass\n", &config);
+        assert!(
+            out.contains("class A(list[\"A\"]):"),
+            "base self-ref must stay quoted on 3.14+, got: {out}"
         );
     }
 
