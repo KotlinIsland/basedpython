@@ -1,40 +1,31 @@
-//! AST rewrite for basedpython tuple-member dot access: `expr.N` → `expr[N]`.
+//! Text-edit lowering for basedpython tuple-member dot access: `expr.N` → `expr[N]`.
 //!
 //! The parser accepts `expr.N` where `N` is one or more decimal digits and
 //! constructs an `ExprAttribute` whose `attr` is the digit string. That
 //! shape is unreachable in stock python (identifiers cannot start with a
 //! digit), so the attr-is-digits check is unambiguous.
+//!
+//! The rewrite replaces only the `.N` bytes with `[N]`, leaving the operand
+//! untouched — so it composes with any sibling lowering inside the operand and
+//! with wide template rewrites (`??`) that pass the whole expression through.
 
-use std::cell::Cell;
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
+use ruff_python_ast::{Expr, Stmt};
+use ruff_text_size::{Ranged, TextRange};
 
-use ruff_python_ast::visitor::transformer::{Transformer, walk_expr};
-use ruff_python_ast::{
-    AtomicNodeIndex, Expr, ExprContext, ExprNumberLiteral, ExprSubscript, Int, Number, Stmt,
-};
-use ruff_text_size::TextRange;
+use super::ast_driver::{PassContext, TypeAwarePass};
+use crate::type_info::TypeInfo;
 
-pub(crate) struct TupleIndex {
-    changed: Cell<bool>,
+struct TupleIndex {
+    edits: Vec<(TextRange, String)>,
 }
 
-impl TupleIndex {
-    pub(crate) fn new() -> Self {
-        Self {
-            changed: Cell::new(false),
-        }
+impl<'ast> Visitor<'ast> for TupleIndex {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        walk_stmt(self, stmt);
     }
 
-    pub(crate) fn changed_cell(&self) -> &Cell<bool> {
-        &self.changed
-    }
-}
-
-impl Transformer for TupleIndex {
-    fn visit_stmt(&self, stmt: &mut Stmt) {
-        ruff_python_ast::visitor::transformer::walk_stmt(self, stmt);
-    }
-
-    fn visit_expr(&self, expr: &mut Expr) {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
         walk_expr(self, expr);
 
         let Expr::Attribute(attr) = expr else { return };
@@ -49,27 +40,29 @@ impl Transformer for TupleIndex {
         } else {
             trimmed.parse().unwrap_or(0)
         };
-        let value = std::mem::replace(
-            attr.value.as_mut(),
-            Expr::NoneLiteral(ruff_python_ast::ExprNoneLiteral {
-                node_index: AtomicNodeIndex::NONE,
-                range: TextRange::default(),
-            }),
-        );
-        let slice = Expr::NumberLiteral(ExprNumberLiteral {
-            node_index: AtomicNodeIndex::NONE,
-            range: TextRange::default(),
-            value: Number::Int(Int::from(n)),
-        });
-        *expr = Expr::Subscript(ExprSubscript {
-            node_index: AtomicNodeIndex::NONE,
-            range: TextRange::default(),
-            value: Box::new(value),
-            slice: Box::new(slice),
-            ctx: ExprContext::Load,
-            is_typeof: false,
-        });
-        self.changed.set(true);
+        // replace the `.N` bytes (everything after the operand) with `[N]`
+        self.edits.push((
+            TextRange::new(attr.value.range().end(), expr.range().end()),
+            format!("[{n}]"),
+        ));
+    }
+}
+
+pub(crate) struct TupleIndexPass;
+
+impl TupleIndexPass {
+    pub(crate) fn new() -> Self {
+        Self
+    }
+}
+
+impl TypeAwarePass for TupleIndexPass {
+    fn run(&self, stmts: &[Stmt], _types: &dyn TypeInfo, ctx: &mut PassContext) {
+        let mut inner = TupleIndex { edits: Vec::new() };
+        for stmt in stmts {
+            inner.visit_stmt(stmt);
+        }
+        ctx.text_edits.extend(inner.edits);
     }
 }
 
@@ -128,6 +121,16 @@ mod tests {
     #[test]
     fn all_zero() {
         check("x = t.00\n", "x = t[0]\n");
+    }
+
+    #[test]
+    fn composes_with_coalesce() {
+        // `.N` inside a `??` operand is lowered inside the rewrite rather than
+        // clobbered by it
+        check(
+            "x = t.0 ?? 9\n",
+            "x = _t if (_t := t[0]) is not None else 9\n",
+        );
     }
 
     #[test]
