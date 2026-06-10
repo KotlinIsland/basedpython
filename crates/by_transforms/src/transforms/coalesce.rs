@@ -1,15 +1,18 @@
-use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Operator, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
-use super::ast_driver::{PassContext, TypeAwarePass};
+use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
 
-/// rewrites `a ?? b` to `a if a is not None else b`
+/// rewrites `a ?? b` to `a if a is not None else b`.
+///
+/// emits *template* edits: operands are `Src` passthrough spans, so any
+/// sibling lowering inside an operand (`?.`, `!`, `expr.N`, …) is materialized
+/// inside the rewrite instead of being clobbered by first-wins overlap dedup
 pub(crate) struct NoneCoalesce<'src> {
     source: &'src str,
-    pub(crate) edits: Vec<Fix>,
+    pub(crate) edits: Vec<(TextRange, Vec<Fragment>)>,
 }
 
 impl<'src> NoneCoalesce<'src> {
@@ -18,10 +21,6 @@ impl<'src> NoneCoalesce<'src> {
             source,
             edits: Vec::new(),
         }
-    }
-
-    fn src(&self, range: TextRange) -> &str {
-        &self.source[usize::from(range.start())..usize::from(range.end())]
     }
 }
 
@@ -42,11 +41,8 @@ impl<'ast> Visitor<'ast> for NoneCoalesce<'_> {
             // build the whole (possibly chained) `??` expansion in one edit over
             // the outer expression's range, then stop — recursing into the
             // operands here would emit overlapping edits for any nested `??`
-            let replacement = self.expand_coalesce(expr);
-            self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                replacement,
-                expr.range(),
-            )));
+            let template = self.expand_coalesce(expr);
+            self.edits.push((expr.range(), template));
             return;
         }
         walk_expr(self, expr);
@@ -54,12 +50,12 @@ impl<'ast> Visitor<'ast> for NoneCoalesce<'_> {
 }
 
 impl NoneCoalesce<'_> {
-    /// Lower a `??` expression to a conditional. Chained `??` recurses, so
-    /// `a ?? b ?? c` becomes a nested `… if … is not None else …` rather than
-    /// stranding the inner `??` as verbatim source. The walrus temp `_t` is
-    /// reused safely: a nested `_t` only lives inside a branch that is no longer
-    /// referenced once the enclosing `(_t := …)` is taken.
-    fn expand_coalesce(&self, expr: &Expr) -> String {
+    /// Lower a `??` expression to a conditional template. Chained `??`
+    /// recurses, so `a ?? b ?? c` becomes a nested `… if … is not None else …`
+    /// rather than stranding the inner `??` as verbatim source. The walrus
+    /// temp `_t` is reused safely: a nested `_t` only lives inside a branch
+    /// that is no longer referenced once the enclosing `(_t := …)` is taken.
+    fn expand_coalesce(&self, expr: &Expr) -> Vec<Fragment> {
         let Expr::BinOp(b) = expr else {
             return self.operand_value(expr);
         };
@@ -73,33 +69,51 @@ impl NoneCoalesce<'_> {
         }
         let rhs = self.operand_value(&b.right);
         match expand_none_chain(&b.left, self.source) {
-            Some(expanded) => format!("_t if (_t := {expanded}) is not None else {rhs}"),
+            Some(expanded) => {
+                let mut t = vec![
+                    Fragment::Lit("_t if (_t := ".to_owned()),
+                    Fragment::Lit(expanded),
+                    Fragment::Lit(") is not None else ".to_owned()),
+                ];
+                t.extend(rhs);
+                t
+            }
             None if is_trivially_pure(&b.left) => {
-                let lhs = self.src(b.left.range());
-                format!("{lhs} if {lhs} is not None else {rhs}")
+                let mut t = vec![
+                    Fragment::Src(b.left.range()),
+                    Fragment::Lit(" if ".to_owned()),
+                    Fragment::Src(b.left.range()),
+                    Fragment::Lit(" is not None else ".to_owned()),
+                ];
+                t.extend(rhs);
+                t
             }
             None => {
                 // a chained (left-associative) `??` puts another coalesce on the
                 // left; recurse through `operand_value` so it is lowered rather
                 // than copied verbatim. hoist to walrus so the LHS runs once
-                let lhs = self.operand_value(&b.left);
-                format!("_t if (_t := {lhs}) is not None else {rhs}")
+                let mut t = vec![Fragment::Lit("_t if (_t := ".to_owned())];
+                t.extend(self.operand_value(&b.left));
+                t.push(Fragment::Lit(") is not None else ".to_owned()));
+                t.extend(rhs);
+                t
             }
         }
     }
 
-    /// Render an operand as a plain value: a nested `??` is expanded, a `?.`
-    /// chain is lowered, otherwise its source is used verbatim.
-    fn operand_value(&self, expr: &Expr) -> String {
+    /// Render an operand: a nested `??` is expanded, a `?.` chain is lowered,
+    /// otherwise it is a passthrough span (any sibling edits inside it apply
+    /// when the template is materialized).
+    fn operand_value(&self, expr: &Expr) -> Vec<Fragment> {
         if let Expr::BinOp(b) = expr
             && matches!(b.op, Operator::Coalesce)
         {
             return self.expand_coalesce(expr);
         }
         if let Some(expanded) = expand_none_chain(expr, self.source) {
-            return expanded;
+            return vec![Fragment::Lit(expanded)];
         }
-        self.src(expr.range()).to_owned()
+        vec![Fragment::Src(expr.range())]
     }
 }
 
@@ -152,13 +166,7 @@ impl TypeAwarePass for NoneCoalescePass<'_> {
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
-        for fix in inner.edits {
-            for edit in fix.edits() {
-                let range = edit.range();
-                let repl = edit.content().unwrap_or_default().to_owned();
-                ctx.text_edits.push((range, repl));
-            }
-        }
+        ctx.template_edits.extend(inner.edits);
     }
 }
 
@@ -216,6 +224,33 @@ mod tests {
                 def f(a):
                     _t if (_t := None if a is None else a.a.b) is not None else 1
             "},
+        );
+    }
+
+    #[test]
+    fn optional_chain_in_rhs_composes() {
+        // the RHS is a passthrough span, so a `?.` chain inside it is lowered
+        // by the none-chain pass rather than copied verbatim
+        check(
+            indoc::indoc! {"
+                def f(a, b):
+                    a ?? b?.c
+            "},
+            indoc::indoc! {"
+                def f(a, b):
+                    a if a is not None else None if b is None else b.c
+            "},
+        );
+    }
+
+    #[test]
+    fn force_unwrap_in_lhs_composes() {
+        // `!` inside the hoisted LHS is lowered inside the walrus, not
+        // stranded
+        let out = transpile("x = f()! ?? 1\n", &Config::test_default()).unwrap();
+        assert!(
+            out.contains("x = _t if (_t := _force_unwrap(f())) is not None else 1\n"),
+            "got: {out}"
         );
     }
 
