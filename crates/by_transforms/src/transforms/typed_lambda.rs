@@ -12,14 +12,17 @@ use std::cell::Cell;
 
 use ruff_python_ast::visitor::transformer::{Transformer, walk_expr};
 use ruff_python_ast::{Expr, Parameters, Stmt};
+use ruff_text_size::{Ranged, TextRange};
 
-pub(crate) struct TypedLambda {
+pub(crate) struct TypedLambda<'src> {
+    source: &'src str,
     changed: Cell<bool>,
 }
 
-impl TypedLambda {
-    pub(crate) fn new() -> Self {
+impl<'src> TypedLambda<'src> {
+    pub(crate) fn new(source: &'src str) -> Self {
         Self {
+            source,
             changed: Cell::new(false),
         }
     }
@@ -54,7 +57,7 @@ impl TypedLambda {
     }
 }
 
-impl Transformer for TypedLambda {
+impl Transformer for TypedLambda<'_> {
     fn visit_stmt(&self, stmt: &mut Stmt) {
         ruff_python_ast::visitor::transformer::walk_stmt(self, stmt);
     }
@@ -71,6 +74,14 @@ impl Transformer for TypedLambda {
         }
         if lambda.returns.is_some() {
             lambda.returns = None;
+            any = true;
+        }
+        // a parenthesized parameter list (`lambda (x): …`) is based-only
+        // surface even without annotations — re-render to the bare form
+        if let Some(p) = lambda.parameters.as_deref()
+            && p.range() != TextRange::default()
+            && self.source.as_bytes().get(usize::from(p.range().start())) == Some(&b'(')
+        {
             any = true;
         }
         if any {
@@ -107,6 +118,13 @@ mod tests {
     fn typed_lambda_only_return() {
         // codegen emits `lambda : body` with a space when params is empty
         check("a = lambda () -> int: 42\n", "a = lambda : 42\n");
+    }
+
+    #[test]
+    fn parenthesized_untyped_lambda() {
+        // parens around lambda params are based-only surface even with no
+        // annotations — they must not leak into the output
+        check("g = lambda (x): str(x)\n", "g = lambda x: str(x)\n");
     }
 
     #[test]

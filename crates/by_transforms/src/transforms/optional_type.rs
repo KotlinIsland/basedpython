@@ -197,6 +197,20 @@ class Optional:
     }
 
     #[test]
+    fn py39_target_defers_annotation_evaluation() {
+        // below 3.10 the runtime cannot evaluate the pep 604 union this very
+        // lowering produces, so the future import is mandatory
+        let config = crate::Config {
+            min_version: crate::PythonVersion::PY39,
+            ..crate::Config::test_default()
+        };
+        assert_eq!(
+            crate::transpile("x: int? = None\n", &config).unwrap(),
+            "from __future__ import annotations\nx: int | None = None\n"
+        );
+    }
+
+    #[test]
     fn optional_of_negation_composes() {
         // the operand source is preserved, so the `not_type` transform still
         // lowers `not A` to `Not[A]` inside the optional

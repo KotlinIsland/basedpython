@@ -14,6 +14,8 @@
 //! function, body included, keeps its source bytes, so sibling lowerings
 //! (`??`, `?.`, `int?` annotations, …) anywhere in the function still apply.
 
+use std::fmt::Write as _;
+
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtFunctionDef, UnaryOp};
 use ruff_text_size::{Ranged, TextRange};
@@ -92,20 +94,22 @@ impl MutableDefaults<'_> {
                 // each guard re-establishes it for the following line
                 let base = prefix.to_owned();
                 for (name, default) in &guards {
-                    text.push_str(&format!(
+                    let _ = write!(
+                        text,
                         "if {name} is _MISSING:\n{base}    {name} = {default}\n{base}"
-                    ));
+                    );
                 }
             } else {
                 // single-line body (`def f(x=[]): ...`) — break it onto its own
                 // indented line after the guards
                 let base = format!("{}    ", line_indent(self.source, f.range().start()));
                 for (name, default) in &guards {
-                    text.push_str(&format!(
+                    let _ = write!(
+                        text,
                         "\n{base}if {name} is _MISSING:\n{base}    {name} = {default}"
-                    ));
+                    );
                 }
-                text.push_str(&format!("\n{base}"));
+                let _ = write!(text, "\n{base}");
             }
             self.edits.push((TextRange::empty(insert_at), text));
         } else {
@@ -113,9 +117,10 @@ impl MutableDefaults<'_> {
             let doc_end = f.body[docstring_count - 1].range().end();
             let base = format!("{}    ", line_indent(self.source, f.range().start()));
             for (name, default) in &guards {
-                text.push_str(&format!(
+                let _ = write!(
+                    text,
                     "\n{base}if {name} is _MISSING:\n{base}    {name} = {default}"
-                ));
+                );
             }
             self.edits.push((TextRange::empty(doc_end), text));
         }
