@@ -2062,6 +2062,14 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                 self.check_type_pair(db, source_form.instance_fallback(db), target)
             }
 
+            // basedpython: wrapped optionals are covariant in their inner type —
+            // `Literal[1]??` is assignable to `int??` because every wrapped
+            // value of the former is a wrapped value of the latter
+            (
+                Type::KnownInstance(KnownInstanceType::WrappedOptional(source_inner)),
+                Type::KnownInstance(KnownInstanceType::WrappedOptional(target_inner)),
+            ) => self.check_type_pair(db, source_inner.inner(db), target_inner.inner(db)),
+
             // basedpython: a wrapped optional `WrappedOptional(inner)` accepts
             // any value of its decomposition `inner | None` — the wrapped value
             // itself, or `None` for the absent outer state. (Identical wrapped

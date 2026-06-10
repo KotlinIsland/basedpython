@@ -69,6 +69,17 @@ def h() -> int???:
 reveal_type(h())  # revealed: int???
 ```
 
+## wrapped optionals are covariant in their inner type
+
+a narrower wrapped optional is assignable to a wider one — `Literal[1]??` to `int??`:
+
+```by
+def f[T](t: T) -> T??:
+    return Some(t)
+
+x: int?? = f(1)
+```
+
 ## force-unwrap `!` peels one optional layer
 
 `expr!` removes one layer of optionality: a wrapped optional yields the next layer in, and a plain
