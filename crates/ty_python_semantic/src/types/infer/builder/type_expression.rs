@@ -791,6 +791,22 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             }
 
             ast::Expr::BoolOp(bool_op) => {
+                // basedpython: `A or B` / `A and B` in a type annotation are the
+                // keyword spellings of union / intersection. allowed only in
+                // `.by` / `.byi`
+                if self.is_basedpython_file() {
+                    let elements: Vec<Type<'db>> = bool_op
+                        .values
+                        .iter()
+                        .map(|value| self.infer_type_expression(value))
+                        .collect();
+                    return match bool_op.op {
+                        ast::BoolOp::Or => {
+                            UnionType::from_elements_leave_aliases(self.db(), elements)
+                        }
+                        ast::BoolOp::And => IntersectionType::from_elements(self.db(), elements),
+                    };
+                }
                 if !self.in_string_annotation() {
                     self.infer_boolean_expression(bool_op, TypeContext::default());
                 }

@@ -11,12 +11,11 @@
 //! `Annotated[T, …]` first arg, `Callable[[P], R]` parameter list + return.
 //! `not x` in non-type contexts (boolean negation) is never affected.
 
-use ruff_python_ast::{
-    AtomicNodeIndex, Expr, ExprContext, ExprName, ExprSubscript, Stmt, UnaryOp, name::Name,
-};
+use ruff_python_ast::{Expr, Stmt, UnaryOp};
 use ruff_text_size::TextRange;
 
 use super::ast_driver::{PassContext, TypeAwarePass, render_expr};
+use super::intersection::{LowerImports, lower};
 use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
 use crate::type_info::TypeInfo;
 
@@ -32,20 +31,17 @@ impl TypeAwarePass for NotType {
     fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut state = State {
             edits: Vec::new(),
-            needs_import: false,
+            needs: LowerImports::default(),
         };
         walk_type_positions(stmts, Some(types), &mut state);
         ctx.text_edits.extend(state.edits);
-        if state.needs_import {
-            ctx.required_imports
-                .push("from ty_extensions import Not".to_owned());
-        }
+        state.needs.push_required(ctx);
     }
 }
 
 struct State {
     edits: Vec<(TextRange, String)>,
-    needs_import: bool,
+    needs: LowerImports,
 }
 
 impl TypeExprVisitor for State {
@@ -53,21 +49,12 @@ impl TypeExprVisitor for State {
         if let Expr::UnaryOp(u) = expr
             && matches!(u.op, UnaryOp::Not)
         {
-            let new_node = Expr::Subscript(ExprSubscript {
-                node_index: AtomicNodeIndex::NONE,
-                range: TextRange::default(),
-                value: Box::new(Expr::Name(ExprName {
-                    node_index: AtomicNodeIndex::NONE,
-                    range: TextRange::default(),
-                    id: Name::from("Not"),
-                    ctx: ExprContext::Load,
-                })),
-                slice: Box::new((*u.operand).clone()),
-                ctx: ExprContext::Load,
-                is_typeof: false,
-            });
-            self.needs_import = true;
+            // the shared lowering rewrites the whole `not …` chain, including
+            // `&` / `and` / `or` and nested `not` inside the operand, so the
+            // wide edit can't leak surface operators
+            let new_node = lower(expr, &mut self.needs);
             self.edits.push((u.range, render_expr(&new_node)));
+            return Recurse::Stop;
         }
         Recurse::Descend
     }
@@ -269,6 +256,41 @@ mod tests {
         // `Literal[True, False]` is opaque — its slice elements are not
         // type expressions. don't descend (would try to wrap booleans)
         unchanged("from typing import Literal\na: Literal[True, False]\n");
+    }
+
+    #[test]
+    fn not_of_intersection_operand_lowered() {
+        // the operand lowers through the shared intersection/union lowering
+        // so `&` doesn't leak into the emitted python
+        check(
+            "a: not (A & B)\n",
+            indoc! {"
+                from ty_extensions import Intersection, Not
+                a: Not[Intersection[A, B]]
+            "},
+        );
+    }
+
+    #[test]
+    fn not_of_or_keyword_operand_lowered() {
+        check(
+            "a: not (A or B)\n",
+            indoc! {"
+                from ty_extensions import Not
+                a: Not[A | B]
+            "},
+        );
+    }
+
+    #[test]
+    fn nested_not_lowered() {
+        check(
+            "a: not not int\n",
+            indoc! {"
+                from ty_extensions import Not
+                a: Not[Not[int]]
+            "},
+        );
     }
 
     #[test]
