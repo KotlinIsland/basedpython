@@ -25,6 +25,7 @@ basedpython is a Python-like language that transpiles to pure Python
 - [tuple type literals](features/tuple-types.md)
 - [callable arrow syntax](features/callable.md)
 - [intersection types](features/intersection.md)
+- [`or` / `and` type operators](features/or-and-types.md)
 - [negation types (`not T`)](features/not-type.md)
 - [`typeof` keyword](features/typeof.md)
 - [star projections (`X[*]`)](features/star-projection.md)

@@ -140,6 +140,12 @@ impl TypePosWalker<'_> {
                 self.visit_type_expr(&b.left, TypePos::Nested);
                 self.visit_type_expr(&b.right, TypePos::Nested);
             }
+            // `A or B` / `A and B` — keyword spellings of union / intersection
+            Expr::BoolOp(b) => {
+                for value in &b.values {
+                    self.visit_type_expr(value, TypePos::Nested);
+                }
+            }
             // `not T` (negation) and `T?` (optional) both carry a nested type
             // expression in their operand, so descend so sibling transforms
             // (intersection, not, float, …) apply inside `(not A)?`, `(A & B)?`

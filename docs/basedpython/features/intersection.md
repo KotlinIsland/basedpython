@@ -28,6 +28,9 @@ chains are flattened: `A & B & C` becomes `Intersection[A, B, C]` rather than
 nested. intersections compose with unions by precedence: `&` binds tighter than
 `|`, so `A & B | C` parses as `(A & B) | C`
 
+the keywords `and` / `or` are accepted as alternate spellings of `&` / `|` —
+see [`or` / `and` type operators](or-and-types.md)
+
 ## scope
 
 the `&` operator is recognized only in syntactic type positions: annotations,
