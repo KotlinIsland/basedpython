@@ -1,64 +1,6 @@
-//! Type-aware pass that rewrites `not T` in type positions to
-//! `ty_extensions.Not[T]`.
-//!
-//! `a: not int`           → `a: Not[int]`
-//! `a: not (int | str)`   → `a: Not[int | str]`
-//! `a: list[not int]`     → `a: list[Not[int]]`
-//!
-//! Fires in every type position recognised by [`type_expr_walker`]:
-//! annotations, return types, type-alias RHS, type-param bounds/defaults,
-//! class bases, value-position type applications, `cast(T, _)`,
-//! `Annotated[T, …]` first arg, `Callable[[P], R]` parameter list + return.
-//! `not x` in non-type contexts (boolean negation) is never affected.
-
-use ruff_python_ast::{Expr, Stmt, UnaryOp};
-use ruff_text_size::TextRange;
-
-use super::ast_driver::{PassContext, TypeAwarePass, render_expr};
-use super::intersection::{LowerImports, lower};
-use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
-use crate::type_info::TypeInfo;
-
-pub(crate) struct NotType;
-
-impl NotType {
-    pub(crate) fn new() -> Self {
-        Self
-    }
-}
-
-impl TypeAwarePass for NotType {
-    fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
-        let mut state = State {
-            edits: Vec::new(),
-            needs: LowerImports::default(),
-        };
-        walk_type_positions(stmts, Some(types), &mut state);
-        ctx.text_edits.extend(state.edits);
-        state.needs.push_required(ctx);
-    }
-}
-
-struct State {
-    edits: Vec<(TextRange, String)>,
-    needs: LowerImports,
-}
-
-impl TypeExprVisitor for State {
-    fn visit(&mut self, expr: &Expr, _pos: TypePos) -> Recurse {
-        if let Expr::UnaryOp(u) = expr
-            && matches!(u.op, UnaryOp::Not)
-        {
-            // the shared lowering rewrites the whole `not …` chain, including
-            // `&` / `and` / `or` and nested `not` inside the operand, so the
-            // wide edit can't leak surface operators
-            let new_node = lower(expr, &mut self.needs);
-            self.edits.push((u.range, render_expr(&new_node)));
-            return Recurse::Stop;
-        }
-        Recurse::Descend
-    }
-}
+//! End-to-end tests for `not T` in type positions (`a: not int` →
+//! `a: Not[int]`). The lowering is performed by the single type-expression
+//! lowerer in [`callable`](super::callable); this module only hosts the tests.
 
 #[cfg(test)]
 mod tests {
@@ -302,6 +244,20 @@ mod tests {
             indoc! {"
                 from ty_extensions import Not
                 a: dict[Not[int], Not[str]]
+            "},
+        );
+    }
+
+    #[test]
+    fn not_arm_float_composes() {
+        // the `float` operand must still lower to `JustFloat` through the
+        // template's `Src` passthrough — the wide `Not[…]` edit used to swallow
+        // just_float's narrow edit while keeping its (now-orphan) import
+        check(
+            "a: not float\n",
+            indoc! {"
+                from ty_extensions import JustFloat, Not
+                a: Not[JustFloat]
             "},
         );
     }

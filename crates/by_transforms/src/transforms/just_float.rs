@@ -62,8 +62,8 @@ impl<'src> JustFloat<'src> {
         }
     }
 
-    /// public so [`rewrite_type_expr`] (used by `generics.rs`) can drive a
-    /// one-off lowering over a single expression without spinning up a pass
+    /// public so [`rewrite_type_expr_with_imports`] can drive a one-off
+    /// lowering over a single expression without spinning up a pass
     pub(crate) fn emit_in_type_expr(&mut self, expr: &Expr) {
         walk_one_type_expr(expr, self);
     }
@@ -126,17 +126,39 @@ impl TypeAwarePass for JustFloatPass {
 /// alias range — its outer edit would otherwise subsume our minimal in-place
 /// edits, so we have to splice the rewrite into the synthesized
 /// `TypeAliasType("X", …)` payload directly.
-pub(crate) fn rewrite_type_expr(source: &str, types: &dyn TypeInfo, expr: &Expr) -> Option<String> {
+/// Composes the per-leaf type rewrites (`float` → `JustFloat`, a literal →
+/// `Literal[…]`, `dynamic` → `Any`, `float.inf` → `float`) over a single type
+/// expression and returns the lowered text plus the import lines the composed
+/// leaf rewrites require (`from ty_extensions import JustFloat`, `from typing
+/// import Literal`, …). A caller that re-emits a lowered type expression into
+/// synthesized text — e.g. `callable`'s wide replacement, where the per-leaf
+/// passes' own edits are dropped by first-wins overlap and their imports would
+/// otherwise be the only trace left — needs these so the lowered names resolve.
+pub(crate) fn rewrite_type_expr_with_imports(
+    source: &str,
+    types: &dyn TypeInfo,
+    expr: &Expr,
+) -> Option<(String, Vec<String>)> {
     let mut all_edits: Vec<Edit> = Vec::new();
+    let mut imports: Vec<String> = Vec::new();
 
     let mut lt = LiteralType::new(source, types);
     lt.emit_type_edits(expr, true);
+    if lt.needs_literal_import {
+        imports.push("from typing import Literal".to_owned());
+    }
     for fix in lt.edits {
         all_edits.extend(fix.into_edits());
     }
 
     let mut jf = JustFloat::new(types);
     jf.emit_in_type_expr(expr);
+    if jf.needs_float_alias {
+        imports.push("from ty_extensions import JustFloat".to_owned());
+    }
+    if jf.needs_complex_alias {
+        imports.push("from ty_extensions import JustComplex".to_owned());
+    }
     for fix in jf.edits {
         all_edits.extend(fix.into_edits());
     }
@@ -146,6 +168,9 @@ pub(crate) fn rewrite_type_expr(source: &str, types: &dyn TypeInfo, expr: &Expr)
     // keyword (an undefined name the final parse can't catch)
     let mut dk = crate::transforms::dynamic_keyword::DynamicKeyword::new(types);
     dk.emit_in_type_expr(expr);
+    if dk.needs_any_import && !types.is_bound_globally("Any") {
+        imports.push("from typing import Any".to_owned());
+    }
     for fix in dk.edits {
         all_edits.extend(fix.into_edits());
     }
@@ -178,7 +203,7 @@ pub(crate) fn rewrite_type_expr(source: &str, types: &dyn TypeInfo, expr: &Expr)
         pos = edit.end();
     }
     result.push_str(&source[usize::from(pos)..usize::from(range.end())]);
-    Some(result)
+    Some((result, imports))
 }
 
 #[cfg(test)]

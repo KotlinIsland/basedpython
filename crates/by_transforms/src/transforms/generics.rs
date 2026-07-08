@@ -9,7 +9,7 @@ use ruff_python_ast::{
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::config::Config;
-use crate::transforms::just_float;
+use crate::transforms::callable::lower_type_expr_full;
 use crate::type_info::TypeInfo;
 use ruff_python_ast::PythonVersion;
 
@@ -278,7 +278,7 @@ impl<'src> GenericPolyfill<'src> {
                                     format!("tuple[{inner}]")
                                 }
                             } else {
-                                just_float::rewrite_type_expr(self.source, self.types, bound)
+                                lower_type_expr_full(self.source, self.types, bound)
                                     .unwrap_or_else(|| self.src(bound.range()).to_owned())
                             };
                             extra_args.push(format!("bound={bound_src}"));
@@ -286,9 +286,8 @@ impl<'src> GenericPolyfill<'src> {
                     }
 
                     if let Some(default) = &tv.default {
-                        let default_src =
-                            just_float::rewrite_type_expr(self.source, self.types, default)
-                                .unwrap_or_else(|| self.src(default.range()).to_owned());
+                        let default_src = lower_type_expr_full(self.source, self.types, default)
+                            .unwrap_or_else(|| self.src(default.range()).to_owned());
                         if self.config.min_version < PythonVersion::PY313 {
                             self.needed_imports.typevar_needs_ext = true;
                         }
@@ -600,7 +599,7 @@ impl<'src> GenericPolyfill<'src> {
         // Pull in the literal-types + just-float rewrite for the RHS — our
         // `alias.range()` edit subsumes anything those emitted on the value
         // alone, so we have to splice the rewrite into our output.
-        let literal_rewrite = just_float::rewrite_type_expr(self.source, self.types, &alias.value);
+        let literal_rewrite = lower_type_expr_full(self.source, self.types, &alias.value);
 
         let (type_params_arg, defs, value_src) = if let Some(tp) = &alias.type_params {
             let (generic_args, type_defs, rename_map) = self.process_type_params(&tp.type_params);
@@ -1440,15 +1439,18 @@ mod tests {
 
     #[test]
     fn tuple_bound_is_not_constraints() {
-        // In basedpython, `T: (int, str)` means bound=(int, str), NOT positional
-        // constraints. Use `T: constraints(int, str)` for that.
+        // In basedpython, `T: (int, str)` is a tuple-type upper bound, NOT
+        // positional constraints. Use `T: constraints(int, str)` for that. the
+        // bound lowers like any other type expression (matching the native
+        // `class Foo[T: tuple[int, str]]` form), since the polyfill routes the
+        // bound through the same type-expression lowerer
         check(
             indoc! {"
                 class Foo[T: (int, str)]: ...
             "},
             indoc! {"
                 from typing import TypeVar, Generic
-                _T = TypeVar(\"_T\", bound=(int, str))
+                _T = TypeVar(\"_T\", bound=tuple[int, str])
                 class Foo(Generic[_T]): ...
             "},
         );
@@ -1531,12 +1533,56 @@ mod tests {
 
     #[test]
     fn by_tuple_is_bound() {
-        // In .by files, T: (int, str) is an upper bound (tuple type), not constraints.
+        // In .by files, T: (int, str) is an upper bound (tuple type), not
+        // constraints — and it lowers to `tuple[int, str]` like the native form
         check(
             "class Foo[T: (int, str)]: ...\n",
             indoc! {"
                 from typing import TypeVar, Generic
-                _T = TypeVar(\"_T\", bound=(int, str))
+                _T = TypeVar(\"_T\", bound=tuple[int, str])
+                class Foo(Generic[_T]): ...
+            "},
+        );
+    }
+
+    #[test]
+    fn intersection_bound_polyfilled() {
+        // an `&` bound lowers to `Intersection[...]` even on the < 3.12 polyfill
+        // path: the `TypeVar(bound=)` payload routes through the full type
+        // lowerer, matching the native `class Foo[T: Intersection[A, B]]`
+        check(
+            "class Foo[T: A & B]: ...\n",
+            indoc! {"
+                from ty_extensions import Intersection
+                from typing import TypeVar, Generic
+                _T = TypeVar(\"_T\", bound=Intersection[A, B])
+                class Foo(Generic[_T]): ...
+            "},
+        );
+    }
+
+    #[test]
+    fn negation_bound_polyfilled() {
+        check(
+            "class Foo[T: not int]: ...\n",
+            indoc! {"
+                from ty_extensions import Not
+                from typing import TypeVar, Generic
+                _T = TypeVar(\"_T\", bound=Not[int])
+                class Foo(Generic[_T]): ...
+            "},
+        );
+    }
+
+    #[test]
+    fn leaf_composes_in_polyfilled_bound() {
+        // per-leaf lowering still composes inside the spliced bound
+        check(
+            "class Foo[T: A & float]: ...\n",
+            indoc! {"
+                from ty_extensions import Intersection, JustFloat
+                from typing import TypeVar, Generic
+                _T = TypeVar(\"_T\", bound=Intersection[A, JustFloat])
                 class Foo(Generic[_T]): ...
             "},
         );

@@ -150,7 +150,8 @@ impl<'src> OptionalTypePass<'src> {
 }
 
 /// Collect the optional-lowering text edits for a single type-expression
-/// subtree. Used by the shared `just_float::rewrite_type_expr` composer so a
+/// subtree. Used by the shared `just_float::rewrite_type_expr_with_imports`
+/// composer so a
 /// `T?` nested inside a type constructor (tuple type, kw-subscript, …) is
 /// lowered when that constructor renders its nested types. The runtime
 /// `Optional[...]` import for nested `T??` is handled by [`OptionalTypePass`],
