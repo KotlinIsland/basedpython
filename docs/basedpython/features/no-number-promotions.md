@@ -22,9 +22,19 @@ the rewrite fires only in type-expression positions:
 - recursive into generic subscripts (`list[float]`, `dict[str, float]`)
 - recursive into the first argument of `Annotated[…]`
 
-bitwise-or unions (`float | None`), bitwise-and intersections (`float & A`)
-and `Literal[…]` are handled correctly; literal-value positions inside
-`Literal[…]` are not type expressions and are left alone
+the rewrite composes with the other type-position transforms — a `float` arm
+inside a union, intersection, negation, or callable type is wrapped just like a
+bare one:
+
+```by
+a: A & float        # → Intersection[A, JustFloat]
+b: float | None     # → JustFloat | None
+c: not float        # → Not[JustFloat]
+d: (float) -> int   # → Callable[[JustFloat], int]
+```
+
+literal-value positions inside `Literal[…]` are not type expressions and are
+left alone
 
 value-position uses of `float` / `complex` (calls like `float(x)`,
 `isinstance(y, float)`) are left alone — they refer to the class object, not

@@ -274,6 +274,22 @@ impl<'src> LiteralType<'src> {
                 self.emit_union_group_edits(expr);
                 return;
             }
+            // intersection `A & 1` — recurse into each operand so a bare literal
+            // arm is wrapped individually (intersections don't group literals
+            // the way `|` unions do)
+            if matches!(b.op, Operator::BitAnd) {
+                self.emit_type_edits(&b.left, false);
+                self.emit_type_edits(&b.right, false);
+                return;
+            }
+        }
+        // keyword `and` / `or` spellings of intersection / union — recurse into
+        // each arm so a literal arm still gets wrapped
+        if let Expr::BoolOp(b) = expr {
+            for value in &b.values {
+                self.emit_type_edits(value, false);
+            }
+            return;
         }
         if let Expr::Subscript(s) = expr {
             if self.is_literal_name(&s.value) {

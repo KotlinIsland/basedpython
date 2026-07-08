@@ -37,11 +37,11 @@ use super::{
     annotation, anon_named_tuple, auto_quote, callable, cast, coalesce, coalesce_chain, compat,
     decl_site_variance, decorator_keyword, dedent_string, dynamic_keyword, empty_declarations,
     float_const, force_unwrap, generic_call, generics, identity_swap, implicit_typing, init_method,
-    intersection, just_float, kw_subscript, literal_types, main_function, modifiers,
-    mutable_defaults, none_chain, not_type, optional_type, overload, postfix_await, propagate,
-    reified_generic, repeated_underscore, sentinel, some_ctor, string_tag, super_keyword,
-    symbolic_type_op, top_star, tuple_index, type_is, typed_dict_literal, typed_lambda,
-    typeof_keyword, unpack, use_site_variance,
+    just_float, kw_subscript, literal_types, main_function, modifiers, mutable_defaults,
+    none_chain, optional_type, overload, postfix_await, propagate, reified_generic,
+    repeated_underscore, sentinel, some_ctor, string_tag, super_keyword, symbolic_type_op,
+    top_star, tuple_index, type_is, typed_dict_literal, typed_lambda, typeof_keyword, unpack,
+    use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -376,15 +376,6 @@ pub(crate) fn run_against_source<'a>(
         text_edits: RefCell::new(vec![]),
     };
 
-    let typeof_inner = typeof_keyword::TypeofFold::new();
-    let typeof_pass = VisitorPass {
-        inner: &typeof_inner,
-        changed_cell: typeof_inner.changed_cell(),
-        imports: vec![],
-        hoist: RefCell::new(vec![]),
-        text_edits: RefCell::new(vec![]),
-    };
-
     // resolve symbolic operations in type positions (`1 + 1` → `Literal[2]`)
     // up front, from the original parse where `typeof` operands are still
     // intact for ty to read. the pass replaces each operation node and must run
@@ -395,6 +386,23 @@ pub(crate) fn run_against_source<'a>(
     let symbolic_needs_any_import = symbolic_folds.needs_any_import;
     ctx.claimed_type_op_ranges = symbolic_folds.claimed_ranges();
     let symbolic_pass = symbolic_type_op::SymbolicTypeOp::new(symbolic_folds);
+
+    // a `typeof` nested under a structural type-form (`&` / `or` / `not` / an
+    // arrow) belongs to the type-expression lowerer's wide edit; the fold
+    // skips those so its statement re-render doesn't drop that edit
+    let typeof_skip = typeof_keyword::collect_structural_typeof_ranges(
+        parsed_handle.suite(),
+        &semantic_model,
+        &ctx.claimed_type_op_ranges,
+    );
+    let typeof_inner = typeof_keyword::TypeofFold::new(typeof_skip);
+    let typeof_pass = VisitorPass {
+        inner: &typeof_inner,
+        changed_cell: typeof_inner.changed_cell(),
+        imports: vec![],
+        hoist: RefCell::new(vec![]),
+        text_edits: RefCell::new(vec![]),
+    };
 
     let tuple_index_pass = tuple_index::TupleIndexPass::new();
 
@@ -425,8 +433,6 @@ pub(crate) fn run_against_source<'a>(
         text_edits: RefCell::new(vec![]),
     };
 
-    let not_type_pass = not_type::NotType::new();
-    let intersection_pass = intersection::IntersectionType::new();
     let dynamic_keyword_pass = dynamic_keyword::DynamicKeywordPass::new();
     let type_is_pass = type_is::TypeIs::new();
     let top_star_pass = top_star::TopStar::new();
@@ -525,8 +531,6 @@ pub(crate) fn run_against_source<'a>(
     // type-aware passes: operate on the salsa-owned parsed module (so
     // semantic queries hit the right AST nodes), emit text_edits / imports
     let type_aware: &[&dyn TypeAwarePass] = &[
-        &not_type_pass,
-        &intersection_pass,
         &dynamic_keyword_pass,
         &just_float_pass,
         &float_const_pass,

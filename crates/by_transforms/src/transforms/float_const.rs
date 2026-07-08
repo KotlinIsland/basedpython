@@ -37,8 +37,8 @@ impl<'src> FloatConst<'src> {
     }
 
     /// Run the erasure over a single type expression (used by the composed
-    /// `rewrite_type_expr` in `just_float`, where a polyfill replaces the whole
-    /// range and would otherwise subsume our in-place edits)
+    /// `rewrite_type_expr_with_imports` in `just_float`, where a polyfill
+    /// replaces the whole range and would otherwise subsume our in-place edits)
     pub(crate) fn emit_in_type_expr(&mut self, expr: &Expr) {
         walk_one_type_expr(expr, self);
     }

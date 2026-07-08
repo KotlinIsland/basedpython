@@ -43,8 +43,8 @@ impl<'src> DynamicKeyword<'src> {
         }
     }
 
-    /// public so [`crate::transforms::just_float::rewrite_type_expr`] can drive
-    /// a one-off lowering over a single expression without spinning up a pass
+    /// public so [`crate::transforms::just_float::rewrite_type_expr_with_imports`]
+    /// can drive a one-off lowering over a single expression without a pass
     /// (used by `generics.rs` when the PEP-695 polyfill replaces a whole type
     /// alias / bound and would otherwise subsume our minimal edits)
     pub(crate) fn emit_in_type_expr(&mut self, expr: &Expr) {
