@@ -133,7 +133,9 @@ pub fn convert_module(parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
     // (e.g. `AnyStr`) may be re-exported and imported by other modules, so it
     // must survive even when unused within its own module
     let uses = collect_uses(&module.body, &table);
-    for (name, decl) in &table {
+    let mut decls: Vec<_> = table.iter().collect();
+    decls.sort_by_key(|(name, _)| **name);
+    for (name, decl) in decls {
         if !name.starts_with('_') {
             continue;
         }

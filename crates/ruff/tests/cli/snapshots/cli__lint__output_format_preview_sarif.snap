@@ -1,7 +1,7 @@
 ---
 source: crates/ruff/tests/cli/lint.rs
 info:
-  program: ruff
+  program: buff
   args:
     - check
     - "--no-cache"
@@ -125,7 +125,7 @@ exit_code: 1
               "help": {
                 "text": "Undefined name `{name}`. {tip}"
               },
-              "helpUri": "https://docs.astral.sh/ruff/rules/undefined-name",
+              "helpUri": "https://kotlinisland.github.io/basedpython/rules/undefined-name",
               "id": "undefined-name",
               "properties": {
                 "id": "undefined-name",
@@ -144,7 +144,7 @@ exit_code: 1
               "help": {
                 "text": "`{name}` imported but unused; consider using `importlib.util.find_spec` to test for availability"
               },
-              "helpUri": "https://docs.astral.sh/ruff/rules/unused-import",
+              "helpUri": "https://kotlinisland.github.io/basedpython/rules/unused-import",
               "id": "unused-import",
               "properties": {
                 "id": "unused-import",

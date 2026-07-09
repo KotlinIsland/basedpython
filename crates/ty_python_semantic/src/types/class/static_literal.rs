@@ -118,6 +118,11 @@ bitflags::bitflags! {
         const HAS_EXPLICIT_BASES = 1 << 3;
         /// Whether this class has an explicit `metaclass` keyword argument.
         const HAS_EXPLICIT_METACLASS = 1 << 4;
+        /// basedpython: whether this class is a payload-enum variant
+        /// (`case Node(...)` inside an `enum class`). variants inherit the
+        /// enclosing enum's generic context despite having no type params of
+        /// their own, so fast paths keyed on `HAS_TYPE_PARAMS` must not skip them.
+        const IS_ENUM_VARIANT = 1 << 5;
     }
 }
 
@@ -137,11 +142,17 @@ impl<'db> StaticClassLiteral<'db> {
     }
 
     pub(crate) fn has_explicit_bases(self, db: &'db dyn Db) -> bool {
-        self.flags(db).contains(ClassLiteralFlags::HAS_EXPLICIT_BASES)
+        self.flags(db)
+            .contains(ClassLiteralFlags::HAS_EXPLICIT_BASES)
     }
 
     pub(crate) fn has_explicit_metaclass(self, db: &'db dyn Db) -> bool {
-        self.flags(db).contains(ClassLiteralFlags::HAS_EXPLICIT_METACLASS)
+        self.flags(db)
+            .contains(ClassLiteralFlags::HAS_EXPLICIT_METACLASS)
+    }
+
+    pub(crate) fn is_enum_variant(self, db: &'db dyn Db) -> bool {
+        self.flags(db).contains(ClassLiteralFlags::IS_ENUM_VARIANT)
     }
 }
 
@@ -312,7 +323,9 @@ impl<'db> StaticClassLiteral<'db> {
     }
 
     pub(crate) fn pep695_generic_context(self, db: &'db dyn Db) -> Option<GenericContext<'db>> {
-        if !self.has_type_params(db) {
+        // a based-enum variant has no type params of its own but inherits the
+        // enclosing enum's generic context (see `pep695_generic_context_inner`)
+        if !self.has_type_params(db) && !self.is_enum_variant(db) {
             return None;
         }
         self.pep695_generic_context_inner(db)

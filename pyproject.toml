@@ -49,10 +49,6 @@ Repository = "https://github.com/KotlinIsland/basedpython"
 Documentation = "https://kotlinisland.github.io/basedpython/"
 Changelog = "https://github.com/KotlinIsland/basedpython/blob/main/CHANGELOG.md"
 
-[dependency-groups]
-docs = [
-    "zensical",
-]
 
 # builds the standalone distribution crate, which produces both the `by`
 # (type-checker / transpiler) and `buff` (linter / formatter) binaries. maturin
@@ -67,6 +63,9 @@ strip = true
 [dependency-groups]
 dev = [
     "prek==0.4.5",
+]
+docs = [
+    "zensical",
 ]
 release = [
     "rooster==0.1.1",

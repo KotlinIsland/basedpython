@@ -186,30 +186,14 @@ expression: diagnostics
           "character": 7
         },
         "end": {
-          "line": 3,
-          "character": 0
+          "line": 2,
+          "character": 7
         }
       },
       "severity": 1,
       "code": "invalid-syntax",
       "source": "ty",
       "message": "Expected `,`, found newline"
-    },
-    {
-      "range": {
-        "start": {
-          "line": 2,
-          "character": 7
-        },
-        "end": {
-          "line": 2,
-          "character": 7
-        }
-      },
-      "severity": 1,
-      "code": "invalid-syntax",
-      "source": "ty",
-      "message": "Expected `)`, found end of file"
     }
   ]
 }

@@ -56,7 +56,6 @@ mod containment;
 
 use self::containment::{elements_of, narrow_string_membership};
 
-
 /// Return the type constraints that `test` would place on `symbol` if true and false.
 ///
 /// For example, if we have this code:

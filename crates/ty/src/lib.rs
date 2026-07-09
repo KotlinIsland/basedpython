@@ -111,8 +111,8 @@ fn run_generate_api_file(
     python: Option<SystemPathBuf>,
     python_version: Option<crate::python_version::PythonVersion>,
 ) -> anyhow::Result<ExitStatus> {
-    use ty_project::metadata::options::EnvironmentOptions;
     use ruff_ranged_value::RangedValue;
+    use ty_project::metadata::options::EnvironmentOptions;
     use ty_project::metadata::value::RelativePathBuf;
     use ty_python_semantic::api_lockfile::generate_api_lockfile;
 

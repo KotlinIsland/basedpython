@@ -5,52 +5,13 @@ expression: lex_source(source)
 ## Tokens
 ```
 [
-    (
-        Not,
-        0..3,
-    ),
-    (
-        String(
-            "x",
-        ),
-        3..6,
-        TokenFlags(
-            DOUBLE_QUOTES,
-        ),
-    ),
-    (
-        If,
-        7..9,
-    ),
-    (
-        Match,
-        10..15,
-    ),
-    (
-        String(
-            "y",
-        ),
-        15..18,
-        TokenFlags(
-            DOUBLE_QUOTES,
-        ),
-    ),
-    (
-        Else,
-        19..23,
-    ),
-    (
-        String(
-            "z",
-        ),
-        23..26,
-        TokenFlags(
-            DOUBLE_QUOTES,
-        ),
-    ),
-    (
-        Newline,
-        26..26,
-    ),
+    Not 0..3,
+    String 3..6 (flags = DOUBLE_QUOTES),
+    If 7..9,
+    Match 10..15,
+    String 15..18 (flags = DOUBLE_QUOTES),
+    Else 19..23,
+    String 23..26 (flags = DOUBLE_QUOTES),
+    Newline 26..26,
 ]
 ```

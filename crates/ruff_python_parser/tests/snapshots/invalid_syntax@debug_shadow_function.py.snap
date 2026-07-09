@@ -196,6 +196,7 @@ Module(
                                     kwarg: None,
                                 },
                             ),
+                            returns: None,
                             body: NumberLiteral(
                                 ExprNumberLiteral {
                                     node_index: NodeIndex(None),

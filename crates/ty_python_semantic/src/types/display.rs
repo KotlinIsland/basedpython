@@ -33,10 +33,9 @@ use crate::types::visitor::TypeVisitor;
 use crate::types::{
     CallableType, DynamicType, IntersectionType, KnownBoundMethodType, KnownClass,
     KnownInstanceType, LiteralValueType, LiteralValueTypeKind, MaterializationKind,
-    PropertyInstanceType, Protocol,
-    ProtocolInstanceType, SpecialFormType, StringLiteralType, SubclassOfInner, SubclassOfType,
-    Type, TypeAliasType, TypeGuardLike, TypedDictModule, TypedDictType, UnionType,
-    WrapperDescriptorKind, visitor,
+    PropertyInstanceType, Protocol, ProtocolInstanceType, SpecialFormType, StringLiteralType,
+    SubclassOfInner, SubclassOfType, Type, TypeAliasType, TypeGuardLike, TypedDictModule,
+    TypedDictType, UnionType, WrapperDescriptorKind, visitor,
 };
 use ty_python_core::definition::Definition;
 use ty_python_core::scope::{FileScopeId, ScopeKind};

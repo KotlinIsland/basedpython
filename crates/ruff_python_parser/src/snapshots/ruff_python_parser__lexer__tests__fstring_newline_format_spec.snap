@@ -16,8 +16,8 @@ expression: "lex_invalid(source, Mode::Module)"
     Newline 14..15,
     Rbrace 15..16,
     Name 16..18,
-    String 18..19 (flags = UNCLOSED_STRING),
-    Newline 19..20,
+    TStringStart 18..19 (flags = T_STRING),
+    Newline 19..20 (flags = UNCLOSED_STRING),
     FStringStart 20..22 (flags = F_STRING),
     FStringMiddle 22..24 (flags = F_STRING),
     Lbrace 24..25,
@@ -32,8 +32,8 @@ expression: "lex_invalid(source, Mode::Module)"
     Dedent 44..44,
     Rbrace 44..45,
     Name 45..47,
-    String 47..48 (flags = UNCLOSED_STRING),
-    Newline 48..49,
+    TStringStart 47..48 (flags = T_STRING),
+    Newline 48..49 (flags = UNCLOSED_STRING),
 ]
 ```
 ## Errors
@@ -46,8 +46,10 @@ expression: "lex_invalid(source, Mode::Module)"
         location: 13..14,
     },
     LexicalError {
-        error: UnclosedStringError,
-        location: 18..19,
+        error: TStringError(
+            UnterminatedString,
+        ),
+        location: 19..19,
     },
     LexicalError {
         error: FStringError(
@@ -56,8 +58,10 @@ expression: "lex_invalid(source, Mode::Module)"
         location: 32..33,
     },
     LexicalError {
-        error: UnclosedStringError,
-        location: 47..48,
+        error: TStringError(
+            UnterminatedString,
+        ),
+        location: 48..48,
     },
 ]
 ```

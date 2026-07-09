@@ -3,6 +3,7 @@ use itertools::Itertools;
 use crate::Db;
 use crate::types::enums::enum_member_literals;
 use crate::types::tuple::Tuple;
+use crate::types::typevar::TypeVarKind;
 use crate::types::{KnownClass, Type};
 
 /// Maximum number of expanded types that can be generated from a single tuple's
@@ -31,9 +32,13 @@ pub(crate) fn expand_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Vec<Typ
             // closed set of variant types, so `match` over an enum *instance* (e.g.
             // `self` in a method) is exhaustive — mirroring how a standard enum splits
             // into its member literals below
-            if let Some(union) = instance.class_literal(db).as_static().and_then(
-                |static_class| crate::types::class::based_enum_variant_union(db, static_class),
-            ) {
+            if let Some(union) = instance
+                .class_literal(db)
+                .as_static()
+                .and_then(|static_class| {
+                    crate::types::class::based_enum_variant_union(db, static_class)
+                })
+            {
                 return Some(match union {
                     Type::Union(union) => union.elements(db).to_vec(),
                     other => vec![other],
@@ -96,6 +101,30 @@ pub(crate) fn expand_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Vec<Typ
         ),
         // For type aliases, expand the underlying value type.
         Type::TypeAlias(alias) => expand_type(db, alias.value_type(db)),
+        // basedpython: `Self` in a payload-enum method is bounded by the enum's
+        // closed variant union, so it expands to the variants — making
+        // `match self` in an enum method exhaustive
+        Type::TypeVar(bound_typevar) => {
+            let typevar = bound_typevar.typevar(db);
+            if !matches!(typevar.kind(db), TypeVarKind::TypingSelf) {
+                return None;
+            }
+            let upper_bound = typevar.upper_bound(db)?;
+            let is_variant = |ty: &Type<'db>| match ty {
+                Type::NominalInstance(instance) => instance
+                    .class_literal(db)
+                    .as_static()
+                    .is_some_and(|class| class.is_enum_variant(db)),
+                ty if ty.as_enum_literal().is_some() => true,
+                _ => false,
+            };
+            match upper_bound {
+                Type::Union(union) if union.elements(db).iter().all(is_variant) => {
+                    Some(union.elements(db).to_vec())
+                }
+                _ => None,
+            }
+        }
         // We don't handle `type[A | B]` here because it's already stored in the expanded form
         // i.e., `type[A] | type[B]` which is handled by the `Type::Union` case.
         _ => None,

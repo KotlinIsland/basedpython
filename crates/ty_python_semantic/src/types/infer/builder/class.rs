@@ -191,6 +191,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         );
         class_flags.set(ClassLiteralFlags::HAS_EXPLICIT_BASES, has_explicit_bases);
         class_flags.set(
+            ClassLiteralFlags::IS_ENUM_VARIANT,
+            class_node.is_enum_variant(),
+        );
+        class_flags.set(
             ClassLiteralFlags::HAS_EXPLICIT_METACLASS,
             has_explicit_metaclass,
         );

@@ -1,7 +1,7 @@
 ---
 source: crates/ruff/tests/cli/lint.rs
 info:
-  program: ruff
+  program: buff
   args:
     - check
     - "--no-cache"
@@ -21,7 +21,7 @@ exit_code: 1
   "diagnostics": [
     {
       "code": {
-        "url": "https://docs.astral.sh/ruff/rules/unused-import",
+        "url": "https://kotlinisland.github.io/basedpython/rules/unused-import",
         "value": "unused-import"
       },
       "location": {
@@ -56,7 +56,7 @@ exit_code: 1
     },
     {
       "code": {
-        "url": "https://docs.astral.sh/ruff/rules/undefined-name",
+        "url": "https://kotlinisland.github.io/basedpython/rules/undefined-name",
         "value": "undefined-name"
       },
       "location": {
@@ -97,7 +97,7 @@ exit_code: 1
   "severity": "WARNING",
   "source": {
     "name": "ruff",
-    "url": "https://docs.astral.sh/ruff"
+    "url": "https://kotlinisland.github.io/basedpython"
   }
 }
 ----- stderr -----

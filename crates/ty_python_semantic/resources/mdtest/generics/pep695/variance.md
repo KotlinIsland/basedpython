@@ -1112,7 +1112,8 @@ basedpython allows annotating variance directly on the type parameter with `out 
 ### class
 
 ```by
-from ty_extensions import is_subtype_of, static_assert
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
 
 class A
 class B(A)
@@ -1142,7 +1143,8 @@ static_assert(not is_subtype_of(Invariant[A], Invariant[B]))
 typevar, consistent with the body.
 
 ```by
-from ty_extensions import is_subtype_of, static_assert
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
 
 class A
 class B(A)

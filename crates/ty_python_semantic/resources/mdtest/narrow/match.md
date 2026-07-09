@@ -146,28 +146,28 @@ from typing import Any
 
 def test_isinstance(x: dict[Any, Any] | int) -> None:
     if isinstance(x, Mapping):
-        reveal_type(x)  # revealed: dict[Any, Any] | (int & Top[Mapping[Unknown, object]])
+        reveal_type(x)  # revealed: dict[Any, Any] | (int & Mapping[object, object])
     else:
         reveal_type(x)  # revealed: int & ~Mapping[object, object]
 
 def test_match(x: dict[Any, Any] | int) -> None:
     match x:
         case {}:
-            reveal_type(x)  # revealed: dict[Any, Any] | (int & Top[Mapping[Unknown, object]])
+            reveal_type(x)  # revealed: dict[Any, Any] | (int & Mapping[object, object])
         case _:
             reveal_type(x)  # revealed: int & ~Mapping[object, object]
 
 def test_match_double_star(x: dict[Any, Any] | int) -> None:
     match x:
         case {**rest}:
-            reveal_type(x)  # revealed: dict[Any, Any] | (int & Top[Mapping[Unknown, object]])
+            reveal_type(x)  # revealed: dict[Any, Any] | (int & Mapping[object, object])
         case _:
             reveal_type(x)  # revealed: int & ~Mapping[object, object]
 
 def test_match_refutable(x: dict[Any, Any] | int) -> None:
     match x:
         case {"k": _}:
-            reveal_type(x)  # revealed: dict[Any, Any] | (int & Top[Mapping[Unknown, object]])
+            reveal_type(x)  # revealed: dict[Any, Any] | (int & Mapping[object, object])
         case _:
             reveal_type(x)  # revealed: dict[Any, Any] | int
 ```
@@ -1646,7 +1646,7 @@ def match_patterns_preserve_any_and_unknown(
 
     match unknown_value:
         case {"key": _}:
-            reveal_type(unknown_value)  # revealed: Unknown & Top[Mapping[Unknown, object]]
+            reveal_type(unknown_value)  # revealed: Unknown & Mapping[object, object]
 
 def match_class_narrows_subject(
     value: TaggedPayload[Literal["int"], int] | TaggedPayload[Literal["str"], str],

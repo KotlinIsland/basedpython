@@ -502,7 +502,9 @@ type Ops[T] = SelfOp[T] | ListOp[T]
 type NestedOp[T] = T | Ops[T]
 
 x18: NestedOp[str] = {"$in": ["a", "b"]}
-reveal_type(x18)  # revealed: dict[Literal["$in", "$nin"], list[str]]
+# with the fork's covariant `Mapping` key, the narrower inferred key type
+# already satisfies the annotation, so it is not widened to the declared union
+reveal_type(x18)  # revealed: dict[Literal["$in"], list[str]]
 ```
 
 ## Annotations influence generic call argument inference
@@ -887,7 +889,8 @@ reveal_type(x18)  # revealed: list[list[Any]]
 x19: dict[int, dict[str, int]] = defaultdict(dict)
 reveal_type(x19)  # revealed: defaultdict[int, dict[str, int]]
 
-x20: Mapping[str, list[str]] = reveal_type(defaultdict(list))  # revealed: defaultdict[str, list[str]]
+# the fork's covariant `Mapping` key places no lower bound on the key typevar
+x20: Mapping[str, list[str]] = reveal_type(defaultdict(list))  # revealed: defaultdict[Unknown, list[str]]
 x20["key"].append(1)  # error: [invalid-argument-type]
 
 factory: Callable[[], list[str]] = reveal_type(list)  # revealed: <class 'list[str]'>

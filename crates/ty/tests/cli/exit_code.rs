@@ -58,7 +58,7 @@ fn error_on_warning_conflicts_with_exit_zero_on_warning() -> anyhow::Result<()> 
     ----- stderr -----
     error: the argument '--error-on-warning' cannot be used with '--exit-zero-on-warning'
 
-    Usage: ty check --error-on-warning [PATH]...
+    Usage: by check --error-on-warning [PATH]...
 
     For more information, try '--help'.
     ");

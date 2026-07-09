@@ -1562,12 +1562,12 @@ a: float<CURSOR> = 3.14
            |    ^^^^^ Clicking here
            |
         info: Found 2 definitions
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class int:
            |       ---
            |
-          ::: stdlib/builtins.pyi:LL:7
+          ::: stdlib/builtins.byi:LL:7
            |
         LL | class float:
            |       -----
@@ -1594,17 +1594,17 @@ a: complex<CURSOR> = 3.14
            |    ^^^^^^^ Clicking here
            |
         info: Found 3 definitions
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class int:
            |       ---
            |
-          ::: stdlib/builtins.pyi:LL:7
+          ::: stdlib/builtins.byi:LL:7
            |
         LL | class float:
            |       -----
            |
-          ::: stdlib/builtins.pyi:LL:7
+          ::: stdlib/builtins.byi:LL:7
            |
         LL | class complex:
            |       -------
@@ -1841,9 +1841,9 @@ x = DynClass<CURSOR>()
            |     ^^^^^^^^ Clicking here
            |
         info: Found 1 definition
-          --> stdlib/builtins.pyi:LL:9
+          --> stdlib/builtins.byi:LL:9
            |
-        LL |     def __new__(cls) -> Self: ...
+        LL |     def __new__(cls) -> Self
            |         -------
            |
         ");
@@ -2077,9 +2077,9 @@ p = Point<CURSOR>(1, 2)
            |     ^^^^^^^^^^^^^^ Clicking here
            |
         info: Found 1 definition
-          --> stdlib/builtins.pyi:LL:9
+          --> stdlib/builtins.byi:LL:9
            |
-        LL |     def __dictoffset__(self) -> int: ...
+        LL |     def __dictoffset__(self) -> int
            |         --------------
            |
         ");
@@ -2165,9 +2165,9 @@ p = Point<CURSOR>(1, 2)
            |      ^^^^^^^^^^^^^^ Clicking here
            |
         info: Found 1 definition
-          --> stdlib/builtins.pyi:LL:9
+          --> stdlib/builtins.byi:LL:9
            |
-        LL |     def __dictoffset__(self) -> int: ...
+        LL |     def __dictoffset__(self) -> int
            |         --------------
            |
         ");

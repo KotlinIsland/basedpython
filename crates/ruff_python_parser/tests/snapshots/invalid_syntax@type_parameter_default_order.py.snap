@@ -232,6 +232,7 @@ Module(
                                         },
                                         bound: None,
                                         default: None,
+                                        variance: None,
                                     },
                                 ),
                             ],
@@ -300,6 +301,7 @@ Module(
                                                 },
                                             ),
                                         ),
+                                        variance: None,
                                     },
                                 ),
                                 TypeVar(
