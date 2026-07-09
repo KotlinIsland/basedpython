@@ -1451,7 +1451,7 @@ def expects_named_tuple(x: typing.NamedTuple):
     reveal_type(x._make)  # revealed: bound method type[NamedTupleLike]._make(iterable: Iterable[Any]) -> NamedTupleLike
     # revealed: bound method (tuple[object, ...] & NamedTupleLike)._replace(...) -> tuple[object, ...] & NamedTupleLike
     reveal_type(x._replace)
-    # revealed: Overload[(value: tuple[object, ...], /) -> tuple[object, ...], [_T](value: tuple[_T, ...], /) -> tuple[object, ...]]
+    # revealed: Overload[(value: tuple[object, ...], /) -> tuple[object, ...], [T](value: tuple[T, ...], /) -> tuple[object, ...]]
     reveal_type(x.__add__)
     # revealed: bound method (tuple[object, ...] & NamedTupleLike).__iter__() -> Iterator[object]
     reveal_type(x.__iter__)

@@ -5,24 +5,8 @@ expression: lex_source(source)
 ## Tokens
 ```
 [
-    (
-        Name(
-            Name("sql"),
-        ),
-        0..3,
-    ),
-    (
-        String(
-            "select",
-        ),
-        4..12,
-        TokenFlags(
-            DOUBLE_QUOTES,
-        ),
-    ),
-    (
-        Newline,
-        12..12,
-    ),
+    Name 0..3,
+    String 4..12 (flags = DOUBLE_QUOTES),
+    Newline 12..12,
 ]
 ```

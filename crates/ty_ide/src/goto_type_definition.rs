@@ -76,7 +76,7 @@ mod tests {
            | ^^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/typing.pyi:LL:1
+          --> stdlib/typing.byi:LL:1
            |
         LL | Literal: _SpecialForm
            | -------
@@ -104,7 +104,7 @@ mod tests {
            | ^^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/typing.pyi:LL:7
+          --> stdlib/typing.byi:LL:7
            |
         LL | class Any:
            |       ---
@@ -131,7 +131,7 @@ mod tests {
            | ^^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/typing.pyi:LL:1
+          --> stdlib/typing.byi:LL:1
            |
         LL | Generic: type[_Generic]
            | -------
@@ -666,7 +666,7 @@ mod tests {
            | ^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class str(Sequence[str]):
            |       ---
@@ -689,7 +689,7 @@ mod tests {
            |          ^^^^^^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class str(Sequence[str]):
            |       ---
@@ -876,10 +876,10 @@ mod tests {
         LL | class MyClass:
            |       -------
            |
-          ::: stdlib/types.pyi:LL:7
+          ::: stdlib/types.byi:LL:13
            |
-        LL | class NoneType:
-           |       --------
+        LL | final class NoneType:
+           |             --------
            |
         "#);
     }
@@ -935,10 +935,10 @@ mod tests {
         LL | class MyClass:
            |       -------
            |
-          ::: stdlib/types.pyi:LL:7
+          ::: stdlib/types.byi:LL:13
            |
-        LL | class NoneType:
-           |       --------
+        LL | final class NoneType:
+           |             --------
            |
         "#);
     }
@@ -1286,7 +1286,7 @@ mod tests {
             "#,
         );
 
-        assert_snapshot!(test.goto_type_definition(), @r#"
+        assert_snapshot!(test.goto_type_definition(), @"
         info[goto-type definition]: Go to type definition
           --> main.py:LL:17
            |
@@ -1294,12 +1294,12 @@ mod tests {
            |                 ^^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class str(Sequence[str]):
            |       ---
            |
-        "#);
+        ");
     }
 
     #[test]
@@ -1327,7 +1327,7 @@ mod tests {
             "#,
         );
 
-        assert_snapshot!(test.goto_type_definition(), @r#"
+        assert_snapshot!(test.goto_type_definition(), @"
         info[goto-type definition]: Go to type definition
           --> main.py:LL:17
            |
@@ -1335,12 +1335,12 @@ mod tests {
            |                 ^^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
-        LL | class list(MutableSequence[_T]):
+        LL | class list[in out Element](MutableSequence[Element]):
            |       ----
            |
-        "#);
+        ");
     }
 
     #[test]
@@ -1368,7 +1368,7 @@ mod tests {
             "#,
         );
 
-        assert_snapshot!(test.goto_type_definition(), @r#"
+        assert_snapshot!(test.goto_type_definition(), @"
         info[goto-type definition]: Go to type definition
           --> main.py:LL:17
            |
@@ -1376,12 +1376,12 @@ mod tests {
            |                 ^^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class str(Sequence[str]):
            |       ---
            |
-        "#);
+        ");
     }
 
     #[test]
@@ -1429,7 +1429,7 @@ mod tests {
            |                 ^^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class str(Sequence[str]):
            |       ---
@@ -1615,7 +1615,7 @@ mod tests {
            |      ^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class str(Sequence[str]):
            |       ---
@@ -1644,7 +1644,7 @@ mod tests {
            |      ^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class int:
            |       ---
@@ -1672,9 +1672,9 @@ f(**kwargs<CURSOR>)
            |     ^^^^^^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
-        LL | class dict(MutableMapping[_KT, _VT]):
+        LL | class dict[in out Key, in out Value](MutableMapping[Key, Value]):
            |       ----
            |
         ");
@@ -1705,7 +1705,7 @@ def outer():
            |                ^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class str(Sequence[str]):
            |       ---
@@ -1755,7 +1755,7 @@ def function():
            |            ^^^^^^^^^^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class str(Sequence[str]):
            |       ---
@@ -1797,7 +1797,7 @@ def function():
            |     ^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class str(Sequence[str]):
            |       ---
@@ -1878,7 +1878,7 @@ def function():
            |               ^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class str(Sequence[str]):
            |       ---
@@ -1903,15 +1903,15 @@ def function():
            |     ^ Clicking here
            |
         info: Found 2 type definitions
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class str(Sequence[str]):
            |       ---
            |
-          ::: stdlib/types.pyi:LL:7
+          ::: stdlib/types.byi:LL:13
            |
-        LL | class NoneType:
-           |       --------
+        LL | final class NoneType:
+           |             --------
            |
         ");
     }
@@ -2126,7 +2126,7 @@ def function():
            |                     ^^^^^^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class int:
            |       ---
@@ -2162,7 +2162,7 @@ def function():
            |     ^^^^^^ Clicking here
            |
         info: Found 1 type definition
-          --> stdlib/builtins.pyi:LL:7
+          --> stdlib/builtins.byi:LL:7
            |
         LL | class int:
            |       ---

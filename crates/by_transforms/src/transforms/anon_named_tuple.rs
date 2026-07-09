@@ -207,9 +207,7 @@ impl<'src> AnonNamedTuple<'src> {
     fn active_typevar_renames(&self) -> HashMap<String, String> {
         let mut out = HashMap::new();
         for frame in &self.typevar_rename_stack {
-            for (k, v) in frame {
-                out.insert(k.clone(), v.clone());
-            }
+            out.extend(frame.clone());
         }
         out
     }

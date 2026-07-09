@@ -1,7 +1,7 @@
 ---
 source: crates/ruff/tests/cli/lint.rs
 info:
-  program: ruff
+  program: buff
   args:
     - check
     - "--no-cache"

@@ -980,10 +980,10 @@ impl<'db> Signature<'db> {
             let impl_kind = parameter_kind_tag(&impl_param.kind);
             let mut tys: Vec<Type<'db>> = Vec::new();
             for sig in overload_signatures {
-                if let Some(matched) =
-                    sig.parameters.iter().find(|p| {
-                        p.name() == Some(&name) && parameter_kind_tag(&p.kind) == impl_kind
-                    })
+                if let Some(matched) = sig
+                    .parameters
+                    .iter()
+                    .find(|p| p.name() == Some(&name) && parameter_kind_tag(&p.kind) == impl_kind)
                     && !matched.inferred_annotation
                 {
                     tys.push(matched.annotated_type);

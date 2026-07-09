@@ -35,9 +35,8 @@ use crate::place::{
     RequiresExplicitReExport, TypeOrigin, builtins_module_scope, builtins_symbol,
     class_body_implicit_symbol, explicit_global_symbol, is_basedpython_implicit_typing_name,
     loop_header_reachability, module_type_implicit_global_declaration,
-    module_type_implicit_global_symbol, place_by_id,
-    place_from_bindings_with_reachability_cache, place_from_declarations_with_reachability_cache,
-    typing_extensions_symbol, typing_symbol,
+    module_type_implicit_global_symbol, place_by_id, place_from_bindings_with_reachability_cache,
+    place_from_declarations_with_reachability_cache, typing_extensions_symbol, typing_symbol,
 };
 use crate::reachability::{ReachabilityEvaluationCache, evaluate_reachability_with_cache};
 use crate::subscript::PyIndex;

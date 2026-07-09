@@ -10,7 +10,7 @@ success: true
 exit_code: 0
 ----- stdout -----
 #api-lock:v=1
-#tool:by=0.0.0
+#tool:by=0.0.3
 #python:default
 #modules:1
 al._underscore_public:d()->None

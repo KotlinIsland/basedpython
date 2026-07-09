@@ -48,7 +48,7 @@ fn only_warnings_and_exit_zero_on_warning() -> anyhow::Result<()> {
 #[test]
 fn error_on_warning_conflicts_with_exit_zero_on_warning() -> anyhow::Result<()> {
     let case = CliTest::with_file("test.py", "")?
-        .with_filter(r"Usage: ty(?:\.exe)? check", "Usage: ty check");
+        .with_filter(r"Usage: by(?:\.exe)? check", "Usage: by check");
 
     assert_cmd_snapshot!(case.command().arg("--error-on-warning").arg("--exit-zero-on-warning"), @"
     success: false
@@ -58,7 +58,7 @@ fn error_on_warning_conflicts_with_exit_zero_on_warning() -> anyhow::Result<()> 
     ----- stderr -----
     error: the argument '--error-on-warning' cannot be used with '--exit-zero-on-warning'
 
-    Usage: ty check --error-on-warning [PATH]...
+    Usage: by check --error-on-warning [PATH]...
 
     For more information, try '--help'.
     ");

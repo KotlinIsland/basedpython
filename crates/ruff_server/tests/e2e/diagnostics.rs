@@ -33,7 +33,7 @@ fn uses_human_readable_names_in_preview() -> Result<()> {
           "severity": 2,
           "code": "unused-import",
           "codeDescription": {
-            "href": "https://docs.astral.sh/ruff/rules/unused-import"
+            "href": "https://kotlinisland.github.io/basedpython/rules/unused-import"
           },
           "source": "Ruff",
           "message": "`os` imported but unused\n\nhelp: Remove unused import: `os`",

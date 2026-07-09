@@ -228,7 +228,7 @@ error[invalid-argument-type]: Argument to function `loads` is incorrect
   |            ^ Expected `str | bytes | bytearray`, found `Literal[5]`
   |
 info: Function defined here
-   --> stdlib/json/__init__.pyi:320:9
+   --> stdlib/json/__init__.byi:320:9
     |
 320 |     def loads(
     |         ^^^^^
