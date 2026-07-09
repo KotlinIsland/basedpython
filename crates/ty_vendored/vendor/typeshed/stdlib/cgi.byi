@@ -15,7 +15,7 @@ from builtins import list as _list, type as _type
 from collections.abc import Iterable, Iterator, Mapping
 from email.message import Message
 from types import TracebackType
-from typing import IO, Any, Protocol, type_check_only
+from typing import IO, Protocol, type_check_only
 from typing_extensions import Self
 
 __all__ = [
@@ -34,7 +34,7 @@ __all__ = [
 ]
 
 def parse(
-    fp: IO[Any] | None = None,
+    fp: IO[dynamic] | None = None,
     environ: SupportsItemAccess[str, str] = os.environ,
     keep_blank_values: bool = ...,
     strict_parsing: bool = ...,
@@ -64,8 +64,8 @@ def parse(
     """
 
 def parse_multipart(
-    fp: IO[Any], pdict: SupportsGetItem[str, bytes], encoding: str = "utf-8", errors: str = "replace", separator: str = "&"
-) -> dict[str, list[Any]]:
+    fp: IO[dynamic], pdict: SupportsGetItem[str, bytes], encoding: str = "utf-8", errors: str = "replace", separator: str = "&"
+) -> dict[str, list[dynamic]]:
     """Parse multipart input.
 
     Arguments:
@@ -102,7 +102,7 @@ def test(environ: _Environ = os.environ) -> None:
 def print_environ(environ: _Environ = os.environ) -> None:
     """Dump the shell environment as HTML."""
 
-def print_form(form: dict[str, Any]) -> None:
+def print_form(form: dict[str, dynamic]) -> None:
     """Dump the contents of a form as HTML."""
 
 def print_directory() -> None:
@@ -115,17 +115,17 @@ class MiniFieldStorage:
     """Like FieldStorage, for use when no file uploads are possible."""
 
     # The first five "Any" attributes here are always None, but mypy doesn't support that
-    filename: Any
-    list: Any
-    type: Any
+    filename: dynamic
+    list: dynamic
+    type: dynamic
     file: IO[bytes] | None
-    type_options: dict[Any, Any]
-    disposition: Any
-    disposition_options: dict[Any, Any]
-    headers: dict[Any, Any]
-    name: Any
-    value: Any
-    def __init__(self, name: Any, value: Any) -> None:
+    type_options: dict[dynamic, dynamic]
+    disposition: dynamic
+    disposition_options: dict[dynamic, dynamic]
+    headers: dict[dynamic, dynamic]
+    name: dynamic
+    value: dynamic
+    def __init__(self, name: dynamic, value: dynamic) -> None:
         """Constructor from field name and value."""
 
 class FieldStorage:
@@ -191,11 +191,11 @@ class FieldStorage:
     innerboundary: bytes
     length: int
     done: int
-    list: _list[Any] | None
-    value: None | bytes | _list[Any]
+    list: _list[dynamic] | None
+    value: None | bytes | _list[dynamic]
     def __init__(
         self,
-        fp: IO[Any] | None = None,
+        fp: IO[dynamic] | None = None,
         headers: Mapping[str, str] | Message | None = None,
         outerboundary: bytes = b"",
         environ: SupportsContainsAndGetItem[str, str] = os.environ,
@@ -254,16 +254,16 @@ class FieldStorage:
     def __enter__(self) -> Self
     def __exit__(self, *args: Unused) -> None
     def __iter__(self) -> Iterator[str]
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key: str) -> dynamic:
         """Dictionary style indexing."""
 
-    def getvalue(self, key: str, default: Any = None) -> Any:
+    def getvalue(self, key: str, default: dynamic = None) -> dynamic:
         """Dictionary style get() method, including 'value' lookup."""
 
-    def getfirst(self, key: str, default: Any = None) -> Any:
+    def getfirst(self, key: str, default: dynamic = None) -> dynamic:
         """Return the first value received."""
 
-    def getlist(self, key: str) -> _list[Any]:
+    def getlist(self, key: str) -> _list[dynamic]:
         """Return list of received values."""
 
     def keys(self) -> _list[str]:
@@ -278,7 +278,7 @@ class FieldStorage:
     def __bool__(self) -> bool
     def __del__(self) -> None
     # Returns bytes or str IO depending on an internal flag
-    def make_file(self) -> IO[Any]:
+    def make_file(self) -> IO[dynamic]:
         """Overridable: return a readable & writable file.
 
         The file will be used as follows:

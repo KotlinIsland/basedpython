@@ -99,7 +99,7 @@ fn isinstance_call(lhs: Expr, rhs: Expr, negate: bool) -> Expr {
             node_index: AtomicNodeIndex::NONE,
             range: TextRange::default(),
             args: Box::new([lhs, rhs]),
-            keywords: Box::new([]),
+            keywords: thin_vec::ThinVec::new(),
         },
         is_cast: false,
         is_string_tag: false,

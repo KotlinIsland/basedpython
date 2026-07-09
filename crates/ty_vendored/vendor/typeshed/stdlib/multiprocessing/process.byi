@@ -1,6 +1,5 @@
 import sys
 from collections.abc import Iterable, Mapping
-from typing import Any
 
 __all__ = ["BaseProcess", "current_process", "active_children", "parent_process"]
 
@@ -24,8 +23,8 @@ class BaseProcess:
         group: None = None,
         target: (...) -> object | None = None,
         name: str | None = None,
-        args: Iterable[Any] = (),
-        kwargs: Mapping[str, Any] = {},
+        args: Iterable[dynamic] = (),
+        kwargs: Mapping[str, dynamic] = {},
         *,
         daemon: bool | None = None,
     ) -> None
@@ -38,6 +37,7 @@ class BaseProcess:
         """
         Start child process
         """
+
     if sys.version_info >= (3, 14):
         def interrupt(self) -> None:
             """

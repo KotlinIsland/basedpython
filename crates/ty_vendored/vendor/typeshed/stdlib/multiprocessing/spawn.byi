@@ -1,6 +1,6 @@
 from collections.abc import Mapping, Sequence
 from types import ModuleType
-from typing import Any, Final
+from typing import Final
 
 __all__ = [
     "_main",
@@ -27,7 +27,7 @@ def freeze_support() -> None:
     Run code for process object if this in not the main process
     """
 
-def get_command_line(**kwds: Any) -> list[str]:
+def get_command_line(**kwds: dynamic) -> list[str]:
     """
     Returns prefix of command line used for spawning a child process
     """
@@ -39,14 +39,14 @@ def spawn_main(pipe_handle: int, parent_pid: int | None = None, tracker_fd: int 
 
 # undocumented
 def _main(fd: int, parent_sentinel: int) -> int
-def get_preparation_data(name: str) -> dict[str, Any]:
+def get_preparation_data(name: str) -> dict[str, dynamic]:
     """
     Return info about parent needed by child to unpickle process object
     """
 
 old_main_modules: list[ModuleType]
 
-def prepare(data: Mapping[str, Any]) -> None:
+def prepare(data: Mapping[str, dynamic]) -> None:
     """
     Try to get current process ready to unpickle process object
     """

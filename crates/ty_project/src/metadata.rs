@@ -1,7 +1,9 @@
+use compact_str::CompactString;
 use configuration_file::{ConfigurationFile, ConfigurationFileError};
+use ruff_db::files::FileRootKind;
 use ruff_db::system::{System, SystemPath, SystemPathBuf};
 use ruff_db::vendored::VendoredFileSystem;
-use ruff_python_ast::name::Name;
+use ruff_ranged_value::ValueSource;
 use std::sync::Arc;
 use thiserror::Error;
 use ty_combine::Combine;
@@ -12,7 +14,6 @@ use crate::metadata::options::ProjectOptionsOverrides;
 use crate::metadata::options::{OptionDiagnostic, ProgramSettingsDiagnostic, ToSettingsError};
 use crate::metadata::pyproject::{Project, PyProject, PyProjectError, ResolveRequiresPythonError};
 use crate::metadata::settings::Settings;
-use crate::metadata::value::ValueSource;
 pub use options::Options;
 use options::TyTomlError;
 
@@ -23,10 +24,10 @@ pub mod python_version;
 pub mod settings;
 pub mod value;
 
-#[derive(Debug, PartialEq, Eq, get_size2::GetSize)]
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
 #[cfg_attr(test, derive(serde::Serialize))]
 pub struct ProjectMetadata {
-    pub(super) name: Name,
+    name: ProjectName,
 
     pub(super) root: SystemPathBuf,
 
@@ -45,9 +46,9 @@ pub struct ProjectMetadata {
 
 impl ProjectMetadata {
     /// Creates a project with the given name and root that uses the default options.
-    pub fn new(name: Name, root: SystemPathBuf) -> Self {
+    pub fn new(name: impl AsRef<str>, root: SystemPathBuf) -> Self {
         Self {
-            name,
+            name: ProjectName::new(name),
             root,
             extra_configuration_paths: Vec::default(),
             options: Options::default(),
@@ -71,7 +72,7 @@ impl ProjectMetadata {
         let options = config_file.into_options();
 
         Ok(Self {
-            name: Name::new(root.file_name().unwrap_or("root")),
+            name: ProjectName::new(root.file_name().unwrap_or("root")),
             root: root.to_path_buf(),
             options,
             extra_configuration_paths: vec![path],
@@ -100,8 +101,8 @@ impl ProjectMetadata {
     ) -> Result<Self, Strategy::Error<ResolveRequiresPythonError>> {
         let name = project
             .and_then(|project| project.name.as_deref())
-            .map(|name| Name::new(&**name))
-            .unwrap_or_else(|| Name::new(root.file_name().unwrap_or("root")));
+            .map(|name| ProjectName::new(&**name))
+            .unwrap_or_else(|| ProjectName::new(root.file_name().unwrap_or("root")));
 
         // If the `options` don't specify a python version but the `project.requires-python` field is set,
         // use that as a lower bound instead.
@@ -257,10 +258,7 @@ impl ProjectMetadata {
             );
 
             // Create a project with a default configuration
-            Self::new(
-                path.file_name().unwrap_or("root").into(),
-                path.to_path_buf(),
-            )
+            Self::new(path.file_name().unwrap_or("root"), path.to_path_buf())
         };
 
         Ok(metadata)
@@ -271,7 +269,7 @@ impl ProjectMetadata {
     }
 
     pub fn name(&self) -> &str {
-        &self.name
+        self.name.as_str()
     }
 
     pub fn options(&self) -> &Options {
@@ -280,6 +278,15 @@ impl ProjectMetadata {
 
     pub fn extra_configuration_paths(&self) -> &[SystemPathBuf] {
         &self.extra_configuration_paths
+    }
+
+    pub(crate) fn try_add_project_root(&self, db: &dyn Db) {
+        // This adds a file root for the project itself. This enables
+        // tracking of when changes are made to the files in a project
+        // at the directory level. At time of writing (2025-07-17),
+        // this is used for caching completions for submodules.
+        db.files()
+            .try_add_root(db, self.root(), FileRootKind::Project);
     }
 
     pub fn to_program_settings<Strategy: MisconfigurationStrategy>(
@@ -338,30 +345,44 @@ impl ProjectMetadata {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+#[cfg_attr(test, derive(serde::Serialize))]
+struct ProjectName(CompactString);
+
+impl ProjectName {
+    fn new(name: impl AsRef<str>) -> Self {
+        Self(CompactString::new(name))
+    }
+
+    fn as_str(&self) -> &str {
+        self.0.as_str()
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum ProjectMetadataError {
     #[error("project path '{0}' is not a directory")]
     NotADirectory(SystemPathBuf),
 
-    #[error("{path} is not a valid `pyproject.toml`: {source}")]
+    #[error("{path} is not a valid `pyproject.toml`")]
     InvalidPyProject {
         source: Box<PyProjectError>,
         path: SystemPathBuf,
     },
 
-    #[error("{path} is not a valid `ty.toml`: {source}")]
+    #[error("{path} is not a valid `ty.toml`")]
     InvalidTyToml {
         source: Box<TyTomlError>,
         path: SystemPathBuf,
     },
 
-    #[error("Invalid `requires-python` version specifier (`{path}`): {source}")]
+    #[error("Invalid `requires-python` version specifier (`{path}`)")]
     InvalidRequiresPythonConstraint {
         source: ResolveRequiresPythonError,
         path: SystemPathBuf,
     },
 
-    #[error("Error loading configuration file at {path}: {source}")]
+    #[error("Error loading configuration file at {path}")]
     ConfigurationFileError {
         source: Box<ConfigurationFileError>,
         path: SystemPathBuf,
@@ -397,7 +418,7 @@ mod tests {
         with_escaped_paths(|| {
             assert_ron_snapshot!(&project, @r#"
             ProjectMetadata(
-              name: Name("app"),
+              name: ProjectName("app"),
               root: "/app",
               options: Options(),
             )
@@ -435,7 +456,7 @@ mod tests {
         with_escaped_paths(|| {
             assert_ron_snapshot!(&project, @r#"
             ProjectMetadata(
-              name: Name("backend"),
+              name: ProjectName("backend"),
               root: "/app",
               options: Options(),
             )
@@ -478,8 +499,8 @@ mod tests {
             ));
         };
 
-        assert_error_eq(
-            &error,
+        assert_error_chain_eq(
+            error,
             r#"/app/pyproject.toml is not a valid `pyproject.toml`: TOML parse error at line 5, column 29
   |
 5 |                     [tool.ty
@@ -527,7 +548,7 @@ unclosed table, expected `]`
         with_escaped_paths(|| {
             assert_ron_snapshot!(sub_project, @r#"
             ProjectMetadata(
-              name: Name("nested-project"),
+              name: ProjectName("nested-project"),
               root: "/app/packages/a",
               options: Options(
                 src: Some(SrcOptions(
@@ -577,7 +598,7 @@ unclosed table, expected `]`
         with_escaped_paths(|| {
             assert_ron_snapshot!(root, @r#"
             ProjectMetadata(
-              name: Name("project-root"),
+              name: ProjectName("project-root"),
               root: "/app",
               options: Options(
                 src: Some(SrcOptions(
@@ -621,7 +642,7 @@ unclosed table, expected `]`
         with_escaped_paths(|| {
             assert_ron_snapshot!(sub_project, @r#"
             ProjectMetadata(
-              name: Name("nested-project"),
+              name: ProjectName("nested-project"),
               root: "/app/packages/a",
               options: Options(),
             )
@@ -664,7 +685,7 @@ unclosed table, expected `]`
         with_escaped_paths(|| {
             assert_ron_snapshot!(root, @r#"
             ProjectMetadata(
-              name: Name("project-root"),
+              name: ProjectName("project-root"),
               root: "/app",
               options: Options(
                 environment: Some(EnvironmentOptions(
@@ -716,7 +737,7 @@ unclosed table, expected `]`
         with_escaped_paths(|| {
             assert_ron_snapshot!(root, @r#"
             ProjectMetadata(
-              name: Name("super-app"),
+              name: ProjectName("super-app"),
               root: "/app",
               options: Options(
                 environment: Some(EnvironmentOptions(
@@ -954,8 +975,8 @@ unclosed table, expected `]`
             ));
         };
 
-        assert_error_eq(
-            &error,
+        assert_error_chain_eq(
+            error,
             "Invalid `requires-python` version specifier (`/app/pyproject.toml`): value `<3.12` does not contain a lower bound. Add a lower bound to indicate the minimum compatible Python version (e.g., `>=3.13`) or specify a version in `environment.python-version`.",
         );
 
@@ -984,8 +1005,8 @@ unclosed table, expected `]`
             ));
         };
 
-        assert_error_eq(
-            &error,
+        assert_error_chain_eq(
+            error,
             "Invalid `requires-python` version specifier (`/app/pyproject.toml`): value `` does not contain a lower bound. Add a lower bound to indicate the minimum compatible Python version (e.g., `>=3.13`) or specify a version in `environment.python-version`.",
         );
 
@@ -1014,8 +1035,8 @@ unclosed table, expected `]`
             ));
         };
 
-        assert_error_eq(
-            &error,
+        assert_error_chain_eq(
+            error,
             "Invalid `requires-python` version specifier (`/app/pyproject.toml`): The major version `999` is larger than the maximum supported value 255",
         );
 
@@ -1076,8 +1097,8 @@ unclosed table, expected `]`
             ));
         };
 
-        assert_error_eq(
-            &error,
+        assert_error_chain_eq(
+            error,
             "Invalid `requires-python` version specifier (`/app/pyproject.toml`): value `==44.44` does not include any Python version supported by ty. Adjust `requires-python` to include a supported Python 3 version or specify `environment.python-version` explicitly.",
         );
 
@@ -1085,8 +1106,9 @@ unclosed table, expected `]`
     }
 
     #[track_caller]
-    fn assert_error_eq(error: &ProjectMetadataError, message: &str) {
-        assert_eq!(error.to_string().replace('\\', "/"), message);
+    fn assert_error_chain_eq(error: ProjectMetadataError, message: &str) {
+        let error = anyhow::Error::new(error);
+        assert_eq!(format!("{error:#}").replace('\\', "/"), message);
     }
 
     fn with_escaped_paths<R>(f: impl FnOnce() -> R) -> R {

@@ -10,6 +10,9 @@ Exceptions:
 
 Functions:
 
+  get_sigalgs          -- return a list of all available TLS signature
+                          algorithms (requires OpenSSL 3.4 or later)
+
   cert_time_to_seconds -- convert time string used for certificate
                           notBefore and notAfter functions to integer
                           seconds past the Epoch (the time values
@@ -117,7 +120,7 @@ from _ssl import (
 )
 from _typeshed import ReadableBuffer, StrOrBytesPath, WriteableBuffer
 from collections.abc import Callable, Iterable
-from typing import Any, Final, Literal, NamedTuple, TypeAlias, TypedDict, type_check_only
+from typing import Final, Literal, NamedTuple, TypeAlias, TypedDict, type_check_only
 from typing_extensions import Never, Self, deprecated
 
 if sys.version_info >= (3, 13):
@@ -408,7 +411,7 @@ class SSLSocket(socket.socket):
     def session_reused(self) -> bool | None:
         """Was the client session reused during handshake"""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None
+    def __init__(self, *args: dynamic, **kwargs: dynamic) -> None
     def connect(self, addr: socket._Address) -> None:
         """Connects to remote ADDR, and then wraps the connection in
         an SSL channel.
@@ -471,10 +474,16 @@ class SSLSocket(socket.socket):
         """Return the current compression algorithm in use, or ``None`` if
         compression was not negotiated or not supported by one of the peers.
         """
+
     if sys.version_info >= (3, 15):
-        def group(self) -> str | None
-        def client_sigalg(self) -> str | None
-        def server_sigalg(self) -> str | None
+        def group(self) -> str | None:
+            """Return the currently selected key agreement group name."""
+
+        def client_sigalg(self) -> str | None:
+            """Return the selected client authentication signature algorithm."""
+
+        def server_sigalg(self) -> str | None:
+            """Return the selected server handshake signature algorithm."""
 
     def get_channel_binding(self, cb_type: str = "tls-unique") -> bytes | None:
         """Get channel binding data for current connection.  Raise ValueError
@@ -625,9 +634,9 @@ class SSLContext(_SSLContext):
     security_level: int
     """The current security level."""
 
-    def __new__(cls, protocol: int, *args: Any, **kwargs: Any) -> Self
+    def __new__(cls, protocol: int, *args: dynamic, **kwargs: dynamic) -> Self
     @deprecated("Deprecated since Python 3.10. Use a specific version of the SSL protocol.")
-    def __new__(cls, protocol: None = None, *args: Any, **kwargs: Any) -> Self
+    def __new__(cls, protocol: None = None, *args: dynamic, **kwargs: dynamic) -> Self
 
     def load_default_certs(self, purpose: Purpose = Purpose.SERVER_AUTH) -> None
     def load_verify_locations(
@@ -640,14 +649,14 @@ class SSLContext(_SSLContext):
     def get_ca_certs(self, binary_form: Literal[False] = False) -> list[_PeerCertRetDictType]:
         """Returns a list of dicts with information of loaded CA certs.
 
-        If the optional argument is True, returns a DER-encoded copy of the CA
-        certificate.
+        If the optional argument is True, returns a DER-encoded copy of the
+        CA certificate.
 
-        NOTE: Certificates in a capath directory aren't loaded unless they have
-        been used at least once.
+        NOTE: Certificates in a capath directory aren't loaded unless they
+        have been used at least once.
         """
     def get_ca_certs(self, binary_form: Literal[True]) -> list[bytes]
-    def get_ca_certs(self, binary_form: bool = False) -> Any
+    def get_ca_certs(self, binary_form: bool = False) -> dynamic
 
     def get_ciphers(self) -> list[_Cipher]
     if sys.version_info >= (3, 15):
@@ -747,6 +756,7 @@ class SSLObject:
         """The currently set server hostname (for SNI), or ``None`` if no
         server hostname is set.
         """
+
     session: SSLSession | None
     """The SSLSession for client socket."""
 
@@ -754,7 +764,7 @@ class SSLObject:
     def session_reused(self) -> bool:
         """Was the client session reused during handshake"""
 
-    def __init__(self, *args: Any, **kwargs: Any) -> None
+    def __init__(self, *args: dynamic, **kwargs: dynamic) -> None
     def read(self, len: int = 1024, buffer: WriteableBuffer | None = None) -> bytes:
         """Read up to 'len' bytes from the SSL object and return them.
 
@@ -806,10 +816,16 @@ class SSLObject:
         """Return the current compression algorithm in use, or ``None`` if
         compression was not negotiated or not supported by one of the peers.
         """
+
     if sys.version_info >= (3, 15):
-        def group(self) -> str | None
-        def client_sigalg(self) -> str | None
-        def server_sigalg(self) -> str | None
+        def group(self) -> str | None:
+            """Return the currently selected key agreement group name."""
+
+        def client_sigalg(self) -> str | None:
+            """Return the selected client authentication signature algorithm."""
+
+        def server_sigalg(self) -> str | None:
+            """Return the selected server handshake signature algorithm."""
 
     def pending(self) -> int:
         """Return the number of bytes that can be read immediately."""

@@ -26,14 +26,14 @@ class ABCMeta(type):
     __abstractmethods__: frozenset[str]
     if sys.version_info >= (3, 11):
         def __new__(
-            mcls: type[_typeshed.Self], name: str, bases: (*: type), namespace: dict[str, Any], /, **kwargs: Any
+            mcls: type[_typeshed.Self], name: str, bases: (*: type), namespace: dict[str, dynamic], /, **kwargs: dynamic
         ) -> _typeshed.Self
     else:
         def __new__(
-            mcls: type[_typeshed.Self], name: str, bases: (*: type), namespace: dict[str, Any], **kwargs: Any
+            mcls: type[_typeshed.Self], name: str, bases: (*: type), namespace: dict[str, dynamic], **kwargs: dynamic
         ) -> _typeshed.Self
 
-    def __instancecheck__(cls: ABCMeta, instance: Any, /) -> bool:
+    def __instancecheck__(cls: ABCMeta, instance: dynamic, /) -> bool:
         """Override for isinstance(instance, cls)."""
 
     def __subclasscheck__(cls: ABCMeta, subclass: type, /) -> bool:
@@ -126,9 +126,9 @@ class ABC(metaclass=ABCMeta):
 def get_cache_token() -> object:
     """Returns the current ABC cache token.
 
-    The token is an opaque object (supporting equality testing) identifying the
-    current version of the ABC cache for virtual subclasses. The token changes
-    with every call to register() on any ABC.
+    The token is an opaque object (supporting equality testing) identifying
+    the current version of the ABC cache for virtual subclasses.  The token
+    changes with every call to register() on any ABC.
     """
 
 def update_abstractmethods[Element](cls: type[Element]) -> type[Element]:

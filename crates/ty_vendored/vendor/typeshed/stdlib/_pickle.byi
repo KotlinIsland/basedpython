@@ -22,7 +22,7 @@ _ReducedType: TypeAlias = (
 )
 
 def dump(
-    obj: Any,
+    obj: dynamic,
     file: SupportsWrite[bytes],
     protocol: int | None = None,
     *,
@@ -57,7 +57,7 @@ def dump(
     *buffer_callback* is not None and *protocol* is None or smaller than 5.
     """
 
-def dumps(obj: Any, protocol: int | None = None, *, fix_imports: bool = True, buffer_callback: _BufferCallback = None) -> bytes:
+def dumps(obj: dynamic, protocol: int | None = None, *, fix_imports: bool = True, buffer_callback: _BufferCallback = None) -> bytes:
     """Return the pickled representation of the object as a bytes object.
 
     The optional *protocol* argument tells the pickler to use the given
@@ -84,8 +84,8 @@ def load(
     fix_imports: bool = True,
     encoding: str = "ASCII",
     errors: str = "strict",
-    buffers: Iterable[Any] | None = (),
-) -> Any:
+    buffers: Iterable[dynamic] | None = (),
+) -> dynamic:
     """Read and return an object from the pickle data stored in a file.
 
     This is equivalent to ``Unpickler(file).load()``, but may be more
@@ -118,8 +118,8 @@ def loads(
     fix_imports: bool = True,
     encoding: str = "ASCII",
     errors: str = "strict",
-    buffers: Iterable[Any] | None = (),
-) -> Any:
+    buffers: Iterable[dynamic] | None = (),
+) -> dynamic:
     """Read and return an object from the given pickle data.
 
     The protocol version of the pickle is detected automatically, so no
@@ -180,7 +180,7 @@ class Pickler:
     """
 
     fast: bool
-    dispatch_table: Mapping[type, Callable[[Any], _ReducedType]]
+    dispatch_table: Mapping[type, Callable[[dynamic], _ReducedType]]
     bin: bool  # undocumented
     def __init__(
         self,
@@ -195,7 +195,7 @@ class Pickler:
     @memo.setter
     def memo(self, value: PicklerMemoProxy | dict[int, (int, Any)]) -> None: ...
 
-    def dump(self, obj: Any, /) -> None:
+    def dump(self, obj: dynamic, /) -> None:
         """Write a pickled representation of the given object to the open file."""
 
     def clear_memo(self) -> None:
@@ -206,8 +206,9 @@ class Pickler:
         pickled by reference and not by value.  This method is useful when
         re-using picklers.
         """
+
     # this method has no default implementation for Python < 3.13
-    def persistent_id(self, obj: Any, /) -> Any
+    def persistent_id(self, obj: dynamic, /) -> dynamic
     # The following method is not defined on _Pickler, but can be defined on
     # sub-classes. Should return `NotImplemented` if pickling the supplied
     # object is not supported and returns the same types as `__reduce__()`.
@@ -249,7 +250,7 @@ class Unpickler:
         fix_imports: bool = True,
         encoding: str = "ASCII",
         errors: str = "strict",
-        buffers: Iterable[Any] | None = (),
+        buffers: Iterable[dynamic] | None = (),
     ) -> None
 
     @property
@@ -257,7 +258,7 @@ class Unpickler:
     @memo.setter
     def memo(self, value: UnpicklerMemoProxy | dict[int, (int, Any)]) -> None: ...
 
-    def load(self) -> Any:
+    def load(self) -> dynamic:
         """Load a pickle.
 
         Read a pickled object representation from the open file object given
@@ -265,7 +266,7 @@ class Unpickler:
         specified therein.
         """
 
-    def find_class(self, module_name: str, global_name: str, /) -> Any:
+    def find_class(self, module_name: str, global_name: str, /) -> dynamic:
         """Return an object from a specified module.
 
         If necessary, the module will be imported. Subclasses may override
@@ -275,5 +276,6 @@ class Unpickler:
         This method is called whenever a class or a function object is
         needed.  Both arguments passed are str objects.
         """
+
     # this method has no default implementation for Python < 3.13
-    def persistent_load(self, pid: Any, /) -> Any
+    def persistent_load(self, pid: dynamic, /) -> dynamic

@@ -57,6 +57,7 @@ class BaseContext:
         The managers methods such as `Lock()`, `Condition()` and `Queue()`
         can be used to create shared objects.
         """
+
     # N.B. Keep this in sync with multiprocessing.connection.Pipe.
     # _ConnectionBase is the common base class of Connection and PipeConnection
     # and can be used in cross-platform code.
@@ -66,6 +67,7 @@ class BaseContext:
     if sys.platform != "win32":
         def Pipe(self, duplex: bool = True) -> (Connection[Any, Any], Connection[Any, Any]):
             """Returns two connection object connected by a pipe"""
+
     else:
         def Pipe(self, duplex: bool = True) -> (PipeConnection[Any, Any], PipeConnection[Any, Any]):
             """Returns two connection object connected by a pipe"""
@@ -93,61 +95,61 @@ class BaseContext:
     def Semaphore(self, value: int = 1) -> synchronize.Semaphore:
         """Returns a semaphore object"""
 
-    def Queue(self, maxsize: int = 0) -> queues.Queue[Any]:
+    def Queue(self, maxsize: int = 0) -> queues.Queue[dynamic]:
         """Returns a queue object"""
 
-    def JoinableQueue(self, maxsize: int = 0) -> queues.JoinableQueue[Any]:
+    def JoinableQueue(self, maxsize: int = 0) -> queues.JoinableQueue[dynamic]:
         """Returns a queue object"""
 
-    def SimpleQueue(self) -> queues.SimpleQueue[Any]:
+    def SimpleQueue(self) -> queues.SimpleQueue[dynamic]:
         """Returns a queue object"""
 
     def Pool(
         self,
         processes: int | None = None,
         initializer: (...) -> object | None = None,
-        initargs: Iterable[Any] = (),
+        initargs: Iterable[dynamic] = (),
         maxtasksperchild: int | None = None,
     ) -> _Pool:
         """Returns a process pool object"""
 
-    def RawValue[CT: _CData](self, typecode_or_type: type[CT], *args: Any) -> CT:
+    def RawValue[CT: _CData](self, typecode_or_type: type[CT], *args: dynamic) -> CT:
         """Returns a shared object"""
-    def RawValue(self, typecode_or_type: str, *args: Any) -> Any
+    def RawValue(self, typecode_or_type: str, *args: dynamic) -> dynamic
 
-    def RawArray[CT: _CData](self, typecode_or_type: type[CT], size_or_initializer: int | Sequence[Any]) -> ctypes.Array[CT]:
+    def RawArray[CT: _CData](self, typecode_or_type: type[CT], size_or_initializer: int | Sequence[dynamic]) -> ctypes.Array[CT]:
         """Returns a shared array"""
-    def RawArray(self, typecode_or_type: str, size_or_initializer: int | Sequence[Any]) -> Any
+    def RawArray(self, typecode_or_type: str, size_or_initializer: int | Sequence[dynamic]) -> dynamic
 
     def Value[Element](
-        self, typecode_or_type: type[_SimpleCData[Element]], *args: Any, lock: Literal[True] | _LockLike = True
+        self, typecode_or_type: type[_SimpleCData[Element]], *args: dynamic, lock: Literal[True] | _LockLike = True
     ) -> Synchronized[Element]:
         """Returns a synchronized shared object"""
-    def Value[CT: _CData](self, typecode_or_type: type[CT], *args: Any, lock: Literal[False]) -> Synchronized[CT]
-    def Value[CT: _CData](self, typecode_or_type: type[CT], *args: Any, lock: Literal[True] | _LockLike = True) -> Synchronized[CT]
-    def Value(self, typecode_or_type: str, *args: Any, lock: Literal[True] | _LockLike = True) -> Synchronized[Any]
-    def Value(self, typecode_or_type: str | type[_CData], *args: Any, lock: bool | _LockLike = True) -> Any
+    def Value[CT: _CData](self, typecode_or_type: type[CT], *args: dynamic, lock: Literal[False]) -> Synchronized[CT]
+    def Value[CT: _CData](self, typecode_or_type: type[CT], *args: dynamic, lock: Literal[True] | _LockLike = True) -> Synchronized[CT]
+    def Value(self, typecode_or_type: str, *args: dynamic, lock: Literal[True] | _LockLike = True) -> Synchronized[dynamic]
+    def Value(self, typecode_or_type: str | type[_CData], *args: dynamic, lock: bool | _LockLike = True) -> dynamic
 
     def Array[Element](
-        self, typecode_or_type: type[_SimpleCData[Element]], size_or_initializer: int | Sequence[Any], *, lock: Literal[False]
+        self, typecode_or_type: type[_SimpleCData[Element]], size_or_initializer: int | Sequence[dynamic], *, lock: Literal[False]
     ) -> SynchronizedArray[Element]:
         """Returns a synchronized shared array"""
     def Array(
-        self, typecode_or_type: type[c_char], size_or_initializer: int | Sequence[Any], *, lock: Literal[True] | _LockLike = True
+        self, typecode_or_type: type[c_char], size_or_initializer: int | Sequence[dynamic], *, lock: Literal[True] | _LockLike = True
     ) -> SynchronizedString
     def Array[Element](
         self,
         typecode_or_type: type[_SimpleCData[Element]],
-        size_or_initializer: int | Sequence[Any],
+        size_or_initializer: int | Sequence[dynamic],
         *,
         lock: Literal[True] | _LockLike = True,
     ) -> SynchronizedArray[Element]
     def Array(
-        self, typecode_or_type: str, size_or_initializer: int | Sequence[Any], *, lock: Literal[True] | _LockLike = True
-    ) -> SynchronizedArray[Any]
+        self, typecode_or_type: str, size_or_initializer: int | Sequence[dynamic], *, lock: Literal[True] | _LockLike = True
+    ) -> SynchronizedArray[dynamic]
     def Array(
-        self, typecode_or_type: str | type[_CData], size_or_initializer: int | Sequence[Any], *, lock: bool | _LockLike = True
-    ) -> Any
+        self, typecode_or_type: str | type[_CData], size_or_initializer: int | Sequence[dynamic], *, lock: bool | _LockLike = True
+    ) -> dynamic
 
     def freeze_support(self) -> None:
         """Check whether this is a fake forked process in a frozen executable.
@@ -172,10 +174,18 @@ class BaseContext:
         child processes instead of sys.executable when using the 'spawn'
         start method.  Useful for people embedding Python.
         """
+
     if sys.version_info >= (3, 15):
         def set_forkserver_preload(
             self, module_names: list[str], *, on_error: Literal["ignore", "warn", "fail"] = "ignore"
-        ) -> None
+        ) -> None:
+            """Set list of module names to try to load in forkserver process.
+
+            The on_error parameter controls how import failures are handled:
+            "ignore" (default) silently ignores failures, "warn" emits warnings,
+            and "fail" raises exceptions breaking the forkserver context.
+            """
+
     else:
         def set_forkserver_preload(self, module_names: list[str]) -> None:
             """Set list of module names to try to load in forkserver process.
@@ -256,4 +266,4 @@ else:
     def get_spawning_popen() -> popen_spawn_win32.Popen | None
     def set_spawning_popen(popen: popen_spawn_win32.Popen | None) -> None
 
-def assert_spawning(obj: Any) -> None
+def assert_spawning(obj: dynamic) -> None

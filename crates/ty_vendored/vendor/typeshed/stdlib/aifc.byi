@@ -135,7 +135,7 @@ writeframesraw.
 """
 
 from types import TracebackType
-from typing import IO, Any, Literal, NamedTuple, TypeAlias
+from typing import IO, Literal, NamedTuple, TypeAlias
 from typing_extensions import Self
 
 __all__ = ["Error", "open"]
@@ -205,10 +205,10 @@ class Aifc_write:
     def getmark(self, id: int) -> _Marker
     def getmarkers(self) -> list[_Marker] | None
     def tell(self) -> int
-    def writeframesraw(self, data: Any) -> None  # Actual type for data is Buffer Protocol
-    def writeframes(self, data: Any) -> None
+    def writeframesraw(self, data: dynamic) -> None  # Actual type for data is Buffer Protocol
+    def writeframes(self, data: dynamic) -> None
     def close(self) -> None
 
 def open(f: _File, mode: Literal["r", "rb"]) -> Aifc_read
 def open(f: _File, mode: Literal["w", "wb"]) -> Aifc_write
-def open(f: _File, mode: str | None = None) -> Any
+def open(f: _File, mode: str | None = None) -> dynamic

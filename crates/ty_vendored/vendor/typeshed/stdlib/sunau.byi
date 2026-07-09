@@ -104,7 +104,7 @@ is destroyed.
 """
 
 from _typeshed import Unused
-from typing import IO, Any, Final, Literal, NamedTuple, NoReturn, TypeAlias
+from typing import IO, Final, Literal, NamedTuple, NoReturn, TypeAlias
 from typing_extensions import Self
 
 _File: TypeAlias = str | IO[bytes]
@@ -153,7 +153,7 @@ class Au_read:
     def getcompname(self) -> str
     def getparams(self) -> _sunau_params
     def getmarkers(self) -> None
-    def getmark(self, id: Any) -> NoReturn
+    def getmark(self, id: dynamic) -> NoReturn
     def setpos(self, pos: int) -> None
     def readframes(self, nframes: int) -> bytes | None
 
@@ -183,4 +183,4 @@ class Au_write:
 
 def open(f: _File, mode: Literal["r", "rb"]) -> Au_read
 def open(f: _File, mode: Literal["w", "wb"]) -> Au_write
-def open(f: _File, mode: str | None = None) -> Any
+def open(f: _File, mode: str | None = None) -> dynamic

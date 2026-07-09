@@ -6,7 +6,7 @@ hexbin(inputfilename, outputfilename)
 """
 
 from _typeshed import SizedBuffer
-from typing import IO, Any, Final, TypeAlias
+from typing import IO, Final, TypeAlias
 
 __all__ = ["binhex", "hexbin", "Error"]
 
@@ -27,9 +27,9 @@ _FileHandleUnion: TypeAlias = str | IO[bytes]
 def getfileinfo(name: str) -> _FileInfoTuple
 
 class openrsrc:
-    def __init__(self, *args: Any) -> None
-    def read(self, *args: Any) -> bytes
-    def write(self, *args: Any) -> None
+    def __init__(self, *args: dynamic) -> None
+    def read(self, *args: dynamic) -> bytes
+    def write(self, *args: dynamic) -> None
     def close(self) -> None
 
 class BinHex:

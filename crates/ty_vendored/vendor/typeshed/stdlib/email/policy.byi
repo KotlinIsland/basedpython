@@ -124,7 +124,7 @@ class EmailPolicy(Policy[_MessageT]):
 
     utf8: bool
     refold_source: str
-    header_factory: Callable[[str, Any], Any]
+    header_factory: Callable[[str, dynamic], dynamic]
     content_manager: ContentManager
 
     def __init__(
@@ -174,7 +174,7 @@ class EmailPolicy(Policy[_MessageT]):
 
         """
 
-    def header_store_parse(self, name: str, value: Any) -> (str, Any):
+    def header_store_parse(self, name: str, value: dynamic) -> (str, Any):
         """Given the header name and the value provided by the application
         program, return the (name, value) that should be stored in the model.
         The name is returned unchanged.  If the input value has a 'name'
@@ -186,7 +186,7 @@ class EmailPolicy(Policy[_MessageT]):
 
         """
 
-    def header_fetch_parse(self, name: str, value: str) -> Any:
+    def header_fetch_parse(self, name: str, value: str) -> dynamic:
         """Given the header name and the value from the model, return the value
         to be returned to the application program that is requesting that
         header.  The value passed in by the email package may contain
@@ -201,7 +201,7 @@ class EmailPolicy(Policy[_MessageT]):
 
         """
 
-    def fold(self, name: str, value: str) -> Any:
+    def fold(self, name: str, value: str) -> dynamic:
         """Given the header name and the value from the model, return a string
         containing linesep characters that implement the folding of the header
         according to the policy controls.  The value passed in by the email

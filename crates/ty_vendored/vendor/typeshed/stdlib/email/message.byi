@@ -47,11 +47,11 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
 
     # The policy attributes and arguments in this class and its subclasses
     # would ideally use Policy[Self], but this is not possible.
-    policy: Policy[Any]  # undocumented
+    policy: Policy[dynamic]  # undocumented
     preamble: str | None
     epilogue: str | None
     defects: list[MessageDefect]
-    def __init__(self, policy: Policy[Any] = ...) -> None
+    def __init__(self, policy: Policy[dynamic] = ...) -> None
     def is_multipart(self) -> bool:
         """Return True if the message consists of multiple parts."""
 
@@ -415,7 +415,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         according to the rfc2183.
         """
 
-    def as_string(self, unixfrom: bool = False, maxheaderlen: int = 0, policy: Policy[Any] | None = None) -> str:
+    def as_string(self, unixfrom: bool = False, maxheaderlen: int = 0, policy: Policy[dynamic] | None = None) -> str:
         """Return the entire formatted message as a string.
 
         Optional 'unixfrom', when true, means include the Unix From_ envelope
@@ -430,7 +430,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         unicode "unknown character" code points.
         """
 
-    def as_bytes(self, unixfrom: bool = False, policy: Policy[Any] | None = None) -> bytes:
+    def as_bytes(self, unixfrom: bool = False, policy: Policy[dynamic] | None = None) -> bytes:
         """Return the entire formatted message as a bytes object.
 
         Optional 'unixfrom', when true, means include the Unix From_ envelope
@@ -468,6 +468,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         2231.  Optional language specifies the RFC 2231 language, defaulting
         to the empty string.  Both charset and language should be strings.
         """
+
     # The following two methods are undocumented, but a source code comment states that they are public API
     def set_raw(self, name: str, value: HeaderParamT) -> None:
         """Store name and value in the model without modification.
@@ -482,7 +483,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         """
 
 class MIMEPart[out HeaderRegistryT = Any, in HeaderRegistryParamT = Any](Message[HeaderRegistryT, HeaderRegistryParamT]):
-    def __init__(self, policy: Policy[Any] | None = None) -> None
+    def __init__(self, policy: Policy[dynamic] | None = None) -> None
     def get_body(
         self, preferencelist: Sequence[str] = ("related", "html", "plain")
     ) -> MIMEPart[HeaderRegistryT, HeaderRegistryParamT] | None:
@@ -503,6 +504,7 @@ class MIMEPart[out HeaderRegistryT = Any, in HeaderRegistryParamT = Any](Message
         is called.  If you want to set the payload to a scalar object, use
         set_payload() instead.
         """
+
     # The attachments are created via type(self) in the attach method. It's theoretically
     # possible to sneak other attachment types into a MIMEPart instance, but could cause
     # cause unforseen consequences.
@@ -524,17 +526,17 @@ class MIMEPart[out HeaderRegistryT = Any, in HeaderRegistryParamT = Any](Message
         Return an empty iterator for a non-multipart.
         """
 
-    def get_content(self, *args: Any, content_manager: ContentManager | None = None, **kw: Any) -> Any
-    def set_content(self, *args: Any, content_manager: ContentManager | None = None, **kw: Any) -> None
+    def get_content(self, *args: dynamic, content_manager: ContentManager | None = None, **kw: dynamic) -> dynamic
+    def set_content(self, *args: dynamic, content_manager: ContentManager | None = None, **kw: dynamic) -> None
     def make_related(self, boundary: str | None = None) -> None
     def make_alternative(self, boundary: str | None = None) -> None
     def make_mixed(self, boundary: str | None = None) -> None
-    def add_related(self, *args: Any, content_manager: ContentManager | None = ..., **kw: Any) -> None
-    def add_alternative(self, *args: Any, content_manager: ContentManager | None = ..., **kw: Any) -> None
-    def add_attachment(self, *args: Any, content_manager: ContentManager | None = ..., **kw: Any) -> None
+    def add_related(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic) -> None
+    def add_alternative(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic) -> None
+    def add_attachment(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic) -> None
     def clear(self) -> None
     def clear_content(self) -> None
-    def as_string(self, unixfrom: bool = False, maxheaderlen: int | None = None, policy: Policy[Any] | None = None) -> str:
+    def as_string(self, unixfrom: bool = False, maxheaderlen: int | None = None, policy: Policy[dynamic] | None = None) -> str:
         """Return the entire formatted message as a string.
 
         Optional 'unixfrom', when true, means include the Unix From_ envelope

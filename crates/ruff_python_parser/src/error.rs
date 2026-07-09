@@ -151,6 +151,8 @@ pub enum ParseErrorType {
     InvalidStarredExpressionUsage,
     /// A star pattern was found outside a sequence pattern.
     InvalidStarPatternUsage,
+    /// An underscore was used as a binding target in a match pattern.
+    InvalidMatchPatternTarget,
 
     /// A parameter was found after a vararg.
     ParamAfterVarKeywordParam,
@@ -317,6 +319,7 @@ impl std::fmt::Display for ParseErrorType {
             ParseErrorType::InvalidStarPatternUsage => {
                 f.write_str("Star pattern cannot be used here")
             }
+            ParseErrorType::InvalidMatchPatternTarget => f.write_str("cannot use '_' as a target"),
             ParseErrorType::ExpectedRealNumber => {
                 f.write_str("Expected a real number in complex literal pattern")
             }

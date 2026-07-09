@@ -10,7 +10,7 @@ from collections.abc import Container, Generator, Iterable, Mapping
 from logging import Logger, _ExcInfoType
 from multiprocessing import JoinableQueue
 from multiprocessing.synchronize import Lock
-from typing import Any, ClassVar, Final, NoReturn
+from typing import ClassVar, Final, NoReturn
 
 from .btm_matcher import BottomMatcher
 from .fixer_base import BaseFix
@@ -34,7 +34,7 @@ class RefactoringTool:
     FILE_PREFIX: ClassVar[str]
     fixers: Iterable[str]
     explicit: Container[str]
-    options: dict[str, Any]
+    options: dict[str, dynamic]
     grammar: Grammar
     write_unchanged_files: bool
     errors: list[(str, Iterable[str], dict[str, _ExcInfoType])]
@@ -158,6 +158,7 @@ class RefactoringTool:
         then rewrites the file; the latter is only done if the write option is
         set.
         """
+
     PS1: Final = ">>> "
     PS2: Final = "... "
     def refactor_docstring(self, input: str, filename: StrPath) -> str:

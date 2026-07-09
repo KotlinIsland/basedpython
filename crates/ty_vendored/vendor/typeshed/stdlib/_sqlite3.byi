@@ -215,9 +215,9 @@ if sys.version_info >= (3, 11):
     threadsafety: Literal[0, 1, 3]
 
 # Can take or return anything depending on what's in the registry.
-def adapt(obj: Any, proto: Any, /) -> Any:
+def adapt(obj: dynamic, proto: dynamic, /) -> dynamic:
     """Adapt given object to given protocol."""
-def adapt[Element](obj: Any, proto: Any, alt: Element, /) -> Any | Element
+def adapt[Element](obj: dynamic, proto: dynamic, alt: Element, /) -> dynamic | Element
 
 def complete_statement(statement: str) -> bool:
     """Checks if a string contains a complete SQL statement."""
@@ -238,11 +238,6 @@ if sys.version_info >= (3, 12):
 
         You can use ":memory:" to open a database connection to a database that
         resides in RAM instead of on disk.
-
-        Note: Passing more than 1 positional argument to _sqlite3.connect() is
-        deprecated. Parameters 'timeout', 'detect_types', 'isolation_level',
-        'check_same_thread', 'factory', 'cached_statements' and 'uri' will
-        become keyword-only parameters in Python 3.15.
         """
     def connect[ConnectionT: Connection](
         database: StrOrBytesPath,

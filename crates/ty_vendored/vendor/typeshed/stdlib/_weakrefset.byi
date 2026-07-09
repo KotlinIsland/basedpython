@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Iterator, MutableSet
 from types import GenericAlias
-from typing import Any, ClassVar, TypeVar
+from typing import ClassVar, TypeVar
 from typing_extensions import Self
 
 __all__ = ["WeakSet"]
@@ -21,13 +21,13 @@ class WeakSet[in out Element](MutableSet[Element]):
     def __iter__(self) -> Iterator[Element]
     def __ior__(self, other: Iterable[Element]) -> Self  # type: ignore[override,misc]
     def difference(self, other: Iterable[Element]) -> Self
-    def __sub__(self, other: Iterable[Any]) -> Self
-    def difference_update(self, other: Iterable[Any]) -> None
-    def __isub__(self, other: Iterable[Any]) -> Self
+    def __sub__(self, other: Iterable[dynamic]) -> Self
+    def difference_update(self, other: Iterable[dynamic]) -> None
+    def __isub__(self, other: Iterable[dynamic]) -> Self
     def intersection(self, other: Iterable[Element]) -> Self
-    def __and__(self, other: Iterable[Any]) -> Self
-    def intersection_update(self, other: Iterable[Any]) -> None
-    def __iand__(self, other: Iterable[Any]) -> Self
+    def __and__(self, other: Iterable[dynamic]) -> Self
+    def intersection_update(self, other: Iterable[dynamic]) -> None
+    def __iand__(self, other: Iterable[dynamic]) -> Self
     def issubset(self, other: Iterable[Element]) -> bool
     def __le__(self, other: Iterable[Element]) -> bool
     def __lt__(self, other: Iterable[Element]) -> bool
@@ -42,8 +42,9 @@ class WeakSet[in out Element](MutableSet[Element]):
     def union[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
     def __or__[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
     def isdisjoint(self, other: Iterable[Element]) -> bool
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
-        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        For example, for t = list[int], t.__origin__ is list and t.__args__
+        is (int,).
         """

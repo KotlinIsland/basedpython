@@ -1,4 +1,4 @@
-use super::{ArgumentForms, Binding, Bindings, CallableBinding, CallableItem};
+use super::{Binding, Bindings, CallableBinding, CallableItem};
 use crate::db::Db;
 use crate::types::call::arguments::CallArguments;
 use crate::types::constraints::ConstraintSetBuilder;
@@ -65,13 +65,8 @@ impl<'db> ConstructorBinding<'db> {
     }
 
     /// Match parameters for this constructor method and downstream constructors.
-    pub(super) fn match_parameters(
-        &mut self,
-        db: &'db dyn Db,
-        arguments: &CallArguments<'_, 'db>,
-        argument_forms: &mut ArgumentForms,
-    ) {
-        self.entry.match_parameters(db, arguments, argument_forms);
+    pub(super) fn match_parameters(&mut self, db: &'db dyn Db, arguments: &CallArguments<'_, 'db>) {
+        self.entry.match_parameters(db, arguments);
 
         // We don't know at this point whether we'll need to check downstream constructors or not
         // (since we can't resolve return types yet), so we match parameters for all downstream
@@ -89,7 +84,7 @@ impl<'db> ConstructorBinding<'db> {
         constraints: &ConstraintSetBuilder<'db>,
         argument_types: &CallArguments<'_, 'db>,
         call_expression_tcx: TypeContext<'db>,
-    ) -> Option<ArgumentForms> {
+    ) {
         /// For constructors which may have downstreams (that is, metaclass `__call__` or `__new__`),
         /// analyze their overloads to determine whether to check downstream constructors.
         ///
@@ -125,8 +120,7 @@ impl<'db> ConstructorBinding<'db> {
             })
         }
 
-        let forms = self
-            .entry
+        self.entry
             .check_types(db, constraints, argument_types, call_expression_tcx);
 
         // Now that we've fully checked our own callable, we can determine whether downstream
@@ -135,8 +129,6 @@ impl<'db> ConstructorBinding<'db> {
             // If not, we can discard the downstream constructor bindings entirely.
             self.downstream_constructor = None;
         }
-
-        forms
     }
 
     /// Check types for downstream constructors, if any.
@@ -266,9 +258,10 @@ impl<'db> ConstructorBinding<'db> {
             let self_parameter_specialization = static_class_literal.and_then(|lit| {
                 let self_param_ty = overload.signature.parameters().get(0)?.annotated_type();
                 let resolved_self_param_ty = overload
-                    .specialization
-                    .map(|specialization| self_param_ty.apply_specialization(db, specialization))
-                    .unwrap_or(self_param_ty);
+                    .specialization(db)
+                    .map_or(self_param_ty, |specialization| {
+                        self_param_ty.apply_specialization(db, specialization)
+                    });
                 resolved_self_param_ty.specialization_of(db, lit)
             });
             let refined_self_parameter_specialization =
@@ -302,11 +295,7 @@ impl<'db> ConstructorBinding<'db> {
             } else {
                 refined_self_parameter_specialization
                     .or(return_specialization)
-                    .or_else(|| {
-                        overload
-                            .specialization
-                            .and_then(|s| s.restrict(db, class_context))
-                    })
+                    .or_else(|| overload.specialization(db)?.restrict(db, class_context))
             };
             // end TODO
 
@@ -427,7 +416,7 @@ impl<'db> ConstructorBinding<'db> {
             .unspecialized_return_type(db)
             .apply_optional_specialization(
                 db,
-                overload.specialization.map(|specialization| {
+                overload.specialization(db).map(|specialization| {
                     self.unspecialize_class_type_variables(db, specialization)
                 }),
             );

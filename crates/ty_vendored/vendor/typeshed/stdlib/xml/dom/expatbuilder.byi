@@ -106,13 +106,13 @@ class FilterCrutch:
 
 class Rejecter(FilterCrutch):
     __slots__ = ()
-    def start_element_handler(self, *args: Any) -> None
-    def end_element_handler(self, *args: Any) -> None
+    def start_element_handler(self, *args: dynamic) -> None
+    def end_element_handler(self, *args: dynamic) -> None
 
 class Skipper(FilterCrutch):
     __slots__ = ()
-    def start_element_handler(self, *args: Any) -> None
-    def end_element_handler(self, *args: Any) -> None
+    def start_element_handler(self, *args: dynamic) -> None
+    def end_element_handler(self, *args: dynamic) -> None
 
 class FragmentBuilder(ExpatBuilder):
     """Builder which constructs document fragments given XML source

@@ -107,6 +107,7 @@ class IMAP4:
         This connection will be used by the routines:
             read, readline, send, shutdown.
         """
+
     if sys.version_info >= (3, 14):
         @property
         @deprecated("IMAP4.file is unsupported, can cause errors, and may be removed.")
@@ -114,7 +115,7 @@ class IMAP4:
     else:
         file: IO[str] | IO[bytes]
 
-    def __getattr__(self, attr: str) -> Any
+    def __getattr__(self, attr: str) -> dynamic
     host: str
     port: int
     sock: _socket
@@ -278,6 +279,7 @@ class IMAP4:
 
         (typ, [[QUOTAROOT responses...], [QUOTA responses]]) = <instance>.getquotaroot(mailbox)
         """
+
     if sys.version_info >= (3, 14):
         def idle(self, duration: float | None = None) -> Idler:
             """Return an iterable IDLE context manager producing untagged responses.
@@ -414,7 +416,7 @@ class IMAP4:
         (typ, [data]) = <instance>.sort(sort_criteria, charset, search_criteria, ...)
         """
 
-    def starttls(self, ssl_context: Any | None = None) -> (Literal["OK"], _list[None])
+    def starttls(self, ssl_context: dynamic | None = None) -> (Literal["OK"], _list[None])
     def status(self, mailbox: str, names: str) -> _CommandResults:
         """Request named status conditions for mailbox.
 
@@ -552,9 +554,9 @@ class IMAP4_SSL(IMAP4):
     if sys.version_info >= (3, 14):
         @property
         @deprecated("IMAP4_SSL.file is unsupported, can cause errors, and may be removed.")
-        def file(self) -> IO[Any]
+        def file(self) -> IO[dynamic]
     else:
-        file: IO[Any]
+        file: IO[dynamic]
 
     def open(self, host: str = "", port: int | None = 993, timeout: float | None = None) -> None:
         """Setup connection to remote server on "host:port".
@@ -580,12 +582,12 @@ class IMAP4_stream(IMAP4):
     if sys.version_info >= (3, 14):
         @property
         @deprecated("IMAP4_stream.file is unsupported, can cause errors, and may be removed.")
-        def file(self) -> IO[Any]
+        def file(self) -> IO[dynamic]
     else:
-        file: IO[Any]
+        file: IO[dynamic]
     process: subprocess.Popen[bytes]
-    writefile: IO[Any]
-    readfile: IO[Any]
+    writefile: IO[dynamic]
+    readfile: IO[dynamic]
     def open(self, host: str | None = None, port: int | None = None, timeout: float | None = None) -> None:
         """Setup a stream connection.
         This connection will be used by the routines:

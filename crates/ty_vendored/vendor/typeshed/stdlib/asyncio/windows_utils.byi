@@ -4,7 +4,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from types import TracebackType
-from typing import Any, AnyStr, Final
+from typing import AnyStr, Final
 from typing_extensions import Self
 
 if sys.platform == "win32":
@@ -50,7 +50,7 @@ if sys.platform == "win32":
             stdin: subprocess._FILE | None = None,
             stdout: subprocess._FILE | None = None,
             stderr: subprocess._FILE | None = None,
-            **kwds: Any,
+            **kwds: dynamic,
         ) -> Self
         def __init__(
             self,
@@ -58,5 +58,5 @@ if sys.platform == "win32":
             stdin: subprocess._FILE | None = None,
             stdout: subprocess._FILE | None = None,
             stderr: subprocess._FILE | None = None,
-            **kwds: Any,
+            **kwds: dynamic,
         ) -> None

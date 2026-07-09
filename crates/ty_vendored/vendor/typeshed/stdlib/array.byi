@@ -1,6 +1,6 @@
 """This module defines an object type which can efficiently represent
 an array of basic values: characters, integers, floating-point
-numbers.  Arrays are sequence types and behave very much like lists,
+numbers, complex numbers.  Arrays are sequence types and behave very much like lists,
 except that the type of objects stored in them is constrained.
 """
 
@@ -8,7 +8,7 @@ import sys
 from _typeshed import ReadableBuffer, SupportsRead, SupportsWrite
 from collections.abc import Iterable, MutableSequence
 from types import GenericAlias
-from typing import Any, ClassVar, Literal, SupportsIndex, TypeAlias, TypeVar
+from typing import ClassVar, Literal, SupportsIndex, TypeAlias, TypeVar
 from typing_extensions import Self, deprecated, disjoint_base
 
 _IntTypeCode: TypeAlias = Literal["b", "B", "h", "H", "i", "I", "l", "L", "q", "Q"]
@@ -38,7 +38,7 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
 
     Arrays represent basic values and behave very much like lists, except
     the type of objects stored in them is constrained. The type is specified
-    at object creation time by using a type code, which is a single character.
+    at object creation time by using a type code, which is a string.
     The following type codes are defined:
 
         Type code   C Type             Minimum size in bytes
@@ -53,8 +53,11 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
         'L'         unsigned integer   4
         'q'         signed integer     8 (see note)
         'Q'         unsigned integer   8 (see note)
+        'e'         16-bit IEEE floats 2
         'f'         floating-point     4
         'd'         floating-point     8
+        'Zf'        float complex      8
+        'Zd'        double complex     16
 
     NOTE: The 'u' typecode corresponds to Python's unicode character. On
     narrow builds this is 2-bytes on wide builds this is 4-bytes.
@@ -125,15 +128,16 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
     def buffer_info(self) -> (int, int):
         """Return a tuple (address, length) giving the current memory address and the length in items of the buffer used to hold array's contents.
 
-        The length should be multiplied by the itemsize attribute to calculate
-        the buffer length in bytes.
+        The length should be multiplied by the itemsize attribute to
+        calculate the buffer length in bytes.
         """
 
     def byteswap(self) -> None:
         """Byteswap all items of the array.
 
-        If the items in the array are not 1, 2, 4, or 8 bytes in size, RuntimeError is
-        raised.
+        If the items in the array are not 1, 2, 4, 8 or 16 bytes in size,
+        RuntimeError is raised.  Note, that for complex types the order of
+        components (the real part, followed by imaginary part) is preserved.
         """
 
     def count(self, v: Element, /) -> int:
@@ -154,9 +158,9 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
     def fromunicode(self, ustr: str, /) -> None:
         """Extends this array with data from the unicode string ustr.
 
-        The array must be a unicode type array; otherwise a ValueError is raised.
-        Use array.frombytes(ustr.encode(...)) to append Unicode data to an array of
-        some other type.
+        The array must be a unicode type array; otherwise a ValueError is
+        raised.  Use array.frombytes(ustr.encode(...)) to append Unicode
+        data to an array of some other type.
         """
 
     def index(self, v: Element, start: int = 0, stop: int = sys.maxsize, /) -> int:
@@ -189,10 +193,12 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
     def tounicode(self) -> str:
         """Extends this array with data from the unicode string ustr.
 
-        Convert the array to a unicode string.  The array must be a unicode type array;
-        otherwise a ValueError is raised.  Use array.tobytes().decode() to obtain a
-        unicode string from an array of some other type.
+        Convert the array to a unicode string.  The array must be a unicode
+        type array; otherwise a ValueError is raised.  Use
+        array.tobytes().decode() to obtain a unicode string from an array of
+        some other type.
         """
+
     __hash__: ClassVar[None]  # type: ignore[assignment]
     def __contains__(self, value: object, /) -> bool:
         """Return bool(key in self)."""
@@ -234,7 +240,7 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
     def __copy__(self) -> array[Element]:
         """Return a copy of the array."""
 
-    def __deepcopy__(self, unused: Any, /) -> array[Element]:
+    def __deepcopy__(self, unused: dynamic, /) -> array[Element]:
         """Return a copy of the array."""
 
     def __buffer__(self, flags: int, /) -> memoryview:
@@ -242,8 +248,9 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
 
     def __release_buffer__(self, buffer: memoryview, /) -> None:
         """Release the buffer object that exposes the underlying memory of the object."""
+
     if sys.version_info >= (3, 12):
-        def __class_getitem__(cls, item: Any, /) -> GenericAlias:
-            """See PEP 585"""
+        def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
+            """Arrays are generic over the type of their elements"""
 
 ArrayType = array

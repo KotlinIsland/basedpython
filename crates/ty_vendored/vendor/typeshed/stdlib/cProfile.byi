@@ -1,5 +1,7 @@
-"""Python interface for the 'lsprof' profiler.
-Compatible with the 'profile' module.
+"""Compatibility wrapper for cProfile module.
+
+This module maintains backward compatibility by importing from the new
+profiling.tracing module.
 """
 
 import _lsprof
@@ -7,7 +9,7 @@ import sys
 from _typeshed import StrOrBytesPath, Unused
 from collections.abc import Callable, Mapping
 from types import CodeType
-from typing import Any, ParamSpec, TypeAlias, TypeVar
+from typing import ParamSpec, TypeAlias, TypeVar
 from typing_extensions import Self
 
 __all__ = ["run", "runctx", "Profile"]
@@ -25,7 +27,7 @@ def run(statement: str, filename: str | None = None, sort: str | int = -1) -> No
     """
 
 def runctx(
-    statement: str, globals: dict[str, Any], locals: Mapping[str, Any], filename: str | None = None, sort: str | int = -1
+    statement: str, globals: dict[str, dynamic], locals: Mapping[str, dynamic], filename: str | None = None, sort: str | int = -1
 ) -> None:
     """Run statement under profiler, supplying your own globals and locals,
     optionally saving results in filename.
@@ -51,7 +53,7 @@ class Profile(_lsprof.Profiler):
     def create_stats(self) -> None
     def snapshot_stats(self) -> None
     def run(self, cmd: str) -> Self
-    def runctx(self, cmd: str, globals: dict[str, Any], locals: Mapping[str, Any]) -> Self
+    def runctx(self, cmd: str, globals: dict[str, dynamic], locals: Mapping[str, dynamic]) -> Self
     def runcall[**P, Element](self, func: Callable[P, Element], /, *args: P.args, **kw: P.kwargs) -> Element
     def __enter__(self) -> Self
     def __exit__(self, *exc_info: Unused) -> None

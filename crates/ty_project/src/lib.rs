@@ -4,18 +4,20 @@
 )]
 use crate::glob::{GlobFilterCheckMode, IncludeResult};
 use crate::metadata::options::{OptionDiagnostic, ProgramSettingsDiagnostic};
+use crate::parallel::ParallelIteratorExt;
 use crate::walk::{ProjectFilesFilter, ProjectFilesWalker};
 #[cfg(feature = "testing")]
-pub use db::tests::TestDb;
+pub use db::testing::TestDb;
 pub use db::{ChangeResult, CheckMode, Db, ProjectDatabase, SalsaMemoryDump};
 use files::{Index, Indexed, IndexedFiles};
 
 use metadata::settings::Settings;
 pub use metadata::{ProjectMetadata, ProjectMetadataError};
+use rayon::prelude::*;
 use ruff_db::diagnostic::{
     Diagnostic, DiagnosticId, Severity, SubDiagnostic, SubDiagnosticSeverity,
 };
-use ruff_db::files::{File, FileRootKind};
+use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_db::system::{SystemPath, SystemPathBuf, deduplicate_nested_paths};
 use rustc_hash::FxHashSet;
@@ -31,6 +33,7 @@ mod db;
 mod files;
 pub mod glob;
 pub mod metadata;
+pub mod parallel;
 mod walk;
 pub mod watch;
 
@@ -182,24 +185,50 @@ impl Project {
             settings_diagnostics,
             program_settings_diagnostics,
         );
-        let project = Project::builder(Box::new(metadata), Box::new(settings), diagnostics)
+
+        Project::builder(Box::new(metadata), Box::new(settings), diagnostics)
             .durability(Durability::MEDIUM)
             .open_fileset_durability(Durability::LOW)
             .file_set_durability(Durability::LOW)
-            .new(db);
-
-        project.try_add_file_root(db);
-
-        project
+            .new(db)
     }
 
-    fn try_add_file_root(self, db: &dyn Db) {
-        // This adds a file root for the project itself. This enables
-        // tracking of when changes are made to the files in a project
-        // at the directory level. At time of writing (2025-07-17),
-        // this is used for caching completions for submodules.
-        db.files()
-            .try_add_root(db, self.root(db), FileRootKind::Project);
+    /// Permanently freezes the most heavily read immutable project inputs.
+    ///
+    /// This is intentionally not exhaustive.
+    pub(crate) fn freeze(self, db: &mut dyn Db) {
+        let durability = Durability::NEVER_CHANGE;
+        let metadata = Box::new(self.metadata(db).clone());
+        let settings = Box::new(self.settings(db).clone());
+        let included_paths = self.included_paths_list(db).to_vec();
+        let open_files = self.open_fileset(db).clone();
+        let check_mode = self.check_mode(db);
+        let verbose = self.verbose_flag(db);
+        let force_exclude = self.force_exclude_flag(db);
+
+        self.set_metadata(db)
+            .with_durability(durability)
+            .to(metadata);
+        self.set_settings(db)
+            .with_durability(durability)
+            .to(settings);
+        self.set_included_paths_list(db)
+            .with_durability(durability)
+            .to(included_paths);
+        self.set_open_fileset(db)
+            .with_durability(durability)
+            .to(open_files);
+        self.set_check_mode(db)
+            .with_durability(durability)
+            .to(check_mode);
+        self.set_verbose_flag(db)
+            .with_durability(durability)
+            .to(verbose);
+        self.set_force_exclude_flag(db)
+            .with_durability(durability)
+            .to(force_exclude);
+
+        IndexedFiles::freeze(db, self);
     }
 
     pub fn root(self, db: &dyn Db) -> &SystemPath {
@@ -284,7 +313,6 @@ impl Project {
 
         if metadata_changed {
             self.set_metadata(db).to(Box::new(metadata));
-            self.try_add_file_root(db);
         }
 
         if metadata_changed || settings_changed {
@@ -355,51 +383,39 @@ impl Project {
         let open_files = self.open_files(db);
         let check_start = ruff_db::Instant::now();
 
-        {
-            let db = db.clone();
-            let project_span = &project_span;
+        let files: Vec<_> = (&files).into_iter().collect();
 
-            rayon::scope(move |scope| {
-                for file in &files {
-                    let db = db.clone();
-                    let reporter = &*reporter;
+        files
+            .into_par_iter()
+            .for_each_with_project_db(db, |db, file| {
+                db.unwind_if_revision_cancelled();
 
-                    db.unwind_if_revision_cancelled();
+                let check_file_span =
+                    tracing::debug_span!(parent: &project_span, "check_file", ?file);
+                let _entered = check_file_span.entered();
 
-                    scope.spawn(move |_| {
-                        let check_file_span =
-                            tracing::debug_span!(parent: project_span, "check_file", ?file);
-                        let _entered = check_file_span.entered();
+                match check_file_impl(db, file) {
+                    Ok(diagnostics) => {
+                        reporter.report_checked_file(db, file, diagnostics);
 
-                        match check_file_impl(&db, file) {
-                            Ok(diagnostics) => {
-                                reporter.report_checked_file(&db, file, diagnostics);
+                        // This is outside `check_file_impl` to avoid that opening or closing
+                        // a file invalidates the `check_file_impl` query of every file!
+                        if !open_files.contains(&file) {
+                            // The module has already been parsed by `check_file_impl`.
+                            // We only retrieve it here so that we can call `clear` on it.
+                            let parsed = parsed_module(db, file);
 
-                                // This is outside `check_file_impl` to avoid that opening or closing
-                                // a file invalidates the `check_file_impl` query of every file!
-                                if !open_files.contains(&file) {
-                                    // The module has already been parsed by `check_file_impl`.
-                                    // We only retrieve it here so that we can call `clear` on it.
-                                    let parsed = parsed_module(&db, file);
-
-                                    // Drop the AST now that we are done checking this file. It is not currently open,
-                                    // so it is unlikely to be accessed again soon. If any queries need to access the AST
-                                    // from across files, it will be re-parsed.
-                                    parsed.clear();
-                                }
-                            }
-                            Err(io_error) => {
-                                reporter.report_checked_file(
-                                    &db,
-                                    file,
-                                    std::slice::from_ref(io_error),
-                                );
-                            }
+                            // Drop the AST now that we are done checking this file. It is not currently open,
+                            // so it is unlikely to be accessed again soon. If any queries need to access the AST
+                            // from across files, it will be re-parsed.
+                            parsed.clear();
                         }
-                    });
+                    }
+                    Err(io_error) => {
+                        reporter.report_checked_file(db, file, std::slice::from_ref(io_error));
+                    }
                 }
             });
-        };
 
         tracing::debug!(
             "Checking all files took {:.3}s",
@@ -867,18 +883,17 @@ where
 mod tests {
     use crate::check_file_impl;
     use crate::db::Db as _;
-    use crate::db::tests::TestDb;
+    use crate::db::testing::TestDb;
     use crate::{IncludeResult, ProjectMetadata};
     use ruff_db::files::system_path_to_file;
     use ruff_db::source::source_text;
     use ruff_db::system::{DbWithTestSystem, DbWithWritableSystem as _, SystemPath, SystemPathBuf};
     use ruff_db::testing::assert_function_query_was_not_run;
-    use ruff_python_ast::name::Name;
     use ty_python_semantic::types::check_types;
 
     #[test]
     fn check_file_skips_type_checking_when_file_cant_be_read() -> ruff_db::system::Result<()> {
-        let project = ProjectMetadata::new(Name::new_static("test"), SystemPathBuf::from("/"));
+        let project = ProjectMetadata::new("test", SystemPathBuf::from("/"));
         let mut db = TestDb::new(project);
         db.init_program().unwrap();
         let path = SystemPath::new("test.py");
@@ -925,7 +940,7 @@ mod tests {
     fn explicit_nested_included_file_is_a_literal_match() {
         let root = SystemPathBuf::from("/project");
         let explicit_file = root.join("build/keep.txt");
-        let project = ProjectMetadata::new(Name::new_static("test"), root.clone());
+        let project = ProjectMetadata::new("test", root.clone());
         let mut db = TestDb::new(project);
         let project = db.project();
 

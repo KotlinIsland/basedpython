@@ -49,7 +49,7 @@ __all__ = [
     "Spinbox",
 ]
 
-def tclobjs_to_py(adict: dict[Any, Any]) -> dict[Any, Any]:
+def tclobjs_to_py(adict: dict[dynamic, dynamic]) -> dict[dynamic, dynamic]:
     """Returns adict with its values converted from Tcl objects to Python
     objects.
     """
@@ -151,15 +151,15 @@ class Style:
 
     # For these methods, values given vary between options. Returned values
     # seem to be str, but this might not always be the case.
-    def configure(self, style: str) -> dict[str, Any] | None:  # Returns None if no configuration.
+    def configure(self, style: str) -> dict[str, dynamic] | None:  # Returns None if no configuration.
         """Query or sets the default value of the specified option(s) in
         style.
 
         Each key in kw is an option and each value is either a string or
         a sequence identifying the value for that option.
         """
-    def configure(self, style: str, query_opt: str, **kw: Any) -> Any
-    def configure(self, style: str, query_opt: None = None, **kw: Any) -> None
+    def configure(self, style: str, query_opt: str, **kw: dynamic) -> dynamic
+    def configure(self, style: str, query_opt: None = None, **kw: dynamic) -> None
 
     def map(self, style: str, query_opt: str) -> _Statespec:
         """Query or sets dynamic values of the specified option(s) in
@@ -172,7 +172,7 @@ class Style:
         """
     def map(self, style: str, query_opt: None = None, **kw: Iterable[_Statespec]) -> dict[str, _Statespec]
 
-    def lookup(self, style: str, option: str, state: Iterable[str] | None = None, default: Any | None = None) -> Any:
+    def lookup(self, style: str, option: str, state: Iterable[str] | None = None, default: dynamic | None = None) -> dynamic:
         """Returns the value specified for option in style.
 
         If state is specified it is expected to be a sequence of one
@@ -308,7 +308,7 @@ class Style:
 class Widget(tkinter.Widget):
     """Base class for Tk themed widgets."""
 
-    def __init__(self, master: tkinter.Misc | None, widgetname: str | None, kw: dict[str, Any] | None = None) -> None:
+    def __init__(self, master: tkinter.Misc | None, widgetname: str | None, kw: dict[str, dynamic] | None = None) -> None:
         """Constructs a Ttk Widget with the parent master.
 
         STANDARD OPTIONS
@@ -367,7 +367,7 @@ class Button(Widget):
         master: tkinter.Misc | None = None,
         *,
         class_: str = "",
-        command: str | Callable[[], Any] = "",
+        command: str | Callable[[], dynamic] = "",
         compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = "",
         cursor: tkinter._Cursor = "",
         default: Literal["normal", "active", "disabled"] = "normal",
@@ -396,9 +396,9 @@ class Button(Widget):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
-        command: str | Callable[[], Any] = ...,
+        command: str | Callable[[], dynamic] = ...,
         compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = ...,
         cursor: tkinter._Cursor = ...,
         default: Literal["normal", "active", "disabled"] = ...,
@@ -427,7 +427,7 @@ class Button(Widget):
     def configure(self, cnf: str) -> (str, str, str, Any, Any)
 
     config = configure
-    def invoke(self) -> Any:
+    def invoke(self) -> dynamic:
         """Invokes the command associated with the button."""
 
 class Checkbutton(Widget):
@@ -438,13 +438,13 @@ class Checkbutton(Widget):
         master: tkinter.Misc | None = None,
         *,
         class_: str = "",
-        command: str | Callable[[], Any] = "",
+        command: str | Callable[[], dynamic] = "",
         compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = "",
         cursor: tkinter._Cursor = "",
         image: tkinter._Image | str = "",
         name: str = ...,
-        offvalue: Any = 0,
-        onvalue: Any = 1,
+        offvalue: dynamic = 0,
+        onvalue: dynamic = 1,
         padding=...,  # undocumented
         state: str = "normal",
         style: str = "",
@@ -472,14 +472,14 @@ class Checkbutton(Widget):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
-        command: str | Callable[[], Any] = ...,
+        command: str | Callable[[], dynamic] = ...,
         compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = ...,
         cursor: tkinter._Cursor = ...,
         image: tkinter._Image | str = ...,
-        offvalue: Any = ...,
-        onvalue: Any = ...,
+        offvalue: dynamic = ...,
+        onvalue: dynamic = ...,
         padding=...,
         state: str = ...,
         style: str = ...,
@@ -505,7 +505,7 @@ class Checkbutton(Widget):
     def configure(self, cnf: str) -> (str, str, str, Any, Any)
 
     config = configure
-    def invoke(self) -> Any:
+    def invoke(self) -> dynamic:
         """Toggles between the selected and deselected states and
         invokes the associated command. If the widget is currently
         selected, sets the option variable to the offvalue option
@@ -562,7 +562,7 @@ class Entry(Widget, tkinter.Entry):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
         cursor: tkinter._Cursor = ...,
@@ -598,7 +598,7 @@ class Entry(Widget, tkinter.Entry):
     # config must be copy/pasted, otherwise ttk.Entry().config is mypy error (don't know why)
     def config(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
         cursor: tkinter._Cursor = ...,
@@ -692,7 +692,7 @@ class Combobox(Entry):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
         cursor: tkinter._Cursor = ...,
@@ -731,7 +731,7 @@ class Combobox(Entry):
     # config must be copy/pasted, otherwise ttk.Combobox().config is mypy error (don't know why)
     def config(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
         cursor: tkinter._Cursor = ...,
@@ -774,7 +774,7 @@ class Combobox(Entry):
         or -1 if the current value does not appear in the list.
         """
 
-    def set(self, value: Any) -> None:
+    def set(self, value: dynamic) -> None:
         """Sets the value of the combobox to value."""
 
 class Frame(Widget):
@@ -813,7 +813,7 @@ class Frame(Widget):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         border: float | str = ...,
         borderwidth: float | str = ...,
@@ -886,7 +886,7 @@ class Label(Widget):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         anchor: Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"] = ...,
         background: str = ...,
@@ -964,7 +964,7 @@ class Labelframe(Widget):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         border: float | str = ...,
         borderwidth: float | str = ...,
@@ -1037,7 +1037,7 @@ class Menubutton(Widget):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = ...,
         cursor: tkinter._Cursor = ...,
@@ -1119,7 +1119,7 @@ class Notebook(Widget):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         cursor: tkinter._Cursor = ...,
         height: int = ...,
@@ -1281,7 +1281,7 @@ class Panedwindow(Widget, tkinter.PanedWindow):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         cursor: tkinter._Cursor = ...,
         height: int = ...,
@@ -1306,7 +1306,7 @@ class Panedwindow(Widget, tkinter.PanedWindow):
     # config must be copy/pasted, otherwise ttk.Panedwindow().config is mypy error (don't know why)
     def config(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         cursor: tkinter._Cursor = ...,
         height: int = ...,
@@ -1396,7 +1396,7 @@ class Progressbar(Widget):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         cursor: tkinter._Cursor = ...,
         length: float | str = ...,
@@ -1452,7 +1452,7 @@ class Radiobutton(Widget):
         master: tkinter.Misc | None = None,
         *,
         class_: str = "",
-        command: str | Callable[[], Any] = "",
+        command: str | Callable[[], dynamic] = "",
         compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = "",
         cursor: tkinter._Cursor = "",
         image: tkinter._Image | str = "",
@@ -1464,7 +1464,7 @@ class Radiobutton(Widget):
         text: float | str = "",
         textvariable: tkinter.Variable = ...,
         underline: int = -1,
-        value: Any = "1",
+        value: dynamic = "1",
         variable: tkinter.Variable | Literal[""] = ...,
         width: int | Literal[""] = "",
     ) -> None:
@@ -1482,9 +1482,9 @@ class Radiobutton(Widget):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
-        command: str | Callable[[], Any] = ...,
+        command: str | Callable[[], dynamic] = ...,
         compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = ...,
         cursor: tkinter._Cursor = ...,
         image: tkinter._Image | str = ...,
@@ -1495,7 +1495,7 @@ class Radiobutton(Widget):
         text: float | str = ...,
         textvariable: tkinter.Variable = ...,
         underline: int = ...,
-        value: Any = ...,
+        value: dynamic = ...,
         variable: tkinter.Variable | Literal[""] = ...,
         width: int | Literal[""] = ...,
     ) -> dict[str, (str, str, str, Any, Any)] | None:
@@ -1514,7 +1514,7 @@ class Radiobutton(Widget):
     def configure(self, cnf: str) -> (str, str, str, Any, Any)
 
     config = configure
-    def invoke(self) -> Any:
+    def invoke(self) -> dynamic:
         """Sets the option variable to the option value, selects the
         widget, and invokes the associated command.
 
@@ -1559,7 +1559,7 @@ class Scale(Widget, tkinter.Scale):  # type: ignore[misc]
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         command: str | Callable[[str], object] = ...,
         cursor: tkinter._Cursor = ...,
@@ -1583,7 +1583,7 @@ class Scale(Widget, tkinter.Scale):  # type: ignore[misc]
     # config must be copy/pasted, otherwise ttk.Scale().config is mypy error (don't know why)
     def config(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         command: str | Callable[[str], object] = ...,
         cursor: tkinter._Cursor = ...,
@@ -1648,7 +1648,7 @@ class Scrollbar(Widget, tkinter.Scrollbar):  # type: ignore[misc]
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         command: (...) -> tuple[float, float] | None | str = ...,
         cursor: tkinter._Cursor = ...,
@@ -1673,7 +1673,7 @@ class Scrollbar(Widget, tkinter.Scrollbar):  # type: ignore[misc]
     # config must be copy/pasted, otherwise ttk.Scrollbar().config is mypy error (don't know why)
     def config(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         command: (...) -> tuple[float, float] | None | str = ...,
         cursor: tkinter._Cursor = ...,
@@ -1724,7 +1724,7 @@ class Separator(Widget):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         cursor: tkinter._Cursor = ...,
         orient: Literal["horizontal", "vertical"] = ...,
@@ -1771,7 +1771,7 @@ class Sizegrip(Widget):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         cursor: tkinter._Cursor = ...,
         style: str = ...,
@@ -1844,7 +1844,7 @@ class Spinbox(Entry):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
         command: Callable[[], object] | str | list[str] | (*: str) = ...,
@@ -1885,14 +1885,14 @@ class Spinbox(Entry):
     def configure(self, cnf: str) -> (str, str, str, Any, Any)
 
     config = configure  # type: ignore[assignment]
-    def set(self, value: Any) -> None:
+    def set(self, value: dynamic) -> None:
         """Sets the value of the Spinbox to value."""
 
 @type_check_only
 class _TreeviewItemDict(TypedDict):
     text: str
     image: list[str] | Literal[""]  # no idea why it's wrapped in list
-    values: list[Any] | Literal[""]
+    values: list[dynamic] | Literal[""]
     open: bool  # actually 0 or 1
     tags: list[str] | Literal[""]
 
@@ -1972,7 +1972,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
 
     def configure(
         self,
-        cnf: dict[str, Any] | None = None,
+        cnf: dict[str, dynamic] | None = None,
         *,
         columns: str | list[str] | list[int] | list[str | int] | (*: str | int) = ...,
         cursor: tkinter._Cursor = ...,
@@ -2034,7 +2034,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
     def column(self, column: str | int, option: Literal["stretch"]) -> bool  # actually 0 or 1
     def column(self, column: str | int, option: Literal["anchor"]) -> _tkinter.Tcl_Obj
     def column(self, column: str | int, option: Literal["id"]) -> str
-    def column(self, column: str | int, option: str) -> Any
+    def column(self, column: str | int, option: str) -> dynamic
     def column(
         self,
         column: str | int,
@@ -2096,7 +2096,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
     def heading(self, column: str | int, option: Literal["image"]) -> (str,) | str
     def heading(self, column: str | int, option: Literal["anchor"]) -> _tkinter.Tcl_Obj
     def heading(self, column: str | int, option: Literal["command"]) -> str
-    def heading(self, column: str | int, option: str) -> Any
+    def heading(self, column: str | int, option: str) -> dynamic
     def heading(self, column: str | int, option: None = None) -> _TreeviewHeaderDict
     def heading(
         self,
@@ -2186,7 +2186,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
     def item(self, item: str | int, option: Literal["values"]) -> (*: Any) | Literal[""]
     def item(self, item: str | int, option: Literal["open"]) -> bool  # actually 0 or 1
     def item(self, item: str | int, option: Literal["tags"]) -> (*: str) | Literal[""]
-    def item(self, item: str | int, option: str) -> Any
+    def item(self, item: str | int, option: str) -> dynamic
     def item(self, item: str | int, option: None = None) -> _TreeviewItemDict
     def item(
         self,
@@ -2208,6 +2208,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         beginning, if greater than or equal to the number of children,
         it is moved to the end. If item was detached it is reattached.
         """
+
     reattach = move
     def next(self, item: str | int) -> str:  # returning empty string means last item
         """Returns the identifier of item's next sibling, or '' if item
@@ -2251,7 +2252,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         """Toggle the selection state of each specified item."""
     def selection_toggle(self, *items: str | int) -> None
 
-    def set(self, item: str | int, column: None = None, value: None = None) -> dict[str, Any]:
+    def set(self, item: str | int, column: None = None, value: None = None) -> dict[str, dynamic]:
         """Query or set the value of given item.
 
         With one argument, return a dictionary of column/value pairs
@@ -2259,8 +2260,8 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         value of the specified column. With three arguments, set the
         value of given column in given item to the specified value.
         """
-    def set(self, item: str | int, column: str | int, value: None = None) -> Any
-    def set(self, item: str | int, column: str | int, value: Any) -> Literal[""]
+    def set(self, item: str | int, column: str | int, value: None = None) -> dynamic
+    def set(self, item: str | int, column: str | int, value: dynamic) -> Literal[""]
 
     # There's no tag_unbind() or 'add' argument for whatever reason.
     # Also, it's 'callback' instead of 'func' here.
@@ -2347,8 +2348,9 @@ class LabeledScale(Frame):
                 Specifies how to display the label relative to the scale.
                 Defaults to 'top'.
         """
+
     # destroy is overridden, signature does not change
-    value: Any
+    value: dynamic
     """Return current scale value."""
 
 class OptionMenu(Menubutton):
@@ -2383,6 +2385,7 @@ class OptionMenu(Menubutton):
                 command: callback
                     A callback that will be invoked after selecting an item.
             """
+
     else:
         def __init__(
             self,
@@ -2409,6 +2412,7 @@ class OptionMenu(Menubutton):
                 command: callback
                     A callback that will be invoked after selecting an item.
             """
+
     # configure, config, cget, destroy are inherited from Menubutton
     # destroy and __setitem__ are overridden, signature does not change
     def set_menu(self, default: str | None = None, *values: str) -> None:

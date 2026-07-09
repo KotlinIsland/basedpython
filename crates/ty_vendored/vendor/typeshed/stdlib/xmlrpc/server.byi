@@ -141,7 +141,7 @@ _DispatchProtocol: TypeAlias = (
     _DispatchArity0 | _DispatchArity1 | _DispatchArity2 | _DispatchArity3 | _DispatchArity4 | _DispatchArityN
 )
 
-def resolve_dotted_attribute(obj: Any, attr: str, allow_dotted_names: bool = True) -> Any:  # undocumented
+def resolve_dotted_attribute(obj: dynamic, attr: str, allow_dotted_names: bool = True) -> dynamic:  # undocumented
     """resolve_dotted_attribute(a, 'b.c.d') => a.b.c.d
 
     Resolves a dotted attribute name to an object.  Raises
@@ -151,7 +151,7 @@ def resolve_dotted_attribute(obj: Any, attr: str, allow_dotted_names: bool = Tru
     supported and this function operates similar to getattr(obj, attr).
     """
 
-def list_public_methods(obj: Any) -> list[str]:  # undocumented
+def list_public_methods(obj: dynamic) -> list[str]:  # undocumented
     """Returns a list of attribute strings, found in the specified
     object, which represent callable attributes
     """
@@ -166,12 +166,12 @@ class SimpleXMLRPCDispatcher:  # undocumented
     """
 
     funcs: dict[str, _DispatchProtocol]
-    instance: Any | None
+    instance: dynamic | None
     allow_none: bool
     encoding: str
     use_builtin_types: bool
     def __init__(self, allow_none: bool = False, encoding: str | None = None, use_builtin_types: bool = False) -> None
-    def register_instance(self, instance: Any, allow_dotted_names: bool = False) -> None:
+    def register_instance(self, instance: dynamic, allow_dotted_names: bool = False) -> None:
         """Registers an instance to respond to XML-RPC requests.
 
         Only one instance can be installed at a time.
@@ -229,7 +229,7 @@ class SimpleXMLRPCDispatcher:  # undocumented
         self,
         data: str | ReadableBuffer,
         dispatch_method: Callable[[str, tuple[_Marshallable, ...]], Fault | (*: _Marshallable)] | None = None,
-        path: Any | None = None,
+        path: dynamic | None = None,
     ) -> str:  # undocumented
         """Dispatches an XML-RPC method from marshalled (XML) data.
 

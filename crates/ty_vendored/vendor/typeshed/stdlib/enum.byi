@@ -85,7 +85,7 @@ class _EnumDict(dict[str, Any]):
     else:
         def __init__(self) -> None
 
-    def __setitem__(self, key: str, value: Any) -> None:
+    def __setitem__(self, key: str, value: dynamic) -> None:
         """
         Changes anything not dundered or not a descriptor.
 
@@ -94,14 +94,15 @@ class _EnumDict(dict[str, Any]):
 
         Single underscore (sunder) names are reserved.
         """
+
     if sys.version_info >= (3, 11):
         # See comment above `typing.MutableMapping.update`
         # for why overloads are preferable to a Union here
         #
         # Unlike with MutableMapping.update(), the first argument is required,
         # hence the type: ignore
-        def update(self, members: SupportsKeysAndGetItem[str, Any], **more_members: Any) -> None
-        def update(self, members: Iterable[(str, Any)], **more_members: Any) -> None
+        def update(self, members: SupportsKeysAndGetItem[str, dynamic], **more_members: dynamic) -> None
+        def update(self, members: Iterable[(str, Any)], **more_members: dynamic) -> None
 
     if sys.version_info >= (3, 13):
         @property
@@ -125,14 +126,14 @@ class EnumMeta(type):
             *,
             boundary: FlagBoundary | None = None,
             _simple: bool = False,
-            **kwds: Any,
+            **kwds: dynamic,
         ) -> _typeshed.Self
     else:
         def __new__(
-            metacls: type[_typeshed.Self], cls: str, bases: (*: type), classdict: _EnumDict, **kwds: Any
+            metacls: type[_typeshed.Self], cls: str, bases: (*: type), classdict: _EnumDict, **kwds: dynamic
         ) -> _typeshed.Self
 
-    class def __prepare__(metacls, cls: str, bases: (*: type), **kwds: Any) -> _EnumDict  # type: ignore[override]
+    class def __prepare__(metacls, cls: str, bases: (*: type), **kwds: dynamic) -> _EnumDict  # type: ignore[override]
     def __iter__[EnumMemberT](self: type[EnumMemberT]) -> Iterator[EnumMemberT]:
         """
         Return members in definition order.
@@ -142,8 +143,9 @@ class EnumMeta(type):
         """
         Return members in reverse definition order.
         """
+
     if sys.version_info >= (3, 12):
-        def __contains__(self: type[Any], value: object) -> bool:
+        def __contains__(self: type[dynamic], value: object) -> bool:
             """Return True if `value` is in `cls`.
 
             `value` is in `cls` if:
@@ -151,8 +153,9 @@ class EnumMeta(type):
             2) `value` is the value of one of the `cls`'s members.
             3) `value` is a pseudo-member (flags)
             """
+
     elif sys.version_info >= (3, 11):
-        def __contains__(self: type[Any], member: object) -> bool:
+        def __contains__(self: type[dynamic], member: object) -> bool:
             """
             Return True if member is a member of this enum
             raises TypeError if member is not an enum member
@@ -160,8 +163,9 @@ class EnumMeta(type):
             note: in 3.12 TypeError will no longer be raised, and True will also be
             returned if member is the value of a member in this enum
             """
+
     else:
-        def __contains__(self: type[Any], obj: object) -> bool
+        def __contains__(self: type[dynamic], obj: object) -> bool
 
     def __getitem__[EnumMemberT](self: type[EnumMemberT], name: str) -> EnumMemberT:
         """
@@ -173,8 +177,8 @@ class EnumMeta(type):
         """
         Returns a mapping of member name->value.
 
-        This mapping lists all enum members, including aliases. Note that this
-        is a read-only view of the internal mapping.
+        This mapping lists all enum members, including aliases.  Note that
+        this is a read-only view of the internal mapping.
         """
 
     def __len__(self) -> int:
@@ -190,13 +194,13 @@ class EnumMeta(type):
     def __dir__(self) -> list[str]
 
     # Overload 1: Value lookup on an already existing enum class (simple case)
-    def __call__[EnumMemberT](cls: type[EnumMemberT], value: Any, names: None = None) -> EnumMemberT:
+    def __call__[EnumMemberT](cls: type[EnumMemberT], value: dynamic, names: None = None) -> EnumMemberT:
         """
         Either returns an existing member, or creates a new enum class.
 
-        This method is used both when an enum class is given a value to match
-        to an enumeration member (i.e. Color(3)) and for the functional API
-        (i.e. Color = Enum('Color', names='RED GREEN BLUE')).
+        This method is used both when an enum class is given a value to
+        match to an enumeration member (i.e. Color(3)) and for the
+        functional API (i.e. Color = Enum('Color', names='RED GREEN BLUE')).
 
         The value lookup branch is chosen if the enum is final.
 
@@ -204,16 +208,17 @@ class EnumMeta(type):
 
         `value` will be the name of the new class.
 
-        `names` should be either a string of white-space/comma delimited names
-        (values will start at `start`), or an iterator/mapping of name, value pairs.
+        `names` should be either a string of white-space/comma delimited
+        names (values will start at `start`), or an iterator/mapping of
+        name, value pairs.
 
         `module` should be set to the module this class is being created in;
-        if it is not set, an attempt to find that module will be made, but if
-        it fails the class will not be picklable.
+        if it is not set, an attempt to find that module will be made, but
+        if it fails the class will not be picklable.
 
-        `qualname` should be set to the actual location this class can be found
-        at in its module; by default it is set to the global scope.  If this is
-        not correct, unpickling will fail in some circumstances.
+        `qualname` should be set to the actual location this class can be
+        found at in its module; by default it is set to the global scope.
+        If this is not correct, unpickling will fail in some circumstances.
 
         `type`, if set, will be mixed in as the first base class.
         """
@@ -234,9 +239,9 @@ class EnumMeta(type):
             """
             Either returns an existing member, or creates a new enum class.
 
-            This method is used both when an enum class is given a value to match
-            to an enumeration member (i.e. Color(3)) and for the functional API
-            (i.e. Color = Enum('Color', names='RED GREEN BLUE')).
+            This method is used both when an enum class is given a value to
+            match to an enumeration member (i.e. Color(3)) and for the
+            functional API (i.e. Color = Enum('Color', names='RED GREEN BLUE')).
 
             The value lookup branch is chosen if the enum is final.
 
@@ -244,16 +249,17 @@ class EnumMeta(type):
 
             `value` will be the name of the new class.
 
-            `names` should be either a string of white-space/comma delimited names
-            (values will start at `start`), or an iterator/mapping of name, value pairs.
+            `names` should be either a string of white-space/comma delimited
+            names (values will start at `start`), or an iterator/mapping of
+            name, value pairs.
 
             `module` should be set to the module this class is being created in;
-            if it is not set, an attempt to find that module will be made, but if
-            it fails the class will not be picklable.
+            if it is not set, an attempt to find that module will be made, but
+            if it fails the class will not be picklable.
 
-            `qualname` should be set to the actual location this class can be found
-            at in its module; by default it is set to the global scope.  If this is
-            not correct, unpickling will fail in some circumstances.
+            `qualname` should be set to the actual location this class can be
+            found at in its module; by default it is set to the global scope.
+            If this is not correct, unpickling will fail in some circumstances.
 
             `type`, if set, will be mixed in as the first base class.
             """
@@ -292,6 +298,7 @@ class EnumMeta(type):
 
             `type`, if set, will be mixed in as the first base class.
             """
+
     # Overload 3 (py312+ only): Value lookup on an already existing enum class (complex case)
     #
     # >>> class Foo(enum.Enum):
@@ -300,13 +307,13 @@ class EnumMeta(type):
     # <Foo.X: (1, 2, 3)>
     #
     if sys.version_info >= (3, 12):
-        def __call__[EnumMemberT](cls: type[EnumMemberT], value: Any, *values: Any) -> EnumMemberT:
+        def __call__[EnumMemberT](cls: type[EnumMemberT], value: dynamic, *values: dynamic) -> EnumMemberT:
             """
             Either returns an existing member, or creates a new enum class.
 
-            This method is used both when an enum class is given a value to match
-            to an enumeration member (i.e. Color(3)) and for the functional API
-            (i.e. Color = Enum('Color', names='RED GREEN BLUE')).
+            This method is used both when an enum class is given a value to
+            match to an enumeration member (i.e. Color(3)) and for the
+            functional API (i.e. Color = Enum('Color', names='RED GREEN BLUE')).
 
             The value lookup branch is chosen if the enum is final.
 
@@ -314,26 +321,28 @@ class EnumMeta(type):
 
             `value` will be the name of the new class.
 
-            `names` should be either a string of white-space/comma delimited names
-            (values will start at `start`), or an iterator/mapping of name, value pairs.
+            `names` should be either a string of white-space/comma delimited
+            names (values will start at `start`), or an iterator/mapping of
+            name, value pairs.
 
             `module` should be set to the module this class is being created in;
-            if it is not set, an attempt to find that module will be made, but if
-            it fails the class will not be picklable.
+            if it is not set, an attempt to find that module will be made, but
+            if it fails the class will not be picklable.
 
-            `qualname` should be set to the actual location this class can be found
-            at in its module; by default it is set to the global scope.  If this is
-            not correct, unpickling will fail in some circumstances.
+            `qualname` should be set to the actual location this class can be
+            found at in its module; by default it is set to the global scope.
+            If this is not correct, unpickling will fail in some circumstances.
 
             `type`, if set, will be mixed in as the first base class.
             """
+
     if sys.version_info >= (3, 14):
         @property
         def __signature__(cls) -> _Signature
 
     _member_names_: list[str]  # undocumented
     _member_map_: dict[str, Enum]  # undocumented
-    _value2member_map_: dict[Any, Enum]  # undocumented
+    _value2member_map_: dict[dynamic, Enum]  # undocumented
 
 if sys.version_info >= (3, 11):
     # In 3.11 `EnumMeta` metaclass is renamed to `EnumType`, but old name also exists.
@@ -402,15 +411,16 @@ class Enum(metaclass=EnumMeta):
         """The name of the Enum member."""
 
     @_magic_enum_attr
-    def value(self) -> Any:
+    def value(self) -> dynamic:
         """The value of the Enum member."""
+
     _name_: str
-    _value_: Any
+    _value_: dynamic
     _ignore_: str | list[str]
     _order_: str
     __order__: str
-    class def _missing_(cls, value: object) -> Any
-    static def _generate_next_value_(name: str, start: int, count: int, last_values: list[Any]) -> Any:
+    class def _missing_(cls, value: object) -> dynamic
+    static def _generate_next_value_(name: str, start: int, count: int, last_values: list[dynamic]) -> dynamic:
         """
         Generate the next value when not given.
 
@@ -419,6 +429,7 @@ class Enum(metaclass=EnumMeta):
         count: the number of existing members
         last_values: the list of values assigned
         """
+
     # It's not true that `__new__` will accept any argument type,
     # so ideally we'd use `Any` to indicate that the argument type is inexpressible.
     # However, using `Any` causes too many false-positives for those using mypy's `--disallow-any-expr`
@@ -439,13 +450,13 @@ class Enum(metaclass=EnumMeta):
     def __reduce_ex__(self, proto: Unused) -> (*: Any)
     if sys.version_info >= (3, 11):
         def __copy__(self) -> Self
-        def __deepcopy__(self, memo: Any) -> Self
+        def __deepcopy__(self, memo: dynamic) -> Self
     if sys.version_info >= (3, 12) and sys.version_info < (3, 14):
         class def __signature__(cls) -> str
     if sys.version_info >= (3, 13):
         # Value may be any type, even in special enums. Enabling Enum parsing from
         # multiple value types
-        def _add_value_alias_(self, value: Any) -> None
+        def _add_value_alias_(self, value: dynamic) -> None
         def _add_alias_(self, name: str) -> None
 
 if sys.version_info >= (3, 11):
@@ -491,7 +502,7 @@ def unique[EnumerationT: type[Enum]](enumeration: EnumerationT) -> EnumerationT:
     Class decorator for enumerations ensuring unique member values.
     """
 
-_auto_null: Any
+_auto_null: dynamic
 
 class Flag(Enum):
     """
@@ -680,9 +691,9 @@ class auto:
     Instances are replaced with an appropriate value in Enum class suites.
     """
 
-    _value_: Any
+    _value_: dynamic
     @_magic_enum_attr
-    def value(self) -> Any
+    def value(self) -> dynamic
     def __new__(cls) -> Self
 
     # These don't exist, but auto is basically immediately replaced with

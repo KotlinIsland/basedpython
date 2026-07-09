@@ -235,7 +235,7 @@ class NNTP:
                 HELP command
         """
 
-    def stat(self, message_spec: Any = None) -> (str, int, str):
+    def stat(self, message_spec: dynamic = None) -> (str, int, str):
         """Process a STAT command.  Argument:
         - message_spec: article number or message id (if not specified,
           the current article is selected)
@@ -251,7 +251,7 @@ class NNTP:
     def last(self) -> (str, int, str):
         """Process a LAST command.  No arguments.  Return as for STAT."""
 
-    def head(self, message_spec: Any = None, *, file: _File = None) -> (str, ArticleInfo):
+    def head(self, message_spec: dynamic = None, *, file: _File = None) -> (str, ArticleInfo):
         """Process a HEAD command.  Argument:
         - message_spec: article number or message id
         - file: filename string or file object to store the headers in
@@ -260,7 +260,7 @@ class NNTP:
         - ArticleInfo: (article number, message id, list of header lines)
         """
 
-    def body(self, message_spec: Any = None, *, file: _File = None) -> (str, ArticleInfo):
+    def body(self, message_spec: dynamic = None, *, file: _File = None) -> (str, ArticleInfo):
         """Process a BODY command.  Argument:
         - message_spec: article number or message id
         - file: filename string or file object to store the body in
@@ -269,7 +269,7 @@ class NNTP:
         - ArticleInfo: (article number, message id, list of body lines)
         """
 
-    def article(self, message_spec: Any = None, *, file: _File = None) -> (str, ArticleInfo):
+    def article(self, message_spec: dynamic = None, *, file: _File = None) -> (str, ArticleInfo):
         """Process an ARTICLE command.  Argument:
         - message_spec: article number or message id
         - file: filename string or file object to store the article in
@@ -283,7 +283,7 @@ class NNTP:
         - resp: server response if successful
         """
 
-    def xhdr(self, hdr: str, str: Any, *, file: _File = None) -> (str, _list[str]):
+    def xhdr(self, hdr: str, str: dynamic, *, file: _File = None) -> (str, _list[str]):
         """Process an XHDR command (optional server extension).  Arguments:
         - hdr: the header type (e.g. 'subject')
         - str: an article nr, a message id, or a range nr1-nr2
@@ -337,7 +337,7 @@ class NNTP:
         - resp: server response if successful
         """
 
-    def ihave(self, message_id: Any, data: bytes | Iterable[bytes]) -> str:
+    def ihave(self, message_id: dynamic, data: bytes | Iterable[bytes]) -> str:
         """Process an IHAVE command.  Arguments:
         - message_id: message-id of the article
         - data: file containing the article

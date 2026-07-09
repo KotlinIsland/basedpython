@@ -131,31 +131,34 @@ class Doc:
     if sys.version_info >= (3, 15):
         STDLIB_DIR: str
 
-    def document(self, object: object, name: str | None = None, *args: Any) -> str:
+    def document(self, object: object, name: str | None = None, *args: dynamic) -> str:
         """Generate documentation for an object."""
 
-    def fail(self, object: object, name: str | None = None, *args: Any) -> NoReturn:
+    def fail(self, object: object, name: str | None = None, *args: dynamic) -> NoReturn:
         """Raise an exception for unimplemented types."""
 
-    abstract def docmodule(self, object: object, name: str | None = None, *args: Any) -> str:
+    abstract def docmodule(self, object: object, name: str | None = None, *args: dynamic) -> str:
         """Raise an exception for unimplemented types."""
 
-    abstract def docclass(self, object: object, name: str | None = None, *args: Any) -> str:
+    abstract def docclass(self, object: object, name: str | None = None, *args: dynamic) -> str:
         """Raise an exception for unimplemented types."""
 
-    abstract def docroutine(self, object: object, name: str | None = None, *args: Any) -> str:
+    abstract def docroutine(self, object: object, name: str | None = None, *args: dynamic) -> str:
         """Raise an exception for unimplemented types."""
 
-    abstract def docother(self, object: object, name: str | None = None, *args: Any) -> str:
+    abstract def docother(self, object: object, name: str | None = None, *args: dynamic) -> str:
         """Raise an exception for unimplemented types."""
 
-    abstract def docproperty(self, object: object, name: str | None = None, *args: Any) -> str:
+    abstract def docproperty(self, object: object, name: str | None = None, *args: dynamic) -> str:
         """Raise an exception for unimplemented types."""
 
-    abstract def docdata(self, object: object, name: str | None = None, *args: Any) -> str:
+    abstract def docdata(self, object: object, name: str | None = None, *args: dynamic) -> str:
         """Raise an exception for unimplemented types."""
+
     if sys.version_info >= (3, 15):
-        def getdocloc(self, object: object, basedir: str | None = None) -> str | None
+        def getdocloc(self, object: object, basedir: str | None = None) -> str | None:
+            """Return the location of module docs or None"""
+
     else:
         def getdocloc(self, object: object, basedir: str = ...) -> str | None:
             """Return the location of module docs or None"""
@@ -180,6 +183,7 @@ class HTMLDoc(Doc):
     escape = _repr_instance.escape
     def page(self, title: str, contents: str) -> str:
         """Format an HTML page."""
+
     if sys.version_info >= (3, 11):
         def heading(self, title: str, extras: str = "") -> str:
             """Format a page heading."""
@@ -198,6 +202,7 @@ class HTMLDoc(Doc):
 
         def multicolumn[Element](self, list: list[Element], format: Callable[[Element], str]) -> str:
             """Format a list of items into a multi-column list."""
+
     else:
         def heading(self, title: str, fgcol: str, bgcol: str, extras: str = "") -> str:
             """Format a page heading."""
@@ -218,7 +223,7 @@ class HTMLDoc(Doc):
         def multicolumn[Element](self, list: list[Element], format: Callable[[Element], str], cols: int = 4) -> str:
             """Format a list of items into a multi-column list."""
 
-    def bigsection(self, title: str, *args: Any) -> str:
+    def bigsection(self, title: str, *args: dynamic) -> str:
         """Format a section with a big heading."""
 
     def preformat(self, text: str) -> str:
@@ -269,8 +274,9 @@ class HTMLDoc(Doc):
     def formatvalue(self, object: object) -> str:
         """Format an argument default value as text."""
 
-    def docother(self, object: object, name: str | None = None, mod: Any | None = None, *ignored: Unused) -> str:
+    def docother(self, object: object, name: str | None = None, mod: dynamic | None = None, *ignored: Unused) -> str:
         """Produce HTML documentation for a data object."""
+
     if sys.version_info >= (3, 11):
         def docroutine(  # type: ignore[override]
             self,
@@ -286,14 +292,15 @@ class HTMLDoc(Doc):
             """Produce HTML documentation for a function or method object."""
 
         def docproperty(
-            self, object: object, name: str | None = None, mod: str | None = None, cl: Any | None = None, *ignored: Unused
+            self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None, *ignored: Unused
         ) -> str:
             """Produce html documentation for a data descriptor."""
 
         def docdata(
-            self, object: object, name: str | None = None, mod: Any | None = None, cl: Any | None = None, *ignored: Unused
+            self, object: object, name: str | None = None, mod: dynamic | None = None, cl: dynamic | None = None, *ignored: Unused
         ) -> str:
             """Produce html documentation for a data descriptor."""
+
     else:
         def docroutine(  # type: ignore[override]
             self,
@@ -307,11 +314,12 @@ class HTMLDoc(Doc):
         ) -> str:
             """Produce HTML documentation for a function or method object."""
 
-        def docproperty(self, object: object, name: str | None = None, mod: str | None = None, cl: Any | None = None) -> str:  # type: ignore[override]
+        def docproperty(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:  # type: ignore[override]
             """Produce html documentation for a data descriptor."""
 
-        def docdata(self, object: object, name: str | None = None, mod: Any | None = None, cl: Any | None = None) -> str:  # type: ignore[override]
+        def docdata(self, object: object, name: str | None = None, mod: dynamic | None = None, cl: dynamic | None = None) -> str:  # type: ignore[override]
             """Produce html documentation for a data descriptor."""
+
     if sys.version_info >= (3, 11):
         def parentlink(self, object: type | ModuleType, modname: str) -> str:
             """Make a link for the enclosing class or module."""
@@ -355,27 +363,28 @@ class TextDoc(Doc):
 
     def formatvalue(self, object: object) -> str:
         """Format an argument default value as text."""
+
     if sys.version_info >= (3, 11):
         def docroutine(  # type: ignore[override]
             self,
             object: object,
             name: str | None = None,
             mod: str | None = None,
-            cl: Any | None = None,
-            homecls: Any | None = None,
+            cl: dynamic | None = None,
+            homecls: dynamic | None = None,
         ) -> str:
             """Produce text documentation for a function or method object."""
 
-        def docmodule(self, object: object, name: str | None = None, mod: Any | None = None, *ignored: Unused) -> str:
+        def docmodule(self, object: object, name: str | None = None, mod: dynamic | None = None, *ignored: Unused) -> str:
             """Produce text documentation for a given module object."""
 
         def docproperty(
-            self, object: object, name: str | None = None, mod: Any | None = None, cl: Any | None = None, *ignored: Unused
+            self, object: object, name: str | None = None, mod: dynamic | None = None, cl: dynamic | None = None, *ignored: Unused
         ) -> str:
             """Produce text documentation for a data descriptor."""
 
         def docdata(
-            self, object: object, name: str | None = None, mod: str | None = None, cl: Any | None = None, *ignored: Unused
+            self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None, *ignored: Unused
         ) -> str:
             """Produce text documentation for a data descriptor."""
 
@@ -387,20 +396,21 @@ class TextDoc(Doc):
             parent: str | None = None,
             *ignored: Unused,
             maxlen: int | None = None,
-            doc: Any | None = None,
+            doc: dynamic | None = None,
         ) -> str:
             """Produce text documentation for a data object."""
+
     else:
-        def docroutine(self, object: object, name: str | None = None, mod: str | None = None, cl: Any | None = None) -> str:  # type: ignore[override]
+        def docroutine(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:  # type: ignore[override]
             """Produce text documentation for a function or method object."""
 
-        def docmodule(self, object: object, name: str | None = None, mod: Any | None = None) -> str:  # type: ignore[override]
+        def docmodule(self, object: object, name: str | None = None, mod: dynamic | None = None) -> str:  # type: ignore[override]
             """Produce text documentation for a given module object."""
 
-        def docproperty(self, object: object, name: str | None = None, mod: Any | None = None, cl: Any | None = None) -> str:  # type: ignore[override]
+        def docproperty(self, object: object, name: str | None = None, mod: dynamic | None = None, cl: dynamic | None = None) -> str:  # type: ignore[override]
             """Produce text documentation for a data descriptor."""
 
-        def docdata(self, object: object, name: str | None = None, mod: str | None = None, cl: Any | None = None) -> str:  # type: ignore[override]
+        def docdata(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:  # type: ignore[override]
             """Produce text documentation for a data descriptor."""
 
         def docother(  # type: ignore[override]
@@ -410,7 +420,7 @@ class TextDoc(Doc):
             mod: str | None = None,
             parent: str | None = None,
             maxlen: int | None = None,
-            doc: Any | None = None,
+            doc: dynamic | None = None,
         ) -> str:
             """Produce text documentation for a data object."""
 
@@ -425,7 +435,7 @@ else:
 def plain(text: str) -> str:
     """Remove boldface formatting from text."""
 
-def describe(thing: Any) -> str:
+def describe(thing: dynamic) -> str:
     """Produce a short description of the given thing."""
 
 def locate(path: str, forceload: bool = ...) -> object:
@@ -446,6 +456,7 @@ if sys.version_info >= (3, 13):
 
     def plain_pager(text: str, title: str = "") -> None:
         """Simply print unformatted text.  This is the ultimate fallback."""
+
     # For backwards compatibility.
     getpager = get_pager
     pipepager = pipe_pager
@@ -501,7 +512,7 @@ else:
 def writedoc(thing: str | object, forceload: bool = ...) -> None:
     """Write HTML documentation to a file in the current directory."""
 
-def writedocs(dir: str, pkgpath: str = "", done: Any | None = None) -> None:
+def writedocs(dir: str, pkgpath: str = "", done: dynamic | None = None) -> None:
     """Write out HTML documentation for all modules in a directory tree."""
 
 class Helper:
@@ -517,10 +528,11 @@ class Helper:
     def interact(self) -> None
     def getline(self, prompt: str) -> str:
         """Read one line, using input() when appropriate."""
+
     if sys.version_info >= (3, 11):
-        def help(self, request: Any, is_cli: bool = False) -> None
+        def help(self, request: dynamic, is_cli: bool = False) -> None
     else:
-        def help(self, request: Any) -> None
+        def help(self, request: dynamic) -> None
 
     def intro(self) -> None
     def list(self, items: _list[str], columns: int = 4, width: int = 80) -> None

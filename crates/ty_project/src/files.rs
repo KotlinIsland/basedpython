@@ -3,7 +3,7 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use rustc_hash::FxHashSet;
-use salsa::Setter;
+use salsa::{Durability, Setter};
 
 use ruff_db::diagnostic::Diagnostic;
 use ruff_db::files::File;
@@ -53,6 +53,21 @@ impl IndexedFiles {
 
     pub(super) fn is_lazy(&self) -> bool {
         matches!(*self.state.lock().unwrap(), State::Lazy)
+    }
+
+    /// Permanently freezes the project's file-set input without cloning the indexed files.
+    pub(super) fn freeze(db: &mut dyn Db, project: Project) {
+        let state = {
+            let files = project.file_set(db);
+            std::mem::replace(&mut *files.state.lock().unwrap(), State::Lazy)
+        };
+
+        project
+            .set_file_set(db)
+            .with_durability(Durability::NEVER_CHANGE)
+            .to(Self {
+                state: std::sync::Mutex::new(state),
+            });
     }
 
     /// Returns a mutable view on the index that allows cheap in-place mutations.
@@ -257,15 +272,14 @@ mod tests {
 
     use crate::ProjectMetadata;
     use crate::db::Db;
-    use crate::db::tests::TestDb;
+    use crate::db::testing::TestDb;
     use crate::files::Index;
     use ruff_db::files::system_path_to_file;
     use ruff_db::system::{DbWithWritableSystem as _, SystemPathBuf};
-    use ruff_python_ast::name::Name;
 
     #[test]
     fn re_entrance() -> anyhow::Result<()> {
-        let metadata = ProjectMetadata::new(Name::new_static("test"), SystemPathBuf::from("/test"));
+        let metadata = ProjectMetadata::new("test", SystemPathBuf::from("/test"));
         let mut db = TestDb::new(metadata);
 
         db.write_file("test.py", "")?;

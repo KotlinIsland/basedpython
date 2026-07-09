@@ -27,9 +27,9 @@ __all__ = ["BaseManager", "SyncManager", "BaseProxy", "Token", "SharedMemoryMana
 
 
 class Namespace:
-    def __init__(self, **kwds: Any) -> None
-    def __getattr__(self, name: str, /) -> Any
-    def __setattr__(self, name: str, value: Any, /) -> None
+    def __init__(self, **kwds: dynamic) -> None
+    def __getattr__(self, name: str, /) -> dynamic
+    def __setattr__(self, name: str, value: dynamic, /) -> None
 
 _Namespace: TypeAlias = Namespace
 
@@ -51,25 +51,25 @@ class BaseProxy:
     A base for proxies of shared objects
     """
 
-    _address_to_local: dict[_Address, Any]
-    _mutex: Any
+    _address_to_local: dict[_Address, dynamic]
+    _mutex: dynamic
     def __init__(
         self,
-        token: Any,
+        token: dynamic,
         serializer: str,
-        manager: Any = None,
+        manager: dynamic = None,
         authkey: AnyStr | None = None,
-        exposed: Any = None,
+        exposed: dynamic = None,
         incref: bool = True,
         manager_owned: bool = False,
     ) -> None
-    def __deepcopy__(self, memo: Any | None) -> Any
-    def _callmethod(self, methodname: str, args: (*: Any) = (), kwds: dict[Any, Any] = {}) -> None:
+    def __deepcopy__(self, memo: dynamic | None) -> dynamic
+    def _callmethod(self, methodname: str, args: (*: Any) = (), kwds: dict[dynamic, dynamic] = {}) -> None:
         """
         Try to call a method of the referent and return a copy of the result
         """
 
-    def _getvalue(self) -> Any:
+    def _getvalue(self) -> dynamic:
         """
         Get a copy of the value of the referent
         """
@@ -80,15 +80,16 @@ class ValueProxy[in out Element](BaseProxy):
     def get(self) -> Element
     def set(self, value: Element) -> None
     value: Element
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
-        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        For example, for t = list[int], t.__origin__ is list and t.__args__
+        is (int,).
         """
 
 if sys.version_info >= (3, 13):
     class _BaseDictProxy[in out Key, in out Value](BaseProxy, MutableMapping[Key, Value]):
-        __builtins__: ClassVar[dict[str, Any]]
+        __builtins__: ClassVar[dict[str, dynamic]]
         def __len__(self) -> int
         def __getitem__(self, key: Key, /) -> Value
         def __setitem__(self, key: Key, value: Value, /) -> None
@@ -109,7 +110,7 @@ if sys.version_info >= (3, 13):
         def values(self) -> list[Value]  # type: ignore[override]
         if sys.version_info >= (3, 14):
             # Next methods are copied from builtins.dict
-            def fromkeys[Element](self, iterable: Iterable[Element], value: None = None, /) -> dict[Element, Any | None]
+            def fromkeys[Element](self, iterable: Iterable[Element], value: None = None, /) -> dict[Element, dynamic | None]
             def fromkeys[Element, Other](self, iterable: Iterable[Element], value: Other, /) -> dict[Element, Other]
 
             def __reversed__(self) -> Iterator[Key]
@@ -124,15 +125,16 @@ if sys.version_info >= (3, 13):
             def __ior__(self, value: Iterable[(Key, Value)], /) -> Self
 
     class DictProxy[in out Key, in out Value](_BaseDictProxy[Key, Value]):
-        def __class_getitem__(cls, args: Any, /) -> GenericAlias:
+        def __class_getitem__(cls, args: dynamic, /) -> GenericAlias:
             """Represent a PEP 585 generic type
 
-            E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+            For example, for t = list[int], t.__origin__ is list and t.__args__
+            is (int,).
             """
 
 else:
     class DictProxy[in out Key, in out Value](BaseProxy, MutableMapping[Key, Value]):
-        __builtins__: ClassVar[dict[str, Any]]
+        __builtins__: ClassVar[dict[str, dynamic]]
         def __len__(self) -> int
         def __getitem__(self, key: Key, /) -> Value
         def __setitem__(self, key: Key, value: Value, /) -> None
@@ -154,19 +156,19 @@ else:
 
 if sys.version_info >= (3, 14):
     class _BaseSetProxy[in out Element](BaseProxy, MutableSet[Element]):
-        __builtins__: ClassVar[dict[str, Any]]
+        __builtins__: ClassVar[dict[str, dynamic]]
         # Copied from builtins.set
         def add(self, element: Element, /) -> None
         def copy(self) -> set[Element]
         def clear(self) -> None
-        def difference(self, *s: Iterable[Any]) -> set[Element]
-        def difference_update(self, *s: Iterable[Any]) -> None
+        def difference(self, *s: Iterable[dynamic]) -> set[Element]
+        def difference_update(self, *s: Iterable[dynamic]) -> None
         def discard(self, element: Element, /) -> None
-        def intersection(self, *s: Iterable[Any]) -> set[Element]
-        def intersection_update(self, *s: Iterable[Any]) -> None
-        def isdisjoint(self, s: Iterable[Any], /) -> bool
-        def issubset(self, s: Iterable[Any], /) -> bool
-        def issuperset(self, s: Iterable[Any], /) -> bool
+        def intersection(self, *s: Iterable[dynamic]) -> set[Element]
+        def intersection_update(self, *s: Iterable[dynamic]) -> None
+        def isdisjoint(self, s: Iterable[dynamic], /) -> bool
+        def issubset(self, s: Iterable[dynamic], /) -> bool
+        def issuperset(self, s: Iterable[dynamic], /) -> bool
         def pop(self) -> Element
         def remove(self, element: Element, /) -> None
         def symmetric_difference(self, s: Iterable[Element], /) -> set[Element]
@@ -193,12 +195,12 @@ if sys.version_info >= (3, 14):
         def __ror__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]  # type: ignore[misc]
         def __rsub__(self, value: AbstractSet[Element], /) -> set[Element]
         def __rxor__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]  # type: ignore[misc]
-        def __class_getitem__(cls, item: Any, /) -> GenericAlias
+        def __class_getitem__(cls, item: dynamic, /) -> GenericAlias
 
     class SetProxy[in out Element](_BaseSetProxy[Element])
 
 class BaseListProxy[in out Element](BaseProxy, MutableSequence[Element]):
-    __builtins__: ClassVar[dict[str, Any]]
+    __builtins__: ClassVar[dict[str, dynamic]]
     def __len__(self) -> int
     def __add__(self, x: list[Element], /) -> list[Element]
     def __delitem__(self, i: SupportsIndex | slice[SupportsIndex | None], /) -> None
@@ -234,10 +236,11 @@ class ListProxy[in out Element](BaseListProxy[Element]):
     def __iadd__(self, value: Iterable[Element], /) -> Self  # type: ignore[override]
     def __imul__(self, value: SupportsIndex, /) -> Self  # type: ignore[override]
     if sys.version_info >= (3, 13):
-        def __class_getitem__(cls, args: Any, /) -> Any:
+        def __class_getitem__(cls, args: dynamic, /) -> dynamic:
             """Represent a PEP 585 generic type
 
-            E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+            For example, for t = list[int], t.__origin__ is list and t.__args__
+            is (int,).
             """
 
 # Send is (kind, result)
@@ -252,7 +255,7 @@ class Server:
 
     address: _Address | None
     id_to_obj: dict[str, (Any, set[str], dict[str, str])]
-    fallback_mapping: dict[str, Callable[[_ServerConnection, str, Any], Any]]
+    fallback_mapping: dict[str, Callable[[_ServerConnection, str, dynamic], dynamic]]
     public: list[str]
     # Registry values are (callable, exposed, method_to_typeid, proxytype)
     def __init__(
@@ -279,8 +282,8 @@ class Server:
         """
 
     def fallback_getvalue[Element](self, conn: _ServerConnection, ident: str, obj: Element) -> Element
-    def fallback_str(self, conn: _ServerConnection, ident: str, obj: Any) -> str
-    def fallback_repr(self, conn: _ServerConnection, ident: str, obj: Any) -> str
+    def fallback_str(self, conn: _ServerConnection, ident: str, obj: dynamic) -> str
+    def fallback_repr(self, conn: _ServerConnection, ident: str, obj: dynamic) -> str
     def dummy(self, c: _ServerConnection) -> None
     def debug_info(self, c: _ServerConnection) -> str:
         """
@@ -297,7 +300,7 @@ class Server:
         Shutdown this process
         """
 
-    def create(self, c: _ServerConnection, typeid: str, /, *args: Any, **kwds: Any) -> (str, (*: str)):
+    def create(self, c: _ServerConnection, typeid: str, /, *args: dynamic, **kwds: dynamic) -> (str, (*: str)):
         """
         Create a new shared object and return its id
         """
@@ -349,10 +352,11 @@ class BaseManager:
         Connect manager object to the server process
         """
 
-    def start(self, initializer: (...) -> object | None = None, initargs: Iterable[Any] = ()) -> None:
+    def start(self, initializer: (...) -> object | None = None, initargs: Iterable[dynamic] = ()) -> None:
         """
         Spawn a server process for this manager object
         """
+
     shutdown: _Finalize  # only available after start() was called
     def join(self, timeout: float | None = None) -> None:  # undocumented
         """
@@ -365,7 +369,7 @@ class BaseManager:
         cls,
         typeid: str,
         callable: (...) -> object | None = None,
-        proxytype: Any = None,
+        proxytype: dynamic = None,
         exposed: Sequence[str] | None = None,
         method_to_typeid: Mapping[str, str] | None = None,
         create_method: bool = True,
@@ -402,19 +406,19 @@ class SyncManager(BaseManager):
         self,
         processes: int | None = None,
         initializer: (...) -> object | None = None,
-        initargs: Iterable[Any] = (),
+        initargs: Iterable[dynamic] = (),
         maxtasksperchild: int | None = None,
-        context: Any | None = None,
+        context: dynamic | None = None,
     ) -> pool.Pool
-    def Queue(self, maxsize: int = ...) -> queue.Queue[Any]
-    def JoinableQueue(self, maxsize: int = ...) -> queue.Queue[Any]
+    def Queue(self, maxsize: int = ...) -> queue.Queue[dynamic]
+    def JoinableQueue(self, maxsize: int = ...) -> queue.Queue[dynamic]
     def RLock(self) -> threading.RLock
     def Semaphore(self, value: int = 1) -> threading.Semaphore
-    def Array[Element](self, typecode: Any, sequence: Sequence[Element]) -> Sequence[Element]
-    def Value[Element](self, typecode: Any, value: Element) -> ValueProxy[Element]
+    def Array[Element](self, typecode: dynamic, sequence: Sequence[Element]) -> Sequence[Element]
+    def Value[Element](self, typecode: dynamic, value: Element) -> ValueProxy[Element]
 
     # Overloads are copied from builtins.dict.__init__
-    def dict(self) -> DictProxy[Any, Any]
+    def dict(self) -> DictProxy[dynamic, dynamic]
     def dict[Value](self, **kwargs: Value) -> DictProxy[str, Value]
     def dict[Key, Value](self, map: SupportsKeysAndGetItem[Key, Value], /) -> DictProxy[Key, Value]
     def dict[Value](self, map: SupportsKeysAndGetItem[str, Value], /, **kwargs: Value) -> DictProxy[str, Value]
@@ -425,11 +429,11 @@ class SyncManager(BaseManager):
 
     # Overloads are copied from builtins.list.__init__
     def list[Element](self, iterable: Iterable[Element], /) -> ListProxy[Element]
-    def list(self) -> ListProxy[Any]
+    def list(self) -> ListProxy[dynamic]
 
     if sys.version_info >= (3, 14):
         def set[Element](self, iterable: Iterable[Element], /) -> SetProxy[Element]
-        def set(self) -> SetProxy[Any]
+        def set(self) -> SetProxy[dynamic]
 
 class RemoteError(Exception)
 

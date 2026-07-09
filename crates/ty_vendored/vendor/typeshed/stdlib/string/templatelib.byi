@@ -14,15 +14,15 @@ final class Template:  # TODO: consider making `Template` generic on `TypeVarTup
     interpolations: (*: Interpolation[Any])
     """Interpolations"""
 
-    def __new__(cls, *args: str | Interpolation[Any]) -> Template
-    def __iter__(self) -> Iterator[str | Interpolation[Any]]:
+    def __new__(cls, *args: str | Interpolation[dynamic]) -> Template
+    def __iter__(self) -> Iterator[str | Interpolation[dynamic]]:
         """Implement iter(self)."""
 
     def __add__(self, other: Template, /) -> Template:
         """Return self+value."""
 
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
-        """See PEP 585"""
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
+        """Template supports [] for generic usage"""
 
     @property
     def values(self) -> (*: Any):  # Tuple of interpolation values, which can have any type
@@ -48,8 +48,8 @@ final class Interpolation[in out Element]:
     def __new__(
         cls, value: Element, expression: str = "", conversion: Literal["a", "r", "s"] | None = None, format_spec: str = ""
     ) -> Interpolation[Element]
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
-        """See PEP 585"""
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
+        """Interpolations are generic over the types of their values"""
 
 def convert[Element](obj: Element, /, conversion: None) -> Element:
     """Convert *obj* using formatted string literal semantics."""

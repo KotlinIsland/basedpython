@@ -10,75 +10,75 @@ from typing import Any, Generic, Literal, Protocol, SupportsIndex, TypeVar, type
 __all__ = ["RawValue", "RawArray", "Value", "Array", "copy", "synchronized"]
 
 
-def RawValue[CT: _CData](typecode_or_type: type[CT], *args: Any) -> CT:
+def RawValue[CT: _CData](typecode_or_type: type[CT], *args: dynamic) -> CT:
     """
     Returns a ctypes object allocated from shared memory
     """
-def RawValue(typecode_or_type: str, *args: Any) -> Any
+def RawValue(typecode_or_type: str, *args: dynamic) -> dynamic
 
-def RawArray[CT: _CData](typecode_or_type: type[CT], size_or_initializer: int | Sequence[Any]) -> ctypes.Array[CT]:
+def RawArray[CT: _CData](typecode_or_type: type[CT], size_or_initializer: int | Sequence[dynamic]) -> ctypes.Array[CT]:
     """
     Returns a ctypes array allocated from shared memory
     """
-def RawArray(typecode_or_type: str, size_or_initializer: int | Sequence[Any]) -> Any
+def RawArray(typecode_or_type: str, size_or_initializer: int | Sequence[dynamic]) -> dynamic
 
-def Value[CT: _CData](typecode_or_type: type[CT], *args: Any, lock: Literal[False], ctx: BaseContext | None = None) -> CT:
+def Value[CT: _CData](typecode_or_type: type[CT], *args: dynamic, lock: Literal[False], ctx: BaseContext | None = None) -> CT:
     """
     Return a synchronization wrapper for a Value
     """
 def Value[CT: _CData](
-    typecode_or_type: type[CT], *args: Any, lock: Literal[True] | _LockLike = True, ctx: BaseContext | None = None
+    typecode_or_type: type[CT], *args: dynamic, lock: Literal[True] | _LockLike = True, ctx: BaseContext | None = None
 ) -> SynchronizedBase[CT]
 def Value(
-    typecode_or_type: str, *args: Any, lock: Literal[True] | _LockLike = True, ctx: BaseContext | None = None
-) -> SynchronizedBase[Any]
+    typecode_or_type: str, *args: dynamic, lock: Literal[True] | _LockLike = True, ctx: BaseContext | None = None
+) -> SynchronizedBase[dynamic]
 def Value(
-    typecode_or_type: str | type[_CData], *args: Any, lock: bool | _LockLike = True, ctx: BaseContext | None = None
-) -> Any
+    typecode_or_type: str | type[_CData], *args: dynamic, lock: bool | _LockLike = True, ctx: BaseContext | None = None
+) -> dynamic
 
 def Array[CT: _CData](
-    typecode_or_type: type[CT], size_or_initializer: int | Sequence[Any], *, lock: Literal[False], ctx: BaseContext | None = None
+    typecode_or_type: type[CT], size_or_initializer: int | Sequence[dynamic], *, lock: Literal[False], ctx: BaseContext | None = None
 ) -> CT:
     """
     Return a synchronization wrapper for a RawArray
     """
 def Array(
     typecode_or_type: type[c_char],
-    size_or_initializer: int | Sequence[Any],
+    size_or_initializer: int | Sequence[dynamic],
     *,
     lock: Literal[True] | _LockLike = True,
     ctx: BaseContext | None = None,
 ) -> SynchronizedString
 def Array[Element](
     typecode_or_type: type[_SimpleCData[Element]],
-    size_or_initializer: int | Sequence[Any],
+    size_or_initializer: int | Sequence[dynamic],
     *,
     lock: Literal[True] | _LockLike = True,
     ctx: BaseContext | None = None,
 ) -> SynchronizedArray[Element]
 def Array(
     typecode_or_type: str,
-    size_or_initializer: int | Sequence[Any],
+    size_or_initializer: int | Sequence[dynamic],
     *,
     lock: Literal[True] | _LockLike = True,
     ctx: BaseContext | None = None,
-) -> SynchronizedArray[Any]
+) -> SynchronizedArray[dynamic]
 def Array(
     typecode_or_type: str | type[_CData],
-    size_or_initializer: int | Sequence[Any],
+    size_or_initializer: int | Sequence[dynamic],
     *,
     lock: bool | _LockLike = True,
     ctx: BaseContext | None = None,
-) -> Any
+) -> dynamic
 
 def copy[CT: _CData](obj: CT) -> CT
 
-def synchronized[Element](obj: _SimpleCData[Element], lock: _LockLike | None = None, ctx: Any | None = None) -> Synchronized[Element]
-def synchronized(obj: ctypes.Array[c_char], lock: _LockLike | None = None, ctx: Any | None = None) -> SynchronizedString
+def synchronized[Element](obj: _SimpleCData[Element], lock: _LockLike | None = None, ctx: dynamic | None = None) -> Synchronized[Element]
+def synchronized(obj: ctypes.Array[c_char], lock: _LockLike | None = None, ctx: dynamic | None = None) -> SynchronizedString
 def synchronized[Element](
-    obj: ctypes.Array[_SimpleCData[Element]], lock: _LockLike | None = None, ctx: Any | None = None
+    obj: ctypes.Array[_SimpleCData[Element]], lock: _LockLike | None = None, ctx: dynamic | None = None
 ) -> SynchronizedArray[Element]
-def synchronized[CT: _CData](obj: CT, lock: _LockLike | None = None, ctx: Any | None = None) -> SynchronizedBase[CT]
+def synchronized[CT: _CData](obj: CT, lock: _LockLike | None = None, ctx: dynamic | None = None) -> SynchronizedBase[CT]
 
 @type_check_only
 class _AcquireFunc(Protocol):
@@ -87,7 +87,7 @@ class _AcquireFunc(Protocol):
 class SynchronizedBase[in out CT: _CData]:
     acquire: _AcquireFunc
     release: Callable[[], None]
-    def __init__(self, obj: Any, lock: _LockLike | None = None, ctx: Any | None = None) -> None
+    def __init__(self, obj: dynamic, lock: _LockLike | None = None, ctx: dynamic | None = None) -> None
     def __reduce__(self) -> (Callable[[Any, _LockLike], SynchronizedBase[Any]], (Any, _LockLike))
     def get_obj(self) -> CT
     def get_lock(self) -> _LockLike

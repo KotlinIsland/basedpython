@@ -345,7 +345,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from linecache import _ModuleGlobals
 from rlcompleter import Completer
 from types import CodeType, FrameType, TracebackType
-from typing import IO, Any, ClassVar, Final, Literal, ParamSpec, TypeAlias, TypeVar
+from typing import IO, ClassVar, Final, Literal, ParamSpec, TypeAlias, TypeVar
 from typing_extensions import Self, deprecated
 
 __all__ = ["run", "pm", "Pdb", "runeval", "runctx", "runcall", "set_trace", "post_mortem", "help"]
@@ -360,7 +360,7 @@ class Restart(Exception):
     """Causes a debugger to be restarted for the debugged python program."""
 
 def run(  # matches `builtins.exec`
-    statement: str | ReadableBuffer | CodeType, globals: dict[str, Any] | None = None, locals: Mapping[str, object] | None = None
+    statement: str | ReadableBuffer | CodeType, globals: dict[str, dynamic] | None = None, locals: Mapping[str, object] | None = None
 ) -> None:
     """Execute the *statement* (given as a string or a code object)
     under debugger control.
@@ -376,11 +376,11 @@ def run(  # matches `builtins.exec`
     """
 
 def runctx(  # matches `builtins.exec`
-    statement: str | ReadableBuffer | CodeType, globals: dict[str, Any], locals: Mapping[str, object]
+    statement: str | ReadableBuffer | CodeType, globals: dict[str, dynamic], locals: Mapping[str, object]
 ) -> None
 def runeval(  # matches `builtins.eval`
-    expression: str | ReadableBuffer | CodeType, globals: dict[str, Any] | None = None, locals: Mapping[str, object] | None = None
-) -> Any:
+    expression: str | ReadableBuffer | CodeType, globals: dict[str, dynamic] | None = None, locals: Mapping[str, object] | None = None
+) -> dynamic:
     """Evaluate the *expression* (given as a string or a code object)
     under debugger control.
 
@@ -471,14 +471,14 @@ class Pdb(Bdb, Cmd):
     if sys.version_info >= (3, 13):
         @property
         @deprecated("The frame locals reference is no longer cached. Use 'curframe.f_locals' instead.")
-        def curframe_locals(self) -> Mapping[str, Any]: ...
+        def curframe_locals(self) -> Mapping[str, dynamic]: ...
         @curframe_locals.setter
         @deprecated(
             "Setting 'curframe_locals' no longer has any effect as of 3.14. Update the contents of 'curframe.f_locals' instead."
         )
-        def curframe_locals(self, value: Mapping[str, Any]) -> None: ...
+        def curframe_locals(self, value: Mapping[str, dynamic]) -> None: ...
     else:
-        curframe_locals: Mapping[str, Any]
+        curframe_locals: Mapping[str, dynamic]
     if sys.version_info >= (3, 14):
         mode: _Mode | None
         colorize: bool
@@ -523,6 +523,7 @@ class Pdb(Bdb, Cmd):
         Returns True if the normal interaction function must be called,
         False otherwise.
         """
+
     if sys.version_info >= (3, 13):
         def interaction(self, frame: FrameType | None, tb_or_exc: TracebackType | BaseException | None) -> None
     else:
@@ -547,6 +548,7 @@ class Pdb(Bdb, Cmd):
             Return `lineno` if it is, 0 if not (e.g. a docstring, comment, blank
             line or EOF). Warning: testing is not comprehensive.
             """
+
     else:
         def checkline(self, filename: str, lineno: int) -> int:
             """Check whether specified line seems to be executable.
@@ -579,6 +581,7 @@ class Pdb(Bdb, Cmd):
 
         files and modules will be searched in sys.path.
         """
+
     if sys.version_info < (3, 11):
         def _runscript(self, filename: str) -> None
 
@@ -625,6 +628,7 @@ class Pdb(Bdb, Cmd):
         print anything, you will see no sign that the breakpoint was
         reached.
         """
+
     if sys.version_info >= (3, 14):
         def do_break(self, arg: str, temporary: bool = False) -> bool | None:
             """b(reak) [ ([filename:]lineno | function) [, condition] ]
@@ -642,6 +646,7 @@ class Pdb(Bdb, Cmd):
             hasn't been loaded yet).  The file is searched for on
             sys.path; the .py suffix may be omitted.
             """
+
     else:
         def do_break(self, arg: str, temporary: bool | Literal[0, 1] = 0) -> bool | None:
             """b(reak) [ ([filename:]lineno | function) [, condition] ]
@@ -723,6 +728,7 @@ class Pdb(Bdb, Cmd):
         An arrow indicates the "current frame", which determines the
         context of most commands.  'bt' is an alias for this command.
         """
+
     if sys.version_info >= (3, 13):
         def do_exceptions(self, arg: str) -> bool | None:
             """exceptions [number]
@@ -915,6 +921,7 @@ class Pdb(Bdb, Cmd):
         "help pdb" shows the full pdb documentation.
         "help exec" gives help on the ! command.
         """
+
     do_b = do_break
     do_cl = do_clear
     do_w = do_where
@@ -961,7 +968,7 @@ class Pdb(Bdb, Cmd):
     if sys.version_info >= (3, 13):
         def completenames(self, text: str, line: str, begidx: int, endidx: int) -> list[str]  # type: ignore[override]
     if sys.version_info >= (3, 12):
-        def set_convenience_variable(self, frame: FrameType, name: str, value: Any) -> None
+        def set_convenience_variable(self, frame: FrameType, name: str, value: dynamic) -> None
     if sys.version_info >= (3, 13):
         # Added in 3.13.8 and 3.14.1
         @property
@@ -1015,6 +1022,7 @@ class Pdb(Bdb, Cmd):
 
         Without expression, clear all display expressions for the current frame.
         """
+
     do_ll = do_longlist
     def _complete_location(self, text: str, line: str, begidx: int, endidx: int) -> list[str]
     def _complete_bpnumber(self, text: str, line: str, begidx: int, endidx: int) -> list[str]

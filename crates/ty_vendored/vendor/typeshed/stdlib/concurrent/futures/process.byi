@@ -54,14 +54,14 @@ from weakref import ref
 from ._base import BrokenExecutor, Executor, Future
 
 
-_threads_wakeups: MutableMapping[Any, Any]
+_threads_wakeups: MutableMapping[dynamic, dynamic]
 _global_shutdown: bool
 
 class _ThreadWakeup:
     _closed: bool
     # Any: Unused send and recv methods
-    _reader: Connection[Any, Any]
-    _writer: Connection[Any, Any]
+    _reader: Connection[dynamic, dynamic]
+    _writer: Connection[dynamic, dynamic]
     def close(self) -> None
     def wakeup(self) -> None
     def clear(self) -> None
@@ -87,33 +87,33 @@ def _rebuild_exc(exc: Exception, tb: str) -> Exception
 class _WorkItem[in out Element]:
     future: Future[Element]
     fn: (...) -> Element
-    args: Iterable[Any]
-    kwargs: Mapping[str, Any]
-    def __init__(self, future: Future[Element], fn: (...) -> Element, args: Iterable[Any], kwargs: Mapping[str, Any]) -> None
+    args: Iterable[dynamic]
+    kwargs: Mapping[str, dynamic]
+    def __init__(self, future: Future[Element], fn: (...) -> Element, args: Iterable[dynamic], kwargs: Mapping[str, dynamic]) -> None
 
 class _ResultItem:
     work_id: int
     exception: Exception
-    result: Any
+    result: dynamic
     if sys.version_info >= (3, 11):
         exit_pid: int | None
         def __init__(
-            self, work_id: int, exception: Exception | None = None, result: Any | None = None, exit_pid: int | None = None
+            self, work_id: int, exception: Exception | None = None, result: dynamic | None = None, exit_pid: int | None = None
         ) -> None
     else:
-        def __init__(self, work_id: int, exception: Exception | None = None, result: Any | None = None) -> None
+        def __init__(self, work_id: int, exception: Exception | None = None, result: dynamic | None = None) -> None
 
 class _CallItem:
     work_id: int
     fn: (...) -> Any
-    args: Iterable[Any]
-    kwargs: Mapping[str, Any]
-    def __init__(self, work_id: int, fn: (...) -> Any, args: Iterable[Any], kwargs: Mapping[str, Any]) -> None
+    args: Iterable[dynamic]
+    kwargs: Mapping[str, dynamic]
+    def __init__(self, work_id: int, fn: (...) -> Any, args: Iterable[dynamic], kwargs: Mapping[str, dynamic]) -> None
 
 class _SafeQueue(Queue[Future[Any]]):
     """Safe Queue set exception to the future object linked to a job"""
 
-    pending_work_items: dict[int, _WorkItem[Any]]
+    pending_work_items: dict[int, _WorkItem[dynamic]]
     if sys.version_info < (3, 12):
         shutdown_lock: Lock
     thread_wakeup: _ThreadWakeup
@@ -123,7 +123,7 @@ class _SafeQueue(Queue[Future[Any]]):
             max_size: int | None = 0,
             *,
             ctx: BaseContext,
-            pending_work_items: dict[int, _WorkItem[Any]],
+            pending_work_items: dict[int, _WorkItem[dynamic]],
             thread_wakeup: _ThreadWakeup,
         ) -> None
     else:
@@ -132,14 +132,14 @@ class _SafeQueue(Queue[Future[Any]]):
             max_size: int | None = 0,
             *,
             ctx: BaseContext,
-            pending_work_items: dict[int, _WorkItem[Any]],
+            pending_work_items: dict[int, _WorkItem[dynamic]],
             shutdown_lock: Lock,
             thread_wakeup: _ThreadWakeup,
         ) -> None
 
     def _on_queue_feeder_error(self, e: Exception, obj: _CallItem) -> None
 
-def _get_chunks(*iterables: Any, chunksize: int) -> Generator[(*: Any)]:
+def _get_chunks(*iterables: dynamic, chunksize: int) -> Generator[(*: Any)]:
     """Iterates over zip()ed iterables in chunks."""
 
 def _process_chunk[Element](fn: (...) -> Element, chunk: Iterable[(*: Any)]) -> list[Element]:
@@ -154,9 +154,9 @@ def _process_chunk[Element](fn: (...) -> Element, chunk: Iterable[(*: Any)]) -> 
 
 if sys.version_info >= (3, 11):
     def _sendback_result(
-        result_queue: SimpleQueue[_WorkItem[Any]],
+        result_queue: SimpleQueue[_WorkItem[dynamic]],
         work_id: int,
-        result: Any | None = None,
+        result: dynamic | None = None,
         exception: Exception | None = None,
         exit_pid: int | None = None,
     ) -> None:
@@ -164,7 +164,7 @@ if sys.version_info >= (3, 11):
 
 else:
     def _sendback_result(
-        result_queue: SimpleQueue[_WorkItem[Any]], work_id: int, result: Any | None = None, exception: Exception | None = None
+        result_queue: SimpleQueue[_WorkItem[dynamic]], work_id: int, result: dynamic | None = None, exception: Exception | None = None
     ) -> None:
         """Safely send back the given result or exception"""
 
@@ -223,12 +223,12 @@ class _ExecutorManagerThread(Thread):
 
     thread_wakeup: _ThreadWakeup
     shutdown_lock: Lock
-    executor_reference: ref[Any]
+    executor_reference: ref[dynamic]
     processes: MutableMapping[int, Process]
     call_queue: Queue[_CallItem]
     result_queue: SimpleQueue[_ResultItem]
     work_ids_queue: Queue[int]
-    pending_work_items: dict[int, _WorkItem[Any]]
+    pending_work_items: dict[int, _WorkItem[dynamic]]
     def __init__(self, executor: ProcessPoolExecutor) -> None
     def run(self) -> None
     def add_call_item_to_queue(self) -> None
@@ -245,7 +245,7 @@ _system_limits_checked: bool
 _system_limited: bool | None
 
 def _check_system_limits() -> None
-def _chain_from_iterable_of_lists(iterable: Iterable[MutableSequence[Any]]) -> Any:
+def _chain_from_iterable_of_lists(iterable: Iterable[MutableSequence[dynamic]]) -> dynamic:
     """
     Specialized implementation of itertools.chain.from_iterable.
     Each item in *iterable* should be a list.  This function is
@@ -269,11 +269,11 @@ class ProcessPoolExecutor(Executor):
     _idle_worker_semaphore: Semaphore
     _broken: bool
     _queue_count: int
-    _pending_work_items: dict[int, _WorkItem[Any]]
+    _pending_work_items: dict[int, _WorkItem[dynamic]]
     _cancel_pending_futures: bool
     _executor_manager_thread_wakeup: _ThreadWakeup
-    _result_queue: SimpleQueue[Any]
-    _work_ids: Queue[Any]
+    _result_queue: SimpleQueue[dynamic]
+    _work_ids: Queue[dynamic]
     if sys.version_info >= (3, 11):
         def __init__(
             self,
@@ -288,19 +288,21 @@ class ProcessPoolExecutor(Executor):
 
             Args:
                 max_workers: The maximum number of processes that can be used to
-                    execute the given calls. If None or not given then as many
-                    worker processes will be created as the machine has processors.
-                mp_context: A multiprocessing context to launch the workers created
-                    using the multiprocessing.get_context('start method') API. This
-                    object should provide SimpleQueue, Queue and Process.
+                    execute the given calls.  If None or not given then as many
+                    worker processes will be created as the machine has
+                    processors.
+                mp_context: A multiprocessing context to launch the workers
+                    created using the multiprocessing.get_context('start method')
+                    API.  This object should provide SimpleQueue, Queue and
+                    Process.
                 initializer: A callable used to initialize worker processes.
                 initargs: A tuple of arguments to pass to the initializer.
-                max_tasks_per_child: The maximum number of tasks a worker process
-                    can complete before it will exit and be replaced with a fresh
-                    worker process. The default of None means worker process will
-                    live as long as the executor. Requires a non-'fork' mp_context
-                    start method. When given, we default to using 'spawn' if no
-                    mp_context is supplied.
+                max_tasks_per_child: The maximum number of tasks a worker
+                    process can complete before it will exit and be replaced
+                    with a fresh worker process.  The default of None means
+                    worker process will live as long as the executor.  Requires
+                    a non-'fork' mp_context start method.  When given, we
+                    default to using 'spawn' if no mp_context is supplied.
             """
         def __init__[*Ts](
             self,

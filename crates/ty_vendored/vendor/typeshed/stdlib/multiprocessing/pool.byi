@@ -1,7 +1,7 @@
 from collections.abc import Callable, Iterable, Mapping
 from multiprocessing.context import DefaultContext, Process
 from types import GenericAlias, TracebackType
-from typing import Any, Final, Generic, TypeVar
+from typing import Final, Generic, TypeVar
 from typing_extensions import Self
 
 __all__ = ["Pool", "ThreadPool"]
@@ -15,10 +15,11 @@ class ApplyResult[in out Element]:
     def wait(self, timeout: float | None = None) -> None
     def ready(self) -> bool
     def successful(self) -> bool
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
-        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        For example, for t = list[int], t.__origin__ is list and t.__args__
+        is (int,).
         """
 
 # alias created during issue #17805
@@ -51,12 +52,12 @@ class Pool:
         self,
         processes: int | None = None,
         initializer: (...) -> object | None = None,
-        initargs: Iterable[Any] = (),
+        initargs: Iterable[dynamic] = (),
         maxtasksperchild: int | None = None,
-        context: Any | None = None,
+        context: dynamic | None = None,
     ) -> None
-    static def Process(ctx: DefaultContext, *args: Any, **kwds: Any) -> Process
-    def apply[Element](self, func: (...) -> Element, args: Iterable[Any] = (), kwds: Mapping[str, Any] = {}) -> Element:
+    static def Process(ctx: DefaultContext, *args: dynamic, **kwds: dynamic) -> Process
+    def apply[Element](self, func: (...) -> Element, args: Iterable[dynamic] = (), kwds: Mapping[str, dynamic] = {}) -> Element:
         """
         Equivalent of `func(*args, **kwds)`.
         Pool must be running.
@@ -65,8 +66,8 @@ class Pool:
     def apply_async[Element](
         self,
         func: (...) -> Element,
-        args: Iterable[Any] = (),
-        kwds: Mapping[str, Any] = {},
+        args: Iterable[dynamic] = (),
+        kwds: Mapping[str, dynamic] = {},
         callback: Callable[[Element], object] | None = None,
         error_callback: Callable[[BaseException], object] | None = None,
     ) -> AsyncResult[Element]:
@@ -102,7 +103,7 @@ class Pool:
         Like `imap()` method but ordering of results is arbitrary.
         """
 
-    def starmap[Element](self, func: (...) -> Element, iterable: Iterable[Iterable[Any]], chunksize: int | None = None) -> list[Element]:
+    def starmap[Element](self, func: (...) -> Element, iterable: Iterable[Iterable[dynamic]], chunksize: int | None = None) -> list[Element]:
         """
         Like `map()` method but the elements of the `iterable` are expected to
         be iterables as well and will be unpacked as arguments. Hence
@@ -112,7 +113,7 @@ class Pool:
     def starmap_async[Element](
         self,
         func: (...) -> Element,
-        iterable: Iterable[Iterable[Any]],
+        iterable: Iterable[Iterable[dynamic]],
         chunksize: int | None = None,
         callback: Callable[[list[Element]], object] | None = None,
         error_callback: Callable[[BaseException], object] | None = None,
@@ -132,7 +133,7 @@ class Pool:
 
 class ThreadPool(Pool):
     def __init__(
-        self, processes: int | None = None, initializer: (...) -> object | None = None, initargs: Iterable[Any] = ()
+        self, processes: int | None = None, initializer: (...) -> object | None = None, initargs: Iterable[dynamic] = ()
     ) -> None
 
 # undocumented

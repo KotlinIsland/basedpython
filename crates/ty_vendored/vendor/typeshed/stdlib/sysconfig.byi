@@ -1,7 +1,7 @@
 """Access to Python's configuration information."""
 
 import sys
-from typing import IO, Any, Literal
+from typing import IO, Literal
 from typing_extensions import LiteralString, deprecated
 
 __all__ = [
@@ -19,15 +19,15 @@ __all__ = [
 ]
 
 @deprecated("SO is deprecated, use EXT_SUFFIX. Support is removed in Python 3.11")
-def get_config_var(name: Literal["SO"]) -> Any:
+def get_config_var(name: Literal["SO"]) -> dynamic:
     """Return the value of a single variable using the dictionary returned by
     'get_config_vars()'.
 
     Equivalent to get_config_vars().get(name)
     """
-def get_config_var(name: str) -> Any
+def get_config_var(name: str) -> dynamic
 
-def get_config_vars() -> dict[str, Any]:
+def get_config_vars() -> dict[str, dynamic]:
     """With no arguments, return a dictionary of all configuration
     variables relevant for the current platform.
 
@@ -37,7 +37,7 @@ def get_config_vars() -> dict[str, Any]:
     With arguments, return a list of values that result from looking up
     each argument in the configuration variable dictionary.
     """
-def get_config_vars(arg: str, /, *args: str) -> list[Any]
+def get_config_vars(arg: str, /, *args: str) -> list[dynamic]
 
 def get_scheme_names() -> (*: str):
     """Return a tuple containing the schemes names."""
@@ -50,13 +50,13 @@ def _get_preferred_schemes() -> dict[Literal["prefix", "home", "user"], LiteralS
 def get_path_names() -> (*: str):
     """Return a tuple containing the paths names."""
 
-def get_path(name: str, scheme: str = ..., vars: dict[str, Any] | None = None, expand: bool = True) -> str:
+def get_path(name: str, scheme: str = ..., vars: dict[str, dynamic] | None = None, expand: bool = True) -> str:
     """Return a path corresponding to the scheme.
 
     ``scheme`` is the install scheme name.
     """
 
-def get_paths(scheme: str = ..., vars: dict[str, Any] | None = None, expand: bool = True) -> dict[str, str]:
+def get_paths(scheme: str = ..., vars: dict[str, dynamic] | None = None, expand: bool = True) -> dict[str, str]:
     """Return a mapping containing an install scheme.
 
     ``scheme`` is the install scheme name. If not provided, it will
@@ -74,6 +74,9 @@ def get_platform() -> str:
     isn't particularly important.
 
     Examples of returned values:
+       linux-x86_64
+       linux-aarch64
+       solaris-2.6-sun4u
 
 
     Windows:
@@ -103,7 +106,7 @@ else:
     @deprecated("The `check_home` parameter is deprecated since Python 3.12; removed in Python 3.15.")
     def is_python_build(check_home: bool = False) -> bool
 
-def parse_config_h(fp: IO[Any], vars: dict[str, Any] | None = None) -> dict[str, Any]:
+def parse_config_h(fp: IO[dynamic], vars: dict[str, dynamic] | None = None) -> dict[str, dynamic]:
     """Parse a config.h-style file.
 
     A dictionary containing name/value pairs is returned.  If an

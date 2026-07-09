@@ -114,7 +114,7 @@ class Fault(Error):
 
     faultCode: int
     faultString: str
-    def __init__(self, faultCode: int, faultString: str, **extra: Any) -> None
+    def __init__(self, faultCode: int, faultString: str, **extra: dynamic) -> None
 
 boolean = bool
 Boolean = bool
@@ -138,10 +138,10 @@ class DateTime:
     def __eq__(self, other: _DateTimeComparable) -> bool  # type: ignore[override]
     def make_comparable(self, other: _DateTimeComparable) -> (str, str)  # undocumented
     def timetuple(self) -> time.struct_time  # undocumented
-    def decode(self, data: Any) -> None
+    def decode(self, data: dynamic) -> None
     def encode(self, out: SupportsWrite[str]) -> None
 
-def _datetime(data: Any) -> DateTime  # undocumented
+def _datetime(data: dynamic) -> DateTime  # undocumented
 def _datetime_type(data: str) -> datetime  # undocumented
 
 class Binary:
@@ -175,8 +175,8 @@ class Marshaller:
     function for this purpose.
     """
 
-    dispatch: dict[type[_Marshallable] | Literal["_arbitrary_instance"], Callable[[Marshaller, Any, _WriteCallback], None]]
-    memo: dict[Any, None]
+    dispatch: dict[type[_Marshallable] | Literal["_arbitrary_instance"], Callable[[Marshaller, dynamic, _WriteCallback], None]]
+    memo: dict[dynamic, None]
     data: None
     encoding: str | None
     allow_none: bool
@@ -215,13 +215,13 @@ class Unmarshaller:
     _value: bool
     _methodname: str | None
     _encoding: str
-    append: Callable[[Any], None]
+    append: Callable[[dynamic], None]
     _use_datetime: bool
     _use_builtin_types: bool
     def __init__(self, use_datetime: bool = False, use_builtin_types: bool = False) -> None
     def close(self) -> (*: _Marshallable)
     def getmethodname(self) -> str | None
-    def xml(self, encoding: str, standalone: Any) -> None  # Standalone is ignored
+    def xml(self, encoding: str, standalone: dynamic) -> None  # Standalone is ignored
     def start(self, tag: str, attrs: dict[str, str]) -> None
     def data(self, text: str) -> None
     def end(self, tag: str) -> None
@@ -401,7 +401,7 @@ class SafeTransport(Transport):
         use_builtin_types: bool = False,
         *,
         headers: Iterable[(str, str)] = (),
-        context: Any | None = None,
+        context: dynamic | None = None,
     ) -> None
     def make_connection(self, host: _HostType) -> http.client.HTTPSConnection
 
@@ -445,7 +445,7 @@ class ServerProxy:
         use_builtin_types: bool = False,
         *,
         headers: Iterable[(str, str)] = (),
-        context: Any | None = None,
+        context: dynamic | None = None,
     ) -> None
     def __getattr__(self, name: str) -> _Method
 

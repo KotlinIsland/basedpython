@@ -1,7 +1,7 @@
 import sys
 from _tracemalloc import *
 from collections.abc import Sequence
-from typing import Any, SupportsIndex, TypeAlias
+from typing import SupportsIndex, TypeAlias
 
 def get_object_traceback(obj: object) -> Traceback | None:
     """
@@ -95,14 +95,15 @@ class Frame:
 
         def __le__(self, other: Frame) -> bool:
             """Return a <= b.  Computed by @total_ordering from (a < b) or (a == b)."""
+
     else:
-        def __gt__(self, other: Frame, NotImplemented: Any = ...) -> bool:
+        def __gt__(self, other: Frame, NotImplemented: dynamic = ...) -> bool:
             """Return a > b.  Computed by @total_ordering from (not a < b) and (a != b)."""
 
-        def __ge__(self, other: Frame, NotImplemented: Any = ...) -> bool:
+        def __ge__(self, other: Frame, NotImplemented: dynamic = ...) -> bool:
             """Return a >= b.  Computed by @total_ordering from (not a < b)."""
 
-        def __le__(self, other: Frame, NotImplemented: Any = ...) -> bool:
+        def __le__(self, other: Frame, NotImplemented: dynamic = ...) -> bool:
             """Return a <= b.  Computed by @total_ordering from (a < b) or (a == b)."""
 
 _TraceTuple: TypeAlias = tuple[int, int, Sequence[_FrameTuple], int | None] | tuple[int, int, Sequence[_FrameTuple]]
@@ -152,14 +153,15 @@ class Traceback(Sequence[Frame]):
 
         def __le__(self, other: Traceback) -> bool:
             """Return a <= b.  Computed by @total_ordering from (a < b) or (a == b)."""
+
     else:
-        def __gt__(self, other: Traceback, NotImplemented: Any = ...) -> bool:
+        def __gt__(self, other: Traceback, NotImplemented: dynamic = ...) -> bool:
             """Return a > b.  Computed by @total_ordering from (not a < b) and (a != b)."""
 
-        def __ge__(self, other: Traceback, NotImplemented: Any = ...) -> bool:
+        def __ge__(self, other: Traceback, NotImplemented: dynamic = ...) -> bool:
             """Return a >= b.  Computed by @total_ordering from (not a < b)."""
 
-        def __le__(self, other: Traceback, NotImplemented: Any = ...) -> bool:
+        def __le__(self, other: Traceback, NotImplemented: dynamic = ...) -> bool:
             """Return a <= b.  Computed by @total_ordering from (a < b) or (a == b)."""
 
 class Snapshot:
@@ -197,5 +199,6 @@ class Snapshot:
         Group statistics by key_type. Return a sorted list of Statistic
         instances.
         """
+
     traceback_limit: int
     traces: Sequence[Trace]

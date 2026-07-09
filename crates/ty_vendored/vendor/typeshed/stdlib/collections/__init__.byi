@@ -46,7 +46,7 @@ def namedtuple(
     *,
     rename: bool = False,
     module: str | None = None,
-    defaults: Iterable[Any] | None = None,
+    defaults: Iterable[dynamic] | None = None,
 ) -> type[(*: Any)]:
     """Returns a new subclass of tuple with named fields.
 
@@ -109,7 +109,7 @@ class UserDict[in out Key, in out Value](MutableMapping[Key, Value]):
     # TODO: Much like `dict.fromkeys`, the true signature of `UserDict.fromkeys` is inexpressible in the current type system.
     # See #3800 & https://github.com/python/typing/issues/548#issuecomment-683336963.
     @classmethod
-    def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None) -> UserDict[Element, Any | None]
+    def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None) -> UserDict[Element, dynamic | None]
     @classmethod
     def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other) -> UserDict[Element, Other]
 
@@ -198,18 +198,18 @@ class UserString(Sequence[UserString]):
     def __radd__(self, other: object) -> Self
     def __mul__(self, n: int) -> Self
     def __rmul__(self, n: int) -> Self
-    def __mod__(self, args: Any) -> Self
+    def __mod__(self, args: dynamic) -> Self
     def __rmod__(self, template: object) -> Self
     def capitalize(self) -> Self
     def casefold(self) -> Self
-    def center(self, width: int, *args: Any) -> Self
+    def center(self, width: int, *args: dynamic) -> Self
     def count(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
     def encode(self: UserString, encoding: str | None = "utf-8", errors: str | None = "strict") -> bytes
     def endswith(self, suffix: str | (*: str), start: int | None = 0, end: int | None = sys.maxsize) -> bool
     def expandtabs(self, tabsize: int = 8) -> Self
     def find(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
-    def format(self, *args: Any, **kwds: Any) -> str
-    def format_map(self, mapping: Mapping[str, Any]) -> str
+    def format(self, *args: dynamic, **kwds: dynamic) -> str
+    def format_map(self, mapping: Mapping[str, dynamic]) -> str
     def index(self, sub: str, start: int = 0, end: int = sys.maxsize) -> int
     def isalpha(self) -> bool
     def isalnum(self) -> bool
@@ -224,7 +224,7 @@ class UserString(Sequence[UserString]):
     def isupper(self) -> bool
     def isascii(self) -> bool
     def join(self, seq: Iterable[str]) -> str
-    def ljust(self, width: int, *args: Any) -> Self
+    def ljust(self, width: int, *args: dynamic) -> Self
     def lower(self) -> Self
     def lstrip(self, chars: str | None = None) -> Self
     maketrans = str.maketrans
@@ -234,7 +234,7 @@ class UserString(Sequence[UserString]):
     def replace(self, old: str | UserString, new: str | UserString, maxsplit: int = -1) -> Self
     def rfind(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
     def rindex(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
-    def rjust(self, width: int, *args: Any) -> Self
+    def rjust(self, width: int, *args: dynamic) -> Self
     def rpartition(self, sep: str) -> (str, str, str)
     def rstrip(self, chars: str | None = None) -> Self
     def split(self, sep: str | None = None, maxsplit: int = -1) -> list[str]
@@ -244,7 +244,7 @@ class UserString(Sequence[UserString]):
     def strip(self, chars: str | None = None) -> Self
     def swapcase(self) -> Self
     def title(self) -> Self
-    def translate(self, *args: Any) -> Self
+    def translate(self, *args: dynamic) -> Self
     def upper(self) -> Self
     def zfill(self, width: int) -> Self
 
@@ -303,6 +303,7 @@ class deque[in out Element](MutableSequence[Element]):
 
     def __len__(self) -> int:
         """Return len(self)."""
+
     __hash__: ClassVar[None]  # type: ignore[assignment]
     # These methods of deque don't take slices, unlike MutableSequence, hence the type: ignores
     def __getitem__(self, key: SupportsIndex, /) -> Element:  # type: ignore[override]
@@ -337,8 +338,8 @@ class deque[in out Element](MutableSequence[Element]):
     def __gt__(self, value: deque[Element], /) -> bool
     def __ge__(self, value: deque[Element], /) -> bool
     def __eq__(self, value: object, /) -> bool
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
-        """See PEP 585"""
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
+        """deques are generic over the type of their contents"""
 
 class Counter[in out Element](dict[Element, int]):
     """Dict subclass for counting hashable items.  Sometimes called a bag
@@ -431,7 +432,7 @@ class Counter[in out Element](dict[Element, int]):
 
         """
 
-    class def fromkeys(cls, iterable: Any, v: int | None = None) -> NoReturn  # type: ignore[override]
+    class def fromkeys(cls, iterable: dynamic, v: int | None = None) -> NoReturn  # type: ignore[override]
 
     def subtract(self, iterable: None = None, /) -> None:
         """Like dict.update() but subtracts counts instead of replacing them.
@@ -489,16 +490,16 @@ class Counter[in out Element](dict[Element, int]):
     def __ne__(self, other: object) -> bool:
         """True if any counts disagree. Missing counts are treated as zero."""
 
-    def __le__(self, other: Counter[Any]) -> bool:
+    def __le__(self, other: Counter[dynamic]) -> bool:
         """True if all counts in self are a subset of those in other."""
 
-    def __lt__(self, other: Counter[Any]) -> bool:
+    def __lt__(self, other: Counter[dynamic]) -> bool:
         """True if all counts in self are a proper subset of those in other."""
 
-    def __ge__(self, other: Counter[Any]) -> bool:
+    def __ge__(self, other: Counter[dynamic]) -> bool:
         """True if all counts in self are a superset of those in other."""
 
-    def __gt__(self, other: Counter[Any]) -> bool:
+    def __gt__(self, other: Counter[dynamic]) -> bool:
         """True if all counts in self are a proper superset of those in other."""
 
     def __add__[Other](self, other: Counter[Other]) -> Counter[Element | Other]:
@@ -532,8 +533,23 @@ class Counter[in out Element](dict[Element, int]):
         Counter({'b': 3, 'c': 2, 'a': 1})
 
         """
+
     if sys.version_info >= (3, 15):
-        def __xor__[Other](self, other: Counter[Other]) -> Counter[Element | Other]  # type: ignore[override]
+        def __xor__[Other](self, other: Counter[Other]) -> Counter[Element | Other]:  # type: ignore[override]
+            """Symmetric difference. Absolute value of count differences.
+
+            The symmetric difference p ^ q is equivalent to:
+
+                (p - q) | (q - p).
+
+            For each element, symmetric difference gives the same result as:
+
+                max(p[elem], q[elem]) - min(p[elem], q[elem])
+
+            >>> Counter(a=5, b=3, c=2, d=2) ^ Counter(a=1, b=3, c=5, e=1)
+            Counter({'a': 4, 'c': 3, 'd': 2, 'e': 1})
+
+            """
 
     def __pos__(self) -> Counter[Element]:
         """Adds an empty counter, effectively stripping negative and zero counts"""
@@ -543,6 +559,7 @@ class Counter[in out Element](dict[Element, int]):
         and flips the sign on negative counts.
 
         """
+
     # several type: ignores because __iadd__ is supposedly incompatible with __add__, etc.
     def __iadd__(self, other: SupportsItems[Element, int]) -> Self:  # type: ignore[misc]
         """Inplace add from another counter, keeping only positive counts.
@@ -583,8 +600,17 @@ class Counter[in out Element](dict[Element, int]):
         Counter({'b': 3, 'c': 2, 'a': 1})
 
         """
+
     if sys.version_info >= (3, 15):
-        def __ixor__(self, other: Counter[Element]) -> Self  # type: ignore[misc]
+        def __ixor__(self, other: Counter[Element]) -> Self:  # type: ignore[misc]
+            """Inplace symmetric difference. Absolute value of count differences.
+
+            >>> c = Counter(a=5, b=3, c=2, d=2)
+            >>> c ^= Counter(a=1, b=3, c=5, e=1)
+            >>> c
+            Counter({'a': 4, 'c': 3, 'd': 2, 'e': 1})
+
+            """
 
 # The pure-Python implementations of the "views" classes
 # These are exposed at runtime in `collections/__init__.py`
@@ -623,7 +649,8 @@ class OrderedDict[in out Key, in out Value](dict[Key, Value]):
     def popitem(self, last: bool = True) -> (Key, Value):
         """Remove and return a (key, value) pair from the dictionary.
 
-        Pairs are returned in LIFO order if last is true or FIFO order if false.
+        Pairs are returned in LIFO order if last is true or FIFO order if
+        false.
         """
 
     def move_to_end(self, key: Key, last: bool = True) -> None:
@@ -646,7 +673,7 @@ class OrderedDict[in out Key, in out Value](dict[Key, Value]):
     # Like dict.fromkeys, its true signature is not expressible in the current type system.
     # See #3800 & https://github.com/python/typing/issues/548#issuecomment-683336963.
     @classmethod
-    def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None) -> OrderedDict[Element, Any | None]:
+    def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None) -> OrderedDict[Element, dynamic | None]:
         """Create a new ordered dictionary with keys from iterable and values set to value."""
     @classmethod
     def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other) -> OrderedDict[Element, Other]
@@ -672,10 +699,12 @@ class OrderedDict[in out Key, in out Value](dict[Key, Value]):
     def __eq__(self, value: object, /) -> bool
 
     if sys.version_info >= (3, 15):
-        def __or__(self, value: dict[Key, Value] | frozendict[Key, Value], /) -> Self
+        def __or__(self, value: dict[Key, Value] | frozendict[Key, Value], /) -> Self:
+            """Return self|value."""
         def __or__[T1, T2](self, value: dict[T1, T2] | frozendict[T1, T2], /) -> OrderedDict[Key | T1, Value | T2]
 
-        def __ror__(self, value: dict[Key, Value] | frozendict[Key, Value], /) -> Self  # type: ignore[override,misc]
+        def __ror__(self, value: dict[Key, Value] | frozendict[Key, Value], /) -> Self:  # type: ignore[override,misc]
+            """Return value|self."""
         def __ror__[T1, T2](  # type: ignore[misc]
             self, value: dict[T1, T2] | frozendict[T1, T2], /
         ) -> OrderedDict[Key | T1, Value | T2]
@@ -808,20 +837,21 @@ class ChainMap[in out Key, in out Value](MutableMapping[Key, Value]):
 
     def copy(self) -> Self:
         """New ChainMap or subclass with a new copy of maps[0] and refs to maps[1:]"""
+
     __copy__ = copy
     # All arguments to `fromkeys` are passed to `dict.fromkeys` at runtime,
     # so the signature should be kept in line with `dict.fromkeys`.
     if sys.version_info >= (3, 13):
         @classmethod
-        def fromkeys[Element](cls, iterable: Iterable[Element], /) -> ChainMap[Element, Any | None]:
+        def fromkeys[Element](cls, iterable: Iterable[Element], /) -> ChainMap[Element, dynamic | None]:
             """Create a new ChainMap with keys from iterable and values set to value."""
     else:
         @classmethod
-        def fromkeys[Element](cls, iterable: Iterable[Element]) -> ChainMap[Element, Any | None]:
+        def fromkeys[Element](cls, iterable: Iterable[Element]) -> ChainMap[Element, dynamic | None]:
             """Create a ChainMap with a single dict created from the iterable."""
 
     @classmethod
-    def fromkeys[Element](cls, iterable: Iterable[Element], value: None, /) -> ChainMap[Element, Any | None]:
+    def fromkeys[Element](cls, iterable: Iterable[Element], value: None, /) -> ChainMap[Element, dynamic | None]:
         """Create a new ChainMap with keys from iterable and values set to value."""
     @classmethod
     def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other, /) -> ChainMap[Element, Other]

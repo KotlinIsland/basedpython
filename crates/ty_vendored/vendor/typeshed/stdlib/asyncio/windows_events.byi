@@ -126,7 +126,7 @@ if sys.platform == "win32":
             def get_child_watcher(self) -> NoReturn:
                 """Get the watcher for child processes."""
 
-            def set_child_watcher(self, watcher: Any) -> NoReturn:
+            def set_child_watcher(self, watcher: dynamic) -> NoReturn:
                 """Set the watcher for child processes."""
 
         class WindowsProactorEventLoopPolicy(events.BaseDefaultEventLoopPolicy):
@@ -134,7 +134,7 @@ if sys.platform == "win32":
             def get_child_watcher(self) -> NoReturn:
                 """Get the watcher for child processes."""
 
-            def set_child_watcher(self, watcher: Any) -> NoReturn:
+            def set_child_watcher(self, watcher: dynamic) -> NoReturn:
                 """Set the watcher for child processes."""
 
     if sys.version_info >= (3, 14):

@@ -82,6 +82,29 @@ def f() -> None:
     reveal_type(x)  # revealed: int | str | bytes
 ```
 
+## `Self`
+
+`Self` is not allowed in an explicit type alias value, even when the alias is defined in a class
+body. Runtime-expression positions, such as `Annotated` metadata, are not part of the alias value's
+type expression.
+
+TODO: Reject `Self` in alias type-parameter bounds and defaults.
+
+TODO: Reject `Self` introduced indirectly through runtime-expression forms such as `TypeOf[value]`.
+
+```py
+from typing import Annotated, Self, cast
+
+class C:
+    # error: [invalid-type-form] "`Self` cannot be used in a type alias"
+    type Alias = tuple[Self]
+
+    # error: [invalid-type-form] "`Self` cannot be used in a type alias"
+    type Simplified = object | Self
+
+    type Metadata = Annotated[int, cast(Self, object())]
+```
+
 ## Aliased type aliases
 
 ```py
@@ -244,7 +267,8 @@ type W = A | B
 type X = C | D
 type Y = W | X
 
-from ty_extensions import is_equivalent_to, static_assert
+from ty_extensions import static_assert
+from ty_extensions._internal import is_equivalent_to
 
 static_assert(is_equivalent_to(Y, A | B | C | D))
 ```
@@ -311,7 +335,8 @@ def _(x: X, y: tuple[Literal[1], Literal[3]]):
 Two `TypeAliasType`s are distinct and disjoint, even if they refer to the same type
 
 ```py
-from ty_extensions import static_assert, is_equivalent_to, is_disjoint_from, TypeOf
+from ty_extensions import static_assert
+from ty_extensions._internal import TypeOf, is_equivalent_to, is_disjoint_from
 
 type Alias1 = int
 type Alias2 = int
@@ -563,7 +588,8 @@ def _(x: C):
 ### Subtyping of materializations of cyclic aliases
 
 ```py
-from ty_extensions import static_assert, is_subtype_of, Bottom, Top
+from ty_extensions import static_assert, Bottom, Top
+from ty_extensions._internal import is_subtype_of
 
 type JsonValue = None | JsonDict
 type JsonDict = dict[str, JsonValue]
@@ -578,7 +604,8 @@ static_assert(is_subtype_of(Bottom[JsonDict], Top[JsonDict]))
 
 ```py
 from typing import Callable
-from ty_extensions import static_assert, is_equivalent_to, is_subtype_of, Top
+from ty_extensions import static_assert, Top
+from ty_extensions._internal import is_equivalent_to, is_subtype_of
 
 class Box[T]:
     pass
@@ -603,6 +630,17 @@ x: JSON_OBJECT = {"hello": 23}
 
 def f() -> JSON_OBJECT:
     return {"hello": 23}
+```
+
+### Aliased union in a self-recursive type alias
+
+Regression test for <https://github.com/astral-sh/ty/issues/3835>.
+
+```py
+from collections.abc import Sequence
+
+type JSONScalar = str | int
+type JSONValue = JSONScalar | Sequence[JSONValue] | dict[str, JSONValue]
 ```
 
 ### Recursive dict alias in method return

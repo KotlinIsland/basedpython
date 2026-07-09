@@ -453,7 +453,7 @@ def optimize(p: bytes | bytearray | IO[bytes]) -> bytes:
 def dis(
     pickle: bytes | bytearray | IO[bytes],
     out: IO[str] | None = None,
-    memo: MutableMapping[int, Any] | None = None,
+    memo: MutableMapping[int, dynamic] | None = None,
     indentlevel: int = 4,
     annotate: int = 0,
 ) -> None:

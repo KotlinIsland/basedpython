@@ -3,7 +3,7 @@ import sys
 from _typeshed import StrOrBytesPath
 from asyncio import events, protocols, streams, transports
 from collections.abc import Callable, Collection
-from typing import IO, Any, Literal
+from typing import IO, Literal
 
 # Keep asyncio.__all__ updated with any changes to __all__ here
 __all__ = ("create_subprocess_exec", "create_subprocess_shell")
@@ -42,9 +42,9 @@ class Process:
 if sys.version_info >= (3, 11):
     async def create_subprocess_shell(
         cmd: str | bytes,
-        stdin: int | IO[Any] | None = None,
-        stdout: int | IO[Any] | None = None,
-        stderr: int | IO[Any] | None = None,
+        stdin: int | IO[dynamic] | None = None,
+        stdout: int | IO[dynamic] | None = None,
+        stderr: int | IO[dynamic] | None = None,
         limit: int = 65536,
         *,
         # These parameters are forced to these values by BaseEventLoop.subprocess_shell
@@ -56,11 +56,11 @@ if sys.version_info >= (3, 11):
         text: Literal[False] | None = None,
         # These parameters are taken by subprocess.Popen, which this ultimately delegates to
         executable: StrOrBytesPath | None = None,
-        preexec_fn: Callable[[], Any] | None = None,
+        preexec_fn: Callable[[], dynamic] | None = None,
         close_fds: bool = True,
         cwd: StrOrBytesPath | None = None,
         env: subprocess._ENV | None = None,
-        startupinfo: Any | None = None,
+        startupinfo: dynamic | None = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -75,9 +75,9 @@ if sys.version_info >= (3, 11):
     async def create_subprocess_exec(
         program: StrOrBytesPath,
         *args: StrOrBytesPath,
-        stdin: int | IO[Any] | None = None,
-        stdout: int | IO[Any] | None = None,
-        stderr: int | IO[Any] | None = None,
+        stdin: int | IO[dynamic] | None = None,
+        stdout: int | IO[dynamic] | None = None,
+        stderr: int | IO[dynamic] | None = None,
         limit: int = 65536,
         # These parameters are forced to these values by BaseEventLoop.subprocess_exec
         universal_newlines: Literal[False] = False,
@@ -88,11 +88,11 @@ if sys.version_info >= (3, 11):
         text: Literal[False] | None = None,
         # These parameters are taken by subprocess.Popen, which this ultimately delegates to
         executable: StrOrBytesPath | None = None,
-        preexec_fn: Callable[[], Any] | None = None,
+        preexec_fn: Callable[[], dynamic] | None = None,
         close_fds: bool = True,
         cwd: StrOrBytesPath | None = None,
         env: subprocess._ENV | None = None,
-        startupinfo: Any | None = None,
+        startupinfo: dynamic | None = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -108,9 +108,9 @@ if sys.version_info >= (3, 11):
 else:
     async def create_subprocess_shell(
         cmd: str | bytes,
-        stdin: int | IO[Any] | None = None,
-        stdout: int | IO[Any] | None = None,
-        stderr: int | IO[Any] | None = None,
+        stdin: int | IO[dynamic] | None = None,
+        stdout: int | IO[dynamic] | None = None,
+        stderr: int | IO[dynamic] | None = None,
         limit: int = 65536,
         *,
         # These parameters are forced to these values by BaseEventLoop.subprocess_shell
@@ -122,11 +122,11 @@ else:
         text: Literal[False] | None = None,
         # These parameters are taken by subprocess.Popen, which this ultimately delegates to
         executable: StrOrBytesPath | None = None,
-        preexec_fn: Callable[[], Any] | None = None,
+        preexec_fn: Callable[[], dynamic] | None = None,
         close_fds: bool = True,
         cwd: StrOrBytesPath | None = None,
         env: subprocess._ENV | None = None,
-        startupinfo: Any | None = None,
+        startupinfo: dynamic | None = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -140,9 +140,9 @@ else:
     async def create_subprocess_exec(
         program: StrOrBytesPath,
         *args: StrOrBytesPath,
-        stdin: int | IO[Any] | None = None,
-        stdout: int | IO[Any] | None = None,
-        stderr: int | IO[Any] | None = None,
+        stdin: int | IO[dynamic] | None = None,
+        stdout: int | IO[dynamic] | None = None,
+        stderr: int | IO[dynamic] | None = None,
         limit: int = 65536,
         # These parameters are forced to these values by BaseEventLoop.subprocess_exec
         universal_newlines: Literal[False] = False,
@@ -153,11 +153,11 @@ else:
         text: Literal[False] | None = None,
         # These parameters are taken by subprocess.Popen, which this ultimately delegates to
         executable: StrOrBytesPath | None = None,
-        preexec_fn: Callable[[], Any] | None = None,
+        preexec_fn: Callable[[], dynamic] | None = None,
         close_fds: bool = True,
         cwd: StrOrBytesPath | None = None,
         env: subprocess._ENV | None = None,
-        startupinfo: Any | None = None,
+        startupinfo: dynamic | None = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,

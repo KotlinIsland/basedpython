@@ -2,7 +2,7 @@ import sys
 from _typeshed import Unused
 from collections.abc import Awaitable, Callable, Coroutine
 from contextvars import Context
-from typing import Any, TypeVar, final
+from typing import TypeVar, final
 from typing_extensions import Self
 
 from .events import AbstractEventLoop
@@ -31,7 +31,8 @@ if sys.version_info >= (3, 11):
         with asyncio.Runner(debug=True) as runner:
             runner.run(main())
 
-        The run() method can be called multiple times within the runner's context.
+        The run() method can be called multiple times within the runner's
+        context.
 
         This can be useful for interactive console (e.g. IPython),
         unittest runners, console tools, -- everywhere when async code
@@ -48,11 +49,13 @@ if sys.version_info >= (3, 11):
 
         def get_loop(self) -> AbstractEventLoop:
             """Return embedded event loop."""
+
         if sys.version_info >= (3, 14):
             def run[Element](self, coro: Awaitable[Element], *, context: Context | None = None) -> Element:
                 """Run code in the embedded event loop."""
+
         else:
-            def run[Element](self, coro: Coroutine[Any, Any, Element], *, context: Context | None = None) -> Element:
+            def run[Element](self, coro: Coroutine[dynamic, dynamic, Element], *, context: Context | None = None) -> Element:
                 """Run a coroutine inside the embedded event loop."""
 
 if sys.version_info >= (3, 14):
@@ -88,7 +91,7 @@ if sys.version_info >= (3, 14):
 
 elif sys.version_info >= (3, 12):
     def run[Element](
-        main: Coroutine[Any, Any, Element], *, debug: bool | None = None, loop_factory: Callable[[], AbstractEventLoop] | None = None
+        main: Coroutine[dynamic, dynamic, Element], *, debug: bool | None = None, loop_factory: Callable[[], AbstractEventLoop] | None = None
     ) -> Element:
         """Execute the coroutine and return the result.
 
@@ -120,7 +123,7 @@ elif sys.version_info >= (3, 12):
         """
 
 else:
-    def run[Element](main: Coroutine[Any, Any, Element], *, debug: bool | None = None) -> Element:
+    def run[Element](main: Coroutine[dynamic, dynamic, Element], *, debug: bool | None = None) -> Element:
         """Execute the coroutine and return the result.
 
         This function runs the passed coroutine, taking care of

@@ -9,7 +9,7 @@ import sys
 from _typeshed import StrOrBytesPath
 from builtins import list as _list  # conflicts with a method named "list"
 from re import Pattern
-from typing import Any, BinaryIO, Final, NoReturn, TypeAlias
+from typing import BinaryIO, Final, NoReturn, TypeAlias
 from typing_extensions import deprecated
 
 __all__ = ["POP3", "error_proto", "POP3_SSL"]
@@ -98,7 +98,7 @@ class POP3:
         Result is tuple of 2 ints (message count, mailbox size)
         """
 
-    def list(self, which: Any | None = None) -> _LongResp:
+    def list(self, which: dynamic | None = None) -> _LongResp:
         """Request listing, return result.
 
         Result without a message number argument is in form
@@ -108,13 +108,13 @@ class POP3:
         single response: the "scan listing" for that message.
         """
 
-    def retr(self, which: Any) -> _LongResp:
+    def retr(self, which: dynamic) -> _LongResp:
         """Retrieve whole message number 'which'.
 
         Result is in form ['response', ['line', ...], octets].
         """
 
-    def dele(self, which: Any) -> bytes:
+    def dele(self, which: dynamic) -> bytes:
         """Delete message number 'which'.
 
         Result is 'response'.
@@ -137,6 +137,7 @@ class POP3:
 
     def rpop(self, user: str) -> bytes:
         """Send RPOP command to access the mailbox with an alternate user."""
+
     timestamp: Pattern[str]
     def apop(self, user: str, password: str) -> bytes:
         """Authorisation
@@ -150,7 +151,7 @@ class POP3:
         NB: mailbox is locked by server from here to 'quit()'
         """
 
-    def top(self, which: Any, howmuch: int) -> _LongResp:
+    def top(self, which: dynamic, howmuch: int) -> _LongResp:
         """Retrieve message header of message number 'which'
         and first 'howmuch' lines of message body.
 
@@ -164,7 +165,7 @@ class POP3:
         in the form 'response mesgnum uid', otherwise result is
         the list ['response', ['mesgnum uid', ...], octets]
         """
-    def uidl(self, which: Any) -> bytes
+    def uidl(self, which: dynamic) -> bytes
 
     def utf8(self) -> bytes:
         """Try to enter UTF-8 mode (see RFC 6856). Returns server response."""
@@ -205,11 +206,12 @@ class POP3_SSL(POP3):
         def __init__(
             self, host: str, port: int = 995, *, timeout: float = ..., context: ssl.SSLContext | None = None
         ) -> None
-        def stls(self, context: Any = None) -> NoReturn:
+        def stls(self, context: dynamic = None) -> NoReturn:
             """The method unconditionally raises an exception since the
             STLS command doesn't make any sense on an already established
             SSL/TLS session.
             """
+
     else:
         def __init__(
             self,
@@ -238,7 +240,7 @@ class POP3_SSL(POP3):
         certfile: StrOrBytesPath | None
         # "context" is actually the last argument,
         # but that breaks LSP and it doesn't really matter because all the arguments are ignored
-        def stls(self, context: Any = None, keyfile: Any = None, certfile: Any = None) -> NoReturn:
+        def stls(self, context: dynamic = None, keyfile: dynamic = None, certfile: dynamic = None) -> NoReturn:
             """The method unconditionally raises an exception since the
             STLS command doesn't make any sense on an already established
             SSL/TLS session.

@@ -6,7 +6,7 @@ a file or socket object.
 
 import sys
 from _typeshed import FileDescriptorLike, ReadOnlyBuffer, WriteableBuffer
-from typing import Any, Final, Literal
+from typing import Final, Literal
 from typing_extensions import Buffer
 
 if sys.platform != "win32":
@@ -155,8 +155,7 @@ if sys.platform != "win32":
 
         If arg is given as a bytes-like object, the return value of fcntl() is a
         bytes object of that length, containing the resulting value put in the
-        arg buffer by the operating system.  The length of the arg buffer is not
-        allowed to exceed 1024 bytes.
+        arg buffer by the operating system.
         """
     def fcntl(fd: FileDescriptorLike, cmd: int, arg: str | ReadOnlyBuffer, /) -> bytes
 
@@ -188,8 +187,7 @@ if sys.platform != "win32":
         If the argument is an immutable buffer then a copy of the buffer is
         passed to the operating system and the return value is a bytes object of
         the same length containing whatever the operating system put in the
-        buffer.  The length of the arg buffer in this case is not allowed to
-        exceed 1024 bytes.
+        buffer.
         """
     # The return type works as follows:
     # - If arg is a read-write buffer, return int if mutate_flag is True, otherwise bytes
@@ -198,7 +196,7 @@ if sys.platform != "win32":
     # buffers, so we add overloads for a few unambiguous cases and use Any for the rest.
     def ioctl(fd: FileDescriptorLike, request: int, arg: bytes, mutate_flag: bool = True, /) -> bytes
     def ioctl(fd: FileDescriptorLike, request: int, arg: WriteableBuffer, mutate_flag: Literal[False], /) -> bytes
-    def ioctl(fd: FileDescriptorLike, request: int, arg: Buffer, mutate_flag: bool = True, /) -> Any
+    def ioctl(fd: FileDescriptorLike, request: int, arg: Buffer, mutate_flag: bool = True, /) -> dynamic
 
     def flock(fd: FileDescriptorLike, operation: int, /) -> None:
         """Perform the lock operation on file descriptor fd.
@@ -207,7 +205,7 @@ if sys.platform != "win32":
         function is emulated using fcntl()).
         """
 
-    def lockf(fd: FileDescriptorLike, cmd: int, len: int = 0, start: int = 0, whence: int = 0, /) -> Any:
+    def lockf(fd: FileDescriptorLike, cmd: int, len: int = 0, start: int = 0, whence: int = 0, /) -> dynamic:
         """A wrapper around the fcntl() locking calls.
 
         fd is the file descriptor of the file to lock or unlock, and operation

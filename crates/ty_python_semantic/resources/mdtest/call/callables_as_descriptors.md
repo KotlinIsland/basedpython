@@ -13,8 +13,8 @@ instance to the first argument. The bound-method object therefore has a differen
 the first argument:
 
 ```py
-from ty_extensions import RegularCallableTypeOf
-from typing import Callable
+from ty_extensions._internal import RegularCallableTypeOf
+from typing import Any, Callable
 
 class C1:
     def method(self: C1, x: int) -> str:
@@ -111,7 +111,7 @@ intention that it shouldn't influence the method's descriptor behavior. For exam
 `method_decorated` below as a bound method, even though its type is `Callable[[C1, int], str]`:
 
 ```py
-from typing import Callable
+from typing import Any, Callable
 
 def memoize[**P, R](f: Callable[P, R]) -> Callable[P, R]:
     raise NotImplementedError
@@ -132,7 +132,7 @@ C1().method_decorated(1)
 This also works with an argumentless `Callable` annotation:
 
 ```py
-def memoize2(f: Callable) -> Callable:
+def memoize2(f: Callable[..., Any]) -> Callable[..., Any]:
     raise NotImplementedError
 
 class C2:
@@ -348,7 +348,7 @@ The callable type of a type object is not function-like.
 
 ```py
 from typing import ClassVar
-from ty_extensions import RegularCallableTypeOf
+from ty_extensions._internal import RegularCallableTypeOf
 
 class WithNew:
     def __new__(self, x: int) -> WithNew:

@@ -35,11 +35,11 @@ def reset() -> str:  # undocumented
 def small(text: str) -> str  # undocumented
 def strong(text: str) -> str  # undocumented
 def grey(text: str) -> str  # undocumented
-def lookup(name: str, frame: FrameType, locals: dict[str, Any]) -> (str | None, Any):  # undocumented
+def lookup(name: str, frame: FrameType, locals: dict[str, dynamic]) -> (str | None, Any):  # undocumented
     """Find the value for a given name in the given environment."""
 
 def scanvars(
-    reader: Callable[[], bytes], frame: FrameType, locals: dict[str, Any]
+    reader: Callable[[], bytes], frame: FrameType, locals: dict[str, dynamic]
 ) -> list[(str, str | None, Any)]:  # undocumented
     """Scan one logical line of Python and look up values of variables used."""
 

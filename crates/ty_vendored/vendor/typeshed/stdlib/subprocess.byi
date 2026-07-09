@@ -120,7 +120,7 @@ class CompletedProcess[in out Element]:
     """
 
     # morally: _CMD
-    args: Any
+    args: dynamic
     returncode: int
     # These can both be None, but requiring checks for None would be tedious
     # and writing all the overloads would be horrific.
@@ -130,10 +130,11 @@ class CompletedProcess[in out Element]:
     def check_returncode(self) -> None:
         """Raise CalledProcessError if the exit code is non-zero."""
 
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
-        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        For example, for t = list[int], t.__origin__ is list and t.__args__
+        is (int,).
         """
 
 if sys.version_info >= (3, 11):
@@ -151,7 +152,7 @@ if sys.version_info >= (3, 11):
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: Literal[True] | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -212,7 +213,7 @@ if sys.version_info >= (3, 11):
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -245,7 +246,7 @@ if sys.version_info >= (3, 11):
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -279,7 +280,7 @@ if sys.version_info >= (3, 11):
         env: _ENV | None = None,
         *,
         universal_newlines: Literal[True],
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -312,7 +313,7 @@ if sys.version_info >= (3, 11):
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: Literal[False] | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -345,7 +346,7 @@ if sys.version_info >= (3, 11):
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -364,7 +365,7 @@ if sys.version_info >= (3, 11):
         umask: int = -1,
         pipesize: int = -1,
         process_group: int | None = None,
-    ) -> CompletedProcess[Any]
+    ) -> CompletedProcess[dynamic]
 else:
     # 3.10 adds "pipesize" argument
     def run(
@@ -380,7 +381,7 @@ else:
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: Literal[True] | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -440,7 +441,7 @@ else:
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -472,7 +473,7 @@ else:
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -505,7 +506,7 @@ else:
         env: _ENV | None = None,
         *,
         universal_newlines: Literal[True],
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -537,7 +538,7 @@ else:
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: Literal[False] | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -569,7 +570,7 @@ else:
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -587,7 +588,7 @@ else:
         extra_groups: Iterable[str | int] | None = None,
         umask: int = -1,
         pipesize: int = -1,
-    ) -> CompletedProcess[Any]
+    ) -> CompletedProcess[dynamic]
 
 # Same args as Popen.__init__
 if sys.version_info >= (3, 11):
@@ -605,7 +606,7 @@ if sys.version_info >= (3, 11):
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -644,7 +645,7 @@ else:
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -683,7 +684,7 @@ if sys.version_info >= (3, 11):
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -724,7 +725,7 @@ else:
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -763,7 +764,7 @@ if sys.version_info >= (3, 11):
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: Literal[True] | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -827,7 +828,7 @@ if sys.version_info >= (3, 11):
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -857,7 +858,7 @@ if sys.version_info >= (3, 11):
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -888,7 +889,7 @@ if sys.version_info >= (3, 11):
         env: _ENV | None = None,
         *,
         universal_newlines: Literal[True],
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -918,7 +919,7 @@ if sys.version_info >= (3, 11):
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: Literal[False] | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -948,7 +949,7 @@ if sys.version_info >= (3, 11):
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -965,7 +966,7 @@ if sys.version_info >= (3, 11):
         umask: int = -1,
         pipesize: int = -1,
         process_group: int | None = None,
-    ) -> Any  # morally: -> str | bytes
+    ) -> dynamic  # morally: -> str | bytes
 else:
     # 3.10 adds "pipesize" argument
     def check_output(
@@ -980,7 +981,7 @@ else:
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: Literal[True] | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -1043,7 +1044,7 @@ else:
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -1072,7 +1073,7 @@ else:
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -1102,7 +1103,7 @@ else:
         env: _ENV | None = None,
         *,
         universal_newlines: Literal[True],
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -1131,7 +1132,7 @@ else:
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: Literal[False] | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -1160,7 +1161,7 @@ else:
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         universal_newlines: bool | None = None,
-        startupinfo: Any = None,
+        startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
         start_new_session: bool = False,
@@ -1176,7 +1177,7 @@ else:
         extra_groups: Iterable[str | int] | None = None,
         umask: int = -1,
         pipesize: int = -1,
-    ) -> Any  # morally: -> str | bytes
+    ) -> dynamic  # morally: -> str | bytes
 
 PIPE: Final[int]
 STDOUT: Final[int]
@@ -1196,10 +1197,10 @@ class TimeoutExpired(SubprocessError):
         self, cmd: _CMD, timeout: float, output: str | bytes | None = None, stderr: str | bytes | None = None
     ) -> None
     # morally: _CMD
-    cmd: Any
+    cmd: dynamic
     timeout: float
     # morally: str | bytes | None
-    output: Any
+    output: dynamic
     stdout: bytes | None
     stderr: bytes | None
 
@@ -1213,15 +1214,15 @@ class CalledProcessError(SubprocessError):
 
     returncode: int
     # morally: _CMD
-    cmd: Any
+    cmd: dynamic
     # morally: str | bytes | None
-    output: Any
+    output: dynamic
 
     # morally: str | bytes | None
-    stdout: Any
+    stdout: dynamic
     """Alias for output attribute, to match stderr"""
 
-    stderr: Any
+    stderr: dynamic
     def __init__(
         self, returncode: int, cmd: _CMD, output: str | bytes | None = None, stderr: str | bytes | None = None
     ) -> None
@@ -1284,9 +1285,9 @@ class Popen(Generic[AnyStr]):
     """
 
     args: _CMD
-    stdin: IO[Any] | None
-    stdout: IO[Any] | None
-    stderr: IO[Any] | None
+    stdin: IO[dynamic] | None
+    stdout: IO[dynamic] | None
+    stderr: IO[dynamic] | None
     pid: int
     returncode: int | MaybeNone
     universal_newlines: bool
@@ -1307,7 +1308,7 @@ class Popen(Generic[AnyStr]):
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
             universal_newlines: bool | None = None,
-            startupinfo: Any | None = None,
+            startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
@@ -1338,7 +1339,7 @@ class Popen(Generic[AnyStr]):
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
             universal_newlines: bool | None = None,
-            startupinfo: Any | None = None,
+            startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
@@ -1369,7 +1370,7 @@ class Popen(Generic[AnyStr]):
             env: _ENV | None = None,
             *,
             universal_newlines: Literal[True],
-            startupinfo: Any | None = None,
+            startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
@@ -1399,7 +1400,7 @@ class Popen(Generic[AnyStr]):
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
             universal_newlines: Literal[True] | None = None,
-            startupinfo: Any | None = None,
+            startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
@@ -1429,7 +1430,7 @@ class Popen(Generic[AnyStr]):
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
             universal_newlines: Literal[False] | None = None,
-            startupinfo: Any | None = None,
+            startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
@@ -1446,7 +1447,7 @@ class Popen(Generic[AnyStr]):
             process_group: int | None = None,
         ) -> None
         def __init__(
-            self: Popen[Any],
+            self: Popen[dynamic],
             args: _CMD,
             bufsize: int = -1,
             executable: StrOrBytesPath | None = None,
@@ -1459,7 +1460,7 @@ class Popen(Generic[AnyStr]):
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
             universal_newlines: bool | None = None,
-            startupinfo: Any | None = None,
+            startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
@@ -1491,7 +1492,7 @@ class Popen(Generic[AnyStr]):
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
             universal_newlines: bool | None = None,
-            startupinfo: Any | None = None,
+            startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
@@ -1521,7 +1522,7 @@ class Popen(Generic[AnyStr]):
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
             universal_newlines: bool | None = None,
-            startupinfo: Any | None = None,
+            startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
@@ -1551,7 +1552,7 @@ class Popen(Generic[AnyStr]):
             env: _ENV | None = None,
             *,
             universal_newlines: Literal[True],
-            startupinfo: Any | None = None,
+            startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
@@ -1580,7 +1581,7 @@ class Popen(Generic[AnyStr]):
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
             universal_newlines: Literal[True] | None = None,
-            startupinfo: Any | None = None,
+            startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
@@ -1609,7 +1610,7 @@ class Popen(Generic[AnyStr]):
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
             universal_newlines: Literal[False] | None = None,
-            startupinfo: Any | None = None,
+            startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
@@ -1625,7 +1626,7 @@ class Popen(Generic[AnyStr]):
             pipesize: int = -1,
         ) -> None
         def __init__(
-            self: Popen[Any],
+            self: Popen[dynamic],
             args: _CMD,
             bufsize: int = -1,
             executable: StrOrBytesPath | None = None,
@@ -1638,7 +1639,7 @@ class Popen(Generic[AnyStr]):
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
             universal_newlines: bool | None = None,
-            startupinfo: Any | None = None,
+            startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
@@ -1661,6 +1662,7 @@ class Popen(Generic[AnyStr]):
 
     def wait(self, timeout: float | None = None) -> int:
         """Wait for child process to terminate; returns self.returncode."""
+
     # morally the members of the returned tuple should be optional
     # TODO: this should allow ReadableBuffer for Popen[bytes], but adding
     # overloads for that runs into a mypy bug (python/mypy#14070).
@@ -1696,10 +1698,11 @@ class Popen(Generic[AnyStr]):
         self, exc_type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
     ) -> None
     def __del__(self) -> None
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
-        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        For example, for t = list[int], t.__origin__ is list and t.__args__
+        is (int,).
         """
 
 # The result really is always a str.
@@ -1808,18 +1811,18 @@ if sys.platform == "win32":
             self,
             *,
             dwFlags: int = 0,
-            hStdInput: Any | None = None,
-            hStdOutput: Any | None = None,
-            hStdError: Any | None = None,
+            hStdInput: dynamic | None = None,
+            hStdOutput: dynamic | None = None,
+            hStdError: dynamic | None = None,
             wShowWindow: int = 0,
-            lpAttributeList: Mapping[str, Any] | None = None,
+            lpAttributeList: Mapping[str, dynamic] | None = None,
         ) -> None
         dwFlags: int
-        hStdInput: Any | None
-        hStdOutput: Any | None
-        hStdError: Any | None
+        hStdInput: dynamic | None
+        hStdOutput: dynamic | None
+        hStdError: dynamic | None
         wShowWindow: int
-        lpAttributeList: Mapping[str, Any]
+        lpAttributeList: Mapping[str, dynamic]
         def copy(self) -> STARTUPINFO
 
     from _winapi import (

@@ -60,7 +60,7 @@ if sys.version_info >= (3, 12):
         _attributes: ClassVar[(*: str)]
         _fields: ClassVar[(*: str)]
         if sys.version_info >= (3, 13):
-            _field_types: ClassVar[dict[str, Any]]
+            _field_types: ClassVar[dict[str, dynamic]]
 
         if sys.version_info >= (3, 14):
             def __replace__(self) -> Self:
@@ -156,8 +156,8 @@ class stmt(AST):
     | Try(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)
     | TryStar(stmt* body, excepthandler* handlers, stmt* orelse, stmt* finalbody)
     | Assert(expr test, expr? msg)
-    | Import(alias* names)
-    | ImportFrom(identifier? module, alias* names, int? level)
+    | Import(alias* names, int? is_lazy)
+    | ImportFrom(identifier? module, alias* names, int? level, int? is_lazy)
     | Global(identifier* names)
     | Nonlocal(identifier* names)
     | Expr(expr value)
@@ -827,7 +827,7 @@ class Assert(stmt):
             """Return a copy of the AST node with new values for the specified fields."""
 
 class Import(stmt):
-    """Import(alias* names)"""
+    """Import(alias* names, int? is_lazy)"""
 
     if sys.version_info >= (3, 15):
         __match_args__ = ("names", "is_lazy")
@@ -845,14 +845,15 @@ class Import(stmt):
         def __init__(self, names: list[alias], **kwargs: Unpack[_Attributes]) -> None
 
     if sys.version_info >= (3, 15):
-        def __replace__(self, *, names: list[alias] = ..., is_lazy: bool | None = ..., **kwargs: Unpack[_Attributes]) -> Self
+        def __replace__(self, *, names: list[alias] = ..., is_lazy: bool | None = ..., **kwargs: Unpack[_Attributes]) -> Self:
+            """Return a copy of the AST node with new values for the specified fields."""
 
     elif sys.version_info >= (3, 14):
         def __replace__(self, *, names: list[alias] = ..., **kwargs: Unpack[_Attributes]) -> Self:
             """Return a copy of the AST node with new values for the specified fields."""
 
 class ImportFrom(stmt):
-    """ImportFrom(identifier? module, alias* names, int? level)"""
+    """ImportFrom(identifier? module, alias* names, int? level, int? is_lazy)"""
 
     if sys.version_info >= (3, 15):
         __match_args__ = ("module", "names", "level", "is_lazy")
@@ -896,7 +897,8 @@ class ImportFrom(stmt):
             level: int = ...,
             is_lazy: bool | None = ...,
             **kwargs: Unpack[_Attributes],
-        ) -> Self
+        ) -> Self:
+            """Return a copy of the AST node with new values for the specified fields."""
 
     elif sys.version_info >= (3, 14):
         def __replace__(
@@ -963,7 +965,7 @@ class expr(AST):
     | Set(expr* elts)
     | ListComp(expr elt, comprehension* generators)
     | SetComp(expr elt, comprehension* generators)
-    | DictComp(expr key, expr value, comprehension* generators)
+    | DictComp(expr key, expr? value, comprehension* generators)
     | GeneratorExp(expr elt, comprehension* generators)
     | Await(expr value)
     | Yield(expr? value)
@@ -1131,7 +1133,7 @@ class SetComp(expr):
             """Return a copy of the AST node with new values for the specified fields."""
 
 class DictComp(expr):
-    """DictComp(expr key, expr value, comprehension* generators)"""
+    """DictComp(expr key, expr? value, comprehension* generators)"""
 
     __match_args__ = ("key", "value", "generators")
     key: expr
@@ -1140,14 +1142,29 @@ class DictComp(expr):
     else:
         value: expr
     generators: list[comprehension]
-    if sys.version_info >= (3, 13):
+    if sys.version_info >= (3, 15):
+        def __init__(
+            self, key: expr, value: expr | None = None, generators: list[comprehension] = ..., **kwargs: Unpack[_Attributes]
+        ) -> None
+    elif sys.version_info >= (3, 13):
         def __init__(
             self, key: expr, value: expr, generators: list[comprehension] = ..., **kwargs: Unpack[_Attributes]
         ) -> None
     else:
         def __init__(self, key: expr, value: expr, generators: list[comprehension], **kwargs: Unpack[_Attributes]) -> None
 
-    if sys.version_info >= (3, 14):
+    if sys.version_info >= (3, 15):
+        def __replace__(
+            self,
+            *,
+            key: expr = ...,
+            value: expr | None = ...,
+            generators: list[comprehension] = ...,
+            **kwargs: Unpack[_Attributes],
+        ) -> Self:
+            """Return a copy of the AST node with new values for the specified fields."""
+
+    elif sys.version_info >= (3, 14):
         def __replace__(
             self, *, key: expr = ..., value: expr = ..., generators: list[comprehension] = ..., **kwargs: Unpack[_Attributes]
         ) -> Self:
@@ -2128,17 +2145,22 @@ _T = _TypeVar("_T", bound=AST)
 if sys.version_info >= (3, 15):
     def parse(
         source: _T,
-        filename: str | bytes | os.PathLike[Any] = "<unknown>",
+        filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
         mode: Literal["exec", "eval", "func_type", "single"] = "exec",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
         optimize: Literal[-1, 0, 1, 2] = -1,
         module: str | None = None,
-    ) -> _T
+    ) -> _T:
+        """
+        Parse the source into an AST node.
+        Equivalent to compile(source, filename, mode, PyCF_ONLY_AST).
+        Pass type_comments=True to get back type comments where the syntax allows.
+        """
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any] = "<unknown>",
+        filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
         mode: Literal["exec"] = "exec",
         *,
         type_comments: bool = False,
@@ -2148,7 +2170,7 @@ if sys.version_info >= (3, 15):
     ) -> Module
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any],
+        filename: str | bytes | os.PathLike[dynamic],
         mode: Literal["eval"],
         *,
         type_comments: bool = False,
@@ -2158,7 +2180,7 @@ if sys.version_info >= (3, 15):
     ) -> Expression
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any],
+        filename: str | bytes | os.PathLike[dynamic],
         mode: Literal["func_type"],
         *,
         type_comments: bool = False,
@@ -2168,7 +2190,7 @@ if sys.version_info >= (3, 15):
     ) -> FunctionType
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any],
+        filename: str | bytes | os.PathLike[dynamic],
         mode: Literal["single"],
         *,
         type_comments: bool = False,
@@ -2205,7 +2227,7 @@ if sys.version_info >= (3, 15):
     ) -> Interactive
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any] = "<unknown>",
+        filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
         mode: str = "exec",
         *,
         type_comments: bool = False,
@@ -2216,7 +2238,7 @@ if sys.version_info >= (3, 15):
 elif sys.version_info >= (3, 13):
     def parse(
         source: _T,
-        filename: str | bytes | os.PathLike[Any] = "<unknown>",
+        filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
         mode: Literal["exec", "eval", "func_type", "single"] = "exec",
         *,
         type_comments: bool = False,
@@ -2230,7 +2252,7 @@ elif sys.version_info >= (3, 13):
         """
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any] = "<unknown>",
+        filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
         mode: Literal["exec"] = "exec",
         *,
         type_comments: bool = False,
@@ -2239,7 +2261,7 @@ elif sys.version_info >= (3, 13):
     ) -> Module
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any],
+        filename: str | bytes | os.PathLike[dynamic],
         mode: Literal["eval"],
         *,
         type_comments: bool = False,
@@ -2248,7 +2270,7 @@ elif sys.version_info >= (3, 13):
     ) -> Expression
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any],
+        filename: str | bytes | os.PathLike[dynamic],
         mode: Literal["func_type"],
         *,
         type_comments: bool = False,
@@ -2257,7 +2279,7 @@ elif sys.version_info >= (3, 13):
     ) -> FunctionType
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any],
+        filename: str | bytes | os.PathLike[dynamic],
         mode: Literal["single"],
         *,
         type_comments: bool = False,
@@ -2290,7 +2312,7 @@ elif sys.version_info >= (3, 13):
     ) -> Interactive
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any] = "<unknown>",
+        filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
         mode: str = "exec",
         *,
         type_comments: bool = False,
@@ -2300,7 +2322,7 @@ elif sys.version_info >= (3, 13):
 else:
     def parse(
         source: _T,
-        filename: str | bytes | os.PathLike[Any] = "<unknown>",
+        filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
         mode: Literal["exec", "eval", "func_type", "single"] = "exec",
         *,
         type_comments: bool = False,
@@ -2313,7 +2335,7 @@ else:
         """
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any] = "<unknown>",
+        filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
         mode: Literal["exec"] = "exec",
         *,
         type_comments: bool = False,
@@ -2321,7 +2343,7 @@ else:
     ) -> Module
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any],
+        filename: str | bytes | os.PathLike[dynamic],
         mode: Literal["eval"],
         *,
         type_comments: bool = False,
@@ -2329,7 +2351,7 @@ else:
     ) -> Expression
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any],
+        filename: str | bytes | os.PathLike[dynamic],
         mode: Literal["func_type"],
         *,
         type_comments: bool = False,
@@ -2337,7 +2359,7 @@ else:
     ) -> FunctionType
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any],
+        filename: str | bytes | os.PathLike[dynamic],
         mode: Literal["single"],
         *,
         type_comments: bool = False,
@@ -2366,14 +2388,14 @@ else:
     ) -> Interactive
     def parse(
         source: str | ReadableBuffer,
-        filename: str | bytes | os.PathLike[Any] = "<unknown>",
+        filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
         mode: str = "exec",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
     ) -> mod
 
-def literal_eval(node_or_string: str | AST) -> Any:
+def literal_eval(node_or_string: str | AST) -> dynamic:
     """
     Evaluate an expression node or a string containing only a Python
     expression.  The string or node provided may only consist of the following
@@ -2392,7 +2414,29 @@ if sys.version_info >= (3, 15):
         indent: int | str | None = None,
         show_empty: bool = False,
         color: bool = False,
-    ) -> str
+    ) -> str:
+        """
+        Return a formatted dump of the tree in node.  This is mainly useful for
+        debugging purposes.
+
+        If annotate_fields is true (by default), the returned string will show the
+        names and the values for fields. If annotate_fields is false, the result
+        string will be more compact by omitting unambiguous field names.
+
+        Attributes such as line numbers and column offsets are not dumped by default.
+        If this is wanted, include_attributes can be set to true.
+
+        If color is true, the returned string is syntax highlighted using ANSI
+        escape sequences. If color is false (the default), colored output is always
+        disabled.
+
+        If indent is a non-negative integer or string, then the tree will be
+        pretty-printed with that indent level. If indent is None (the default),
+        the tree is dumped on a single line.
+
+        If show_empty is False, then empty lists and fields that are None
+        will be omitted from the output for better readability.
+        """
 
 elif sys.version_info >= (3, 13):
     def dump(
@@ -2527,147 +2571,152 @@ class NodeVisitor:
 
     # All visit methods below can be overwritten by subclasses and return an
     # arbitrary value, which is passed to the caller.
-    def visit(self, node: AST) -> Any:
+    def visit(self, node: AST) -> dynamic:
         """Visit a node."""
 
-    def generic_visit(self, node: AST) -> Any:
+    def generic_visit(self, node: AST) -> dynamic:
         """Called if no explicit visitor function exists for a node."""
+
     # The following visit methods are not defined on NodeVisitor, but can
     # be implemented by subclasses and are called during a visit if defined.
-    def visit_Module(self, node: Module) -> Any
-    def visit_Interactive(self, node: Interactive) -> Any
-    def visit_Expression(self, node: Expression) -> Any
-    def visit_FunctionDef(self, node: FunctionDef) -> Any
-    def visit_AsyncFunctionDef(self, node: AsyncFunctionDef) -> Any
-    def visit_ClassDef(self, node: ClassDef) -> Any
-    def visit_Return(self, node: Return) -> Any
-    def visit_Delete(self, node: Delete) -> Any
-    def visit_Assign(self, node: Assign) -> Any
-    def visit_AugAssign(self, node: AugAssign) -> Any
-    def visit_AnnAssign(self, node: AnnAssign) -> Any
-    def visit_For(self, node: For) -> Any
-    def visit_AsyncFor(self, node: AsyncFor) -> Any
-    def visit_While(self, node: While) -> Any
-    def visit_If(self, node: If) -> Any
-    def visit_With(self, node: With) -> Any
-    def visit_AsyncWith(self, node: AsyncWith) -> Any
-    def visit_Raise(self, node: Raise) -> Any
-    def visit_Try(self, node: Try) -> Any
-    def visit_Assert(self, node: Assert) -> Any
-    def visit_Import(self, node: Import) -> Any
-    def visit_ImportFrom(self, node: ImportFrom) -> Any
-    def visit_Global(self, node: Global) -> Any
-    def visit_Nonlocal(self, node: Nonlocal) -> Any
-    def visit_Expr(self, node: Expr) -> Any
-    def visit_Pass(self, node: Pass) -> Any
-    def visit_Break(self, node: Break) -> Any
-    def visit_Continue(self, node: Continue) -> Any
-    def visit_Slice(self, node: Slice) -> Any
-    def visit_BoolOp(self, node: BoolOp) -> Any
-    def visit_BinOp(self, node: BinOp) -> Any
-    def visit_UnaryOp(self, node: UnaryOp) -> Any
-    def visit_Lambda(self, node: Lambda) -> Any
-    def visit_IfExp(self, node: IfExp) -> Any
-    def visit_Dict(self, node: Dict) -> Any
-    def visit_Set(self, node: Set) -> Any
-    def visit_ListComp(self, node: ListComp) -> Any
-    def visit_SetComp(self, node: SetComp) -> Any
-    def visit_DictComp(self, node: DictComp) -> Any
-    def visit_GeneratorExp(self, node: GeneratorExp) -> Any
-    def visit_Await(self, node: Await) -> Any
-    def visit_Yield(self, node: Yield) -> Any
-    def visit_YieldFrom(self, node: YieldFrom) -> Any
-    def visit_Compare(self, node: Compare) -> Any
-    def visit_Call(self, node: Call) -> Any
-    def visit_FormattedValue(self, node: FormattedValue) -> Any
-    def visit_JoinedStr(self, node: JoinedStr) -> Any
-    def visit_Constant(self, node: Constant) -> Any
-    def visit_NamedExpr(self, node: NamedExpr) -> Any
-    def visit_TypeIgnore(self, node: TypeIgnore) -> Any
-    def visit_Attribute(self, node: Attribute) -> Any
-    def visit_Subscript(self, node: Subscript) -> Any
-    def visit_Starred(self, node: Starred) -> Any
-    def visit_Name(self, node: Name) -> Any
-    def visit_List(self, node: List) -> Any
-    def visit_Tuple(self, node: Tuple) -> Any
-    def visit_Del(self, node: Del) -> Any
-    def visit_Load(self, node: Load) -> Any
-    def visit_Store(self, node: Store) -> Any
-    def visit_And(self, node: And) -> Any
-    def visit_Or(self, node: Or) -> Any
-    def visit_Add(self, node: Add) -> Any
-    def visit_BitAnd(self, node: BitAnd) -> Any
-    def visit_BitOr(self, node: BitOr) -> Any
-    def visit_BitXor(self, node: BitXor) -> Any
-    def visit_Div(self, node: Div) -> Any
-    def visit_FloorDiv(self, node: FloorDiv) -> Any
-    def visit_LShift(self, node: LShift) -> Any
-    def visit_Mod(self, node: Mod) -> Any
-    def visit_Mult(self, node: Mult) -> Any
-    def visit_MatMult(self, node: MatMult) -> Any
-    def visit_Pow(self, node: Pow) -> Any
-    def visit_RShift(self, node: RShift) -> Any
-    def visit_Sub(self, node: Sub) -> Any
-    def visit_Invert(self, node: Invert) -> Any
-    def visit_Not(self, node: Not) -> Any
-    def visit_UAdd(self, node: UAdd) -> Any
-    def visit_USub(self, node: USub) -> Any
-    def visit_Eq(self, node: Eq) -> Any
-    def visit_Gt(self, node: Gt) -> Any
-    def visit_GtE(self, node: GtE) -> Any
-    def visit_In(self, node: In) -> Any
-    def visit_Is(self, node: Is) -> Any
-    def visit_IsNot(self, node: IsNot) -> Any
-    def visit_Lt(self, node: Lt) -> Any
-    def visit_LtE(self, node: LtE) -> Any
-    def visit_NotEq(self, node: NotEq) -> Any
-    def visit_NotIn(self, node: NotIn) -> Any
-    def visit_comprehension(self, node: comprehension) -> Any
-    def visit_ExceptHandler(self, node: ExceptHandler) -> Any
-    def visit_arguments(self, node: arguments) -> Any
-    def visit_arg(self, node: arg) -> Any
-    def visit_keyword(self, node: keyword) -> Any
-    def visit_alias(self, node: alias) -> Any
-    def visit_withitem(self, node: withitem) -> Any
-    def visit_Match(self, node: Match) -> Any
-    def visit_match_case(self, node: match_case) -> Any
-    def visit_MatchValue(self, node: MatchValue) -> Any
-    def visit_MatchSequence(self, node: MatchSequence) -> Any
-    def visit_MatchSingleton(self, node: MatchSingleton) -> Any
-    def visit_MatchStar(self, node: MatchStar) -> Any
-    def visit_MatchMapping(self, node: MatchMapping) -> Any
-    def visit_MatchClass(self, node: MatchClass) -> Any
-    def visit_MatchAs(self, node: MatchAs) -> Any
-    def visit_MatchOr(self, node: MatchOr) -> Any
+    def visit_Module(self, node: Module) -> dynamic
+    def visit_Interactive(self, node: Interactive) -> dynamic
+    def visit_Expression(self, node: Expression) -> dynamic
+    def visit_FunctionDef(self, node: FunctionDef) -> dynamic
+    def visit_AsyncFunctionDef(self, node: AsyncFunctionDef) -> dynamic
+    def visit_ClassDef(self, node: ClassDef) -> dynamic
+    def visit_Return(self, node: Return) -> dynamic
+    def visit_Delete(self, node: Delete) -> dynamic
+    def visit_Assign(self, node: Assign) -> dynamic
+    def visit_AugAssign(self, node: AugAssign) -> dynamic
+    def visit_AnnAssign(self, node: AnnAssign) -> dynamic
+    def visit_For(self, node: For) -> dynamic
+    def visit_AsyncFor(self, node: AsyncFor) -> dynamic
+    def visit_While(self, node: While) -> dynamic
+    def visit_If(self, node: If) -> dynamic
+    def visit_With(self, node: With) -> dynamic
+    def visit_AsyncWith(self, node: AsyncWith) -> dynamic
+    def visit_Raise(self, node: Raise) -> dynamic
+    def visit_Try(self, node: Try) -> dynamic
+    def visit_Assert(self, node: Assert) -> dynamic
+    def visit_Import(self, node: Import) -> dynamic
+    def visit_ImportFrom(self, node: ImportFrom) -> dynamic
+    def visit_Global(self, node: Global) -> dynamic
+    def visit_Nonlocal(self, node: Nonlocal) -> dynamic
+    def visit_Expr(self, node: Expr) -> dynamic
+    def visit_Pass(self, node: Pass) -> dynamic
+    def visit_Break(self, node: Break) -> dynamic
+    def visit_Continue(self, node: Continue) -> dynamic
+    def visit_Slice(self, node: Slice) -> dynamic
+    def visit_BoolOp(self, node: BoolOp) -> dynamic
+    def visit_BinOp(self, node: BinOp) -> dynamic
+    def visit_UnaryOp(self, node: UnaryOp) -> dynamic
+    def visit_Lambda(self, node: Lambda) -> dynamic
+    def visit_IfExp(self, node: IfExp) -> dynamic
+    def visit_Dict(self, node: Dict) -> dynamic
+    def visit_Set(self, node: Set) -> dynamic
+    def visit_ListComp(self, node: ListComp) -> dynamic
+    def visit_SetComp(self, node: SetComp) -> dynamic
+    def visit_DictComp(self, node: DictComp) -> dynamic
+    def visit_GeneratorExp(self, node: GeneratorExp) -> dynamic
+    def visit_Await(self, node: Await) -> dynamic
+    def visit_Yield(self, node: Yield) -> dynamic
+    def visit_YieldFrom(self, node: YieldFrom) -> dynamic
+    def visit_Compare(self, node: Compare) -> dynamic
+    def visit_Call(self, node: Call) -> dynamic
+    def visit_FormattedValue(self, node: FormattedValue) -> dynamic
+    def visit_JoinedStr(self, node: JoinedStr) -> dynamic
+    def visit_Constant(self, node: Constant) -> dynamic
+    def visit_NamedExpr(self, node: NamedExpr) -> dynamic
+    def visit_TypeIgnore(self, node: TypeIgnore) -> dynamic
+    def visit_Attribute(self, node: Attribute) -> dynamic
+    def visit_Subscript(self, node: Subscript) -> dynamic
+    def visit_Starred(self, node: Starred) -> dynamic
+    def visit_Name(self, node: Name) -> dynamic
+    def visit_List(self, node: List) -> dynamic
+    def visit_Tuple(self, node: Tuple) -> dynamic
+    def visit_Del(self, node: Del) -> dynamic
+    def visit_Load(self, node: Load) -> dynamic
+    def visit_Store(self, node: Store) -> dynamic
+    def visit_And(self, node: And) -> dynamic
+    def visit_Or(self, node: Or) -> dynamic
+    def visit_Add(self, node: Add) -> dynamic
+    def visit_BitAnd(self, node: BitAnd) -> dynamic
+    def visit_BitOr(self, node: BitOr) -> dynamic
+    def visit_BitXor(self, node: BitXor) -> dynamic
+    def visit_Div(self, node: Div) -> dynamic
+    def visit_FloorDiv(self, node: FloorDiv) -> dynamic
+    def visit_LShift(self, node: LShift) -> dynamic
+    def visit_Mod(self, node: Mod) -> dynamic
+    def visit_Mult(self, node: Mult) -> dynamic
+    def visit_MatMult(self, node: MatMult) -> dynamic
+    def visit_Pow(self, node: Pow) -> dynamic
+    def visit_RShift(self, node: RShift) -> dynamic
+    def visit_Sub(self, node: Sub) -> dynamic
+    def visit_Invert(self, node: Invert) -> dynamic
+    def visit_Not(self, node: Not) -> dynamic
+    def visit_UAdd(self, node: UAdd) -> dynamic
+    def visit_USub(self, node: USub) -> dynamic
+    def visit_Eq(self, node: Eq) -> dynamic
+    def visit_Gt(self, node: Gt) -> dynamic
+    def visit_GtE(self, node: GtE) -> dynamic
+    def visit_In(self, node: In) -> dynamic
+    def visit_Is(self, node: Is) -> dynamic
+    def visit_IsNot(self, node: IsNot) -> dynamic
+    def visit_Lt(self, node: Lt) -> dynamic
+    def visit_LtE(self, node: LtE) -> dynamic
+    def visit_NotEq(self, node: NotEq) -> dynamic
+    def visit_NotIn(self, node: NotIn) -> dynamic
+    def visit_comprehension(self, node: comprehension) -> dynamic
+    def visit_ExceptHandler(self, node: ExceptHandler) -> dynamic
+    def visit_arguments(self, node: arguments) -> dynamic
+    def visit_arg(self, node: arg) -> dynamic
+    def visit_keyword(self, node: keyword) -> dynamic
+    def visit_alias(self, node: alias) -> dynamic
+    def visit_withitem(self, node: withitem) -> dynamic
+    def visit_Match(self, node: Match) -> dynamic
+    def visit_match_case(self, node: match_case) -> dynamic
+    def visit_MatchValue(self, node: MatchValue) -> dynamic
+    def visit_MatchSequence(self, node: MatchSequence) -> dynamic
+    def visit_MatchSingleton(self, node: MatchSingleton) -> dynamic
+    def visit_MatchStar(self, node: MatchStar) -> dynamic
+    def visit_MatchMapping(self, node: MatchMapping) -> dynamic
+    def visit_MatchClass(self, node: MatchClass) -> dynamic
+    def visit_MatchAs(self, node: MatchAs) -> dynamic
+    def visit_MatchOr(self, node: MatchOr) -> dynamic
 
     if sys.version_info >= (3, 11):
-        def visit_TryStar(self, node: TryStar) -> Any
+        def visit_TryStar(self, node: TryStar) -> dynamic
 
     if sys.version_info >= (3, 12):
-        def visit_TypeVar(self, node: TypeVar) -> Any
-        def visit_ParamSpec(self, node: ParamSpec) -> Any
-        def visit_TypeVarTuple(self, node: TypeVarTuple) -> Any
-        def visit_TypeAlias(self, node: TypeAlias) -> Any
+        def visit_TypeVar(self, node: TypeVar) -> dynamic
+        def visit_ParamSpec(self, node: ParamSpec) -> dynamic
+        def visit_TypeVarTuple(self, node: TypeVarTuple) -> dynamic
+        def visit_TypeAlias(self, node: TypeAlias) -> dynamic
+
+    if sys.version_info >= (3, 14):
+        def visit_TemplateStr(self, node: TemplateStr) -> dynamic
+        def visit_Interpolation(self, node: Interpolation) -> dynamic
 
     # visit methods for deprecated nodes
-    def visit_ExtSlice(self, node: ExtSlice) -> Any
-    def visit_Index(self, node: Index) -> Any
-    def visit_Suite(self, node: Suite) -> Any
-    def visit_AugLoad(self, node: AugLoad) -> Any
-    def visit_AugStore(self, node: AugStore) -> Any
-    def visit_Param(self, node: Param) -> Any
+    def visit_ExtSlice(self, node: ExtSlice) -> dynamic
+    def visit_Index(self, node: Index) -> dynamic
+    def visit_Suite(self, node: Suite) -> dynamic
+    def visit_AugLoad(self, node: AugLoad) -> dynamic
+    def visit_AugStore(self, node: AugStore) -> dynamic
+    def visit_Param(self, node: Param) -> dynamic
 
     if sys.version_info < (3, 14):
         @deprecated("Removed in Python 3.14. Use `visit_Constant` instead.")
-        def visit_Num(self, node: Num) -> Any  # type: ignore[deprecated]
+        def visit_Num(self, node: Num) -> dynamic  # type: ignore[deprecated]
         @deprecated("Removed in Python 3.14. Use `visit_Constant` instead.")
-        def visit_Str(self, node: Str) -> Any  # type: ignore[deprecated]
+        def visit_Str(self, node: Str) -> dynamic  # type: ignore[deprecated]
         @deprecated("Removed in Python 3.14. Use `visit_Constant` instead.")
-        def visit_Bytes(self, node: Bytes) -> Any  # type: ignore[deprecated]
+        def visit_Bytes(self, node: Bytes) -> dynamic  # type: ignore[deprecated]
         @deprecated("Removed in Python 3.14. Use `visit_Constant` instead.")
-        def visit_NameConstant(self, node: NameConstant) -> Any  # type: ignore[deprecated]
+        def visit_NameConstant(self, node: NameConstant) -> dynamic  # type: ignore[deprecated]
         @deprecated("Removed in Python 3.14. Use `visit_Constant` instead.")
-        def visit_Ellipsis(self, node: Ellipsis) -> Any  # type: ignore[deprecated]
+        def visit_Ellipsis(self, node: Ellipsis) -> dynamic  # type: ignore[deprecated]
 
 class NodeTransformer(NodeVisitor):
     """

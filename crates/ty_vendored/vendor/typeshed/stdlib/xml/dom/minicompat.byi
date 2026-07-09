@@ -5,7 +5,7 @@ should not be imported; use xml.dom.minidom instead.
 """
 
 from collections.abc import Iterable
-from typing import Any, Literal, TypeVar
+from typing import Literal, TypeVar
 
 __all__ = ["NodeList", "EmptyNodeList", "StringTypes", "defproperty"]
 
@@ -30,4 +30,4 @@ class EmptyNodeList(tuple[()]):
     def __add__[Element](self, other: Iterable[Element]) -> NodeList[Element]  # type: ignore[override]
     def __radd__[Element](self, other: Iterable[Element]) -> NodeList[Element]
 
-def defproperty(klass: type[Any], name: str, doc: str) -> None
+def defproperty(klass: type[dynamic], name: str, doc: str) -> None

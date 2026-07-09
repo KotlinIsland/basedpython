@@ -8,8 +8,8 @@ represent it is with a tree.  This module has two classes for this purpose:
    2. Element represents a single node in this tree.
 
 Interactions with the whole document (reading and writing to/from files) are
-usually done on the ElementTree level.  Interactions with a single XML element
-and its sub-elements are done on the Element level.
+usually done on the ElementTree level.  Interactions with a single XML
+element and its sub-elements are done on the Element level.
 
 Element is a flexible container object designed to store hierarchical data
 structures in memory. It can be described as a cross between a list and a
@@ -100,10 +100,11 @@ def canonicalize(
 ) -> str:
     """Convert XML to its C14N 2.0 serialised form.
 
-    If *out* is provided, it must be a file or file-like object that receives
-    the serialised canonical XML output (text, not bytes) through its ``.write()``
-    method.  To write to a file, open it in text mode with encoding "utf-8".
-    If *out* is not provided, this function returns the output as text string.
+    If *out* is provided, it must be a file or file-like object that
+    receives the serialised canonical XML output (text, not bytes) through
+    its ``.write()`` method.  To write to a file, open it in text mode with
+    encoding "utf-8".  If *out* is not provided, this function returns the
+    output as text string.
 
     Either *xml_data* (an XML string) or *from_file* (a file path or
     file-like object) must be provided as input.
@@ -144,9 +145,9 @@ class Element[in out Tag: str | _ElementCallable = str]:
     """A string of text directly after the end tag, or None"""
 
     def __init__(self, tag: Tag, attrib: dict[str, str] = {}, **extra: str) -> None
-    def append(self, subelement: Element[Any], /) -> None
+    def append(self, subelement: Element[dynamic], /) -> None
     def clear(self) -> None
-    def extend(self, elements: Iterable[Element[Any]], /) -> None
+    def extend(self, elements: Iterable[Element[dynamic]], /) -> None
     def find(self, path: str, namespaces: dict[str, str] | None = None) -> Element | None
     def findall(self, path: str, namespaces: dict[str, str] | None = None) -> list[Element]
 
@@ -156,7 +157,7 @@ class Element[in out Tag: str | _ElementCallable = str]:
     def get(self, key: str, default: None = None) -> str | None
     def get[Element](self, key: str, default: Element) -> str | Element
 
-    def insert(self, index: int, subelement: Element[Any], /) -> None
+    def insert(self, index: int, subelement: Element[dynamic], /) -> None
     def items(self) -> ItemsView[str, str]
     def iter(self, tag: str | None = None) -> Generator[Element]
 
@@ -167,10 +168,10 @@ class Element[in out Tag: str | _ElementCallable = str]:
     def keys(self) -> dict_keys[str, str]
     # makeelement returns the type of self in Python impl, but not in C impl
     def makeelement[OtherTag: str | _ElementCallable = str](self, tag: OtherTag, attrib: dict[str, str], /) -> Element[OtherTag]
-    def remove(self, subelement: Element[Any], /) -> None
+    def remove(self, subelement: Element[dynamic], /) -> None
     def set(self, key: str, value: str, /) -> None
     def __copy__(self) -> Element[Tag]  # returns the type of self in Python impl, but not in C impl
-    def __deepcopy__(self, memo: Any, /) -> Element  # Only exists in C impl
+    def __deepcopy__(self, memo: dynamic, /) -> Element  # Only exists in C impl
     def __delitem__(self, key: SupportsIndex | slice, /) -> None:
         """Delete self[key]."""
 
@@ -180,19 +181,20 @@ class Element[in out Tag: str | _ElementCallable = str]:
 
     def __len__(self) -> int:
         """Return len(self)."""
+
     # Doesn't actually exist at runtime, but instance of the class are indeed iterable due to __getitem__.
     def __iter__(self) -> Iterator[Element]
 
-    def __setitem__(self, key: SupportsIndex, value: Element[Any], /) -> None:
+    def __setitem__(self, key: SupportsIndex, value: Element[dynamic], /) -> None:
         """Set self[key] to value."""
-    def __setitem__(self, key: slice[SupportsIndex | None], value: Iterable[Element[Any]], /) -> None
+    def __setitem__(self, key: slice[SupportsIndex | None], value: Iterable[Element[dynamic]], /) -> None
 
     # Doesn't really exist in earlier versions, where __len__ is called implicitly instead
     @deprecated("Testing an element's truth value is deprecated.")
     def __bool__(self) -> bool:
         """True if self else False"""
 
-def SubElement(parent: Element[Any], tag: str, attrib: dict[str, str] = ..., **extra: str) -> Element
+def SubElement(parent: Element[dynamic], tag: str, attrib: dict[str, str] = ..., **extra: str) -> Element
 def Comment(text: str | None = None) -> Element[_ElementCallable]:
     """Comment element factory.
 
@@ -253,11 +255,11 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
 
     """
 
-    def __init__(self, element: Element[Any] | None = None, file: _FileRead | None = None) -> None
+    def __init__(self, element: Element[dynamic] | None = None, file: _FileRead | None = None) -> None
     def getroot(self) -> Root:
         """Return root element of this tree."""
 
-    def _setroot(self, element: Element[Any]) -> None:
+    def _setroot(self, element: Element[dynamic]) -> None:
         """Replace root element of this tree.
 
         This will discard the current contents of the tree and replace it
@@ -268,8 +270,8 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
     def parse(self, source: _FileRead, parser: XMLParser | None = None) -> Element:
         """Load external XML document into element tree.
 
-        *source* is a file name or file object, *parser* is an optional parser
-        instance that defaults to XMLParser.
+        *source* is a file name or file object, *parser* is an optional
+        parser instance that defaults to XMLParser.
 
         ParseError is raised if the parser fails to parse the document.
 
@@ -280,7 +282,8 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
     def iter(self, tag: str | None = None) -> Generator[Element]:
         """Create and return tree iterator for the root element.
 
-        The iterator loops over all elements in this tree, in document order.
+        The iterator loops over all elements in this tree, in document
+        order.
 
         *tag* is a string with the tag name to iterate over
         (default is to return all elements).
@@ -293,7 +296,8 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
         Same as getroot().find(path), which is Element.find()
 
         *path* is a string having either an element tag or an XPath,
-        *namespaces* is an optional mapping from namespace prefix to full name.
+        *namespaces* is an optional mapping from namespace prefix to full
+        name.
 
         Return the first matching element, or None if no element was found.
 
@@ -305,7 +309,8 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
         Same as getroot().findtext(path),  which is Element.findtext()
 
         *path* is a string having either an element tag or an XPath,
-        *namespaces* is an optional mapping from namespace prefix to full name.
+        *namespaces* is an optional mapping from namespace prefix to full
+        name.
 
         Return the first matching element, or None if no element was found.
 
@@ -318,7 +323,8 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
         Same as getroot().findall(path), which is Element.findall().
 
         *path* is a string having either an element tag or an XPath,
-        *namespaces* is an optional mapping from namespace prefix to full name.
+        *namespaces* is an optional mapping from namespace prefix to full
+        name.
 
         Return list containing all matching elements in document order.
 
@@ -350,24 +356,26 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
         """Write element tree to a file as XML.
 
         Arguments:
-          *file_or_filename* -- file name or a file object opened for writing
+          *file_or_filename* -- file name or a file object opened for
+                                writing
 
           *encoding* -- the output encoding (default: US-ASCII)
 
-          *xml_declaration* -- bool indicating if an XML declaration should be
-                               added to the output. If None, an XML declaration
-                               is added if encoding IS NOT either of:
-                               US-ASCII, UTF-8, or Unicode
+          *xml_declaration* -- bool indicating if an XML declaration should
+                               be added to the output. If None, an XML
+                               declaration is added if encoding IS NOT
+                               either of: US-ASCII, UTF-8, or Unicode
 
-          *default_namespace* -- sets the default XML namespace (for "xmlns")
+          *default_namespace* -- sets the default XML namespace (for
+                                 "xmlns")
 
           *method* -- either "xml" (default), "html, "text", or "c14n"
 
           *short_empty_elements* -- controls the formatting of elements
-                                    that contain no content. If True (default)
-                                    they are emitted as a single self-closed
-                                    tag, otherwise they are emitted as a pair
-                                    of start/end tags
+                                    that contain no content.  If True
+                                    (default) they are emitted as a single
+                                    self-closed tag, otherwise they are
+                                    emitted as a pair of start/end tags
 
         """
 
@@ -389,7 +397,7 @@ def register_namespace(prefix: str, uri: str) -> None:
     """
 
 def tostring(
-    element: Element[Any],
+    element: Element[dynamic],
     encoding: None = None,
     method: Literal["xml", "html", "text", "c14n"] | None = None,
     *,
@@ -403,15 +411,15 @@ def tostring(
     is returned. Otherwise a bytestring is returned.
 
     *element* is an Element instance, *encoding* is an optional output
-    encoding defaulting to US-ASCII, *method* is an optional output which can
-    be one of "xml" (default), "html", "text" or "c14n", *default_namespace*
-    sets the default XML namespace (for "xmlns").
+    encoding defaulting to US-ASCII, *method* is an optional output which
+    can be one of "xml" (default), "html", "text" or "c14n",
+    *default_namespace* sets the default XML namespace (for "xmlns").
 
     Returns an (optionally) encoded string containing the XML data.
 
     """
 def tostring(
-    element: Element[Any],
+    element: Element[dynamic],
     encoding: Literal["unicode"],
     method: Literal["xml", "html", "text", "c14n"] | None = None,
     *,
@@ -420,17 +428,17 @@ def tostring(
     short_empty_elements: bool = True,
 ) -> str
 def tostring(
-    element: Element[Any],
+    element: Element[dynamic],
     encoding: str,
     method: Literal["xml", "html", "text", "c14n"] | None = None,
     *,
     xml_declaration: bool | None = None,
     default_namespace: str | None = None,
     short_empty_elements: bool = True,
-) -> Any
+) -> dynamic
 
 def tostringlist(
-    element: Element[Any],
+    element: Element[dynamic],
     encoding: None = None,
     method: Literal["xml", "html", "text", "c14n"] | None = None,
     *,
@@ -439,7 +447,7 @@ def tostringlist(
     short_empty_elements: bool = True,
 ) -> list[bytes]
 def tostringlist(
-    element: Element[Any],
+    element: Element[dynamic],
     encoding: Literal["unicode"],
     method: Literal["xml", "html", "text", "c14n"] | None = None,
     *,
@@ -448,16 +456,16 @@ def tostringlist(
     short_empty_elements: bool = True,
 ) -> list[str]
 def tostringlist(
-    element: Element[Any],
+    element: Element[dynamic],
     encoding: str,
     method: Literal["xml", "html", "text", "c14n"] | None = None,
     *,
     xml_declaration: bool | None = None,
     default_namespace: str | None = None,
     short_empty_elements: bool = True,
-) -> list[Any]
+) -> list[dynamic]
 
-def dump(elem: Element[Any] | ElementTree[Any]) -> None:
+def dump(elem: Element[dynamic] | ElementTree[dynamic]) -> None:
     """Write element tree or element structure to sys.stdout.
 
     This function should be used for debugging only.
@@ -468,7 +476,7 @@ def dump(elem: Element[Any] | ElementTree[Any]) -> None:
 
     """
 
-def indent(tree: Element[Any] | ElementTree[Any], space: str = "  ", level: int = 0) -> None:
+def indent(tree: Element[dynamic] | ElementTree[dynamic], space: str = "  ", level: int = 0) -> None:
     """Indent an XML document by inserting newlines and indentation space
     after elements.
 
@@ -484,7 +492,7 @@ def indent(tree: Element[Any] | ElementTree[Any], space: str = "  ", level: int 
     nested inside of a document.
     """
 
-def parse(source: _FileRead, parser: XMLParser[Any] | None = None) -> ElementTree[Element]:
+def parse(source: _FileRead, parser: XMLParser[dynamic] | None = None) -> ElementTree[Element]:
     """Parse XML document into element tree.
 
     *source* is a filename or file object containing XML data,
@@ -511,7 +519,7 @@ class _IterParseIterator[out EventT: Element[str] | Element[_ElementCallable] | 
         def __del__(self) -> None
 
 # See the comment for _EventT_co above for possible iterator types.
-def iterparse(source: _FileRead, events: Iterable[_EventType]) -> _IterParseIterator[Any]:
+def iterparse(source: _FileRead, events: Iterable[_EventType]) -> _IterParseIterator[dynamic]:
     """Incrementally parse XML document into ElementTree.
 
     This class also reports what's going on to the user based on the
@@ -521,7 +529,8 @@ def iterparse(source: _FileRead, events: Iterable[_EventType]) -> _IterParseIter
     "end" events are reported.
 
     *source* is a filename or file object containing XML data, *events* is
-    a list of events to report back, *parser* is an optional parser instance.
+    a list of events to report back, *parser* is an optional parser
+    instance.
 
     Returns an iterator providing (event, elem) pairs.
 
@@ -531,7 +540,7 @@ def iterparse(source: _FileRead, events: None = None) -> _IterParseIterator[Elem
 # In case a custom parser is passed, the type of the second element of the tuple
 # yielded by iterparse depends on the parser.
 @deprecated("The `parser` parameter is deprecated since Python 3.4.")
-def iterparse(source: _FileRead, events: Iterable[_EventType], parser: XMLParser | None = None) -> _IterParseIterator[Any]
+def iterparse(source: _FileRead, events: Iterable[_EventType], parser: XMLParser | None = None) -> _IterParseIterator[dynamic]
 
 _EventQueue: TypeAlias = tuple[str] | tuple[str, tuple[str, str]] | tuple[str, None]
 
@@ -610,8 +619,8 @@ class TreeBuilder:
         self,
         element_factory: _ElementFactory | None = None,
         *,
-        comment_factory: Callable[[str | None], Element[Any]] | None = None,
-        pi_factory: Callable[[str, str | None], Element[Any]] | None = None,
+        comment_factory: Callable[[str | None], Element[dynamic]] | None = None,
+        pi_factory: Callable[[str, str | None], Element[dynamic]] | None = None,
         insert_comments: bool = False,
         insert_pis: bool = False,
     ) -> None
@@ -622,11 +631,11 @@ class TreeBuilder:
     def data(self, data: str, /) -> None
     # tag and attrs are passed to the element_factory, so they could be anything
     # depending on what the particular factory supports.
-    def start(self, tag: Any, attrs: dict[Any, Any], /) -> Element
+    def start(self, tag: dynamic, attrs: dict[dynamic, dynamic], /) -> Element
     def end(self, tag: str, /) -> Element
     # These two methods have pos-only parameters in the C implementation
-    def comment(self, text: str | None, /) -> Element[Any]
-    def pi(self, target: str, text: str | None = None, /) -> Element[Any]
+    def comment(self, text: str | None, /) -> Element[dynamic]
+    def pi(self, target: str, text: str | None = None, /) -> Element[dynamic]
 
 class C14NWriterTarget:
     """
@@ -635,19 +644,22 @@ class C14NWriterTarget:
     Serialises parse events to XML C14N 2.0.
 
     The *write* function is used for writing out the resulting data stream
-    as text (not bytes).  To write to a file, open it in text mode with encoding
-    "utf-8" and pass its ``.write`` method.
+    as text (not bytes).  To write to a file, open it in text mode with
+    encoding "utf-8" and pass its ``.write`` method.
 
     Configuration options:
 
     - *with_comments*: set to true to include comments
-    - *strip_text*: set to true to strip whitespace before and after text content
-    - *rewrite_prefixes*: set to true to replace namespace prefixes by "n{number}"
+    - *strip_text*: set to true to strip whitespace before and after text
+                    content
+    - *rewrite_prefixes*: set to true to replace namespace prefixes by
+                          "n{number}"
     - *qname_aware_tags*: a set of qname aware tag names in which prefixes
                           should be replaced in text content
-    - *qname_aware_attrs*: a set of qname aware attribute names in which prefixes
-                           should be replaced in text content
-    - *exclude_attrs*: a set of attribute names that should not be serialised
+    - *qname_aware_attrs*: a set of qname aware attribute names in which
+                           prefixes should be replaced in text content
+    - *exclude_attrs*: a set of attribute names that should not be
+                       serialised
     - *exclude_tags*: a set of tag names that should not be serialised
     """
 

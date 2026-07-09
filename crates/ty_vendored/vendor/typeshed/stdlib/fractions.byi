@@ -4,7 +4,7 @@ import sys
 from collections.abc import Callable
 from decimal import Decimal
 from numbers import Rational, Real
-from typing import Any, Literal, Protocol, SupportsIndex, TypeAlias, type_check_only
+from typing import Literal, Protocol, SupportsIndex, TypeAlias, type_check_only
 from typing_extensions import Self
 
 _ComparableNum: TypeAlias = int | float | Decimal | Real
@@ -130,6 +130,7 @@ class Fraction(Rational):
 
         The ratio is in lowest terms and has a positive denominator.
         """
+
     if sys.version_info >= (3, 12):
         def is_integer(self) -> bool:
             """Return True if the Fraction is an integer."""
@@ -282,10 +283,11 @@ class Fraction(Rational):
         """a != 0"""
 
     def __copy__(self) -> Self
-    def __deepcopy__(self, memo: Any) -> Self
+    def __deepcopy__(self, memo: dynamic) -> Self
     if sys.version_info >= (3, 11):
         def __int__(a, _index: Callable[[SupportsIndex], int] = ...) -> int:
             """int(a)"""
+
     # Not actually defined within fractions.py, but provides more useful
     # overrides
     @property
@@ -298,6 +300,7 @@ class Fraction(Rational):
 
     def conjugate(self) -> Fraction:
         """Conjugate is a no-op for Reals."""
+
     if sys.version_info >= (3, 14):
         class def from_number(cls, number: float | Rational | _ConvertibleToIntegerRatio) -> Self:
             """Converts a finite real number to a rational number, exactly.

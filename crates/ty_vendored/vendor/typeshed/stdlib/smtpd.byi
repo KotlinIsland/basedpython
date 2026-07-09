@@ -48,7 +48,7 @@ import asyncore
 import socket
 import sys
 from collections import defaultdict
-from typing import Any, TypeAlias
+from typing import TypeAlias
 from typing_extensions import deprecated
 
 if sys.version_info >= (3, 11):
@@ -65,7 +65,7 @@ class SMTPChannel(asynchat.async_chat):
     command_size_limits: defaultdict[str, int]
     smtp_server: SMTPServer
     conn: socket.socket
-    addr: Any
+    addr: dynamic
     received_lines: list[str]
     smtp_state: int
     seen_greeting: str
@@ -85,7 +85,7 @@ class SMTPChannel(asynchat.async_chat):
         self,
         server: SMTPServer,
         conn: socket.socket,
-        addr: Any,
+        addr: dynamic,
         data_size_limit: int = 33554432,
         map: asyncore._MapType | None = None,
         enable_SMTPUTF8: bool = False,
@@ -121,8 +121,8 @@ class SMTPServer(asyncore.dispatcher):
         enable_SMTPUTF8: bool = False,
         decode_data: bool = False,
     ) -> None
-    def handle_accepted(self, conn: socket.socket, addr: Any) -> None
-    def process_message(self, peer: _Address, mailfrom: str, rcpttos: list[str], data: bytes | str, **kwargs: Any) -> str | None:
+    def handle_accepted(self, conn: socket.socket, addr: dynamic) -> None
+    def process_message(self, peer: _Address, mailfrom: str, rcpttos: list[str], data: bytes | str, **kwargs: dynamic) -> str | None:
         """Override this abstract method to handle messages from the client.
 
         peer is a tuple containing (ipaddr, port) of the client that made the

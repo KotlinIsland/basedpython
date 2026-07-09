@@ -7,7 +7,7 @@ documentation for details.
 import sys
 from collections.abc import Iterable
 from types import GenericAlias
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 from typing_extensions import Self
 
 __all__ = ["SharedMemory", "ShareableList"]
@@ -100,8 +100,9 @@ class ShareableList[in out SLT: constraints (int, float, bool, str, bytes, None)
         Raises ValueError if the value is not present.
         """
 
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
-        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        For example, for t = list[int], t.__origin__ is list and t.__args__
+        is (int,).
         """

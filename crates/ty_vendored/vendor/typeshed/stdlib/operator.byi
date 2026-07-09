@@ -192,13 +192,13 @@ final class attrgetter[out Element]:
     (r.name.first, r.name.last).
     """
 
-    def __new__(cls, attr: str, /) -> attrgetter[Any]
+    def __new__(cls, attr: str, /) -> attrgetter[dynamic]
     def __new__(cls, attr: str, attr2: str, /) -> attrgetter[(Any, Any)]
     def __new__(cls, attr: str, attr2: str, attr3: str, /) -> attrgetter[(Any, Any, Any)]
     def __new__(cls, attr: str, attr2: str, attr3: str, attr4: str, /) -> attrgetter[(Any, Any, Any, Any)]
     def __new__(cls, attr: str, /, *attrs: str) -> attrgetter[(*: Any)]
 
-    def __call__(self, obj: Any, /) -> Element:
+    def __call__(self, obj: dynamic, /) -> Element:
         """Call self as a function."""
 
 final class itemgetter[out Element]:
@@ -219,7 +219,7 @@ final class itemgetter[out Element]:
     # then we can't annotate __call__'s return type or it'll break on tuples
     #
     # These issues are best demonstrated by the `itertools.check_itertools_recipes.unique_justseen` test.
-    def __call__(self, obj: SupportsGetItem[Any, Any]) -> Any:
+    def __call__(self, obj: SupportsGetItem[dynamic, dynamic]) -> dynamic:
         """Call self as a function."""
 
 final class methodcaller:
@@ -229,6 +229,6 @@ final class methodcaller:
     r.name('date', foo=1).
     """
 
-    def __new__(cls, name: str, /, *args: Any, **kwargs: Any) -> Self
-    def __call__(self, obj: Any) -> Any:
+    def __new__(cls, name: str, /, *args: dynamic, **kwargs: dynamic) -> Self
+    def __call__(self, obj: dynamic) -> dynamic:
         """Call self as a function."""

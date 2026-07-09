@@ -7,7 +7,7 @@ import sys
 from _typeshed import StrPath
 from collections.abc import Iterator
 from io import TextIOWrapper
-from typing import IO, Any, BinaryIO, Literal, NoReturn
+from typing import IO, BinaryIO, Literal, NoReturn
 from typing_extensions import Never
 
 if sys.version_info >= (3, 11):
@@ -68,7 +68,7 @@ if sys.version_info >= (3, 11):
             write_through: bool = False,
         ) -> TextIOWrapper
         def open(self, mode: Literal["rb"]) -> BinaryIO
-        def open(self, mode: str) -> IO[Any]
+        def open(self, mode: str) -> IO[dynamic]
 
         def joinpath(self, name: Never) -> NoReturn  # type: ignore[override]
 

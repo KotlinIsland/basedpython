@@ -1,5 +1,5 @@
-use std::fmt::Display;
-use std::{borrow::Cow, fmt::Formatter, path::Path, sync::Arc};
+use std::fmt::{Display, Formatter};
+use std::{borrow::Cow, path::Path, sync::Arc};
 
 use ruff_diagnostics::{Applicability, Fix};
 use ruff_source_file::{LineColumn, SourceCode, SourceFile};
@@ -274,6 +274,11 @@ impl Diagnostic {
             .annotations
             .iter_mut()
             .find(|ann| ann.is_primary)
+    }
+
+    /// Returns all annotations in the order in which they were added.
+    pub fn annotations(&self) -> &[Annotation] {
+        &self.inner.annotations
     }
 
     /// Returns a mutable borrow of all annotations of this diagnostic.
@@ -557,9 +562,13 @@ impl Ord for RenderingSortKey<'_> {
             self.diagnostic.primary_span(),
             other.diagnostic.primary_span(),
         ) {
-            let order = span1.file().path(&self.db).cmp(span2.file().path(&self.db));
-            if order.is_ne() {
-                return order;
+            let file1 = span1.file();
+            let file2 = span2.file();
+            if file1 != file2 {
+                let order = file1.path(&self.db).cmp(file2.path(&self.db));
+                if order.is_ne() {
+                    return order;
+                }
             }
 
             if let (Some(range1), Some(range2)) = (span1.range(), span2.range()) {
@@ -688,6 +697,18 @@ impl SubDiagnostic {
         self.inner.annotations.iter().find(|ann| ann.is_primary)
     }
 
+    /// Returns a reference to the primary span of this sub-diagnostic.
+    pub fn primary_span_ref(&self) -> Option<&Span> {
+        self.primary_annotation().map(Annotation::get_span)
+    }
+
+    /// Returns the primary message for this sub-diagnostic.
+    ///
+    /// A sub-diagnostic always has a message, but it may be empty.
+    pub fn primary_message(&self) -> &str {
+        self.inner.message.as_str()
+    }
+
     /// Introspects this diagnostic and returns what kind of "primary" message
     /// it contains for concise formatting.
     ///
@@ -701,7 +722,7 @@ impl SubDiagnostic {
     /// cases, just converting it to a string (or printing it) will do what
     /// you want.
     pub fn concise_message(&self) -> ConciseMessage<'_> {
-        let main = self.inner.message.as_str();
+        let main = self.primary_message();
         let annotation = self
             .primary_annotation()
             .and_then(|ann| ann.get_message())
@@ -1361,6 +1382,18 @@ impl Display for SubDiagnosticSeverity {
     }
 }
 
+/// Controls whether colored diagnostic output includes hyperlinks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HyperlinkMode {
+    /// Detect hyperlink support from the environment.
+    #[default]
+    Auto,
+    /// Always emit hyperlinks.
+    Always,
+    /// Never emit hyperlinks.
+    Never,
+}
+
 /// Configuration for rendering diagnostics.
 #[derive(Clone, Debug)]
 pub struct DisplayDiagnosticConfig {
@@ -1374,6 +1407,14 @@ pub struct DisplayDiagnosticConfig {
     ///
     /// Disabled by default.
     color: bool,
+    /// Whether to emit hyperlinks in colored diagnostic output.
+    ///
+    /// By default, hyperlink support is detected from the environment.
+    hyperlinks: HyperlinkMode,
+    /// Whether to anonymize line numbers in full diagnostic output.
+    ///
+    /// Disabled by default.
+    anonymized_line_numbers: bool,
     /// The number of non-empty lines to show around each snippet.
     ///
     /// NOTE: It seems like making this a property of rendering *could*
@@ -1383,16 +1424,12 @@ pub struct DisplayDiagnosticConfig {
     /// here for now as the most "sensible" place for it to live until
     /// we had more concrete use cases. ---AG
     context: usize,
-    /// The "merge window" for annotations.
+    /// The "merge window" for annotations and fix diff hunks.
     ///
-    /// If two annotations have fewer than this number of lines between them,
-    /// they will be merged into a single annotation.
+    /// Nearby annotations or fix edits are rendered in a single source frame even when their
+    /// configured context windows would not otherwise overlap.
     merge_window: usize,
     /// Whether to use preview formatting for Ruff diagnostics.
-    #[allow(
-        dead_code,
-        reason = "This is currently only used for JSON but will be needed soon for other formats"
-    )]
     preview: bool,
     /// Whether to hide the real `Severity` of diagnostics.
     ///
@@ -1417,6 +1454,8 @@ impl DisplayDiagnosticConfig {
             program,
             format: DiagnosticFormat::default(),
             color: false,
+            hyperlinks: HyperlinkMode::Auto,
+            anonymized_line_numbers: false,
             context: 2,
             merge_window: 2,
             preview: false,
@@ -1438,6 +1477,22 @@ impl DisplayDiagnosticConfig {
         DisplayDiagnosticConfig { color: yes, ..self }
     }
 
+    /// Configures hyperlink rendering for colored diagnostic output.
+    pub fn hyperlinks(self, mode: HyperlinkMode) -> DisplayDiagnosticConfig {
+        DisplayDiagnosticConfig {
+            hyperlinks: mode,
+            ..self
+        }
+    }
+
+    /// Whether to anonymize line numbers in full diagnostic output.
+    pub fn anonymized_line_numbers(self, yes: bool) -> DisplayDiagnosticConfig {
+        DisplayDiagnosticConfig {
+            anonymized_line_numbers: yes,
+            ..self
+        }
+    }
+
     /// Set the number of contextual lines to show around each snippet.
     pub fn context(self, lines: usize) -> DisplayDiagnosticConfig {
         DisplayDiagnosticConfig {
@@ -1446,10 +1501,10 @@ impl DisplayDiagnosticConfig {
         }
     }
 
-    /// Set the "merge window" for annotations.
+    /// Set the "merge window" for annotations and fix diff hunks.
     ///
-    /// If two annotations have fewer than this number of lines between them,
-    /// they will be merged into a single annotation.
+    /// Nearby annotations or fix edits are rendered in a single source frame even when their
+    /// configured context windows would not otherwise overlap.
     pub fn merge_window(self, lines: usize) -> DisplayDiagnosticConfig {
         DisplayDiagnosticConfig {
             merge_window: lines,
@@ -1463,6 +1518,10 @@ impl DisplayDiagnosticConfig {
             preview: yes,
             ..self
         }
+    }
+
+    pub fn preview_enabled(&self) -> bool {
+        self.preview
     }
 
     /// Whether to hide a diagnostic's severity or not.

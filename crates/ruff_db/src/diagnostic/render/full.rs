@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::num::NonZeroUsize;
 
-use similar::{ChangeTag, TextDiff};
+use similar::{ChangeTag, DiffOp, TextDiff};
 
 use ruff_annotate_snippets::Renderer as AnnotateRenderer;
 use ruff_diagnostics::{Applicability, Fix};
@@ -29,7 +29,7 @@ impl<'a> FullRenderer<'a> {
         diagnostics: &[Diagnostic],
     ) -> std::fmt::Result {
         let stylesheet = if self.config.color {
-            DiagnosticStylesheet::styled()
+            DiagnosticStylesheet::styled().hyperlinks(self.config.hyperlinks)
         } else {
             DiagnosticStylesheet::plain()
         };
@@ -39,7 +39,8 @@ impl<'a> FullRenderer<'a> {
         } else {
             AnnotateRenderer::plain()
         }
-        .cut_indicator("…");
+        .cut_indicator("…")
+        .anonymized_line_numbers(self.config.anonymized_line_numbers);
 
         renderer = renderer
             .error(stylesheet.error)
@@ -65,7 +66,8 @@ impl<'a> FullRenderer<'a> {
 
             if self.config.show_fix_diff
                 && diag.has_applicable_fix(self.config.fix_applicability())
-                && let Some(diff) = Diff::from_diagnostic(diag, &stylesheet, self.resolver)
+                && let Some(diff) =
+                    Diff::from_diagnostic(diag, &stylesheet, self.resolver, self.config)
             {
                 write!(f, "{diff}")?;
             }
@@ -76,6 +78,8 @@ impl<'a> FullRenderer<'a> {
         Ok(())
     }
 }
+
+const FIX_CONTEXT: usize = 1;
 
 /// Renders a diff that shows the code fixes.
 ///
@@ -90,6 +94,7 @@ struct Diff<'a> {
     diagnostic_source: DiagnosticSource,
     notebook_index: Option<NotebookIndex>,
     stylesheet: &'a DiagnosticStylesheet,
+    merge_window: usize,
 }
 
 impl<'a> Diff<'a> {
@@ -97,6 +102,7 @@ impl<'a> Diff<'a> {
         diagnostic: &'a Diagnostic,
         stylesheet: &'a DiagnosticStylesheet,
         resolver: &'a dyn FileResolver,
+        config: &DisplayDiagnosticConfig,
     ) -> Option<Diff<'a>> {
         let file = &diagnostic.primary_span_ref()?.file;
         Some(Diff {
@@ -104,9 +110,22 @@ impl<'a> Diff<'a> {
             diagnostic_source: file.diagnostic_source(resolver),
             notebook_index: resolver.notebook_index(file),
             stylesheet,
+            merge_window: config.merge_window,
         })
     }
+
+    fn write_gutter(&self, f: &mut std::fmt::Formatter, width: NonZeroUsize) -> std::fmt::Result {
+        writeln!(
+            f,
+            "{line} {separator}",
+            line = fmt_styled(Line { index: None, width }, self.stylesheet.line_no),
+            separator = fmt_styled("|", self.stylesheet.line_no),
+        )
+    }
 }
+
+/// Limit diffs to a narrow range around each fix rather than diffing the whole file.
+const DIFF_CONTEXT_WINDOW: usize = 3;
 
 impl std::fmt::Display for Diff<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -136,6 +155,32 @@ impl std::fmt::Display for Diff<'_> {
         for (cell, offset) in cells {
             let range = TextRange::new(last_end, offset);
             last_end = offset;
+
+            // For non-notebooks, construct and diff only the source surrounding the edits.
+            let (range, line_offset) = if cell.is_none()
+                && let Some(first) = self.fix.edits().first()
+                && let Some(last) = self.fix.edits().last()
+            {
+                let start_line = source_code
+                    .line_index(first.start())
+                    .saturating_sub(DIFF_CONTEXT_WINDOW);
+                let last_source_line = source_code.line_index(source_text.text_len());
+                let end_line = source_code
+                    .line_index(last.end())
+                    .saturating_add(DIFF_CONTEXT_WINDOW)
+                    .min(last_source_line);
+
+                (
+                    TextRange::new(
+                        source_code.line_start(start_line),
+                        source_code.line_end(end_line),
+                    ),
+                    start_line.to_zero_indexed(),
+                )
+            } else {
+                (range, 0)
+            };
+
             let input = source_code.slice(range);
 
             let mut output = String::with_capacity(input.len());
@@ -160,12 +205,34 @@ impl std::fmt::Display for Diff<'_> {
 
             let diff = TextDiff::from_lines(input, &output);
 
-            let grouped_ops = diff.grouped_ops(3);
+            let mut grouped_ops: Vec<Vec<DiffOp>> = Vec::new();
+            for group in diff.grouped_ops(FIX_CONTEXT) {
+                if let Some(previous) = grouped_ops.last_mut()
+                    && let Some(DiffOp::Equal { new_index, len, .. }) = previous.last_mut()
+                    && let [
+                        DiffOp::Equal {
+                            new_index: next_new_index,
+                            len: next_len,
+                            ..
+                        },
+                        rest @ ..,
+                    ] = group.as_slice()
+                    && next_new_index.saturating_sub(*new_index + *len) <= self.merge_window
+                {
+                    // Restore the unchanged lines that `grouped_ops` omitted between the groups.
+                    *len = next_new_index + next_len - *new_index;
+                    previous.extend_from_slice(rest);
+                } else {
+                    grouped_ops.push(group);
+                }
+            }
 
             // Find the new line number with the largest number of digits to align all of the line
             // number separators.
             let last_op = grouped_ops.last().and_then(|group| group.last());
-            let largest_new = last_op.map(|op| op.new_range().end).unwrap_or_default();
+            let largest_new = last_op
+                .map(|op| op.new_range().end + line_offset)
+                .unwrap_or_default();
 
             let digit_with = OneIndexed::new(largest_new).unwrap_or_default().digits();
 
@@ -174,6 +241,8 @@ impl std::fmt::Display for Diff<'_> {
                 // three colons on the pipe.
                 writeln!(f, "{:>1$} cell {cell}", ":::", digit_with.get() + 3)?;
             }
+
+            self.write_gutter(f, digit_with)?;
 
             for (idx, group) in grouped_ops.iter().enumerate() {
                 if idx > 0 {
@@ -203,7 +272,9 @@ impl std::fmt::Display for Diff<'_> {
                         };
 
                         let line = Line {
-                            index: index.map(OneIndexed::from_zero_indexed),
+                            index: index.map(|i| {
+                                OneIndexed::from_zero_indexed(i).saturating_add(line_offset)
+                            }),
                             width: digit_with,
                         };
 
@@ -235,6 +306,8 @@ impl std::fmt::Display for Diff<'_> {
                     }
                 }
             }
+
+            self.write_gutter(f, digit_with)?;
         }
 
         match self.fix.applicability() {
@@ -925,7 +998,7 @@ line 10
             range,
         )));
 
-        insta::assert_snapshot!(env.render(&diagnostic), @r"
+        insta::assert_snapshot!(env.render(&diagnostic), @"
         error[test-diagnostic][*]: main diagnostic message
          --> example.py:3:1
           |
@@ -937,15 +1010,79 @@ line 10
         5 | line 5
           |
         help: Start of diff:
+          |
+        6 | line 6
+          - line 7
+        7 + fixed line 7
+        8 | line 8
+          |
+        note: This is an unsafe fix and may change runtime behavior
+        ");
+    }
+
+    #[test]
+    fn nearby_fix_edits_share_diff_frame() {
+        let mut env = TestEnvironment::new();
+        let contents = "\
+line 1
+line 2
+line 3
+line 4
+line 5
+line 6
+line 7
+line 8
+line 9
+line 10
+line 11
+line 12
+line 13
+";
+        env.add("example.py", contents);
+        env.format(DiagnosticFormat::Full);
+        env.context(0);
+        env.merge_window(2);
+        env.show_fix_diff(true);
+
+        let replacement = |target: &str| {
+            let start = contents.find(target).unwrap();
+            Edit::range_replacement(
+                format!("fixed {target}"),
+                TextRange::at(TextSize::try_from(start).unwrap(), target.text_len()),
+            )
+        };
+
+        let mut diagnostic = env.err().primary("example.py", "2", "2", "").build();
+        diagnostic.help("Replace three lines");
+        diagnostic.set_fix(Fix::safe_edits(
+            replacement("line 2"),
+            [replacement("line 7"), replacement("line 13")],
+        ));
+
+        insta::assert_snapshot!(env.render(&diagnostic), @"
+        error[test-diagnostic]: main diagnostic message
+         --> example.py:2:1
+          |
+        2 | line 2
+          | ^^^^^^
+          |
+        help: Replace three lines
+           |
+        1  | line 1
+           - line 2
+        2  + fixed line 2
+        3  | line 3
         4  | line 4
         5  | line 5
         6  | line 6
            - line 7
         7  + fixed line 7
         8  | line 8
-        9  | line 9
-        10 | line 10
-        note: This is an unsafe fix and may change runtime behavior
+        --------------------------------------------------------------------------------
+        12 | line 12
+           - line 13
+        13 + fixed line 13
+           |
         ");
     }
 }

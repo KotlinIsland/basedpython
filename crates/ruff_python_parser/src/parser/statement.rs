@@ -10,12 +10,12 @@ use ruff_python_ast::{
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::error::StarTupleKind;
-use crate::parser::expression::{EXPR_SET, ParsedExpr};
+use crate::parser::expression::{ArgumentsContext, EXPR_SET, ParsedExpr};
 use crate::parser::progress::ParserProgress;
 use crate::parser::{
-    FunctionKind, Parser, RecoveryContext, RecoveryContextKind, WithItemKind, helpers,
+    FunctionKind, IpyEscapeContext, Parser, RecoveryContext, RecoveryContextKind, WithItemKind,
+    helpers,
 };
-use crate::token::TokenValue;
 use crate::token_set::TokenSet;
 use crate::{Mode, ParseErrorType, UnsupportedSyntaxErrorKind};
 
@@ -904,7 +904,7 @@ impl<'src> Parser<'src> {
         let type_params = self.try_parse_type_params();
         let arguments = self
             .at(TokenKind::Lpar)
-            .then(|| Box::new(self.parse_arguments()));
+            .then(|| Box::new(self.parse_arguments(ArgumentsContext::ClassDefinition)));
         let body = if self.eat(TokenKind::Colon) {
             self.parse_body(Clause::Class)
         } else {
@@ -1416,6 +1416,12 @@ impl<'src> Parser<'src> {
 
                 let start = self.node_start();
 
+                // test_err yield_after_comma
+                // def f(): 1, yield 1
+
+                // test_ok yield_after_comma_parenthesized
+                // def f(): 1, (yield 1)
+
                 // simple_stmt: `... | yield_stmt | star_expressions | ...`
                 let parsed_expr =
                     self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or());
@@ -1687,16 +1693,19 @@ impl<'src> Parser<'src> {
         // import ,
         // import x, y,
 
-        let names = self
-            .parse_comma_separated_list_into_vec(RecoveryContextKind::ImportNames, |p| {
-                p.parse_alias(ImportStyle::Import)
-            });
+        let mut names = self.parse_comma_separated_list_into_vec_with_capacity(
+            RecoveryContextKind::ImportNames,
+            |p| p.parse_alias(ImportStyle::Import),
+            1,
+        );
 
         if names.is_empty() {
             // test_err import_stmt_empty
             // import
             self.add_error(ParseErrorType::EmptyImportNames, self.current_token_range());
         }
+
+        names.shrink_to_fit();
 
         ast::StmtImport {
             names,
@@ -1762,7 +1771,7 @@ impl<'src> Parser<'src> {
         self.expect(TokenKind::Import);
 
         let names_start = self.node_start();
-        let mut names = vec![];
+        let mut names = Vec::new();
         let mut seen_star_import = false;
 
         let parenthesized = Parenthesized::from(self.eat(TokenKind::Lpar));
@@ -1792,6 +1801,15 @@ impl<'src> Parser<'src> {
             self.add_error(ParseErrorType::EmptyImportNames, self.current_token_range());
         }
 
+        if seen_star_import && parenthesized.is_yes() {
+            // test_err from_import_parenthesized_star
+            // from x import (*)
+            self.add_error(
+                ParseErrorType::OtherError("Star import cannot be parenthesized".to_string()),
+                self.node_range(names_start),
+            );
+        }
+
         if seen_star_import && names.len() > 1 {
             // test_err from_import_star_with_other_names
             // from x import *, a
@@ -1812,6 +1830,8 @@ impl<'src> Parser<'src> {
             // 2 + 2
             self.expect(TokenKind::Rpar);
         }
+
+        names.shrink_to_fit();
 
         ast::StmtImportFrom {
             module,
@@ -2151,11 +2171,7 @@ impl<'src> Parser<'src> {
     fn parse_ipython_escape_command_statement(&mut self) -> ast::StmtIpyEscapeCommand {
         let start = self.node_start();
 
-        let TokenValue::IpyEscapeCommand { value, kind } =
-            self.bump_value(TokenKind::IpyEscapeCommand)
-        else {
-            unreachable!()
-        };
+        let (value, kind) = self.bump_ipython_escape_command(IpyEscapeContext::LogicalLineStart);
 
         let range = self.node_range(start);
         if self.options.mode != Mode::Ipython {
@@ -2514,8 +2530,13 @@ impl<'src> Parser<'src> {
         });
 
         if self.at(TokenKind::Else) {
+            if elif_else_clauses.is_empty() {
+                elif_else_clauses.reserve_exact(1);
+            }
             elif_else_clauses.push(self.parse_elif_or_else_clause(ElifOrElse::Else));
         }
+
+        elif_else_clauses.shrink_to_fit();
 
         ast::StmtIf {
             test: Box::new(test.expr),
@@ -2612,7 +2633,7 @@ impl<'src> Parser<'src> {
         // except* ExceptionGroup:
         //     pass
         let mut mixed_except_ranges = Vec::new();
-        let handlers = self.parse_clauses(Clause::Except, |p| {
+        let mut handlers = self.parse_clauses(Clause::Except, |p| {
             let (handler, kind) = p.parse_except_clause();
             if let ExceptClauseKind::Star(range) = kind {
                 p.add_unsupported_syntax_error(UnsupportedSyntaxErrorKind::ExceptStar, range);
@@ -2624,6 +2645,8 @@ impl<'src> Parser<'src> {
             }
             handler
         });
+        handlers.shrink_to_fit();
+
         // Empty handler has `is_star` false.
         let is_star = is_star.unwrap_or_default();
         for handler_err_range in mixed_except_ranges {
@@ -3368,9 +3391,14 @@ impl<'src> Parser<'src> {
         // test_ok class_def_arguments
         // class Foo: ...
         // class Foo(): ...
+        // class Foo((base for base in bases)): ...
+        // class Foo(*(base for base in bases)): ...
+
+        // test_err class_def_unparenthesized_generator_argument
+        // class Foo(base for base in bases): ...
         let arguments = self
             .at(TokenKind::Lpar)
-            .then(|| Box::new(self.parse_arguments()));
+            .then(|| Box::new(self.parse_arguments(ArgumentsContext::ClassDefinition)));
 
         // basedpython: `class Foo` (no colon, no body) is permitted as an
         // empty declaration. the AST records `body: vec![]`, which the
@@ -3424,7 +3452,9 @@ impl<'src> Parser<'src> {
     fn parse_with_statement(&mut self, start: TextSize) -> ast::StmtWith {
         self.bump(TokenKind::With);
 
-        let items = self.parse_with_items();
+        let mut items = self.parse_with_items();
+        items.shrink_to_fit();
+
         self.expect(TokenKind::Colon);
 
         let body = self.parse_body(Clause::With);
@@ -3522,15 +3552,17 @@ impl<'src> Parser<'src> {
                 // with (a | b) << c | d: ...
                 // # Postfix should still be parsed first
                 // with (a)[0] + b * c: ...
-                self.parse_comma_separated_list_into_vec(
+                self.parse_comma_separated_list_into_vec_with_capacity(
                     RecoveryContextKind::WithItems(WithItemKind::ParenthesizedExpression),
                     |p| p.parse_with_item(WithItemParsingState::Regular).item,
+                    1,
                 )
             }
         } else {
-            self.parse_comma_separated_list_into_vec(
+            self.parse_comma_separated_list_into_vec_with_capacity(
                 RecoveryContextKind::WithItems(WithItemKind::Unparenthesized),
                 |p| p.parse_with_item(WithItemParsingState::Regular).item,
+                1,
             )
         }
     }
@@ -3568,7 +3600,7 @@ impl<'src> Parser<'src> {
 
         self.bump(TokenKind::Lpar);
 
-        let mut parsed_with_items = vec![];
+        let mut parsed_with_items = Vec::with_capacity(1);
         let mut has_optional_vars = false;
 
         // test_err with_items_parenthesized_missing_comma
@@ -4239,6 +4271,8 @@ impl<'src> Parser<'src> {
             self.expect(TokenKind::Newline);
         }
 
+        decorators.shrink_to_fit();
+
         // basedpython: a modifier keyword may follow the decorators, e.g.
         // `@overload class def open(...)` or `@final static def helper(...)`.
         // route to the modifier parser, carrying the decorators we just parsed so
@@ -4823,6 +4857,10 @@ impl<'src> Parser<'src> {
             self.expect(TokenKind::Rpar);
         }
 
+        parameters.args.shrink_to_fit();
+        parameters.kwonlyargs.shrink_to_fit();
+        parameters.posonlyargs.shrink_to_fit();
+
         parameters.range = self.node_range(start);
 
         parameters
@@ -5296,6 +5334,9 @@ impl<'src> Parser<'src> {
         while recovery_kind.is_list_element(self) {
             progress.assert_progressing(self);
 
+            if clauses.is_empty() {
+                clauses.reserve_exact(1);
+            }
             clauses.push(parse_clause(self));
         }
 

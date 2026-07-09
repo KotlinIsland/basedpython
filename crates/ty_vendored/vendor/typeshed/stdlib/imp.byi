@@ -90,7 +90,7 @@ class NullImporter:
     """
 
     def __init__(self, path: StrPath) -> None
-    def find_module(self, fullname: Any) -> None:
+    def find_module(self, fullname: dynamic) -> None:
         """Always returns None."""
 
 # Technically, a text file has to support a slightly different set of operations than a binary file,
@@ -100,9 +100,9 @@ class _FileLike(Protocol):
     closed: bool
     mode: str
     def read(self) -> str | bytes
-    def close(self) -> Any
-    def __enter__(self) -> Any
-    def __exit__(self, typ: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None, /) -> Any
+    def close(self) -> dynamic
+    def __enter__(self) -> dynamic
+    def __exit__(self, typ: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None, /) -> dynamic
 
 # PathLike doesn't work for the pathname argument here
 def load_source(name: str, pathname: str, file: _FileLike | None = None) -> types.ModuleType
@@ -152,7 +152,7 @@ def init_builtin(name: str) -> types.ModuleType | None:
     exist
     """
 
-def load_dynamic(name: str, path: str, file: Any = None) -> types.ModuleType:  # file argument is ignored
+def load_dynamic(name: str, path: str, file: dynamic = None) -> types.ModuleType:  # file argument is ignored
     """**DEPRECATED**
 
     Load an extension module.

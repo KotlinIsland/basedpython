@@ -32,9 +32,9 @@ socket_map: _MapType  # undocumented
 
 class ExitNow(Exception)
 
-def read(obj: Any) -> None
-def write(obj: Any) -> None
-def readwrite(obj: Any, flags: int) -> None
+def read(obj: dynamic) -> None
+def write(obj: dynamic) -> None
+def readwrite(obj: dynamic, flags: int) -> None
 def poll(timeout: float = 0.0, map: _MapType | None = None) -> None
 def poll2(timeout: float = 0.0, map: _MapType | None = None) -> None
 
@@ -67,8 +67,8 @@ class dispatcher:
     def send(self, data: ReadableBuffer) -> int
     def recv(self, buffer_size: int) -> bytes
     def close(self) -> None
-    def log(self, message: Any) -> None
-    def log_info(self, message: Any, type: str = "info") -> None
+    def log(self, message: dynamic) -> None
+    def log_info(self, message: dynamic, type: str = "info") -> None
     def handle_read_event(self) -> None
     def handle_connect_event(self) -> None
     def handle_write_event(self) -> None

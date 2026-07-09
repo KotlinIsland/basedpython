@@ -79,12 +79,12 @@ class TransportSocket:
         if sys.platform == "linux":
             @deprecated("Removed in Python 3.11")
             def sendmsg_afalg(
-                self, msg: Iterable[ReadableBuffer] = ..., *, op: int, iv: Any = ..., assoclen: int = ..., flags: int = 0
+                self, msg: Iterable[ReadableBuffer] = ..., *, op: int, iv: dynamic = ..., assoclen: int = ..., flags: int = 0
             ) -> int
         else:
             @deprecated("Removed in Python 3.11.")
             def sendmsg_afalg(
-                self, msg: Iterable[ReadableBuffer] = ..., *, op: int, iv: Any = ..., assoclen: int = ..., flags: int = 0
+                self, msg: Iterable[ReadableBuffer] = ..., *, op: int, iv: dynamic = ..., assoclen: int = ..., flags: int = 0
             ) -> NoReturn
 
         @deprecated("Removed in Python 3.11.")

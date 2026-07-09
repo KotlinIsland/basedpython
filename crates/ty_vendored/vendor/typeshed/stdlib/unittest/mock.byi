@@ -51,16 +51,16 @@ FILTER_DIR: bool  # controls the way mock objects respond to `dir` function
 class _SentinelObject:
     """A unique, named, sentinel object."""
 
-    name: Any
-    def __init__(self, name: Any) -> None
+    name: dynamic
+    def __init__(self, name: dynamic) -> None
 
 class _Sentinel:
     """Access attributes to return a named object, usable as a sentinel."""
 
-    def __getattr__(self, name: str) -> Any
+    def __getattr__(self, name: str) -> dynamic
 
 sentinel: _Sentinel
-DEFAULT: Any
+DEFAULT: dynamic
 
 _ArgsKwargs: TypeAlias = tuple[tuple[Any, ...], Mapping[str, Any]]
 _NameArgsKwargs: TypeAlias = tuple[str, tuple[Any, ...], Mapping[str, Any]]
@@ -106,14 +106,14 @@ if sys.version_info >= (3, 12):
         __hash__: ClassVar[None]  # type: ignore[assignment]
         def __eq__(self, other: object) -> bool
         def __ne__(self, value: object, /) -> bool
-        def __call__(self, *args: Any, **kwargs: Any) -> _Call
-        def __getattr__(self, attr: str) -> Any
-        def __getattribute__(self, attr: str) -> Any
+        def __call__(self, *args: dynamic, **kwargs: dynamic) -> _Call
+        def __getattr__(self, attr: str) -> dynamic
+        def __getattribute__(self, attr: str) -> dynamic
         @property
         def args(self) -> (*: Any)
         @property
-        def kwargs(self) -> Mapping[str, Any]
-        def call_list(self) -> Any:
+        def kwargs(self) -> Mapping[str, dynamic]
+        def call_list(self) -> dynamic:
             """For a call object that represents multiple calls, `call_list`
             returns a list of all the intermediate calls as well as the
             final call.
@@ -160,14 +160,14 @@ else:
         __hash__: ClassVar[None]  # type: ignore[assignment]
         def __eq__(self, other: object) -> bool
         def __ne__(self, value: object, /) -> bool
-        def __call__(self, *args: Any, **kwargs: Any) -> _Call
-        def __getattr__(self, attr: str) -> Any
-        def __getattribute__(self, attr: str) -> Any
+        def __call__(self, *args: dynamic, **kwargs: dynamic) -> _Call
+        def __getattr__(self, attr: str) -> dynamic
+        def __getattribute__(self, attr: str) -> dynamic
         @property
         def args(self) -> (*: Any)
         @property
-        def kwargs(self) -> Mapping[str, Any]
-        def call_list(self) -> Any:
+        def kwargs(self) -> Mapping[str, dynamic]
+        def call_list(self) -> dynamic:
             """For a call object that represents multiple calls, `call_list`
             returns a list of all the intermediate calls as well as the
             final call.
@@ -176,10 +176,10 @@ else:
 call: _Call
 
 class _CallList(list[_Call]):
-    def __contains__(self, value: Any) -> bool
+    def __contains__(self, value: dynamic) -> bool
 
 class Base:
-    def __init__(self, *args: Any, **kwargs: Any) -> None
+    def __init__(self, *args: dynamic, **kwargs: dynamic) -> None
 
 # We subclass with "Any" because mocks are explicitly designed to stand in for other types,
 # something that can't be expressed with our static type system.
@@ -190,43 +190,43 @@ class NonCallableMock(Base, Any):
         def __new__(
             cls,
             spec: list[str] | object | type[object] | None = None,
-            wraps: Any | None = None,
+            wraps: dynamic | None = None,
             name: str | None = None,
             spec_set: list[str] | object | type[object] | None = None,
             parent: NonCallableMock | None = None,
-            _spec_state: Any | None = None,
+            _spec_state: dynamic | None = None,
             _new_name: str = "",
             _new_parent: NonCallableMock | None = None,
             _spec_as_instance: bool = False,
             _eat_self: bool | None = None,
             unsafe: bool = False,
-            **kwargs: Any,
+            **kwargs: dynamic,
         ) -> Self
     else:
-        def __new__(cls, /, *args: Any, **kw: Any) -> Self
+        def __new__(cls, /, *args: dynamic, **kw: dynamic) -> Self
 
     def __init__(
         self,
         spec: list[str] | object | type[object] | None = None,
-        wraps: Any | None = None,
+        wraps: dynamic | None = None,
         name: str | None = None,
         spec_set: list[str] | object | type[object] | None = None,
         parent: NonCallableMock | None = None,
-        _spec_state: Any | None = None,
+        _spec_state: dynamic | None = None,
         _new_name: str = "",
         _new_parent: NonCallableMock | None = None,
         _spec_as_instance: bool = False,
         _eat_self: bool | None = None,
         unsafe: bool = False,
-        **kwargs: Any,
+        **kwargs: dynamic,
     ) -> None
-    def __getattr__(self, name: str) -> Any
+    def __getattr__(self, name: str) -> dynamic
     def __delattr__(self, name: str) -> None
-    def __setattr__(self, name: str, value: Any) -> None
+    def __setattr__(self, name: str, value: dynamic) -> None
     def __dir__(self) -> list[str]:
         """Filter the output of `dir(mock)` to only useful members."""
 
-    def assert_called_with(self, *args: Any, **kwargs: Any) -> None:
+    def assert_called_with(self, *args: dynamic, **kwargs: dynamic) -> None:
         """assert that the last call was made with the specified arguments.
 
         Raises an AssertionError if the args and keyword args passed in are
@@ -236,23 +236,23 @@ class NonCallableMock(Base, Any):
     def assert_not_called(self) -> None:
         """assert that the mock was never called."""
 
-    def assert_called_once_with(self, *args: Any, **kwargs: Any) -> None:
-        """assert that the mock was called exactly once and that that call was
+    def assert_called_once_with(self, *args: dynamic, **kwargs: dynamic) -> None:
+        """assert that the mock was called exactly once and that call was
         with the specified arguments.
         """
 
-    def _format_mock_failure_message(self, args: Any, kwargs: Any, action: str = "call") -> str
+    def _format_mock_failure_message(self, args: dynamic, kwargs: dynamic, action: str = "call") -> str
     def assert_called(self) -> None:
         """assert that the mock was called at least once"""
 
     def assert_called_once(self) -> None:
         """assert that the mock was called only once."""
 
-    def reset_mock(self, visited: Any = None, *, return_value: bool = False, side_effect: bool = False) -> None:
+    def reset_mock(self, visited: dynamic = None, *, return_value: bool = False, side_effect: bool = False) -> None:
         """Restore the mock object to its initial state."""
 
     def _extract_mock_name(self) -> str
-    def _get_call_signature_from_name(self, name: str) -> Any:
+    def _get_call_signature_from_name(self, name: str) -> dynamic:
         """
         * If call objects are asserted against a method/function like obj.meth1
         then there could be no name for the call object to lookup. Hence just
@@ -264,7 +264,7 @@ class NonCallableMock(Base, Any):
         and can be safely exited.
         """
 
-    def assert_any_call(self, *args: Any, **kwargs: Any) -> None:
+    def assert_any_call(self, *args: dynamic, **kwargs: dynamic) -> None:
         """assert the mock has been called with the specified arguments.
 
         The assert passes if the mock has *ever* been called, unlike
@@ -284,7 +284,7 @@ class NonCallableMock(Base, Any):
         they must all appear in `mock_calls`.
         """
 
-    def mock_add_spec(self, spec: Any, spec_set: bool = False) -> None:
+    def mock_add_spec(self, spec: dynamic, spec_set: bool = False) -> None:
         """Add a spec to a mock. `spec` can either be an object or a
         list of strings. Only attributes on the `spec` can be fetched as
         attributes from the mock.
@@ -292,7 +292,7 @@ class NonCallableMock(Base, Any):
         If `spec_set` is True then only attributes on the spec can be set.
         """
 
-    def _mock_add_spec(self, spec: Any, spec_set: bool, _spec_as_instance: bool = False, _eat_self: bool = False) -> None
+    def _mock_add_spec(self, spec: dynamic, spec_set: bool, _spec_as_instance: bool = False, _eat_self: bool = False) -> None
     def attach_mock(self, mock: NonCallableMock, attribute: str) -> None:
         """
         Attach a mock as an attribute of this one, replacing its name and
@@ -300,7 +300,7 @@ class NonCallableMock(Base, Any):
         `method_calls` and `mock_calls` attributes of this one.
         """
 
-    def configure_mock(self, **kwargs: Any) -> None:
+    def configure_mock(self, **kwargs: dynamic) -> None:
         """Set attributes on the mock through keyword arguments.
 
         Attributes plus return values and side effects can be set on child
@@ -310,15 +310,16 @@ class NonCallableMock(Base, Any):
         >>> attrs = {'method.return_value': 3, 'other.side_effect': KeyError}
         >>> mock.configure_mock(**attrs)
         """
-    return_value: Any
-    side_effect: Any
+
+    return_value: dynamic
+    side_effect: dynamic
     called: bool
     call_count: int
     call_args: _Call | MaybeNone
     call_args_list: _CallList
     method_calls: _CallList
     mock_calls: _CallList
-    def _format_mock_call_signature(self, args: Any, kwargs: Any) -> str
+    def _format_mock_call_signature(self, args: dynamic, kwargs: dynamic) -> str
     def _call_matcher(self, _call: (*: _Call)) -> _Call:
         """
         Given a call (or simply an (args, kwargs) tuple), return a
@@ -327,7 +328,7 @@ class NonCallableMock(Base, Any):
         if available, or falls back on the arguments themselves.
         """
 
-    def _get_child_mock(self, **kw: Any) -> NonCallableMock:
+    def _get_child_mock(self, **kw: dynamic) -> NonCallableMock:
         """Create the child mocks for attributes and return value.
         By default child mocks will be the same type as the parent.
         Subclasses of Mock may want to override this to customize the way
@@ -336,6 +337,7 @@ class NonCallableMock(Base, Any):
         For non-callable mocks the callable variant will be used (rather than
         any custom subclass).
         """
+
     if sys.version_info >= (3, 13):
         def _calls_repr(self) -> str:
             """Renders self.mock_calls as a string.
@@ -346,6 +348,7 @@ class NonCallableMock(Base, Any):
                     If self.mock_calls is empty, an empty string is returned. The
                     output will be truncated if very long.
             """
+
     else:
         def _calls_repr(self, prefix: str = "Calls") -> str:
             """Renders self.mock_calls as a string.
@@ -358,22 +361,22 @@ class NonCallableMock(Base, Any):
             """
 
 class CallableMixin(Base):
-    side_effect: Any
+    side_effect: dynamic
     def __init__(
         self,
-        spec: Any | None = None,
-        side_effect: Any | None = None,
-        return_value: Any = ...,
-        wraps: Any | None = None,
-        name: Any | None = None,
-        spec_set: Any | None = None,
-        parent: Any | None = None,
-        _spec_state: Any | None = None,
-        _new_name: Any = "",
-        _new_parent: Any | None = None,
-        **kwargs: Any,
+        spec: dynamic | None = None,
+        side_effect: dynamic | None = None,
+        return_value: dynamic = ...,
+        wraps: dynamic | None = None,
+        name: dynamic | None = None,
+        spec_set: dynamic | None = None,
+        parent: dynamic | None = None,
+        _spec_state: dynamic | None = None,
+        _new_name: dynamic = "",
+        _new_parent: dynamic | None = None,
+        **kwargs: dynamic,
     ) -> None
-    def __call__(self, *args: Any, **kwargs: Any) -> Any
+    def __call__(self, *args: dynamic, **kwargs: dynamic) -> dynamic
 
 class Mock(CallableMixin, NonCallableMock):
     """
@@ -434,31 +437,31 @@ class Mock(CallableMixin, NonCallableMock):
     """
 
 class _patch[in out Element]:
-    attribute_name: Any
-    getter: Callable[[], Any]
+    attribute_name: dynamic
+    getter: Callable[[], dynamic]
     attribute: str
     new: Element
-    new_callable: Any
-    spec: Any
+    new_callable: dynamic
+    spec: dynamic
     create: bool
-    has_local: Any
-    spec_set: Any
-    autospec: Any
-    kwargs: Mapping[str, Any]
-    additional_patchers: Any
+    has_local: dynamic
+    spec_set: dynamic
+    autospec: dynamic
+    kwargs: Mapping[str, dynamic]
+    additional_patchers: dynamic
     # If new==DEFAULT, self is _patch[Any]. Ideally we'd be able to add an overload for it so that self is _patch[MagicMock],
     # but that's impossible with the current type system.
     def __init__(
         self: _patch[Element],  # pyright: ignore[reportInvalidTypeVarUse]  #11780
-        getter: Callable[[], Any],
+        getter: Callable[[], dynamic],
         attribute: str,
         new: Element,
-        spec: Any | None,
+        spec: dynamic | None,
         create: bool,
-        spec_set: Any | None,
-        autospec: Any | None,
-        new_callable: Any | None,
-        kwargs: Mapping[str, Any],
+        spec_set: dynamic | None,
+        autospec: dynamic | None,
+        new_callable: dynamic | None,
+        kwargs: Mapping[str, dynamic],
         *,
         unsafe: bool = False,
     ) -> None
@@ -470,14 +473,14 @@ class _patch[in out Element]:
     def __call__[**P, R](self, func: Callable[P, R]) -> Callable[P, R]
 
     def decoration_helper(
-        self, patched: _patch[Any], args: Sequence[Any], keywargs: Any
+        self, patched: _patch[dynamic], args: Sequence[dynamic], keywargs: dynamic
     ) -> _GeneratorContextManager[(Sequence[Any], Any)]
     def decorate_class[TT: type[Any]](self, klass: TT) -> TT
     def decorate_callable[R](self, func: (...) -> R) -> (...) -> R
     def decorate_async_callable[R](self, func: (...) -> Awaitable[R]) -> (...) -> Awaitable[R]
     def get_original(self) -> (Any, bool)
-    target: Any
-    temp_original: Any
+    target: dynamic
+    temp_original: dynamic
     is_local: bool
     def __enter__(self) -> Element:
         """Perform the patch."""
@@ -533,24 +536,24 @@ class _patch_dict:
     `patch.TEST_PREFIX` for choosing which methods to wrap.
     """
 
-    in_dict: Any
-    values: Any
-    clear: Any
-    def __init__(self, in_dict: Any, values: Any = (), clear: Any = False, **kwargs: Any) -> None
-    def __call__(self, f: Any) -> Any
-    def __enter__(self) -> Any:
+    in_dict: dynamic
+    values: dynamic
+    clear: dynamic
+    def __init__(self, in_dict: dynamic, values: dynamic = (), clear: dynamic = False, **kwargs: dynamic) -> None
+    def __call__(self, f: dynamic) -> dynamic
+    def __enter__(self) -> dynamic:
         """Patch the dict."""
 
-    def __exit__(self, *args: object) -> Any:
+    def __exit__(self, *args: object) -> dynamic:
         """Unpatch the dict."""
 
     def decorate_callable[F: Callable[..., Any]](self, f: F) -> F
     def decorate_async_callable[AF: Callable[..., Coroutine[Any, Any, Any]]](self, f: AF) -> AF
-    def decorate_class(self, klass: Any) -> Any
-    start: Any
+    def decorate_class(self, klass: dynamic) -> dynamic
+    start: dynamic
     """Activate a patch, returning any created mock."""
 
-    stop: Any
+    stop: dynamic
     """Stop an active patch."""
 
 # This class does not exist at runtime, it's a hack to add methods to the
@@ -580,35 +583,35 @@ class _patcher:
         target: str,
         *,
         # If not False or None, this is passed to new_callable
-        spec: Any | Literal[False] | None = None,
+        spec: dynamic | Literal[False] | None = None,
         create: bool = False,
         # If not False or None, this is passed to new_callable
-        spec_set: Any | Literal[False] | None = None,
+        spec_set: dynamic | Literal[False] | None = None,
         autospec: Literal[False] | None = None,
         new_callable: (...) -> Element,
         unsafe: bool = False,
         # kwargs are passed to new_callable
-        **kwargs: Any,
+        **kwargs: dynamic,
     ) -> _patch_pass_arg[Element]
     def __call__(
         self,
         target: str,
         *,
-        spec: Any | bool | None = None,
+        spec: dynamic | bool | None = None,
         create: bool = False,
-        spec_set: Any | bool | None = None,
-        autospec: Any | bool | None = None,
+        spec_set: dynamic | bool | None = None,
+        autospec: dynamic | bool | None = None,
         new_callable: None = None,
         unsafe: bool = False,
         # kwargs are passed to the MagicMock/AsyncMock constructor
-        **kwargs: Any,
+        **kwargs: dynamic,
     ) -> _patch_pass_arg[MagicMock | AsyncMock]
 
     # This overload also covers the case, where new==DEFAULT. In this case, the return type is _patch[Any].
     # Ideally we'd be able to add an overload for it so that the return type is _patch[MagicMock],
     # but that's impossible with the current type system.
     static def object[Element](
-        target: Any,
+        target: dynamic,
         attribute: str,
         new: Element,
         spec: Literal[False] | None = None,
@@ -620,69 +623,69 @@ class _patcher:
         unsafe: bool = False,
     ) -> _patch[Element]
     static def object[Element](
-        target: Any,
+        target: dynamic,
         attribute: str,
         *,
         # If not False or None, this is passed to new_callable
-        spec: Any | Literal[False] | None = None,
+        spec: dynamic | Literal[False] | None = None,
         create: bool = False,
         # If not False or None, this is passed to new_callable
-        spec_set: Any | Literal[False] | None = None,
+        spec_set: dynamic | Literal[False] | None = None,
         autospec: Literal[False] | None = None,
         new_callable: (...) -> Element,
         unsafe: bool = False,
         # kwargs are passed to new_callable
-        **kwargs: Any,
+        **kwargs: dynamic,
     ) -> _patch_pass_arg[Element]
     static def object(
-        target: Any,
+        target: dynamic,
         attribute: str,
         *,
-        spec: Any | bool | None = None,
+        spec: dynamic | bool | None = None,
         create: bool = False,
-        spec_set: Any | bool | None = None,
-        autospec: Any | bool | None = None,
+        spec_set: dynamic | bool | None = None,
+        autospec: dynamic | bool | None = None,
         new_callable: None = None,
         unsafe: bool = False,
         # kwargs are passed to the MagicMock/AsyncMock constructor
-        **kwargs: Any,
+        **kwargs: dynamic,
     ) -> _patch_pass_arg[MagicMock | AsyncMock]
 
     static def multiple[Element](
-        target: Any | str,
+        target: dynamic | str,
         # If not False or None, this is passed to new_callable
-        spec: Any | Literal[False] | None = None,
+        spec: dynamic | Literal[False] | None = None,
         create: bool = False,
         # If not False or None, this is passed to new_callable
-        spec_set: Any | Literal[False] | None = None,
+        spec_set: dynamic | Literal[False] | None = None,
         autospec: Literal[False] | None = None,
         *,
         new_callable: (...) -> Element,
         # The kwargs must be DEFAULT
-        **kwargs: Any,
+        **kwargs: dynamic,
     ) -> _patch_pass_arg[Element]
     static def multiple[Element](
-        target: Any | str,
+        target: dynamic | str,
         # If not False or None, this is passed to new_callable
-        spec: Any | Literal[False] | None,
+        spec: dynamic | Literal[False] | None,
         create: bool,
         # If not False or None, this is passed to new_callable
-        spec_set: Any | Literal[False] | None,
+        spec_set: dynamic | Literal[False] | None,
         autospec: Literal[False] | None,
         new_callable: (...) -> Element,
         # The kwargs must be DEFAULT
-        **kwargs: Any,
+        **kwargs: dynamic,
     ) -> _patch_pass_arg[Element]
     static def multiple(
-        target: Any | str,
-        spec: Any | bool | None = None,
+        target: dynamic | str,
+        spec: dynamic | bool | None = None,
         create: bool = False,
-        spec_set: Any | bool | None = None,
-        autospec: Any | bool | None = None,
+        spec_set: dynamic | bool | None = None,
+        autospec: dynamic | bool | None = None,
         new_callable: None = None,
         # The kwargs are the mock objects or DEFAULT
-        **kwargs: Any,
-    ) -> _patch[Any]
+        **kwargs: dynamic,
+    ) -> _patch[dynamic]
 
     static def stopall() -> None
 
@@ -760,7 +763,7 @@ available for alternate use-cases.
 """
 
 class MagicMixin(Base):
-    def __init__(self, *args: Any, **kw: Any) -> None
+    def __init__(self, *args: dynamic, **kw: dynamic) -> None
 
 class NonCallableMagicMock(MagicMixin, NonCallableMock):
     """A version of `MagicMock` that isn't callable."""
@@ -778,8 +781,8 @@ class MagicMock(MagicMixin, Mock):
     """
 
 class AsyncMockMixin(Base):
-    def __init__(self, *args: Any, **kwargs: Any) -> None
-    async def _execute_mock_call(self, *args: Any, **kwargs: Any) -> Any
+    def __init__(self, *args: dynamic, **kwargs: dynamic) -> None
+    async def _execute_mock_call(self, *args: dynamic, **kwargs: dynamic) -> dynamic
     def assert_awaited(self) -> None:
         """
         Assert that the mock was awaited at least once.
@@ -790,18 +793,18 @@ class AsyncMockMixin(Base):
         Assert that the mock was awaited exactly once.
         """
 
-    def assert_awaited_with(self, *args: Any, **kwargs: Any) -> None:
+    def assert_awaited_with(self, *args: dynamic, **kwargs: dynamic) -> None:
         """
         Assert that the last await was with the specified arguments.
         """
 
-    def assert_awaited_once_with(self, *args: Any, **kwargs: Any) -> None:
+    def assert_awaited_once_with(self, *args: dynamic, **kwargs: dynamic) -> None:
         """
         Assert that the mock was awaited exactly once and with the specified
         arguments.
         """
 
-    def assert_any_await(self, *args: Any, **kwargs: Any) -> None:
+    def assert_any_await(self, *args: dynamic, **kwargs: dynamic) -> None:
         """
         Assert the mock has ever been awaited with the specified arguments.
         """
@@ -824,16 +827,17 @@ class AsyncMockMixin(Base):
         Assert that the mock was never awaited.
         """
 
-    def reset_mock(self, *args: Any, **kwargs: Any) -> None:
+    def reset_mock(self, *args: dynamic, **kwargs: dynamic) -> None:
         """
         See :func:`.Mock.reset_mock()`
         """
+
     await_count: int
     await_args: _Call | None
     await_args_list: _CallList
 
 class AsyncMagicMixin(MagicMixin):
-    def __init__(self, *args: Any, **kw: Any) -> None
+    def __init__(self, *args: dynamic, **kw: dynamic) -> None
 
 class AsyncMock(AsyncMockMixin, AsyncMagicMixin, Mock):
     """
@@ -880,17 +884,17 @@ class AsyncMock(AsyncMockMixin, AsyncMagicMixin, Mock):
     # Improving the `reset_mock` signature.
     # It is defined on `AsyncMockMixin` with `*args, **kwargs`, which is not ideal.
     # But, `NonCallableMock` super-class has the better version.
-    def reset_mock(self, visited: Any = None, *, return_value: bool = False, side_effect: bool = False) -> None:
+    def reset_mock(self, visited: dynamic = None, *, return_value: bool = False, side_effect: bool = False) -> None:
         """
         See :func:`.Mock.reset_mock()`
         """
 
 class MagicProxy(Base):
     name: str
-    parent: Any
-    def __init__(self, name: str, parent: Any) -> None
-    def create_mock(self) -> Any
-    def __get__(self, obj: Any, _type: Any | None = None) -> Any
+    parent: dynamic
+    def __init__(self, name: str, parent: dynamic) -> None
+    def create_mock(self) -> dynamic
+    def __get__(self, obj: dynamic, _type: dynamic | None = None) -> dynamic
 
 # See https://github.com/python/typeshed/issues/14701
 class _ANY(Any):
@@ -903,15 +907,15 @@ class _ANY(Any):
 ANY: _ANY
 
 def create_autospec(
-    spec: Any,
-    spec_set: Any = False,
-    instance: Any = False,
-    _parent: Any | None = None,
-    _name: Any | None = None,
+    spec: dynamic,
+    spec_set: dynamic = False,
+    instance: dynamic = False,
+    _parent: dynamic | None = None,
+    _name: dynamic | None = None,
     *,
     unsafe: bool = False,
-    **kwargs: Any,
-) -> Any:
+    **kwargs: dynamic,
+) -> dynamic:
     """Create a mock object using another object as a spec. Attributes on the
     mock will use the corresponding attribute on the `spec` object as their
     spec.
@@ -936,23 +940,23 @@ def create_autospec(
     """
 
 class _SpecState:
-    spec: Any
-    ids: Any
-    spec_set: Any
-    parent: Any
-    instance: Any
-    name: Any
+    spec: dynamic
+    ids: dynamic
+    spec_set: dynamic
+    parent: dynamic
+    instance: dynamic
+    name: dynamic
     def __init__(
         self,
-        spec: Any,
-        spec_set: Any = False,
-        parent: Any | None = None,
-        name: Any | None = None,
-        ids: Any | None = None,
-        instance: Any = False,
+        spec: dynamic,
+        spec_set: dynamic = False,
+        parent: dynamic | None = None,
+        name: dynamic | None = None,
+        ids: dynamic | None = None,
+        instance: dynamic = False,
     ) -> None
 
-def mock_open(mock: Any | None = None, read_data: Any = "") -> Any:
+def mock_open(mock: dynamic | None = None, read_data: dynamic = "") -> dynamic:
     """
     A helper function to create a mock to replace the use of `open`. It works
     for `open` called directly or used as a context manager.
@@ -976,15 +980,15 @@ class PropertyMock(Mock):
     """
 
     def __get__[Element](self, obj: Element, obj_type: type[Element] | None = None) -> Self
-    def __set__(self, obj: Any, val: Any) -> None
+    def __set__(self, obj: dynamic, val: dynamic) -> None
 
 if sys.version_info >= (3, 13):
     class ThreadingMixin(Base):
         DEFAULT_TIMEOUT: Final[float | None] = None
 
-        def __init__(self, /, *args: Any, timeout: float | None | _SentinelObject = ..., **kwargs: Any) -> None
+        def __init__(self, /, *args: dynamic, timeout: float | None | _SentinelObject = ..., **kwargs: dynamic) -> None
         # Same as `NonCallableMock.reset_mock.`
-        def reset_mock(self, visited: Any = None, *, return_value: bool = False, side_effect: bool = False) -> None:
+        def reset_mock(self, visited: dynamic = None, *, return_value: bool = False, side_effect: bool = False) -> None:
             """
             See :func:`.Mock.reset_mock()`
             """
@@ -997,7 +1001,7 @@ if sys.version_info >= (3, 13):
             Use None to block undefinetively.
             """
 
-        def wait_until_any_call_with(self, *args: Any, **kwargs: Any) -> None:
+        def wait_until_any_call_with(self, *args: dynamic, **kwargs: dynamic) -> None:
             """Wait until the mock object is called with given args.
 
             Waits for the timeout in seconds provided in the constructor.
@@ -1017,7 +1021,7 @@ if sys.version_info >= (3, 13):
         If no timeout is set, it will block undefinetively.
         """
 
-def seal(mock: Any) -> None:
+def seal(mock: dynamic) -> None:
     """Disable the automatic generation of child mocks.
 
     Given an input Mock, seals it to ensure no further mocks will be generated

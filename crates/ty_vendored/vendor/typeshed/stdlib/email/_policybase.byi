@@ -153,7 +153,7 @@ class Policy[out MessageT: Message[Any, Any] = Message[str, str]](_PolicyBase[Me
 
     # Every Message object has a `defects` attribute, so the following
     # methods will work for any Message object.
-    def handle_defect(self, obj: Message[Any, Any], defect: MessageDefect) -> None:
+    def handle_defect(self, obj: Message[dynamic, dynamic], defect: MessageDefect) -> None:
         """Based on policy, either raise defect or call register_defect.
 
             handle_defect(obj, defect)
@@ -169,7 +169,7 @@ class Policy[out MessageT: Message[Any, Any] = Message[str, str]](_PolicyBase[Me
 
         """
 
-    def register_defect(self, obj: Message[Any, Any], defect: MessageDefect) -> None:
+    def register_defect(self, obj: Message[dynamic, dynamic], defect: MessageDefect) -> None:
         """Record 'defect' on 'obj'.
 
         Called by handle_defect if raise_on_defect is False.  This method is

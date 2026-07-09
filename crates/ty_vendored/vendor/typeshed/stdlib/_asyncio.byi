@@ -50,17 +50,17 @@ class Future[in out Element](Awaitable[Element]):
     def add_done_callback(self, fn: Callable[[Self], object], /, *, context: Context | None = None) -> None:
         """Add a callback to be run when the future becomes done.
 
-        The callback is called with a single argument - the future object. If
-        the future is already done when this is called, the callback is
+        The callback is called with a single argument - the future object.
+        If the future is already done when this is called, the callback is
         scheduled with call_soon.
         """
 
-    def cancel(self, msg: Any | None = None) -> bool:
+    def cancel(self, msg: dynamic | None = None) -> bool:
         """Cancel the future and schedule callbacks.
 
-        If the future is already done or cancelled, return False.  Otherwise,
-        change the future's state to cancelled, schedule the callbacks and
-        return True.
+        If the future is already done or cancelled, return False.
+        Otherwise, change the future's state to cancelled, schedule the
+        callbacks and return True.
         """
 
     def cancelled(self) -> bool:
@@ -69,8 +69,8 @@ class Future[in out Element](Awaitable[Element]):
     def done(self) -> bool:
         """Return True if the future is done.
 
-        Done means either that a result / exception are available, or that the
-        future was cancelled.
+        Done means either that a result / exception are available, or that
+        the future was cancelled.
         """
 
     def result(self) -> Element:
@@ -78,7 +78,8 @@ class Future[in out Element](Awaitable[Element]):
 
         If the future has been cancelled, raises CancelledError.  If the
         future's result isn't yet available, raises InvalidStateError.  If
-        the future is done and has an exception set, this exception is raised.
+        the future is done and has an exception set, this exception is
+        raised.
         """
 
     def exception(self) -> BaseException | None:
@@ -110,16 +111,16 @@ class Future[in out Element](Awaitable[Element]):
         InvalidStateError.
         """
 
-    def __iter__(self) -> Generator[Any, None, Element]:
+    def __iter__(self) -> Generator[dynamic, None, Element]:
         """Implement iter(self)."""
 
-    def __await__(self) -> Generator[Any, None, Element]:
+    def __await__(self) -> Generator[dynamic, None, Element]:
         """Return an iterator to be used in await expression."""
 
     @property
     def _loop(self) -> AbstractEventLoop
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
-        """See PEP 585"""
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
+        """Futures are generic over the type of their results"""
 
 if sys.version_info >= (3, 12):
     _TaskCompatibleCoro: TypeAlias = Coroutine[Any, Any, _T_co]
@@ -199,6 +200,7 @@ class Task[out Element](Future[Element]):  # type: ignore[type-var]  # pyright: 
         to which the output is written; by default output is written
         to sys.stderr.
         """
+
     if sys.version_info >= (3, 11):
         def cancelling(self) -> int:
             """Return the count of the task's cancellation requests.
@@ -216,8 +218,8 @@ class Task[out Element](Future[Element]):  # type: ignore[type-var]  # pyright: 
             Returns the remaining number of cancellation requests.
             """
 
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
-        """See PEP 585"""
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
+        """Tasks are generic over the return type of their wrapped coroutines"""
 
 def get_event_loop() -> AbstractEventLoop:
     """Return an asyncio event loop.
@@ -243,26 +245,26 @@ def _set_running_loop(loop: AbstractEventLoop | None, /) -> None:
     This function is thread-specific.
     """
 
-def _get_running_loop() -> AbstractEventLoop:
+def _get_running_loop() -> AbstractEventLoop | None:
     """Return the running event loop or None.
 
     This is a low-level function intended to be used by event loops.
     This function is thread-specific.
     """
 
-def _register_task(task: Task[Any]) -> None:
+def _register_task(task: Task[dynamic]) -> None:
     """Register a new task in asyncio as executed by loop.
 
     Returns None.
     """
 
-def _unregister_task(task: Task[Any]) -> None:
+def _unregister_task(task: Task[dynamic]) -> None:
     """Unregister a task.
 
     Returns None.
     """
 
-def _enter_task(loop: AbstractEventLoop, task: Task[Any]) -> None:
+def _enter_task(loop: AbstractEventLoop, task: Task[dynamic]) -> None:
     """Enter into task execution or resume suspended task.
 
     Task belongs to loop.
@@ -270,7 +272,7 @@ def _enter_task(loop: AbstractEventLoop, task: Task[Any]) -> None:
     Returns None.
     """
 
-def _leave_task(loop: AbstractEventLoop, task: Task[Any]) -> None:
+def _leave_task(loop: AbstractEventLoop, task: Task[dynamic]) -> None:
     """Leave task execution or suspend a task.
 
     Task belongs to loop.
@@ -279,13 +281,13 @@ def _leave_task(loop: AbstractEventLoop, task: Task[Any]) -> None:
     """
 
 if sys.version_info >= (3, 12):
-    def current_task(loop: AbstractEventLoop | None = None) -> Task[Any] | None:
+    def current_task(loop: AbstractEventLoop | None = None) -> Task[dynamic] | None:
         """Return a currently executed task."""
 
 if sys.version_info >= (3, 14):
-    def future_discard_from_awaited_by(future: Future[Any], waiter: Future[Any], /) -> None
-    def future_add_to_awaited_by(future: Future[Any], waiter: Future[Any], /) -> None:
+    def future_discard_from_awaited_by(future: Future[dynamic], waiter: Future[dynamic], /) -> None
+    def future_add_to_awaited_by(future: Future[dynamic], waiter: Future[dynamic], /) -> None:
         """Record that `fut` is awaited on by `waiter`."""
 
-    def all_tasks(loop: AbstractEventLoop | None = None) -> set[Task[Any]]:
+    def all_tasks(loop: AbstractEventLoop | None = None) -> set[Task[dynamic]]:
         """Return a set of all tasks for the loop."""

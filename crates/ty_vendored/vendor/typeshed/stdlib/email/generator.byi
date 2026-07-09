@@ -21,7 +21,7 @@ class Generator[in out MessageT: Message[Any, Any] = Any]:
     policy: Policy[MessageT] | None
 
     def __init__(
-        self: Generator[Any],  # The Policy of the message is used.
+        self: Generator[dynamic],  # The Policy of the message is used.
         outfp: SupportsWrite[str],
         mangle_from_: bool | None = None,
         maxheaderlen: int | None = None,
@@ -95,7 +95,7 @@ class BytesGenerator[in out MessageT: Message[Any, Any] = Any](Generator[Message
     """
 
     def __init__(
-        self: BytesGenerator[Any],  # The Policy of the message is used.
+        self: BytesGenerator[dynamic],  # The Policy of the message is used.
         outfp: SupportsWrite[bytes],
         mangle_from_: bool | None = None,
         maxheaderlen: int | None = None,
@@ -141,7 +141,7 @@ class DecodedGenerator[in out MessageT: Message[Any, Any] = Any](Generator[Messa
     """
 
     def __init__(
-        self: DecodedGenerator[Any],  # The Policy of the message is used.
+        self: DecodedGenerator[dynamic],  # The Policy of the message is used.
         outfp: SupportsWrite[str],
         mangle_from_: bool | None = None,
         maxheaderlen: int | None = None,

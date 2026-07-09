@@ -4,7 +4,6 @@ from asyncio.events import AbstractEventLoop
 from asyncio.protocols import BaseProtocol
 from collections.abc import Iterable, Mapping
 from socket import _Address
-from typing import Any
 
 # Keep asyncio.__all__ updated with any changes to __all__ here
 __all__ = ("BaseTransport", "ReadTransport", "WriteTransport", "Transport", "DatagramTransport", "SubprocessTransport")
@@ -13,8 +12,8 @@ class BaseTransport:
     """Base class for transports."""
 
     __slots__ = ("_extra",)
-    def __init__(self, extra: Mapping[str, Any] | None = None) -> None
-    def get_extra_info(self, name: str, default: Any = None) -> Any:
+    def __init__(self, extra: Mapping[str, dynamic] | None = None) -> None
+    def get_extra_info(self, name: str, default: dynamic = None) -> dynamic:
         """Get optional transport information."""
 
     def is_closing(self) -> bool:
@@ -89,14 +88,14 @@ class WriteTransport(BaseTransport):
         positive number of bytes.
         """
 
-    def write(self, data: bytes | bytearray | memoryview[Any]) -> None:  # any memoryview format or shape
+    def write(self, data: bytes | bytearray | memoryview[dynamic]) -> None:  # any memoryview format or shape
         """Write some data bytes to the transport.
 
         This does not block; it buffers the data and arranges for it
         to be sent out asynchronously.
         """
 
-    def writelines(self, list_of_data: Iterable[bytes | bytearray | memoryview[Any]]) -> None:  # any memoryview format or shape
+    def writelines(self, list_of_data: Iterable[bytes | bytearray | memoryview[dynamic]]) -> None:  # any memoryview format or shape
         """Write a list (or any iterable) of data bytes to the transport.
 
         The default implementation concatenates the arguments and
@@ -231,4 +230,4 @@ class _FlowControlMixin(Transport):
     """
 
     __slots__ = ("_loop", "_protocol_paused", "_high_water", "_low_water")
-    def __init__(self, extra: Mapping[str, Any] | None = None, loop: AbstractEventLoop | None = None) -> None
+    def __init__(self, extra: Mapping[str, dynamic] | None = None, loop: AbstractEventLoop | None = None) -> None

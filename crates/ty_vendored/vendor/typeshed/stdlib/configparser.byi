@@ -481,7 +481,7 @@ class RawConfigParser(_Parser):
     def read_string(self, string: str, source: str = "<string>") -> None:
         """Read configuration from a given string."""
 
-    def read_dict(self, dictionary: Mapping[str, Mapping[str, Any]], source: str = "<dict>") -> None:
+    def read_dict(self, dictionary: Mapping[str, Mapping[str, dynamic]], source: str = "<dict>") -> None:
         """Read configuration from a dictionary.
 
         Keys are section names, values are dictionaries with keys and values
@@ -494,6 +494,7 @@ class RawConfigParser(_Parser):
         Optional second argument is the `source` specifying the name of the
         dictionary being read.
         """
+
     if sys.version_info < (3, 12):
         @deprecated("Deprecated since Python 3.2; removed in Python 3.12. Use `parser.read_file()` instead.")
         def readfp(self, fp: Iterable[str], filename: str | None = None) -> None:
@@ -636,8 +637,8 @@ class SectionProxy(MutableMapping[str, str]):
         *,
         raw: bool = False,
         vars: _Section | None = None,
-        _impl: Any | None = None,
-        **kwargs: Any,  # passed to the underlying parser's get() method
+        _impl: dynamic | None = None,
+        **kwargs: dynamic,  # passed to the underlying parser's get() method
     ) -> str | None:
         """Get an option value.
 
@@ -652,8 +653,8 @@ class SectionProxy(MutableMapping[str, str]):
         *,
         raw: bool = False,
         vars: _Section | None = None,
-        _impl: Any | None = None,
-        **kwargs: Any,  # passed to the underlying parser's get() method
+        _impl: dynamic | None = None,
+        **kwargs: dynamic,  # passed to the underlying parser's get() method
     ) -> str | Element
 
     # These are partially-applied version of the methods with the same names in
@@ -678,7 +679,7 @@ class ConverterMapping(MutableMapping[str, _ConverterCallback | None]):
     section proxies to find and use the implementation on the parser class.
     """
 
-    GETTERCRE: ClassVar[Pattern[Any]]
+    GETTERCRE: ClassVar[Pattern[dynamic]]
     def __init__(self, parser: RawConfigParser) -> None
     def __getitem__(self, key: str) -> _ConverterCallback
     def __setitem__(self, key: str, value: _ConverterCallback | None) -> None

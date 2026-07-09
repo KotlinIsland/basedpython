@@ -41,7 +41,7 @@ ProxyTypes: (*: type[Any])
 
 final class CallableProxyType[in out CallableT: Callable[..., Any]]:  # "weakcallableproxy"
     def __eq__(self, value: object, /) -> bool
-    def __getattr__(self, attr: str) -> Any
+    def __getattr__(self, attr: str) -> dynamic
     __call__: CallableT
     """Call self as a function."""
 
@@ -49,20 +49,20 @@ final class CallableProxyType[in out CallableT: Callable[..., Any]]:  # "weakcal
 
 final class ProxyType[in out Element]:  # "weakproxy"
     def __eq__(self, value: object, /) -> bool
-    def __getattr__(self, attr: str) -> Any
+    def __getattr__(self, attr: str) -> dynamic
     __hash__: ClassVar[None]  # type: ignore[assignment]
 
 @disjoint_base
 class ReferenceType[in out Element]:  # "weakref"
-    __callback__: Callable[[Self], Any]
-    def __new__(cls, o: Element, callback: Callable[[Self], Any] | None = ..., /) -> Self
+    __callback__: Callable[[Self], dynamic]
+    def __new__(cls, o: Element, callback: Callable[[Self], dynamic] | None = ..., /) -> Self
     def __call__(self) -> Element | None:
         """Call self as a function."""
 
     def __eq__(self, value: object, /) -> bool
     def __hash__(self) -> int
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
-        """See PEP 585"""
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
+        """Weakrefs are generic over the type of the referenced object."""
 
 ref = ReferenceType
 
@@ -75,7 +75,7 @@ class WeakMethod[in out CallableT: Callable[..., Any]](ref[CallableT]):
     """
 
     __slots__ = ("_func_ref", "_meth_type", "_alive", "__weakref__")
-    def __new__(cls, meth: CallableT, callback: Callable[[Self], Any] | None = None) -> Self
+    def __new__(cls, meth: CallableT, callback: Callable[[Self], dynamic] | None = None) -> Self
     def __call__(self) -> CallableT | None
     def __eq__(self, other: object) -> bool
     def __ne__(self, other: object) -> bool
@@ -109,7 +109,7 @@ class WeakValueDictionary[in out Key, in out Value](MutableMapping[Key, Value]):
     def __iter__(self) -> Iterator[Key]
     def copy(self) -> WeakValueDictionary[Key, Value]
     __copy__ = copy
-    def __deepcopy__(self, memo: Any) -> Self
+    def __deepcopy__(self, memo: dynamic) -> Self
 
     def get(self, key: Key, default: None = None) -> Value | None
     def get(self, key: Key, default: Value) -> Value
@@ -170,8 +170,8 @@ class KeyedRef[in out Key, in out Element](ref[Element]):
 
     __slots__ = ("key",)
     key: Key
-    def __new__(type, ob: Element, callback: Callable[[Self], Any], key: Key) -> Self
-    def __init__(self, ob: Element, callback: Callable[[Self], Any], key: Key) -> None
+    def __new__(type, ob: Element, callback: Callable[[Self], dynamic], key: Key) -> Self
+    def __init__(self, ob: Element, callback: Callable[[Self], dynamic], key: Key) -> None
 
 class WeakKeyDictionary[in out Key, in out Value](MutableMapping[Key, Value]):
     """Mapping class that references keys weakly.
@@ -195,7 +195,7 @@ class WeakKeyDictionary[in out Key, in out Value](MutableMapping[Key, Value]):
     def __iter__(self) -> Iterator[Key]
     def copy(self) -> WeakKeyDictionary[Key, Value]
     __copy__ = copy
-    def __deepcopy__(self, memo: Any) -> Self
+    def __deepcopy__(self, memo: dynamic) -> Self
 
     def get(self, key: Key, default: None = None) -> Value | None
     def get(self, key: Key, default: Value) -> Value
@@ -250,8 +250,8 @@ class finalize[**P, in out Element]:
     """
 
     __slots__ = ()
-    def __init__(self, obj: Element, func: Callable[P, Any], /, *args: P.args, **kwargs: P.kwargs) -> None
-    def __call__(self, _: Any = None) -> Any | None:
+    def __init__(self, obj: Element, func: Callable[P, dynamic], /, *args: P.args, **kwargs: P.kwargs) -> None
+    def __call__(self, _: dynamic = None) -> dynamic | None:
         """If alive then mark as dead and return func(*args, **kwargs);
         otherwise return None
         """
@@ -269,5 +269,6 @@ class finalize[**P, in out Element]:
     @property
     def alive(self) -> bool:
         """Whether finalizer is alive"""
+
     atexit: bool
     """Whether finalizer should be called at exit"""

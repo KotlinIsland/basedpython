@@ -36,7 +36,7 @@ class addclosehook(addbase):
 
     closehook: (...) -> object
     hookargs: (*: Any)
-    def __init__(self, fp: IO[bytes], closehook: (...) -> object, *hookargs: Any) -> None
+    def __init__(self, fp: IO[bytes], closehook: (...) -> object, *hookargs: dynamic) -> None
 
 class addinfo(addbase):
     """class to add an info() method to an open file."""

@@ -145,15 +145,77 @@ def getprofile() -> ProfileFunction | None:
 
 if sys.version_info >= (3, 15):
     final class serialize_iterator[in out Element](Iterator[Element]):
+        """Wrap a non-concurrent iterator with a lock to enforce sequential access.
+
+        Applies a non-reentrant lock around calls to __next__.  If the
+        wrapped iterator also defines send(), throw(), or close(), those
+        calls are serialized as well.
+
+        Allows iterator and generator instances to be shared by multiple consumer
+        threads.
+
+        For example, itertools.count does not make thread-safe instances,
+        but that is easily fixed with:
+
+            atomic_counter = serialize_iterator(itertools.count())
+
+        """
+
         def __init__(self, iterable: Iterable[Element]) -> None
         def __iter__(self) -> Self
         def __next__(self) -> Element
-        def send(self, value: Any, /) -> Element
-        def throw(self, typ: type[BaseException], val: BaseException | object = ..., tb: TracebackType | None = ...) -> Element
-        def close(self) -> None
+        def send(self, value: dynamic, /) -> Element:
+            """Send a value to a generator.
 
-    def synchronized_iterator[Element](func: (...) -> Iterable[Element]) -> (...) -> Iterator[Element]
-    def concurrent_tee[Element](iterable: Iterable[Element], n: int = 2) -> (*: Iterator[Element])
+            Raises AttributeError if not a generator.
+            """
+
+        def throw(self, typ: type[BaseException], val: BaseException | object = ..., tb: TracebackType | None = ...) -> Element:
+            """Call throw() on a generator.
+
+            Raises AttributeError if not a generator.
+            """
+
+        def close(self) -> None:
+            """Call close() on a generator.
+
+            Raises AttributeError if not a generator.
+            """
+
+    def synchronized_iterator[Element](func: (...) -> Iterable[Element]) -> (...) -> Iterator[Element]:
+        """Wrap an iterator-returning callable to make its iterators thread-safe.
+
+        Existing itertools and more-itertools can be wrapped so that their
+        iterator instances are serialized.
+
+        For example, itertools.count does not make thread-safe instances,
+        but that is easily fixed with:
+
+            atomic_counter = synchronized_iterator(itertools.count)
+
+        Can also be used as a decorator for generator function definitions
+        so that the generator instances are serialized::
+
+            import time
+
+            @synchronized_iterator
+            def enumerate_and_timestamp(iterable):
+                for count, value in enumerate(iterable):
+                    yield count, time.time_ns(), value
+
+        """
+
+    def concurrent_tee[Element](iterable: Iterable[Element], n: int = 2) -> (*: Iterator[Element]):
+        """Variant of itertools.tee() but with guaranteed threading semantics.
+
+        Takes a non-threadsafe iterator as an input and creates concurrent
+        tee objects for other threads to have reliable independent copies of
+        the data stream.
+
+        The new iterators are only thread-safe if consumed within a single thread.
+        To share just one of the new iterators across multiple threads, wrap it
+        with threading.serialize_iterator().
+        """
 
 def stack_size(size: int = 0, /) -> int:
     """Return the thread stack size used when creating new threads.  The
@@ -205,6 +267,7 @@ class Thread:
         created. The identifier is available even after the thread has exited.
 
         """
+
     daemon: bool
     """A boolean value indicating whether this thread is a daemon thread.
 
@@ -223,8 +286,8 @@ class Thread:
             group: None = None,
             target: (...) -> object | None = None,
             name: str | None = None,
-            args: Iterable[Any] = (),
-            kwargs: Mapping[str, Any] | None = None,
+            args: Iterable[dynamic] = (),
+            kwargs: Mapping[str, dynamic] | None = None,
             *,
             daemon: bool | None = None,
             context: Context | None = None,
@@ -258,14 +321,15 @@ class Thread:
             else to the thread.
 
             """
+
     else:
         def __init__(
             self,
             group: None = None,
             target: (...) -> object | None = None,
             name: str | None = None,
-            args: Iterable[Any] = (),
-            kwargs: Mapping[str, Any] | None = None,
+            args: Iterable[dynamic] = (),
+            kwargs: Mapping[str, dynamic] | None = None,
             *,
             daemon: bool | None = None,
         ) -> None:
@@ -448,6 +512,7 @@ final class _RLock:
         There is no return value.
 
         """
+
     __enter__ = acquire
     def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None
 
@@ -693,18 +758,18 @@ class Timer(Thread):
 
     """
 
-    args: Iterable[Any]  # undocumented
+    args: Iterable[dynamic]  # undocumented
     finished: Event  # undocumented
     function: (...) -> Any  # undocumented
     interval: float  # undocumented
-    kwargs: Mapping[str, Any]  # undocumented
+    kwargs: Mapping[str, dynamic]  # undocumented
 
     def __init__(
         self,
         interval: float,
         function: (...) -> object,
-        args: Iterable[Any] | None = None,
-        kwargs: Mapping[str, Any] | None = None,
+        args: Iterable[dynamic] | None = None,
+        kwargs: Mapping[str, dynamic] | None = None,
     ) -> None
     def cancel(self) -> None:
         """Stop the timer if it hasn't finished yet."""

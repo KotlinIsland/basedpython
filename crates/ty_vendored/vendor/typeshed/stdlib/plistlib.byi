@@ -2,7 +2,7 @@
 
 The property list (.plist) file format is a simple XML pickle supporting
 basic object types, like dictionaries, lists, numbers and strings.
-Usually the top level object is a dictionary.
+Usually the top level object is a dictionary or a frozen dictionary.
 
 To write out a plist file, use the dump(value, file)
 function. 'value' is the top level object, 'file' is
@@ -78,9 +78,9 @@ if sys.version_info >= (3, 13):
         fp: IO[bytes],
         *,
         fmt: PlistFormat | None = None,
-        dict_type: type[MutableMapping[str, Any]] = ...,
+        dict_type: type[MutableMapping[str, dynamic]] = ...,
         aware_datetime: bool = False,
-    ) -> Any:
+    ) -> dynamic:
         """Read a .plist file. 'fp' should be a readable and binary file object.
         Return the unpacked root object (which usually is a dictionary).
         """
@@ -89,20 +89,20 @@ if sys.version_info >= (3, 13):
         value: ReadableBuffer | str,
         *,
         fmt: PlistFormat | None = None,
-        dict_type: type[MutableMapping[str, Any]] = ...,
+        dict_type: type[MutableMapping[str, dynamic]] = ...,
         aware_datetime: bool = False,
-    ) -> Any:
+    ) -> dynamic:
         """Read a .plist file from a bytes object.
         Return the unpacked root object (which usually is a dictionary).
         """
 
 else:
-    def load(fp: IO[bytes], *, fmt: PlistFormat | None = None, dict_type: type[MutableMapping[str, Any]] = ...) -> Any:
+    def load(fp: IO[bytes], *, fmt: PlistFormat | None = None, dict_type: type[MutableMapping[str, dynamic]] = ...) -> dynamic:
         """Read a .plist file. 'fp' should be a readable and binary file object.
         Return the unpacked root object (which usually is a dictionary).
         """
 
-    def loads(value: ReadableBuffer, *, fmt: PlistFormat | None = None, dict_type: type[MutableMapping[str, Any]] = ...) -> Any:
+    def loads(value: ReadableBuffer, *, fmt: PlistFormat | None = None, dict_type: type[MutableMapping[str, dynamic]] = ...) -> dynamic:
         """Read a .plist file from a bytes object.
         Return the unpacked root object (which usually is a dictionary).
         """

@@ -11,7 +11,7 @@ additional features:
 from collections.abc import Iterable, Mapping
 from getopt import _SliceableT, _StrSequenceT_co
 from re import Pattern
-from typing import Any, Final, TypeAlias
+from typing import Final, TypeAlias
 
 _Option: TypeAlias = tuple[str, str | None, str]
 
@@ -49,7 +49,7 @@ class FancyGetopt:
         is left untouched.
         """
     def getopt(
-        self, args: _SliceableT[_StrSequenceT_co] | None, object: Any
+        self, args: _SliceableT[_StrSequenceT_co] | None, object: dynamic
     ) -> _StrSequenceT_co  # object is an arbitrary non-slotted object
 
     def get_option_order(self) -> list[(str, str)]:
@@ -68,7 +68,7 @@ def fancy_getopt(
     options: list[_Option], negative_opt: Mapping[_Option, _Option], object: None, args: _SliceableT[_StrSequenceT_co] | None
 ) -> (_StrSequenceT_co, OptionDummy)
 def fancy_getopt(
-    options: list[_Option], negative_opt: Mapping[_Option, _Option], object: Any, args: _SliceableT[_StrSequenceT_co] | None
+    options: list[_Option], negative_opt: Mapping[_Option, _Option], object: dynamic, args: _SliceableT[_StrSequenceT_co] | None
 ) -> _StrSequenceT_co
 
 WS_TRANS: Final[dict[int, str]]

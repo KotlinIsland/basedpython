@@ -1,5 +1,5 @@
 import sys
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 if sys.platform != "win32" and sys.platform != "darwin":
     # Depends on soundcard.h
@@ -120,11 +120,11 @@ if sys.platform != "win32" and sys.platform != "darwin":
     control_names: list[str]
 
     # TODO: oss_audio_device return type
-    def open(mode: Literal["r", "w", "rw"]) -> Any
-    def open(device: str, mode: Literal["r", "w", "rw"]) -> Any
+    def open(mode: Literal["r", "w", "rw"]) -> dynamic
+    def open(device: str, mode: Literal["r", "w", "rw"]) -> dynamic
 
     # TODO: oss_mixer_device return type
-    def openmixer(device: str = ...) -> Any
+    def openmixer(device: str = ...) -> dynamic
 
     class OSSAudioError(Exception)
     error = OSSAudioError

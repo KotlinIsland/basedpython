@@ -6,7 +6,7 @@ import unittest.suite
 from collections.abc import Callable, Sequence
 from re import Pattern
 from types import ModuleType
-from typing import Any, Final, TypeAlias
+from typing import Final, TypeAlias
 from typing_extensions import deprecated
 
 _SortComparisonMethod: TypeAlias = Callable[[str, str], int]
@@ -27,11 +27,13 @@ class TestLoader:
     suiteClass: _SuiteClass
     def loadTestsFromTestCase(self, testCaseClass: type[unittest.case.TestCase]) -> unittest.suite.TestSuite:
         """Return a suite of all test cases contained in testCaseClass"""
+
     if sys.version_info >= (3, 12):
         def loadTestsFromModule(self, module: ModuleType, *, pattern: str | None = None) -> unittest.suite.TestSuite:
             """Return a suite of all test cases contained in the given module"""
+
     else:
-        def loadTestsFromModule(self, module: ModuleType, *args: Any, pattern: str | None = None) -> unittest.suite.TestSuite:
+        def loadTestsFromModule(self, module: ModuleType, *args: dynamic, pattern: str | None = None) -> unittest.suite.TestSuite:
             """Return a suite of all test cases contained in the given module"""
 
     def loadTestsFromName(self, name: str, module: ModuleType | None = None) -> unittest.suite.TestSuite:

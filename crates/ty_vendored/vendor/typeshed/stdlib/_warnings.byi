@@ -3,10 +3,9 @@ It is a helper module to speed up interpreter start-up.
 """
 
 import sys
-from typing import Any
 
 _defaultaction: str
-_onceregistry: dict[Any, Any]
+_onceregistry: dict[dynamic, dynamic]
 filters: list[(str, str | None, type[Warning], str | None, int)]
 
 if sys.version_info >= (3, 12):
@@ -14,7 +13,7 @@ if sys.version_info >= (3, 12):
         message: str,
         category: type[Warning] | None = None,
         stacklevel: int = 1,
-        source: Any | None = None,
+        source: dynamic | None = None,
         *,
         skip_file_prefixes: (*: str) = (),
     ) -> None:
@@ -35,16 +34,16 @@ if sys.version_info >= (3, 12):
         """
     def warn(
         message: Warning,
-        category: Any = None,
+        category: dynamic = None,
         stacklevel: int = 1,
-        source: Any | None = None,
+        source: dynamic | None = None,
         *,
         skip_file_prefixes: (*: str) = (),
     ) -> None
 else:
-    def warn(message: str, category: type[Warning] | None = None, stacklevel: int = 1, source: Any | None = None) -> None:
+    def warn(message: str, category: type[Warning] | None = None, stacklevel: int = 1, source: dynamic | None = None) -> None:
         """Issue a warning, or maybe ignore it or raise an exception."""
-    def warn(message: Warning, category: Any = None, stacklevel: int = 1, source: Any | None = None) -> None
+    def warn(message: Warning, category: dynamic = None, stacklevel: int = 1, source: dynamic | None = None) -> None
 
 def warn_explicit(
     message: str,
@@ -53,17 +52,17 @@ def warn_explicit(
     lineno: int,
     module: str | None = ...,
     registry: dict[str | (str, type[Warning], int), int] | None = None,
-    module_globals: dict[str, Any] | None = None,
-    source: Any | None = None,
+    module_globals: dict[str, dynamic] | None = None,
+    source: dynamic | None = None,
 ) -> None:
     """Issue a warning, or maybe ignore it or raise an exception."""
 def warn_explicit(
     message: Warning,
-    category: Any,
+    category: dynamic,
     filename: str,
     lineno: int,
     module: str | None = None,
     registry: dict[str | (str, type[Warning], int), int] | None = None,
-    module_globals: dict[str, Any] | None = None,
-    source: Any | None = None,
+    module_globals: dict[str, dynamic] | None = None,
+    source: dynamic | None = None,
 ) -> None

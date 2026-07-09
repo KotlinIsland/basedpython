@@ -67,8 +67,8 @@ if sys.version_info >= (3, 14):
         def evaluate(
             self,
             *,
-            globals: dict[str, Any] | None = None,
-            locals: Mapping[str, Any] | None = None,
+            globals: dict[str, dynamic] | None = None,
+            locals: Mapping[str, dynamic] | None = None,
             type_params: (*: TypeVar | ParamSpec | TypeVarTuple) | None = None,
             owner: object = None,
             format: Literal[Format.STRING],
@@ -80,8 +80,8 @@ if sys.version_info >= (3, 14):
         def evaluate(
             self,
             *,
-            globals: dict[str, Any] | None = None,
-            locals: Mapping[str, Any] | None = None,
+            globals: dict[str, dynamic] | None = None,
+            locals: Mapping[str, dynamic] | None = None,
             type_params: (*: TypeVar | ParamSpec | TypeVarTuple) | None = None,
             owner: object = None,
             format: Literal[Format.FORWARDREF],
@@ -89,8 +89,8 @@ if sys.version_info >= (3, 14):
         def evaluate(
             self,
             *,
-            globals: dict[str, Any] | None = None,
-            locals: Mapping[str, Any] | None = None,
+            globals: dict[str, dynamic] | None = None,
+            locals: Mapping[str, dynamic] | None = None,
             type_params: (*: TypeVar | ParamSpec | TypeVarTuple) | None = None,
             owner: object = None,
             format: Format = Format.VALUE,  # noqa: Y011
@@ -99,8 +99,8 @@ if sys.version_info >= (3, 14):
         @deprecated("Use `ForwardRef.evaluate()` or `typing.evaluate_forward_ref()` instead.")
         def _evaluate(
             self,
-            globalns: dict[str, Any] | None,
-            localns: Mapping[str, Any] | None,
+            globalns: dict[str, dynamic] | None,
+            localns: Mapping[str, dynamic] | None,
             type_params: (*: TypeVar | ParamSpec | TypeVarTuple) = ...,
             *,
             recursive_guard: frozenset[str],
@@ -113,8 +113,8 @@ if sys.version_info >= (3, 14):
         def __resolved_str__(self) -> str
         def __eq__(self, other: object) -> bool
         def __hash__(self) -> int
-        def __or__(self, other: Any) -> types.UnionType
-        def __ror__(self, other: Any) -> types.UnionType
+        def __or__(self, other: dynamic) -> types.UnionType
+        def __ror__(self, other: dynamic) -> types.UnionType
 
     def call_evaluate_function(evaluate: EvaluateFunc, format: Literal[Format.STRING], *, owner: object = None) -> str:
         """Call an evaluate function. Evaluate functions are normally generated for
@@ -159,7 +159,7 @@ if sys.version_info >= (3, 14):
         """
 
     def get_annotations(
-        obj: Any,  # any object with __annotations__ or __annotate__
+        obj: dynamic,  # any object with __annotations__ or __annotate__
         *,
         globals: dict[str, object] | None = None,
         locals: Mapping[str, object] | None = None,
@@ -217,7 +217,7 @@ if sys.version_info >= (3, 14):
             functools.update_wrapper()) it is first unwrapped.
         """
     def get_annotations(
-        obj: Any,
+        obj: dynamic,
         *,
         globals: dict[str, object] | None = None,
         locals: Mapping[str, object] | None = None,
@@ -225,7 +225,7 @@ if sys.version_info >= (3, 14):
         format: Literal[Format.FORWARDREF],
     ) -> dict[str, AnnotationForm | ForwardRef]
     def get_annotations(
-        obj: Any,
+        obj: dynamic,
         *,
         globals: dict[str, object] | None = None,
         locals: Mapping[str, object] | None = None,

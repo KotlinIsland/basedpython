@@ -80,7 +80,7 @@ class Font:
         overstrike: bool = ...,
     ) -> None
     __hash__: ClassVar[None]  # type: ignore[assignment]
-    def __setitem__(self, key: str, value: Any) -> None
+    def __setitem__(self, key: str, value: dynamic) -> None
 
     def cget(self, option: Literal["family"]) -> str:
         """Get font attribute"""
@@ -88,7 +88,7 @@ class Font:
     def cget(self, option: Literal["weight"]) -> Literal["normal", "bold"]
     def cget(self, option: Literal["slant"]) -> Literal["roman", "italic"]
     def cget(self, option: Literal["underline", "overstrike"]) -> bool
-    def cget(self, option: str) -> Any
+    def cget(self, option: str) -> dynamic
 
     __getitem__ = cget
 
@@ -112,6 +112,7 @@ class Font:
         overstrike: bool = ...,
     ) -> _FontDict | None:
         """Modify font attributes"""
+
     configure = config
     def copy(self) -> Font:
         """Return a distinct copy of the current font"""

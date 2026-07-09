@@ -35,11 +35,11 @@ class Event(NamedTuple):
     """Event(time, priority, sequence, action, argument, kwargs)"""
 
     time: float
-    priority: Any
+    priority: dynamic
     sequence: int
     action: _ActionCallback
     argument: (*: Any)
-    kwargs: dict[str, Any]
+    kwargs: dict[str, dynamic]
 
 class scheduler:
     timefunc: Callable[[], float]
@@ -51,7 +51,7 @@ class scheduler:
         """
 
     def enterabs(
-        self, time: float, priority: Any, action: _ActionCallback, argument: (*: Any) = (), kwargs: dict[str, Any] = ...
+        self, time: float, priority: dynamic, action: _ActionCallback, argument: (*: Any) = (), kwargs: dict[str, dynamic] = ...
     ) -> Event:
         """Enter a new event in the queue at an absolute time.
 
@@ -61,7 +61,7 @@ class scheduler:
         """
 
     def enter(
-        self, delay: float, priority: Any, action: _ActionCallback, argument: (*: Any) = (), kwargs: dict[str, Any] = ...
+        self, delay: float, priority: dynamic, action: _ActionCallback, argument: (*: Any) = (), kwargs: dict[str, dynamic] = ...
     ) -> Event:
         """A variant that specifies the time as a relative time.
 

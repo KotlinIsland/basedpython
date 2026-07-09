@@ -19,6 +19,7 @@ class ZoneInfo(tzinfo):
     def __new__(cls, key: str) -> Self
     class def no_cache(cls, key: str) -> Self:
         """Get a new instance of ZoneInfo, bypassing the cache."""
+
     if sys.version_info >= (3, 12):
         class def from_file(cls, file_obj: _IOBytes, /, key: str | None = None) -> Self:
             """Create a ZoneInfo file from a file object."""

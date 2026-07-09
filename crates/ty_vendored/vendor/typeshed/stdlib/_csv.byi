@@ -4,7 +4,7 @@ import csv
 import sys
 from _typeshed import SupportsWrite
 from collections.abc import Iterable
-from typing import Any, Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 from typing_extensions import Self, disjoint_base
 
 __version__: Final[str]
@@ -84,26 +84,27 @@ class Writer:
     @property
     def dialect(self) -> Dialect
     if sys.version_info >= (3, 13):
-        def writerow(self, row: Iterable[Any], /) -> Any:
+        def writerow(self, row: Iterable[dynamic], /) -> dynamic:
             """Construct and write a CSV record from an iterable of fields.
 
             Non-string elements will be converted to string.
             """
 
-        def writerows(self, rows: Iterable[Iterable[Any]], /) -> None:
+        def writerows(self, rows: Iterable[Iterable[dynamic]], /) -> None:
             """Construct and write a series of iterables to a csv file.
 
             Non-string elements will be converted to string.
             """
+
     else:
-        def writerow(self, row: Iterable[Any]) -> Any:
+        def writerow(self, row: Iterable[dynamic]) -> dynamic:
             """writerow(iterable)
 
             Construct and write a CSV record from an iterable of fields.  Non-string
             elements will be converted to string.
             """
 
-        def writerows(self, rows: Iterable[Iterable[Any]]) -> None:
+        def writerows(self, rows: Iterable[Iterable[dynamic]]) -> None:
             """writerows(iterable of iterables)
 
             Construct and write a series of iterables to a csv file.  Non-string

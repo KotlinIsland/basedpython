@@ -229,15 +229,15 @@ class Option:
     action: str
     type: str | None
     dest: str | None
-    default: Any  # default can be "any" type
+    default: dynamic  # default can be "any" type
     nargs: int
-    const: Any | None  # const can be "any" type
+    const: dynamic | None  # const can be "any" type
     choices: list[str] | (*: str) | None
     # Callback args and kwargs cannot be expressed in Python's type system.
     # Revisit if ParamSpec is ever changed to work with packed args/kwargs.
     callback: (...) -> object | None
     callback_args: (*: Any) | None
-    callback_kwargs: dict[str, Any] | None
+    callback_kwargs: dict[str, dynamic] | None
     help: str | None
     metavar: str | None
     def __init__(
@@ -248,13 +248,13 @@ class Option:
         action: str | None = None,
         type: str | builtins.type | None = None,
         dest: str | None = None,
-        default: Any = ...,  # = NO_DEFAULT
+        default: dynamic = ...,  # = NO_DEFAULT
         nargs: int | None = None,
-        const: Any | None = None,
+        const: dynamic | None = None,
         choices: list[str] | (*: str) | None = None,
         callback: (...) -> object | None = None,
         callback_args: (*: Any) | None = None,
-        callback_kwargs: dict[str, Any] | None = None,
+        callback_kwargs: dict[str, dynamic] | None = None,
         help: str | None = None,
         metavar: str | None = None,
     ) -> None
@@ -266,14 +266,14 @@ class Option:
     def _check_nargs(self) -> None
     def _check_opt_strings(self, opts: Iterable[str | None]) -> list[str]
     def _check_type(self) -> None
-    def _set_attrs(self, attrs: dict[str, Any]) -> None  # accepted attrs depend on the ATTRS attribute
+    def _set_attrs(self, attrs: dict[str, dynamic]) -> None  # accepted attrs depend on the ATTRS attribute
     def _set_opt_strings(self, opts: Iterable[str]) -> None
-    def check_value(self, opt: str, value: str) -> Any  # return type cannot be known statically
-    def convert_value(self, opt: str, value: str | (*: str) | None) -> Any  # return type cannot be known statically
+    def check_value(self, opt: str, value: str) -> dynamic  # return type cannot be known statically
+    def convert_value(self, opt: str, value: str | (*: str) | None) -> dynamic  # return type cannot be known statically
     def get_opt_string(self) -> str
     def process(self, opt: str, value: str | (*: str) | None, values: Values, parser: OptionParser) -> int
     # value of take_action can be "any" type
-    def take_action(self, action: str, dest: str, opt: str, value: Any, values: Values, parser: OptionParser) -> int
+    def take_action(self, action: str, dest: str, opt: str, value: dynamic, values: Values, parser: OptionParser) -> int
     def takes_value(self) -> bool
 
 make_option = Option
@@ -312,7 +312,7 @@ class OptionContainer:
     _long_opt: dict[str, Option]
     _short_opt: dict[str, Option]
     conflict_handler: str
-    defaults: dict[str, Any]  # default values can be "any" type
+    defaults: dict[str, dynamic]  # default values can be "any" type
     description: str | None
     option_class: type[Option]
     def __init__(
@@ -334,16 +334,16 @@ class OptionContainer:
         action: str | None = None,
         type: str | builtins.type | None = None,
         dest: str | None = None,
-        default: Any = ...,  # = NO_DEFAULT
+        default: dynamic = ...,  # = NO_DEFAULT
         nargs: int | None = None,
-        const: Any | None = None,
+        const: dynamic | None = None,
         choices: list[str] | (*: str) | None = None,
         callback: (...) -> object | None = None,
         callback_args: (*: Any) | None = None,
-        callback_kwargs: dict[str, Any] | None = None,
+        callback_kwargs: dict[str, dynamic] | None = None,
         help: str | None = None,
         metavar: str | None = None,
-        **kwargs: Any,  # Allow arbitrary keyword arguments for user defined option_class
+        **kwargs: dynamic,  # Allow arbitrary keyword arguments for user defined option_class
     ) -> Option
 
     def add_options(self, option_list: Iterable[Option]) -> None
@@ -386,15 +386,15 @@ class Values:
         they have a corresponding attribute in self or not.
         """
 
-    def ensure_value(self, attr: str, value: object) -> Any  # return type cannot be known statically
+    def ensure_value(self, attr: str, value: object) -> dynamic  # return type cannot be known statically
     def read_file(self, filename: str, mode: Literal["careful", "loose"] = "careful") -> None
     def read_module(self, modname: str, mode: Literal["careful", "loose"] = "careful") -> None
     __hash__: ClassVar[None]  # type: ignore[assignment]
     # __getattr__ doesn't exist, but anything passed as a default to __init__
     # is set on the instance.
-    def __getattr__(self, name: str) -> Any
+    def __getattr__(self, name: str) -> dynamic
     # TODO: mypy infers -> object for __getattr__ if __setattr__ has `value: object`
-    def __setattr__(self, name: str, value: Any, /) -> None
+    def __setattr__(self, name: str, value: dynamic, /) -> None
     def __eq__(self, other: object) -> bool
 
 class OptionParser(OptionContainer):
@@ -610,7 +610,7 @@ class OptionParser(OptionContainer):
         name.  Does nothing if self.version is empty or undefined.
         """
 
-    def set_default(self, dest: str, value: Any) -> None  # default value can be "any" type
-    def set_defaults(self, **kwargs: Any) -> None  # default values can be "any" type
+    def set_default(self, dest: str, value: dynamic) -> None  # default value can be "any" type
+    def set_defaults(self, **kwargs: dynamic) -> None  # default values can be "any" type
     def set_process_default_values(self, process: bool) -> None
     def set_usage(self, usage: str | None) -> None

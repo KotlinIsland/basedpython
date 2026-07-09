@@ -23,7 +23,7 @@ import sys
 import types
 from _typeshed import Incomplete, StrPath, TraceFunction
 from collections.abc import Callable, Iterable, Mapping, Sequence
-from typing import Any, ParamSpec, TypeAlias, TypeVar
+from typing import ParamSpec, TypeAlias, TypeVar
 
 __all__ = ["Trace", "CoverageResults"]
 
@@ -46,6 +46,7 @@ class CoverageResults:
     ) -> None  # undocumented
     def update(self, other: CoverageResults) -> None:
         """Merge in the data from another CoverageResults"""
+
     if sys.version_info >= (3, 13):
         def write_results(
             self,
@@ -67,6 +68,7 @@ class CoverageResults:
                              exist are silently ignored. Otherwise, a missing file
                              will raise a FileNotFoundError.
             """
+
     else:
         def write_results(self, show_missing: bool = True, summary: bool = False, coverdir: StrPath | None = None) -> None:
             """
@@ -80,7 +82,7 @@ class CoverageResults:
             """
 
     def write_results_file(
-        self, path: StrPath, lines: Sequence[str], lnotab: Any, lines_hit: Mapping[int, int], encoding: str | None = None
+        self, path: StrPath, lines: Sequence[str], lnotab: dynamic, lines_hit: Mapping[int, int], encoding: str | None = None
     ) -> (int, int):
         """Return a coverage results file in path."""
 
@@ -136,30 +138,30 @@ class Trace:
 
     def run(self, cmd: str | types.CodeType) -> None
     def runctx(
-        self, cmd: str | types.CodeType, globals: Mapping[str, Any] | None = None, locals: Mapping[str, Any] | None = None
+        self, cmd: str | types.CodeType, globals: Mapping[str, dynamic] | None = None, locals: Mapping[str, dynamic] | None = None
     ) -> None
     def runfunc[**P, Element](self, func: Callable[P, Element], /, *args: P.args, **kw: P.kwargs) -> Element
     def file_module_function_of(self, frame: types.FrameType) -> _FileModuleFunction
-    def globaltrace_trackcallers(self, frame: types.FrameType, why: str, arg: Any) -> None:
+    def globaltrace_trackcallers(self, frame: types.FrameType, why: str, arg: dynamic) -> None:
         """Handler for call events.
 
         Adds information about who called who to the self._callers dict.
         """
 
-    def globaltrace_countfuncs(self, frame: types.FrameType, why: str, arg: Any) -> None:
+    def globaltrace_countfuncs(self, frame: types.FrameType, why: str, arg: dynamic) -> None:
         """Handler for call events.
 
         Adds (filename, modulename, funcname) to the self._calledfuncs dict.
         """
 
-    def globaltrace_lt(self, frame: types.FrameType, why: str, arg: Any) -> None:
+    def globaltrace_lt(self, frame: types.FrameType, why: str, arg: dynamic) -> None:
         """Handler for call events.
 
         If the code block being entered is to be ignored, returns 'None',
         else returns self.localtrace.
         """
 
-    def localtrace_trace_and_count(self, frame: types.FrameType, why: str, arg: Any) -> TraceFunction
-    def localtrace_trace(self, frame: types.FrameType, why: str, arg: Any) -> TraceFunction
-    def localtrace_count(self, frame: types.FrameType, why: str, arg: Any) -> TraceFunction
+    def localtrace_trace_and_count(self, frame: types.FrameType, why: str, arg: dynamic) -> TraceFunction
+    def localtrace_trace(self, frame: types.FrameType, why: str, arg: dynamic) -> TraceFunction
+    def localtrace_count(self, frame: types.FrameType, why: str, arg: dynamic) -> TraceFunction
     def results(self) -> CoverageResults

@@ -11,7 +11,7 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
     _closed: bool  # undocumented
     _protocol: protocols.SubprocessProtocol  # undocumented
     _loop: events.AbstractEventLoop  # undocumented
-    _proc: subprocess.Popen[Any] | None  # undocumented
+    _proc: subprocess.Popen[dynamic] | None  # undocumented
     _pid: int | None  # undocumented
     _returncode: int | None  # undocumented
     _exit_waiters: list[futures.Future[Any]]  # undocumented
@@ -29,8 +29,8 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         stderr: _File,
         bufsize: int,
         waiter: futures.Future[Any] | None = None,
-        extra: Any | None = None,
-        **kwargs: Any,
+        extra: dynamic | None = None,
+        **kwargs: dynamic,
     ) -> None
     def _start(
         self,
@@ -40,14 +40,14 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         stdout: _File,
         stderr: _File,
         bufsize: int,
-        **kwargs: Any,
+        **kwargs: dynamic,
     ) -> None  # undocumented
     def get_pid(self) -> int | None  # type: ignore[override]
     def get_pipe_transport(self, fd: int) -> _File  # type: ignore[override]
     def _check_proc(self) -> None  # undocumented
     def send_signal(self, signal: int) -> None
     async def _connect_pipes(self, waiter: futures.Future[Any] | None) -> None  # undocumented
-    def _call(self, cb: (...) -> object, *data: Any) -> None  # undocumented
+    def _call(self, cb: (...) -> object, *data: dynamic) -> None  # undocumented
     def _pipe_connection_lost(self, fd: int, exc: BaseException | None) -> None  # undocumented
     def _pipe_data_received(self, fd: int, data: bytes) -> None  # undocumented
     def _process_exited(self, returncode: int) -> None  # undocumented

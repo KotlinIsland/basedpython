@@ -170,12 +170,12 @@ class _SSLProtocolTransport(transports._FlowControlMixin, transports.Transport):
         _ssl_protocol: SSLProtocol
     _closed: bool
     def __init__(self, loop: events.AbstractEventLoop, ssl_protocol: SSLProtocol) -> None
-    def get_extra_info(self, name: str, default: Any | None = None) -> dict[str, Any]:
+    def get_extra_info(self, name: str, default: dynamic | None = None) -> dict[str, dynamic]:
         """Get optional transport information."""
 
     @property
     def _protocol_paused(self) -> bool
-    def write(self, data: bytes | bytearray | memoryview[Any]) -> None:  # any memoryview format or shape
+    def write(self, data: bytes | bytearray | memoryview[dynamic]) -> None:  # any memoryview format or shape
         """Write some data bytes to the transport.
 
         This does not block; it buffers the data and arranges for it
@@ -184,6 +184,7 @@ class _SSLProtocolTransport(transports._FlowControlMixin, transports.Transport):
 
     def can_write_eof(self) -> Literal[False]:
         """Return True if this transport supports write_eof(), False if not."""
+
     if sys.version_info >= (3, 11):
         def get_write_buffer_limits(self) -> (int, int)
         def get_read_buffer_limits(self) -> (int, int)
@@ -227,7 +228,7 @@ class SSLProtocol(_SSLProtocolBase):
     _server_side: bool
     _server_hostname: str | None
     _sslcontext: ssl.SSLContext
-    _extra: dict[str, Any]
+    _extra: dict[str, dynamic]
     _write_backlog: deque[(bytes, int)]
     _write_buffer_size: int
     _waiter: futures.Future[Any]
@@ -292,7 +293,7 @@ class SSLProtocol(_SSLProtocolBase):
         transport is up to the protocol.
         """
 
-    def _get_extra_info(self, name: str, default: Any | None = None) -> Any
+    def _get_extra_info(self, name: str, default: dynamic | None = None) -> dynamic
     def _start_shutdown(self) -> None
     if sys.version_info >= (3, 11):
         def _write_appdata(self, list_of_data: list[bytes]) -> None

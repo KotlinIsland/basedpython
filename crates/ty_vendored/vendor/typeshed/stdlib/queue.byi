@@ -5,7 +5,7 @@ from _queue import Empty as Empty, SimpleQueue as SimpleQueue
 from _typeshed import SupportsRichComparisonT
 from threading import Condition, Lock
 from types import GenericAlias
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 __all__ = ["Empty", "Full", "Queue", "PriorityQueue", "LifoQueue", "SimpleQueue"]
 if sys.version_info >= (3, 13):
@@ -36,7 +36,7 @@ class Queue[in out Element]:
         is_shutdown: bool  # undocumented
     # Despite the fact that `queue` has `deque` type,
     # we treat it as `Any` to allow different implementations in subtypes.
-    queue: Any  # undocumented
+    queue: dynamic  # undocumented
     def __init__(self, maxsize: int = 0) -> None
     def _init(self, maxsize: int) -> None
     def empty(self) -> bool:
@@ -81,6 +81,7 @@ class Queue[in out Element]:
         Only get an item if one is immediately available. Otherwise
         raise the Empty exception.
         """
+
     if sys.version_info >= (3, 13):
         def shutdown(self, immediate: bool = False) -> None:
             """Shut-down the queue, making queue gets and puts raise ShutDown.
@@ -147,10 +148,11 @@ class Queue[in out Element]:
         placed in the queue.
         """
 
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
-        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        For example, for t = list[int], t.__origin__ is list and t.__args__
+        is (int,).
         """
 
 class PriorityQueue(Queue[SupportsRichComparisonT]):

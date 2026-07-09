@@ -5,17 +5,17 @@ from typing import Any, TypeVar
 from weakref import CallableProxyType as CallableProxyType, ProxyType as ProxyType, ReferenceType as ReferenceType, ref as ref
 
 
-def getweakrefcount(object: Any, /) -> int:
+def getweakrefcount(object: dynamic, /) -> int:
     """Return the number of weak references to 'object'."""
 
-def getweakrefs(object: Any, /) -> list[Any]:
+def getweakrefs(object: dynamic, /) -> list[dynamic]:
     """Return a list of all weak reference objects pointing to 'object'."""
 
 # Return CallableProxyType if object is callable, ProxyType otherwise
-def proxy[C: Callable[..., Any]](object: C, callback: Callable[[C], Any] | None = None, /) -> CallableProxyType[C]:
+def proxy[C: Callable[..., Any]](object: C, callback: Callable[[C], dynamic] | None = None, /) -> CallableProxyType[C]:
     """Create a proxy object that weakly references 'object'.
 
     'callback', if given, is called with a reference to the
     proxy when 'object' is about to be finalized.
     """
-def proxy[Element](object: Element, callback: Callable[[Element], Any] | None = None, /) -> Any
+def proxy[Element](object: Element, callback: Callable[[Element], dynamic] | None = None, /) -> dynamic

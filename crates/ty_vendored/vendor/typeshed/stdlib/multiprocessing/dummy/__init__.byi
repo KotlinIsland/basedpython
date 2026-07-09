@@ -13,7 +13,7 @@ from threading import (
     RLock as RLock,
     Semaphore as Semaphore,
 )
-from typing import Any, Literal
+from typing import Literal
 
 from .connection import Pipe as Pipe
 
@@ -39,7 +39,7 @@ __all__ = [
 JoinableQueue = Queue
 
 class DummyProcess(threading.Thread):
-    _children: weakref.WeakKeyDictionary[Any, Any]
+    _children: weakref.WeakKeyDictionary[dynamic, dynamic]
     _parent: threading.Thread
     _pid: None
     _start_called: int
@@ -49,39 +49,39 @@ class DummyProcess(threading.Thread):
         # Default changed in Python 3.14.1
         def __init__(
             self,
-            group: Any = None,
+            group: dynamic = None,
             target: (...) -> object | None = None,
             name: str | None = None,
-            args: Iterable[Any] = (),
-            kwargs: Mapping[str, Any] | None = None,
+            args: Iterable[dynamic] = (),
+            kwargs: Mapping[str, dynamic] | None = None,
         ) -> None
     else:
         def __init__(
             self,
-            group: Any = None,
+            group: dynamic = None,
             target: (...) -> object | None = None,
             name: str | None = None,
-            args: Iterable[Any] = (),
-            kwargs: Mapping[str, Any] | None = {},
+            args: Iterable[dynamic] = (),
+            kwargs: Mapping[str, dynamic] | None = {},
         ) -> None
 
 Process = DummyProcess
 
 class Namespace:
-    def __init__(self, **kwds: Any) -> None
-    def __getattr__(self, name: str, /) -> Any
-    def __setattr__(self, name: str, value: Any, /) -> None
+    def __init__(self, **kwds: dynamic) -> None
+    def __getattr__(self, name: str, /) -> dynamic
+    def __setattr__(self, name: str, value: dynamic, /) -> None
 
 class Value:
-    _typecode: Any
-    _value: Any
-    value: Any
-    def __init__(self, typecode: Any, value: Any, lock: Any = True) -> None
+    _typecode: dynamic
+    _value: dynamic
+    value: dynamic
+    def __init__(self, typecode: dynamic, value: dynamic, lock: dynamic = True) -> None
 
-def Array(typecode: Any, sequence: Sequence[Any], lock: Any = True) -> array.array[Any]
-def Manager() -> Any
-def Pool(processes: int | None = None, initializer: (...) -> object | None = None, initargs: Iterable[Any] = ()) -> Any
-def active_children() -> list[Any]
+def Array(typecode: dynamic, sequence: Sequence[dynamic], lock: dynamic = True) -> array.array[dynamic]
+def Manager() -> dynamic
+def Pool(processes: int | None = None, initializer: (...) -> object | None = None, initargs: Iterable[dynamic] = ()) -> dynamic
+def active_children() -> list[dynamic]
 
 current_process = threading.current_thread
 

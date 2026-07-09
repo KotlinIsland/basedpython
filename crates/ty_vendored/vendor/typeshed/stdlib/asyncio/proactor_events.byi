@@ -21,7 +21,7 @@ class _ProactorBasePipeTransport(transports._FlowControlMixin, transports.BaseTr
         sock: socket,
         protocol: streams.StreamReaderProtocol,
         waiter: futures.Future[Any] | None = None,
-        extra: Mapping[Any, Any] | None = None,
+        extra: Mapping[dynamic, dynamic] | None = None,
         server: events.AbstractServer | None = None,
     ) -> None
     def __del__(self) -> None
@@ -35,7 +35,7 @@ class _ProactorReadPipeTransport(_ProactorBasePipeTransport, transports.ReadTran
         sock: socket,
         protocol: streams.StreamReaderProtocol,
         waiter: futures.Future[Any] | None = None,
-        extra: Mapping[Any, Any] | None = None,
+        extra: Mapping[dynamic, dynamic] | None = None,
         server: events.AbstractServer | None = None,
         buffer_size: int = 65536,
     ) -> None
@@ -58,12 +58,12 @@ class _ProactorSocketTransport(_ProactorReadPipeTransport, _ProactorBaseWritePip
         sock: socket,
         protocol: streams.StreamReaderProtocol,
         waiter: futures.Future[Any] | None = None,
-        extra: Mapping[Any, Any] | None = None,
+        extra: Mapping[dynamic, dynamic] | None = None,
         server: events.AbstractServer | None = None,
     ) -> None
     def _set_extra(self, sock: socket) -> None
     def can_write_eof(self) -> Literal[True]
 
 class BaseProactorEventLoop(base_events.BaseEventLoop):
-    def __init__(self, proactor: Any) -> None
+    def __init__(self, proactor: dynamic) -> None
     async def sock_recv(self, sock: socket, n: int) -> bytes

@@ -209,7 +209,7 @@ pub(crate) fn multiple_starts_ends_with(checker: &Checker, expr: &Expr) {
                 func: Box::new(node2),
                 arguments: Arguments {
                     args: Box::from([node]),
-                    keywords: Box::from([]),
+                    keywords: std::iter::empty().collect(),
                     range: TextRange::default(),
                     node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                 },
@@ -253,7 +253,7 @@ fn is_bound_to_tuple(arg: &Expr, semantic: &SemanticModel) -> bool {
         return false;
     };
 
-    let Some(binding_id) = semantic.lookup_symbol(id.as_str()) else {
+    let Some(binding_id) = semantic.lookup_symbol(id.as_str()).binding_id() else {
         return false;
     };
 

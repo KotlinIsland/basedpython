@@ -21,7 +21,7 @@ from _typeshed import (
 )
 from collections.abc import Callable, Container, Iterable, MutableMapping, MutableSequence, Sequence
 from operator import attrgetter as attrgetter, itemgetter as itemgetter, methodcaller as methodcaller
-from typing import Any, AnyStr, ParamSpec, Protocol, SupportsAbs, SupportsIndex, TypeAlias, TypeVar, type_check_only
+from typing import AnyStr, ParamSpec, Protocol, SupportsAbs, SupportsIndex, TypeAlias, TypeVar, type_check_only
 
 
 # The following protocols return "Any" instead of bool, since the comparison
@@ -30,19 +30,19 @@ from typing import Any, AnyStr, ParamSpec, Protocol, SupportsAbs, SupportsIndex,
 
 @type_check_only
 class _SupportsDunderLT(Protocol):
-    def __lt__(self, other: Any, /) -> Any
+    def __lt__(self, other: dynamic, /) -> dynamic
 
 @type_check_only
 class _SupportsDunderGT(Protocol):
-    def __gt__(self, other: Any, /) -> Any
+    def __gt__(self, other: dynamic, /) -> dynamic
 
 @type_check_only
 class _SupportsDunderLE(Protocol):
-    def __le__(self, other: Any, /) -> Any
+    def __le__(self, other: dynamic, /) -> dynamic
 
 @type_check_only
 class _SupportsDunderGE(Protocol):
-    def __ge__(self, other: Any, /) -> Any
+    def __ge__(self, other: dynamic, /) -> dynamic
 
 _SupportsComparison: TypeAlias = _SupportsDunderLE | _SupportsDunderGE | _SupportsDunderGT | _SupportsDunderLT
 
@@ -59,22 +59,22 @@ class _SupportsPos[out Element](Protocol):
     def __pos__(self) -> Element
 
 # All four comparison functions must have the same signature, or we get false-positive errors
-def lt(a: _SupportsComparison, b: _SupportsComparison, /) -> Any:
+def lt(a: _SupportsComparison, b: _SupportsComparison, /) -> dynamic:
     """Same as a < b."""
 
-def le(a: _SupportsComparison, b: _SupportsComparison, /) -> Any:
+def le(a: _SupportsComparison, b: _SupportsComparison, /) -> dynamic:
     """Same as a <= b."""
 
-def eq(a: object, b: object, /) -> Any:
+def eq(a: object, b: object, /) -> dynamic:
     """Same as a == b."""
 
-def ne(a: object, b: object, /) -> Any:
+def ne(a: object, b: object, /) -> dynamic:
     """Same as a != b."""
 
-def ge(a: _SupportsComparison, b: _SupportsComparison, /) -> Any:
+def ge(a: _SupportsComparison, b: _SupportsComparison, /) -> dynamic:
     """Same as a >= b."""
 
-def gt(a: _SupportsComparison, b: _SupportsComparison, /) -> Any:
+def gt(a: _SupportsComparison, b: _SupportsComparison, /) -> dynamic:
     """Same as a > b."""
 
 def not_(a: object, /) -> bool:
@@ -159,10 +159,10 @@ def contains(a: Container[object], b: object, /) -> bool:
 def countOf(a: Iterable[object], b: object, /) -> int:
     """Return the number of items in a which are, or which equal, b."""
 
-def delitem(a: MutableSequence[Any], b: int, /) -> None:
+def delitem(a: MutableSequence[dynamic], b: int, /) -> None:
     """Same as del a[b]."""
-def delitem(a: MutableSequence[Any], b: slice[int | None], /) -> None
-def delitem[K](a: MutableMapping[K, Any], b: K, /) -> None
+def delitem(a: MutableSequence[dynamic], b: slice[int | None], /) -> None
+def delitem[K](a: MutableMapping[K, dynamic], b: K, /) -> None
 
 def getitem[Element](a: Sequence[Element], b: slice[int | None], /) -> Sequence[Element]:
     """Same as a[b]."""

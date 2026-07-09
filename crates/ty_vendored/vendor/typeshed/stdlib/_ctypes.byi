@@ -39,6 +39,7 @@ if sys.platform == "win32":
 
     def CopyComPointer(src: _PointerLike, dst: _PointerLike | _CArgObject) -> int:
         """CopyComPointer(src, dst) -> HRESULT value"""
+
     FUNCFLAG_HRESULT: Final = 0x2
     FUNCFLAG_STDCALL: Final = 0x0
 
@@ -69,6 +70,7 @@ if sys.platform == "win32":
 else:
     def dlclose(handle: int, /) -> None:
         """dlclose a library"""
+
     # The default for flag is RTLD_GLOBAL|RTLD_LOCAL, which is platform dependent.
     def dlopen(name: StrOrBytesPath, flag: int = ..., /) -> int:
         """dlopen(name, flag={RTLD_GLOBAL|RTLD_LOCAL}) open a shared library"""
@@ -96,7 +98,7 @@ else:
 class _CData:
     _b_base_: int
     _b_needsfree_: bool
-    _objects: Mapping[Any, int] | None
+    _objects: Mapping[dynamic, int] | None
     def __buffer__(self, flags: int, /) -> memoryview
     def __ctypes_from_outparam__(self, /) -> Self
     if sys.version_info >= (3, 14):
@@ -113,7 +115,7 @@ class _PyCSimpleType(_CTypeBaseType):
     def from_address(self: type[_typeshed.Self], value: int, /) -> _typeshed.Self
     def from_buffer(self: type[_typeshed.Self], obj: WriteableBuffer, offset: int = 0, /) -> _typeshed.Self
     def from_buffer_copy(self: type[_typeshed.Self], buffer: ReadableBuffer, offset: int = 0, /) -> _typeshed.Self
-    def from_param(self: type[_typeshed.Self], value: Any, /) -> _typeshed.Self | _CArgObject
+    def from_param(self: type[_typeshed.Self], value: dynamic, /) -> _typeshed.Self | _CArgObject
     def in_dll(self: type[_typeshed.Self], dll: CDLL, name: str, /) -> _typeshed.Self
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
@@ -143,7 +145,7 @@ class _PyCPointerType(_CTypeBaseType):
     def from_address(self: type[_typeshed.Self], value: int, /) -> _typeshed.Self
     def from_buffer(self: type[_typeshed.Self], obj: WriteableBuffer, offset: int = 0, /) -> _typeshed.Self
     def from_buffer_copy(self: type[_typeshed.Self], buffer: ReadableBuffer, offset: int = 0, /) -> _typeshed.Self
-    def from_param(self: type[_typeshed.Self], value: Any, /) -> _typeshed.Self | _CArgObject
+    def from_param(self: type[_typeshed.Self], value: dynamic, /) -> _typeshed.Self | _CArgObject
     def in_dll(self: type[_typeshed.Self], dll: CDLL, name: str, /) -> _typeshed.Self
     def set_type(self, type: _CTypeBaseType, /) -> None
     if sys.version_info < (3, 13):
@@ -161,11 +163,11 @@ class _Pointer[in out CT: _CData](_PointerLike, _CData, metaclass=_PyCPointerTyp
     def __init__(self) -> None
     def __init__(self, arg: CT) -> None
 
-    def __getitem__(self, key: int, /) -> Any:
+    def __getitem__(self, key: int, /) -> dynamic:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> list[Any]
+    def __getitem__(self, key: slice[SupportsIndex | None], /) -> list[dynamic]
 
-    def __setitem__(self, key: int, value: Any, /) -> None:
+    def __setitem__(self, key: int, value: dynamic, /) -> None:
         """Set self[key] to value."""
 
 if sys.version_info < (3, 14):
@@ -213,7 +215,7 @@ class _PyCFuncPtrType(_CTypeBaseType):
     def from_address(self: type[_typeshed.Self], value: int, /) -> _typeshed.Self
     def from_buffer(self: type[_typeshed.Self], obj: WriteableBuffer, offset: int = 0, /) -> _typeshed.Self
     def from_buffer_copy(self: type[_typeshed.Self], buffer: ReadableBuffer, offset: int = 0, /) -> _typeshed.Self
-    def from_param(self: type[_typeshed.Self], value: Any, /) -> _typeshed.Self | _CArgObject
+    def from_param(self: type[_typeshed.Self], value: dynamic, /) -> _typeshed.Self | _CArgObject
     def in_dll(self: type[_typeshed.Self], dll: CDLL, name: str, /) -> _typeshed.Self
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
@@ -223,7 +225,7 @@ class _PyCFuncPtrType(_CTypeBaseType):
 class CFuncPtr(_PointerLike, _CData, metaclass=_PyCFuncPtrType):
     """Function Pointer"""
 
-    restype: type[_CDataType] | Callable[[int], Any] | None
+    restype: type[_CDataType] | Callable[[int], dynamic] | None
     """specify the result type"""
 
     argtypes: Sequence[type[_CDataType]]
@@ -244,7 +246,7 @@ class CFuncPtr(_PointerLike, _CData, metaclass=_PyCFuncPtrType):
             cls, vtbl_index: int, name: str, paramflags: (*: _PF) | None = ..., iid: _CData | _CDataType | None = ..., /
         ) -> Self
 
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
+    def __call__(self, *args: dynamic, **kwargs: dynamic) -> dynamic:
         """Call self as a function."""
 
 
@@ -282,11 +284,11 @@ if sys.version_info >= (3, 14):
         is_anonymous: bool
         """true if this field is anonymous"""
 
-        def __get__(self, instance: None, owner: builtins.type[Any] | None = None, /) -> Self:
+        def __get__(self, instance: None, owner: builtins.type[dynamic] | None = None, /) -> Self:
             """Return an attribute of instance, which is of type owner."""
-        def __get__(self, instance: Any, owner: builtins.type[Any] | None = None, /) -> GetT
+        def __get__(self, instance: dynamic, owner: builtins.type[dynamic] | None = None, /) -> GetT
 
-        def __set__(self, instance: Any, value: SetT, /) -> None:
+        def __set__(self, instance: dynamic, value: SetT, /) -> None:
             """Set an attribute of instance to value."""
 
     _CField = CField
@@ -298,10 +300,10 @@ else:
         offset: int
         size: int
 
-        def __get__(self, instance: None, owner: type[Any] | None = None, /) -> Self
-        def __get__(self, instance: Any, owner: type[Any] | None = None, /) -> GetT
+        def __get__(self, instance: None, owner: type[dynamic] | None = None, /) -> Self
+        def __get__(self, instance: dynamic, owner: type[dynamic] | None = None, /) -> GetT
 
-        def __set__(self, instance: Any, value: SetT, /) -> None
+        def __set__(self, instance: dynamic, value: SetT, /) -> None
 
 # This class is not exposed. It calls itself _ctypes.UnionType.
 @type_check_only
@@ -309,12 +311,12 @@ class _UnionType(_CTypeBaseType):
     def from_address(self: type[_typeshed.Self], value: int, /) -> _typeshed.Self
     def from_buffer(self: type[_typeshed.Self], obj: WriteableBuffer, offset: int = 0, /) -> _typeshed.Self
     def from_buffer_copy(self: type[_typeshed.Self], buffer: ReadableBuffer, offset: int = 0, /) -> _typeshed.Self
-    def from_param(self: type[_typeshed.Self], value: Any, /) -> _typeshed.Self | _CArgObject
+    def from_param(self: type[_typeshed.Self], value: dynamic, /) -> _typeshed.Self | _CArgObject
     def in_dll(self: type[_typeshed.Self], dll: CDLL, name: str, /) -> _typeshed.Self
     # At runtime, various attributes are created on a Union subclass based
     # on its _fields_. This method doesn't exist, but represents those
     # dynamically created attributes.
-    def __getattr__(self, name: str) -> _CField[Any, Any, Any]
+    def __getattr__(self, name: str) -> _CField[dynamic, dynamic, dynamic]
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
         def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
@@ -329,9 +331,9 @@ class Union(_CData, metaclass=_UnionType):
     if sys.version_info >= (3, 13):
         _align_: ClassVar[int]
 
-    def __init__(self, *args: Any, **kw: Any) -> None
-    def __getattr__(self, name: str) -> Any
-    def __setattr__(self, name: str, value: Any) -> None
+    def __init__(self, *args: dynamic, **kw: dynamic) -> None
+    def __getattr__(self, name: str) -> dynamic
+    def __setattr__(self, name: str, value: dynamic) -> None
 
 # This class is not exposed. It calls itself _ctypes.PyCStructType.
 @type_check_only
@@ -339,12 +341,12 @@ class _PyCStructType(_CTypeBaseType):
     def from_address(self: type[_typeshed.Self], value: int, /) -> _typeshed.Self
     def from_buffer(self: type[_typeshed.Self], obj: WriteableBuffer, offset: int = 0, /) -> _typeshed.Self
     def from_buffer_copy(self: type[_typeshed.Self], buffer: ReadableBuffer, offset: int = 0, /) -> _typeshed.Self
-    def from_param(self: type[_typeshed.Self], value: Any, /) -> _typeshed.Self | _CArgObject
+    def from_param(self: type[_typeshed.Self], value: dynamic, /) -> _typeshed.Self | _CArgObject
     def in_dll(self: type[_typeshed.Self], dll: CDLL, name: str, /) -> _typeshed.Self
     # At runtime, various attributes are created on a Structure subclass based
     # on its _fields_. This method doesn't exist, but represents those
     # dynamically created attributes.
-    def __getattr__(self, name: str) -> _CField[Any, Any, Any]
+    def __getattr__(self, name: str) -> _CField[dynamic, dynamic, dynamic]
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
         def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
@@ -363,9 +365,9 @@ class Structure(_CData, metaclass=_PyCStructType):
         # _layout_ can be defined by the user, but is not always present.
         _layout_: ClassVar[Literal["ms", "gcc-sysv"]]
 
-    def __init__(self, *args: Any, **kw: Any) -> None
-    def __getattr__(self, name: str) -> Any
-    def __setattr__(self, name: str, value: Any) -> None
+    def __init__(self, *args: dynamic, **kw: dynamic) -> None
+    def __getattr__(self, name: str) -> dynamic
+    def __setattr__(self, name: str, value: dynamic) -> None
 
 # This class is not exposed. It calls itself _ctypes.PyCArrayType.
 @type_check_only
@@ -373,7 +375,7 @@ class _PyCArrayType(_CTypeBaseType):
     def from_address(self: type[_typeshed.Self], value: int, /) -> _typeshed.Self
     def from_buffer(self: type[_typeshed.Self], obj: WriteableBuffer, offset: int = 0, /) -> _typeshed.Self
     def from_buffer_copy(self: type[_typeshed.Self], buffer: ReadableBuffer, offset: int = 0, /) -> _typeshed.Self
-    def from_param(self: type[_typeshed.Self], value: Any, /) -> _typeshed.Self | _CArgObject
+    def from_param(self: type[_typeshed.Self], value: dynamic, /) -> _typeshed.Self | _CArgObject
     def in_dll(self: type[_typeshed.Self], dll: CDLL, name: str, /) -> _typeshed.Self
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
@@ -406,7 +408,7 @@ class Array[in out CT: _CData](_CData, metaclass=_PyCArrayType):
     @raw.setter
     def raw(self, value: ReadableBuffer) -> None: ...
 
-    value: Any  # Note: bytes if _CT == c_char, str if _CT == c_wchar, unavailable otherwise
+    value: dynamic  # Note: bytes if _CT == c_char, str if _CT == c_wchar, unavailable otherwise
     # TODO: These methods cannot be annotated correctly at the moment.
     # All of these "Any"s stand for the array's element type, but it's not possible to use _CT
     # here, because of a special feature of ctypes.
@@ -419,24 +421,24 @@ class Array[in out CT: _CData](_CData, metaclass=_PyCArrayType):
     # a MyInt, not an int.
     # This special behavior is not easy to model in a stub, so for now all places where
     # the array element type would belong are annotated with Any instead.
-    def __init__(self, *args: Any) -> None
+    def __init__(self, *args: dynamic) -> None
 
-    def __getitem__(self, key: int, /) -> Any:
+    def __getitem__(self, key: int, /) -> dynamic:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> list[Any]
+    def __getitem__(self, key: slice[SupportsIndex | None], /) -> list[dynamic]
 
-    def __setitem__(self, key: int, value: Any, /) -> None:
+    def __setitem__(self, key: int, value: dynamic, /) -> None:
         """Set self[key] to value."""
-    def __setitem__(self, key: slice[SupportsIndex | None], value: Iterable[Any], /) -> None
+    def __setitem__(self, key: slice[SupportsIndex | None], value: Iterable[dynamic], /) -> None
 
-    def __iter__(self) -> Iterator[Any]
+    def __iter__(self) -> Iterator[dynamic]
     # Can't inherit from Sized because the metaclass conflict between
     # Sized and _CData prevents using _CDataMeta.
     def __len__(self) -> int:
         """Return len(self)."""
 
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
-        """See PEP 585"""
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
+        """Arrays are generic over the type of their elements"""
 
 def addressof(obj: _CData | _CDataType, /) -> int:
     """Return the address of the C instance internal buffer"""
@@ -455,11 +457,11 @@ def set_errno(value: int, /) -> int
 def sizeof(obj_or_type: _CData | _CDataType | type[_CData | _CDataType], /) -> int:
     """Return the size in bytes of a C instance."""
 
-def PyObj_FromPtr(address: int, /) -> Any
+def PyObj_FromPtr(address: int, /) -> dynamic
 def Py_DECREF[Element](o: Element, /) -> Element
 def Py_INCREF[Element](o: Element, /) -> Element
 def buffer_info(o: _CData | _CDataType | type[_CData | _CDataType], /) -> (str, int, (*: int)):
     """Return buffer interface information"""
 
-def call_cdeclfunction(address: int, arguments: (*: Any), /) -> Any
-def call_function(address: int, arguments: (*: Any), /) -> Any
+def call_cdeclfunction(address: int, arguments: (*: Any), /) -> dynamic
+def call_function(address: int, arguments: (*: Any), /) -> dynamic

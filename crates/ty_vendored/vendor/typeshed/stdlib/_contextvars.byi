@@ -18,10 +18,12 @@ final class ContextVar[in out Element]:
     def get(self) -> Element:
         """Return a value for the context variable for the current context.
 
-        If there is no value for the variable in the current context, the method will:
-         * return the value of the default argument of the method, if provided; or
-         * return the default value for the context variable, if it was created
-           with one; or
+        If there is no value for the variable in the current context, the
+        method will:
+         * return the value of the default argument of the method, if
+           provided; or
+         * return the default value for the context variable, if it was
+           created with one; or
          * raise a LookupError.
         """
     def get(self, default: Element, /) -> Element
@@ -30,31 +32,33 @@ final class ContextVar[in out Element]:
     def set(self, value: Element, /) -> Token[Element]:
         """Call to set a new value for the context variable in the current context.
 
-        The required value argument is the new value for the context variable.
+        The required value argument is the new value for the context
+        variable.
 
-        Returns a Token object that can be used to restore the variable to its previous
-        value via the `ContextVar.reset()` method.
+        Returns a Token object that can be used to restore the variable to
+        its previous value via the `ContextVar.reset()` method.
         """
 
     def reset(self, token: Token[Element], /) -> None:
         """Reset the context variable.
 
-        The variable is reset to the value it had before the `ContextVar.set()` that
-        created the token was used.
+        The variable is reset to the value it had before the
+        `ContextVar.set()` that created the token was used.
         """
 
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
-        """See PEP 585"""
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
+        """ContextVars are generic over the type of their contained values"""
 
 final class Token[in out Element]:
     @property
     def var(self) -> ContextVar[Element]
     @property
-    def old_value(self) -> Any  # returns either _T or MISSING, but that's hard to express
+    def old_value(self) -> dynamic  # returns either _T or MISSING, but that's hard to express
     MISSING: ClassVar[object]
     __hash__: ClassVar[None]  # type: ignore[assignment]
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
-        """See PEP 585"""
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
+        """Tokens are generic over the same type as the ContextVar which created them."""
+
     if sys.version_info >= (3, 14):
         def __enter__(self) -> Self:
             """Enter into Token context manager."""
@@ -74,8 +78,8 @@ final class Context(Mapping[ContextVar[Any], Any]):
     def get[Element](self, key: ContextVar[Element], default: None = None, /) -> Element | None:
         """Return the value for `key` if `key` has the value in the context object.
 
-        If `key` does not exist, return `default`. If `default` is not given,
-        return None.
+        If `key` does not exist, return `default`.  If `default` is not
+        given, return None.
         """
     def get[Element](self, key: ContextVar[Element], default: Element, /) -> Element
     def get[Element, D](self, key: ContextVar[Element], default: D, /) -> Element | D
@@ -83,11 +87,12 @@ final class Context(Mapping[ContextVar[Any], Any]):
     def run[**P, Element](self, callable: Callable[P, Element], *args: P.args, **kwargs: P.kwargs) -> Element
     def copy(self) -> Context:
         """Return a shallow copy of the context object."""
+
     __hash__: ClassVar[None]  # type: ignore[assignment]
     def __getitem__[Element](self, key: ContextVar[Element], /) -> Element:
         """Return self[key]."""
 
-    def __iter__(self) -> Iterator[ContextVar[Any]]:
+    def __iter__(self) -> Iterator[ContextVar[dynamic]]:
         """Implement iter(self)."""
 
     def __len__(self) -> int:

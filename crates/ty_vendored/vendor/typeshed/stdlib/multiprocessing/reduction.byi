@@ -29,16 +29,16 @@ class ForkingPickler(pickle.Pickler):
         buffer_callback: _BufferCallback = None,
         /,
     ) -> None
-    class def register(cls, type: Type, reduce: Callable[[Any], _ReducedType]) -> None:
+    class def register(cls, type: Type, reduce: Callable[[dynamic], _ReducedType]) -> None:
         """Register a reduce function for a type."""
 
-    class def dumps(cls, obj: Any, protocol: int | None = None) -> memoryview
+    class def dumps(cls, obj: dynamic, protocol: int | None = None) -> memoryview
     loads = pickle.loads
 
 register = ForkingPickler.register
 """Register a reduce function for a type."""
 
-def dump(obj: Any, file: SupportsWrite[bytes], protocol: int | None = None) -> None:
+def dump(obj: dynamic, file: SupportsWrite[bytes], protocol: int | None = None) -> None:
     """Replacement for pickle.dump() using ForkingPickler."""
 
 if sys.platform == "win32":

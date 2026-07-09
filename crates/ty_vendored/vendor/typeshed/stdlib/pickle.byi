@@ -17,7 +17,6 @@ Functions:
 
 Misc variables:
 
-    __version__
     format_version
     compatible_formats
 
@@ -278,9 +277,9 @@ def decode_long(data: Iterable[SupportsIndex] | SupportsBytes | ReadableBuffer) 
 # undocumented pure-Python implementations
 class _Pickler:
     fast: bool
-    dispatch_table: Mapping[type, Callable[[Any], _ReducedType]]
+    dispatch_table: Mapping[type, Callable[[dynamic], _ReducedType]]
     bin: bool  # undocumented
-    dispatch: ClassVar[dict[type, Callable[[Unpickler, Any], None]]]  # undocumented, _Pickler only
+    dispatch: ClassVar[dict[type, Callable[[Unpickler, dynamic], None]]]  # undocumented, _Pickler only
     def __init__(
         self,
         file: SupportsWrite[bytes],
@@ -323,7 +322,7 @@ class _Pickler:
         is None or smaller than 5.
         """
 
-    def dump(self, obj: Any) -> None:
+    def dump(self, obj: dynamic) -> None:
         """Write a pickled representation of obj to the open file."""
 
     def clear_memo(self) -> None:
@@ -335,7 +334,7 @@ class _Pickler:
         useful when re-using picklers.
         """
 
-    def persistent_id(self, obj: Any) -> Any
+    def persistent_id(self, obj: dynamic) -> dynamic
     # The following method is not defined on _Pickler, but can be defined on
     # sub-classes. Should return `NotImplemented` if pickling the supplied
     # object is not supported and returns the same types as `__reduce__()`.
@@ -350,7 +349,7 @@ class _Unpickler:
         fix_imports: bool = True,
         encoding: str = "ASCII",
         errors: str = "strict",
-        buffers: Iterable[Any] | None = None,
+        buffers: Iterable[dynamic] | None = None,
     ) -> None:
         """This takes a binary file for reading a pickle data stream.
 
@@ -390,11 +389,11 @@ class _Unpickler:
         'bytes' to read these 8-bit string instances as bytes objects.
         """
 
-    def load(self) -> Any:
+    def load(self) -> dynamic:
         """Read a pickled object representation from the open file.
 
         Return the reconstituted object hierarchy specified in the file.
         """
 
-    def find_class(self, module: str, name: str) -> Any
-    def persistent_load(self, pid: Any) -> Any
+    def find_class(self, module: str, name: str) -> dynamic
+    def persistent_load(self, pid: dynamic) -> dynamic

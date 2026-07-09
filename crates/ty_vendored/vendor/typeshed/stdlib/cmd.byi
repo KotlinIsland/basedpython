@@ -43,7 +43,7 @@ functions respectively.
 """
 
 from collections.abc import Callable
-from typing import IO, Any, Final
+from typing import IO, Final
 from typing_extensions import LiteralString
 
 __all__ = ["Cmd"]
@@ -68,7 +68,7 @@ class Cmd:
     identchars: str
     ruler: str
     lastcmd: str
-    intro: Any | None
+    intro: dynamic | None
     doc_leader: str
     doc_header: str
     misc_header: str
@@ -90,8 +90,9 @@ class Cmd:
         sys.stdin and sys.stdout are used.
 
         """
+
     old_completer: Callable[[str, int], str | None] | None
-    def cmdloop(self, intro: Any | None = None) -> None:
+    def cmdloop(self, intro: dynamic | None = None) -> None:
         """Repeatedly issue a prompt, accept input, parse an initial prefix
         off the received input, and dispatch to action methods, passing them
         the remainder of the line as argument.
@@ -149,7 +150,7 @@ class Cmd:
 
         """
 
-    def completedefault(self, *ignored: Any) -> list[str]:
+    def completedefault(self, *ignored: dynamic) -> list[str]:
         """Method called to complete an input line when no command-specific
         complete_*() method is available.
 
@@ -157,7 +158,7 @@ class Cmd:
 
         """
 
-    def completenames(self, text: str, *ignored: Any) -> list[str]
+    def completenames(self, text: str, *ignored: dynamic) -> list[str]
     completion_matches: list[str] | None
     def complete(self, text: str, state: int) -> list[str] | None:
         """Return the next possible completion for 'text'.
@@ -168,11 +169,11 @@ class Cmd:
 
     def get_names(self) -> list[str]
     # Only the first element of args matters.
-    def complete_help(self, *args: Any) -> list[str]
+    def complete_help(self, *args: dynamic) -> list[str]
     def do_help(self, arg: str) -> bool | None:
         """List available commands with "help" or detailed help with "help cmd"."""
 
-    def print_topics(self, header: str, cmds: list[str] | None, cmdlen: Any, maxcol: int) -> None
+    def print_topics(self, header: str, cmds: list[str] | None, cmdlen: dynamic, maxcol: int) -> None
     def columnize(self, list: list[str] | None, displaywidth: int = 80) -> None:
         """Display a list of strings as a compact set of columns.
 

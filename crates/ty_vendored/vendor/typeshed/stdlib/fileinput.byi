@@ -69,7 +69,7 @@ import sys
 from _typeshed import AnyStr_co, StrOrBytesPath
 from collections.abc import Callable, Iterable
 from types import GenericAlias, TracebackType
-from typing import IO, Any, AnyStr, Generic, Literal, Protocol, TypeAlias, type_check_only
+from typing import IO, AnyStr, Generic, Literal, Protocol, TypeAlias, type_check_only
 from typing_extensions import Self, deprecated
 
 __all__ = [
@@ -130,10 +130,10 @@ def input(
     backup: str = "",
     *,
     mode: str,
-    openhook: Callable[[StrOrBytesPath, str], _HasReadlineAndFileno[Any]] | None = None,
+    openhook: Callable[[StrOrBytesPath, str], _HasReadlineAndFileno[dynamic]] | None = None,
     encoding: str | None = None,
     errors: str | None = None,
-) -> FileInput[Any]
+) -> FileInput[dynamic]
 
 def close() -> None:
     """Close the sequence."""
@@ -224,13 +224,13 @@ class FileInput(Generic[AnyStr]):
         errors: None = None,
     ) -> None
     def __init__(
-        self: FileInput[Any],
+        self: FileInput[dynamic],
         files: StrOrBytesPath | Iterable[StrOrBytesPath] | None = None,
         inplace: bool = False,
         backup: str = "",
         *,
         mode: str,
-        openhook: Callable[[StrOrBytesPath, str], _HasReadlineAndFileno[Any]] | None = None,
+        openhook: Callable[[StrOrBytesPath, str], _HasReadlineAndFileno[dynamic]] | None = None,
         encoding: str | None = None,
         errors: str | None = None,
     ) -> None
@@ -254,14 +254,15 @@ class FileInput(Generic[AnyStr]):
     def fileno(self) -> int
     def isfirstline(self) -> bool
     def isstdin(self) -> bool
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
-        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        For example, for t = list[int], t.__origin__ is list and t.__args__
+        is (int,).
         """
 
 def hook_compressed(
     filename: StrOrBytesPath, mode: str, *, encoding: str | None = None, errors: str | None = None
-) -> IO[Any]
+) -> IO[dynamic]
 @deprecated("Deprecated since Python 3.10. Use `fileinput.input` or `fileinput.FileInput` instead.")
-def hook_encoded(encoding: str, errors: str | None = None) -> Callable[[StrOrBytesPath, str], IO[Any]]
+def hook_encoded(encoding: str, errors: str | None = None) -> Callable[[StrOrBytesPath, str], IO[dynamic]]

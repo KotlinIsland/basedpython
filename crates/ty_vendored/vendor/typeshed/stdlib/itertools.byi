@@ -33,7 +33,7 @@ import sys
 from _typeshed import MaybeNone
 from collections.abc import Callable, Iterable, Iterator
 from types import GenericAlias
-from typing import Any, Generic, Literal, SupportsComplex, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, TypeVar
+from typing import Generic, Literal, SupportsComplex, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, TypeVar
 from typing_extensions import Self, disjoint_base
 
 _T = TypeVar("_T")
@@ -123,21 +123,23 @@ class chain[in out Element]:
     def __iter__(self) -> Self:
         """Implement iter(self)."""
 
-    class def from_iterable[Other](cls: type[Any], iterable: Iterable[Iterable[Other]], /) -> chain[Other]:
+    class def from_iterable[Other](cls: type[dynamic], iterable: Iterable[Iterable[Other]], /) -> chain[Other]:
         """Alternative chain() constructor taking a single iterable argument that evaluates lazily."""
 
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
-        """See PEP 585"""
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
+        """chain is generic over the type of its contents.
+        This is the union of the types of the input iterable contents.
+        """
 
 @disjoint_base
 class compress[in out Element]:
     """Return data elements corresponding to true selector elements.
 
-    Forms a shorter iterator from selected data elements using the selectors to
-    choose the data elements.
+    Forms a shorter iterator from selected data elements using the selectors
+    to choose the data elements.
     """
 
-    def __new__(cls, data: Iterable[Element], selectors: Iterable[Any]) -> Self
+    def __new__(cls, data: Iterable[Element], selectors: Iterable[dynamic]) -> Self
     def __iter__(self) -> Self:
         """Implement iter(self)."""
 
@@ -219,7 +221,7 @@ class islice[in out Element]:
 class starmap[out Element]:
     """Return an iterator whose values are returned from the function evaluated with an argument tuple taken from the given sequence."""
 
-    def __new__[T](cls, function: (...) -> T, iterable: Iterable[Iterable[Any]], /) -> starmap[T]
+    def __new__[T](cls, function: (...) -> T, iterable: Iterable[Iterable[dynamic]], /) -> starmap[T]
     def __iter__(self) -> Self:
         """Implement iter(self)."""
 

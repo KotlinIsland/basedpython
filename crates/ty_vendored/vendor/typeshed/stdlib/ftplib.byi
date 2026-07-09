@@ -34,7 +34,7 @@ from collections.abc import Callable, Iterable, Iterator
 from socket import socket
 from ssl import SSLContext
 from types import TracebackType
-from typing import Any, Final, Literal, TextIO
+from typing import Final, Literal, TextIO
 from typing_extensions import Self, deprecated
 
 __all__ = ["FTP", "error_reply", "error_temp", "error_perm", "error_proto", "all_errors", "FTP_TLS"]
@@ -185,6 +185,7 @@ class FTP:
 
     def login(self, user: str = "", passwd: str = "", acct: str = "") -> str:
         """Login, default anonymous."""
+
     # In practice, `rest` can actually be anything whose str() is an integer sequence, so to make it simple we allow integers
     def ntransfercmd(self, cmd: str, rest: int | str | None = None) -> (socket, int | None):
         """Initiate a transfer over the data connection.
@@ -276,6 +277,7 @@ class FTP:
 
     def nlst(self, *args: str) -> list[str]:
         """Return a list of files in a given directory (default the current)."""
+
     # Technically only the last arg can be a Callable but ...
     def dir(self, *args: str | Callable[[str], object]) -> None:
         """List a directory in long form.
@@ -435,7 +437,7 @@ def parse227(resp: str) -> (str, int):  # undocumented
     Return ('host.addr.as.numbers', port#) tuple.
     """
 
-def parse229(resp: str, peer: Any) -> (str, int):  # undocumented
+def parse229(resp: str, peer: dynamic) -> (str, int):  # undocumented
     """Parse the '229' response for an EPSV request.
     Raises error_proto if it does not contain '(|||port|)'
     Return ('host.addr.as.numbers', port#) tuple.

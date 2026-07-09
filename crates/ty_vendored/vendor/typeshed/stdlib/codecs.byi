@@ -12,7 +12,7 @@ import types
 from _codecs import *
 from _typeshed import ReadableBuffer
 from collections.abc import Callable, Generator, Iterable
-from typing import Any, BinaryIO, ClassVar, Final, Literal, Protocol, TextIO, TypeAlias, type_check_only
+from typing import BinaryIO, ClassVar, Final, Literal, Protocol, TextIO, TypeAlias, type_check_only
 from typing_extensions import Self, deprecated, disjoint_base
 
 __all__ = [
@@ -442,6 +442,7 @@ class IncrementalEncoder:
         """
         Resets the encoder to the initial state.
         """
+
     # documentation says int but str is needed for the subclass.
     def getstate(self) -> int | str:
         """
@@ -575,7 +576,7 @@ class StreamWriter(Codec):
     def seek(self, offset: int, whence: int = 0) -> None
     def __enter__(self) -> Self
     def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
-    def __getattr__(self, name: str, getattr: Callable[[Any, str], Any] = ...) -> Any:
+    def __getattr__(self, name: str, getattr: Callable[[dynamic, str], dynamic] = ...) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
 class StreamReader(Codec):
@@ -670,7 +671,7 @@ class StreamReader(Codec):
     def __next__(self) -> str:
         """Return the next decoded line from the input stream."""
 
-    def __getattr__(self, name: str, getattr: Callable[[Any, str], Any] = ...) -> Any:
+    def __getattr__(self, name: str, getattr: Callable[[dynamic, str], dynamic] = ...) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
 # Doesn't actually inherit from TextIO, but wraps a BinaryIO to provide text reading and writing
@@ -712,8 +713,9 @@ class StreamReaderWriter(TextIO):
     def seek(self, offset: int, whence: int = 0) -> None  # type: ignore[override]
     def __enter__(self) -> Self
     def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> dynamic:
         """Inherit all other methods from the underlying stream."""
+
     # These methods don't actually exist directly, but they are needed to satisfy the TextIO
     # interface. At runtime, they are delegated through __getattr__.
     def close(self) -> None
@@ -783,7 +785,7 @@ class StreamRecoder(BinaryIO):
     def write(self, data: bytes) -> None  # type: ignore[override]
     def writelines(self, list: Iterable[bytes]) -> None  # type: ignore[override]
     def reset(self) -> None
-    def __getattr__(self, name: str) -> Any:
+    def __getattr__(self, name: str) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
     def __enter__(self) -> Self

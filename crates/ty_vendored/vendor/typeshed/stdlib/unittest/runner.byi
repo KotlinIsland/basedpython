@@ -28,7 +28,7 @@ class _WritelnDecorator:
 
     def __init__(self, stream: _SupportsWriteAndFlush) -> None
     def writeln(self, arg: str | None = None) -> None
-    def __getattr__(self, attr: str) -> Any  # Any attribute from the stream type passed to __init__
+    def __getattr__(self, attr: str) -> dynamic  # Any attribute from the stream type passed to __init__
     # These attributes are prevented by __getattr__
     stream: Never
     __getstate__: Never
@@ -57,6 +57,7 @@ class TextTestResult[in out StreamT: _TextTestStream = _WritelnDecorator](unitte
             """Construct a TextTestResult. Subclasses should accept **kwargs
             to ensure compatibility as the interface changes.
             """
+
     else:
         def __init__(self, stream: StreamT, descriptions: bool, verbosity: int) -> None
 
@@ -104,6 +105,7 @@ class TextTestRunner:
             Subclasses should accept **kwargs to ensure compatibility as the
             interface changes.
             """
+
     else:
         def __init__(
             self,

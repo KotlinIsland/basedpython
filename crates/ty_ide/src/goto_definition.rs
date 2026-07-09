@@ -1556,22 +1556,22 @@ a: float<CURSOR> = 3.14
 
         assert_snapshot!(test.goto_definition(), @"
         info[goto-definition]: Go to definition
-         --> main.py:2:4
-          |
-        2 | a: float = 3.14
-          |    ^^^^^ Clicking here
-          |
+          --> main.py:LL:4
+           |
+        LL | a: float = 3.14
+           |    ^^^^^ Clicking here
+           |
         info: Found 2 definitions
-           --> stdlib/builtins.byi:287:7
-            |
-        287 | class int:
-            |       ---
-            |
-           ::: stdlib/builtins.byi:591:7
-            |
-        591 | class float:
-            |       -----
-            |
+          --> stdlib/builtins.pyi:LL:7
+           |
+        LL | class int:
+           |       ---
+           |
+          ::: stdlib/builtins.pyi:LL:7
+           |
+        LL | class float:
+           |       -----
+           |
         ");
     }
 
@@ -1588,27 +1588,27 @@ a: complex<CURSOR> = 3.14
 
         assert_snapshot!(test.goto_definition(), @"
         info[goto-definition]: Go to definition
-         --> main.py:2:4
-          |
-        2 | a: complex = 3.14
-          |    ^^^^^^^ Clicking here
-          |
+          --> main.py:LL:4
+           |
+        LL | a: complex = 3.14
+           |    ^^^^^^^ Clicking here
+           |
         info: Found 3 definitions
-           --> stdlib/builtins.byi:287:7
-            |
-        287 | class int:
-            |       ---
-            |
-           ::: stdlib/builtins.byi:591:7
-            |
-        591 | class float:
-            |       -----
-            |
-           ::: stdlib/builtins.byi:744:7
-            |
-        744 | class complex:
-            |       -------
-            |
+          --> stdlib/builtins.pyi:LL:7
+           |
+        LL | class int:
+           |       ---
+           |
+          ::: stdlib/builtins.pyi:LL:7
+           |
+        LL | class float:
+           |       -----
+           |
+          ::: stdlib/builtins.pyi:LL:7
+           |
+        LL | class complex:
+           |       -------
+           |
         ");
     }
 
@@ -1835,15 +1835,15 @@ x = DynClass<CURSOR>()
 
         assert_snapshot!(test.goto_definition(), @"
         info[goto-definition]: Go to definition
-         --> main.py:4:5
-          |
-        4 | x = DynClass()
-          |     ^^^^^^^^ Clicking here
-          |
-        info: Found 1 definition
-          --> stdlib/builtins.byi:87:9
+          --> main.py:LL:5
            |
-        87 |     def __new__(cls) -> Self
+        LL | x = DynClass()
+           |     ^^^^^^^^ Clicking here
+           |
+        info: Found 1 definition
+          --> stdlib/builtins.pyi:LL:9
+           |
+        LL |     def __new__(cls) -> Self: ...
            |         -------
            |
         ");
@@ -2071,17 +2071,17 @@ p = Point<CURSOR>(1, 2)
 
         assert_snapshot!(test.goto_definition(), @"
         info[goto-definition]: Go to definition
-         --> main.py:4:5
-          |
-        4 | Foo.__dictoffset__
-          |     ^^^^^^^^^^^^^^ Clicking here
-          |
+          --> main.py:LL:5
+           |
+        LL | Foo.__dictoffset__
+           |     ^^^^^^^^^^^^^^ Clicking here
+           |
         info: Found 1 definition
-           --> stdlib/builtins.byi:207:9
-            |
-        207 |     def __dictoffset__(self) -> int
-            |         --------------
-            |
+          --> stdlib/builtins.pyi:LL:9
+           |
+        LL |     def __dictoffset__(self) -> int: ...
+           |         --------------
+           |
         ");
     }
 
@@ -2159,17 +2159,17 @@ p = Point<CURSOR>(1, 2)
 
         assert_snapshot!(test.goto_definition(), @"
         info[goto-definition]: Go to definition
-         --> main.py:1:6
-          |
-        1 | type.__dictoffset__
-          |      ^^^^^^^^^^^^^^ Clicking here
-          |
+          --> main.py:LL:6
+           |
+        LL | type.__dictoffset__
+           |      ^^^^^^^^^^^^^^ Clicking here
+           |
         info: Found 1 definition
-           --> stdlib/builtins.byi:207:9
-            |
-        207 |     def __dictoffset__(self) -> int
-            |         --------------
-            |
+          --> stdlib/builtins.pyi:LL:9
+           |
+        LL |     def __dictoffset__(self) -> int: ...
+           |         --------------
+           |
         ");
     }
 

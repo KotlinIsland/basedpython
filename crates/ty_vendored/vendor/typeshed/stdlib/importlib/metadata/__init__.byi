@@ -1,3 +1,12 @@
+"""
+APIs exposing metadata from third-party Python packages.
+
+This codebase is shared between importlib.metadata in the stdlib
+and importlib_metadata in PyPI. See
+https://github.com/python/importlib_metadata/wiki/Development-Methodology
+for more detail.
+"""
+
 import abc
 import pathlib
 import sys
@@ -9,7 +18,7 @@ from importlib.abc import MetaPathFinder
 from importlib.metadata._meta import PackageMetadata as PackageMetadata, SimplePath
 from os import PathLike
 from re import Pattern
-from typing import Any, ClassVar, Generic, NamedTuple, TypeAlias, TypeVar, type_check_only
+from typing import ClassVar, Generic, NamedTuple, TypeAlias, TypeVar, type_check_only
 from typing_extensions import Self, deprecated, disjoint_base
 
 
@@ -51,7 +60,8 @@ class PackageNotFoundError(ModuleNotFoundError):
     def name(self) -> str  # type: ignore[override]
 
 if sys.version_info >= (3, 15):
-    class MetadataNotFound(FileNotFoundError)
+    class MetadataNotFound(FileNotFoundError):
+        """No metadata file is present in the distribution."""
 
 if sys.version_info >= (3, 13):
     _EntryPointBase = object
@@ -96,6 +106,30 @@ if sys.version_info >= (3, 11):
         'attr'
         >>> ep.extras
         ['extra1', 'extra2']
+
+        If the value package or module are not valid identifiers, a
+        ValueError is raised on access.
+
+        >>> EntryPoint(name=None, group=None, value='invalid-name').module
+        Traceback (most recent call last):
+        ...
+        ValueError: ('Invalid object reference...invalid-name...
+        >>> EntryPoint(name=None, group=None, value='invalid-name').attr
+        Traceback (most recent call last):
+        ...
+        ValueError: ('Invalid object reference...invalid-name...
+        >>> EntryPoint(name=None, group=None, value='invalid-name').extras
+        Traceback (most recent call last):
+        ...
+        ValueError: ('Invalid object reference...invalid-name...
+
+        The same thing happens on construction.
+
+        >>> EntryPoint(name=None, group=None, value='invalid-name')
+        Traceback (most recent call last):
+        ...
+        ValueError: ('Invalid object reference...invalid-name...
+
         """
 
         pattern: ClassVar[Pattern[str]]
@@ -104,7 +138,7 @@ if sys.version_info >= (3, 11):
         group: str
 
         def __init__(self, name: str, value: str, group: str) -> None
-        def load(self) -> Any:  # Callable[[], Any] or an importable module
+        def load(self) -> dynamic:  # Callable[[], Any] or an importable module
             """Load the entry point from its definition. If only a module
             is indicated by the value, return that module. Otherwise,
             return the named object.
@@ -151,7 +185,7 @@ if sys.version_info >= (3, 11):
         def __eq__(self, other: object) -> bool
         def __lt__(self, other: object) -> bool
         if sys.version_info < (3, 12):
-            def __iter__(self) -> Iterator[Any]:  # result of iter((str, Self)), really
+            def __iter__(self) -> Iterator[dynamic]:  # result of iter((str, Self)), really
                 """
                 Supply iter so one may construct dicts of EntryPoints by name.
                 """
@@ -177,7 +211,7 @@ else:
 
         pattern: ClassVar[Pattern[str]]
 
-        def load(self) -> Any:  # Callable[[], Any] or an importable module
+        def load(self) -> dynamic:  # Callable[[], Any] or an importable module
             """Load the entry point from its definition. If only a module
             is indicated by the value, return that module. Otherwise,
             return the named object.
@@ -221,7 +255,7 @@ else:
             """
 
         def __hash__(self) -> int
-        def __iter__(self) -> Iterator[Any]:  # result of iter((str, Self)), really
+        def __iter__(self) -> Iterator[dynamic]:  # result of iter((str, Self)), really
             """
             Supply iter so one may construct dicts of EntryPoints by name.
             """
@@ -415,6 +449,7 @@ class PackagePath(pathlib.PurePosixPath):
     def read_binary(self) -> bytes
     def locate(self) -> PathLike[str]:
         """Return a path-like object for this path"""
+
     # The following attributes are not defined on PackagePath, but are dynamically added by Distribution.files:
     hash: FileHash | None
     size: int | None
@@ -472,6 +507,17 @@ class Distribution(_distribution_parent):
         """
         Given a path to a file in this distribution, return a SimplePath
         to it.
+
+        This method is used by callers of ``Distribution.files()`` to
+        locate files within the distribution. If it's possible for a
+        Distribution to represent files in the distribution as
+        ``SimplePath`` objects, it should implement this method
+        to resolve such objects.
+
+        Some Distribution providers may elect not to resolve SimplePath
+        objects within the distribution by raising a
+        NotImplementedError, but consumers of such a Distribution would
+        be unable to invoke ``Distribution.files()``.
         """
 
     class def from_name(cls, name: str) -> Distribution:
@@ -496,7 +542,7 @@ class Distribution(_distribution_parent):
           the context.
         """
     class def discover(
-        cls, *, context: None = None, name: str | None = ..., path: list[str] = ..., **kwargs: Any
+        cls, *, context: None = None, name: str | None = ..., path: list[str] = ..., **kwargs: dynamic
     ) -> Iterable[Distribution]
 
     static def at(path: StrPath) -> PathDistribution:
@@ -516,6 +562,8 @@ class Distribution(_distribution_parent):
 
         Custom providers may provide the METADATA file or override this
         property.
+
+        :raises MetadataNotFound: If no metadata file is present.
         """
 
     @property
@@ -554,6 +602,7 @@ class Distribution(_distribution_parent):
     @property
     def name(self) -> str:
         """Return the 'Name' metadata for the distribution package."""
+
     if sys.version_info >= (3, 13):
         @property
         def origin(self) -> types.SimpleNamespace | None
@@ -590,7 +639,7 @@ class DistributionFinder(MetaPathFinder):
         """
 
         name: str | None
-        def __init__(self, *, name: str | None = ..., path: list[str] = ..., **kwargs: Any) -> None
+        def __init__(self, *, name: str | None = ..., path: list[str] = ..., **kwargs: dynamic) -> None
         @property
         def path(self) -> list[str]:
             """
@@ -621,6 +670,7 @@ class MetadataPathFinder(DistributionFinder):
         (or all names if ``None`` indicated) along the paths in the list
         of directories ``context.path``.
         """
+
     if sys.version_info >= (3, 11):
         class def invalidate_caches(cls) -> None
     else:
@@ -672,7 +722,7 @@ def distributions(*, context: DistributionFinder.Context) -> Iterable[Distributi
     :return: An iterable of ``Distribution`` instances.
     """
 def distributions(
-    *, context: None = None, name: str | None = ..., path: list[str] = ..., **kwargs: Any
+    *, context: None = None, name: str | None = ..., path: list[str] = ..., **kwargs: dynamic
 ) -> Iterable[Distribution]
 
 def metadata(distribution_name: str) -> PackageMetadata:
@@ -680,6 +730,7 @@ def metadata(distribution_name: str) -> PackageMetadata:
 
     :param distribution_name: The name of the distribution package to query.
     :return: A PackageMetadata containing the parsed metadata.
+    :raises MetadataNotFound: If no metadata file is present in the distribution.
     """
 
 if sys.version_info >= (3, 12):

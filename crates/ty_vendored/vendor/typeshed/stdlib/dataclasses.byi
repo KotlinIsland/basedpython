@@ -57,7 +57,7 @@ MISSING: Final = _MISSING_TYPE.MISSING
 
 class KW_ONLY
 
-def asdict(obj: DataclassInstance) -> dict[str, Any]:
+def asdict(obj: DataclassInstance) -> dict[str, dynamic]:
     """Return the fields of a dataclass instance as a new dictionary mapping
     field names to field values.
 
@@ -74,9 +74,10 @@ def asdict(obj: DataclassInstance) -> dict[str, Any]:
     If given, 'dict_factory' will be used instead of built-in dict.
     The function applies recursively to field values that are
     dataclass instances. This will also look into built-in containers:
-    tuples, lists, and dicts. Other objects are copied with 'copy.deepcopy()'.
+    tuples, lists, dicts, and frozendicts. Other objects are copied
+    with 'copy.deepcopy()'.
     """
-def asdict[Element](obj: DataclassInstance, *, dict_factory: Callable[[list[tuple[str, Any]]], Element]) -> Element
+def asdict[Element](obj: DataclassInstance, *, dict_factory: Callable[[list[tuple[str, dynamic]]], Element]) -> Element
 
 def astuple(obj: DataclassInstance) -> (*: Any):
     """Return the fields of a dataclass instance as a new tuple of field values.
@@ -94,9 +95,10 @@ def astuple(obj: DataclassInstance) -> (*: Any):
     If given, 'tuple_factory' will be used instead of built-in tuple.
     The function applies recursively to field values that are
     dataclass instances. This will also look into built-in containers:
-    tuples, lists, and dicts. Other objects are copied with 'copy.deepcopy()'.
+    tuples, lists, dicts, and frozendicts. Other objects are copied
+    with 'copy.deepcopy()'.
     """
-def astuple[Element](obj: DataclassInstance, *, tuple_factory: Callable[[list[Any]], Element]) -> Element
+def astuple[Element](obj: DataclassInstance, *, tuple_factory: Callable[[list[dynamic]], Element]) -> Element
 
 if sys.version_info >= (3, 11):
     def dataclass[Element](
@@ -222,14 +224,14 @@ class Field[in out Element]:
             "_field_type",
         )
     name: str
-    type: Type[Element] | str | Any
+    type: Type[Element] | str | dynamic
     default: Element | Literal[_MISSING_TYPE.MISSING]
     default_factory: _DefaultFactory[Element] | Literal[_MISSING_TYPE.MISSING]
     repr: bool
     hash: bool | None
     init: bool
     compare: bool
-    metadata: types.MappingProxyType[Any, Any]
+    metadata: types.MappingProxyType[dynamic, dynamic]
 
     if sys.version_info >= (3, 14):
         doc: str | None
@@ -245,7 +247,7 @@ class Field[in out Element]:
             repr: bool,
             hash: bool | None,
             compare: bool,
-            metadata: Mapping[Any, Any],
+            metadata: Mapping[dynamic, dynamic],
             kw_only: bool,
             doc: str | None,
         ) -> None
@@ -258,15 +260,16 @@ class Field[in out Element]:
             repr: bool,
             hash: bool | None,
             compare: bool,
-            metadata: Mapping[Any, Any],
+            metadata: Mapping[dynamic, dynamic],
             kw_only: bool,
         ) -> None
 
-    def __set_name__(self, owner: Type[Any], name: str) -> None
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+    def __set_name__(self, owner: Type[dynamic], name: str) -> None
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
-        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        For example, for t = list[int], t.__origin__ is list and t.__args__
+        is (int,).
         """
 
 # NOTE: Actual return type is 'Field[_T]', but we want to help type checkers
@@ -280,7 +283,7 @@ if sys.version_info >= (3, 14):
         repr: bool = True,
         hash: bool | None = None,
         compare: bool = True,
-        metadata: Mapping[Any, Any] | None = None,
+        metadata: Mapping[dynamic, dynamic] | None = None,
         kw_only: bool | Literal[_MISSING_TYPE.MISSING] = ...,
         doc: str | None = None,
     ) -> Element:
@@ -307,7 +310,7 @@ if sys.version_info >= (3, 14):
         repr: bool = True,
         hash: bool | None = None,
         compare: bool = True,
-        metadata: Mapping[Any, Any] | None = None,
+        metadata: Mapping[dynamic, dynamic] | None = None,
         kw_only: bool | Literal[_MISSING_TYPE.MISSING] = ...,
         doc: str | None = None,
     ) -> Element
@@ -319,10 +322,10 @@ if sys.version_info >= (3, 14):
         repr: bool = True,
         hash: bool | None = None,
         compare: bool = True,
-        metadata: Mapping[Any, Any] | None = None,
+        metadata: Mapping[dynamic, dynamic] | None = None,
         kw_only: bool | Literal[_MISSING_TYPE.MISSING] = ...,
         doc: str | None = None,
-    ) -> Any
+    ) -> dynamic
 else:
     def field[Element](
         *,
@@ -332,7 +335,7 @@ else:
         repr: bool = True,
         hash: bool | None = None,
         compare: bool = True,
-        metadata: Mapping[Any, Any] | None = None,
+        metadata: Mapping[dynamic, dynamic] | None = None,
         kw_only: bool | Literal[_MISSING_TYPE.MISSING] = ...,
     ) -> Element:
         """Return an object to identify dataclass fields.
@@ -358,7 +361,7 @@ else:
         repr: bool = True,
         hash: bool | None = None,
         compare: bool = True,
-        metadata: Mapping[Any, Any] | None = None,
+        metadata: Mapping[dynamic, dynamic] | None = None,
         kw_only: bool | Literal[_MISSING_TYPE.MISSING] = ...,
     ) -> Element
     def field(
@@ -369,9 +372,9 @@ else:
         repr: bool = True,
         hash: bool | None = None,
         compare: bool = True,
-        metadata: Mapping[Any, Any] | None = None,
+        metadata: Mapping[dynamic, dynamic] | None = None,
         kw_only: bool | Literal[_MISSING_TYPE.MISSING] = ...,
-    ) -> Any
+    ) -> dynamic
 
 def fields(class_or_instance: DataclassInstance | type[DataclassInstance]) -> (*: Field[Any]):
     """Return a tuple describing the fields of this dataclass.
@@ -396,7 +399,7 @@ class InitVar[in out Element]:
     def __init__(self, type: Type[Element]) -> None
 
     def __class_getitem__(cls, type: Type[Element]) -> InitVar[Element]  # pyright: ignore[reportInvalidTypeForm]
-    def __class_getitem__(cls, type: Any) -> InitVar[Any]  # pyright: ignore[reportInvalidTypeForm]
+    def __class_getitem__(cls, type: dynamic) -> InitVar[dynamic]  # pyright: ignore[reportInvalidTypeForm]
 
 if sys.version_info >= (3, 14):
     def make_dataclass(
@@ -404,7 +407,7 @@ if sys.version_info >= (3, 14):
         fields: Iterable[str | (str, Any) | (str, Any, Any)],
         *,
         bases: (*: type) = (),
-        namespace: dict[str, Any] | None = None,
+        namespace: dict[str, dynamic] | None = None,
         init: bool = True,
         repr: bool = True,
         eq: bool = True,
@@ -450,7 +453,7 @@ elif sys.version_info >= (3, 12):
         fields: Iterable[str | (str, Any) | (str, Any, Any)],
         *,
         bases: (*: type) = (),
-        namespace: dict[str, Any] | None = None,
+        namespace: dict[str, dynamic] | None = None,
         init: bool = True,
         repr: bool = True,
         eq: bool = True,
@@ -495,7 +498,7 @@ elif sys.version_info >= (3, 11):
         fields: Iterable[str | (str, Any) | (str, Any, Any)],
         *,
         bases: (*: type) = (),
-        namespace: dict[str, Any] | None = None,
+        namespace: dict[str, dynamic] | None = None,
         init: bool = True,
         repr: bool = True,
         eq: bool = True,
@@ -536,7 +539,7 @@ else:
         fields: Iterable[str | (str, Any) | (str, Any, Any)],
         *,
         bases: (*: type) = (),
-        namespace: dict[str, Any] | None = None,
+        namespace: dict[str, dynamic] | None = None,
         init: bool = True,
         repr: bool = True,
         eq: bool = True,
@@ -570,7 +573,7 @@ else:
         dataclass().
         """
 
-def replace[DataclassT: DataclassInstance](obj: DataclassT, /, **changes: Any) -> DataclassT:
+def replace[DataclassT: DataclassInstance](obj: DataclassT, /, **changes: dynamic) -> DataclassT:
     """Return a new object replacing specified fields with new values.
 
     This is especially useful for frozen classes.  Example usage::

@@ -5,7 +5,7 @@ pyexpat.__version__ == '2.22'.
 
 from _typeshed import ReadableBuffer
 from collections.abc import Mapping
-from typing import Any, Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias
 from xml.sax import _Source, xmlreader
 from xml.sax.handler import LexicalHandler, _ContentHandlerProtocol
 
@@ -45,13 +45,13 @@ class ExpatParser(xmlreader.IncrementalParser, xmlreader.Locator):
     def setFeature(self, name: str, state: _BoolType) -> None
 
     def getProperty(self, name: Literal["http://xml.org/sax/properties/lexical-handler"]) -> LexicalHandler | None
-    def getProperty(self, name: Literal["http://www.python.org/sax/properties/interning-dict"]) -> dict[str, Any] | None
+    def getProperty(self, name: Literal["http://www.python.org/sax/properties/interning-dict"]) -> dict[str, dynamic] | None
     def getProperty(self, name: Literal["http://xml.org/sax/properties/xml-string"]) -> bytes | None
     def getProperty(self, name: str) -> object
 
     def setProperty(self, name: Literal["http://xml.org/sax/properties/lexical-handler"], value: LexicalHandler) -> None
     def setProperty(
-        self, name: Literal["http://www.python.org/sax/properties/interning-dict"], value: dict[str, Any]
+        self, name: Literal["http://www.python.org/sax/properties/interning-dict"], value: dict[str, dynamic]
     ) -> None
     def setProperty(self, name: str, value: object) -> None
 

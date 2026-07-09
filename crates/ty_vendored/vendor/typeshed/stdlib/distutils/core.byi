@@ -11,7 +11,7 @@ from collections.abc import Mapping
 from distutils.cmd import Command as Command
 from distutils.dist import Distribution as Distribution
 from distutils.extension import Extension as Extension
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 USAGE: Final[str]
 
@@ -61,7 +61,7 @@ def setup(
     password: str = ...,
     fullname: str = ...,
     # Custom Distributions could accept more params
-    **attrs: Any,
+    **attrs: dynamic,
 ) -> Distribution:
     """The gateway to the Distutils: do everything your setup script needs
     to do, in a highly flexible and user-driven way.  Briefly: create a

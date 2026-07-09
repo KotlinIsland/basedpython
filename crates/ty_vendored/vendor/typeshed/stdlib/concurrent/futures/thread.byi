@@ -12,7 +12,7 @@ from weakref import ref
 from ._base import BrokenExecutor, Executor, Future
 
 
-_threads_queues: Mapping[Any, Any]
+_threads_queues: Mapping[dynamic, dynamic]
 _shutdown: bool
 _global_shutdown_lock: Lock
 
@@ -50,31 +50,32 @@ if sys.version_info >= (3, 14):
         task: _Task
         def __init__(self, future: Future[Any], task: _Task) -> None
         def run(self, ctx: WorkerContext) -> None
-        def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
             """Represent a PEP 585 generic type
 
-            E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+            For example, for t = list[int], t.__origin__ is list and t.__args__
+            is (int,).
             """
 
-    def _worker(executor_reference: ref[Any], ctx: WorkerContext, work_queue: queue.SimpleQueue[Any]) -> None
+    def _worker(executor_reference: ref[dynamic], ctx: WorkerContext, work_queue: queue.SimpleQueue[dynamic]) -> None
 
 else:
     class _WorkItem[in out Other]:
         future: Future[Other]
         fn: (...) -> Other
-        args: Iterable[Any]
-        kwargs: Mapping[str, Any]
-        def __init__(self, future: Future[Other], fn: (...) -> Other, args: Iterable[Any], kwargs: Mapping[str, Any]) -> None
+        args: Iterable[dynamic]
+        kwargs: Mapping[str, dynamic]
+        def __init__(self, future: Future[Other], fn: (...) -> Other, args: Iterable[dynamic], kwargs: Mapping[str, dynamic]) -> None
         def run(self) -> None
-        def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+        def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
             """Represent a PEP 585 generic type
 
             E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
             """
 
     def _worker[*Ts](
-        executor_reference: ref[Any],
-        work_queue: queue.SimpleQueue[Any],
+        executor_reference: ref[dynamic],
+        work_queue: queue.SimpleQueue[dynamic],
         initializer: Callable[[Unpack[Ts]], object],
         initargs: (Unpack[Ts],),
     ) -> None
@@ -101,7 +102,7 @@ class ThreadPoolExecutor(Executor):
     else:
         _initializer: (...) -> None | None
         _initargs: (*: Any)
-    _work_queue: queue.SimpleQueue[_WorkItem[Any]]
+    _work_queue: queue.SimpleQueue[_WorkItem[dynamic]]
 
     if sys.version_info >= (3, 14):
         class def prepare_context(

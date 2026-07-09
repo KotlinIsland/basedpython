@@ -10,7 +10,7 @@ from importlib import _bootstrap_external
 from importlib._abc import Loader as Loader
 from importlib.machinery import ModuleSpec
 from io import BufferedReader
-from typing import IO, Any, Literal, Protocol, runtime_checkable
+from typing import IO, Literal, Protocol, runtime_checkable
 from typing_extensions import deprecated
 
 if sys.version_info >= (3, 11):
@@ -149,7 +149,7 @@ class SourceLoader(_bootstrap_external.SourceLoader, ResourceLoader, ExecutionLo
     def get_source(self, fullname: str) -> str | None:
         """Concrete implementation of InspectLoader.get_source."""
 
-    def path_stats(self, path: str) -> Mapping[str, Any]:
+    def path_stats(self, path: str) -> Mapping[str, dynamic]:
         """Return a metadata dict for the source pointed to by the path (str).
         Possible keys:
         - 'mtime' (mandatory) is the numeric timestamp of last source
@@ -179,6 +179,7 @@ class MetaPathFinder(metaclass=ABCMeta):
         """An optional method for clearing the finder's cache, if any.
         This method is used by importlib.invalidate_caches().
         """
+
     # Not defined on the actual class, but expected to exist.
     def find_spec(
         self, fullname: str, path: Sequence[str] | None, target: types.ModuleType | None = ..., /
@@ -218,6 +219,7 @@ class PathEntryFinder(metaclass=ABCMeta):
         """An optional method for clearing the finder's cache, if any.
         This method is used by PathFinder.invalidate_caches().
         """
+
     # Not defined on the actual class, but expected to exist.
     def find_spec(self, fullname: str, target: types.ModuleType | None = ...) -> ModuleSpec | None
 
@@ -295,6 +297,7 @@ if sys.version_info < (3, 11):
             """
             Yield Traversable objects in self
             """
+
         if sys.version_info >= (3, 11):
             abstract def joinpath(self, *descendants: str) -> Traversable
         else:
@@ -347,7 +350,7 @@ if sys.version_info < (3, 11):
             """Return a Traversable object for the loaded package."""
 
         def open_resource(self, resource: str) -> BufferedReader
-        def resource_path(self, resource: Any) -> str
+        def resource_path(self, resource: dynamic) -> str
         def is_resource(self, path: str) -> bool
         def contents(self) -> Iterator[str]
 

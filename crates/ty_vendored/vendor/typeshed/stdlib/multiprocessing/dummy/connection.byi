@@ -1,7 +1,6 @@
 from multiprocessing.connection import _Address
 from queue import Queue
 from types import TracebackType
-from typing import Any
 from typing_extensions import Self
 
 __all__ = ["Client", "Listener", "Pipe"]
@@ -9,24 +8,24 @@ __all__ = ["Client", "Listener", "Pipe"]
 families: list[None]
 
 class Connection:
-    _in: Any
-    _out: Any
-    recv: Any
-    recv_bytes: Any
-    send: Any
-    send_bytes: Any
+    _in: dynamic
+    _out: dynamic
+    recv: dynamic
+    recv_bytes: dynamic
+    send: dynamic
+    send_bytes: dynamic
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None
     ) -> None
-    def __init__(self, _in: Any, _out: Any) -> None
+    def __init__(self, _in: dynamic, _out: dynamic) -> None
     def close(self) -> None
     def poll(self, timeout: float = 0.0) -> bool
 
 class Listener:
-    _backlog_queue: Queue[Any] | None
+    _backlog_queue: Queue[dynamic] | None
     @property
-    def address(self) -> Queue[Any] | None
+    def address(self) -> Queue[dynamic] | None
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None

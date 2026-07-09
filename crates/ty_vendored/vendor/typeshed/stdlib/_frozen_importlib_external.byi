@@ -18,7 +18,7 @@ from _typeshed.importlib import LoaderProtocol
 from collections.abc import Callable, Iterable, Mapping, MutableSequence, Sequence
 from importlib.machinery import ModuleSpec
 from importlib.metadata import DistributionFinder, PathDistribution
-from typing import Any, Final, Literal
+from typing import Final, Literal
 from typing_extensions import deprecated
 
 if sys.platform == "win32":
@@ -46,14 +46,10 @@ def cache_from_source(path: StrPath, debug_override: bool, *, optimization: None
     of the argument is taken and verified to be alphanumeric (else ValueError
     is raised).
 
-    The debug_override parameter is deprecated. If debug_override is not None,
-    a True value is the same as setting 'optimization' to the empty string
-    while a False value is equivalent to setting 'optimization' to '1'.
-
     If sys.implementation.cache_tag is None then NotImplementedError is raised.
 
     """
-def cache_from_source(path: StrPath, debug_override: None = None, *, optimization: Any | None = None) -> str
+def cache_from_source(path: StrPath, debug_override: None = None, *, optimization: dynamic | None = None) -> str
 
 def source_from_cache(path: StrPath) -> str:
     """Given the path to a .pyc. file, return the path to its .py file.
@@ -135,6 +131,7 @@ class PathFinder(importlib.abc.MetaPathFinder):
 
         The search is based on sys.path_hooks and sys.path_importer_cache.
         """
+
     if sys.version_info < (3, 12):
         @classmethod
         @deprecated("Deprecated since Python 3.4; removed in Python 3.12. Use `find_spec()` instead.")
@@ -215,7 +212,7 @@ class SourceLoader(_LoaderBasics):
     def get_source(self, fullname: str) -> str | None:
         """Concrete implementation of InspectLoader.get_source."""
 
-    def path_stats(self, path: str) -> Mapping[str, Any]:
+    def path_stats(self, path: str) -> Mapping[str, dynamic]:
         """Optional method returning a metadata dict for the specified
         path (a str).
 
@@ -277,7 +274,7 @@ class SourceFileLoader(importlib.abc.FileLoader, FileLoader, importlib.abc.Sourc
     def set_data(self, path: str, data: ReadableBuffer, *, _mode: int = 0o666) -> None:
         """Write bytes data to a file."""
 
-    def path_stats(self, path: str) -> Mapping[str, Any]:
+    def path_stats(self, path: str) -> Mapping[str, dynamic]:
         """Return the metadata for the path."""
 
     def source_to_code(  # type: ignore[override]  # incompatible with InspectLoader.source_to_code

@@ -14,7 +14,7 @@ pulldom -- DOM builder supporting on-demand tree-building for selected
 
 """
 
-from typing import Any, Final, Literal
+from typing import Final, Literal
 
 from .domreg import getDOMImplementation as getDOMImplementation, registerDOMImplementation as registerDOMImplementation
 
@@ -59,7 +59,7 @@ class DOMException(Exception):
     """
 
     code: int
-    def __init__(self, *args: Any, **kw: Any) -> None
+    def __init__(self, *args: dynamic, **kw: dynamic) -> None
     def _get_code(self) -> int
 
 class IndexSizeErr(DOMException):

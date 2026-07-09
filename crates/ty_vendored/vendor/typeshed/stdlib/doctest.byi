@@ -42,7 +42,7 @@ import types
 import unittest
 from _typeshed import ExcInfo
 from collections.abc import Callable
-from typing import Any, Final, NamedTuple, TypeAlias, type_check_only
+from typing import Final, NamedTuple, TypeAlias, type_check_only
 from typing_extensions import Self
 
 __all__ = [
@@ -202,7 +202,7 @@ class DocTest:
     """
 
     examples: list[Example]
-    globs: dict[str, Any]
+    globs: dict[str, dynamic]
     name: str
     filename: str | None
     lineno: int | None
@@ -210,7 +210,7 @@ class DocTest:
     def __init__(
         self,
         examples: list[Example],
-        globs: dict[str, Any],
+        globs: dict[str, dynamic],
         name: str,
         filename: str | None,
         lineno: int | None,
@@ -239,7 +239,7 @@ class DocTestParser:
         used for error messages.
         """
 
-    def get_doctest(self, string: str, globs: dict[str, Any], name: str, filename: str | None, lineno: int | None) -> DocTest:
+    def get_doctest(self, string: str, globs: dict[str, dynamic], name: str, filename: str | None, lineno: int | None) -> DocTest:
         """
         Extract all doctest examples from the given string, and
         collect them into a `DocTest` object.
@@ -294,8 +294,8 @@ class DocTestFinder:
         obj: object,
         name: str | None = None,
         module: None | bool | types.ModuleType = None,
-        globs: dict[str, Any] | None = None,
-        extraglobs: dict[str, Any] | None = None,
+        globs: dict[str, dynamic] | None = None,
+        extraglobs: dict[str, dynamic] | None = None,
     ) -> list[DocTest]:
         """
         Return a list of the DocTests that are defined by the given
@@ -638,11 +638,11 @@ master: DocTestRunner | None
 def testmod(
     m: types.ModuleType | None = None,
     name: str | None = None,
-    globs: dict[str, Any] | None = None,
+    globs: dict[str, dynamic] | None = None,
     verbose: bool | None = None,
     report: bool = True,
     optionflags: int = 0,
-    extraglobs: dict[str, Any] | None = None,
+    extraglobs: dict[str, dynamic] | None = None,
     raise_on_error: bool = False,
     exclude_empty: bool = False,
 ) -> TestResults:
@@ -715,11 +715,11 @@ def testfile(
     module_relative: bool = True,
     name: str | None = None,
     package: None | str | types.ModuleType = None,
-    globs: dict[str, Any] | None = None,
+    globs: dict[str, dynamic] | None = None,
     verbose: bool | None = None,
     report: bool = True,
     optionflags: int = 0,
-    extraglobs: dict[str, Any] | None = None,
+    extraglobs: dict[str, dynamic] | None = None,
     raise_on_error: bool = False,
     parser: DocTestParser = ...,
     encoding: str | None = None,
@@ -803,7 +803,7 @@ def testfile(
 
 def run_docstring_examples(
     f: object,
-    globs: dict[str, Any],
+    globs: dict[str, dynamic],
     verbose: bool = False,
     name: str = "NoName",
     compileflags: int | None = None,
@@ -875,10 +875,10 @@ class _DocTestSuite(unittest.TestSuite)
 
 def DocTestSuite(
     module: None | str | types.ModuleType = None,
-    globs: dict[str, Any] | None = None,
-    extraglobs: dict[str, Any] | None = None,
+    globs: dict[str, dynamic] | None = None,
+    extraglobs: dict[str, dynamic] | None = None,
     test_finder: DocTestFinder | None = None,
-    **options: Any,
+    **options: dynamic,
 ) -> _DocTestSuite:
     """
     Convert doctest tests for a module to a unittest test suite.
@@ -921,12 +921,12 @@ def DocFileTest(
     path: str,
     module_relative: bool = True,
     package: None | str | types.ModuleType = None,
-    globs: dict[str, Any] | None = None,
+    globs: dict[str, dynamic] | None = None,
     parser: DocTestParser = ...,
     encoding: str | None = None,
-    **options: Any,
+    **options: dynamic,
 ) -> DocFileCase
-def DocFileSuite(*paths: str, **kw: Any) -> _DocTestSuite:
+def DocFileSuite(*paths: str, **kw: dynamic) -> _DocTestSuite:
     """A unittest suite for one or more doctest files.
 
     The path to each doctest file is given as a string; the
@@ -1050,10 +1050,10 @@ def testsource(module: None | str | types.ModuleType, name: str) -> str:
     with the doc string with tests to be debugged.
     """
 
-def debug_src(src: str, pm: bool = False, globs: dict[str, Any] | None = None) -> None:
+def debug_src(src: str, pm: bool = False, globs: dict[str, dynamic] | None = None) -> None:
     """Debug a single doctest docstring, in argument `src`"""
 
-def debug_script(src: str, pm: bool = False, globs: dict[str, Any] | None = None) -> None:
+def debug_script(src: str, pm: bool = False, globs: dict[str, dynamic] | None = None) -> None:
     """Debug a test script.  `src` is the script, as a string."""
 
 def debug(module: None | str | types.ModuleType, name: str, pm: bool = False) -> None:

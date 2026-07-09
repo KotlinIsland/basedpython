@@ -1,10 +1,10 @@
 import io
-from typing import Any, Protocol, type_check_only
+from typing import Protocol, type_check_only
 
 @type_check_only
 class _IOBytes(Protocol):
     def read(self, size: int, /) -> bytes
-    def seek(self, size: int, whence: int = ..., /) -> Any
+    def seek(self, size: int, whence: int = ..., /) -> dynamic
 
 def load_tzdata(key: str) -> io.BufferedReader
 def load_data(

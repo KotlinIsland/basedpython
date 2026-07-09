@@ -76,9 +76,9 @@ class Handle:
 
     __slots__ = ("_callback", "_args", "_cancelled", "_loop", "_source_traceback", "_repr", "__weakref__", "_context")
     _cancelled: bool
-    _args: Sequence[Any]
+    _args: Sequence[dynamic]
     def __init__(
-        self, callback: (...) -> object, args: Sequence[Any], loop: AbstractEventLoop, context: Context | None = None
+        self, callback: (...) -> object, args: Sequence[dynamic], loop: AbstractEventLoop, context: Context | None = None
     ) -> None
     def cancel(self) -> None
     def _run(self) -> None
@@ -94,7 +94,7 @@ class TimerHandle(Handle):
         self,
         when: float,
         callback: (...) -> object,
-        args: Sequence[Any],
+        args: Sequence[dynamic],
         loop: AbstractEventLoop,
         context: Context | None = None,
     ) -> None
@@ -117,6 +117,7 @@ class AbstractServer:
 
     abstract def close(self) -> None:
         """Stop serving.  This leaves existing connections open."""
+
     if sys.version_info >= (3, 13):
         abstract def close_clients(self) -> None:
             """Close all active connections."""
@@ -186,6 +187,7 @@ class AbstractEventLoop:
 
     abstract async def shutdown_asyncgens(self) -> None:
         """Shutdown all active asynchronous generators."""
+
     # Methods scheduling callbacks.  All these return Handles.
     # "context" added in 3.9.10/3.10.2 for call_*
     abstract def call_soon[*Ts](
@@ -339,8 +341,8 @@ class AbstractEventLoop:
 
             If host is an empty string or None all interfaces are assumed
             and a list of multiple sockets will be returned (most likely
-            one for IPv4 and another one for IPv6). The host parameter can also be
-            a sequence (e.g. list) of hosts to bind to.
+            one for IPv4 and another one for IPv6). The host parameter can also
+            be a sequence (e.g. list) of hosts to bind to.
 
             family can be set to either AF_INET or AF_INET6 to force the
             socket to use IPv4 or IPv6. If not set it will be determined
@@ -380,8 +382,9 @@ class AbstractEventLoop:
 
             start_serving set to True (default) causes the created server
             to start accepting connections immediately.  When set to False,
-            the user should await Server.start_serving() or Server.serve_forever()
-            to make the server to start accepting connections.
+            the user should await Server.start_serving() or
+            Server.serve_forever() to make the server to start accepting
+            connections.
             """
         abstract async def create_server(
             self,
@@ -617,8 +620,9 @@ class AbstractEventLoop:
 
             start_serving set to True (default) causes the created server
             to start accepting connections immediately.  When set to False,
-            the user should await Server.start_serving() or Server.serve_forever()
-            to make the server to start accepting connections.
+            the user should await Server.start_serving() or
+            Server.serve_forever() to make the server to start accepting
+            connections.
             """
     else:
         abstract async def start_tls(
@@ -673,6 +677,7 @@ class AbstractEventLoop:
             the user should await Server.start_serving() or Server.serve_forever()
             to make the server to start accepting connections.
             """
+
     if sys.version_info >= (3, 11):
         async def connect_accepted_socket[ProtocolT: BaseProtocol](
             self,
@@ -691,6 +696,7 @@ class AbstractEventLoop:
             This method is a coroutine.  When completed, the coroutine
             returns a (transport, protocol) pair.
             """
+
     else:
         async def connect_accepted_socket[ProtocolT: BaseProtocol](
             self,
@@ -708,6 +714,7 @@ class AbstractEventLoop:
             This method is a coroutine.  When completed, the coroutine
             returns a (transport, protocol) pair.
             """
+
     if sys.version_info >= (3, 11):
         async def create_unix_connection[ProtocolT: BaseProtocol](
             self,
@@ -764,8 +771,8 @@ class AbstractEventLoop:
 
         protocol_factory must be a callable returning a protocol instance.
 
-        socket family AF_INET, socket.AF_INET6 or socket.AF_UNIX depending on
-        host (or family if specified), socket type SOCK_DGRAM.
+        socket family AF_INET, socket.AF_INET6 or socket.AF_UNIX depending
+        on host (or family if specified), socket type SOCK_DGRAM.
 
         reuse_address tells the kernel to reuse a local socket in
         TIME_WAIT state, without waiting for its natural timeout to
@@ -785,8 +792,9 @@ class AbstractEventLoop:
         sock can optionally be specified in order to use a preexisting
         socket object.
         """
+
     # Pipes and subprocesses.
-    abstract async def connect_read_pipe[ProtocolT: BaseProtocol](self, protocol_factory: Callable[[], ProtocolT], pipe: Any) -> (ReadTransport, ProtocolT):
+    abstract async def connect_read_pipe[ProtocolT: BaseProtocol](self, protocol_factory: Callable[[], ProtocolT], pipe: dynamic) -> (ReadTransport, ProtocolT):
         """Register read pipe in event loop. Set the pipe to non-blocking mode.
 
         protocol_factory should instantiate object with Protocol interface.
@@ -796,11 +804,12 @@ class AbstractEventLoop:
         """
 
     abstract async def connect_write_pipe[ProtocolT: BaseProtocol](
-        self, protocol_factory: Callable[[], ProtocolT], pipe: Any
+        self, protocol_factory: Callable[[], ProtocolT], pipe: dynamic
     ) -> (WriteTransport, ProtocolT):
         """Register write pipe in event loop.
 
-        protocol_factory should instantiate object with BaseProtocol interface.
+        protocol_factory should instantiate object with BaseProtocol
+        interface.
         Pipe is file-like object already switched to nonblocking.
         Return pair (transport, protocol), where transport support
         WriteTransport interface.
@@ -811,35 +820,35 @@ class AbstractEventLoop:
         protocol_factory: Callable[[], ProtocolT],
         cmd: bytes | str,
         *,
-        stdin: int | IO[Any] | None = -1,
-        stdout: int | IO[Any] | None = -1,
-        stderr: int | IO[Any] | None = -1,
+        stdin: int | IO[dynamic] | None = -1,
+        stdout: int | IO[dynamic] | None = -1,
+        stderr: int | IO[dynamic] | None = -1,
         universal_newlines: Literal[False] = False,
         shell: Literal[True] = True,
         bufsize: Literal[0] = 0,
         encoding: None = None,
         errors: None = None,
         text: Literal[False] | None = None,
-        **kwargs: Any,
+        **kwargs: dynamic,
     ) -> (SubprocessTransport, ProtocolT)
     abstract async def subprocess_exec[ProtocolT: BaseProtocol](
         self,
         protocol_factory: Callable[[], ProtocolT],
-        program: Any,
-        *args: Any,
-        stdin: int | IO[Any] | None = -1,
-        stdout: int | IO[Any] | None = -1,
-        stderr: int | IO[Any] | None = -1,
+        program: dynamic,
+        *args: dynamic,
+        stdin: int | IO[dynamic] | None = -1,
+        stdout: int | IO[dynamic] | None = -1,
+        stderr: int | IO[dynamic] | None = -1,
         universal_newlines: Literal[False] = False,
         shell: Literal[False] = False,
         bufsize: Literal[0] = 0,
         encoding: None = None,
         errors: None = None,
-        **kwargs: Any,
+        **kwargs: dynamic,
     ) -> (SubprocessTransport, ProtocolT)
-    abstract def add_reader[*Ts](self, fd: FileDescriptorLike, callback: Callable[[Unpack[Ts]], Any], *args: *Ts) -> None
+    abstract def add_reader[*Ts](self, fd: FileDescriptorLike, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
     abstract def remove_reader(self, fd: FileDescriptorLike) -> bool
-    abstract def add_writer[*Ts](self, fd: FileDescriptorLike, callback: Callable[[Unpack[Ts]], Any], *args: *Ts) -> None
+    abstract def add_writer[*Ts](self, fd: FileDescriptorLike, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
     abstract def remove_writer(self, fd: FileDescriptorLike) -> bool
     abstract async def sock_recv(self, sock: socket, nbytes: int) -> bytes
     abstract async def sock_recv_into(self, sock: socket, buf: WriteableBuffer) -> int

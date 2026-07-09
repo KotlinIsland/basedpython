@@ -47,8 +47,8 @@ echo "==> phase 1: reverse-transpile .pyi -> .byi"
 pyi_count=0
 while IFS= read -r -d '' pyi; do
     byi="${pyi%.pyi}.byi"
-    "$BY" transpile --reverse --in-place "$pyi"
-    mv "$pyi" "$byi"
+    "$BY" transpile --reverse "$pyi" > "$byi"
+    rm "$pyi"
     pyi_count=$((pyi_count + 1))
 done < <(find "$TYPESHED" -name "*.pyi" -print0)
 echo "    converted $pyi_count files"

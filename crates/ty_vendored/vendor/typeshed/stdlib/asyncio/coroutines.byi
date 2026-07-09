@@ -27,9 +27,9 @@ if sys.version_info >= (3, 11):
     def iscoroutinefunction(func: (...) -> Coroutine[Any, Any, Any]) -> bool:
         """Return True if func is a decorated coroutine function."""
     @deprecated("Deprecated since Python 3.14. Use `inspect.iscoroutinefunction()` instead.")
-    def iscoroutinefunction[**P, Element](func: Callable[P, Awaitable[Element]]) -> TypeGuard[Callable[P, Coroutine[Any, Any, Element]]]
+    def iscoroutinefunction[**P, Element](func: Callable[P, Awaitable[Element]]) -> TypeGuard[Callable[P, Coroutine[dynamic, dynamic, Element]]]
     @deprecated("Deprecated since Python 3.14. Use `inspect.iscoroutinefunction()` instead.")
-    def iscoroutinefunction[**P](func: Callable[P, object]) -> TypeGuard[Callable[P, Coroutine[Any, Any, Any]]]
+    def iscoroutinefunction[**P](func: Callable[P, object]) -> TypeGuard[Callable[P, Coroutine[dynamic, dynamic, dynamic]]]
     @deprecated("Deprecated since Python 3.14. Use `inspect.iscoroutinefunction()` instead.")
     def iscoroutinefunction(func: object) -> TypeGuard[(...) -> Coroutine[Any, Any, Any]]
 else:
@@ -37,6 +37,6 @@ else:
     # which was removed in 3.11 which the inspect version doesn't support.
     def iscoroutinefunction(func: (...) -> Coroutine[Any, Any, Any]) -> bool:
         """Return True if func is a decorated coroutine function."""
-    def iscoroutinefunction[**P, Element](func: Callable[P, Awaitable[Element]]) -> TypeGuard[Callable[P, Coroutine[Any, Any, Element]]]
-    def iscoroutinefunction[**P](func: Callable[P, object]) -> TypeGuard[Callable[P, Coroutine[Any, Any, Any]]]
+    def iscoroutinefunction[**P, Element](func: Callable[P, Awaitable[Element]]) -> TypeGuard[Callable[P, Coroutine[dynamic, dynamic, Element]]]
+    def iscoroutinefunction[**P](func: Callable[P, object]) -> TypeGuard[Callable[P, Coroutine[dynamic, dynamic, dynamic]]]
     def iscoroutinefunction(func: object) -> TypeGuard[(...) -> Coroutine[Any, Any, Any]]

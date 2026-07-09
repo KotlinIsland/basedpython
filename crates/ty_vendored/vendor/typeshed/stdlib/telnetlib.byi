@@ -35,7 +35,7 @@ import socket
 from collections.abc import Callable, MutableSequence, Sequence
 from re import Match, Pattern
 from types import TracebackType
-from typing import Any, Final
+from typing import Final
 from typing_extensions import Self
 
 __all__ = ["Telnet"]
@@ -192,7 +192,7 @@ class Telnet:
         Don't try to reopen an already connected instance.
         """
 
-    def msg(self, msg: str, *args: Any) -> None:
+    def msg(self, msg: str, *args: dynamic) -> None:
         """Print a debug message, when the debug level is > 0.
 
         If extra arguments are present, they are substituted in the

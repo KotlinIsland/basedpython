@@ -73,7 +73,7 @@ class _DictConfigArgs(TypedDict, total=False):
 #
 # Also accept a TypedDict type, to allow callers to use TypedDict
 # types, and for somewhat stricter type checking of dict literals.
-def dictConfig(config: _DictConfigArgs | dict[str, Any]) -> None:
+def dictConfig(config: _DictConfigArgs | dict[str, dynamic]) -> None:
     """Configure logging using a dictionary."""
 
 def fileConfig(
@@ -120,38 +120,38 @@ def stopListening() -> None:
 class ConvertingMixin:  # undocumented
     """For ConvertingXXX's, this mixin class provides common functions"""
 
-    def convert_with_key(self, key: Any, value: Any, replace: bool = True) -> Any
-    def convert(self, value: Any) -> Any
+    def convert_with_key(self, key: dynamic, value: dynamic, replace: bool = True) -> dynamic
+    def convert(self, value: dynamic) -> dynamic
 
 class ConvertingDict(dict[Hashable, Any], ConvertingMixin):  # undocumented
     """A converting dictionary wrapper."""
 
-    def __getitem__(self, key: Hashable) -> Any
-    def get(self, key: Hashable, default: Any = None) -> Any
-    def pop(self, key: Hashable, default: Any = None) -> Any
+    def __getitem__(self, key: Hashable) -> dynamic
+    def get(self, key: Hashable, default: dynamic = None) -> dynamic
+    def pop(self, key: Hashable, default: dynamic = None) -> dynamic
 
 class ConvertingList(list[Any], ConvertingMixin):  # undocumented
     """A converting list wrapper."""
 
-    def __getitem__(self, key: SupportsIndex) -> Any
-    def __getitem__(self, key: slice[SupportsIndex | None]) -> Any
+    def __getitem__(self, key: SupportsIndex) -> dynamic
+    def __getitem__(self, key: slice[SupportsIndex | None]) -> dynamic
 
-    def pop(self, idx: SupportsIndex = -1) -> Any
+    def pop(self, idx: SupportsIndex = -1) -> dynamic
 
 if sys.version_info >= (3, 12):
     class ConvertingTuple(tuple[Any, ...], ConvertingMixin):  # undocumented
         """A converting tuple wrapper."""
 
-        def __getitem__(self, key: SupportsIndex) -> Any
-        def __getitem__(self, key: slice[SupportsIndex | None]) -> Any
+        def __getitem__(self, key: SupportsIndex) -> dynamic
+        def __getitem__(self, key: slice[SupportsIndex | None]) -> dynamic
 
 else:
     @disjoint_base
     class ConvertingTuple(tuple[Any, ...], ConvertingMixin):  # undocumented
         """A converting tuple wrapper."""
 
-        def __getitem__(self, key: SupportsIndex) -> Any
-        def __getitem__(self, key: slice[SupportsIndex | None]) -> Any
+        def __getitem__(self, key: SupportsIndex) -> dynamic
+        def __getitem__(self, key: slice[SupportsIndex | None]) -> dynamic
 
 class BaseConfigurator:
     """
@@ -166,29 +166,29 @@ class BaseConfigurator:
     value_converters: dict[str, str]
     importer: (...) -> Any
 
-    config: dict[str, Any]  # undocumented
+    config: dict[str, dynamic]  # undocumented
 
-    def __init__(self, config: _DictConfigArgs | dict[str, Any]) -> None
-    def resolve(self, s: str) -> Any:
+    def __init__(self, config: _DictConfigArgs | dict[str, dynamic]) -> None
+    def resolve(self, s: str) -> dynamic:
         """
         Resolve strings to objects using standard import and attribute
         syntax.
         """
 
-    def ext_convert(self, value: str) -> Any:
+    def ext_convert(self, value: str) -> dynamic:
         """Default converter for the ext:// protocol."""
 
-    def cfg_convert(self, value: str) -> Any:
+    def cfg_convert(self, value: str) -> dynamic:
         """Default converter for the cfg:// protocol."""
 
-    def convert(self, value: Any) -> Any:
+    def convert(self, value: dynamic) -> dynamic:
         """
         Convert values to an appropriate type. dicts, lists and tuples are
         replaced by their converting alternatives. Strings are checked to
         see if they have a conversion format and are converted if they do.
         """
 
-    def configure_custom(self, config: dict[str, Any]) -> Any:
+    def configure_custom(self, config: dict[str, dynamic]) -> dynamic:
         """Configure an object with a user-supplied factory."""
 
     def as_tuple(self, value: list[Any] | (*: Any)) -> (*: Any):
@@ -203,16 +203,16 @@ class DictConfigurator(BaseConfigurator):
     def configure(self) -> None:  # undocumented
         """Do the configuration."""
 
-    def configure_formatter(self, config: _FormatterConfiguration) -> Formatter | Any:  # undocumented
+    def configure_formatter(self, config: _FormatterConfiguration) -> Formatter | dynamic:  # undocumented
         """Configure a formatter from a dictionary."""
 
-    def configure_filter(self, config: _FilterConfiguration) -> Filter | Any:  # undocumented
+    def configure_filter(self, config: _FilterConfiguration) -> Filter | dynamic:  # undocumented
         """Configure a filter from a dictionary."""
 
     def add_filters(self, filterer: Filterer, filters: Iterable[_FilterType]) -> None:  # undocumented
         """Add filters to a filterer from a list of names."""
 
-    def configure_handler(self, config: _HandlerConfiguration) -> Handler | Any:  # undocumented
+    def configure_handler(self, config: _HandlerConfiguration) -> Handler | dynamic:  # undocumented
         """Configure a handler from a dictionary."""
 
     def add_handlers(self, logger: Logger, handlers: Iterable[str]) -> None:  # undocumented

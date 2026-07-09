@@ -61,7 +61,7 @@ from _typeshed import StrOrBytesPath
 from collections.abc import Callable, Iterator, MutableMapping
 from dbm import _TFlags
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import TypeVar
 from typing_extensions import Self
 
 __all__ = ["Shelf", "BsdDbShelf", "DbfilenameShelf", "open"]
@@ -87,8 +87,8 @@ class Shelf[in out Value](MutableMapping[str, Value]):
             writeback: bool = False,
             keyencoding: str = "utf-8",
             *,
-            serializer: Callable[[Any], bytes] | None = None,
-            deserializer: Callable[[bytes], Any] | None = None,
+            serializer: Callable[[dynamic], bytes] | None = None,
+            deserializer: Callable[[bytes], dynamic] | None = None,
         ) -> None
 
     else:
@@ -155,8 +155,8 @@ class DbfilenameShelf[in out Value](Shelf[Value]):
             protocol: int | None = None,
             writeback: bool = False,
             *,
-            serializer: Callable[[Any], bytes] | None = None,
-            deserializer: Callable[[bytes], Any] | None = None,
+            serializer: Callable[[dynamic], bytes] | None = None,
+            deserializer: Callable[[bytes], dynamic] | None = None,
         ) -> None
 
     elif sys.version_info >= (3, 11):
@@ -174,12 +174,23 @@ if sys.version_info >= (3, 15):
         protocol: int | None = None,
         writeback: bool = False,
         *,
-        serializer: Callable[[Any], bytes] | None = None,
-        deserializer: Callable[[bytes], Any] | None = None,
-    ) -> Shelf[Any]
+        serializer: Callable[[dynamic], bytes] | None = None,
+        deserializer: Callable[[bytes], dynamic] | None = None,
+    ) -> Shelf[dynamic]:
+        """Open a persistent dictionary for reading and writing.
+
+        The filename parameter is the base filename for the underlying
+        database.  As a side-effect, an extension may be added to the
+        filename and more than one file may be created.  The optional flag
+        parameter has the same interpretation as the flag parameter of
+        dbm.open(). The optional protocol parameter specifies the
+        version of the pickle protocol.
+
+        See the module's __doc__ string for an overview of the interface.
+        """
 
 elif sys.version_info >= (3, 11):
-    def open(filename: StrOrBytesPath, flag: _TFlags = "c", protocol: int | None = None, writeback: bool = False) -> Shelf[Any]:
+    def open(filename: StrOrBytesPath, flag: _TFlags = "c", protocol: int | None = None, writeback: bool = False) -> Shelf[dynamic]:
         """Open a persistent dictionary for reading and writing.
 
         The filename parameter is the base filename for the underlying
@@ -193,7 +204,7 @@ elif sys.version_info >= (3, 11):
         """
 
 else:
-    def open(filename: str, flag: _TFlags = "c", protocol: int | None = None, writeback: bool = False) -> Shelf[Any]:
+    def open(filename: str, flag: _TFlags = "c", protocol: int | None = None, writeback: bool = False) -> Shelf[dynamic]:
         """Open a persistent dictionary for reading and writing.
 
         The filename parameter is the base filename for the underlying

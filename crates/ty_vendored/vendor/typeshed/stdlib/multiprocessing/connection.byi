@@ -44,7 +44,7 @@ class _ConnectionBase[in Sent = Any, out RecvT = Any]:
         Receive bytes data as a bytes object.
         """
 
-    def recv_bytes_into(self, buf: Any, offset: int = 0) -> int:
+    def recv_bytes_into(self, buf: dynamic, offset: int = 0) -> int:
         """
         Receive bytes data into a writeable bytes-like object.
         Return the number of bytes read.
@@ -87,12 +87,21 @@ class Listener:
     def __init__(
         self, address: _Address | None = None, family: str | None = None, backlog: int = 1, authkey: bytes | None = None
     ) -> None
-    def accept(self) -> Connection[Incomplete, Incomplete]:
-        """
-        Accept a connection on the bound socket or named pipe of `self`.
+    if sys.platform != "win32":
+        def accept(self) -> Connection[Incomplete, Incomplete]:
+            """
+            Accept a connection on the bound socket or named pipe of `self`.
 
-        Returns a `Connection` object.
-        """
+            Returns a `Connection` object.
+            """
+
+    else:
+        def accept(self) -> Connection[Incomplete, Incomplete] | PipeConnection[Incomplete, Incomplete]:
+            """
+            Accept a connection on the bound socket or named pipe of `self`.
+
+            Returns a `Connection` object.
+            """
 
     def close(self) -> None:
         """
@@ -110,25 +119,34 @@ class Listener:
 
 # Any: send and recv methods unused
 if sys.version_info >= (3, 12):
-    def deliver_challenge(connection: Connection[Any, Any], authkey: bytes, digest_name: str = "sha256") -> None
+    def deliver_challenge(connection: _ConnectionBase[dynamic, dynamic], authkey: bytes, digest_name: str = "sha256") -> None
 
 else:
-    def deliver_challenge(connection: Connection[Any, Any], authkey: bytes) -> None
+    def deliver_challenge(connection: _ConnectionBase[dynamic, dynamic], authkey: bytes) -> None
 
-def answer_challenge(connection: Connection[Any, Any], authkey: bytes) -> None
+def answer_challenge(connection: _ConnectionBase[dynamic, dynamic], authkey: bytes) -> None
 def wait[Sent = Any, RecvT = Any](
-    object_list: Iterable[Connection[Sent, RecvT] | socket.socket | int], timeout: float | None = None
-) -> list[Connection[Sent, RecvT] | socket.socket | int]:
+    object_list: Iterable[_ConnectionBase[Sent, RecvT] | socket.socket | int], timeout: float | None = None
+) -> list[_ConnectionBase[Sent, RecvT] | socket.socket | int]:
     """
     Wait till an object in object_list is ready/readable.
 
     Returns list of those objects in object_list which are ready/readable.
     """
 
-def Client(address: _Address, family: str | None = None, authkey: bytes | None = None) -> Connection[Any, Any]:
-    """
-    Returns a connection to the address of a `Listener`
-    """
+if sys.platform != "win32":
+    def Client(address: _Address, family: str | None = None, authkey: bytes | None = None) -> Connection[dynamic, dynamic]:
+        """
+        Returns a connection to the address of a `Listener`
+        """
+
+else:
+    def Client(
+        address: _Address, family: str | None = None, authkey: bytes | None = None
+    ) -> Connection[dynamic, dynamic] | PipeConnection[Any, Any]:
+        """
+        Returns a connection to the address of a `Listener`
+        """
 
 # N.B. Keep this in sync with multiprocessing.context.BaseContext.Pipe.
 # _ConnectionBase is the common base class of Connection and PipeConnection

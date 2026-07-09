@@ -1,6 +1,6 @@
 from collections.abc import Callable, Generator, Iterable
 from re import Pattern
-from typing import Any, Final, Literal, TypeAlias, TypeVar
+from typing import Final, Literal, TypeAlias, TypeVar
 from xml.etree.ElementTree import Element
 
 xpath_tokenizer_re: Final[Pattern[str]]
@@ -26,12 +26,12 @@ class _SelectorContext:
     def __init__(self, root: Element) -> None
 
 def iterfind(  # type: ignore[overload-overlap]
-    elem: Element[Any], path: Literal[""], namespaces: dict[str, str] | None = None
+    elem: Element[dynamic], path: Literal[""], namespaces: dict[str, str] | None = None
 ) -> None
-def iterfind(elem: Element[Any], path: str, namespaces: dict[str, str] | None = None) -> Generator[Element]
+def iterfind(elem: Element[dynamic], path: str, namespaces: dict[str, str] | None = None) -> Generator[Element]
 
-def find(elem: Element[Any], path: str, namespaces: dict[str, str] | None = None) -> Element | None
-def findall(elem: Element[Any], path: str, namespaces: dict[str, str] | None = None) -> list[Element]
+def find(elem: Element[dynamic], path: str, namespaces: dict[str, str] | None = None) -> Element | None
+def findall(elem: Element[dynamic], path: str, namespaces: dict[str, str] | None = None) -> list[Element]
 
-def findtext(elem: Element[Any], path: str, default: None = None, namespaces: dict[str, str] | None = None) -> str | None
-def findtext[Element](elem: Element[Any], path: str, default: Element, namespaces: dict[str, str] | None = None) -> Element | str
+def findtext(elem: Element[dynamic], path: str, default: None = None, namespaces: dict[str, str] | None = None) -> str | None
+def findtext[Element](elem: Element[dynamic], path: str, default: Element, namespaces: dict[str, str] | None = None) -> Element | str

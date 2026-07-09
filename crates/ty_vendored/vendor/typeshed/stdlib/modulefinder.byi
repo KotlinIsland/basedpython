@@ -40,9 +40,9 @@ class ModuleFinder:
         excludes: Container[str] | None = None,
         replace_paths: Sequence[(str, str)] | None = None,
     ) -> None
-    def msg(self, level: int, str: str, *args: Any) -> None  # undocumented
-    def msgin(self, *args: Any) -> None  # undocumented
-    def msgout(self, *args: Any) -> None  # undocumented
+    def msg(self, level: int, str: str, *args: dynamic) -> None  # undocumented
+    def msgin(self, *args: dynamic) -> None  # undocumented
+    def msgout(self, *args: dynamic) -> None  # undocumented
     def run_script(self, pathname: str) -> None
     def load_file(self, pathname: str) -> None  # undocumented
     def import_hook(

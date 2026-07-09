@@ -25,11 +25,11 @@ final class make_encoder:
         """indent"""
 
     @property
-    def markers(self) -> dict[int, Any] | None:
+    def markers(self) -> dict[int, dynamic] | None:
         """markers"""
 
     @property
-    def default(self) -> Callable[[Any], Any]:
+    def default(self) -> Callable[[dynamic], dynamic]:
         """default"""
 
     @property
@@ -42,8 +42,8 @@ final class make_encoder:
 
     def __new__(
         cls,
-        markers: dict[int, Any] | None,
-        default: Callable[[Any], Any],
+        markers: dict[int, dynamic] | None,
+        default: Callable[[dynamic], dynamic],
         encoder: Callable[[str], str],
         indent: str | None,
         key_separator: str,
@@ -52,25 +52,25 @@ final class make_encoder:
         skipkeys: bool,
         allow_nan: bool,
     ) -> Self
-    def __call__(self, obj: object, _current_indent_level: int) -> Any:
+    def __call__(self, obj: object, _current_indent_level: int) -> dynamic:
         """Call self as a function."""
 
 final class make_scanner:
     """JSON scanner object"""
 
     if sys.version_info >= (3, 15):
-        array_hook: Any
-    object_hook: Any
+        array_hook: dynamic
+    object_hook: dynamic
     """object_hook"""
 
-    object_pairs_hook: Any
-    parse_int: Any
+    object_pairs_hook: dynamic
+    parse_int: dynamic
     """parse_int"""
 
-    parse_constant: Any
+    parse_constant: dynamic
     """parse_constant"""
 
-    parse_float: Any
+    parse_float: dynamic
     """parse_float"""
 
     strict: bool
@@ -82,19 +82,23 @@ final class make_scanner:
         """Call self as a function."""
 
 def encode_basestring(s: str, /) -> str:
-    """encode_basestring(string) -> string
-
-    Return a JSON representation of a Python string
-    """
+    """Return a JSON representation of a Python string"""
 
 def encode_basestring_ascii(s: str, /) -> str:
-    """encode_basestring_ascii(string) -> string
-
-    Return an ASCII-only JSON representation of a Python string
-    """
+    """Return an ASCII-only JSON representation of a Python string"""
 
 if sys.version_info >= (3, 15):
-    def scanstring(pystr: str, end: int, strict: bool = True, /) -> (str, int)
+    def scanstring(pystr: str, end: int, strict: bool = True, /) -> (str, int):
+        """Scan the string s for a JSON string.
+
+        End is the index of the character in s after the quote that started the
+        JSON string. Unescapes all valid JSON string escape sequences and raises
+        ValueError on attempt to decode an invalid string. If strict is False
+        then literal control characters are allowed in the string.
+
+        Returns a tuple of the decoded string and the index of the character in
+        s after the end quote.
+        """
 
 else:
     def scanstring(string: str, end: int, strict: bool = True) -> (str, int):

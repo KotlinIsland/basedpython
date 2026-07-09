@@ -17,16 +17,10 @@ def py_encode_basestring_ascii(s: str) -> str:  # undocumented
     """Return an ASCII-only JSON representation of a Python string"""
 
 def encode_basestring(s: str, /) -> str:  # undocumented
-    """encode_basestring(string) -> string
-
-    Return a JSON representation of a Python string
-    """
+    """Return a JSON representation of a Python string"""
 
 def encode_basestring_ascii(s: str, /) -> str:  # undocumented
-    """encode_basestring_ascii(string) -> string
-
-    Return an ASCII-only JSON representation of a Python string
-    """
+    """Return an ASCII-only JSON representation of a Python string"""
 
 class JSONEncoder:
     """Extensible JSON <https://json.org> encoder for Python data structures.
@@ -36,7 +30,7 @@ class JSONEncoder:
     +-------------------+---------------+
     | Python            | JSON          |
     +===================+===============+
-    | dict              | object        |
+    | dict, frozendict  | object        |
     +-------------------+---------------+
     | list, tuple       | array         |
     +-------------------+---------------+
@@ -121,7 +115,7 @@ class JSONEncoder:
 
         """
 
-    def default(self, o: Any) -> Any:
+    def default(self, o: dynamic) -> dynamic:
         """Implement this method in a subclass such that it returns
         a serializable object for ``o``, or calls the base implementation
         (to raise a ``TypeError``).
@@ -141,7 +135,7 @@ class JSONEncoder:
 
         """
 
-    def encode(self, o: Any) -> str:
+    def encode(self, o: dynamic) -> str:
         """Return a JSON string representation of a Python data structure.
 
         >>> from json.encoder import JSONEncoder
@@ -150,7 +144,7 @@ class JSONEncoder:
 
         """
 
-    def iterencode(self, o: Any, _one_shot: bool = False) -> Iterator[str]:
+    def iterencode(self, o: dynamic, _one_shot: bool = False) -> Iterator[str]:
         """Encode the given object and yield each string
         representation as available.
 

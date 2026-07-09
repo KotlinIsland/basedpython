@@ -24,11 +24,11 @@ class DBAPICursor(Protocol):
     # optional:
     # def callproc(self, procname: str, parameters: Sequence[Any] = ..., /) -> Sequence[Any]: ...
     def close(self) -> object
-    def execute(self, operation: str, parameters: Sequence[Any] | Mapping[str, Any] = ..., /) -> object
-    def executemany(self, operation: str, seq_of_parameters: Sequence[Sequence[Any]], /) -> object
-    def fetchone(self) -> Sequence[Any] | None
-    def fetchmany(self, size: int = ..., /) -> Sequence[Sequence[Any]]
-    def fetchall(self) -> Sequence[Sequence[Any]]
+    def execute(self, operation: str, parameters: Sequence[dynamic] | Mapping[str, dynamic] = ..., /) -> object
+    def executemany(self, operation: str, seq_of_parameters: Sequence[Sequence[dynamic]], /) -> object
+    def fetchone(self) -> Sequence[dynamic] | None
+    def fetchmany(self, size: int = ..., /) -> Sequence[Sequence[dynamic]]
+    def fetchall(self) -> Sequence[Sequence[dynamic]]
     # optional:
     # def nextset(self) -> None | Literal[True]: ...
     arraysize: int

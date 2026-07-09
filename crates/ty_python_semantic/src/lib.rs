@@ -4,7 +4,8 @@
 )]
 use crate::lint::{LintRegistry, LintRegistryBuilder};
 use crate::suppression::{
-    IGNORE_COMMENT_UNKNOWN_RULE, INVALID_IGNORE_COMMENT, UNUSED_TYPE_IGNORE_COMMENT,
+    BLANKET_IGNORE_COMMENT, IGNORE_COMMENT_UNKNOWN_RULE, INVALID_IGNORE_COMMENT,
+    UNUSED_TYPE_IGNORE_COMMENT,
 };
 use crate::types::check_types;
 pub use db::Db;
@@ -87,6 +88,7 @@ pub fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNUSED_TYPE_IGNORE_COMMENT);
     registry.register_lint(&IGNORE_COMMENT_UNKNOWN_RULE);
     registry.register_lint(&INVALID_IGNORE_COMMENT);
+    registry.register_lint(&BLANKET_IGNORE_COMMENT);
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
@@ -242,4 +244,4 @@ impl IOErrorDiagnostic {
 /// values that will soon converge, but where unioning in the early value causes an
 /// unrecoverable loss of precision. This constant controls how many iterations
 /// are considered likely to produce "tainted" results that should be discarded.
-pub(crate) const TAINTED_CYCLES: u32 = 1;
+pub(crate) const TAINTED_CYCLES: u32 = 3;

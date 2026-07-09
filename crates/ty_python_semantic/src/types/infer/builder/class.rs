@@ -1,7 +1,8 @@
 use crate::place::Place;
 use crate::types::{
-    CallArguments, DataclassFlags, DataclassParams, KnownClass, KnownInstanceType,
-    MemberLookupPolicy, SpecialFormType, StaticClassLiteral, SubclassOfType, Type, TypeContext,
+    CallArguments, ClassLiteralFlags, DataclassFlags, DataclassParams, KnownClass,
+    KnownInstanceType, MemberLookupPolicy, SpecialFormType, StaticClassLiteral, SubclassOfType,
+    Type, TypeContext, TypedDictModule,
     call::CallError,
     callable::CallableFunctionProvenance,
     function::KnownFunction,
@@ -10,7 +11,6 @@ use crate::types::{
         builder::{DeclaredAndInferredType, DeferredExpressionState},
         original_class_type,
     },
-    signatures::ParameterForm,
     special_form::TypeQualifier,
 };
 use ruff_python_ast::name::Name;
@@ -35,22 +35,41 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
         self.infer_type_parameters(type_params);
 
-        if let Some(arguments) = class.arguments.as_deref() {
+        if class.arguments.is_some() {
             let defer_class_args = self.in_stub() || self.is_basedpython_file();
             let previous_deferred_state =
                 std::mem::replace(&mut self.deferred_state, defer_class_args.into());
-            let mut call_arguments =
-                CallArguments::from_arguments(arguments, |arg_or_keyword, splatted_value| {
-                    let ty = self.infer_expression(splatted_value, TypeContext::default());
-                    if let ast::ArgOrKeyword::Arg(argument) = arg_or_keyword
-                        && argument.is_starred_expr()
-                    {
-                        self.store_expression_type(argument, ty);
-                    }
+
+            // PEP 695 class headers are inferred in the type-parameter scope, before the completed
+            // class type is available. Infer the bases first because `extra_items=T` is an
+            // annotation in `class C[T](TypedDict, extra_items=T)`, but an ordinary value argument
+            // in `class C[T](Base, extra_items=T)`.
+            let mut is_typed_dict = false;
+
+            for base in class.bases() {
+                let ty = if let ast::Expr::Starred(starred) = base {
+                    let ty = self.infer_expression(&starred.value, TypeContext::default());
+                    self.store_expression_type(base, ty);
                     ty
-                });
-            let argument_forms = vec![Some(ParameterForm::Value); call_arguments.len()];
-            self.infer_argument_types(arguments, &mut call_arguments, &argument_forms);
+                } else {
+                    self.infer_expression(base, TypeContext::default())
+                };
+                is_typed_dict |= match ty {
+                    ty if TypedDictModule::from_type(self.db(), ty).is_some() => true,
+                    Type::ClassLiteral(class) => class.is_typed_dict(self.db()),
+                    Type::GenericAlias(alias) => alias.is_typed_dict(self.db()),
+                    _ => false,
+                };
+            }
+
+            for keyword in class.keywords() {
+                if is_typed_dict && keyword.arg.as_deref() == Some("extra_items") {
+                    self.infer_extra_items_kwarg(&keyword.value);
+                } else {
+                    self.infer_expression(&keyword.value, TypeContext::default());
+                }
+            }
+
             self.deferred_state = previous_deferred_state;
         }
 
@@ -152,6 +171,29 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         }
         let mut dataclass_transformer_params = None;
         let mut total_ordering = false;
+        let has_explicit_bases = class_node
+            .arguments
+            .as_deref()
+            .is_some_and(|arguments| !arguments.args.is_empty());
+        let has_explicit_metaclass = class_node
+            .arguments
+            .as_deref()
+            .is_some_and(|arguments| arguments.find_keyword("metaclass").is_some());
+        let mut class_flags = ClassLiteralFlags::empty();
+        class_flags.set(ClassLiteralFlags::SEALED, is_sealed);
+        class_flags.set(
+            ClassLiteralFlags::HAS_DECORATORS,
+            !class_node.decorator_list.is_empty(),
+        );
+        class_flags.set(
+            ClassLiteralFlags::HAS_TYPE_PARAMS,
+            class_node.type_params.is_some(),
+        );
+        class_flags.set(ClassLiteralFlags::HAS_EXPLICIT_BASES, has_explicit_bases);
+        class_flags.set(
+            ClassLiteralFlags::HAS_EXPLICIT_METACLASS,
+            has_explicit_metaclass,
+        );
         let infer_original_class_ty = |deprecated,
                                        type_check_only,
                                        dataclass_params,
@@ -167,7 +209,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 }
                 _ => Type::from(StaticClassLiteral::new(
                     db,
-                    name.id.clone(),
+                    &name.id,
                     body_scope,
                     maybe_known_class,
                     deprecated,
@@ -175,7 +217,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     dataclass_params,
                     dataclass_transformer_params,
                     total_ordering,
-                    is_sealed,
+                    class_flags,
                 )),
             }
         };
@@ -456,7 +498,6 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             InferenceFlags::IN_TYPE_EXPRESSION,
             previously_in_type_expression,
         );
-        self.typevar_binding_context = previous_typevar_binding_context;
 
         if let Some(arguments) = class.arguments.as_deref()
             && let Some(extra_items_keyword) = arguments.find_keyword("extra_items")
@@ -475,6 +516,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 self.infer_expression(&extra_items_keyword.value, TypeContext::default());
             }
         }
+
+        self.typevar_binding_context = previous_typevar_binding_context;
     }
 }
 

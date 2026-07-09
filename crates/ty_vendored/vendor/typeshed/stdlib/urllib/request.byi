@@ -318,7 +318,7 @@ def parse_keqv_list(l: list[str]) -> dict[str, str]:
     """Parse list of key=value strings where keys are not duplicated."""
 
 if sys.platform == "win32" or sys.platform == "darwin":
-    def proxy_bypass(host: str) -> Any:  # undocumented
+    def proxy_bypass(host: str) -> dynamic:  # undocumented
         """Return True, if host should be bypassed.
 
         Checks proxy settings gathered from the environment, if specified,
@@ -327,7 +327,7 @@ if sys.platform == "win32" or sys.platform == "darwin":
         """
 
 else:
-    def proxy_bypass(host: str, proxies: Mapping[str, str] | None = None) -> Any:  # undocumented
+    def proxy_bypass(host: str, proxies: Mapping[str, str] | None = None) -> dynamic:  # undocumented
         """Test if proxies should not be used for a particular host.
 
         Checks the proxy dict for the value of no_proxy, which should
@@ -382,7 +382,7 @@ class OpenerDirector:
     addheaders: list[(str, str)]
     def add_handler(self, handler: BaseHandler) -> None
     def open(self, fullurl: str | Request, data: _DataType = None, timeout: float | None = ...) -> _UrlopenRet
-    def error(self, proto: str, *args: Any) -> _UrlopenRet
+    def error(self, proto: str, *args: dynamic) -> _UrlopenRet
     def close(self) -> None
 
 class BaseHandler:
@@ -524,7 +524,7 @@ class AbstractHTTPHandler(BaseHandler):  # undocumented
 
     def set_http_debuglevel(self, level: int) -> None
     def do_request_(self, request: Request) -> Request
-    def do_open(self, http_class: _HTTPConnectionProtocol, req: Request, **http_conn_args: Any) -> HTTPResponse:
+    def do_open(self, http_class: _HTTPConnectionProtocol, req: Request, **http_conn_args: dynamic) -> HTTPResponse:
         """Return an HTTPResponse object for the request, using http_class.
 
         http_class must implement the HTTPConnection API from http.client.
@@ -716,6 +716,7 @@ if sys.version_info < (3, 14):
             self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer | None = None
         ) -> _UrlopenRet | addinfourl | None:  # undocumented
             """Error 307 -- relocated, but turn POST into error."""
+
         if sys.version_info >= (3, 11):
             def http_error_308(
                 self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: ReadableBuffer | None = None

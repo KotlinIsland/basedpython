@@ -79,7 +79,7 @@ impl Transformer for Sentinel {
                                 .with_quote_style(ruff_python_ast::str::Quote::Double),
                         }),
                     })]),
-                    keywords: Box::new([]),
+                    keywords: thin_vec::ThinVec::new(),
                 },
                 is_cast: false,
                 is_string_tag: false,

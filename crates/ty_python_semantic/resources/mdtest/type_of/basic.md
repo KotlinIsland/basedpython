@@ -256,9 +256,10 @@ _: type[A, B]
 from collections.abc import Callable
 
 def f(
+    # error: [missing-type-argument]
     x: type[Callable],  # error: [invalid-type-form]
     y: type[Callable[[int], str]],  # error: [invalid-type-form]
-    # error: [invalid-type-form] "Special form `typing.Callable` expected exactly two arguments"
+    # error: [invalid-type-form] "Special form `Callable` expected exactly two arguments"
     # error: [invalid-type-form] "The first argument to `Callable` must be either a list of types, ParamSpec, Concatenate, or `...`"
     z: type[Callable[int]],  # error: [invalid-type-form] "The argument to `type[]` must be a class object type"
 ):
@@ -270,7 +271,7 @@ def f(
 ## As a base class
 
 ```py
-from ty_extensions import reveal_mro
+from ty_extensions._internal import reveal_mro
 
 class Foo(type[int]): ...
 
@@ -315,7 +316,8 @@ python-version = "3.12"
 
 ```py
 from typing import final, Any
-from ty_extensions import is_assignable_to, is_subtype_of, is_disjoint_from, static_assert
+from ty_extensions import static_assert
+from ty_extensions._internal import is_assignable_to, is_subtype_of, is_disjoint_from
 
 class Biv[T]: ...
 
@@ -378,8 +380,7 @@ def _():
     static_assert(not is_subtype_of(type[InvSub[bool]], type[InvSub[int]]))
     static_assert(not is_subtype_of(type[InvSub[int]], type[InvSub[bool]]))
     static_assert(is_disjoint_from(type[InvSub[int]], type[InvSub[str]]))
-    # TODO: These are disjoint.
-    static_assert(not is_disjoint_from(type[InvSub[bool]], type[InvSub[int]]))
+    static_assert(is_disjoint_from(type[InvSub[bool]], type[InvSub[int]]))
 
 def _[T]():
     static_assert(is_subtype_of(type[BivSub[T]], type[BivSub[Any]]))
@@ -449,10 +450,8 @@ def _():
 
     static_assert(not is_subtype_of(type[InvSub[bool]], type[Inv[int]]))
     static_assert(not is_subtype_of(type[InvSub[int]], type[Inv[bool]]))
-    # TODO: These are disjoint.
-    static_assert(not is_disjoint_from(type[InvSub[bool]], type[Inv[int]]))
-    # TODO: These are disjoint.
-    static_assert(not is_disjoint_from(type[InvSub[int]], type[Inv[bool]]))
+    static_assert(is_disjoint_from(type[InvSub[bool]], type[Inv[int]]))
+    static_assert(is_disjoint_from(type[InvSub[int]], type[Inv[bool]]))
 
 def _[T]():
     static_assert(is_subtype_of(type[BivSub[T]], type[Biv[Any]]))
@@ -486,7 +485,8 @@ def _[T]():
 
 ```py
 from typing import Callable, Protocol
-from ty_extensions import is_assignable_to, is_subtype_of, static_assert, TypeOf, Top
+from ty_extensions import static_assert, Top
+from ty_extensions._internal import TypeOf, is_assignable_to, is_subtype_of
 
 class Foo:
     def __init__(self): ...

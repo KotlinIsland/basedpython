@@ -181,7 +181,8 @@ A class `A` is a subtype of `type[T]` if any instance of `A` is a subtype of `T`
 
 ```py
 from typing import Any, Callable, Protocol
-from ty_extensions import is_assignable_to, is_subtype_of, is_disjoint_from, static_assert
+from ty_extensions import static_assert
+from ty_extensions._internal import is_assignable_to, is_subtype_of, is_disjoint_from
 
 class Callback[T](Protocol):
     def __call__(self, *args, **kwargs) -> T: ...
@@ -282,6 +283,29 @@ def _[T: (int, str)](_: T):
 def _[T: (int | str, int)](_: T):
     static_assert(is_subtype_of(type[int], type[T]))
     static_assert(not is_disjoint_from(type[int], type[T]))
+```
+
+## Type aliases in final upper bounds
+
+A type variable whose upper bound resolves to a final class has only one possible class object:
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import final
+from ty_extensions._internal import TypeOf
+
+@final
+class FinalClass: ...
+
+type Alias = FinalClass
+
+def accepts_exact(cls: TypeOf[FinalClass]) -> None: ...
+def bounded[T: Alias](cls: type[T]) -> None:
+    accepts_exact(cls)
 ```
 
 ## Metaclass instances
@@ -459,7 +483,7 @@ from typing import final
 class P[T]:
     x: T
 
-def expects_type_p(x: type[P]):
+def expects_type_p(x: type[P]):  # error: [missing-type-argument]
     pass
 
 def expects_type_p_of_int(x: type[P[int]]):
@@ -519,7 +543,7 @@ This also works with `ParamSpec`:
 @final
 class C[**P]: ...
 
-def expects_type_c(f: type[C]): ...
+def expects_type_c(f: type[C]): ...  # error: [missing-type-argument]
 def expects_type_c_of_int_and_str(x: type[C[int, str]]): ...
 
 # OK, the unspecialized `C` is assignable to `type[C[...]]`
@@ -571,7 +595,7 @@ expects_type_c_default_of_int_str(C[str, int])
 the class that the instance-type refers to.
 
 ```py
-from ty_extensions import RegularCallableTypeOf
+from ty_extensions._internal import RegularCallableTypeOf
 
 class TakesStrInConstructor:
     def __init__(self, x: int, y: str | None = None): ...

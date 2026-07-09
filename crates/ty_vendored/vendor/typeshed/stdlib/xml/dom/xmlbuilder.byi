@@ -1,7 +1,7 @@
 """Implementation of the DOM Level 3 'LS-Load' feature."""
 
 from _typeshed import SupportsRead
-from typing import Any, Final, Literal, NoReturn
+from typing import Final, Literal, NoReturn
 from xml.dom.minidom import Document, Node, _DOMErrorHandler
 
 __all__ = ["DOMBuilder", "DOMEntityResolver", "DOMInputSource"]
@@ -46,7 +46,7 @@ class DOMBuilder:
     def supportsFeature(self, name: str) -> bool
     def canSetFeature(self, name: str, state: Literal[1, 0]) -> bool
     # getFeature could return any attribute from an instance of `Options`
-    def getFeature(self, name: str) -> Any
+    def getFeature(self, name: str) -> dynamic
     def parseURI(self, uri: str) -> Document
     def parse(self, input: DOMInputSource) -> Document
     def parseWithContext(self, input: DOMInputSource, cnode: Node, action: Literal[1, 2, 3, 4]) -> NoReturn

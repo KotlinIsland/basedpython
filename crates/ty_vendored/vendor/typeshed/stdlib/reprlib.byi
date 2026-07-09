@@ -49,18 +49,18 @@ class Repr:
             indent: str | int | None = None,
         ) -> None
 
-    def repr(self, x: Any) -> str
-    def repr1(self, x: Any, level: int) -> str
+    def repr(self, x: dynamic) -> str
+    def repr1(self, x: dynamic, level: int) -> str
     def repr_tuple(self, x: (*: Any), level: int) -> str
-    def repr_list(self, x: list[Any], level: int) -> str
-    def repr_array(self, x: array[Any], level: int) -> str
-    def repr_set(self, x: set[Any], level: int) -> str
-    def repr_frozenset(self, x: frozenset[Any], level: int) -> str
-    def repr_deque(self, x: deque[Any], level: int) -> str
-    def repr_dict(self, x: dict[Any, Any], level: int) -> str
+    def repr_list(self, x: list[dynamic], level: int) -> str
+    def repr_array(self, x: array[dynamic], level: int) -> str
+    def repr_set(self, x: set[dynamic], level: int) -> str
+    def repr_frozenset(self, x: frozenset[dynamic], level: int) -> str
+    def repr_deque(self, x: deque[dynamic], level: int) -> str
+    def repr_dict(self, x: dict[dynamic, dynamic], level: int) -> str
     def repr_str(self, x: str, level: int) -> str
     def repr_int(self, x: int, level: int) -> str
-    def repr_instance(self, x: Any, level: int) -> str
+    def repr_instance(self, x: dynamic, level: int) -> str
 
 aRepr: Repr
 

@@ -75,7 +75,7 @@ publish-jobs = ["./publish-pypi", "./publish-wasm"]
 # versions) that don't apply to the fork; cleared (takes effect on `dist generate`)
 post-announce-jobs = []
 # Custom permissions for GitHub Jobs
-github-custom-job-permissions = { "build-docker" = { packages = "write", contents = "read", id-token = "write", attestations = "write" }, "publish-wasm" = { contents = "read", id-token = "write", packages = "write" }, "publish-mirror" = { contents = "read" } }
+github-custom-job-permissions = { "build-docker" = { packages = "write", contents = "read", id-token = "write", attestations = "write" }, "publish-wasm" = { contents = "read", id-token = "write", packages = "write" }, "publish-crates" = { contents = "read" }, "publish-mirror" = { contents = "read" } }
 # Whether to install an updater program
 install-updater = false
 # Path that installers should place binaries in

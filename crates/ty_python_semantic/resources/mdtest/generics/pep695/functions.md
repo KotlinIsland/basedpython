@@ -35,6 +35,30 @@ def return_value[T](x: T) -> T:
     return x
 ```
 
+## Compatibility with legacy type variables
+
+A function with its own PEP 695 type parameter list cannot also introduce a legacy type variable.
+Functions without a PEP 695 list can still use the traditional implicit generic-function syntax.
+
+```py
+from typing import TypeVar
+
+K = TypeVar("K")
+L = TypeVar("L")
+
+def identity(value: K) -> K:
+    return value
+
+class C[V]:
+    def legacy(self, value: V, other: K) -> V | K:
+        raise NotImplementedError
+
+    # error: [unbound-type-variable] "Legacy type variable `K` cannot be used in a function with PEP 695 type parameters"
+    # error: [unbound-type-variable] "Legacy type variable `L` cannot be used in a function with PEP 695 type parameters"
+    def mixed[M](self, value: M, other: K, another: L) -> M | K | L:
+        raise NotImplementedError
+```
+
 Each typevar must also appear _somewhere_ in the parameter list:
 
 ```py
@@ -358,6 +382,23 @@ reveal_type(two_params("a", "b"))  # revealed: Literal["a", "b"]
 reveal_type(two_params("a", 1))  # revealed: Literal["a", 1]
 ```
 
+Recursive occurrences of a generic function should be treated as fresh generic callable occurrences.
+The recursive call's typevars are inferable at the call site, even though the function body's own
+typevars are non-inferable.
+
+```py
+def recursive_identity[T](t: T) -> T:
+    reveal_type(recursive_identity(t))  # revealed: T@recursive_identity
+    return t
+
+def pair[A, B](a: A, b: B) -> tuple[A, B]:
+    return (a, b)
+
+def recursive_pair[T](t: T) -> T:
+    reveal_type(pair(recursive_pair(t), recursive_pair(1)))  # revealed: tuple[T@recursive_pair, Literal[1]]
+    return t
+```
+
 When one of the parameters is a union, we attempt to find the smallest specialization that satisfies
 all of the constraints.
 
@@ -664,7 +705,8 @@ Protocol types can be used as TypeVar bounds, just like nominal types.
 
 ```py
 from typing import Any, Protocol
-from ty_extensions import static_assert, is_assignable_to
+from ty_extensions import static_assert
+from ty_extensions._internal import is_assignable_to
 
 class SupportsClose(Protocol):
     def close(self) -> None: ...
@@ -743,20 +785,47 @@ def decorated[T](t: T) -> None:
 ## Attribute access on `Callable`-bounded TypeVars
 
 ```py
-from typing import Callable
+from typing import Any, Callable
 
-def my_decorator[T: Callable](f: T) -> None:
+def my_decorator[T: Callable[..., Any]](f: T) -> None:
     # error: [unresolved-attribute]
     f.whatever
     # error: [unresolved-attribute]
     f.whatever = 1
 
-class Box[T: Callable]:
+class Box[T: Callable[..., Any]]:
     cls: type[T]
 
-def specialized(box: Box[Callable]) -> None:
+def specialized(box: Box[Callable[..., Any]]) -> None:
     # error: [unresolved-attribute]
     box.cls.whatever
+```
+
+## Attribute access on TypeVars bounded by `type[...]`
+
+Regression test for <https://github.com/astral-sh/ty/issues/3782>.
+
+```py
+from typing import ClassVar, Self
+
+class A:
+    attr: ClassVar[str]
+    current: ClassVar[Self]
+
+    @classmethod
+    def create(cls) -> Self:
+        return cls()
+
+class B:
+    attr: ClassVar[int]
+
+def single_bound[T: type[A]](cls: T) -> None:
+    reveal_type(cls.attr)  # revealed: str
+    reveal_type(cls.current)  # revealed: T'instance@single_bound
+    reveal_type(cls.create())  # revealed: T'instance@single_bound
+
+def union_bound[T: type[A] | type[B]](cls: T) -> None:
+    reveal_type(cls.attr)  # revealed: str | int
 ```
 
 ## Solving TypeVars with upper bounds in unions
@@ -898,7 +967,7 @@ reveal_type(name)  # revealed: Name
 
 ## `self` in PEP 695 generic methods
 
-When a generic method uses a PEP 695 generic context, an implict or explicit annotation of
+When a generic method uses a PEP 695 generic context, an implicit or explicit annotation of
 `self: Self` is still part of the full generic context:
 
 ```py
@@ -937,7 +1006,7 @@ specializations of a generic function.
 
 ```py
 from typing import Any, Callable, NoReturn, overload, Self
-from ty_extensions import generic_context, into_regular_callable
+from ty_extensions._internal import generic_context, into_regular_callable
 
 def accepts_callable[**P, R](callable: Callable[P, R]) -> Callable[P, R]:
     return callable
@@ -1005,16 +1074,15 @@ class ClassWithNoReturnMetatype(metaclass=Meta):
     def __new__(cls, *args: Any, **kwargs: Any) -> Self:
         raise NotImplementedError
 
-# TODO: The return types here are wrong, because we end up creating a constraint (Never ≤ R), which
-# we confuse with "R has no lower bound".
 # revealed: (...) -> Never
 reveal_type(into_regular_callable(ClassWithNoReturnMetatype))
-# TODO: revealed: (...) -> Never
-# revealed: (...) -> Unknown
+# revealed: (...) -> Never
 reveal_type(accepts_callable(ClassWithNoReturnMetatype))
-# TODO: revealed: Never
-# revealed: Unknown
-reveal_type(accepts_callable(ClassWithNoReturnMetatype)())
+
+# Keep this in a function so the top-level mdtest block remains reachable after revealing `Never`.
+def _():
+    # revealed: Never
+    reveal_type(accepts_callable(ClassWithNoReturnMetatype)())
 
 class Proxy: ...
 
@@ -1067,16 +1135,33 @@ class GenericClass[T]:
 def _(x: list[str]):
     # revealed: [T](x: list[T], y: list[T]) -> GenericClass[T]
     reveal_type(into_regular_callable(GenericClass))
-    # revealed: ty_extensions.GenericContext[T@GenericClass]
+    # revealed: ty_extensions._internal.GenericContext[T@GenericClass]
     reveal_type(generic_context(into_regular_callable(GenericClass)))
 
     # revealed: [T](x: list[T], y: list[T]) -> GenericClass[T]
     reveal_type(accepts_callable(GenericClass))
-    # revealed: ty_extensions.GenericContext[T@GenericClass]
+    # revealed: ty_extensions._internal.GenericContext[T@GenericClass]
     reveal_type(generic_context(accepts_callable(GenericClass)))
 
     # revealed: GenericClass[str]
     reveal_type(accepts_callable(GenericClass)(x, x))
+```
+
+### Callable instances
+
+Generic parameters can be inferred from the `__call__` method of a class instance.
+
+```py
+from typing import Callable
+
+def call[R](callable: Callable[[], R]) -> R:
+    return callable()
+
+class MyCallable:
+    def __call__(self) -> int:
+        return 1
+
+reveal_type(call(MyCallable()))  # revealed: int
 ```
 
 ### `Callable`s that return union types
@@ -1223,7 +1308,7 @@ def g[S: (bool, str)](x: S) -> S:
 ## Display ordering
 
 Where possible, we want the types that appear in inferred specializations to line up with the types
-that are listed in the source code. We don't want arbitarily reorder e.g. union elements as part of
+that are listed in the source code. We don't want arbitrarily reorder e.g. union elements as part of
 finding a solution.
 
 ```py

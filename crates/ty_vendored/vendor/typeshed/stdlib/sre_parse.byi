@@ -5,7 +5,7 @@ from collections.abc import Iterable
 from re import Match, Pattern as _Pattern
 from sre_constants import *
 from sre_constants import _NamedIntConstant as _NIC, error as _Error
-from typing import Any, Final, TypeAlias
+from typing import Final, TypeAlias
 
 SPECIAL_CHARS: Final = ".\\[{()*+?^$|"
 REPEAT_CHARS: Final = "*+?{"
@@ -62,11 +62,11 @@ class SubPattern:
 
 class Tokenizer:
     istext: bool
-    string: Any
+    string: dynamic
     decoded_string: str
     index: int
     next: str | None
-    def __init__(self, string: Any) -> None
+    def __init__(self, string: dynamic) -> None
     def match(self, char: str) -> bool
     def get(self) -> str | None
     def getwhile(self, n: int, charset: Iterable[str]) -> str
@@ -88,13 +88,13 @@ _TemplateType: TypeAlias = tuple[list[tuple[int, int]], list[str | None]]
 _TemplateByteType: TypeAlias = tuple[list[tuple[int, int]], list[bytes | None]]
 
 if sys.version_info >= (3, 12):
-    def parse_template(source: str, pattern: _Pattern[Any]) -> _TemplateType
-    def parse_template(source: bytes, pattern: _Pattern[Any]) -> _TemplateByteType
+    def parse_template(source: str, pattern: _Pattern[dynamic]) -> _TemplateType
+    def parse_template(source: bytes, pattern: _Pattern[dynamic]) -> _TemplateByteType
 else:
-    def parse_template(source: str, state: _Pattern[Any]) -> _TemplateType
-    def parse_template(source: bytes, state: _Pattern[Any]) -> _TemplateByteType
+    def parse_template(source: str, state: _Pattern[dynamic]) -> _TemplateType
+    def parse_template(source: bytes, state: _Pattern[dynamic]) -> _TemplateByteType
 
 def parse(str: str, flags: int = 0, state: State | None = None) -> SubPattern
 
 if sys.version_info < (3, 12):
-    def expand_template(template: _TemplateType, match: Match[Any]) -> str
+    def expand_template(template: _TemplateType, match: Match[dynamic]) -> str

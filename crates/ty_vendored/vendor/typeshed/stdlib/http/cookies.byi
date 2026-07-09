@@ -136,17 +136,18 @@ class Morsel[in out Element](dict[str, Any]):
     def js_output(self, attrs: Container[str] | None = None) -> str
     def OutputString(self, attrs: Container[str] | None = None) -> str
     def __eq__(self, morsel: object) -> bool
-    def __setitem__(self, K: str, V: Any) -> None
-    def __class_getitem__(cls, item: Any, /) -> GenericAlias:
+    def __setitem__(self, K: str, V: dynamic) -> None
+    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
-        E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
+        For example, for t = list[int], t.__origin__ is list and t.__args__
+        is (int,).
         """
 
 class BaseCookie[in out Element](dict[str, Morsel[Element]]):
     """A container class for a set of Morsels."""
 
-    def __init__(self, input: str | SupportsItems[str, str | Morsel[Any]] | None = None) -> None
+    def __init__(self, input: str | SupportsItems[str, str | Morsel[dynamic]] | None = None) -> None
     def value_decode(self, val: str) -> (Element, str):
         """real_value, coded_value = value_decode(STRING)
         Called prior to setting a cookie's value from the network
@@ -164,11 +165,12 @@ class BaseCookie[in out Element](dict[str, Morsel[Element]]):
 
     def output(self, attrs: Container[str] | None = None, header: str = "Set-Cookie:", sep: str = "\r\n") -> str:
         """Return a string suitable for HTTP."""
+
     __str__ = output
     def js_output(self, attrs: Container[str] | None = None) -> str:
         """Return a string suitable for JavaScript."""
 
-    def load(self, rawdata: str | SupportsItems[str, str | Morsel[Any]]) -> None:
+    def load(self, rawdata: str | SupportsItems[str, str | Morsel[dynamic]]) -> None:
         """Load cookies from a string (presumably HTTP_COOKIE) or
         from a dictionary.  Loading cookies from a dictionary 'd'
         is equivalent to calling:
