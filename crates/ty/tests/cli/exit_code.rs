@@ -48,7 +48,7 @@ fn only_warnings_and_exit_zero_on_warning() -> anyhow::Result<()> {
 #[test]
 fn error_on_warning_conflicts_with_exit_zero_on_warning() -> anyhow::Result<()> {
     let case = CliTest::with_file("test.py", "")?
-        .with_filter(r"Usage: ty(?:\.exe)? check", "Usage: ty check");
+        .with_filter(r"Usage: by(?:\.exe)? check", "Usage: by check");
 
     assert_cmd_snapshot!(case.command().arg("--error-on-warning").arg("--exit-zero-on-warning"), @"
     success: false
