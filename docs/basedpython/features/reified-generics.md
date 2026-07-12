@@ -22,9 +22,12 @@ PEP 695 already compiles the type-parameter list as an implicit enclosing
 scope, so inside `f` the name `T` is a *free variable* of the function's code
 object — `f.__code__.co_freevars == ("T",)` — bound to a cell holding the
 `TypeVar`. reification just swaps that cell's contents from the `TypeVar` to
-the concrete type argument before the body runs. no bytecode is rewritten and
-no name resolution is special-cased; we reuse the closure machinery cpython
-already builds
+the concrete type argument before the body runs. the swap is keyed by
+free-variable *name*, so every other cell — a captured outer local, the
+implicit `__class__` behind zero-arg `super()` — carries over untouched, and
+the rebuilt function keeps its parameter defaults, keyword-only defaults and
+qualname. no bytecode is rewritten and no name resolution is special-cased; we
+reuse the closure machinery cpython already builds
 
 ## desugaring
 
@@ -53,11 +56,19 @@ f[int](1)   # not stripped — routes through generic.__getitem__
 the `generic` wrapper, emitted into the preamble:
 
 ```python
-@dataclass
 class generic:
-    fn: object
-    args: object = None
-    instance: object = None
+    def __init__(self, fn, args=None, instance=None):
+        self.fn = fn
+        self.args = args
+        self.instance = instance
+
+    def __repr__(self):
+        return f"<generic {self.fn!r}>"
+
+    def __getattr__(self, name):
+        if name == "fn":
+            raise AttributeError(name)
+        return getattr(self.fn, name)
 
     def __get__(self, obj, objtype=None):
         if obj is None:
@@ -69,36 +80,86 @@ class generic:
             raise TypeError("type arguments already specified")
         if not isinstance(item, tuple):
             item = (item,)
+        params = self.fn.__type_params__
+        if len(item) > len(params):
+            raise TypeError(
+                f"too many type arguments for {self.fn.__name__}: "
+                f"expected {len(params)}, got {len(item)}"
+            )
         return generic(self.fn, item, self.instance)
 
     def __call__(self, *args, **kwargs):
-        freevars = self.fn.__code__.co_freevars
-        values = list(self.args) if self.args is not None else []
-        params = self.fn.__type_params__
-        while len(values) < len(freevars):
-            values.append(params[len(values)].__default__)
-        temp_fn = FunctionType(
-            self.fn.__code__,
-            self.fn.__globals__,
-            self.fn.__name__,
-            None,
-            tuple(CellType(value) for value in values),
+        fn = self.fn
+        code = fn.__code__
+        supplied = self.args if self.args is not None else ()
+        values = {}
+        for index, param in enumerate(fn.__type_params__):
+            name = param.__name__
+            if index < len(supplied):
+                values[name] = supplied[index]
+                continue
+            has_default = getattr(param, "has_default", None)
+            if has_default is not None and has_default():
+                values[name] = param.__default__
+            elif name in code.co_freevars:
+                raise TypeError(f"{fn.__name__}() missing a type argument for {name!r}")
+        closure = tuple(
+            CellType(values[name]) if name in values else cell
+            for name, cell in zip(code.co_freevars, fn.__closure__ or ())
         )
+        temp_fn = FunctionType(code, fn.__globals__, fn.__name__, fn.__defaults__, closure)
+        temp_fn.__kwdefaults__ = fn.__kwdefaults__
+        temp_fn.__qualname__ = fn.__qualname__
         if self.instance is not None:
             return temp_fn(self.instance, *args, **kwargs)
         return temp_fn(*args, **kwargs)
 ```
 
 a reified method binds its receiver through the descriptor `__get__`, so
-`obj.m[int]()` passes `self` exactly like an ordinary method call
+`obj.m[int]()` passes `self` exactly like an ordinary method call. attribute
+access falls through to the wrapped function, so introspection (`f.__name__`,
+`f.__doc__`, `f.__type_params__`) keeps working, and the wrapper hashes by
+identity like the function it replaces
 
 `f[int]` produces a specialized `generic` carrying `args=(int,)`; calling it
-rebuilds the function with a closure whose cells hold the type arguments, so
-the body sees `T is int`. an omitted slot is filled from its [PEP 696] default,
-read off the function's `__type_params__`. a type parameter used only in
-annotations is left erased exactly as in
+rebuilds the function with a closure whose type-parameter cells hold the type
+arguments, so the body sees `T is int`. an omitted slot is filled from its
+[PEP 696] default, read off the function's `__type_params__`. a type parameter
+used only in annotations is left erased exactly as in
 [explicit generic call sites](generic-calls.md) — the wrapper is the cost of
 reification and we only pay it when the body needs it
+
+over- and under-specialization that get past the type checker still fail
+cleanly at runtime: too many type arguments raise `TypeError` at the
+subscription, and a reified slot with neither a value nor a default raises
+`TypeError` at the call
+
+## decorators
+
+the wrapper is inserted *innermost* — directly above the `def`, below any
+user decorators — so it always receives the raw function object whose closure
+it rebuilds. outer decorators then compose with the wrapper exactly as the
+type checker models them:
+
+```by
+class C:
+    @staticmethod
+    def f[T]() -> object:
+        return T
+
+C.f[int]()   # staticmethod's descriptor passes the wrapper through
+```
+
+a decorator that returns a *different* callable erases the specialization
+step — `f[int]` on its result is an ordinary subscript on whatever the
+decorator returned, and ty flags it at the use site if that type has no
+`__getitem__`
+
+the one binding that cannot compose is `classmethod`: it hides the function
+behind an opaque bound method with no `__getitem__`, so a reified classmethod
+could be neither specialized nor called. ty reports `reified-classmethod` at
+the definition and the transpiler refuses to emit it. `__init_subclass__` and
+`__class_getitem__` are implicitly classmethods and get the same treatment
 
 the lowered `def` keeps its native `[T]` syntax because reification reuses the
 pep 695 closure cells cpython already builds. that syntax is only available on
@@ -108,22 +169,63 @@ defaulted parameter ([PEP 696]) raises the bar to `min_version >= 3.13` — the
 default syntax is not valid on 3.12, and the erased polyfill can't stand in
 because it discards the native parameter list reification depends on
 
-## specialization is mandatory
+## explicit or inferred specialization
 
-because python carries no runtime type information, a reified type parameter
-**cannot** be inferred from the arguments — it must be supplied explicitly:
+a reified generic is structurally a two-step callable (`f[...]` then `(...)`),
+and the first step is not optional — but it doesn't have to be written. when a
+reified type parameter appears in the signature, a bare call reifies it
+through inference: the transpiler injects the statically inferred
+specialization at the call site, so the two-step call still happens at runtime
 
 ```by
-f[int](1)   # ok
-f(1)        # error — T is reified and has no value
+def f[T](t: T):
+    print(1 is T)
+
+f(1)    # transpiles to f[int](1) — prints True
+f("")   # transpiles to f[str]("") — prints False
 ```
 
-ty reports the bare call as an error: a reified generic is structurally a
-two-step callable (`f[...]` then `(...)`), and the first step is not optional.
-the one exception is a type parameter with a default ([PEP 696]), which fills
-the reified slot when omitted:
+the injected argument is a *runtime type expression*: literal solutions
+promote to their class first (`1` infers `int`, not a `Literal`), structured
+annotations solve through their type arguments (`list[T]` + `[1]` → `int`),
+and unions and tuples spell as `int | str` / `tuple[int, str]`. a class name
+is injected only when the bare name resolves — in the module's globals or
+builtins — to that same class, so the emitted expression evaluates to the
+intended type object
+
+when no injectable solution exists, the bare call is an error
+(`unspecialized-reified-generic`):
 
 ```by
+def f[T](t: object):
+    print(T)
+
+f[int](1)   # ok
+f(1)        # error — `T` appears nowhere in the signature
+
+def g[T](t: T):
+    print(T)
+
+def local():
+    class Hidden: ...
+    g(Hidden())   # error — `Hidden` has no runtime spelling at the call site
+
+args = (1,)
+g(*args)          # error — the injection cannot pass through unpacking
+```
+
+a type parameter with a default ([PEP 696]) fills its reified slot when
+neither the call's arguments nor an explicit `[...]` supply one — and an
+inferred solution beats the default, exactly like a passed argument beats a
+parameter default:
+
+```by
+def d[T = int](t: T):
+    print(T)
+
+d("")       # transpiles to d[str]("") — the argument wins
+d(0)        # prints int
+
 def f[T = int]():
     print(T)
 
@@ -139,12 +241,15 @@ callable's interface — it is no longer phantom. assignability between two
 reified generics requires the type-parameter lists to be compatible, on top of
 the usual value-parameter and return-type rules
 
-> the [reified-and-erased distinctness](#reified-and-erased-are-distinct) rule
-> below is implemented: a reified generic is not assignable to a plain
-> callable. the writable `generic[[T], () -> bool]` type-form — and with it the
-> full arity / name / bound-contravariance rules between two reified generics —
-> is not yet available as an annotation; those examples describe the intended
-> behaviour
+> these rules are enforced today in the two places they can already be
+> expressed: a reified generic is not assignable to a plain callable (the
+> [reified-and-erased distinctness](#reified-and-erased-are-distinct) rule),
+> and a method **override** must keep its base's reified interface — arity,
+> positional matching, contravariant bounds, and reified/erased status are all
+> checked at the definition and reported as `invalid-method-override` (see
+> [overrides](#overrides-keep-the-reified-interface)). the writable
+> `generic[[T], () -> bool]` type-form is not yet available as an annotation;
+> examples written with it describe the intended behaviour
 
 ### arity must match
 
@@ -213,6 +318,28 @@ c: () -> None = f           # error — f requires f[...] before ()
 
 an erased generic (type parameter used only in annotations) keeps its existing
 PEP 695 assignability and remains usable wherever a plain callable is expected
+
+### overrides keep the reified interface
+
+a method override is where these rules bite today: `a.f[int]()` on `a: A`
+dispatches to the override at runtime, so the override must accept every
+specialization the base permits. an incompatible list is reported at the
+override's definition as `invalid-method-override`:
+
+```by
+class A:
+    def f[T](self):
+        print(T)
+
+class B(A):
+    def f[A2, B2](self):   # error — the base supplies one type argument
+        print(A2, B2)
+```
+
+the same applies to bound narrowing (contravariance), to erasing a reified
+method (the base's `f[...]` would subscript a plain function), and to
+reifying an erased one without [PEP 696] defaults (a bare call through the
+base could not supply the values)
 
 ## variadics and paramspecs
 

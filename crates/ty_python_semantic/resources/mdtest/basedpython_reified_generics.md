@@ -3,7 +3,8 @@
 A PEP 695 type parameter is *reified* when the function body references it in a value position —
 anywhere other than a type annotation. The reference becomes a real runtime value (the supplied type
 argument), so it types as `type[T]` rather than as the `TypeVar` object. Reification makes the
-`[...]` specialization step structurally required, on top of the usual call.
+`[...]` specialization step required — written explicitly, or inferred from the arguments and
+injected by the transpiler.
 
 ## a value-position type parameter is `type[T]`
 
@@ -37,10 +38,63 @@ def f[T](x: T) -> T:
 reveal_type(f[int](1))  # revealed: int
 ```
 
-## specialization is mandatory
+## specialization is inferred from arguments
 
-Python carries no runtime type information, so a reified type parameter cannot be inferred from the
-arguments — it must be supplied explicitly:
+When a reified type parameter appears in the signature, a bare call reifies it through inference:
+the transpiler injects the statically inferred specialization at the call site (`f(1)` →
+`f[int](1)`), promoting literal solutions to their runtime class first:
+
+```by
+def f[T](t: T) -> T:
+    print(1 is T)
+    return t
+
+f(1)   # runs as f[int](1)
+f("")  # runs as f[str]("")
+reveal_type(f(True))  # revealed: True
+```
+
+Structured annotations solve through their type arguments; unions and tuples spell as runtime
+expressions; keyword arguments participate like positional ones:
+
+```by
+def elem[T](ts: list[T]) -> None:
+    print(T)
+
+elem([1])       # runs as elem[int]([1])
+elem(ts=["a"])  # runs as elem[str](ts=["a"])
+
+def pick[T](t: T) -> None:
+    print(T)
+
+def choose(flag: bool) -> None:
+    pick(1 if flag else "")  # runs as pick[int | str](…)
+
+choose(True)
+pick((1, "a"))  # runs as pick[tuple[int, str]]((1, "a"))
+```
+
+An inferred solution beats a PEP 696 default, and an erased type parameter may stay unsolved when it
+needs no runtime value:
+
+```by
+def d[T = int](t: T) -> None:
+    print(T)
+
+d("")  # runs as d[str]("") — the argument wins over the default
+d(0)   # runs as d[int](0)
+
+def partial[T, U](t: T) -> None:
+    print(T)
+
+partial(1)  # runs as partial[int](1) — erased `U` needs no value
+```
+
+## when inference cannot reify
+
+The injected specialization must be a *runtime expression* that evaluates to the intended type at
+the call site. A type parameter that never appears in the signature, a solution without a runtime
+spelling (a scope-local class), or arguments hidden behind unpacking keep the bare call an error:
 
 ```by
 def f[T](t: object) -> bool:
@@ -49,6 +103,18 @@ def f[T](t: object) -> bool:
 f[int](1)  # ok
 # error: [unspecialized-reified-generic] "Cannot call reified generic function `f` without explicit specialization"
 f(1)
+
+def g[T](t: T) -> None:
+    print(T)
+
+def local() -> None:
+    class Hidden: ...
+    # error: [unspecialized-reified-generic]
+    g(Hidden())
+
+args = (1,)
+# error: [unspecialized-reified-generic]
+g(*args)
 ```
 
 ## a PEP 696 default fills the reified slot
@@ -117,4 +183,216 @@ def g[T](x: T) -> T:
     return x
 
 c: (int) -> int = g  # ok — erased generic specializes to a plain callable
+```
+
+## overrides must keep the reified interface
+
+Specializations flow through the base type — `a.f[int]()` on `a: A` dispatches to the override at
+runtime — so an override must accept every specialization the base permits. Arity counts like value
+parameters (PEP 696 defaults make a parameter optional), and names are positional:
+
+```by
+class A:
+    def f[T](self) -> None:
+        print(T)
+
+class B(A):
+    # error: [invalid-method-override]
+    def f[A2, B2](self) -> None:
+        print(A2, B2)
+
+class C(A):
+    def f[X](self) -> None:  # ok — names are positional
+        print(X)
+
+class D(A):
+    def f[X, Y = str](self) -> None:  # ok — the extra parameter defaults
+        print(X, Y)
+
+class E(A):
+    def f[X = bytes](self) -> None:  # ok — a default only widens what callers may omit
+        print(X)
+```
+
+Bounds are contravariant — the override may widen what the base admits, never narrow it:
+
+```by
+class Narrow:
+    def f[T: int](self) -> None:
+        print(T)
+
+class Wider(Narrow):
+    def f[X](self) -> None:  # ok — accepts everything the base does
+        print(X)
+
+class Base:
+    def g[T](self) -> None:
+        print(T)
+
+class Narrower(Base):
+    # error: [invalid-method-override]
+    def g[X: int](self) -> None:
+        print(X)
+```
+
+Reified and erased stay distinct across an override. Erasing a reified method would make `f[...]`
+through the base subscript a plain function; reifying an erased one demands values a bare call
+through the base cannot supply — unless every reified parameter defaults:
+
+```by
+class R:
+    def f[T](self) -> None:
+        print(T)
+
+class Erases(R):
+    # error: [invalid-method-override]
+    def f(self) -> None: ...
+
+class Plain:
+    def g[T](self, t: T) -> None: ...
+
+class Reifies(Plain):
+    # error: [invalid-method-override]
+    def g[T](self, t: T) -> None:
+        print(T)
+
+class ReifiesWithDefault(Plain):
+    def g[T = int](self, t: T) -> None:  # ok — a bare call falls back to the default
+        print(T)
+```
+
+## `is` composes with reification
+
+basedpython `is` means `isinstance`, and a reified `T` is a runtime class, so the two compose:
+
+```by
+def f[T]() -> None:
+    print(1 is T)
+
+f[int]()  # prints True
+f[str]()  # prints False
+```
+
+## reification preserves the rest of the closure
+
+Only the cells named after type parameters are rebuilt; a captured outer local and the implicit
+`__class__` cell behind zero-arg `super()` carry over untouched:
+
+```by
+def outer() -> object:
+    x = 5
+    def f[T]() -> object:
+        print(T)
+        return x
+    return f[int]()
+
+outer()
+
+class Base:
+    def m(self) -> str:
+        return "base"
+
+class Sub(Base):
+    def probe[T](self) -> str:
+        print(T)
+        return super().m()
+
+Sub().probe[int]()
+```
+
+## partially-used type parameters
+
+Only the type parameters referenced in a value position reify; the others stay erased but still
+occupy their specialization slot:
+
+```by
+def f[T, U](x: U) -> U:
+    print(T)
+    return x
+
+reveal_type(f[int, str]("a"))  # revealed: str
+```
+
+## parameter defaults are preserved
+
+Specialization rebuilds the function; its parameter defaults (positional and keyword-only) still
+apply:
+
+```by
+def f[T](x: int = 5, *, key: str = "k") -> int:
+    print(T, key)
+    return x
+
+reveal_type(f[int]())  # revealed: int
+```
+
+## specialization arity is checked
+
+```by
+def f[T]() -> None:
+    print(T)
+
+f[int, str]()  # error: [invalid-type-arguments]
+```
+
+## async and generator functions reify
+
+The closure rebuild preserves the code object, so coroutine and generator functions specialize like
+plain ones:
+
+```by
+import asyncio
+
+async def af[T]() -> object:
+    return T
+
+def gen[T]():
+    yield T
+
+async def main() -> None:
+    print(await af[int]())
+
+asyncio.run(main())
+print(list(gen[str]()))
+```
+
+## a reified staticmethod
+
+The `generic` wrapper sits innermost — directly on the raw function — so `@staticmethod` composes
+through its descriptor:
+
+```by
+class C:
+    @staticmethod
+    def f[T]() -> object:
+        return T
+
+reveal_type(C.f[int]())  # revealed: object
+C().f[str]()
+```
+
+## a reified classmethod is an error
+
+The classmethod binding hides the function whose closure holds the reified cells, so a classmethod
+cannot reify — neither the specialization nor the bare call could work at runtime. The error is
+reported at the definition:
+
+```by
+class C:
+    @classmethod
+    # error: [reified-classmethod]
+    def f[T](cls) -> None:
+        print(T)
+
+# the impossible specialization falls through to the ordinary subscript error
+C.f[int]()  # error: [not-subscriptable]
+```
+
+`__init_subclass__` and `__class_getitem__` are implicitly classmethods and get the same treatment:
+
+```by
+class D:
+    # error: [reified-classmethod]
+    def __init_subclass__[T](cls) -> None:
+        print(T)
 ```

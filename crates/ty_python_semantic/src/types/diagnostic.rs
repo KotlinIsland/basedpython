@@ -131,6 +131,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SUBCLASS_OF_FINAL_CLASS);
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
+    registry.register_lint(&REIFIED_CLASSMETHOD);
     registry.register_lint(&OVERRIDE_OF_FINAL_METHOD);
     registry.register_lint(&OVERRIDE_OF_FINAL_VARIABLE);
     registry.register_lint(&INEFFECTIVE_FINAL);
@@ -932,29 +933,62 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
-    /// Checks for calls to a basedpython reified generic function without an
-    /// explicit specialization.
+    /// Checks for calls to a basedpython reified generic function whose
+    /// specialization is neither written explicitly nor inferable from the
+    /// arguments.
     ///
     /// ## Why is this bad?
     /// A function whose type parameter is referenced in a value position is
     /// *reified*: the type parameter behaves like a positional parameter that
-    /// is filled by the `[...]` specialization step. Python carries no runtime
-    /// type information, so a reified type parameter cannot be inferred from
-    /// the arguments — calling without `f[...]` leaves it without a value.
-    /// The only exception is a type parameter with a PEP 696 default, which
-    /// fills the reified slot when omitted.
+    /// is filled by the `[...]` specialization step. A bare call is legal only
+    /// when the transpiler can inject that step — every type parameter must
+    /// solve, from the arguments or its PEP 696 default, to a type with a
+    /// runtime spelling at the call site. Otherwise the parameter has no
+    /// value at runtime.
     ///
     /// ## Example
     ///
     /// ```by
-    /// def f[T]():
+    /// def f[T](t: object):
     ///     print(T)
     ///
-    /// f[int]()  # ok
-    /// f()       # error: `T` is reified and has no value
+    /// f[int](1)  # ok
+    /// f(1)       # error: `T` appears nowhere in the signature
+    ///
+    /// def g[T](t: T):
+    ///     print(T)
+    ///
+    /// g(1)       # ok — transpiles to g[int](1)
     /// ```
     pub(crate) static UNSPECIALIZED_REIFIED_GENERIC = {
         summary: "detects calls to reified generic functions without explicit specialization",
+        status: LintStatus::stable("0.0.1-alpha.3"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for classmethods whose type parameters are reified.
+    ///
+    /// ## Why is this bad?
+    /// A type parameter referenced in a value position is *reified*: the
+    /// specialization step (`f[int]`) becomes a runtime operation that
+    /// rebuilds the function's closure with the type arguments. The
+    /// classmethod binding hides the underlying function behind an opaque
+    /// bound method, so a reified classmethod can be neither specialized
+    /// nor called at runtime.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class C:
+    ///     @classmethod
+    ///     def make[T](cls) -> object:
+    ///         return T()  # error: `T` is reified, but `make` is a classmethod
+    /// ```
+    pub(crate) static REIFIED_CLASSMETHOD = {
+        summary: "detects classmethods with reified type parameters",
         status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
     }
@@ -3780,6 +3814,113 @@ pub(crate) fn report_shadowed_type_variable<'db>(
         diagnostic.annotate(Annotation::secondary(span).message(format_args!(
             "Type variable `{typevar_name}` is bound in this enclosing scope"
         )));
+    }
+}
+
+/// basedpython: an override whose reified type-parameter list is incompatible
+/// with the base method's — reported under the same lint as any other Liskov
+/// violation, since the `[...]` step is part of the method's interface
+pub(super) fn report_invalid_reified_override<'db>(
+    context: &InferContext<'db, '_>,
+    member: &str,
+    subclass_definition: Definition<'db>,
+    subclass_function: FunctionType<'db>,
+    superclass: ClassType<'db>,
+    error: crate::types::reified_infer::ReifiedOverrideError<'db>,
+) {
+    use crate::types::reified_infer::ReifiedOverrideError;
+
+    let db = context.db();
+
+    let signature_span =
+        |function: FunctionType<'db>| function.literal(db).last_definition.spans(db).signature;
+    let diagnostic_range = if subclass_definition.kind(db).is_function_def() {
+        signature_span(subclass_function)
+            .range()
+            .unwrap_or_else(|| {
+                subclass_function
+                    .node(db, context.file(), context.module())
+                    .range
+            })
+    } else {
+        subclass_definition.full_range(db, context.module()).range()
+    };
+
+    let Some(builder) = context.report_lint(&INVALID_METHOD_OVERRIDE, diagnostic_range) else {
+        return;
+    };
+
+    let superclass_name = superclass.name(db);
+    let overridden_method = format!("{superclass_name}.{member}");
+
+    let mut diagnostic =
+        builder.into_diagnostic(format_args!("Invalid override of method `{member}`"));
+    diagnostic.set_primary_message(format_args!(
+        "reified type parameters are incompatible with `{overridden_method}`"
+    ));
+
+    match error {
+        ReifiedOverrideError::ErasesReified => {
+            diagnostic.info(format_args!(
+                "`{overridden_method}` reifies its type parameters, but the override \
+                 erases them — a specialization `{member}[...]` through the base would \
+                 subscript a plain function at runtime"
+            ));
+        }
+        ReifiedOverrideError::ReifiesErased(names) => {
+            let s = if names.len() > 1 { "s" } else { "" };
+            diagnostic.info(format_args!(
+                "the override reifies type parameter{s} `{}` that `{overridden_method}` \
+                 leaves erased — a call through the base cannot supply {}; add PEP 696 \
+                 defaults or avoid value-position uses",
+                names.iter().format("`, `"),
+                if names.len() > 1 { "them" } else { "it" },
+            ));
+        }
+        ReifiedOverrideError::Arity {
+            base_required,
+            base_total,
+            sub_required,
+            sub_total,
+        } => {
+            diagnostic.info(format_args!(
+                "the override accepts {sub_required}..{sub_total} type argument(s), but \
+                 `{overridden_method}` permits {base_required}..{base_total}"
+            ));
+            diagnostic.info(format_args!(
+                "specializations flow through the base type, so the override must accept \
+                 every type-argument count the base permits"
+            ));
+        }
+        ReifiedOverrideError::Bound {
+            base_name,
+            sub_name,
+            base_admissible,
+            sub_admissible,
+        } => {
+            diagnostic.info(format_args!(
+                "the bound of type parameter `{sub_name}` (`{}`) rejects specializations \
+                 `{overridden_method}` permits for `{base_name}` (`{}`) — bounds are \
+                 contravariant",
+                sub_admissible.display(db),
+                base_admissible.display(db),
+            ));
+        }
+    }
+
+    diagnostic.info("This violates the Liskov Substitution Principle");
+
+    if let Place::Defined(DefinedPlace {
+        ty: Type::FunctionLiteral(superclass_function),
+        ..
+    }) = superclass
+        .class_member(db, member, MemberLookupPolicy::default())
+        .place
+    {
+        diagnostic.annotate(
+            Annotation::secondary(signature_span(superclass_function))
+                .message(format_args!("`{overridden_method}` defined here")),
+        );
     }
 }
 

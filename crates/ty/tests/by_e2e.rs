@@ -562,13 +562,14 @@ fn build_renders_parse_error_and_aborts() {
 
 #[test]
 fn run_refuses_to_execute_on_check_errors() {
-    // a program that fails `by check` must never execute — here the bare calls
-    // of a reified generic are check errors, and previously slipped through to
-    // a runtime TypeError from the `generic` wrapper
+    // a program that fails `by check` must never execute — here `T` cannot be
+    // inferred from the `object`-typed argument, so the bare call is a check
+    // error; it previously slipped through to a runtime TypeError from the
+    // `generic` wrapper
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("main.by"),
-        "def f[T](t: T):\n    print(T)\n\nf(1)\nf(\"\")\n",
+        "def f[T](t: object):\n    print(T)\n\nf(1)\nf(\"\")\n",
     )
     .unwrap();
 
@@ -819,6 +820,50 @@ f[int](1)
     assert!(
         out.contains("f[int](1)"),
         "reified call site must keep its type args:\n{out}"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn reified_generic_infers_specialization_from_arguments() {
+    // bare calls of a reified generic reify through inference: the transpiler
+    // injects the statically inferred type argument, so `1 is T` observes the
+    // argument's class at runtime
+    let Some(python) = ["python3.13"].into_iter().find(|p| {
+        Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }) else {
+        eprintln!("skipping: no python 3.13 interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "def f[T](t: T):\n    print(1 is T)\n\nf(1)\nf(\"\")\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "True\nFalse"
     );
 }
 

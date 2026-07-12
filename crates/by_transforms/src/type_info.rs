@@ -45,6 +45,11 @@ pub(crate) trait TypeInfo {
     /// `generic.__getitem__`
     fn is_reified_function(&self, name: &ExprName) -> bool;
 
+    /// the comma-joined type arguments to inject at a bare call of a reified
+    /// generic (`f(1)` → `"int"`), or `None` when the call needs no injection
+    /// or none is possible (ty reports the latter)
+    fn reified_call_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String>;
+
     /// whether `expr` resolves to `typing.Any` (the explicitly-annotated
     /// dynamic type). distinguishes the special form from a shadowing binding
     /// or the `Unknown` that an unresolved / invalid type expression yields,
@@ -148,6 +153,11 @@ impl TypeInfo for SemanticModel<'_> {
         name.inferred_type(self)
             .and_then(Type::as_function_literal)
             .is_some_and(|function| function.is_reified(self.db()))
+    }
+
+    fn reified_call_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String> {
+        let arguments = self.reified_call_type_arguments(call)?;
+        Some(arguments.join(", "))
     }
 
     fn is_any(&self, expr: &Expr) -> bool {
