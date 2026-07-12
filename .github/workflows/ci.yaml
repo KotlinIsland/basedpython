@@ -301,28 +301,20 @@ jobs:
       - name: "Clippy (wasm)"
         run: cargo clippy -p ruff_wasm -p ty_wasm --target wasm32-unknown-unknown --all-features --locked -- -D warnings
 
-  cargo-publish-dry-run:
-    name: "cargo publish dry-run"
-    runs-on: ${{ github.repository == 'astral-sh/ruff' && 'depot-ubuntu-22.04-8' || 'ubuntu-latest' }}
-    needs: determine_changes
-    if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-test') && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: "cargo publish dry-run"
-        run: cargo publish --workspace --dry-run
+  # upstream's `cargo-publish-dry-run` is dropped: the fork keeps ruff/ty crate
+  # versions in lock-step with astral's published crates.io versions but modifies
+  # their apis, so `cargo publish --dry-run` pulls the real published crate for a
+  # transitive dep and fails on the api skew. the fork publishes only the
+  # `basedpython` wheel to pypi, never these crates to crates.io
 
   cargo-test-linux:
     name: "cargo test (linux)"
     runs-on: ${{ github.repository == 'astral-sh/ruff' && 'depot-ubuntu-22.04-16' || 'ubuntu-latest' }}
     needs: determine_changes
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-test') && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
-    timeout-minutes: 20
+    # the fork's `ubuntu-latest` runner is far slower than astral's 16-core depot
+    # runner, so the full suite overruns the depot-tuned 20-minute budget
+    timeout-minutes: 45
     env:
       # Line-tables-only debug info: faster builds, backtraces still work.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -431,7 +423,9 @@ jobs:
     runs-on: ${{ matrix.platform }}
     needs: determine_changes
     if: ${{ !contains(github.event.pull_request.labels.*.name, 'no-test') && (needs.determine_changes.outputs.code == 'true' || github.ref == 'refs/heads/main') }}
-    timeout-minutes: 20
+    # the fork's `windows-latest`/`macos-latest` runners are slower than astral's
+    # depot runners, so the full suite overruns the depot-tuned 20-minute budget
+    timeout-minutes: 45
     env:
       # Line-tables-only debug info: faster builds, backtraces still work.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
