@@ -709,13 +709,21 @@ jobs:
           cat ecosystem-result-check-preview >> ecosystem-result
           echo "" >> ecosystem-result
 
+      # `--max-parallelism 2`: the default (50) oversubscribes the fork's small
+      # `ubuntu-latest` runner — dozens of concurrent multi-threaded `buff format`
+      # walks plus git clone/reset churn make the parallel file walk intermittently
+      # surface a transient `No such file or directory` on one large project (a
+      # different one each run), which the "Fail on ecosystem errors" step turns
+      # into a hard failure. astral's 32-core depot runner absorbs the load; ours
+      # needs the concurrency capped. (format only — the read-only check runs are
+      # unaffected.)
       - name: Run `ruff format` stable ecosystem check
         if: ${{ needs.determine_changes.outputs.formatter == 'true' }}
         run: |
           # Set pipefail to avoid hiding errors with tee
           set -eo pipefail
 
-          ruff-ecosystem format ./target/debug/buff-baseline ./target/debug/buff --cache ./checkouts --output-format markdown | tee ecosystem-result-format-stable
+          ruff-ecosystem format ./target/debug/buff-baseline ./target/debug/buff --cache ./checkouts --output-format markdown --max-parallelism 2 | tee ecosystem-result-format-stable
 
           cat ecosystem-result-format-stable > "$GITHUB_STEP_SUMMARY"
           echo "### Formatter (stable)" >> ecosystem-result
@@ -728,7 +736,7 @@ jobs:
           # Set pipefail to avoid hiding errors with tee
           set -eo pipefail
 
-          ruff-ecosystem format ./target/debug/buff-baseline ./target/debug/buff --cache ./checkouts --output-format markdown --force-preview | tee ecosystem-result-format-preview
+          ruff-ecosystem format ./target/debug/buff-baseline ./target/debug/buff --cache ./checkouts --output-format markdown --force-preview --max-parallelism 2 | tee ecosystem-result-format-preview
 
           cat ecosystem-result-format-preview > "$GITHUB_STEP_SUMMARY"
           echo "### Formatter (preview)" >> ecosystem-result

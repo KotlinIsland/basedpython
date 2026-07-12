@@ -99,6 +99,7 @@ def entrypoint():
                 project_dir=Path(cache),
                 raise_on_failure=args.pdb,
                 format_comparison=format_comparison,
+                max_parallelism=args.max_parallelism,
             )
         )
         # https://stackoverflow.com/a/58840987/3549270
@@ -150,6 +151,16 @@ def parse_args() -> argparse.Namespace:
         "--force-preview",
         action="store_true",
         help="Force preview mode to be enabled for all projects",
+    )
+    parser.add_argument(
+        "--max-parallelism",
+        type=int,
+        default=50,
+        help=(
+            "Maximum number of projects to clone/format concurrently. Lower this on "
+            "small CI runners: high concurrency thrashes the filesystem and can make "
+            "the parallel file walk race with concurrent git clone/reset operations."
+        ),
     )
     parser.add_argument(
         "--format-comparison",
