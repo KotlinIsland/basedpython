@@ -84,6 +84,8 @@ ______________________________________________________________________
 `TypeVar` with a `default=` argument requires Python 3.13+. basedpython imports `TypeVar` from `typing_extensions` instead (which supports `default=`).
 this applies when using PEP 695 generic syntax with a default (see the [generics polyfill](#generic-classes-and-functions-pep-695) below)
 
+the `[T = int]` header syntax is itself 3.13+: on a 3.12 target, a declaration with a defaulted type parameter is desugared by the generics polyfill while declarations without defaults keep the native syntax. a [reified](reified-generics.md) function can't be desugared, so a defaulted reified function on a 3.12 target is a transpile error
+
 ### `typing.TypeIs` (PEP 742)
 
 redirected to `typing_extensions.TypeIs`:
