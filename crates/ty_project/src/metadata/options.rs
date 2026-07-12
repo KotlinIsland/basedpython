@@ -1486,6 +1486,25 @@ pub struct AnalysisOptions {
     )]
     pub respect_type_ignore_comments: Option<bool>,
 
+    /// Whether to disable "fluid specializations", a basedpython feature that widens the
+    /// inferred generic specialization of an unannotated binding flow-sensitively based on
+    /// its later uses in the same scope.
+    ///
+    /// When set to `true`, each unannotated binding keeps the specialization it was inferred
+    /// with at its creation site; later uses no longer widen or lock it.
+    ///
+    /// Defaults to `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"false"#,
+        value_type = "bool",
+        example = r#"
+        # Turn off fluid specializations
+        disable-fluid-specializations = true
+        "#
+    )]
+    pub disable_fluid_specializations: Option<bool>,
+
     /// A list of module glob patterns for which `unresolved-import` diagnostics should be suppressed.
     ///
     /// Details on supported glob patterns:
@@ -1546,12 +1565,14 @@ impl AnalysisOptions {
             respect_type_ignore_comments,
             allowed_unresolved_imports,
             replace_imports_with_any,
+            disable_fluid_specializations,
         } = self;
 
         let AnalysisSettings {
             respect_type_ignore_comments: respect_type_ignore_default,
             allowed_unresolved_imports: allowed_unresolved_imports_default,
             replace_imports_with_any: replace_imports_with_any_default,
+            disable_fluid_specializations: disable_fluid_specializations_default,
         } = AnalysisSettings::default();
 
         let allowed_unresolved_imports =
@@ -1581,6 +1602,8 @@ impl AnalysisOptions {
                 .unwrap_or(respect_type_ignore_default),
             allowed_unresolved_imports,
             replace_imports_with_any,
+            disable_fluid_specializations: disable_fluid_specializations
+                .unwrap_or(disable_fluid_specializations_default),
         }
     }
 }

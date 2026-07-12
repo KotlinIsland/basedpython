@@ -83,6 +83,41 @@ any module where the first component contains the substring `test`, use `*test*.
 
 ---
 
+### `disable-fluid-specializations`
+
+Whether to disable "fluid specializations", a basedpython feature that widens the
+inferred generic specialization of an unannotated binding flow-sensitively based on
+its later uses in the same scope.
+
+When set to `true`, each unannotated binding keeps the specialization it was inferred
+with at its creation site; later uses no longer widen or lock it.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Turn off fluid specializations
+    disable-fluid-specializations = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Turn off fluid specializations
+    disable-fluid-specializations = true
+    ```
+
+---
+
 ### `replace-imports-with-any`
 
 A list of module glob patterns whose imports should be replaced with `typing.Any`.
@@ -573,6 +608,41 @@ any module where the first component contains the substring `test`, use `*test*.
     [overrides.analysis]
     # Suppress errors for all `test` modules except `test.foo`
     allowed-unresolved-imports = ["test.**", "!test.foo"]
+    ```
+
+---
+
+#### `disable-fluid-specializations`
+
+Whether to disable "fluid specializations", a basedpython feature that widens the
+inferred generic specialization of an unannotated binding flow-sensitively based on
+its later uses in the same scope.
+
+When set to `true`, each unannotated binding keeps the specialization it was inferred
+with at its creation site; later uses no longer widen or lock it.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # Turn off fluid specializations
+    disable-fluid-specializations = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # Turn off fluid specializations
+    disable-fluid-specializations = true
     ```
 
 ---

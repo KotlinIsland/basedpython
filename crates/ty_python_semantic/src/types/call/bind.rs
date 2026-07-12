@@ -5061,6 +5061,19 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
         // The hook receives (typevar, bounds) and returns Some(ty) to override the default
         // solution, or None to keep it.
         let maybe_promote = |typevar: BoundTypeVarInstance<'db>, bounds: &PathBound<'db>| {
+            // Fluid specialization candidates retain literal types until their
+            // first widening event. Structural promotions (e.g. wrapping a top
+            // ParamSpec signature) are unaffected: only solutions containing
+            // literal values are kept unpromoted.
+            if self.call_expression_tcx.preserve_literals
+                && let Some(lower) = bounds.lower
+                && crate::types::visitor::any_over_type(self.db, lower, false, |ty| {
+                    ty.as_literal_value().is_some()
+                })
+            {
+                return None;
+            }
+
             let bound_or_constraints = typevar.typevar(self.db).bound_or_constraints(self.db);
 
             // For constrained TypeVars, the inferred type is already one of the

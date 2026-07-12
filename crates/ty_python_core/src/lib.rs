@@ -45,6 +45,7 @@ mod builder;
 mod db;
 pub mod definition;
 pub mod expression;
+pub mod fluid;
 pub mod frozen;
 pub(crate) mod member;
 pub mod narrowing_constraints;
@@ -306,11 +307,11 @@ pub struct SemanticIndex<'db> {
     /// Map from a lambda expression to its containing statement.
     enclosing_lambda_statements: FrozenMap<ExpressionNodeKey, Statement<'db>>,
 
-    // Map from a constraining use of a collection initializer to its definition.
-    collections_by_use: FrozenMap<ExpressionNodeKey, Definition<'db>>,
+    // Map from a use of a fluid specialization candidate to its definition.
+    fluid_candidates_by_use: FrozenMap<ExpressionNodeKey, Definition<'db>>,
 
-    // Map from a collection initializer definition to statements containing a constraining use.
-    uses_by_collection: FrozenMap<Definition<'db>, Box<[(Statement<'db>, ExpressionNodeKey)]>>,
+    // Map from a fluid specialization candidate definition to its classified uses, in source order.
+    fluid_uses_by_candidate: FrozenMap<Definition<'db>, Box<[fluid::FluidUse<'db>]>>,
 
     /// Map from the file-local [`FileScopeId`] to the salsa-ingredient [`ScopeId`].
     scope_ids_by_scope: FrozenIndexVec<FileScopeId, ScopeId<'db>>,
@@ -527,24 +528,22 @@ impl<'db> SemanticIndex<'db> {
         self.enclosing_lambda_statements.get(&lambda).copied()
     }
 
-    /// If this is a potentially constraining use of an unannotated collection initializer, returns
-    /// its definition.
-    pub fn unannotated_collection_initializer(
+    /// If this is a use of a fluid specialization candidate binding, returns its definition.
+    pub fn fluid_candidate_binding(
         &self,
-        collection_use: &ast::Expr,
+        candidate_use: impl Into<ExpressionNodeKey>,
     ) -> Option<Definition<'db>> {
-        self.collections_by_use.get(&collection_use.into()).copied()
+        self.fluid_candidates_by_use
+            .get(&candidate_use.into())
+            .copied()
     }
 
-    /// Returns all potentially constraining uses of the given unannotated collection initializer.
-    pub fn constraining_collection_uses(
-        &self,
-        collection_def: Definition<'db>,
-    ) -> impl Iterator<Item = (Statement<'db>, ExpressionNodeKey)> {
-        self.uses_by_collection
-            .get(&collection_def)
-            .into_iter()
-            .flat_map(|uses| uses.iter().copied())
+    /// Returns the classified uses of the given fluid specialization candidate, in source order.
+    pub fn fluid_uses(&self, candidate_def: Definition<'db>) -> &[fluid::FluidUse<'db>] {
+        self.fluid_uses_by_candidate
+            .get(&candidate_def)
+            .map(|uses| &uses[..])
+            .unwrap_or_default()
     }
 
     pub fn is_in_type_checking_block(&self, scope_id: FileScopeId, range: TextRange) -> bool {

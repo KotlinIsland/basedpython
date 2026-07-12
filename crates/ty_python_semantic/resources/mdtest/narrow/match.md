@@ -2714,9 +2714,9 @@ def match_named_expression_subject_capture(value: tuple[int]) -> None:
 ## Cycles in pattern binding types
 
 Pattern captures can affect the type of a later match subject, including through a loop or a
-function defined before the capture. Direct, sequence, class, and built-in positional captures
-resolve to a concrete type. For a mapping capture, the recursive subject is known only to be a
-mapping, so its entry type is `object`.
+function defined before the capture. Direct, sequence, class, built-in positional, and mapping
+captures all resolve to a concrete type: a fluid subject's specialization is solved
+flow-sensitively, so the mapping entry is known precisely rather than collapsing to `object`.
 
 ```py
 def match_loop_carried_capture(flag: bool, x: int) -> None:
@@ -2747,7 +2747,7 @@ def match_loop_carried_mapping_capture(flag: bool) -> None:
     while flag:
         match x:
             case {"value": x}:
-                reveal_type(x)  # revealed: object
+                reveal_type(x)  # revealed: int
 
 def match_loop_carried_match_self_capture(flag: bool, x: int) -> None:
     while flag:

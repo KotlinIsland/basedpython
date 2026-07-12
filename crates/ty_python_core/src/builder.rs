@@ -36,6 +36,7 @@ use crate::definition::{
     StarImportDefinitionNodeRef, WithItemDefinitionNodeRef,
 };
 use crate::expression::{Expression, ExpressionKind};
+use crate::fluid::{FluidUse, FluidUseRole};
 use crate::frozen::{FrozenMap, FrozenSet};
 use crate::member::MemberExprBuilder;
 use crate::place::{
@@ -277,10 +278,12 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     seen_submodule_imports: FxHashSet<String>,
     // A map from a lambda expression to its enclosing statement.
     enclosing_lambda_statements: FxHashMap<ExpressionNodeKey, Statement<'db>>,
-    // A map from a constraining use of a collection initializer to its definition.
-    collections_by_use: FxHashMap<ExpressionNodeKey, Definition<'db>>,
-    // A map from a collection initializer definition to statements containing a constraining use.
-    uses_by_collection: FxHashMap<Definition<'db>, Vec<(Statement<'db>, ExpressionNodeKey)>>,
+    // A map from a use of a fluid specialization candidate to its definition.
+    fluid_candidates_by_use: FxHashMap<ExpressionNodeKey, Definition<'db>>,
+    // A map from a fluid specialization candidate definition to its classified uses.
+    fluid_uses_by_candidate: FxHashMap<Definition<'db>, Vec<FluidUse<'db>>>,
+    /// Ranges of the loop statements enclosing the current traversal position, outermost first.
+    loop_ranges: Vec<TextRange>,
     /// Hashset of all [`FileScopeId`]s that correspond to [generator functions].
     ///
     /// [generator functions]: https://docs.python.org/3/glossary.html#term-generator
@@ -331,8 +334,9 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             condition_flow_snapshots_by_node: FxHashMap::default(),
             statements_by_node: FxHashMap::default(),
             enclosing_lambda_statements: FxHashMap::default(),
-            collections_by_use: FxHashMap::default(),
-            uses_by_collection: FxHashMap::default(),
+            fluid_candidates_by_use: FxHashMap::default(),
+            fluid_uses_by_candidate: FxHashMap::default(),
+            loop_ranges: Vec::new(),
 
             seen_submodule_imports: FxHashSet::default(),
             imported_modules: FxHashSet::default(),
@@ -1103,14 +1107,11 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         &mut self.ast_ids[scope_id]
     }
 
-    /// If the given expression is a use of an unannotated collection initializer, returns
-    /// the definition of the initializer.
-    fn unannotated_collection_initializer_binding(
-        &self,
-        collection_use: &ast::Expr,
-    ) -> Option<Definition<'db>> {
+    /// If the given expression is a use of a fluid specialization candidate binding,
+    /// returns the definition of the candidate.
+    fn fluid_candidate_binding(&self, candidate_use: &ast::Expr) -> Option<Definition<'db>> {
         let use_def = self.current_use_def_map();
-        let use_id = self.current_ast_ids().try_use_id(collection_use)?;
+        let use_id = self.current_ast_ids().try_use_id(candidate_use)?;
 
         use_def
             .bindings_at_use(use_id)
@@ -1120,25 +1121,13 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     .kind(self.db)
                     .as_unannotated_assignment()
                     .is_some_and(|assignment| {
-                        is_collection_initializer(assignment.value(self.module))
+                        is_fluid_specialization_candidate(assignment.value(self.module))
                     })
             })
             // TODO: Support uses that refer to multiple definitions. This currently seems to lead to
             // cycle-related panics.
             .exactly_one()
             .ok()
-    }
-
-    fn unannotated_collection_literal_binding(
-        &self,
-        collection_use: &ast::Expr,
-    ) -> Option<Definition<'db>> {
-        let definition = self.unannotated_collection_initializer_binding(collection_use)?;
-        definition
-            .kind(self.db)
-            .as_unannotated_assignment()
-            .is_some_and(|assignment| is_collection_literal(assignment.value(self.module)))
-            .then_some(definition)
     }
 
     /// Try to register a narrowing alias for a simple name assignment.
@@ -2650,8 +2639,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
         let mut semantic_syntax_errors = self.semantic_syntax_errors.into_inner();
         semantic_syntax_errors.shrink_to_fit();
-        let uses_by_collection = FrozenMap::from_entries(
-            self.uses_by_collection
+        let fluid_uses_by_candidate = FrozenMap::from_entries(
+            self.fluid_uses_by_candidate
                 .into_iter()
                 .map(|(definition, uses)| (definition, uses.into_boxed_slice()))
                 .collect(),
@@ -2678,8 +2667,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 .map(|builder| Arc::new(builder.finish()))
                 .collect(),
             enclosing_lambda_statements: FrozenMap::from(self.enclosing_lambda_statements),
-            collections_by_use: FrozenMap::from(self.collections_by_use),
-            uses_by_collection,
+            fluid_candidates_by_use: FrozenMap::from(self.fluid_candidates_by_use),
+            fluid_uses_by_candidate,
             imported_modules: FrozenSet::from(self.imported_modules),
             has_future_annotations: self.has_future_annotations,
             enclosing_snapshots: FrozenMap::from(self.enclosing_snapshots),
@@ -3171,9 +3160,17 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
                 self.visit_expr(&node.value);
 
-                // Unannotated collection initializers must be standalone expressions to participate
-                // in full-scope bidirectional inference.
-                if node.targets.len() == 1 && is_collection_initializer(&node.value) {
+                // Collection-literal fluid candidates must be standalone expressions to
+                // participate in full-scope bidirectional inference. Call candidates are
+                // not made standalone: their assignments must go through definition
+                // inference so that special forms (`TypeVar(...)`, `NamedTuple(...)`,
+                // ...) are still recognized.
+                if node.targets.len() == 1
+                    && matches!(
+                        node.value.as_ref(),
+                        ast::Expr::List(_) | ast::Expr::Set(_) | ast::Expr::Dict(_)
+                    )
+                {
                     self.add_standalone_assigned_expression(&node.value, node);
                 }
 
@@ -4149,24 +4146,20 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 };
 
                 if let Some((func, expr, is_await)) = call_info {
-                    // Avoid creating reachability nodes for calls on unannotated collection
-                    // literals. Without this short-circuit, performing reachability analysis
+                    // Avoid creating reachability nodes for calls on fluid specialization
+                    // candidates. Without this short-circuit, performing reachability analysis
                     // can lead to quadratic blowup of cycle dependencies during full-scope
-                    // collection inference, as Salsa flattens the dependencies of all cycle
-                    // participants, and the reachability analysis of a given use of the
-                    // collection may create dependencies on all previous uses, leading to
+                    // fluid specialization inference, as Salsa flattens the dependencies of all
+                    // cycle participants, and the reachability analysis of a given use of the
+                    // candidate may create dependencies on all previous uses, leading to
                     // significant performance regressions.
                     //
                     // Note that built-in collection types do not have methods that explicitly
-                    // return `Never`, so this does not have a meaningful semantic impact, except in
-                    // the rare case where a collection is explicitly marked as having elements
-                    // of type `Never`.
+                    // return `Never`, so this rarely has a meaningful semantic impact.
                     if !self.source_type.is_stub()
                         && func
                             .as_attribute_expr()
-                            .and_then(|attribute| {
-                                self.unannotated_collection_literal_binding(&attribute.value)
-                            })
+                            .and_then(|attribute| self.fluid_candidate_binding(&attribute.value))
                             .is_none()
                     {
                         let callable = self.add_standalone_expression(func);
@@ -4218,55 +4211,72 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
 impl<'ast> Visitor<'ast> for SemanticIndexBuilder<'_, 'ast> {
     fn visit_stmt(&mut self, stmt: &'ast ast::Stmt) {
+        let is_loop = matches!(stmt, ast::Stmt::For(_) | ast::Stmt::While(_));
+        if is_loop {
+            self.loop_ranges.push(stmt.range());
+        }
         self.push_statement(CurrentStatement::default());
         self.visit_stmt_impl(stmt);
-        let mut current_statement = self.pop_statement();
-
-        // We currently only consider certain types of statements to introduce constraints
-        // on collection initializers. This restriction is mostly for performance reasons, as we
-        // want to avoid "reads" of a collection contributing to the complexity of the cycles
-        // created by full-scope collection inference.
-        current_statement
-            .collection_uses
-            .retain(|(_, use_expression)| {
-                match stmt {
-                    // A return involving the collection object.
-                    ruff_python_ast::Stmt::Return(_) => true,
-
-                    // A subscript assignment on the collection object.
-                    ruff_python_ast::Stmt::Assign(ast::StmtAssign { targets, .. }) => {
-                        match targets.as_slice() {
-                            [ast::Expr::Subscript(ast::ExprSubscript { value, .. })] => {
-                                ExpressionNodeKey::from(value) == *use_expression
-                            }
-                            _ => false,
-                        }
-                    }
-
-                    // An annotated assignment assigning the collection object to a new binding.
-                    ruff_python_ast::Stmt::AnnAssign(_) => true,
-
-                    // A bound-method call on the collection object.
-                    ruff_python_ast::Stmt::Expr(ast::StmtExpr { value, .. }) => {
-                        match value.as_ref() {
-                            ast::Expr::Call(ast::ExprCall { func, .. }) => match func.as_ref() {
-                                ruff_python_ast::Expr::Attribute(ast::ExprAttribute {
-                                    value,
-                                    ..
-                                }) => ExpressionNodeKey::from(value) == *use_expression,
-                                _ => false,
-                            },
-                            _ => false,
-                        }
-                    }
-
-                    _ => false,
-                }
-            });
+        let current_statement = self.pop_statement();
+        if is_loop {
+            self.loop_ranges.pop();
+        }
 
         if current_statement.lambda_expressions.is_empty()
-            && current_statement.collection_uses.is_empty()
+            && current_statement.fluid_uses.is_empty()
         {
+            return;
+        }
+
+        // Classify how each fluid-candidate use in this statement interacts with the
+        // candidate's specialization. Constraints can only be read back from the
+        // inference of simple (non-compound) statements, so constraint-bearing roles
+        // inside compound statement headers are downgraded.
+        let classified: Vec<(Definition<'_>, FluidUse<'_>)> = current_statement
+            .fluid_uses
+            .into_iter()
+            .map(|(candidate_def, use_expression, range, loops)| {
+                let (mut role, discarded_call_result) = classify_fluid_use(stmt, use_expression);
+                if role.contributes_constraints() && !is_simple_statement(stmt) {
+                    role = match role {
+                        // A method call in a compound statement header (e.g. `if a.pop():`)
+                        // cannot be read back for constraints; treat it as an opaque use.
+                        FluidUseRole::MethodReceiver | FluidUseRole::SubscriptStore => {
+                            FluidUseRole::Escape
+                        }
+                        FluidUseRole::TypeContextual => FluidUseRole::Escape,
+                        role => role,
+                    };
+                }
+                (
+                    candidate_def,
+                    FluidUse {
+                        use_expression,
+                        range,
+                        role,
+                        discarded_call_result,
+                        statement_range: stmt.range(),
+                        loops,
+                        statement: None,
+                    },
+                )
+            })
+            .collect();
+
+        let needs_standalone_statement = !current_statement.lambda_expressions.is_empty()
+            || classified
+                .iter()
+                .any(|(_, fluid_use)| fluid_use.role.contributes_constraints());
+
+        if !needs_standalone_statement {
+            for (candidate_def, fluid_use) in classified {
+                self.fluid_candidates_by_use
+                    .insert(fluid_use.use_expression, candidate_def);
+                self.fluid_uses_by_candidate
+                    .entry(candidate_def)
+                    .or_default()
+                    .push(fluid_use);
+            }
             return;
         }
 
@@ -4283,25 +4293,20 @@ impl<'ast> Visitor<'ast> for SemanticIndexBuilder<'_, 'ast> {
                 .map(|lambda| (lambda.into(), standalone_statement)),
         );
 
-        // The inferred element type of a collection initializer depends on uses of
-        // the collection in its containing scope, and so each use must be part
-        // of an standalone inferable statement to avoid large scope-level cycles.
-        let mut collection_defs = FxHashSet::default();
-        for (collection_def, use_expression) in current_statement.collection_uses {
-            // If the same collection is referenced multiple times in this statement,
-            // we only consider the first occurrence, as collection use constraints are
-            // tracked at the statement level.
-            if !collection_defs.insert(collection_def) {
-                continue;
+        // The inferred specialization of a fluid candidate depends on uses of
+        // the candidate in its containing scope, and so each constraining use must be
+        // part of a standalone inferable statement to avoid large scope-level cycles.
+        for (candidate_def, mut fluid_use) in classified {
+            if fluid_use.role.contributes_constraints() {
+                fluid_use.statement = Some(standalone_statement);
             }
 
-            self.uses_by_collection
-                .entry(collection_def)
+            self.fluid_candidates_by_use
+                .insert(fluid_use.use_expression, candidate_def);
+            self.fluid_uses_by_candidate
+                .entry(candidate_def)
                 .or_default()
-                .push((standalone_statement, use_expression));
-
-            self.collections_by_use
-                .insert(use_expression, collection_def);
+                .push(fluid_use);
         }
     }
 
@@ -4411,14 +4416,17 @@ impl<'ast> Visitor<'ast> for SemanticIndexBuilder<'_, 'ast> {
                     if is_use {
                         self.record_place_use(place_id, expr);
 
-                        // Keep track of any uses of unannotated collection initializers.
-                        if let Some(collection_def) =
-                            self.unannotated_collection_initializer_binding(expr)
-                            && let Some(current_statement) = self.current_statements.last_mut()
-                        {
-                            current_statement
-                                .collection_uses
-                                .push((collection_def, expr.into()));
+                        // Keep track of any uses of fluid specialization candidates.
+                        if let Some(candidate_def) = self.fluid_candidate_binding(expr) {
+                            let loops: Box<[TextRange]> = self.loop_ranges.as_slice().into();
+                            if let Some(current_statement) = self.current_statements.last_mut() {
+                                current_statement.fluid_uses.push((
+                                    candidate_def,
+                                    expr.into(),
+                                    expr.range(),
+                                    loops,
+                                ));
+                            }
                         }
                     }
 
@@ -4965,8 +4973,242 @@ impl<'ast> From<&'ast ast::ExprNamed> for CurrentAssignment<'ast, '_> {
 struct CurrentStatement<'ast, 'db> {
     /// A list of lambda expressions contained in this statement.
     lambda_expressions: Vec<&'ast ast::ExprLambda>,
-    /// A list of collection definitions whose uses are contained in this statement.
-    collection_uses: Vec<(Definition<'db>, ExpressionNodeKey)>,
+    /// A list of fluid candidate definitions whose uses are contained in this statement,
+    /// together with the use expression, its range, and its enclosing loop ranges.
+    fluid_uses: Vec<(
+        Definition<'db>,
+        ExpressionNodeKey,
+        TextRange,
+        Box<[TextRange]>,
+    )>,
+}
+
+/// Whether constraints learned at a fluid-candidate use in this statement can be read
+/// back from the statement's standalone inference. Compound statements are excluded
+/// because inferring them as a standalone unit would re-infer their entire body.
+fn is_simple_statement(stmt: &ast::Stmt) -> bool {
+    matches!(
+        stmt,
+        ast::Stmt::Expr(_)
+            | ast::Stmt::Assign(_)
+            | ast::Stmt::AnnAssign(_)
+            | ast::Stmt::AugAssign(_)
+            | ast::Stmt::Return(_)
+    )
+}
+
+/// Classify how a use of a fluid specialization candidate interacts with the candidate's
+/// specialization, based on the syntactic position of the use within its statement.
+fn classify_fluid_use(stmt: &ast::Stmt, use_expression: ExpressionNodeKey) -> (FluidUseRole, bool) {
+    // The role of the use when it is one of the statement's direct sub-expressions.
+    let direct_role = |expr: &ast::Expr| match stmt {
+        // A bare expression statement reads the value and discards it.
+        ast::Stmt::Expr(_) => FluidUseRole::Read,
+        // Return values and annotated assignments are inferred with the declared type
+        // as bidirectional type context.
+        ast::Stmt::Return(_) | ast::Stmt::AnnAssign(_) => FluidUseRole::TypeContextual,
+        // Truthiness tests and iteration cannot constrain or leak the specialization.
+        ast::Stmt::If(ast::StmtIf { test, .. })
+        | ast::Stmt::While(ast::StmtWhile { test, .. })
+        | ast::Stmt::Assert(ast::StmtAssert { test, .. })
+            if ExpressionNodeKey::from(test.as_ref()) == ExpressionNodeKey::from(expr) =>
+        {
+            FluidUseRole::Read
+        }
+        ast::Stmt::For(ast::StmtFor { iter, .. })
+            if ExpressionNodeKey::from(iter.as_ref()) == ExpressionNodeKey::from(expr) =>
+        {
+            FluidUseRole::Read
+        }
+        _ => FluidUseRole::Escape,
+    };
+
+    let mut classifier = FluidUseClassifier {
+        use_expression,
+        stack: Vec::new(),
+        result: None,
+    };
+    classifier.visit_stmt_header(stmt);
+
+    let (role, call_is_root) = classifier
+        .result
+        .map_or((FluidUseRole::Escape, false), |found| match found {
+            FoundFluidUse::Direct(expr) => (direct_role(expr), false),
+            FoundFluidUse::Nested { role, call_is_root } => (role, call_is_root),
+        });
+
+    // The target of an augmented subscript assignment (`a[k] += v`) both reads and
+    // writes; its constraints are not recorded, so treat it as an opaque use.
+    if role == FluidUseRole::SubscriptStore && stmt.is_aug_assign_stmt() {
+        return (FluidUseRole::Escape, false);
+    }
+
+    // An expression statement discards its value: no observer of the call's result
+    // survives the call.
+    let discarded_call_result =
+        role == FluidUseRole::TypeContextual && call_is_root && stmt.is_expr_stmt();
+
+    (role, discarded_call_result)
+}
+
+enum FoundFluidUse<'ast> {
+    /// The use is a direct sub-expression of the statement.
+    Direct(&'ast ast::Expr),
+    /// The use is nested within an expression; its role was derived from its parents.
+    Nested {
+        role: FluidUseRole,
+        /// Whether the use is an argument of a call that is the statement's root
+        /// expression — if the statement discards the call's result, no observer of
+        /// the result survives the call.
+        call_is_root: bool,
+    },
+}
+
+struct FluidUseClassifier<'ast> {
+    use_expression: ExpressionNodeKey,
+    stack: Vec<&'ast ast::Expr>,
+    result: Option<FoundFluidUse<'ast>>,
+}
+
+impl<'ast> FluidUseClassifier<'ast> {
+    /// Visit the statement's direct sub-expressions, without descending into the bodies
+    /// of compound statements: uses there are recorded against the nested statements.
+    fn visit_stmt_header(&mut self, stmt: &'ast ast::Stmt) {
+        match stmt {
+            ast::Stmt::Expr(node) => self.visit_expr(&node.value),
+            ast::Stmt::Return(node) => {
+                if let Some(value) = &node.value {
+                    self.visit_expr(value);
+                }
+            }
+            ast::Stmt::Assign(node) => {
+                for target in &node.targets {
+                    self.visit_expr(target);
+                }
+                self.visit_expr(&node.value);
+            }
+            ast::Stmt::AnnAssign(node) => {
+                self.visit_expr(&node.target);
+                if let Some(value) = &node.value {
+                    self.visit_expr(value);
+                }
+            }
+            ast::Stmt::AugAssign(node) => {
+                self.visit_expr(&node.target);
+                self.visit_expr(&node.value);
+            }
+            ast::Stmt::If(node) => self.visit_expr(&node.test),
+            ast::Stmt::While(node) => self.visit_expr(&node.test),
+            ast::Stmt::For(node) => {
+                self.visit_expr(&node.target);
+                self.visit_expr(&node.iter);
+            }
+            ast::Stmt::Assert(node) => {
+                self.visit_expr(&node.test);
+                if let Some(msg) = &node.msg {
+                    self.visit_expr(msg);
+                }
+            }
+            ast::Stmt::Delete(node) => {
+                for target in &node.targets {
+                    self.visit_expr(target);
+                }
+            }
+            ast::Stmt::With(node) => {
+                for item in &node.items {
+                    self.visit_expr(&item.context_expr);
+                    if let Some(optional_vars) = &item.optional_vars {
+                        self.visit_expr(optional_vars);
+                    }
+                }
+            }
+            ast::Stmt::Match(node) => self.visit_expr(&node.subject),
+            ast::Stmt::Raise(node) => {
+                if let Some(exc) = &node.exc {
+                    self.visit_expr(exc);
+                }
+                if let Some(cause) = &node.cause {
+                    self.visit_expr(cause);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Derive the role of the use from its parent expressions.
+    fn role_from_stack(&self, use_expr: &'ast ast::Expr) -> FoundFluidUse<'ast> {
+        let Some((parent, rest)) = self.stack.split_last() else {
+            return FoundFluidUse::Direct(use_expr);
+        };
+
+        let use_key = ExpressionNodeKey::from(use_expr);
+
+        let role = match parent {
+            // `a.m` — the role depends on whether the bound method is immediately called.
+            ast::Expr::Attribute(attribute)
+                if ExpressionNodeKey::from(attribute.value.as_ref()) == use_key =>
+            {
+                match rest.last() {
+                    Some(ast::Expr::Call(call))
+                        if ExpressionNodeKey::from(call.func.as_ref())
+                            == ExpressionNodeKey::from(*parent) =>
+                    {
+                        FluidUseRole::MethodReceiver
+                    }
+                    // A bound method that escapes without being called could observe
+                    // the specialization later.
+                    _ => FluidUseRole::Escape,
+                }
+            }
+            ast::Expr::Subscript(subscript)
+                if ExpressionNodeKey::from(subscript.value.as_ref()) == use_key =>
+            {
+                match subscript.ctx {
+                    ast::ExprContext::Load => FluidUseRole::Read,
+                    ast::ExprContext::Store => FluidUseRole::SubscriptStore,
+                    ast::ExprContext::Del | ast::ExprContext::Invalid => FluidUseRole::Escape,
+                }
+            }
+            // A direct argument of a plain function call is inferred with the declared
+            // parameter type as bidirectional type context. Arguments of bound-method
+            // calls escape instead: the receiver may retain the value (e.g.
+            // `other.append(a)` aliases `a` into `other`).
+            ast::Expr::Call(call) if ExpressionNodeKey::from(call.func.as_ref()) != use_key => {
+                let role = if call.func.is_name_expr() {
+                    FluidUseRole::TypeContextual
+                } else {
+                    FluidUseRole::Escape
+                };
+                return FoundFluidUse::Nested {
+                    role,
+                    call_is_root: rest.is_empty(),
+                };
+            }
+            _ => FluidUseRole::Escape,
+        };
+
+        FoundFluidUse::Nested {
+            role,
+            call_is_root: false,
+        }
+    }
+}
+
+impl<'ast> Visitor<'ast> for FluidUseClassifier<'ast> {
+    fn visit_expr(&mut self, expr: &'ast ast::Expr) {
+        if self.result.is_some() {
+            return;
+        }
+
+        if ExpressionNodeKey::from(expr) == self.use_expression {
+            self.result = Some(self.role_from_stack(expr));
+            return;
+        }
+
+        self.stack.push(expr);
+        walk_expr(self, expr);
+        self.stack.pop();
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -5191,24 +5433,21 @@ fn is_if_not_type_checking(expr: &ast::Expr) -> bool {
     )
 }
 
-fn is_empty_collection_constructor_call(expr: &ast::Expr) -> bool {
-    let ast::Expr::Call(ast::ExprCall {
-        func, arguments, ..
-    }) = expr
-    else {
-        return false;
-    };
-
-    arguments.is_empty()
-        && func
-            .as_name_expr()
-            .is_some_and(|name| matches!(name.id.as_str(), "list" | "set" | "dict"))
-}
-
-fn is_collection_initializer(expr: &ast::Expr) -> bool {
-    is_collection_literal(expr) || is_empty_collection_constructor_call(expr)
-}
-
-pub(crate) fn is_collection_literal(expr: &ast::Expr) -> bool {
-    expr.is_list_expr() || expr.is_set_expr() || expr.is_dict_expr()
+/// Whether an expression can create a "fluid" specialization when bound to a name: a
+/// generic instance whose inferred specialization may be refined by later uses of the
+/// binding. Collection literals and constructor calls qualify; calls with subscripted
+/// callees (e.g. `A[int](...)`) are excluded because their specialization is explicit.
+///
+/// This is a purely syntactic over-approximation: whether the assigned value actually
+/// is a generic instance with an inferred specialization is determined during type
+/// inference.
+pub(crate) fn is_fluid_specialization_candidate(expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::List(_) | ast::Expr::Set(_) | ast::Expr::Dict(_) => true,
+        ast::Expr::Call(call) => matches!(
+            call.func.as_ref(),
+            ast::Expr::Name(_) | ast::Expr::Attribute(_)
+        ),
+        _ => false,
+    }
 }

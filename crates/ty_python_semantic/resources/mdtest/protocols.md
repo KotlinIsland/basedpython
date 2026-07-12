@@ -3869,7 +3869,8 @@ output = dict((
     ("22", 22),
     ("23", 23),
 ))
-reveal_type(output)  # revealed: dict[str, int]
+# revealed: dict[str, int]
+reveal_type(output)
 ```
 
 ### Regression test: narrowing with self-referential protocols

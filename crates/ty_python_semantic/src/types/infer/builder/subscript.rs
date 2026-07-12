@@ -1504,7 +1504,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // Record the constraints for the object of the subscript assignment, if the object is an
         // unannotated collection initializer.
         if is_valid_assignment
-            && let Some(collection_def) = self.index.unannotated_collection_initializer(object)
+            && self.fluid_specializations_enabled()
+            && let Some(collection_def) = self.index.fluid_candidate_binding(object)
             && let Some((class_literal, _)) = object_ty.class_specialization(db)
         {
             let identity_instance = Type::instance(db, class_literal.identity_specialization(db));

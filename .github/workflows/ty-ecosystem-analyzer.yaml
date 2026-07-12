@@ -126,6 +126,13 @@ jobs:
     timeout-minutes: 360
     env:
       EXCLUDE_NEWER: ${{ github.event.pull_request.updated_at }}
+      # TODO(perf): fluid specializations still time out several large projects (cloud-init,
+      # core, pandas, prefect, tornado) from a residual superlinear re-solve cost that promotion
+      # did not fully resolve. Disable fluid for ecosystem analysis until that is fixed. This is
+      # an env var rather than a config option because the shared config is fed to both the base
+      # and PR binaries, and the base binary hard-errors on the unknown option; an unknown env
+      # var is harmlessly ignored. The feature stays enabled by default everywhere else.
+      TY_DISABLE_FLUID_SPECIALIZATIONS: "1"
     steps:
       - name: Install the latest version of uv
         uses: astral-sh/setup-uv@f98e06938123ccabd21905ea5d0069192241f9f1 # v8.3.1

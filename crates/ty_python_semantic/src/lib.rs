@@ -105,6 +105,12 @@ pub struct AnalysisSettings {
     pub allowed_unresolved_imports: ModuleGlobSet,
 
     pub replace_imports_with_any: ModuleGlobSet,
+
+    /// Whether the basedpython "fluid specializations" feature is disabled.
+    ///
+    /// When disabled, inferred generic specializations are not widened flow-sensitively by
+    /// later uses of a binding; each binding keeps its creation-time specialization.
+    pub disable_fluid_specializations: bool,
 }
 
 impl Default for AnalysisSettings {
@@ -113,6 +119,7 @@ impl Default for AnalysisSettings {
             respect_type_ignore_comments: true,
             allowed_unresolved_imports: ModuleGlobSet::empty(),
             replace_imports_with_any: ModuleGlobSet::empty(),
+            disable_fluid_specializations: false,
         }
     }
 }
