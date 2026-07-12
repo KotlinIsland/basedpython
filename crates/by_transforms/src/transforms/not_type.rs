@@ -16,8 +16,12 @@ mod tests {
     }
 
     fn check_py312(input: &str, expected: &str) {
+        check_at(input, expected, PythonVersion::PY312);
+    }
+
+    fn check_at(input: &str, expected: &str, version: PythonVersion) {
         let config = Config {
-            min_version: PythonVersion::PY312,
+            min_version: version,
             ..Config::test_default()
         };
         assert_eq!(
@@ -122,11 +126,28 @@ mod tests {
 
     #[test]
     fn not_in_typeparam_default() {
-        check_py312(
+        // native passthrough of a defaulted list needs 3.13 (pep 696)
+        check_at(
             "def f[T = not int](x: T) -> T: ...\n",
             indoc! {"
                 from ty_extensions import Not
                 def f[T = Not[int]](x: T) -> T: ...
+            "},
+            PythonVersion::PY313,
+        );
+    }
+
+    #[test]
+    fn not_in_typeparam_default_downlevels_on_312() {
+        // on a 3.12 target the defaulted list polyfills, and the negation
+        // still lowers inside the `default=` argument
+        check_py312(
+            "def f[T = not int](x: T) -> T: ...\n",
+            indoc! {"
+                from ty_extensions import Not
+                from typing_extensions import TypeVar
+                _T = TypeVar(\"_T\", default=Not[int])
+                def f(x: _T) -> _T: ...
             "},
         );
     }

@@ -103,7 +103,10 @@ reification and we only pay it when the body needs it
 the lowered `def` keeps its native `[T]` syntax because reification reuses the
 pep 695 closure cells cpython already builds. that syntax is only available on
 python 3.12+, so reification requires `min_version >= 3.12`; a reified function
-on an older target is a transpile error rather than code that cannot run
+on an older target is a transpile error rather than code that cannot run. a
+defaulted parameter ([PEP 696]) raises the bar to `min_version >= 3.13` — the
+default syntax is not valid on 3.12, and the erased polyfill can't stand in
+because it discards the native parameter list reification depends on
 
 ## specialization is mandatory
 

@@ -30,6 +30,10 @@
 //! lowered `def` must keep its native `[T]` syntax. that is only available on
 //! python 3.12+, so reification is gated on `min_version >= 3.12`; below that
 //! the pass reports a hard error rather than emit code that cannot run.
+//! pep 696 defaults (`[T = int]`) raise the bar to 3.13 — they are not valid
+//! syntax on 3.12, and the erased polyfill can't stand in because it discards
+//! the native parameter list reification depends on — so a reified function
+//! with a defaulted parameter on a 3.12 target is a hard error too
 
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{PythonVersion, Stmt, StmtFunctionDef};
@@ -100,7 +104,10 @@ struct ReifiedGeneric<'src> {
     used: bool,
     /// a reified function was found but the target is below 3.12
     below_312: Vec<String>,
+    /// a reified function has a pep 696 default but the target is below 3.13
+    defaulted_below_313: Vec<String>,
     supports_native_generics: bool,
+    supports_param_defaults: bool,
 }
 
 impl<'src> ReifiedGeneric<'src> {
@@ -110,7 +117,9 @@ impl<'src> ReifiedGeneric<'src> {
             edits: Vec::new(),
             used: false,
             below_312: Vec::new(),
+            defaulted_below_313: Vec::new(),
             supports_native_generics: min_version >= PythonVersion::PY312,
+            supports_param_defaults: min_version >= PythonVersion::PY313,
         }
     }
 
@@ -120,6 +129,17 @@ impl<'src> ReifiedGeneric<'src> {
         }
         if !self.supports_native_generics {
             self.below_312.push(function.name.id.to_string());
+            return;
+        }
+        // any default in the list makes the native header 3.13-only syntax,
+        // even on parameters that don't themselves reify
+        if !self.supports_param_defaults
+            && function
+                .type_params
+                .as_deref()
+                .is_some_and(|tp| tp.type_params.iter().any(|p| p.default().is_some()))
+        {
+            self.defaulted_below_313.push(function.name.id.to_string());
             return;
         }
         // the decorator goes on its own line directly above the `def`, sharing
@@ -172,6 +192,15 @@ impl TypeAwarePass for ReifiedGenericPass<'_> {
                 "reified generic function `{name}` requires python 3.12 or newer: \
                  reification reuses pep 695 closure cells, which need native \
                  type-parameter syntax in the generated python"
+            ));
+            return;
+        }
+        if let Some(name) = inner.defaulted_below_313.first() {
+            ctx.errors.push(format!(
+                "reified generic function `{name}` has a type-parameter default, \
+                 which requires python 3.13 or newer: reification keeps the native \
+                 pep 695 parameter list in the generated python, and pep 696 \
+                 defaults are not valid syntax before 3.13"
             ));
             return;
         }
@@ -334,6 +363,51 @@ mod tests {
         assert!(
             err.contains("3.12"),
             "expected a 3.12 requirement error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn default_on_312_is_an_error() {
+        // pep 696 defaults are 3.13-only syntax, and a reified function can't
+        // fall back to the erased polyfill, so 3.12 targets get a hard error
+        let err = transpile(
+            indoc! {"
+                def f[T = int]():
+                    print(T)
+            "},
+            &Config {
+                min_version: PythonVersion::PY312,
+                ..Config::test_default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("3.13"),
+            "expected a 3.13 requirement error, got: {err}"
+        );
+    }
+
+    #[test]
+    fn default_on_313_wraps_natively() {
+        let out = transpile(
+            indoc! {"
+                def f[T = int]():
+                    print(T)
+                f()
+            "},
+            &Config {
+                min_version: PythonVersion::PY313,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("@generic  # basedpython: reified"),
+            "should wrap: {out}"
+        );
+        assert!(
+            out.contains("def f[T = int]():"),
+            "native defaulted params kept: {out}"
         );
     }
 

@@ -125,6 +125,19 @@ impl<'src> GenericPolyfill<'src> {
         }
     }
 
+    /// whether the target can keep this parameter list as native syntax:
+    /// pep 695 lists need 3.12+, and a pep 696 default (`[T = int]`) bumps
+    /// the requirement to 3.13. a defaulted list on a 3.12 target polyfills
+    /// the declaration exactly like pre-3.12 code
+    fn supports_native_type_params(&self, params: &[TypeParam]) -> bool {
+        let required = if params.iter().any(|p| p.default().is_some()) {
+            PythonVersion::PY313
+        } else {
+            PythonVersion::PY312
+        };
+        self.config.min_version >= required
+    }
+
     /// Pick a unique mangled name for a `TypeVar`.
     ///
     /// First emission of a given source name returns the standard mangled
@@ -439,8 +452,8 @@ impl<'src> GenericPolyfill<'src> {
             self.parameters_targets
                 .insert(class.name.id.as_str().to_owned());
         }
-        // PEP 695 class type params are native syntax in 3.12+
-        if self.config.min_version >= PythonVersion::PY312 {
+        // PEP 695 class type params are native syntax in 3.12+ (3.13+ with defaults)
+        if self.supports_native_type_params(&tp.type_params) {
             self.strip_constraints_keyword(&tp.type_params);
             return;
         }
@@ -533,8 +546,8 @@ impl<'src> GenericPolyfill<'src> {
             self.parameters_targets
                 .insert(func.name.id.as_str().to_owned());
         }
-        // PEP 695 function type params are native syntax in 3.12+
-        if self.config.min_version >= PythonVersion::PY312 {
+        // PEP 695 function type params are native syntax in 3.12+ (3.13+ with defaults)
+        if self.supports_native_type_params(&tp.type_params) {
             self.strip_constraints_keyword(&tp.type_params);
             return;
         }
@@ -587,7 +600,11 @@ impl<'src> GenericPolyfill<'src> {
     fn process_type_alias(&mut self, alias: &StmtTypeAlias) {
         // `type Point = tuple[float, float]`
         //   → `Point = TypeAliasType("Point", tuple[float, float])`
-        if self.config.min_version >= PythonVersion::PY312 {
+        let params = alias
+            .type_params
+            .as_deref()
+            .map_or(&[][..], |tp| tp.type_params.as_slice());
+        if self.supports_native_type_params(params) {
             if let Some(tp) = &alias.type_params {
                 self.strip_constraints_keyword(&tp.type_params);
             }
@@ -1306,6 +1323,132 @@ mod tests {
         "};
         check_at(src, expected, PythonVersion::PY312);
         check_at(src, expected, PythonVersion::PY314);
+    }
+
+    #[test]
+    fn function_default_downleveled_on_312() {
+        // pep 696 defaults are 3.13-only syntax: a defaulted list on a 3.12
+        // target polyfills like pre-3.12 code instead of passing through
+        check_at(
+            indoc! {"
+                def f[T = int](x: T) -> T:
+                    return x
+            "},
+            indoc! {"
+                from typing_extensions import TypeVar
+                _T = TypeVar(\"_T\", default=int)
+                def f(x: _T) -> _T:
+                    return x
+            "},
+            PythonVersion::PY312,
+        );
+    }
+
+    #[test]
+    fn function_default_unchanged_on_313() {
+        let src = indoc! {"
+            def f[T = int](x: T) -> T:
+                return x
+        "};
+        check_at(src, src, PythonVersion::PY313);
+        check_at(src, src, PythonVersion::PY314);
+    }
+
+    #[test]
+    fn class_default_downleveled_on_312() {
+        check_at(
+            "class A[T = int]: ...\n",
+            indoc! {"
+                from typing import Generic
+                from typing_extensions import TypeVar
+                _T = TypeVar(\"_T\", default=int)
+                class A(Generic[_T]): ...
+            "},
+            PythonVersion::PY312,
+        );
+    }
+
+    #[test]
+    fn class_bound_and_default_downleveled_on_312() {
+        // the bound rides along into the polyfilled call next to the default
+        check_at(
+            "class A[T: int = int]: ...\n",
+            indoc! {"
+                from typing import Generic
+                from typing_extensions import TypeVar
+                _T = TypeVar(\"_T\", bound=int, default=int)
+                class A(Generic[_T]): ...
+            "},
+            PythonVersion::PY312,
+        );
+    }
+
+    #[test]
+    fn class_default_unchanged_on_313() {
+        let src = "class A[T = int]: ...\n";
+        check_at(src, src, PythonVersion::PY313);
+        check_at(src, src, PythonVersion::PY314);
+    }
+
+    #[test]
+    fn only_defaulted_declarations_downlevel_on_312() {
+        // gating is per declaration: the defaulted class polyfills while the
+        // plain one keeps native pep 695 syntax
+        check_at(
+            indoc! {"
+                class A[T = int]: ...
+                class B[T]: ...
+            "},
+            indoc! {"
+                from typing import Generic
+                from typing_extensions import TypeVar
+                _T = TypeVar(\"_T\", default=int)
+                class A(Generic[_T]): ...
+                class B[T]: ...
+            "},
+            PythonVersion::PY312,
+        );
+    }
+
+    #[test]
+    fn paramspec_and_typevartuple_defaults_downlevel_on_312() {
+        // defaults on any parameter kind make the header 3.13-only syntax, so
+        // the whole declaration polyfills. the polyfill itself drops paramspec
+        // and typevartuple defaults, matching the pre-3.12 path
+        check_at(
+            indoc! {"
+                class A[**P = [int]]: ...
+                class B[*Ts = *tuple[int, str]]: ...
+            "},
+            indoc! {"
+                from typing import TypeVarTuple, Unpack, ParamSpec, Generic
+                _P = ParamSpec(\"_P\")
+                class A(Generic[_P]): ...
+                _Ts = TypeVarTuple(\"_Ts\")
+                class B(Generic[*_Ts]): ...
+            "},
+            PythonVersion::PY312,
+        );
+    }
+
+    #[test]
+    fn type_alias_default_downleveled_on_312() {
+        check_at(
+            "type Vector[T = int] = list[T]\n",
+            indoc! {"
+                from typing_extensions import TypeVar, TypeAliasType
+                _T = TypeVar(\"_T\", default=int)
+                Vector = TypeAliasType(\"Vector\", list[_T], type_params=(_T,))
+            "},
+            PythonVersion::PY312,
+        );
+    }
+
+    #[test]
+    fn type_alias_default_unchanged_on_313() {
+        let src = "type Vector[T = int] = list[T]\n";
+        check_at(src, src, PythonVersion::PY313);
+        check_at(src, src, PythonVersion::PY314);
     }
 
     #[test]
