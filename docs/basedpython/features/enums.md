@@ -181,7 +181,9 @@ python `None` for ergonomic interop (open question, see below)
 an enum whose variants are **all unit** (no payloads) lowers to an idiomatic
 `enum.Enum` with `auto()` members — `enum class Color: case Red, Green` becomes
 `class Color(Enum): Red = auto(); Green = auto()`. this is the form the reverse
-transform recognises.
+transform recognises. because the lowering is a real `Enum`, the type checker
+models the class with the `Enum` base too: members expose `name` / `value` and
+the class iterates like any python enum.
 
 any other enum (one or more payload-carrying variants) lowers to a sealed
 hierarchy: the enum class holds the shared members, and each variant becomes a

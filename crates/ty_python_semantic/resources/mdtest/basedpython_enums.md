@@ -250,6 +250,18 @@ def partial(c: Color) -> str:
             return "red"
 ```
 
+since the lowering is a real `enum.Enum`, the class carries the `Enum` interface: members expose
+`name` and `value`, and the model matches the runtime:
+
+```by
+enum class Fruit:
+    case Apple, Pear
+
+reveal_type(Fruit.Apple.name)  # revealed: "Apple"
+print(Fruit.Apple.name)
+print(Fruit.Pear.value)
+```
+
 ## constants in an enum body stay constants
 
 an assignment member disqualifies the idiomatic-`Enum` lowering (python's `Enum` would turn the

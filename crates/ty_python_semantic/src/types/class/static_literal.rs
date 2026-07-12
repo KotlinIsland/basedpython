@@ -604,6 +604,15 @@ impl<'db> StaticClassLiteral<'db> {
                 }
             }
 
+            // a based all-unit enum (`enum class Color: case Red, Green`) lowers
+            // to an idiomatic `enum.Enum`, so give the model the same base: its
+            // members then expose `name`/`value` and the class iterates like any
+            // enum. payload-bearing enums lower to a sealed class hierarchy
+            // instead and must not gain the base
+            if class_stmt.is_based_enum() && class_stmt.is_all_unit_enum() {
+                bases.push(KnownClass::Enum.to_class_literal(db));
+            }
+
             // a based-enum variant subclasses its enum: so methods/classmethods/
             // properties defined on the enum body are inherited by the variant, and
             // a variant instance is a subtype of the enum. the enum is added
