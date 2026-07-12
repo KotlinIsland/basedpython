@@ -239,8 +239,8 @@ by run [OPTIONS] <MODULE>
 <h3 class="cli-reference">Options</h3>
 
 <dl class="cli-reference"><dt id="by-run--help"><a href="#by-run--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help</p>
-</dd><dt id="by-run--min-version"><a href="#by-run--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the output must run on</p>
-<p>[default: 3.10]</p></dd><dt id="by-run--no-soundness"><a href="#by-run--no-soundness"><code>--no-soundness</code></a></dt><dd><p>skip runtime type-soundness checks (<code>_soundness_check</code> insertions)</p>
+</dd><dt id="by-run--min-version"><a href="#by-run--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the output must run on [default: the version of the interpreter that will run it]</p>
+</dd><dt id="by-run--no-soundness"><a href="#by-run--no-soundness"><code>--no-soundness</code></a></dt><dd><p>skip runtime type-soundness checks (<code>_soundness_check</code> insertions)</p>
 </dd></dl>
 
 ## by build

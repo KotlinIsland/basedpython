@@ -70,8 +70,9 @@ pub(crate) enum Command {
         /// module to run (e.g. `by run main` looks for main.by)
         module: String,
         /// minimum Python version the output must run on
-        #[arg(long, value_name = "VERSION", default_value = "3.10")]
-        min_version: String,
+        /// [default: the version of the interpreter that will run it]
+        #[arg(long, value_name = "VERSION")]
+        min_version: Option<String>,
         /// skip runtime type-soundness checks (`_soundness_check` insertions)
         #[arg(long)]
         no_soundness: bool,

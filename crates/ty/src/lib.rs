@@ -84,7 +84,7 @@ where
             module,
             min_version,
             no_soundness,
-        } => by_commands::cmd_run(&module, &min_version, no_soundness),
+        } => by_commands::cmd_run(&module, min_version.as_deref(), no_soundness),
         Command::Build {
             min_version,
             no_soundness,
