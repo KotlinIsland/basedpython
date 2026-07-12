@@ -1692,7 +1692,7 @@ impl<'db> ClassType<'db> {
         let fallback_member_lookup = || {
             class_literal
                 .own_class_member(db, inherited_generic_context, specialization, name)
-                .map_type(|ty| ty.apply_optional_specialization(db, specialization))
+                .map_type(|ty| ty.apply_projected_optional_specialization(db, specialization))
         };
 
         match name {
@@ -1981,15 +1981,15 @@ impl<'db> ClassType<'db> {
             }
             Self::Generic(generic) => {
                 let class_literal = generic.origin(db);
-                let specialization = Some(generic.specialization(db));
+                let specialization = generic.specialization(db);
 
                 if class_literal.is_typed_dict(db) {
                     return Place::Undefined.into();
                 }
 
                 class_literal
-                    .instance_member(db, specialization, name)
-                    .map_type(|ty| ty.apply_optional_specialization(db, specialization))
+                    .instance_member(db, Some(specialization), name)
+                    .map_type(|ty| ty.apply_projected_specialization(db, specialization))
             }
         }
     }

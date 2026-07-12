@@ -403,6 +403,7 @@ impl<'db> KnownInstanceType<'db> {
                 }
                 TypeMapping::ApplySpecialization(_)
                 | TypeMapping::ApplySpecializationWithMaterialization { .. }
+                | TypeMapping::ProjectUseSiteVariance { .. }
                 | TypeMapping::Promote(..)
                 | TypeMapping::FreshenBoundTypeVars { .. }
                 | TypeMapping::BindSelf(..)

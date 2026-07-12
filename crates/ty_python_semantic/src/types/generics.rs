@@ -1289,6 +1289,21 @@ impl<'db> Specialization<'db> {
         self.types(db).get(index).copied()
     }
 
+    /// basedpython: returns the use-site variance projection recorded for
+    /// `bound_typevar`, or `None` when the typevar carries no projection (or is
+    /// not part of this specialization)
+    pub(crate) fn projection_for(
+        self,
+        db: &'db dyn Db,
+        bound_typevar: BoundTypeVarInstance<'db>,
+    ) -> Option<ruff_python_ast::helpers::UseSiteVariance> {
+        let index = self
+            .generic_context(db)
+            .variables_inner(db)
+            .get_index_of(&bound_typevar.identity(db))?;
+        self.projections(db).get(index).copied().flatten()
+    }
+
     /// Applies a specialization to this specialization. This is used, for instance, when a generic
     /// class inherits from a generic alias:
     ///
@@ -1388,6 +1403,26 @@ impl<'db> Specialization<'db> {
 
                     specialized
                 }
+                // basedpython use-site variance: compose the projection position
+                // with this argument's declared variance so an invariant argument
+                // (e.g. the `T` in a returned `list[T]`) is sealed rather than
+                // flipped. this cannot go through the generic covariant/flip arms
+                // below, which have no way to represent an invariant position
+                (
+                    variance,
+                    TypeMapping::ProjectUseSiteVariance {
+                        specialization,
+                        position,
+                    },
+                ) => ty.apply_type_mapping_impl(
+                    db,
+                    &TypeMapping::ProjectUseSiteVariance {
+                        specialization: *specialization,
+                        position: position.compose(variance),
+                    },
+                    tcx,
+                    visitor,
+                ),
                 (variance, _) if variance.is_covariant() => {
                     ty.apply_type_mapping_impl(db, type_mapping, tcx, visitor)
                 }

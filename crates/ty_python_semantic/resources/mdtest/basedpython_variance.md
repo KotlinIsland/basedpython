@@ -81,6 +81,77 @@ def _(a: list[out int | str]):
     reveal_type(a[0])  # revealed: int | str
 ```
 
+The same holds under `in` — writes accept the whole union, reads still project to `object`:
+
+```by
+def _(a: list[in int | str]):
+    reveal_type(a)  # revealed: list[in int | str]
+    a[0] = 1  # ok
+    a[0] = "ok"  # ok
+    # error: [invalid-assignment]
+    a[0] = b"bad"
+    reveal_type(a[0])  # revealed: object
+```
+
+and under `in out`, which reads and writes the union like the plain form:
+
+```by
+def _(a: list[in out int | str]):
+    a[0] = 1  # ok
+    # error: [invalid-assignment]
+    a[0] = b"bad"
+    reveal_type(a[0])  # revealed: int | str
+```
+
+## mutating methods under `out`
+
+The projection is not limited to subscripts and attributes — it reaches every member. A method that
+consumes the element type (like `list.append`) takes it in a contravariant position, which projects
+to `Never` under `out`, so no argument can be written:
+
+```by
+def f(a: list[out int | str]):
+    reveal_type(a.append)  # revealed: bound method list[out int | str].append(object: Never, /) -> None
+    # error: [invalid-argument-type] "Argument to bound method `list.append` is incorrect: Expected `Never`, found `"a"`"
+    a.append("a")
+    # even a value of the element type is rejected — an `out` view writes nothing
+    # error: [invalid-argument-type]
+    a.append(1)
+    # error: [invalid-argument-type]
+    a.extend([1, 2])
+```
+
+A method that *produces* the element type reads it back covariantly, so it is unaffected:
+
+```by
+def f(a: list[out int]):
+    reveal_type(a.pop())  # revealed: int
+```
+
+## mutating methods under `in`
+
+`in` is the mirror image: writes are accepted at the element type, reads project to `object`.
+
+```by
+def f(a: list[in int]):
+    a.append(1)  # ok
+    # error: [invalid-argument-type]
+    a.append("bad")
+    reveal_type(a.pop())  # revealed: object
+```
+
+Union element types are consumed whole:
+
+```by
+def f(a: list[in int | str]):
+    reveal_type(a.append)  # revealed: bound method list[in int | str].append(object: int | str, /) -> None
+    a.append(1)  # ok
+    a.append("ok")  # ok
+    # error: [invalid-argument-type] "Argument to bound method `list.append` is incorrect: Expected `int | str`, found `b"bad"`"
+    a.append(b"bad")
+    reveal_type(a.pop())  # revealed: object
+```
+
 ## subtyping under projection
 
 Use-site projections promote an invariant generic to covariant or contravariant *at the call site*,

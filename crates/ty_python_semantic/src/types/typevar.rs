@@ -1115,6 +1115,54 @@ impl<'db> BoundTypeVarInstance<'db> {
             TypeMapping::ApplySpecialization(specialization) => {
                 mapped_specialization_type(specialization).unwrap_or(Type::TypeVar(self))
             }
+            TypeMapping::ProjectUseSiteVariance {
+                specialization,
+                position,
+            } => {
+                use crate::types::TypeVarVariance;
+                use ruff_python_ast::helpers::UseSiteVariance;
+
+                let Some(value) = mapped_specialization_type(specialization) else {
+                    return Type::TypeVar(self);
+                };
+                let projection = match specialization {
+                    ApplySpecialization::Specialization(specialization) => {
+                        specialization.projection_for(db, self)
+                    }
+                    _ => None,
+                };
+                match projection {
+                    None | Some(UseSiteVariance::InOut) => value,
+                    // an invariant or bivariant occurrence (e.g. the element of a
+                    // returned `list[T]`) is sealed: it takes the value unchanged,
+                    // in neither the read nor the write direction
+                    _ if !matches!(
+                        position,
+                        TypeVarVariance::Covariant | TypeVarVariance::Contravariant
+                    ) =>
+                    {
+                        value
+                    }
+                    // `out`: covariant (read) yields the value; contravariant
+                    // (write) yields `Never`, so no argument can be written
+                    Some(UseSiteVariance::Out) => {
+                        if matches!(position, TypeVarVariance::Contravariant) {
+                            Type::Never
+                        } else {
+                            value
+                        }
+                    }
+                    // `in`: contravariant (write) yields the value; covariant
+                    // (read) projects through to `object`
+                    Some(UseSiteVariance::In) => {
+                        if matches!(position, TypeVarVariance::Contravariant) {
+                            value
+                        } else {
+                            Type::object()
+                        }
+                    }
+                }
+            }
             TypeMapping::ApplySpecializationWithMaterialization {
                 specialization,
                 materialization_kind,

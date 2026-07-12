@@ -6354,6 +6354,47 @@ impl<'db> Type<'db> {
         }
     }
 
+    /// basedpython: applies `specialization` to a member type, honoring any
+    /// use-site variance projections it carries. with no projections this is
+    /// exactly [`Type::apply_specialization`]; with projections, projected
+    /// typevars are substituted directionally by position — see
+    /// [`TypeMapping::ProjectUseSiteVariance`]. this is how `Container[out T]`
+    /// rejects writes (and `Container[in T]` rejects reads) through *methods*,
+    /// not just subscripts and attributes
+    #[must_use]
+    pub(crate) fn apply_projected_specialization(
+        self,
+        db: &'db dyn Db,
+        specialization: Specialization<'db>,
+    ) -> Type<'db> {
+        if specialization.projections(db).iter().any(Option::is_some) {
+            self.apply_type_mapping(
+                db,
+                &TypeMapping::ProjectUseSiteVariance {
+                    specialization: ApplySpecialization::Specialization(specialization),
+                    position: TypeVarVariance::Covariant,
+                },
+                TypeContext::default(),
+            )
+        } else {
+            self.apply_specialization(db, specialization)
+        }
+    }
+
+    /// basedpython: the `Option` analogue of [`Type::apply_projected_specialization`]
+    #[must_use]
+    pub(crate) fn apply_projected_optional_specialization(
+        self,
+        db: &'db dyn Db,
+        specialization: Option<Specialization<'db>>,
+    ) -> Type<'db> {
+        if let Some(specialization) = specialization {
+            self.apply_projected_specialization(db, specialization)
+        } else {
+            self
+        }
+    }
+
     /// Applies a specialization to this type, replacing any typevars with the types that they are
     /// specialized to.
     ///
@@ -6716,6 +6757,7 @@ impl<'db> Type<'db> {
             Type::LiteralValue(_) => match type_mapping {
                 TypeMapping::ApplySpecialization(_) |
                 TypeMapping::ApplySpecializationWithMaterialization { .. } |
+                TypeMapping::ProjectUseSiteVariance { .. } |
                 TypeMapping::BindLegacyTypevars(_) |
                 TypeMapping::FreshenBoundTypeVars { .. } |
                 TypeMapping::BindSelf { .. } |
@@ -6735,6 +6777,7 @@ impl<'db> Type<'db> {
             Type::Dynamic(_) => match type_mapping {
                 TypeMapping::ApplySpecialization(_) |
                 TypeMapping::ApplySpecializationWithMaterialization { .. } |
+                TypeMapping::ProjectUseSiteVariance { .. } |
                 TypeMapping::BindLegacyTypevars(_) |
                 TypeMapping::FreshenBoundTypeVars { .. } |
                 TypeMapping::BindSelf(..) |
@@ -7786,6 +7829,18 @@ pub enum TypeMapping<'a, 'db> {
         specialization: ApplySpecialization<'a, 'db>,
         materialization_kind: MaterializationKind,
     },
+    /// basedpython use-site variance projection: applies `specialization` but
+    /// substitutes use-site-projected typevars directionally by `position`.
+    /// `position` is composed through the surrounding type as we recurse (a
+    /// method parameter flips it, an invariant argument seals it). under an `out`
+    /// projection a typevar reads (covariant) as its value and writes
+    /// (contravariant) as `Never`; under `in` it reads as `object` and writes as
+    /// its value; an invariant occurrence takes the value unchanged. non-projected
+    /// typevars substitute normally in every position
+    ProjectUseSiteVariance {
+        specialization: ApplySpecialization<'a, 'db>,
+        position: TypeVarVariance,
+    },
     /// Replaces any literal types with their corresponding promoted type form (e.g. `Literal["string"]`
     /// to `str`, or `def _() -> int` to `Callable[[], int]`).
     Promote(PromotionMode, PromotionKind),
@@ -7832,7 +7887,8 @@ impl<'db> TypeMapping<'_, 'db> {
                 }),
             ),
             TypeMapping::ApplySpecialization(specialization)
-            | TypeMapping::ApplySpecializationWithMaterialization { specialization, .. } => {
+            | TypeMapping::ApplySpecializationWithMaterialization { specialization, .. }
+            | TypeMapping::ProjectUseSiteVariance { specialization, .. } => {
                 // Filter out type variables that are already specialized
                 // (i.e., mapped to a non-TypeVar type)
                 GenericContext::from_typevar_instances(
@@ -7893,6 +7949,13 @@ impl<'db> TypeMapping<'_, 'db> {
             } => TypeMapping::ApplySpecializationWithMaterialization {
                 specialization: *specialization,
                 materialization_kind: materialization_kind.flip(),
+            },
+            TypeMapping::ProjectUseSiteVariance {
+                specialization,
+                position,
+            } => TypeMapping::ProjectUseSiteVariance {
+                specialization: *specialization,
+                position: position.flip(),
             },
             TypeMapping::Promote(mode, kind) => TypeMapping::Promote(mode.flip(), *kind),
             TypeMapping::ApplySpecialization(_)
