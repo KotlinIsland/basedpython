@@ -38,8 +38,11 @@ impl<'src> ReifiedGenericReverse<'src> {
         }
         let after_dec = usize::from(decorators[idx].range().end());
         let rest = &self.source[after_dec..];
-        // skip the marker comment to the newline, then to the header keyword
-        let offset = rest.find("def")?;
+        // skip the marker comment to the newline, then to the header keyword.
+        // an `async def` header starts at the `async` token, not at `def`
+        let def_offset = rest.find("def")?;
+        let before = rest[..def_offset].trim_end_matches([' ', '\t']);
+        let offset = before.strip_suffix("async").map_or(def_offset, str::len);
         Some(TextSize::from(u32::try_from(after_dec + offset).ok()?))
     }
 
@@ -106,6 +109,20 @@ mod tests {
             "wrapper should be removed: {out}"
         );
         assert!(out.contains("def f[T]():"), "def should remain: {out}");
+    }
+
+    #[test]
+    fn marked_async_generic_keeps_async_keyword() {
+        let src = format!("@generic{REIFIED_MARKER}\nasync def f[T]():\n    print(T)\n");
+        let out = rev(&src);
+        assert!(
+            !out.contains("@generic"),
+            "wrapper should be removed: {out}"
+        );
+        assert!(
+            out.contains("async def f[T]():"),
+            "async header must survive the unwrap: {out}"
+        );
     }
 
     #[test]

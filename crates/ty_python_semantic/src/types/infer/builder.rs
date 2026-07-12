@@ -96,6 +96,7 @@ use crate::types::match_pattern::{ClassPatternPositionalResult, class_pattern_po
 use crate::types::narrow::NarrowingEvaluatorExtension;
 use crate::types::narrow::pattern_success_types;
 use crate::types::newtype::NewType;
+use crate::types::reified_infer::{self, ReifiedInferenceError};
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope};
 use crate::types::special_form::TypeQualifier;
@@ -8454,41 +8455,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return Type::unknown();
         }
 
-        // basedpython: a reified generic must be specialized (`f[...]`) before
-        // it is called — python carries no runtime type information, so a
-        // reified type parameter cannot be inferred from the arguments. a pep
-        // 696 default fills its reified slot when omitted. a reified *method*
-        // (`obj.m()`) is the same: its underlying function carries the reified
-        // type parameters
-        let reified_target = match callable_type {
-            Type::FunctionLiteral(function) => Some(function),
-            Type::BoundMethod(bound_method) => Some(bound_method.function(self.db())),
-            _ => None,
-        };
-        if self.is_basedpython_file()
-            && let Some(function) = reified_target
-            && function.is_unspecialized_reified(self.db())
-        {
-            let missing = function.reified_type_params_without_default(self.db());
-            if !missing.is_empty()
-                && let Some(builder) = self
-                    .context
-                    .report_lint(&UNSPECIALIZED_REIFIED_GENERIC, call_expression)
-            {
-                let name = function.name(self.db());
-                let s = if missing.len() > 1 { "s" } else { "" };
-                let mut diagnostic = builder.into_diagnostic(format_args!(
-                    "Cannot call reified generic function `{name}` \
-                     without explicit specialization"
-                ));
-                diagnostic.info(format_args!(
-                    "reified type parameter{s} `{}` cannot be inferred from arguments — \
-                     specialize with `{name}[...]`",
-                    missing.iter().format("`, `"),
-                ));
-            }
-        }
-
         let class = match callable_type {
             Type::ClassLiteral(class) => Some(ClassType::NonGeneric(class)),
             Type::GenericAlias(generic) => Some(ClassType::Generic(generic)),
@@ -8906,6 +8872,82 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // A call whose return type mentions the typevars solved from a fluid argument
         // hands the caller a new observer of that argument's specialization.
         self.record_fluid_return_observers(arguments, &mut bindings);
+
+        // basedpython: a reified generic must be specialized (`f[...]`) before
+        // it is called — the specialization is a runtime step. a bare call is
+        // accepted only when the transpiler can inject that step: every type
+        // parameter must solve, from the (fully spelled-out) arguments or its
+        // pep 696 default, to a type with a runtime spelling. the shared
+        // `reified_infer` query makes this decision and the injection from the
+        // same inputs, so the two cannot diverge. a reified *method*
+        // (`obj.m()`) is the same: its underlying function carries the reified
+        // type parameters. a reified classmethod is reported at the def site,
+        // so it is skipped here
+        let reified_target = match callable_type {
+            Type::FunctionLiteral(function) => Some(function),
+            Type::BoundMethod(bound_method) => Some(bound_method.function(self.db())),
+            _ => None,
+        };
+        if self.is_basedpython_file()
+            && let Some(function) =
+                reified_target.filter(|function| !function.is_classmethod(self.db()))
+            && function.is_unspecialized_reified(self.db())
+        {
+            let has_unpacked_arguments = arguments.args.iter().any(ast::Expr::is_starred_expr)
+                || arguments
+                    .keywords
+                    .iter()
+                    .any(|keyword| keyword.arg.is_none());
+            let inference_failure = if has_unpacked_arguments {
+                Some(None)
+            } else {
+                reified_infer::inferred_call_type_arguments(
+                    self.db(),
+                    self.file(),
+                    callable_type,
+                    function,
+                    &call_arguments,
+                )
+                .err()
+                .map(Some)
+            };
+            if let Some(failure) = inference_failure
+                && let Some(builder) = self
+                    .context
+                    .report_lint(&UNSPECIALIZED_REIFIED_GENERIC, call_expression)
+            {
+                let name = function.name(self.db());
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "Cannot call reified generic function `{name}` \
+                     without explicit specialization"
+                ));
+                match failure {
+                    None => diagnostic.info(format_args!(
+                        "the inferred specialization cannot be injected through \
+                         unpacked arguments — specialize with `{name}[...]`"
+                    )),
+                    Some(ReifiedInferenceError::Unsolved(parameter)) => {
+                        diagnostic.info(format_args!(
+                            "reified type parameter `{parameter}` cannot be inferred \
+                             from the arguments — specialize with `{name}[...]`"
+                        ));
+                    }
+                    Some(ReifiedInferenceError::Unspellable(parameter, ty)) => {
+                        diagnostic.info(format_args!(
+                            "inferred type `{}` for type parameter `{parameter}` has \
+                             no runtime spelling — specialize with `{name}[...]`",
+                            ty.display(self.db()),
+                        ));
+                    }
+                    Some(ReifiedInferenceError::NoBinding) => {
+                        diagnostic.info(format_args!(
+                            "the specialization cannot be inferred from this call — \
+                             specialize with `{name}[...]`"
+                        ));
+                    }
+                }
+            }
+        }
 
         for binding in bindings.iter_flat_mut() {
             let binding_type = binding.callable_type;

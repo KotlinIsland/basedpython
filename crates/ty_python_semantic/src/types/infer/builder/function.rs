@@ -6,7 +6,7 @@ use crate::{
         TypeContext, TypeVarKind, UnionType,
         diagnostic::{
             FINAL_ON_NON_METHOD, INVALID_PARAMETER_DEFAULT, INVALID_PARAMSPEC, INVALID_TYPE_FORM,
-            USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
+            REIFIED_CLASSMETHOD, USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
             is_invalid_typed_dict_literal, report_implicit_return_type,
             report_invalid_generator_function_return_type, report_invalid_return_type,
             report_shadowed_type_variable,
@@ -434,6 +434,32 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 "`@final` cannot be applied to non-method function `{name}`",
             ));
             diagnostic.info("`@final` is only meaningful on methods and classes");
+        }
+
+        // basedpython: a classmethod cannot have reified type parameters — the
+        // classmethod binding hides the function whose closure would hold the
+        // reified cells, so the specialization step has nothing to rebuild
+        if self.is_basedpython_file()
+            && (function_decorators.contains(FunctionDecorators::CLASSMETHOD)
+                || is_implicit_classmethod(&name.id))
+            && let Some(type_params) = function.type_params.as_deref()
+        {
+            let reified = crate::reified::reified_type_param_names(function);
+            if let Some(first) = reified.first()
+                && let Some(builder) = self.context.report_lint(&REIFIED_CLASSMETHOD, type_params)
+            {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "Classmethod `{name}` cannot have reified type parameters"
+                ));
+                diagnostic.info(format_args!(
+                    "type parameter `{first}` is referenced in a value position, \
+                     which reifies it — the classmethod binding hides the function \
+                     whose closure would hold its value"
+                ));
+                if is_implicit_classmethod(&name.id) {
+                    diagnostic.info(format_args!("`{name}` is implicitly a classmethod"));
+                }
+            }
         }
 
         let has_defaults = parameters

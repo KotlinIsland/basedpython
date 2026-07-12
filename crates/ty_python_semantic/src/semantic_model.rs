@@ -66,6 +66,39 @@ impl<'db> SemanticModel<'db> {
         self.file.path(self.db)
     }
 
+    /// basedpython: the runtime type-argument spellings the transpiler injects
+    /// at a bare call of a reified generic (`f(1)` → `["int"]`), in
+    /// declaration order. `None` when the call is not a bare reified-generic
+    /// call or no injectable spelling exists — the checker reports the latter
+    /// as `unspecialized-reified-generic`
+    pub fn reified_call_type_arguments(&self, call: &ast::ExprCall) -> Option<Vec<String>> {
+        let db = self.db;
+        let callee_ty = call.func.inferred_type(self)?;
+        let function = match callee_ty {
+            Type::FunctionLiteral(function) => function,
+            Type::BoundMethod(method) => method.function(db),
+            _ => return None,
+        };
+        if function.is_classmethod(db) || !function.is_unspecialized_reified(db) {
+            return None;
+        }
+        let mut positional = Vec::with_capacity(call.arguments.args.len());
+        for argument in &call.arguments.args {
+            if argument.is_starred_expr() {
+                return None;
+            }
+            positional.push(argument.inferred_type(self)?);
+        }
+        let mut keywords = Vec::with_capacity(call.arguments.keywords.len());
+        for keyword in &call.arguments.keywords {
+            let name = keyword.arg.as_ref()?;
+            keywords.push((name.as_str(), keyword.value.inferred_type(self)?));
+        }
+        crate::types::reified_infer::injectable_call_type_arguments(
+            db, self.file, callee_ty, function, positional, keywords,
+        )
+    }
+
     pub fn line_index(&self) -> LineIndex {
         line_index(self.db, self.file)
     }

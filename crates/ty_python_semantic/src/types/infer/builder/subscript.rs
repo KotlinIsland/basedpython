@@ -285,11 +285,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // `obj.m[int]` just like a free function. the explicit
             // specialization applies to the underlying function and re-wraps as
             // a bound method; gated on reification so erased generic methods are
-            // unaffected
+            // unaffected. a classmethod is excluded — its binding is opaque at
+            // runtime (reported at the def site by `reified-classmethod`), so
+            // the subscript falls through to the ordinary non-subscriptable path
             Type::BoundMethod(bound_method) => {
                 let function = bound_method.function(db);
                 let signature = function.signature(db);
                 if function.is_reified(db)
+                    && !function.is_classmethod(db)
                     && let Some(overload) = signature.overloads.first()
                     && let Some(generic_context) = overload.generic_context
                 {

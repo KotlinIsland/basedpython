@@ -151,6 +151,7 @@ pub(crate) mod narrow;
 mod newtype;
 mod overrides;
 mod protocol_class;
+pub(crate) mod reified_infer;
 pub(crate) mod relation;
 mod relation_error;
 mod set_theoretic;

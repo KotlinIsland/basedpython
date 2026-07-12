@@ -30,7 +30,8 @@ use crate::{
             INVALID_EXPLICIT_OVERRIDE, INVALID_METHOD_OVERRIDE, INVALID_NAMED_TUPLE,
             INVALID_NAMED_TUPLE_OVERRIDE, MISSING_OVERRIDE_DECORATOR, OVERRIDE_OF_FINAL_METHOD,
             OVERRIDE_OF_FINAL_VARIABLE, report_invalid_method_override,
-            report_overridden_final_method, report_overridden_final_variable,
+            report_invalid_reified_override, report_overridden_final_method,
+            report_overridden_final_variable,
         },
         enums::{EnumMetadata, enum_metadata},
         function::{FunctionDecorators, FunctionType, KnownFunction, OverloadLiteral},
@@ -556,6 +557,35 @@ fn check_class_declaration<'db>(
             if &member.name == "__replace__"
                 && class_kind.is_some_and(CodeGeneratorKind::is_dataclass_like)
             {
+                continue;
+            }
+
+            // basedpython: a reified type-parameter list is part of the
+            // method's runtime interface — `a.f[int]()` through the base
+            // dispatches to the override's wrapper. the value-level callable
+            // check below cannot see it (type parameters are phantom there),
+            // so check list compatibility first
+            let superclass_function = match superclass_type {
+                Type::FunctionLiteral(function) => Some(function),
+                Type::BoundMethod(bound_method) => Some(bound_method.function(db)),
+                _ => None,
+            };
+            if let Some(superclass_function) = superclass_function
+                && let Some(error) = crate::types::reified_infer::reified_override_error(
+                    db,
+                    superclass_function,
+                    subclass_function,
+                )
+            {
+                report_invalid_reified_override(
+                    context,
+                    &member.name,
+                    *first_reachable_definition,
+                    subclass_function,
+                    superclass,
+                    error,
+                );
+                liskov_diagnostic_emitted = true;
                 continue;
             }
 
