@@ -170,6 +170,7 @@ Settings: Settings {
             regex_set: RegexSet([]),
             globs: [],
         },
+        disable_fluid_specializations: false,
     },
     overrides: [],
 }

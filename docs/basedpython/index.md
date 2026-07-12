@@ -20,6 +20,12 @@ basedpython is a Python-like language that transpiles to pure Python
 
 - [api lockfile (`api.lock`)](features/api-lock.md)
 
+## enhancements that also apply to python
+
+type-checking improvements with no new syntax — they work in `.by` and `.py` files alike
+
+- [fluid specializations](features/fluid-specializations.md)
+
 ## basedpython language features
 
 - [tuple type literals](features/tuple-types.md)

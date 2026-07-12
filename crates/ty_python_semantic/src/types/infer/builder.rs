@@ -146,6 +146,7 @@ mod dict;
 mod dynamic_class;
 mod enum_call;
 mod final_attribute;
+mod fluid;
 mod function;
 mod imports;
 mod named_tuple;
@@ -281,6 +282,16 @@ pub(super) struct TypeInferenceBuilder<'db, 'ast> {
     // leaking `SupportsRichComparisonT@sort` into the inferred list element type.
     collection_use_constraints: FxHashMap<Definition<'db>, FxIndexSet<Type<'db>>>,
 
+    /// For each use of a fluid specialization candidate that was inferred with a
+    /// bidirectional type context, the contextual type.
+    fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
+
+    /// The creation-time type of a fluid specialization candidate, with literal types
+    /// retained. Only set when this region is the standalone inference of the
+    /// candidate's assigned value; uses of the binding re-solve their own prefix of the
+    /// constraining events starting from this type.
+    fluid_creation: Option<Type<'db>>,
+
     /// Expressions that are string annotations
     string_annotations: FxHashSet<ExpressionNodeKey>,
 
@@ -400,6 +411,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             qualifiers: FxHashMap::default(),
             type_expression_flags: FxHashMap::default(),
             collection_use_constraints: FxHashMap::default(),
+            fluid_adoptions: FxHashMap::default(),
+            fluid_creation: None,
             string_annotations: FxHashSet::default(),
             expected_types: FxHashMap::default(),
             bindings: VecMap::default(),
@@ -533,6 +546,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             .and_modify(|this| this.extend(constraints))
                             .or_insert(constraints.clone());
                     }
+
+                    self.fluid_adoptions.extend(extra.fluid_adoptions.iter());
                 }
             }
         }
@@ -608,6 +623,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     .or_insert(constraints.clone());
             }
 
+            self.fluid_adoptions.extend(extra.fluid_adoptions.iter());
+
             if !matches!(self.region, InferenceRegion::Scope(..)) {
                 self.bindings.extend(extra.bindings.iter().copied());
             }
@@ -637,6 +654,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     .and_modify(|this| this.extend(constraints))
                     .or_insert(constraints.clone());
             }
+
+            self.fluid_adoptions.extend(extra.fluid_adoptions.iter());
         }
     }
 
@@ -672,6 +691,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
     fn settings(&self) -> &AnalysisSettings {
         self.db().analysis_settings(self.file())
+    }
+
+    /// Whether the basedpython "fluid specializations" feature is active for this file.
+    ///
+    /// Disabled via `analysis.disable-fluid-specializations`; when disabled, inferred generic
+    /// specializations are not widened flow-sensitively by later uses of a binding.
+    fn fluid_specializations_enabled(&self) -> bool {
+        !self.settings().disable_fluid_specializations
     }
 
     fn is_in_type_checking_block(&self, scope: ScopeId<'db>, node: impl Ranged) -> bool {
@@ -3141,7 +3168,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                     self.infer_call_expression_impl(call_expr, callable_type, tcx)
                                 }),
                             Some(_) | None => {
-                                self.infer_call_expression_impl(call_expr, callable_type, tcx)
+                                self.infer_fluid_constructor_call(call_expr, callable_type, tcx)
                             }
                         }
                     };
@@ -5590,6 +5617,23 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
 
         ty = self.apply_type_context(expression, ty, tcx);
+
+        if self.fluid_specializations_enabled()
+            && let Some(candidate_def) = self.index.fluid_candidate_binding(expression)
+        {
+            if let Some(tcx) = tcx.annotation {
+                self.fluid_adoptions.insert(expression.into(), tcx);
+            }
+
+            // Uses of a fluid specialization candidate are typed flow-sensitively:
+            // each use solves the specialization from the events that can have
+            // executed before it, adopting any bidirectional type context that
+            // constrains the specialization.
+            if expression.is_name_expr() {
+                ty = self.fluid_type_at_use(candidate_def, ast::ExprRef::from(expression), ty, tcx);
+            }
+        }
+
         self.store_expression_type(expression, ty);
 
         if let Some(expression_cache) = &self.expression_cache {
@@ -5623,15 +5667,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             && ty.is_assignable_to(self.db(), literal_tcx)
         {
             ty = Type::LiteralValue(literal.to_unpromotable());
-        }
-
-        if let Some(tcx) = tcx.annotation
-            && let Some(collection_def) = self.index.unannotated_collection_initializer(expression)
-        {
-            self.collection_use_constraints
-                .entry(collection_def)
-                .or_default()
-                .insert(tcx);
         }
 
         ty
@@ -7048,53 +7083,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
         }
 
-        if tcx.annotation.is_none()
-            && let Some(collection_expr) = collection_expr
-            && let InferenceRegion::Expression(current_expr, _) = self.region
-            && current_expr.node_ref(self.db()).index() == *collection_expr.node_index()
-            && let Some(assignment) = current_expr.assigned_to(self.db())
-            && let Ok(collection_def) =
-                DefinitionNodeKey::from_assignment(assignment.node(self.module())).exactly_one()
-            && let Some(collection_def) = self.index.try_definition(collection_def)
-        {
-            // For unannotated collection literals, collect any constraints created by later uses
-            // of this definition in the scope.
-            for (statement, use_expression) in
-                self.index.constraining_collection_uses(collection_def)
-            {
-                let statement_use_types = infer_statement_types(self.db(), statement);
-
-                if let Some(divergent) = statement_use_types
-                    .expression_type(use_expression)
-                    .as_divergent()
-                {
-                    // Infer `collection[Divergent]` for the initial cycle result.
-                    let divergent_instance = collection_alias
-                        .origin(self.db())
-                        .apply_specialization(self.db(), |generic_context| {
-                            generic_context
-                                .repeat_specialization(self.db(), Type::Divergent(divergent))
-                        });
-
-                    builder
-                        .infer(
-                            identity_instance,
-                            Type::instance(self.db(), divergent_instance),
-                        )
-                        .ok()?;
-                } else if let Some(constraints) =
-                    statement_use_types.collection_use_constraints(collection_def)
-                {
-                    for constraint in constraints {
-                        if constraint.has_unspecialized_type_var(self.db()) {
-                            continue;
-                        }
-
-                        builder.infer(identity_instance, *constraint).ok()?;
-                    }
-                }
-            }
-        }
+        // If this collection literal is the assigned value of a fluid specialization
+        // candidate, its specialization is solved in two steps: the creation-time
+        // solution below retains literal types, and constraints from later uses of the
+        // binding are combined with it in `fluid_eventual_type`.
+        let fluid_def = if tcx.annotation.is_none() {
+            collection_expr.and_then(|expr| self.fluid_candidate_definition(expr))
+        } else {
+            None
+        };
 
         for (elts_index, elts) in elts.iter().enumerate() {
             // An unpacking expression for a dictionary.
@@ -7181,8 +7178,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
 
                 // We promote element literal types in invariant position by default, unless they were
-                // inferred with an explicit literal annotation.
-                let inferred_elt_ty = inferred_elt_ty.promote(self.db());
+                // inferred with an explicit literal annotation. Fluid candidates retain literal
+                // types until their first widening event.
+                let inferred_elt_ty = if fluid_def.is_some() {
+                    inferred_elt_ty
+                } else {
+                    inferred_elt_ty.promote(self.db())
+                };
 
                 let inferred_type_for_typevar = if elt.is_starred_expr() {
                     inferred_elt_ty
@@ -7209,9 +7211,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .origin(self.db())
             .apply_specialization(self.db(), |_| {
                 builder.build_with(generic_context, |current_typevar, bounds| {
-                    let lower = bounds?.lower?;
+                    let Some(lower) = bounds.and_then(|bounds| bounds.lower) else {
+                        // In fluid mode, an element typevar with no constraints comes from an
+                        // empty collection literal (e.g. `a = []`). Solve it to `Never` — the
+                        // precise element type of an empty collection — rather than the gradual
+                        // `Unknown`; later uses widen it from there.
+                        return fluid_def.is_some().then_some(Type::Never);
+                    };
 
-                    let lower = if tcx.annotation.is_none() {
+                    let lower = if tcx.annotation.is_none() && fluid_def.is_none() {
                         // Constraints learned from later collection uses should follow the same
                         // promotion policy as literal elements: promote element literal types in
                         // invariant position unless an explicit annotation made them unpromotable.
@@ -7228,7 +7236,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         lower
                     };
 
-                    let lower = if elt_tcx_constraints.is_empty() {
+                    let lower = if elt_tcx_constraints.is_empty() && fluid_def.is_none() {
                         lower
                             // Promote singleton types to `T | Unknown` in inferred type parameters,
                             // so that e.g. `[None]` is inferred as `list[None | Unknown]`.
@@ -7241,7 +7249,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 })
             });
 
-        Type::from(class_type).to_instance(self.db())
+        let creation = Type::from(class_type).to_instance(self.db())?;
+
+        if let Some(fluid_def) = fluid_def {
+            // Combine the creation-time solution with the constraining events of the
+            // binding's later uses, and record the creation-time type so that each use
+            // can re-solve its own prefix of the events.
+            return Some(self.fluid_eventual_type(
+                fluid_def,
+                identity_instance,
+                generic_context,
+                creation,
+            ));
+        }
+
+        Some(creation)
     }
 
     /// Infer the type of the `iter` expression of the first comprehension.
@@ -8782,67 +8804,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             call_expression_tcx,
         );
 
-        let mut bindings = match bindings_result {
-            Ok(()) => bindings,
-            Err(_) => {
-                bindings.report_diagnostics(&self.context, call_expression.into());
-                return bindings.return_type(self.db());
-            }
-        };
-
-        for binding in bindings.iter_flat_mut() {
-            let binding_type = binding.callable_type;
-            for (_, overload) in binding.matching_overloads_mut() {
-                match binding_type {
-                    Type::FunctionLiteral(function_literal) => {
-                        if let Some(known_function) = function_literal.known(self.db()) {
-                            known_function.check_call(
-                                &self.context,
-                                overload,
-                                &call_arguments,
-                                call_expression,
-                                self.file(),
-                            );
-                        }
-                    }
-                    Type::ClassLiteral(class) => {
-                        if let Some(known_class) = class.known(self.db()) {
-                            known_class.check_call(
-                                &self.context,
-                                self.index,
-                                overload,
-                                call_expression,
-                            );
-                        }
-                    }
-                    Type::Never => {
-                        // In unreachable sections of code, we infer `Never` for symbols that were
-                        // defined outside the unreachable part. We still want to emit revealed-type
-                        // diagnostics in these sections, so check on the name of the callable here
-                        // and assume that it's actually `typing.reveal_type`.
-                        let is_reveal_type = match func.as_ref() {
-                            ast::Expr::Name(name) => name.id == "reveal_type",
-                            ast::Expr::Attribute(attr) => {
-                                attr.attr.id == "reveal_type" && is_dotted_name(func)
-                            }
-                            _ => false,
-                        };
-                        if is_reveal_type && let Some(first_arg) = arguments.args.first() {
-                            let revealed_ty = self.expression_type(first_arg);
-                            report_revealed_type(&self.context, revealed_ty, first_arg);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        // Record the constraints for the receiver of a bound method call, if the receiver is an
-        // unannotated collection initializer.
-        if let ast::Expr::Attribute(attribute @ ast::ExprAttribute { value, .. }) = func.as_ref() {
+        // Record the constraints for the receiver of a bound method call before
+        // bailing out on call-binding errors: the constraints are solved against the
+        // receiver's identity specialization and widen a fluid receiver, which can
+        // resolve the very error the call produced against the narrower
+        // flow-sensitive receiver type.
+        if self.fluid_specializations_enabled()
+            && let ast::Expr::Attribute(attribute @ ast::ExprAttribute { value, .. }) =
+                func.as_ref()
+        {
             let value_type = self.expression_type(value);
 
-            if let Some(collection_def) = self.index.unannotated_collection_initializer(value)
+            if let Some(collection_def) = self.index.fluid_candidate_binding(value)
                 && let Some((collection_literal, _)) = value_type.class_specialization(self.db())
             {
                 let identity_instance = Type::instance(
@@ -8896,6 +8869,65 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             .or_default()
                             .insert(constraints);
                     }
+                }
+            }
+        }
+
+        let mut bindings = match bindings_result {
+            Ok(()) => bindings,
+            Err(_) => {
+                bindings.report_diagnostics(&self.context, call_expression.into());
+                return bindings.return_type(self.db());
+            }
+        };
+
+        // A call whose return type mentions the typevars solved from a fluid argument
+        // hands the caller a new observer of that argument's specialization.
+        self.record_fluid_return_observers(arguments, &mut bindings);
+
+        for binding in bindings.iter_flat_mut() {
+            let binding_type = binding.callable_type;
+            for (_, overload) in binding.matching_overloads_mut() {
+                match binding_type {
+                    Type::FunctionLiteral(function_literal) => {
+                        if let Some(known_function) = function_literal.known(self.db()) {
+                            known_function.check_call(
+                                &self.context,
+                                overload,
+                                &call_arguments,
+                                call_expression,
+                                self.file(),
+                            );
+                        }
+                    }
+                    Type::ClassLiteral(class) => {
+                        if let Some(known_class) = class.known(self.db()) {
+                            known_class.check_call(
+                                &self.context,
+                                self.index,
+                                overload,
+                                call_expression,
+                            );
+                        }
+                    }
+                    Type::Never => {
+                        // In unreachable sections of code, we infer `Never` for symbols that were
+                        // defined outside the unreachable part. We still want to emit revealed-type
+                        // diagnostics in these sections, so check on the name of the callable here
+                        // and assume that it's actually `typing.reveal_type`.
+                        let is_reveal_type = match func.as_ref() {
+                            ast::Expr::Name(name) => name.id == "reveal_type",
+                            ast::Expr::Attribute(attr) => {
+                                attr.attr.id == "reveal_type" && is_dotted_name(func)
+                            }
+                            _ => false,
+                        };
+                        if is_reveal_type && let Some(first_arg) = arguments.args.first() {
+                            let revealed_ty = self.expression_type(first_arg);
+                            report_revealed_type(&self.context, revealed_ty, first_arg);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -10970,6 +11002,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             qualifiers: _,
             type_expression_flags,
             mut collection_use_constraints,
+            mut fluid_adoptions,
+            fluid_creation,
             string_annotations,
             expected_types,
             scope,
@@ -11011,6 +11045,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             (!string_annotations.is_empty()
                 || !type_expression_flags.is_empty()
                 || !collection_use_constraints.is_empty()
+                || !fluid_adoptions.is_empty()
+                || fluid_creation.is_some()
                 || !expected_types.is_empty()
                 || cycle_recovery.is_some()
                 || !bindings.is_empty()
@@ -11024,14 +11060,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
 
                 collection_use_constraints.shrink_to_fit();
+                fluid_adoptions.shrink_to_fit();
                 Box::new(ExpressionInferenceExtra {
                     string_annotations: FrozenSet::from(string_annotations),
+                    fluid_adoptions,
                     expected_types: FrozenMap::from(expected_types),
                     type_expression_flags: FrozenMap::from(type_expression_flags),
                     bindings: bindings.into_boxed_slice(),
                     diagnostics,
                     cycle_recovery,
-                    collection_use_constraints
+                    collection_use_constraints,
+                    fluid_creation,
                 })
             });
 
@@ -11051,6 +11090,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             expressions,
             qualifiers,
             type_expression_flags,
+            fluid_creation: _,
+            mut fluid_adoptions,
             mut collection_use_constraints,
             string_annotations,
             expected_types,
@@ -11089,12 +11130,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             || !return_types_and_ranges.is_empty()
             || !qualifiers.is_empty()
             || !type_expression_flags.is_empty()
-            || !collection_use_constraints.is_empty())
+            || !collection_use_constraints.is_empty()
+            || !fluid_adoptions.is_empty())
         .then(|| {
             collection_use_constraints.shrink_to_fit();
+            fluid_adoptions.shrink_to_fit();
             return_types_and_ranges.shrink_to_fit();
             Box::new(StatementInferenceInnerExtra {
                 string_annotations: FrozenSet::from(string_annotations),
+                fluid_adoptions,
                 expected_types: FrozenMap::from(expected_types),
                 called_functions: called_functions
                     .into_iter()
@@ -11171,6 +11215,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             string_annotations: _,
             expected_types: _,
             return_types_and_ranges: _,
+            fluid_creation: _,
+            fluid_adoptions: _,
             collection_use_constraints: _,
             dataclass_field_specifiers: _,
             slice_materialization: _,
@@ -11209,6 +11255,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             expressions,
             qualifiers,
             type_expression_flags,
+            fluid_creation,
+            mut fluid_adoptions,
             mut collection_use_constraints,
             string_annotations,
             expected_types,
@@ -11239,6 +11287,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let non_undecorated_extra_field_count = usize::from(!string_annotations.is_empty())
             + usize::from(!expected_types.is_empty())
             + usize::from(!collection_use_constraints.is_empty())
+            + usize::from(!fluid_adoptions.is_empty())
+            + usize::from(fluid_creation.is_some())
             + usize::from(!called_functions.is_empty())
             + usize::from(!type_expression_flags.is_empty())
             + usize::from(cycle_recovery.is_some())
@@ -11288,10 +11338,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             (_, undecorated_type) => {
                 collection_use_constraints.shrink_to_fit();
+                fluid_adoptions.shrink_to_fit();
                 let extra = OtherDefinitionInferenceExtra {
                     string_annotations: FrozenSet::from(string_annotations),
                     expected_types: FrozenMap::from(expected_types),
+                    fluid_adoptions,
                     collection_use_constraints,
+                    fluid_creation,
                     called_functions: called_functions
                         .into_iter()
                         .collect::<Vec<_>>()
@@ -11345,6 +11398,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             string_annotations,
             expected_types,
             type_expression_flags,
+            fluid_creation: _,
+            mut fluid_adoptions,
             mut collection_use_constraints,
             expressions,
             scope,
@@ -11382,15 +11437,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             || cycle_recovery.is_some()
             || !type_expression_flags.is_empty()
             || !collection_use_constraints.is_empty()
-            || !qualifiers.is_empty())
+            || !qualifiers.is_empty()
+            || !fluid_adoptions.is_empty())
         .then(|| {
             collection_use_constraints.shrink_to_fit();
+            fluid_adoptions.shrink_to_fit();
             Box::new(ScopeInferenceExtra {
                 string_annotations: FrozenSet::from(string_annotations),
                 qualifiers: FrozenMap::from(qualifiers),
                 expected_types: FrozenMap::from(expected_types),
                 type_expression_flags: FrozenMap::from(type_expression_flags),
                 collection_use_constraints,
+                fluid_adoptions,
                 cycle_recovery,
                 diagnostics,
             })
@@ -11427,6 +11485,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // These fields are type inference results, but do not affect the inference of a given
             // expression.
             context: _,
+            fluid_creation: _,
+            fluid_adoptions: _,
             collection_use_constraints: _,
             expressions: _,
             string_annotations: _,
@@ -11477,6 +11537,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             context,
             expressions,
             type_expression_flags,
+            fluid_creation: _,
+            fluid_adoptions,
             collection_use_constraints,
             string_annotations,
             expected_types,
@@ -11530,6 +11592,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.bindings
                 .extend(bindings.iter().map(|(def, ty)| (*def, *ty)));
         }
+
+        self.fluid_adoptions.extend(fluid_adoptions);
 
         #[expect(
             clippy::iter_over_hash_type,

@@ -59,6 +59,7 @@ use crate::types::generics::Specialization;
 use crate::types::unpacker::{UnpackResult, Unpacker};
 use crate::types::{
     ClassLiteral, KnownClass, StaticClassLiteral, Type, TypeAndQualifiers, TypeQualifiers,
+    any_over_type,
 };
 use crate::{Db, FxIndexSet};
 
@@ -586,11 +587,18 @@ impl<'db> InferScope<'db> {
 #[derive(Default, Copy, Clone, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::Update)]
 pub(crate) struct TypeContext<'db> {
     pub(crate) annotation: Option<Type<'db>>,
+    /// Retain literal types when solving an inferred specialization. Used for fluid
+    /// specialization candidates, whose literal types are promoted lazily on the first
+    /// widening event rather than at creation time.
+    pub(crate) preserve_literals: bool,
 }
 
 impl<'db> TypeContext<'db> {
     pub(crate) fn new(annotation: Option<Type<'db>>) -> Self {
-        Self { annotation }
+        Self {
+            annotation,
+            preserve_literals: false,
+        }
     }
 
     /// If the type annotation is a specialized instance of the given `KnownClass`, returns the
@@ -607,6 +615,7 @@ impl<'db> TypeContext<'db> {
     pub(crate) fn map(self, f: impl FnOnce(Type<'db>) -> Type<'db>) -> Self {
         Self {
             annotation: self.annotation.map(f),
+            preserve_literals: self.preserve_literals,
         }
     }
 
@@ -794,6 +803,11 @@ struct ScopeInferenceExtra<'db> {
 
     /// The constraints on any collection initializers that are accessed in this region.
     collection_use_constraints: CollectionUseConstraints<'db>,
+
+    /// For each use of a fluid specialization candidate that was inferred with a
+    /// bidirectional type context, the contextual type. A context that constrains the
+    /// candidate's typevars adopts and locks the specialization.
+    fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
 
     /// The fallback type for missing expressions/bindings/declarations or recursive type inference.
     cycle_recovery: Option<Type<'db>>,
@@ -1181,6 +1195,15 @@ struct OtherDefinitionInferenceExtra<'db> {
     /// The constraints on any collection initializers that are accessed in this region.
     collection_use_constraints: CollectionUseConstraints<'db>,
 
+    /// For each use of a fluid specialization candidate that was inferred with a
+    /// bidirectional type context, the contextual type. A context that constrains the
+    /// candidate's typevars adopts and locks the specialization.
+    fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
+
+    /// The creation-time type of a fluid specialization candidate defined by this
+    /// region, with literal types retained.
+    fluid_creation: Option<Type<'db>>,
+
     /// The fallback type for missing expressions/bindings/declarations or recursive type inference.
     cycle_recovery: Option<Type<'db>>,
 
@@ -1255,6 +1278,20 @@ impl<'db> DefinitionInferenceExtra<'db> {
     fn collection_use_constraints(&self) -> Option<&CollectionUseConstraints<'db>> {
         match self {
             Self::Other(extra) => Some(&extra.collection_use_constraints),
+            _ => None,
+        }
+    }
+
+    fn fluid_adoptions(&self) -> Option<&FxHashMap<ExpressionNodeKey, Type<'db>>> {
+        match self {
+            Self::Other(extra) => Some(&extra.fluid_adoptions),
+            _ => None,
+        }
+    }
+
+    fn fluid_creation(&self) -> Option<Type<'db>> {
+        match self {
+            Self::Other(extra) => extra.fluid_creation,
             _ => None,
         }
     }
@@ -1343,6 +1380,21 @@ impl<'db> DefinitionInference<'db> {
             self.extra = Some(Box::new(DefinitionInferenceExtra::Other(Box::new(extra))));
         }
 
+        if let Some(extra) = self.extra.as_mut()
+            && let DefinitionInferenceExtra::Other(extra) = extra.as_mut()
+            && let Some(fluid_creation) = &mut extra.fluid_creation
+            // Only normalize a creation type that actually contains divergent parts:
+            // normalization is lossy (e.g. it drops materializations).
+            && any_over_type(db, *fluid_creation, false, |ty| ty.is_divergent())
+        {
+            *fluid_creation = match previous_inference.fluid_creation() {
+                Some(previous_creation) => {
+                    fluid_creation.cycle_normalized(db, previous_creation, cycle)
+                }
+                None => fluid_creation.recursive_type_normalized(db, cycle),
+            };
+        }
+
         self
     }
 
@@ -1369,6 +1421,22 @@ impl<'db> DefinitionInference<'db> {
             .as_deref()?
             .collection_use_constraints()?
             .get(&collection_def)
+    }
+
+    pub(crate) fn fluid_adoption(&self, use_expression: ExpressionNodeKey) -> Option<Type<'db>> {
+        self.extra
+            .as_deref()?
+            .fluid_adoptions()?
+            .get(&use_expression)
+            .copied()
+    }
+
+    /// The creation-time type of the fluid specialization candidate defined by this
+    /// region, with literal types retained.
+    pub(crate) fn fluid_creation(&self) -> Option<Type<'db>> {
+        self.extra
+            .as_deref()
+            .and_then(DefinitionInferenceExtra::fluid_creation)
     }
 
     /// Get qualifiers for an annotation expression
@@ -1522,6 +1590,15 @@ struct ExpressionInferenceExtra<'db> {
     /// The constraints on any collection initializers that are accessed in this region.
     collection_use_constraints: CollectionUseConstraints<'db>,
 
+    /// For each use of a fluid specialization candidate that was inferred with a
+    /// bidirectional type context, the contextual type. A context that constrains the
+    /// candidate's typevars adopts and locks the specialization.
+    fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
+
+    /// The creation-time type of a fluid specialization candidate whose assigned value
+    /// is this region, with literal types retained.
+    fluid_creation: Option<Type<'db>>,
+
     /// The types of every binding in this expression region.
     ///
     /// Only very few expression regions have bindings (around 0.1%).
@@ -1566,6 +1643,17 @@ impl<'db> ExpressionInference<'db> {
                 } else {
                     *binding_ty = binding_ty.recursive_type_normalized(db, cycle);
                 }
+            }
+
+            if let Some(fluid_creation) = &mut extra.fluid_creation
+                && any_over_type(db, *fluid_creation, false, |ty| ty.is_divergent())
+            {
+                *fluid_creation = match previous.fluid_creation() {
+                    Some(previous_creation) => {
+                        fluid_creation.cycle_normalized(db, previous_creation, cycle)
+                    }
+                    None => fluid_creation.recursive_type_normalized(db, cycle),
+                };
             }
         }
 
@@ -1613,6 +1701,20 @@ impl<'db> ExpressionInference<'db> {
             .get(&collection_def)
     }
 
+    pub(crate) fn fluid_adoption(&self, use_expression: ExpressionNodeKey) -> Option<Type<'db>> {
+        self.extra
+            .as_ref()?
+            .fluid_adoptions
+            .get(&use_expression)
+            .copied()
+    }
+
+    /// The creation-time type of the fluid specialization candidate whose assigned
+    /// value is this region, with literal types retained.
+    pub(crate) fn fluid_creation(&self) -> Option<Type<'db>> {
+        self.extra.as_ref().and_then(|extra| extra.fluid_creation)
+    }
+
     fn fallback_type(&self) -> Option<Type<'db>> {
         self.extra.as_ref().and_then(|extra| extra.cycle_recovery)
     }
@@ -1652,6 +1754,16 @@ impl<'db> StatementInference<'db> {
             StatementInference::Other(inference) => {
                 inference.collection_use_constraints(collection_def)
             }
+        }
+    }
+
+    pub(crate) fn fluid_adoption(&self, use_expression: ExpressionNodeKey) -> Option<Type<'db>> {
+        match self {
+            StatementInference::Expression(inference) => inference.fluid_adoption(use_expression),
+            StatementInference::Definition(_, inference) => {
+                inference.fluid_adoption(use_expression)
+            }
+            StatementInference::Other(inference) => inference.fluid_adoption(use_expression),
         }
     }
 }
@@ -1695,6 +1807,11 @@ struct StatementInferenceInnerExtra<'db> {
 
     /// The constraints on any collection initializers that are accessed in this region.
     collection_use_constraints: CollectionUseConstraints<'db>,
+
+    /// For each use of a fluid specialization candidate that was inferred with a
+    /// bidirectional type context, the contextual type. A context that constrains the
+    /// candidate's typevars adopts and locks the specialization.
+    fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
 
     /// The fallback type for missing expressions/bindings/declarations or recursive type inference.
     cycle_recovery: Option<Type<'db>>,
@@ -1800,6 +1917,14 @@ impl<'db> StatementInferenceInner<'db> {
             .as_ref()?
             .collection_use_constraints
             .get(&collection_def)
+    }
+
+    pub(crate) fn fluid_adoption(&self, use_expression: ExpressionNodeKey) -> Option<Type<'db>> {
+        self.extra
+            .as_ref()?
+            .fluid_adoptions
+            .get(&use_expression)
+            .copied()
     }
 
     fn bindings(&self) -> impl ExactSizeIterator<Item = (Definition<'db>, Type<'db>)> {

@@ -11,11 +11,11 @@ A list can be indexed into with:
 from typing import Any
 
 x = [1, 2, 3]
-reveal_type(x)  # revealed: list[int]
+reveal_type(x)  # revealed: list[Literal[1, 2, 3]]
 
-reveal_type(x[0])  # revealed: int
+reveal_type(x[0])  # revealed: Literal[1, 2, 3]
 
-reveal_type(x[0:1])  # revealed: list[int]
+reveal_type(x[0:1])  # revealed: list[Literal[1, 2, 3]]
 
 # error: [invalid-argument-type]
 reveal_type(x["a"])  # revealed: Unknown
@@ -70,5 +70,5 @@ def f(xs: list[int | str]) -> None:
 def f() -> None:
     (ys := [1])[0] = 2
     ys = ["s"]
-    reveal_type(ys[0])  # revealed: str
+    reveal_type(ys[0])  # revealed: Literal["s"]
 ```

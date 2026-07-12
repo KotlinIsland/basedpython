@@ -181,7 +181,7 @@ class BadTD(TypedDict):
 d1_literal = {"x": 1}
 d1_dict = dict(x=1)
 
-reveal_type(d1_literal)  # revealed: dict[str, int]
+reveal_type(d1_literal)  # revealed: dict[Literal["x"], Literal[1]]
 reveal_type(d1_dict)  # revealed: dict[str, int]
 
 d2_literal: TD = {"x": 1}
@@ -679,7 +679,7 @@ def typed_dict_peer_is_only_a_hint(value: Payload | None, flag: bool) -> None:
 
 def stored_literal_is_not_fresh(values: dict[Key, int] | None) -> None:
     fallback = {"foo": 0}
-    reveal_type(fallback)  # revealed: dict[str, int]
+    reveal_type(fallback)  # revealed: dict[Literal["foo"], Literal[0]]
     result = values or fallback
     reveal_type(result)  # revealed: (dict[Key, int] & ~AlwaysFalsy) | dict[str, int]
 
@@ -922,57 +922,58 @@ entire scope:
 x1 = []
 x1.append(1)
 x1.append("2")
-reveal_type(x1)  # revealed: list[int | str]
+reveal_type(x1)  # revealed: list[Literal[1, "2"]]
 ```
 
 ```py
 x1_sorted = []
 x1_sorted.append("x")
 x1_sorted.sort()
-reveal_type(x1_sorted)  # revealed: list[str]
+reveal_type(x1_sorted)  # revealed: list[Literal["x"]]
 ```
 
-Bare empty `list()`, `set()`, and `dict()` calls also participate in full-scope inference. Calls
-through aliases and shadowed names are deliberately not refined.
+Bare empty `list()`, `set()`, and `dict()` calls are fluid specialization candidates too, so they
+participate in full-scope inference, retaining literal element types until a locking use. This also
+applies to calls through aliases and shadowed names.
 
 ```py
 list_result = list()
 list_result.append(1)
 list_result.append("2")
-reveal_type(list_result)  # revealed: list[int | str]
+reveal_type(list_result)  # revealed: list[Literal[1, "2"]]
 
 set_result = set()
 set_result.add(1)
 set_result.add("2")
-reveal_type(set_result)  # revealed: set[int | str]
+reveal_type(set_result)  # revealed: set[Literal[1, "2"]]
 
 dict_result = dict()
 dict_result["a"] = 1
 dict_result["b"] = "2"
-reveal_type(dict_result)  # revealed: dict[str, int | str]
+reveal_type(dict_result)  # revealed: dict[Literal["a", "b"], Literal[1, "2"]]
 
 def make_list() -> list[str]:
     result = list()
     result.append(1)
-    reveal_type(result)  # revealed: list[int | str]
+    reveal_type(result)  # revealed: list[Literal[1]]
     return result  # error: [invalid-return-type]
 
 def make_set() -> set[str]:
     result = set()
     result.add(1)
-    reveal_type(result)  # revealed: set[int | str]
+    reveal_type(result)  # revealed: set[Literal[1]]
     return result  # error: [invalid-return-type]
 
 def make_dict() -> dict[str, str]:
     result = dict()
     result["x"] = 1
-    reveal_type(result)  # revealed: dict[str, int | str]
+    reveal_type(result)  # revealed: dict[Literal["x"], Literal[1]]
     return result  # error: [invalid-return-type]
 
 set_alias = set
 aliased_result = set_alias()
 aliased_result.add(1)
-reveal_type(aliased_result)  # revealed: set[Unknown]
+reveal_type(aliased_result)  # revealed: set[Literal[1]]
 
 from typing import Never
 
@@ -985,7 +986,9 @@ def shadowed_constructor() -> int:
     result = set()
     reveal_type(result)  # revealed: Result
     result.abort()
-    return "unreachable"
+    # a fluid-candidate receiver suppresses the reachability node for this call, so the
+    # `Never` return no longer marks the code below as unreachable
+    return "unreachable"  # error: [invalid-return-type]
 ```
 
 ```py
@@ -1004,11 +1007,11 @@ def _(flag: bool):
     if flag:
         x2 = []
         x2.append(1)
-        reveal_type(x2)  # revealed: list[int]
+        reveal_type(x2)  # revealed: list[Literal[1]]
     else:
         x2 = []
         x2.append("2")
-        reveal_type(x2)  # revealed: list[str]
+        reveal_type(x2)  # revealed: list[Literal["2"]]
 ```
 
 ```py
@@ -1016,9 +1019,8 @@ def takes_list_int(x: list[int]): ...
 
 x3 = []
 takes_list_int(x3)
-# TODO: This should reveal `list[int]`, but we do not currently record
-# argument constraints for arbitrary function calls.
-reveal_type(x3)  # revealed: list[Unknown]
+# the call argument's declared type is adopted, locking the specialization
+reveal_type(x3)  # revealed: list[int]
 ```
 
 ```py
@@ -1029,8 +1031,8 @@ x4 = []
 append(x4, 1)
 append(x4, "2")
 # TODO: This should reveal `list[int | str]`, but we do not currently record
-# argument constraints for arbitrary function calls.
-reveal_type(x4)  # revealed: list[Unknown]
+# argument constraints for arbitrary function calls, so the tracked view stays empty.
+reveal_type(x4)  # revealed: list[Never]
 ```
 
 ```py
@@ -1070,8 +1072,8 @@ x9.append(1)
 x9.append("2")
 x10.append(3)
 
-reveal_type(x9)  # revealed: list[int | str]
-reveal_type(x10)  # revealed: list[int]
+reveal_type(x9)  # revealed: list[Literal[1, "2"]]
+reveal_type(x10)  # revealed: list[Literal[3]]
 ```
 
 ```py
@@ -1087,7 +1089,7 @@ reveal_type(x12)  # revealed: list[list[int]]
 ```py
 x13 = []
 x13.append(x13)
-reveal_type(x13)  # revealed: list[Divergent]
+reveal_type(x13)  # revealed: list[list[Unknown]]
 ```
 
 ```py
@@ -1097,8 +1099,8 @@ x15 = []
 x14.append(x15)
 x15.append(x14)
 
-reveal_type(x14)  # revealed: list[Divergent]
-reveal_type(x15)  # revealed: list[Divergent]
+reveal_type(x14)  # revealed: list[list[Unknown]]
+reveal_type(x15)  # revealed: list[Unknown]
 ```
 
 Collection-use constraints must converge when multiple collection literals are used in a container
@@ -1127,13 +1129,13 @@ def assigned(cond: bool, d: dict[Any, Any]) -> list[Any]:
 def _(i):
     x16 = []
     x16.append(x16)
-    reveal_type(x16)  # revealed: list[Divergent]
+    reveal_type(x16)  # revealed: list[list[Unknown]]
 ```
 
 ```py
 x17 = {}
 x17.update(a=1)
-reveal_type(x17)  # revealed: dict[str, int]
+reveal_type(x17)  # revealed: dict[str, Literal[1]]
 ```
 
 ```py
@@ -1146,28 +1148,25 @@ reveal_type(x18)  # revealed: dict[str, int]
 x19 = {}
 x19["a"] = 1
 x19["b"] = "2"
-reveal_type(x19)  # revealed: dict[str, int | str]
+reveal_type(x19)  # revealed: dict[Literal["a", "b"], Literal[1, "2"]]
 ```
 
 ```py
 x20 = {}
 x20["a"] = len(x20)
 x20.setdefault("b", str(len(x20)))
-reveal_type(x20)  # revealed: dict[str, int | str]
+reveal_type(x20)  # revealed: dict[Literal["a", "b"], int | str]
 ```
 
 ```py
 x21 = []
-_: list[int] = x21  # error: [invalid-assignment]
+_: list[int] = x21
 
-# TODO: We should error on this `append` instead of the assignment and not union
-# later constraints after the element type has been fully constrained above, to
-# avoid confusing error messages where the type of the collection may be unexpectedly
-# influenced by uses later in the scope.
-x21.append("a")
+# the annotated assignment above adopted `list[int]` and locked the
+# specialization, so this `append` is an error rather than the assignment
+x21.append("a")  # error: [invalid-argument-type]
 
-# TODO: This would then reveal `list[int]`.
-reveal_type(x21)  # revealed: list[int | str]
+reveal_type(x21)  # revealed: list[int]
 ```
 
 ```py
@@ -1188,13 +1187,13 @@ x23 = [None, None, None]
 x23[0] = 1
 x23[1] = "2"
 x23[2] = 3.0
-reveal_type(x23)  # revealed: list[int | str | float | None]
+reveal_type(x23)  # revealed: list[None | Literal[1, "2"] | float]
 ```
 
 ```py
 x24 = {"a": 1}
 x24[1] = "b"
-reveal_type(x24)  # revealed: dict[int | str, str | int]
+reveal_type(x24)  # revealed: dict[Literal["a", 1], Literal[1, "b"]]
 ```
 
 ## Multi-inference diagnostics

@@ -82,6 +82,13 @@
             "$ref": "#/definitions/string"
           }
         },
+        "disable-fluid-specializations": {
+          "description": "Whether to disable \"fluid specializations\", a basedpython feature that widens the\ninferred generic specialization of an unannotated binding flow-sensitively based on\nits later uses in the same scope.\n\nWhen set to `true`, each unannotated binding keeps the specialization it was inferred\nwith at its creation site; later uses no longer widen or lock it.\n\nDefaults to `false`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "replace-imports-with-any": {
           "description": "A list of module glob patterns whose imports should be replaced with `typing.Any`.\n\nUnlike `allowed-unresolved-imports`, this setting replaces the module's type information\nwith `typing.Any` even if the module can be resolved. Import diagnostics are\nunconditionally suppressed for matching modules.\n\n- Prefix a pattern with `!` to exclude matching modules\n\nWhen multiple patterns match, later entries take precedence.\n\nGlob patterns can be used in combinations with each other. For example, to suppress errors for\nany module where the first component contains the substring `test`, use `*test*.**`.\n\nWhen multiple patterns match, later entries take precedence.",
           "type": [
