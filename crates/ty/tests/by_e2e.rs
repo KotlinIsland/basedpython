@@ -298,7 +298,7 @@ fn run_traceback_rewritten_to_by_source() {
         dir.path().join("main.by"),
         "\
 def deeper(n: int) -> int:
-    x: int & str = compute(n)
+    x: int & object = compute(n)
     return x
 
 def compute(n: int) -> int:
@@ -336,7 +336,7 @@ main()
         "compute frame should map to .by line 6:\n{stderr}"
     );
     assert!(
-        stderr.contains("line 2, in deeper") && stderr.contains("x: int & str = compute(n)"),
+        stderr.contains("line 2, in deeper") && stderr.contains("x: int & object = compute(n)"),
         "deeper frame should show the original intersection syntax at .by line 2:\n{stderr}"
     );
     assert!(
@@ -557,6 +557,137 @@ fn build_renders_parse_error_and_aborts() {
     assert!(
         !dir.path().join("out").join("bad.py").exists(),
         "build should not emit output when parse error present"
+    );
+}
+
+#[test]
+fn run_refuses_to_execute_on_check_errors() {
+    // a program that fails `by check` must never execute — here the bare calls
+    // of a reified generic are check errors, and previously slipped through to
+    // a runtime TypeError from the `generic` wrapper
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "def f[T](t: T):\n    print(T)\n\nf(1)\nf(\"\")\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(!output.status.success(), "expected non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stderr.contains("unspecialized-reified-generic"),
+        "stderr should carry the check error:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Traceback") && !stdout.contains("Traceback"),
+        "the program must not have executed:\nstdout: {stdout}\nstderr: {stderr}"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn run_min_version_newer_than_interpreter_errors() {
+    // an explicit --min-version above the interpreter's version would emit
+    // code the interpreter cannot parse; `run` must refuse with a clear error
+    let Some(python) = ["python3.13", "python3"].into_iter().find(|p| {
+        Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }) else {
+        eprintln!("skipping: no python interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "print(1)\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "--min-version", "3.99", "main"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(!output.status.success(), "expected non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("is newer than") && stderr.contains("3.99"),
+        "stderr should explain the version conflict:\n{stderr}"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn run_honors_explicit_min_version() {
+    // the flag used to be silently overridden by the interpreter probe
+    let Some(python) = ["python3.13", "python3"].into_iter().find(|p| {
+        Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }) else {
+        eprintln!("skipping: no python interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "print('versioned')\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "--min-version", "3.9", "main"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "versioned");
+}
+
+#[test]
+fn build_skips_hidden_directories() {
+    // files under hidden directories (`.claude`, `.git`, …) are not project
+    // sources: they must be neither checked nor emitted
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "print(1)\n").unwrap();
+    let hidden = dir.path().join(".claude").join("worktrees").join("x");
+    fs::create_dir_all(&hidden).unwrap();
+    fs::write(hidden.join("junk.by"), "a b\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("build")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by build failed:\n{stderr}");
+    assert!(
+        !stderr.contains("junk"),
+        "hidden-directory file must not be checked:\n{stderr}"
+    );
+    assert!(dir.path().join("out").join("main.py").exists());
+    assert!(
+        !dir.path().join("out").join(".claude").exists(),
+        "hidden-directory file must not be emitted"
     );
 }
 

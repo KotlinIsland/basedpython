@@ -32,20 +32,35 @@ pub(crate) fn parse_version(s: &str) -> anyhow::Result<Config> {
 #[allow(clippy::exit, clippy::print_stderr)]
 pub(crate) fn cmd_run(
     module: &str,
-    min_version: &str,
+    min_version: Option<&str>,
     no_soundness: bool,
 ) -> anyhow::Result<ExitStatus> {
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
-    // `run` executes on a specific interpreter, so target *its* version: the
-    // emitted code (dataclass `slots=`, PEP 695 syntax, …) must match what that
-    // python actually supports. fall back to the `--min-version` flag only if
-    // the interpreter can't be probed
-    let mut config = match detect_python_version(&python) {
-        Some(version) => Config {
+    // `run` executes on a specific interpreter, so by default target *its*
+    // version: the emitted code (dataclass `slots=`, PEP 695 syntax, …) must
+    // match what that python actually supports. an explicit `--min-version`
+    // wins, but it cannot exceed the interpreter — that would emit code the
+    // interpreter cannot parse
+    let probed = detect_python_version(&python);
+    let mut config = match (min_version, probed) {
+        (Some(flag), probed) => {
+            let config = parse_version(flag)?;
+            if let Some(interpreter) = probed
+                && config.min_version > interpreter
+            {
+                anyhow::bail!(
+                    "--min-version {flag} is newer than `{python}` ({interpreter}), \
+                     which could not run the emitted code — \
+                     set PYTHON to a {flag}+ interpreter"
+                );
+            }
+            config
+        }
+        (None, Some(version)) => Config {
             min_version: version,
             ..Config::default()
         },
-        None => parse_version(min_version)?,
+        (None, None) => Config::default(),
     };
     config.soundness_checks = !no_soundness;
     let cwd = std::env::current_dir().context("failed to get current directory")?;
@@ -61,18 +76,24 @@ pub(crate) fn cmd_run(
     // each generated `.py` paired with its source `.by` and the line table that
     // lifts generated line numbers back to `.by` lines (for traceback rewriting)
     let mut traceback_entries: Vec<TracebackEntry> = Vec::new();
-    let ok = render_check_and_transpile(&db, &handles, &config, |bpy, src, line_map| {
-        let rel = bpy.strip_prefix(&cwd).unwrap_or(bpy);
-        let py = tmp.path().join(rel).with_extension("py");
-        fs::create_dir_all(py.parent().unwrap())?;
-        fs::write(&py, src)?;
-        traceback_entries.push(TracebackEntry {
-            py_path: py,
-            by_path: fs::canonicalize(bpy).unwrap_or_else(|_| bpy.to_path_buf()),
-            line_map: line_map.to_vec(),
-        });
-        Ok(())
-    })?;
+    let ok = render_check_and_transpile(
+        &db,
+        &handles,
+        &config,
+        CheckGate::AllErrors,
+        |bpy, src, line_map| {
+            let rel = bpy.strip_prefix(&cwd).unwrap_or(bpy);
+            let py = tmp.path().join(rel).with_extension("py");
+            fs::create_dir_all(py.parent().unwrap())?;
+            fs::write(&py, src)?;
+            traceback_entries.push(TracebackEntry {
+                py_path: py,
+                by_path: fs::canonicalize(bpy).unwrap_or_else(|_| bpy.to_path_buf()),
+                line_map: line_map.to_vec(),
+            });
+            Ok(())
+        },
+    )?;
     if !ok {
         return Ok(ExitStatus::Failure);
     }
@@ -124,15 +145,21 @@ pub(crate) fn cmd_build(min_version: &str, no_soundness: bool) -> anyhow::Result
     }
 
     let (db, handles) = build_project_db(&cwd, &files)?;
-    if !render_check_and_transpile(&db, &handles, &config, |bpy, src, _line_map| {
-        let py = out
-            .join(bpy.strip_prefix(&cwd).unwrap())
-            .with_extension("py");
-        fs::create_dir_all(py.parent().unwrap())?;
-        fs::write(&py, src)?;
-        eprintln!("{} -> {}", bpy.display(), py.display());
-        Ok(())
-    })? {
+    if !render_check_and_transpile(
+        &db,
+        &handles,
+        &config,
+        CheckGate::ParseErrorsOnly,
+        |bpy, src, _line_map| {
+            let py = out
+                .join(bpy.strip_prefix(&cwd).unwrap())
+                .with_extension("py");
+            fs::create_dir_all(py.parent().unwrap())?;
+            fs::write(&py, src)?;
+            eprintln!("{} -> {}", bpy.display(), py.display());
+            Ok(())
+        },
+    )? {
         return Ok(ExitStatus::Failure);
     }
 
@@ -255,8 +282,9 @@ pub(crate) fn cmd_transpile(
 
 // ── directory transpile ───────────────────────────────────────────────────────
 
-/// directories skipped when walking a project for reverse transpile: virtual
-/// envs, caches, vcs metadata, and build outputs — none are first-party source
+/// non-hidden directories skipped when walking a project (see
+/// [`may_contain_sources`]): virtual envs, caches, and build outputs — none
+/// are first-party source. hidden directories are skipped wholesale
 const NON_SOURCE_DIRS: &[&str] = &[
     ".venv",
     "venv",
@@ -327,11 +355,17 @@ fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
     }
 
     let (db, handles) = build_project_db(dir, &files)?;
-    let ok = render_check_and_transpile(&db, &handles, config, |bpy, src, _line_map| {
-        let py = bpy.with_extension("py");
-        fs::write(&py, src).with_context(|| format!("{}", py.display()))?;
-        Ok(())
-    })?;
+    let ok = render_check_and_transpile(
+        &db,
+        &handles,
+        config,
+        CheckGate::ParseErrorsOnly,
+        |bpy, src, _line_map| {
+            let py = bpy.with_extension("py");
+            fs::write(&py, src).with_context(|| format!("{}", py.display()))?;
+            Ok(())
+        },
+    )?;
     Ok(if ok {
         ExitStatus::Success
     } else {
@@ -339,17 +373,12 @@ fn forward_dir(dir: &Path, config: &Config) -> anyhow::Result<ExitStatus> {
     })
 }
 
-/// Every first-party `.py`/`.pyi` file under `root`, skipping [`NON_SOURCE_DIRS`]
-/// and symlinks.
+/// Every first-party `.py`/`.pyi` file under `root`, skipping non-source
+/// directories and symlinks.
 fn py_source_files(root: &Path) -> Vec<PathBuf> {
     WalkDir::new(root)
         .into_iter()
-        .filter_entry(|e| {
-            !(e.file_type().is_dir()
-                && e.file_name()
-                    .to_str()
-                    .is_some_and(|n| NON_SOURCE_DIRS.contains(&n)))
-        })
+        .filter_entry(may_contain_sources)
         .filter_map(Result::ok)
         .filter(|e| {
             let p = e.path();
@@ -360,6 +389,20 @@ fn py_source_files(root: &Path) -> Vec<PathBuf> {
         })
         .map(walkdir::DirEntry::into_path)
         .collect()
+}
+
+/// Whether a project walk may descend into this entry: hidden directories
+/// (`.claude`, `.git`, `.venv`, …) and [`NON_SOURCE_DIRS`] never hold
+/// first-party source. The walk root itself is always entered, even when the
+/// project directory happens to be hidden.
+fn may_contain_sources(entry: &walkdir::DirEntry) -> bool {
+    if entry.depth() == 0 || !entry.file_type().is_dir() {
+        return true;
+    }
+    entry
+        .file_name()
+        .to_str()
+        .is_some_and(|name| !name.starts_with('.') && !NON_SOURCE_DIRS.contains(&name))
 }
 
 // ── traceback rewriting ────────────────────────────────────────────────────────
@@ -487,14 +530,11 @@ main()
 // ── helpers ──────────────────────────────────────────────────────────────────
 
 fn bpy_files(root: &Path) -> Vec<PathBuf> {
-    let out = root.join("out");
     WalkDir::new(root)
         .into_iter()
+        .filter_entry(may_contain_sources)
         .filter_map(Result::ok)
-        .filter(|e| {
-            let p = e.path();
-            !p.starts_with(&out) && p.extension().is_some_and(|x| x == "by")
-        })
+        .filter(|e| e.path().extension().is_some_and(|x| x == "by"))
         .map(walkdir::DirEntry::into_path)
         .collect()
 }
@@ -528,13 +568,28 @@ fn build_project_db(
     Ok((db, handles))
 }
 
+/// How much of the check outcome blocks emitting output.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CheckGate {
+    /// only parse errors block — type diagnostics are advisory. right for
+    /// artifact-producing commands (`build`, `transpile`), where partially
+    /// ill-typed code is still worth emitting
+    ParseErrorsOnly,
+    /// any error-severity diagnostic blocks. right for `run`: a program that
+    /// fails `by check` must not execute — the checker's verdict and the
+    /// runtime behaviour would otherwise diverge
+    AllErrors,
+}
+
 /// Check every file, render diagnostics, then for each non-blocked file call
-/// `consume` with the transpiled Python. Returns `Ok(false)` if any file had
-/// a parse error or transpiler bug (caller should propagate failure).
+/// `consume` with the transpiled Python. Returns `Ok(false)` if the check
+/// outcome blocks per `gate`, or a transpiler bug occurred (caller should
+/// propagate failure).
 fn render_check_and_transpile(
     db: &ProjectDatabase,
     handles: &[(PathBuf, ruff_db::files::File)],
     config: &Config,
+    gate: CheckGate,
     mut consume: impl FnMut(&Path, &str, &[Option<u32>]) -> anyhow::Result<()>,
 ) -> anyhow::Result<bool> {
     let mut all_diagnostics: Vec<Diagnostic> = Vec::new();
@@ -546,6 +601,13 @@ fn render_check_and_transpile(
             blocked = true;
         }
         all_diagnostics.extend(diags);
+    }
+    if gate == CheckGate::AllErrors
+        && all_diagnostics
+            .iter()
+            .any(|d| d.severity() >= Severity::Error)
+    {
+        blocked = true;
     }
 
     if blocked {

@@ -28,6 +28,19 @@ by run MODULE --min-version 3.12    # target a specific runtime python version
 equivalent to `by build && python -m MODULE`, but only transpiles the
 modules required to import `MODULE`
 
+the project is type-checked first, and a program with check *errors* is not
+run — the checker's verdict and the runtime must not diverge. warnings don't
+block; a rule can be downgraded in configuration where its error is unwanted
+
+the interpreter comes from `PYTHON` (default `python3`), and by default the
+emitted code targets that interpreter's version. an explicit `--min-version`
+wins, but must not exceed the interpreter — `by run` refuses rather than emit
+code the interpreter cannot parse
+
+hidden directories (`.claude`, `.git`, `.venv`, …) and build outputs are never
+treated as project source: they are neither checked nor transpiled, by `run`
+and `build` alike
+
 ## `by build`
 
 ```sh
