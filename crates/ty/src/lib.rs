@@ -83,13 +83,18 @@ where
         Command::Run {
             module,
             min_version,
-        } => by_commands::cmd_run(&module, &min_version),
-        Command::Build { min_version } => by_commands::cmd_build(&min_version),
+            no_soundness,
+        } => by_commands::cmd_run(&module, &min_version, no_soundness),
+        Command::Build {
+            min_version,
+            no_soundness,
+        } => by_commands::cmd_build(&min_version, no_soundness),
         Command::Transpile {
             file,
             reverse,
             min_version,
-        } => by_commands::cmd_transpile(file.as_ref(), reverse, &min_version),
+            no_soundness,
+        } => by_commands::cmd_transpile(file.as_ref(), reverse, &min_version, no_soundness),
         Command::GenerateApiFile {
             output,
             stdout,
