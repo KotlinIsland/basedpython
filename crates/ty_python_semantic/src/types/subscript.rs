@@ -528,13 +528,14 @@ impl<'db> Type<'db> {
         db: &'db dyn Db,
         slice_ty: Type<'db>,
         expr_context: ast::ExprContext,
+        tcx: TypeContext<'db>,
     ) -> Result<Type<'db>, SubscriptError<'db>> {
         if let Some(fallback) = self.materialized_divergent_fallback() {
-            return fallback.subscript(db, slice_ty, expr_context);
+            return fallback.subscript(db, slice_ty, expr_context, tcx);
         }
 
         if let Some(fallback) = slice_ty.materialized_divergent_fallback() {
-            return self.subscript(db, fallback, expr_context);
+            return self.subscript(db, fallback, expr_context, tcx);
         }
 
         let value_ty = self;
@@ -543,38 +544,38 @@ impl<'db> Type<'db> {
             (Type::Dynamic(_) | Type::Divergent(_) | Type::Never, _) => Some(Ok(value_ty)),
 
             (Type::TypeAlias(alias), _) => {
-                Some(alias.value_type(db).subscript(db, slice_ty, expr_context))
+                Some(alias.value_type(db).subscript(db, slice_ty, expr_context, tcx))
             }
 
             (_, Type::TypeAlias(alias)) => {
-                Some(value_ty.subscript(db, alias.value_type(db), expr_context))
+                Some(value_ty.subscript(db, alias.value_type(db), expr_context, tcx))
             }
 
             (Type::Union(union), _) => Some(map_union_subscript(db, union, |element| {
-                element.subscript(db, slice_ty, expr_context)
+                element.subscript(db, slice_ty, expr_context, tcx)
             })),
 
             (_, Type::Union(union)) => Some(map_union_subscript(db, union, |element| {
-                value_ty.subscript(db, element, expr_context)
+                value_ty.subscript(db, element, expr_context, tcx)
             })),
 
             (Type::EnumComplement(complement), _) => {
-                Some(complement.remaining_literal_union(db).subscript(db, slice_ty, expr_context))
+                Some(complement.remaining_literal_union(db).subscript(db, slice_ty, expr_context, tcx))
             }
 
             (_, Type::EnumComplement(complement)) => {
-                Some(value_ty.subscript(db, complement.remaining_literal_union(db), expr_context))
+                Some(value_ty.subscript(db, complement.remaining_literal_union(db), expr_context, tcx))
             }
 
             (Type::Intersection(intersection), _) => {
                 Some(map_intersection_subscript(db, intersection, |element| {
-                    element.subscript(db, slice_ty, expr_context)
+                    element.subscript(db, slice_ty, expr_context, tcx)
                 }))
             }
 
             (_, Type::Intersection(intersection)) => {
                 Some(map_intersection_subscript(db, intersection, |element| {
-                    value_ty.subscript(db, element, expr_context)
+                    value_ty.subscript(db, element, expr_context, tcx)
                 }))
             }
 
@@ -741,14 +742,14 @@ impl<'db> Type<'db> {
             // Ex) Given `"value"[True]`, return `"a"`
             (Type::LiteralValue(lhs_literal), Type::LiteralValue(rhs_literal)) if (lhs_literal.is_string() || lhs_literal.is_bytes()) && rhs_literal.is_bool() => {
                 let bool = rhs_literal.as_bool().unwrap();
-                Some(value_ty.subscript(db, Type::int_literal(i64::from(bool)), expr_context))
+                Some(value_ty.subscript(db, Type::int_literal(i64::from(bool)), expr_context, tcx))
             }
 
             (Type::NominalInstance(nominal), Type::LiteralValue(literal))
                 if literal.is_bool() && nominal.tuple_spec(db).is_some() =>
             {
                 let bool = literal.as_bool().unwrap();
-                Some(value_ty.subscript(db, Type::int_literal(i64::from(bool)), expr_context))
+                Some(value_ty.subscript(db, Type::int_literal(i64::from(bool)), expr_context, tcx))
             }
 
             (Type::KnownInstance(KnownInstanceType::SubscriptedProtocol(_)), _) => {
@@ -835,7 +836,7 @@ impl<'db> Type<'db> {
             db,
             "__getitem__",
             CallArguments::positional([slice_ty]),
-            TypeContext::default(),
+            tcx,
         ) {
             Ok(outcome) => {
                 return Ok(outcome.return_type(db));

@@ -1403,7 +1403,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         {
             let value_ty = self.infer_expression(value, TypeContext::default());
             let slice_ty = self.infer_expression(slice, TypeContext::default());
-            Some(self.infer_subscript_expression_types(subscript, value_ty, slice_ty, *ctx))
+            Some(self.infer_subscript_expression_types(
+                subscript,
+                value_ty,
+                slice_ty,
+                *ctx,
+                TypeContext::default(),
+            ))
         } else {
             None
         }
@@ -4370,7 +4376,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // Fall back to non-augmented binary operator inference.
         let binary_return_ty = |builder: &mut Self, value_ty| {
             builder
-                .infer_binary_expression_type(assignment.into(), false, target_type, value_ty, op)
+                .infer_binary_expression_type(
+                    assignment.into(),
+                    false,
+                    target_type,
+                    value_ty,
+                    op,
+                    TypeContext::default(),
+                )
                 .unwrap_or_else(|| {
                     report_unsupported_augmented_assignment(
                         &builder.context,
@@ -4488,7 +4501,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 previous_value
             }
             ast::Expr::Subscript(subscript) => {
-                let previous_value = self.infer_subscript_load(subscript);
+                let previous_value = self.infer_subscript_load(subscript, TypeContext::default());
                 self.store_expression_type(target, previous_value);
                 previous_value
             }
@@ -5606,7 +5619,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             ast::Expr::BinOp(binary) => self.infer_binary_expression(binary, tcx),
             ast::Expr::BoolOp(bool_op) => self.infer_boolean_expression(bool_op, tcx),
             ast::Expr::Compare(compare) => self.infer_compare_expression(compare),
-            ast::Expr::Subscript(subscript) => self.infer_subscript_expression(subscript),
+            ast::Expr::Subscript(subscript) => self.infer_subscript_expression(subscript, tcx),
             ast::Expr::Slice(slice) => self.infer_slice_expression(slice),
             ast::Expr::If(if_expression) => self.infer_if_expression(if_expression, tcx),
             ast::Expr::Lambda(lambda_expression) => {

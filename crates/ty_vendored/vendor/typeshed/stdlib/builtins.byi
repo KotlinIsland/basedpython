@@ -52,7 +52,7 @@ from types import CellType, CodeType, EllipsisType, GenericAlias, NotImplemented
 from typing import IO, Any, BinaryIO, ClassVar, Concatenate, Final, Generic, Mapping, MutableMapping, MutableSequence, ParamSpec, Protocol, Sequence, SupportsAbs, SupportsBytes, SupportsComplex, SupportsFloat, SupportsIndex, TypeAlias, TypeGuard, TypeVar, final, type_check_only
 
 # we can't import `Literal` from typing or mypy crashes: see #11247
-from typing_extensions import Literal, LiteralString, Self, TypeIs, TypeVarTuple, deprecated, disjoint_base  # noqa: Y023, UP035
+from typing_extensions import Never, Literal, LiteralString, Self, TypeIs, TypeVarTuple, deprecated, disjoint_base  # noqa: Y023, UP035
 
 if sys.version_info >= (3, 14):
     from _typeshed import AnnotateFunc
@@ -2769,7 +2769,7 @@ class list[in out Element](MutableSequence[Element]):
     def __init__(self) -> None
     def __init__(self, iterable: Iterable[Element], /) -> None
 
-    def copy(self) -> list[Element]:
+    def copy[WidenElement = Never](self) -> list[Element | WidenElement]:
         """Return a shallow copy of the list."""
 
     def append(self, object: Element, /) -> None:
@@ -2832,7 +2832,7 @@ class list[in out Element](MutableSequence[Element]):
 
     def __getitem__(self, i: SupportsIndex, /) -> Element:
         """Return self[index]."""
-    def __getitem__(self, s: slice[SupportsIndex | None], /) -> list[Element]
+    def __getitem__[WidenElement = Never](self, s: slice[SupportsIndex | None], /) -> list[Element | WidenElement]
 
     def __setitem__(self, key: SupportsIndex, value: Element, /) -> None:
         """Set self[key] to value."""
@@ -2842,17 +2842,17 @@ class list[in out Element](MutableSequence[Element]):
         """Delete self[key]."""
 
     # Overloading looks unnecessary, but is needed to work around complex mypy problems
-    def __add__(self, value: list[Element], /) -> list[Element]:
+    def __add__[WidenElement = Never](self, value: list[Element], /) -> list[Element | WidenElement]:
         """Return self+value."""
-    def __add__[Other](self, value: list[Other], /) -> list[Other | Element]
+    def __add__[Other, WidenElement = Never](self, value: list[Other], /) -> list[Other | Element | WidenElement]
 
     def __iadd__(self, value: Iterable[Element], /) -> Self:  # type: ignore[misc]
         """Implement self+=value."""
 
-    def __mul__(self, value: SupportsIndex, /) -> list[Element]:
+    def __mul__[WidenElement = Never](self, value: SupportsIndex, /) -> list[Element | WidenElement]:
         """Return self*value."""
 
-    def __rmul__(self, value: SupportsIndex, /) -> list[Element]:
+    def __rmul__[WidenElement = Never](self, value: SupportsIndex, /) -> list[Element | WidenElement]:
         """Return value*self."""
 
     def __imul__(self, value: SupportsIndex, /) -> Self:
@@ -2909,7 +2909,7 @@ class dict[in out Key, in out Value](MutableMapping[Key, Value]):
     def __init__(self: dict[bytes, bytes], iterable: Iterable[list[bytes]], /) -> None
 
     def __new__(cls, /, *args: dynamic, **kwargs: dynamic) -> Self
-    def copy(self) -> dict[Key, Value]:
+    def copy[WidenKey = Never, WidenValue = Never](self) -> dict[Key | WidenKey, Value | WidenValue]:
         """Return a shallow copy of the dict."""
 
     def keys(self) -> dict_keys[Key, Value]:
@@ -2970,17 +2970,17 @@ class dict[in out Key, in out Value](MutableMapping[Key, Value]):
         """dicts are generic over two types, signifying (respectively) the types of their keys and values"""
 
     if sys.version_info >= (3, 15):
-        def __or__[T1, T2](self, value: dict[T1, T2] | frozendict[T1, T2], /) -> dict[Key | T1, Value | T2]:
+        def __or__[T1, T2, WidenKey = Never, WidenValue = Never](self, value: dict[T1, T2] | frozendict[T1, T2], /) -> dict[Key | T1 | WidenKey, Value | T2 | WidenValue]:
             """Return self|value."""
 
-        def __ror__[T1, T2](self, value: dict[T1, T2], /) -> dict[Key | T1, Value | T2]:
+        def __ror__[T1, T2, WidenKey = Never, WidenValue = Never](self, value: dict[T1, T2], /) -> dict[Key | T1 | WidenKey, Value | T2 | WidenValue]:
             """Return value|self."""
         def __ror__[T1, T2](self, value: frozendict[T1, T2], /) -> frozendict[Key | T1, Value | T2]
     else:
-        def __or__[T1, T2](self, value: dict[T1, T2], /) -> dict[Key | T1, Value | T2]:
+        def __or__[T1, T2, WidenKey = Never, WidenValue = Never](self, value: dict[T1, T2], /) -> dict[Key | T1 | WidenKey, Value | T2 | WidenValue]:
             """Return self|value."""
 
-        def __ror__[T1, T2](self, value: dict[T1, T2], /) -> dict[Key | T1, Value | T2]:
+        def __ror__[T1, T2, WidenKey = Never, WidenValue = Never](self, value: dict[T1, T2], /) -> dict[Key | T1 | WidenKey, Value | T2 | WidenValue]:
             """Return value|self."""
 
     # dict.__ior__ should be kept roughly in line with MutableMapping.update()
@@ -3071,10 +3071,10 @@ class set[in out Element](MutableSet[Element]):
         This has no effect if the element is already present.
         """
 
-    def copy(self) -> set[Element]:
+    def copy[WidenElement = Never](self) -> set[Element | WidenElement]:
         """Return a shallow copy of a set."""
 
-    def difference(self, *s: Iterable[object]) -> set[Element]:
+    def difference[WidenElement = Never](self, *s: Iterable[object]) -> set[Element | WidenElement]:
         """Return a new set with elements in the set that are not in the others."""
 
     def difference_update(self, *s: Iterable[object]) -> None:
@@ -3087,7 +3087,7 @@ class set[in out Element](MutableSet[Element]):
         an exception when an element is missing from the set.
         """
 
-    def intersection(self, *s: Iterable[object]) -> set[Element]:
+    def intersection[WidenElement = Never](self, *s: Iterable[object]) -> set[Element | WidenElement]:
         """Return a new set with elements common to the set and all others."""
 
     def intersection_update(self, *s: Iterable[object]) -> None:
@@ -3108,13 +3108,13 @@ class set[in out Element](MutableSet[Element]):
         If the element is not a member, raise a KeyError.
         """
 
-    def symmetric_difference[Other](self, s: Iterable[Other], /) -> set[Element | Other]:
+    def symmetric_difference[Other, WidenElement = Never](self, s: Iterable[Other], /) -> set[Element | Other | WidenElement]:
         """Return a new set with elements in either the set or other but not both."""
 
     def symmetric_difference_update(self, s: Iterable[Element], /) -> None:
         """Update the set, keeping only elements found in either set, but not in both."""
 
-    def union[Other](self, *s: Iterable[Other]) -> set[Element | Other]:
+    def union[Other, WidenElement = Never](self, *s: Iterable[Other]) -> set[Element | Other | WidenElement]:
         """Return a new set with elements from the set and all others."""
 
     def update(self, *s: Iterable[Element]) -> None:
@@ -3129,25 +3129,25 @@ class set[in out Element](MutableSet[Element]):
     def __iter__(self) -> Iterator[Element]:
         """Implement iter(self)."""
 
-    def __and__(self, value: AbstractSet[object], /) -> set[Element]:
+    def __and__[WidenElement = Never](self, value: AbstractSet[object], /) -> set[Element | WidenElement]:
         """Return self&value."""
 
     def __iand__(self, value: AbstractSet[object], /) -> Self:
         """Return self&=value."""
 
-    def __or__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]:
+    def __or__[Other, WidenElement = Never](self, value: AbstractSet[Other], /) -> set[Element | Other | WidenElement]:
         """Return self|value."""
 
     def __ior__(self, value: AbstractSet[Element], /) -> Self:  # type: ignore[override,misc]
         """Return self|=value."""
 
-    def __sub__(self, value: AbstractSet[object], /) -> set[Element]:
+    def __sub__[WidenElement = Never](self, value: AbstractSet[object], /) -> set[Element | WidenElement]:
         """Return self-value."""
 
     def __isub__(self, value: AbstractSet[object], /) -> Self:
         """Return self-=value."""
 
-    def __xor__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]:
+    def __xor__[Other, WidenElement = Never](self, value: AbstractSet[Other], /) -> set[Element | Other | WidenElement]:
         """Return self^value."""
 
     def __ixor__(self, value: AbstractSet[Element], /) -> Self:  # type: ignore[override,misc]

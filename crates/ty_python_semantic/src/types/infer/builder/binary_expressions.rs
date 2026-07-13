@@ -76,7 +76,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 BinaryExpressionOperandTypes::Inferred(left_ty, right_ty) => (left_ty, right_ty),
             };
 
-        self.infer_binary_expression_type(binary.into(), false, left_ty, right_ty, *op)
+        self.infer_binary_expression_type(binary.into(), false, left_ty, right_ty, *op, tcx)
             .unwrap_or_else(|| {
                 report_unsupported_binary_operation(&self.context, binary, left_ty, right_ty, *op);
                 Type::unknown()
@@ -312,6 +312,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         left_ty: Type<'db>,
         right_ty: Type<'db>,
         op: ast::Operator,
+        tcx: TypeContext<'db>,
     ) -> Option<Type<'db>> {
         self.infer_binary_expression_type_impl(
             node,
@@ -320,9 +321,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             right_ty,
             op,
             &BinaryExpressionVisitor::new(Some(Type::Never)),
+            tcx,
         )
     }
 
+    #[expect(clippy::too_many_arguments)]
     fn infer_binary_expression_type_impl(
         &mut self,
         node: AnyNodeRef<'_>,
@@ -331,6 +334,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         right_ty: Type<'db>,
         op: ast::Operator,
         visitor: &BinaryExpressionVisitor<'db>,
+        tcx: TypeContext<'db>,
     ) -> Option<Type<'db>> {
         let db = self.db();
 
@@ -357,6 +361,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     rhs,
                     op,
                     visitor,
+                    tcx,
                 )
             }),
             (lhs, Type::Union(rhs_union), _) => rhs_union.try_map(db, |rhs_element| {
@@ -367,6 +372,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     *rhs_element,
                     op,
                     visitor,
+                    tcx,
                 )
             }),
 
@@ -378,6 +384,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     rhs,
                     op,
                     visitor,
+                    tcx,
                 )
             }),
 
@@ -389,6 +396,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     alias.value_type(db),
                     op,
                     visitor,
+                    tcx,
                 )
             }),
 
@@ -456,6 +464,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                     constraint,
                                     constraint,
                                     op,
+                                    tcx,
                                 )
                             },
                         )
@@ -487,6 +496,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                     rhs,
                                     op,
                                     visitor,
+                                    tcx,
                                 )
                             },
                         )
@@ -513,6 +523,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                     constraint,
                                     op,
                                     visitor,
+                                    tcx,
                                 )
                             },
                         )
@@ -537,6 +548,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         rhs,
                         op,
                         visitor,
+                        tcx,
                     )
                 })
             }
@@ -549,6 +561,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         newtype.concrete_base_type(db),
                         op,
                         visitor,
+                        tcx,
                     )
                 })
             }
@@ -810,6 +823,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         Type::int_literal(i64::from(b1)),
                         right_ty,
                         op,
+                        tcx,
                     ),
 
                     (LiteralValueTypeKind::Int(_), LiteralValueTypeKind::Bool(b2), op) => self
@@ -819,6 +833,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             left_ty,
                             Type::int_literal(i64::from(b2)),
                             op,
+                            tcx,
                         ),
 
                     (
@@ -1051,6 +1066,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 left_ty,
                 ast::Operator::BitOr,
                 right_ty,
+                TypeContext::default(),
                 MemberLookupPolicy::META_CLASS_NO_TYPE_FALLBACK,
             )
             .ok()
@@ -1114,7 +1130,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 | Type::TypeForm(_)
                 | Type::TypedDict(_),
                 op,
-            ) => Type::try_call_bin_op_return_type(db, left_ty, op, right_ty),
+            ) => Type::try_call_bin_op_return_type_with_tcx(db, left_ty, op, right_ty, tcx),
         }
     }
 
