@@ -1172,7 +1172,7 @@ mod tests {
         )
         .unwrap();
         assert!(out.contains("a: _AnonNamedTuple_"));
-        assert!(out.contains("= (\"asdf\",)"), "got: {out}");
+        assert!(out.contains("= tuple[str]((\"asdf\",))"), "got: {out}");
     }
 
     #[test]
@@ -1399,7 +1399,7 @@ mod tests {
             "},
             indoc! {"
                 def f() -> tuple[str, int]:
-                    return (\"asdf\", 1)
+                    return tuple[str, int]((\"asdf\", 1))
             "},
         );
     }
@@ -1416,7 +1416,7 @@ mod tests {
             &Config::test_default(),
         )
         .unwrap();
-        assert!(out.contains("return (\"asdf\",)"), "got: {out}");
+        assert!(out.contains("return tuple[str]((\"asdf\",))"), "got: {out}");
     }
 
     #[test]

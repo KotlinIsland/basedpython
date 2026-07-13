@@ -628,10 +628,11 @@ mod tests {
 
     #[test]
     fn value_position_unchanged() {
-        // Dict literal in value position is a regular dict, not a TypedDict
+        // Dict literal in value position is a regular dict, not a TypedDict —
+        // it gains only the reification wrapper
         check(
             "a: dict[str, int] = {\"k\": 1}\n",
-            "a: dict[str, int] = {\"k\": 1}\n",
+            "a: dict[str, int] = dict[str, int]({\"k\": 1})\n",
         );
     }
 
