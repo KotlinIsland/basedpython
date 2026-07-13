@@ -72,6 +72,9 @@ pub(crate) enum Command {
         /// minimum Python version the output must run on
         #[arg(long, value_name = "VERSION", default_value = "3.10")]
         min_version: String,
+        /// skip runtime type-soundness checks (`_soundness_check` insertions)
+        #[arg(long)]
+        no_soundness: bool,
     },
 
     /// Transpile all .by files and write them to out/.
@@ -79,6 +82,9 @@ pub(crate) enum Command {
         /// minimum Python version the output must run on
         #[arg(long, value_name = "VERSION", default_value = "3.10")]
         min_version: String,
+        /// skip runtime type-soundness checks (`_soundness_check` insertions)
+        #[arg(long)]
+        no_soundness: bool,
     },
 
     /// Generate an api lockfile (`api.lock`) summarising the public type-level
@@ -116,6 +122,9 @@ pub(crate) enum Command {
         /// minimum Python version the output must run on
         #[arg(long, value_name = "VERSION", default_value = "3.10")]
         min_version: String,
+        /// skip runtime type-soundness checks (`_soundness_check` insertions)
+        #[arg(long)]
+        no_soundness: bool,
     },
 }
 

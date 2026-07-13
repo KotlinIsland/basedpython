@@ -38,6 +38,7 @@ pub(crate) mod reified_generic;
 pub(crate) mod repeated_underscore;
 pub(crate) mod sentinel;
 pub(crate) mod some_ctor;
+pub(crate) mod soundness;
 pub(crate) mod source_util;
 pub(crate) mod string_tag;
 pub(crate) mod super_keyword;

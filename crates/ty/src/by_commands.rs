@@ -30,19 +30,24 @@ pub(crate) fn parse_version(s: &str) -> anyhow::Result<Config> {
 // ── run ──────────────────────────────────────────────────────────────────────
 
 #[allow(clippy::exit, clippy::print_stderr)]
-pub(crate) fn cmd_run(module: &str, min_version: &str) -> anyhow::Result<ExitStatus> {
+pub(crate) fn cmd_run(
+    module: &str,
+    min_version: &str,
+    no_soundness: bool,
+) -> anyhow::Result<ExitStatus> {
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
     // `run` executes on a specific interpreter, so target *its* version: the
     // emitted code (dataclass `slots=`, PEP 695 syntax, …) must match what that
     // python actually supports. fall back to the `--min-version` flag only if
     // the interpreter can't be probed
-    let config = match detect_python_version(&python) {
+    let mut config = match detect_python_version(&python) {
         Some(version) => Config {
             min_version: version,
             ..Config::default()
         },
         None => parse_version(min_version)?,
     };
+    config.soundness_checks = !no_soundness;
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let tmp = tempfile::TempDir::new().context("failed to create temp directory")?;
 
@@ -106,8 +111,9 @@ fn detect_python_version(python: &str) -> Option<PythonVersion> {
 // ── build ────────────────────────────────────────────────────────────────────
 
 #[allow(clippy::print_stderr)]
-pub(crate) fn cmd_build(min_version: &str) -> anyhow::Result<ExitStatus> {
-    let config = parse_version(min_version)?;
+pub(crate) fn cmd_build(min_version: &str, no_soundness: bool) -> anyhow::Result<ExitStatus> {
+    let mut config = parse_version(min_version)?;
+    config.soundness_checks = !no_soundness;
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let out = cwd.join("out");
     let files = bpy_files(&cwd);
@@ -141,8 +147,10 @@ pub(crate) fn cmd_transpile(
     file: Option<&PathBuf>,
     reverse: bool,
     min_version: &str,
+    no_soundness: bool,
 ) -> anyhow::Result<ExitStatus> {
-    let config = parse_version(min_version)?;
+    let mut config = parse_version(min_version)?;
+    config.soundness_checks = !no_soundness;
 
     // a directory argument transpiles the whole tree in place: forward turns
     // every `.by` into a `.py` (type-aware, one shared project db); reverse

@@ -33,6 +33,13 @@ pub struct Config {
     /// the arrow form). Tests that compare verbatim preservation should set
     /// this to `false`
     pub prune_unused_imports_after_reverse: bool,
+    /// when true (the default), insert runtime `_soundness_check` validations
+    /// at expressions whose inferred type rests on an assumption the checker
+    /// cannot verify: typevar solutions at generic call sites, element
+    /// projections out of annotated containers, and explicit `Any` flowing
+    /// into a declared binding. Tests that compare exact transpile output
+    /// should set this to `false` unless they exercise the checks themselves
+    pub soundness_checks: bool,
 }
 
 impl Default for Config {
@@ -44,6 +51,7 @@ impl Default for Config {
             lazy_imports: true,
             inject_future_annotations: false,
             prune_unused_imports_after_reverse: true,
+            soundness_checks: true,
         }
     }
 }
@@ -57,6 +65,7 @@ impl Config {
         Self {
             lazy_imports: false,
             prune_unused_imports_after_reverse: false,
+            soundness_checks: false,
             ..Self::default()
         }
     }

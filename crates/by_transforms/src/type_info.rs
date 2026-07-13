@@ -97,6 +97,22 @@ pub(crate) trait TypeInfo {
     /// generic `T?`) — its runtime values are `None` or the injected
     /// `Optional` wrapper, so consumers unwrap with `.value`
     fn wrapped_optional(&self, expr: &Expr) -> bool;
+
+    /// whether a call through `callee` yields a result whose type was
+    /// derived by substituting typevars — a generic function's return, or a
+    /// method bound to a specialized generic instance. such results rest on
+    /// an assumption ty cannot verify, so the soundness pass validates them
+    fn call_result_is_typevar_derived(&self, callee: &Expr) -> bool;
+
+    /// whether `expr`'s inferred type is an instance carrying a generic
+    /// specialization (`list[str]`, a `TypedDict`) — element projections out
+    /// of it consume an annotation-level claim
+    fn is_specialized_generic_instance(&self, expr: &Expr) -> bool;
+
+    /// render `expr`'s inferred type as an `isinstance` second argument
+    /// (`str`, `(int, type(None))`), or `None` when the type has no faithful
+    /// shallow runtime test or its name doesn't resolve at module scope
+    fn soundness_check_target(&self, expr: &Expr) -> Option<String>;
 }
 
 impl TypeInfo for SemanticModel<'_> {
@@ -260,6 +276,23 @@ impl TypeInfo for SemanticModel<'_> {
             expr.inferred_type(self),
             Some(Type::KnownInstance(KnownInstanceType::WrappedOptional(_)))
         )
+    }
+
+    fn call_result_is_typevar_derived(&self, callee: &Expr) -> bool {
+        callee.inferred_type(self).is_some_and(|ty| {
+            ty_python_semantic::types::soundness::call_result_is_typevar_derived(self.db(), ty)
+        })
+    }
+
+    fn is_specialized_generic_instance(&self, expr: &Expr) -> bool {
+        expr.inferred_type(self).is_some_and(|ty| {
+            ty_python_semantic::types::soundness::is_specialized_generic_instance(self.db(), ty)
+        })
+    }
+
+    fn soundness_check_target(&self, expr: &Expr) -> Option<String> {
+        let ty = expr.inferred_type(self)?;
+        ty_python_semantic::types::soundness::runtime_check_target(self.db(), self.file(), ty)
     }
 }
 

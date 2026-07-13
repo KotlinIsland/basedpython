@@ -118,8 +118,12 @@ fn by_blocks(markdown: &str) -> Vec<(String, bool)> {
 }
 
 fn transpile(source: &str, min_version: &str) -> Result<String, String> {
+    // soundness checks are intended runtime behavior, but mdtest snippets are
+    // full of stub bodies (`def f[T]() -> T: ...`) that legitimately violate
+    // their annotations when executed — the checks would report those as
+    // divergences rather than transpiler bugs, so this harness opts out
     let mut child = Command::new(env!("CARGO_BIN_EXE_by"))
-        .args(["transpile", "--min-version", min_version])
+        .args(["transpile", "--min-version", min_version, "--no-soundness"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

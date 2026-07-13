@@ -39,9 +39,9 @@ use super::{
     float_const, force_unwrap, generic_call, generics, identity_swap, implicit_typing, init_method,
     just_float, kw_subscript, literal_types, main_function, modifiers, mutable_defaults,
     none_chain, optional_type, overload, postfix_await, propagate, reified_generic,
-    repeated_underscore, sentinel, some_ctor, string_tag, super_keyword, symbolic_type_op,
-    top_star, tuple_index, type_is, typed_dict_literal, typed_lambda, typeof_keyword, unpack,
-    use_site_variance,
+    repeated_underscore, sentinel, some_ctor, soundness, string_tag, super_keyword,
+    symbolic_type_op, top_star, tuple_index, type_is, typed_dict_literal, typed_lambda,
+    typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -473,6 +473,7 @@ pub(crate) fn run_against_source<'a>(
     let none_chain_pass = none_chain::NoneChainPass::new(source_ref);
     let optional_type_pass = optional_type::OptionalTypePass::new(source_ref);
     let generics_pass = generics::GenericPolyfillPass::new(source_ref, config.clone());
+    let soundness_pass = soundness::SoundnessPass::new(config);
     let variance_pass = decl_site_variance::VarianceStripPass::new();
     let anon_named_tuple_pass =
         anon_named_tuple::AnonNamedTuplePass::new(source_ref, config.clone());
@@ -531,6 +532,11 @@ pub(crate) fn run_against_source<'a>(
     // type-aware passes: operate on the salsa-owned parsed module (so
     // semantic queries hit the right AST nodes), emit text_edits / imports
     let type_aware: &[&dyn TypeAwarePass] = &[
+        // soundness wraps whole gated expressions in `_soundness_check(...)`
+        // template edits; it runs first so an equal-span template from a
+        // later pass (e.g. coalesce on a wrapped iterable) is claimed and
+        // materialized inside the check rather than dropping it
+        &soundness_pass,
         &dynamic_keyword_pass,
         &just_float_pass,
         &float_const_pass,
@@ -872,8 +878,15 @@ pub(crate) fn run_against_source<'a>(
     for (start, end, repl) in edits {
         out.replace_range(start..end, &repl);
     }
-    let mut table: Vec<Option<u32>> = Vec::with_capacity(body_table.len());
-    table.extend(std::iter::repeat_n(None, ctx.required_imports.len()));
+    // an entry may be multi-line (runtime helper defs), so the table prefix
+    // counts the lines each entry emits, not the entries themselves
+    let prefix_lines: usize = ctx
+        .required_imports
+        .iter()
+        .map(|imp| crate::newline_count(imp) + 1)
+        .sum();
+    let mut table: Vec<Option<u32>> = Vec::with_capacity(prefix_lines + body_table.len());
+    table.extend(std::iter::repeat_n(None, prefix_lines));
     table.extend(body_table);
     if !ctx.required_imports.is_empty() {
         let mut prefix = String::new();

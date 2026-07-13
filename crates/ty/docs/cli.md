@@ -240,7 +240,8 @@ by run [OPTIONS] <MODULE>
 
 <dl class="cli-reference"><dt id="by-run--help"><a href="#by-run--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help</p>
 </dd><dt id="by-run--min-version"><a href="#by-run--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the output must run on</p>
-<p>[default: 3.10]</p></dd></dl>
+<p>[default: 3.10]</p></dd><dt id="by-run--no-soundness"><a href="#by-run--no-soundness"><code>--no-soundness</code></a></dt><dd><p>skip runtime type-soundness checks (<code>_soundness_check</code> insertions)</p>
+</dd></dl>
 
 ## by build
 
@@ -256,7 +257,8 @@ by build [OPTIONS]
 
 <dl class="cli-reference"><dt id="by-build--help"><a href="#by-build--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help</p>
 </dd><dt id="by-build--min-version"><a href="#by-build--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the output must run on</p>
-<p>[default: 3.10]</p></dd></dl>
+<p>[default: 3.10]</p></dd><dt id="by-build--no-soundness"><a href="#by-build--no-soundness"><code>--no-soundness</code></a></dt><dd><p>skip runtime type-soundness checks (<code>_soundness_check</code> insertions)</p>
+</dd></dl>
 
 ## by generate-api-file
 
@@ -310,7 +312,8 @@ by transpile [OPTIONS] [FILE]
 
 <dl class="cli-reference"><dt id="by-transpile--help"><a href="#by-transpile--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help</p>
 </dd><dt id="by-transpile--min-version"><a href="#by-transpile--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the output must run on</p>
-<p>[default: 3.10]</p></dd><dt id="by-transpile--reverse"><a href="#by-transpile--reverse"><code>--reverse</code></a></dt><dd><p>convert Python source into basedpython idioms (instead of the default by → py direction)</p>
+<p>[default: 3.10]</p></dd><dt id="by-transpile--no-soundness"><a href="#by-transpile--no-soundness"><code>--no-soundness</code></a></dt><dd><p>skip runtime type-soundness checks (<code>_soundness_check</code> insertions)</p>
+</dd><dt id="by-transpile--reverse"><a href="#by-transpile--reverse"><code>--reverse</code></a></dt><dd><p>convert Python source into basedpython idioms (instead of the default by → py direction)</p>
 </dd></dl>
 
 ## by help
