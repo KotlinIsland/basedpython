@@ -16,16 +16,19 @@
 //!   arguments → one witness element decides the arm (`x: list[int] |
 //!   list[str]` is `list[int]` → probe the first element; an empty
 //!   collection has no witness and answers `False`)
-//! - anything else is *unchecked* (ty warns): the lowering probes the
-//!   value's `__orig_class__` — natively stamped on user generics by
-//!   `A[int](…)` — and answers `False` for values that carry none
+//! - the value is undecidable but the target is a *user-defined* generic →
+//!   probe the value's `__orig_class__`, natively stamped on user generics by
+//!   `A[int](…)`; answers `False` for values that carry none
+//! - the value is undecidable and the target is a *builtin* collection, whose
+//!   runtime instances erase their type arguments → ty errors
+//!   (`erased-type-check`) and the lowering is the constant `False`
 //!
 //! a subscripted rhs that is *not* a generic class (`x is candidates[0]`)
 //! falls back to the ordinary `isinstance` lowering that
 //! [`identity_swap`](super::identity_swap) applies to every other rhs
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{self as ast, CmpOp, Expr, PythonVersion, Stmt};
+use ruff_python_ast::{self as ast, CmpOp, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 use ty_python_semantic::reified::is_keyword_comparison;
 use ty_python_semantic::{ParametricIsPlan, WitnessPlan};
@@ -63,9 +66,6 @@ struct ParametricIs<'src, 'ti> {
     edits: Vec<(TextRange, String)>,
     needs_probe: bool,
     needs_witness: bool,
-    /// a lowering evaluates the subscripted alias at runtime (token equality
-    /// or probe), which needs pep 585 for the builtins
-    needs_runtime_alias: bool,
 }
 
 impl ParametricIs<'_, '_> {
@@ -100,12 +100,17 @@ impl ParametricIs<'_, '_> {
             return if negate { format!("not {call}") } else { call };
         };
         match plan {
-            ParametricIsPlan::Fold(result) => {
-                let value = if result != negate { "True" } else { "False" };
+            // a builtin-target probe can never be true (ty reports the
+            // error); lower it to the constant it always is
+            ParametricIsPlan::Fold(false) | ParametricIsPlan::ErasedTarget => {
+                let value = if negate { "True" } else { "False" };
+                self.with_lhs_effects(lhs, value.to_owned())
+            }
+            ParametricIsPlan::Fold(true) => {
+                let value = if negate { "False" } else { "True" };
                 self.with_lhs_effects(lhs, value.to_owned())
             }
             ParametricIsPlan::TokenEq(tokens) => {
-                self.needs_runtime_alias = true;
                 let comparisons = tokens
                     .iter()
                     .map(|(name, target)| format!("{name} == {}", self.src(*target)))
@@ -141,9 +146,9 @@ impl ParametricIs<'_, '_> {
                     check
                 }
             }
-            ParametricIsPlan::Probe(_) => {
+            // a user-defined generic target carries `__orig_class__`; probe it
+            ParametricIsPlan::Probe => {
                 self.needs_probe = true;
-                self.needs_runtime_alias = true;
                 let call = format!(
                     "_parametric_is({}, {})",
                     self.src(lhs.range()),
@@ -185,15 +190,11 @@ impl<'ast> Visitor<'ast> for ParametricIs<'_, '_> {
 
 pub(crate) struct ParametricIsPass<'src> {
     source: &'src str,
-    min_version: PythonVersion,
 }
 
 impl<'src> ParametricIsPass<'src> {
-    pub(crate) fn new(source: &'src str, min_version: PythonVersion) -> Self {
-        Self {
-            source,
-            min_version,
-        }
+    pub(crate) fn new(source: &'src str) -> Self {
+        Self { source }
     }
 }
 
@@ -205,22 +206,15 @@ impl TypeAwarePass for ParametricIsPass<'_> {
             edits: Vec::new(),
             needs_probe: false,
             needs_witness: false,
-            needs_runtime_alias: false,
         };
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
-        // folds and witness probes reference only plain classes; token and
-        // probe lowerings evaluate the subscripted alias itself, and pep 585
-        // (3.9) is what makes the builtins subscriptable there
-        if self.min_version < PythonVersion::PY39 && inner.needs_runtime_alias {
-            ctx.errors.push(
-                "parametric type tests (`x is list[int]`) require python 3.9 or newer: \
-                 the lowered check subscripts the target class at runtime"
-                    .to_owned(),
-            );
-            return;
-        }
+        // no version gate is needed here: the only lowering that spells a
+        // *builtin* subscript at runtime is the reified-cell token equality
+        // (`T == list[int]`), which is already restricted to 3.12+ by the
+        // reified-generic requirement; a user-generic probe (`A[int]`) works
+        // on any target
         if inner.needs_probe {
             ctx.required_imports.push(PARAMETRIC_IS_RUNTIME.to_owned());
         }
@@ -332,18 +326,40 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_value_probes_orig_class() {
+    fn dynamic_value_against_user_generic_probes_orig_class() {
+        // a user-defined generic's instances carry `__orig_class__`, so a
+        // dynamic value against it is a valid runtime probe
+        let out = out(indoc! {"
+            class A[T]:
+                def __init__(self, t: T): ...
+            def f(x) -> bool:
+                return x is A[int]
+        "});
+        assert!(
+            out.contains("return _parametric_is(x, A[int])"),
+            "dynamic lhs against a user generic probes __orig_class__: {out}"
+        );
+        assert!(
+            out.contains("def _parametric_is(value, alias):"),
+            "probe polyfill emitted: {out}"
+        );
+    }
+
+    #[test]
+    fn dynamic_value_against_builtin_folds_false() {
+        // a builtin collection erases its type arguments at runtime, so the
+        // probe can never succeed — ty errors and the lowering is a constant
         let out = out(indoc! {"
             def f(x) -> bool:
                 return x is list[int]
         "});
         assert!(
-            out.contains("return _parametric_is(x, list[int])"),
-            "dynamic lhs lowers to the probe: {out}"
+            out.contains("return False"),
+            "erased builtin target lowers to False: {out}"
         );
         assert!(
-            out.contains("def _parametric_is(value, alias):"),
-            "probe polyfill emitted: {out}"
+            !out.contains("_parametric_is"),
+            "no probe against an erased builtin: {out}"
         );
     }
 
@@ -415,21 +431,14 @@ mod tests {
     }
 
     #[test]
-    fn below_39_is_an_error() {
-        let err = transpile(
-            indoc! {"
-                def f(x) -> bool:
-                    return x is list[int]
-            "},
-            &Config {
-                min_version: PythonVersion::PY38,
-                ..Config::test_default()
-            },
-        )
-        .unwrap_err();
-        assert!(
-            err.contains("3.9"),
-            "expected a 3.9 requirement error: {err}"
-        );
+    fn erased_builtin_probe_becomes_false() {
+        // a dynamic value against a builtin target can't probe (no
+        // __orig_class__); lowers to a constant, no polyfill
+        let out = out(indoc! {"
+            def f(x) -> bool:
+                return x is dict[str, int]
+        "});
+        assert!(out.contains("return False"), "erased dict target: {out}");
+        assert!(!out.contains("_parametric_is"), "no probe: {out}");
     }
 }

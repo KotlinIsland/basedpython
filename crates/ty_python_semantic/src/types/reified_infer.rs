@@ -315,9 +315,10 @@ fn spell_class_literal<'db>(
 ///
 /// Rust-style: the test is answered from static types at compile time
 /// wherever possible; the runtime residue is an equality check of reified
-/// type-param cells or a witness probe. When neither exists the test is
-/// *unchecked* — the lowering falls back to a `__orig_class__` probe and the
-/// checker warns.
+/// type-param cells, a witness probe, or a `__orig_class__` probe. The last
+/// only works when the target's instances carry `__orig_class__` — a
+/// user-defined generic. Against a builtin collection, whose instances erase
+/// their type arguments, no runtime answer exists and the test is an error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ParametricIsPlan {
     /// statically decided — the test lowers to a constant
@@ -329,8 +330,14 @@ pub enum ParametricIsPlan {
     /// disjoint arguments — one witness element decides which arm this is
     /// (an empty collection has no witness and answers `False`)
     Witness(WitnessPlan),
-    /// undecidable — probe `__orig_class__` at runtime; the checker warns
-    Probe(UncheckedReason),
+    /// not decidable from static types, but the target is a user-defined
+    /// generic whose instances carry `__orig_class__` — probe it at runtime.
+    /// a legitimate, unwarned runtime test
+    Probe,
+    /// not decidable from static types, and the target is a builtin
+    /// collection whose instances never carry `__orig_class__`, so no runtime
+    /// probe can succeed — the test can never be true and is an error
+    ErasedTarget,
 }
 
 /// where the witness element lives and the class (by source range in the
@@ -347,12 +354,21 @@ pub enum WitnessPlan {
     TupleIndex { index: usize, class: TextRange },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum UncheckedReason {
-    /// the value's type is (or mentions) a type parameter with no reified cell
-    ErasedGenerics,
-    /// the value's static type is unknown or dynamic
-    Dynamic,
+/// whether specialized instances of `origin` carry `__orig_class__` at
+/// runtime. the builtin collections are C types that erase their type
+/// arguments and reject the attribute; a user-defined generic carries it
+/// (set by `types.GenericAlias.__call__` after construction)
+fn target_carries_orig_class<'db>(db: &'db dyn Db, origin: ClassLiteral<'db>) -> bool {
+    !matches!(
+        origin.known(db),
+        Some(
+            KnownClass::List
+                | KnownClass::Dict
+                | KnownClass::Set
+                | KnownClass::FrozenSet
+                | KnownClass::Tuple
+        )
+    )
 }
 
 /// Classify how `lhs is rhs` (keyword form, `rhs` a subscripted generic
@@ -369,14 +385,23 @@ pub(crate) fn classify_parametric_is<'db>(
         ast::Expr::Tuple(tuple) => tuple.elts.iter().collect(),
         single => vec![single],
     };
-    classify_value(
+    let plan = classify_value(
         db,
         lhs_ty.promote(db),
         target_origin,
         rhs_alias,
         &target_args_ast,
         rhs_node,
-    )
+    );
+    // a runtime `__orig_class__` probe is the last resort. it only works when
+    // the target's instances carry that attribute — a builtin collection
+    // never does, so the test can never be true and becomes an error
+    match plan {
+        ParametricIsPlan::Probe if !target_carries_orig_class(db, target_origin) => {
+            ParametricIsPlan::ErasedTarget
+        }
+        other => other,
+    }
 }
 
 fn classify_value<'db>(
@@ -394,7 +419,7 @@ fn classify_value<'db>(
             if is_reified_function_typevar(db, bound_typevar) {
                 ParametricIsPlan::TokenEq(vec![(bound_typevar.name(db).clone(), rhs_node.range())])
             } else {
-                ParametricIsPlan::Probe(UncheckedReason::ErasedGenerics)
+                ParametricIsPlan::Probe
             }
         }
         Type::NominalInstance(instance) => match instance.class(db) {
@@ -423,19 +448,15 @@ fn classify_value<'db>(
                 if value_ty.is_disjoint_from(db, target_instance) {
                     ParametricIsPlan::Fold(false)
                 } else {
-                    ParametricIsPlan::Probe(UncheckedReason::Dynamic)
+                    ParametricIsPlan::Probe
                 }
             }
         },
         Type::Union(union) => classify_union(db, union, target_origin, rhs_alias, target_args_ast),
-        Type::Dynamic(_) => ParametricIsPlan::Probe(UncheckedReason::Dynamic),
-        other => {
-            if other.has_typevar(db) {
-                ParametricIsPlan::Probe(UncheckedReason::ErasedGenerics)
-            } else {
-                ParametricIsPlan::Probe(UncheckedReason::Dynamic)
-            }
-        }
+        // any other value type — dynamic, a leaked typevar, a protocol — is
+        // undecidable statically; `classify_parametric_is` turns this into a
+        // runtime probe or an erased-target error depending on the target
+        _ => ParametricIsPlan::Probe,
     }
 }
 
@@ -474,13 +495,13 @@ fn unify_specializations<'db>(
                 }
                 Ok(())
             }
-            _ => Err(ParametricIsPlan::Probe(UncheckedReason::Dynamic)),
+            _ => Err(ParametricIsPlan::Probe),
         };
     }
     let value_types = value_spec.types(db);
     let target_types = target_spec.types(db);
     if value_types.len() != target_types.len() {
-        return Err(ParametricIsPlan::Probe(UncheckedReason::Dynamic));
+        return Err(ParametricIsPlan::Probe);
     }
     for (index, (s, t)) in value_types.iter().zip(target_types).enumerate() {
         unify_argument(
@@ -506,18 +527,18 @@ fn unify_argument<'db>(
     }
     if let Type::TypeVar(bound_typevar) = value {
         if !is_reified_function_typevar(db, bound_typevar) {
-            return Err(ParametricIsPlan::Probe(UncheckedReason::ErasedGenerics));
+            return Err(ParametricIsPlan::Probe);
         }
         // a pep 696 default can leave a target position with no source
         // expression to compare against
         let Some(target_ast) = target_ast else {
-            return Err(ParametricIsPlan::Probe(UncheckedReason::Dynamic));
+            return Err(ParametricIsPlan::Probe);
         };
         tokens.push((bound_typevar.name(db).clone(), target_ast.range()));
         return Ok(());
     }
     if value.is_dynamic() || target.is_dynamic() {
-        return Err(ParametricIsPlan::Probe(UncheckedReason::Dynamic));
+        return Err(ParametricIsPlan::Probe);
     }
     // both sides specializations of the same class: recurse structurally
     // (`list[T]` vs the `list[int]` written in the rhs)
@@ -548,7 +569,7 @@ fn unify_argument<'db>(
         );
     }
     if value.has_typevar(db) || target.has_typevar(db) {
-        return Err(ParametricIsPlan::Probe(UncheckedReason::ErasedGenerics));
+        return Err(ParametricIsPlan::Probe);
     }
     Err(ParametricIsPlan::Fold(false))
 }
@@ -567,16 +588,16 @@ fn classify_union<'db>(
     let mut arm_specs = Vec::new();
     for element in union.elements(db) {
         let Type::NominalInstance(instance) = element else {
-            return ParametricIsPlan::Probe(UncheckedReason::Dynamic);
+            return ParametricIsPlan::Probe;
         };
         let ClassType::Generic(alias) = instance.class(db) else {
-            return ParametricIsPlan::Probe(UncheckedReason::Dynamic);
+            return ParametricIsPlan::Probe;
         };
         if ClassLiteral::Static(alias.origin(db)) != target_origin {
-            return ParametricIsPlan::Probe(UncheckedReason::Dynamic);
+            return ParametricIsPlan::Probe;
         }
         if element.has_typevar(db) {
-            return ParametricIsPlan::Probe(UncheckedReason::ErasedGenerics);
+            return ParametricIsPlan::Probe;
         }
         arm_specs.push(alias.specialization(db));
     }
@@ -586,7 +607,7 @@ fn classify_union<'db>(
         for spec in arm_specs.iter().chain([&rhs_alias.specialization(db)]) {
             match spec.tuple(db) {
                 Some(Tuple::Fixed(fixed)) => args.push(fixed.elements_slice().to_vec()),
-                _ => return ParametricIsPlan::Probe(UncheckedReason::Dynamic),
+                _ => return ParametricIsPlan::Probe,
             }
         }
         args
@@ -599,10 +620,10 @@ fn classify_union<'db>(
     };
     let (target_args, arm_args) = arm_args.split_last().expect("chain includes the target");
     if arm_args.iter().any(|args| args.len() != target_args.len()) {
-        return ParametricIsPlan::Probe(UncheckedReason::Dynamic);
+        return ParametricIsPlan::Probe;
     }
     if target_args.iter().any(Type::is_dynamic) {
-        return ParametricIsPlan::Probe(UncheckedReason::Dynamic);
+        return ParametricIsPlan::Probe;
     }
 
     let arms_equal_target: Vec<bool> = arm_args
@@ -641,7 +662,7 @@ fn classify_union<'db>(
                 .all(|(args, _)| target_arg.is_disjoint_from(db, args[index]))
     });
     let Some(index) = discriminant else {
-        return ParametricIsPlan::Probe(UncheckedReason::Dynamic);
+        return ParametricIsPlan::Probe;
     };
     let class = target_args_ast[index].range();
 
@@ -659,7 +680,7 @@ fn classify_union<'db>(
         ParametricIsPlan::Witness(WitnessPlan::Element { class })
     } else {
         // arbitrary generic classes have no canonical element to witness
-        ParametricIsPlan::Probe(UncheckedReason::Dynamic)
+        ParametricIsPlan::Probe
     }
 }
 

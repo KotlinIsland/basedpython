@@ -54,13 +54,13 @@ use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
 use crate::types::diagnostic::{
     self, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS, CYCLIC_TYPE_ALIAS_DEFINITION,
-    FINAL_ON_VARIABLE, GeneratorMismatchKind, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE,
-    INVALID_ASSIGNMENT, INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION,
+    ERASED_TYPE_CHECK, FINAL_ON_VARIABLE, GeneratorMismatchKind, INEFFECTIVE_FINAL,
+    INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT, INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION,
     INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE,
     INVALID_TYPE_FORM, INVALID_TYPE_GUARD_CALL, INVALID_TYPE_VARIABLE_BOUND,
     INVALID_TYPE_VARIABLE_CONSTRAINTS, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
-    UNCHECKED_TYPE_CHECK, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL,
-    UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
+    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
+    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
     hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
     report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
@@ -11055,10 +11055,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
     /// basedpython: classify a parametric type test (`x is list[int]`,
     /// keyword form). Returns `Some(bool)` — the runtime result type — when
-    /// this pair is such a test, and warns when it can be verified neither
-    /// statically from the value's type nor at runtime through a reified type
-    /// parameter or a witness element (the lowering then probes
-    /// `__orig_class__` and answers `False` for values that carry none).
+    /// this pair is such a test, and errors when the target is a builtin
+    /// collection whose runtime instances erase their type arguments, so no
+    /// runtime probe of the value can ever confirm the specialization.
     /// `None` when the pair is an ordinary comparison, so the caller keeps
     /// its usual comparison typing
     fn check_parametric_is_test(
@@ -11089,38 +11088,27 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             subscript,
         );
         let bool_ty = KnownClass::Bool.to_instance(self.db());
-        let crate::types::reified_infer::ParametricIsPlan::Probe(reason) = plan else {
+        // only a probe against a runtime-erased builtin is an error; every
+        // other plan (fold, reified-cell equality, witness, or a probe of a
+        // user generic that carries `__orig_class__`) is a valid test
+        if plan != crate::types::reified_infer::ParametricIsPlan::ErasedTarget {
             return Some(bool_ty);
-        };
+        }
         let range = TextRange::new(left.start(), right.end());
-        let Some(builder) = self.context.report_lint(&UNCHECKED_TYPE_CHECK, range) else {
+        let Some(builder) = self.context.report_lint(&ERASED_TYPE_CHECK, range) else {
             return Some(bool_ty);
         };
-        let mut diagnostic = match reason {
-            crate::types::reified_infer::UncheckedReason::ErasedGenerics => {
-                let mut diagnostic = builder
-                    .into_diagnostic(format_args!("unsafe `is` check due to erased generics"));
-                diagnostic.info(format_args!(
-                    "the value's type mentions a type parameter with no reified \
-                     runtime value, so the type arguments cannot be verified"
-                ));
-                diagnostic
-            }
-            crate::types::reified_infer::UncheckedReason::Dynamic => {
-                let mut diagnostic = builder.into_diagnostic(format_args!("unchecked type-check"));
-                diagnostic.info(format_args!(
-                    "the value's static type is unknown, so the type arguments \
-                     cannot be verified"
-                ));
-                diagnostic
-            }
-        };
-        diagnostic.info(format_args!(
-            "at runtime the test reads the value's `__orig_class__` and answers \
-             `False` when it carries none — every builtin collection does"
+        let target = &source[subscript.range()];
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "`is {target}` can never be true: builtin collections erase their type arguments"
         ));
         diagnostic.info(format_args!(
-            "annotate the value, or reify the type parameter (`def f[T](x: T)`)"
+            "a `list` / `dict` / `set` / `tuple` built at runtime carries no record of \
+             its type arguments, so no runtime check can confirm the specialization"
+        ));
+        diagnostic.info(format_args!(
+            "reify the type parameter (`def f[T](x: T)`), or test against a user-defined \
+             generic whose instances carry `__orig_class__`"
         ));
         Some(bool_ty)
     }

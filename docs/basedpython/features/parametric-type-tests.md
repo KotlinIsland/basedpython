@@ -23,15 +23,31 @@ the value's static type decides the strategy:
     type parameter carries the specialization in that parameter's runtime cell,
     so the test compares cells: `x: T` against `C[args]` lowers to
     `T == C[args]`; `x: list[T]` against `list[int]` unifies structurally to
-    `T == int`. the parameter is [reified](reified-generics.md) for this
+    `T == int`. the parameter is [reified](reified-generics.md) for this. this
+    works against a builtin target too — the cell holds the alias, nothing is
+    erased
 - **disjoint union → witness**. a union of same-origin specializations whose
     arguments are pairwise disjoint is discriminated by a single witness
     element: `x: list[int] | list[str]` against `list[int]` probes the first
     element's type. an empty collection has no witness and answers `False`
-- **anything else → unchecked probe**. the lowering reads the value's
-    `__orig_class__` — which `A[int](…)` [stamps](type-reification.md) on user
-    generics — and answers `False` when it carries none (every builtin
-    collection does). the checker warns here
+- **undecidable, user-generic target → `__orig_class__` probe**. when none of
+    the above apply, the last resort reads the value's `__orig_class__` — which
+    `A[int](…)` [stamps](type-reification.md) on user generics. a legitimate
+    runtime test; answers `False` for values that carry none
+- **undecidable, builtin target → error**. a runtime `list` / `dict` / `set`
+    / `tuple` carries no record of its type arguments, so the probe can never
+    succeed — the test can never be true. this is an
+    [`erased-type-check`](#the-erased-type-check-error) error
+
+so of the two undecidable cases, only the *target* distinguishes them:
+
+```by
+class A[T]: ...
+
+def f(a: object):
+    a is A[int]      # valid — A's instances carry __orig_class__
+    a is list[int]   # error — a runtime list erases its element type
+```
 
 ## narrowing
 
@@ -47,23 +63,26 @@ def f(x: list[int] | list[str]):
         reveal_type(x)  # list[int] | list[str]
 ```
 
-## the unchecked warning
+## the erased-type-check error
 
-when a test can be verified neither statically nor at runtime, ty warns under
-the `unchecked-type-check` rule:
+a parametric test against a builtin collection that isn't statically
+decidable is reported under the `erased-type-check` rule:
 
 ```by
 def f(x):
-    return x is list[int]  # warning: unchecked type-check
+    return x is list[int]  # error: builtin collections erase their type arguments
 ```
 
-the check still runs — at runtime it probes `__orig_class__` and answers
-`False` for the builtins, which carry none. to make the test verifiable,
-annotate the value or reify the type parameter:
+to make the test work, reify the type parameter (so it compares the cell) or
+test against a user-defined generic (whose instances carry `__orig_class__`):
 
 ```by
 def f[T](x: T) -> bool:
     return x is list[int]   # ok — compares the reified `T`
+
+class A[T]: ...
+def g(x) -> bool:
+    return x is A[int]      # ok — probes `x.__orig_class__`
 ```
 
 ## `===` is unaffected
@@ -78,6 +97,6 @@ xs === list[int]   # plain identity — the list is not the class object
 
 ## requirements
 
-the lowered checks evaluate the target class at runtime, so a token or probe
-lowering needs pep 585 (subscriptable builtins), i.e. python 3.9+. below that
-a parametric test is a hard transpile error.
+a user-generic probe works on any target version. the reified-cell token
+equality path is only reached inside a [reified generic](reified-generics.md),
+which already requires python 3.12+.

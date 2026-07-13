@@ -1024,15 +1024,22 @@ print(sorted(s))
 
 #[test]
 fn parametric_is_folds_and_lowers() {
-    // a concrete value folds statically; a dynamic value probes at runtime
+    // a concrete value folds statically; a dynamic value against a builtin
+    // erases to `False`, but against a user generic probes `__orig_class__`
     let out = transpile_at_313(
         "\
+class A[T]:
+    def __init__(self, t: T): ...
+
 xs = [1, 2]
 a = xs is list[int]
 b = xs is list[str]
 
 def f(x) -> bool:
     return x is list[int]
+
+def p(x) -> bool:
+    return x is A[int]
 ",
     );
     assert!(
@@ -1044,8 +1051,51 @@ def f(x) -> bool:
         "concrete mismatch folds false:\n{out}"
     );
     assert!(
-        out.contains("return _parametric_is(x, list[int])"),
-        "dynamic value probes __orig_class__:\n{out}"
+        out.contains("return False"),
+        "dynamic value against an erased builtin folds false:\n{out}"
+    );
+    assert!(
+        out.contains("return _parametric_is(x, A[int])"),
+        "dynamic value against a user generic probes __orig_class__:\n{out}"
+    );
+}
+
+#[test]
+fn parametric_is_erased_builtin_is_a_check_error() {
+    // the acceptance case: `a is list[bool]` on an `object` can never be true
+    // (builtins erase their type arguments), so `by run` refuses to execute;
+    // `a is A[bool]` against a user generic is fine
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+class A[T]:
+    def __init__(self, t: T): ...
+
+def x(a: object):
+    print(a is list[bool])
+    print(a is A[bool])
+
+x(A(True))
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(!output.status.success(), "expected non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("erased-type-check"),
+        "stderr should carry the erased-type-check error:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("A[bool]"),
+        "the user-generic test must not be diagnosed:\n{stderr}"
     );
 }
 
@@ -1055,10 +1105,9 @@ def f(x) -> bool:
     reason = "a skipped test prints why it was skipped"
 )]
 fn parametric_is_observable_at_runtime() {
-    // the acceptance case: an untyped value probes `__orig_class__`, which no
-    // builtin collection carries, so a parametric test answers `False`; a
-    // reified type parameter carries the exact specialization; a disjoint
-    // union is discriminated by a witness element
+    // a user-generic probe reads `__orig_class__` (stamped by `A[int](…)`); a
+    // reified type parameter carries the exact specialization even against a
+    // builtin target; a disjoint union is discriminated by a witness element
     let Some(python) = ["python3.13"].into_iter().find(|p| {
         Command::new(p)
             .arg("--version")
@@ -1073,10 +1122,15 @@ fn parametric_is_observable_at_runtime() {
     fs::write(
         dir.path().join("main.by"),
         "\
-def f(x):
-    print(x is list[int])
+class A[T]:
+    def __init__(self, t: T): ...
 
-f(list[object]((1, 2, 3)))
+def probe(a: object) -> bool:
+    return a is A[int]
+
+print(probe(A(1)))
+print(probe(A(\"x\")))
+print(probe([1]))
 
 def g[T](x: T) -> bool:
     return x is list[int]
@@ -1107,6 +1161,6 @@ print(h([\"a\"]))
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim(),
-        "False\nTrue\nFalse\nTrue\nFalse"
+        "True\nFalse\nFalse\nTrue\nFalse\nTrue\nFalse"
     );
 }

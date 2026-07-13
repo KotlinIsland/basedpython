@@ -1,9 +1,10 @@
 # basedpython: parametric type tests
 
 `x is C[args]` (keyword form) tests a value against a *specialization*. The test is resolved
-rust-style from static types wherever possible; when it can be verified neither statically nor at
-runtime (through a reified type parameter or a witness element), the checker warns and the lowering
-falls back to probing the value's `__orig_class__`, answering `False` for values that carry none.
+rust-style from static types wherever possible. When it can't be — the value's type is dynamic or
+erased — the last resort is a runtime probe of the value's `__orig_class__`. That works for a
+user-defined generic (whose instances carry it) but never for a builtin collection (whose instances
+erase their type arguments), so a probe against a builtin is an error.
 
 ## statically decided tests are silent
 
@@ -35,31 +36,48 @@ def f(x: list[int] | list[str]) -> bool:
     return x is list[int]
 ```
 
-## dynamic values are unchecked
+## a builtin target on a dynamic value is an error
+
+A builtin collection built at runtime carries no record of its type arguments, so the probe can
+never succeed.
 
 ```by
 def f(x) -> bool:
-    return x is list[int]  # error: [unchecked-type-check]
+    return x is list[int]  # error: [erased-type-check]
 ```
 
-## erased type parameters are unsafe
+## an erased type parameter against a builtin is an error
 
-The value's type reaches the test through a local, so no parameter annotation ties it to `T` and `T`
-stays erased.
+The value's type reaches the test through a local, so no parameter annotation ties it to `T`; the
+value is a runtime `list`, which is erased.
 
 ```by
 def f[T](x: T) -> bool:
     y = [x]
-    return y is list[int]  # error: [unchecked-type-check]
+    return y is list[int]  # error: [erased-type-check]
 ```
 
-## a wide static type is unchecked
-
-`object` does not exclude `list[int]`, but cannot verify it either.
+## a wide static type against a builtin is an error
 
 ```by
 def f(x: object) -> bool:
-    return x is list[int]  # error: [unchecked-type-check]
+    return x is list[int]  # error: [erased-type-check]
+```
+
+## a user-defined generic target is valid
+
+`A`'s instances carry `__orig_class__` (stamped by `A[int](…)`), so the runtime probe is a
+legitimate check — no diagnostic.
+
+```by
+class A[T]:
+    def __init__(self, t: T): ...
+
+def f(x) -> bool:
+    return x is A[int]
+
+def g(x: object) -> bool:
+    return x is A[int]
 ```
 
 ## positive narrowing
