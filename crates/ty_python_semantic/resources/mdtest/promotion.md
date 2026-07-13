@@ -125,7 +125,7 @@ coordinates = {
     "home": (0, 0),
     "palm-tree": (10, 8),
 }
-# revealed: dict[Literal["home", "palm-tree"], tuple[Literal[0], Literal[0]] | tuple[Literal[10], Literal[8]]]
+# revealed: dict[str, tuple[int, int]]
 reveal_type(coordinates)
 
 # aliasing locks the fluid specialization, promoting the literals but keeping the tuple lengths
@@ -192,20 +192,20 @@ def get_segments_by_name() -> dict[str, tuple[int, int]]:
     return {"origin": (0, 1)}
 
 segments = [get_segment(), (1, 2), (3, 4, 5)]
-# revealed: list[tuple[int] | tuple[int, int, int, int] | tuple[Literal[1], Literal[2]] | tuple[Literal[3], Literal[4], Literal[5]]]
+# revealed: list[tuple[int] | tuple[int, int, int, int] | tuple[int, int] | tuple[int, int, int]]
 reveal_type(segments)
 locked_segments = segments
 reveal_type(locked_segments)  # revealed: list[tuple[int] | tuple[int, int, int, int] | tuple[int, int] | tuple[int, int, int]]
 locked_segments.append((6, 7, 8, 9, 10))  # error: [invalid-argument-type]
 
 starred_segments = [*get_segments(), (1, 2), (3, 4, 5)]
-reveal_type(starred_segments)  # revealed: list[tuple[int, int] | tuple[Literal[3], Literal[4], Literal[5]]]
+reveal_type(starred_segments)  # revealed: list[tuple[int, int] | tuple[int, int, int]]
 locked_starred_segments = starred_segments
 reveal_type(locked_starred_segments)  # revealed: list[tuple[int, int] | tuple[int, int, int]]
 locked_starred_segments.append((6, 7, 8, 9))  # error: [invalid-argument-type]
 
 mapping_segments = {**get_segments_by_name(), "start": (1, 2), "end": (3, 4, 5)}
-reveal_type(mapping_segments)  # revealed: dict[str, tuple[int, int] | tuple[Literal[3], Literal[4], Literal[5]]]
+reveal_type(mapping_segments)  # revealed: dict[str, tuple[int, int] | tuple[int, int, int]]
 locked_mapping_segments = mapping_segments
 reveal_type(locked_mapping_segments)  # revealed: dict[str, tuple[int, int] | tuple[int, int, int]]
 locked_mapping_segments["bad"] = (6, 7, 8, 9)  # error: [invalid-assignment]
@@ -237,7 +237,7 @@ def get_aliased_segment() -> Segment:
     return (0, 1)
 
 aliased_segments = [get_aliased_segment(), (1, 2), (3, 4, 5)]
-reveal_type(aliased_segments)  # revealed: list[tuple[int, int] | tuple[Literal[3], Literal[4], Literal[5]]]
+reveal_type(aliased_segments)  # revealed: list[tuple[int, int] | tuple[int, int, int]]
 locked_aliased_segments = aliased_segments
 reveal_type(locked_aliased_segments)  # revealed: list[tuple[int, int] | tuple[int, int, int]]
 locked_aliased_segments.append((6, 7, 8, 9))  # error: [invalid-argument-type]
@@ -246,7 +246,7 @@ def get_newtype_segment() -> NewTypeSegment:
     return NewTypeSegment((0, 1))
 
 newtype_segments = [get_newtype_segment(), (1, 2), (3, 4, 5)]
-# revealed: list[NewTypeSegment | tuple[Literal[1], Literal[2]] | tuple[Literal[3], Literal[4], Literal[5]]]
+# revealed: list[tuple[int, int] | tuple[int, int, int]]
 reveal_type(newtype_segments)
 locked_newtype_segments = newtype_segments
 reveal_type(locked_newtype_segments)  # revealed: list[tuple[int, int] | tuple[int, int, int]]
@@ -254,7 +254,7 @@ locked_newtype_segments.append((6, 7, 8, 9))  # error: [invalid-argument-type]
 
 def check_bound_typevar_segment(segment: BoundSegment) -> None:
     bound_typevar_segments = [segment, (1, 2), (3, 4, 5)]
-    # revealed: list[BoundSegment@check_bound_typevar_segment | tuple[Literal[1], Literal[2]] | tuple[Literal[3], Literal[4], Literal[5]]]
+    # revealed: list[tuple[int, int] | tuple[int, int, int]]
     reveal_type(bound_typevar_segments)
     locked_bound_typevar_segments = bound_typevar_segments
     reveal_type(locked_bound_typevar_segments)  # revealed: list[tuple[int, int] | tuple[int, int, int]]
@@ -262,7 +262,7 @@ def check_bound_typevar_segment(segment: BoundSegment) -> None:
 
 def check_constrained_typevar_segment(segment: ConstrainedSegment) -> None:
     constrained_typevar_segments = [segment, (1, 2), (3, 4, 5)]
-    # revealed: list[ConstrainedSegment@check_constrained_typevar_segment | tuple[Literal[1], Literal[2]] | tuple[Literal[3], Literal[4], Literal[5]]]
+    # revealed: list[ConstrainedSegment@check_constrained_typevar_segment | tuple[int, int] | tuple[int, int, int]]
     reveal_type(constrained_typevar_segments)
     locked_constrained_typevar_segments = constrained_typevar_segments
     # revealed: list[ConstrainedSegment@check_constrained_typevar_segment | tuple[int, int] | tuple[int, int, int]]
@@ -273,7 +273,7 @@ def get_subsumed_segment() -> tuple[bool, bool]:
     return (True, False)
 
 subsumed_segments = [get_subsumed_segment(), (1, 2), (3, 4, 5)]
-# revealed: list[tuple[bool, bool] | tuple[Literal[1], Literal[2]] | tuple[Literal[3], Literal[4], Literal[5]]]
+# revealed: list[tuple[int, int] | tuple[int, int, int]]
 reveal_type(subsumed_segments)
 locked_subsumed_segments = subsumed_segments
 reveal_type(locked_subsumed_segments)  # revealed: list[tuple[int, int] | tuple[int, int, int]]
@@ -283,7 +283,7 @@ def get_short_subsumed_segment() -> tuple[bool]:
     return (True,)
 
 short_subsumed_segments = [get_short_subsumed_segment(), (1, 2), (3, 4, 5)]
-# revealed: list[tuple[bool] | tuple[Literal[1], Literal[2]] | tuple[Literal[3], Literal[4], Literal[5]]]
+# revealed: list[tuple[bool] | tuple[int, int] | tuple[int, int, int]]
 reveal_type(short_subsumed_segments)
 locked_short_subsumed_segments = short_subsumed_segments
 reveal_type(locked_short_subsumed_segments)  # revealed: list[tuple[bool] | tuple[int, int] | tuple[int, int, int]]
@@ -293,7 +293,7 @@ def get_heterogeneous_subsumed_segment() -> tuple[bool, int]:
     return (True, 0)
 
 heterogeneous_subsumed_segments = [get_heterogeneous_subsumed_segment(), (1, 2), (3, 4, 5)]
-# revealed: list[tuple[bool, int] | tuple[Literal[1], Literal[2]] | tuple[Literal[3], Literal[4], Literal[5]]]
+# revealed: list[tuple[int, int] | tuple[int, int, int]]
 reveal_type(heterogeneous_subsumed_segments)
 locked_heterogeneous_subsumed_segments = heterogeneous_subsumed_segments
 reveal_type(locked_heterogeneous_subsumed_segments)  # revealed: list[tuple[int, int] | tuple[int, int, int]]
@@ -303,7 +303,7 @@ def check_intersection_segment(segment: tuple[int, int]) -> None:
     if is_p(segment):
         reveal_type(segment)  # revealed: tuple[int, int] & P
         intersection_segments = [segment, (1, 2), (3, 4, 5)]
-        # revealed: list[(tuple[int, int] & P) | tuple[Literal[1], Literal[2]] | tuple[Literal[3], Literal[4], Literal[5]]]
+        # revealed: list[tuple[int, int] | tuple[int, int, int]]
         reveal_type(intersection_segments)
         locked_intersection_segments = intersection_segments
         reveal_type(locked_intersection_segments)  # revealed: list[tuple[int, int] | tuple[int, int, int]]
@@ -775,7 +775,7 @@ class A: ...
 def _(a: A | None):
     if a:
         d = {"a": a}
-        reveal_type(d)  # revealed: dict[Literal["a"], A & ~AlwaysFalsy]
+        reveal_type(d)  # revealed: dict[str, A]
         locked_d = d
         reveal_type(locked_d)  # revealed: dict[str, A]
     return {}

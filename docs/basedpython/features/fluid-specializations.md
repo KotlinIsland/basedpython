@@ -6,13 +6,13 @@ later uses of the binding may refine ("widen") the inferred specialization inste
 checked against it
 
 ```python
-a = [1]        # list[Literal[1]]
-a[0]           # Literal[1] — a covariant operation, doesn't lock anything
-a.append(2)    # no error — the specialization widens
-a[0]           # Literal[1, 2] — literals accumulate while the binding is fluid
-b = a          # the value escapes: promote and lock
-a[0]           # int
-b[0]           # int
+a = [1]        # list[int]
+a[0]           # int — a covariant operation, doesn't lock anything
+a.append("x")  # no error — the specialization widens
+a[0]           # int | str — the promoted element type accumulates while the binding is fluid
+b = a          # the value escapes: lock
+a[0]           # int | str
+b[0]           # int | str
 ```
 
 the same applies to constructor calls of user-defined generic classes:
@@ -25,11 +25,16 @@ class A[T]:
 
 def foo(a: A[object]): ...
 
-a = A(1)       # A[Literal[1]]
-a.x()          # Literal[1]
+a = A(1)       # A[int]
+a.x()          # int
 foo(a)         # an invariant observer — locks the specialization to A[object]
 a.x()          # object
 ```
+
+> **note (performance):** element types are promoted (`a = [1]` is `list[int]`, not
+> `list[Literal[1]]`). retaining literals is the intended behavior, but literal-parametrized
+> generics are currently too expensive in the cross-module constraint solver (~40x, ecosystem
+> timeouts), so precision is traded for performance until that cost is addressed.
 
 ## motivation
 
@@ -55,8 +60,8 @@ classified:
     specialization solved from the events so far, and change nothing
 - *widening uses* — method calls and subscript stores whose arguments don't fit the current
     specialization — are not errors. the specialization at later uses becomes the union of the
-    previous types and the argument types, with literals retained
-    (`a.append(2)` on `list[Literal[1]]` gives `list[Literal[1, 2]]`)
+    previous types and the promoted argument types
+    (`a.append("x")` on `list[int]` gives `list[int | str]`)
 - *locking uses* — passing the value to a context whose declared type constrains the class
     typevars (a call argument, an annotated assignment, a return) — adopt the declared
     specialization, and the binding stops being fluid: later incompatible uses are errors again
@@ -75,7 +80,7 @@ def f2(a: list[int | str]): ...
 
 a = [1]
 f1(a)   # doesn't lock
-a[0]    # Literal[1]
+a[0]    # int
 f2(a)   # locks: the parameter is the concrete `list[int | str]`
 a[0]    # int | str
 ```
@@ -114,8 +119,9 @@ a.append(3)
 c = a         # the lock: a and c are list[int], agreeing with b's view
 ```
 
-literal types are retained at creation time (`a = [1]` is `list[Literal[1]]`), accumulate
-through widening events, and are promoted at the lock
+element types are promoted at creation time (`a = [1]` is `list[int]`) and accumulate through
+widening events as promoted types — literal precision is currently traded for performance (see the
+note above)
 
 the binding's public type — what nested scopes and post-lock uses see — is the solution at
 the lock (or at the end of the scope), so the flow-sensitive narrowing is always a refinement

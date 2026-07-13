@@ -2,10 +2,14 @@
 
 a binding like `a = [1]` or `a = A(1)` creates a generic instance whose specialization was inferred
 rather than declared. while no other observer of the value exists, later uses of the binding may
-refine ("widen") the inferred specialization instead of being checked against it. literal types
-accumulate through widening events. once the value escapes to an observer that relies on the
-specialization, it is "locked": the escape's declared type is adopted if there is one, literals are
-promoted, and later incompatible uses are errors again
+refine ("widen") the inferred specialization instead of being checked against it. once the value
+escapes to an observer that relies on the specialization, it is "locked": the escape's declared type
+is adopted if there is one, and later incompatible uses are errors again
+
+element types are promoted (`a = [1]` is `list[int]`, not `list[Literal[1]]`). retaining literals is
+the intended behavior, but literal-parametrized generics are currently too expensive in the
+cross-module constraint solver, so precision is traded for performance until that is addressed (see
+the `TODO(perf)` notes in `fluid.rs` and the collection-literal inference)
 
 this is a basedpython enhancement that also applies to plain python files
 
@@ -16,20 +20,21 @@ python-version = "3.12"
 
 ## collection literals
 
-the creation-time specialization retains literal types. reads use the narrowed type, widening uses
-are not errors — literals accumulate in the specialization at later uses
+the creation-time specialization uses the promoted element type. reads use the narrowed type,
+widening uses are not errors — the promoted element type accumulates in the specialization at later
+uses
 
 ```py
 a = [1]
-reveal_type(a)  # revealed: list[Literal[1]]
-reveal_type(a[0])  # revealed: Literal[1]
+reveal_type(a)  # revealed: list[int]
+reveal_type(a[0])  # revealed: int
 
 a.append(2)
-reveal_type(a)  # revealed: list[Literal[1, 2]]
-reveal_type(a[0])  # revealed: Literal[1, 2]
+reveal_type(a)  # revealed: list[int]
+reveal_type(a[0])  # revealed: int
 
 a.append("a")
-reveal_type(a)  # revealed: list[Literal[1, 2, "a"]]
+reveal_type(a)  # revealed: list[int | str]
 ```
 
 ## empty collections
@@ -43,7 +48,7 @@ a = []
 reveal_type(a)  # revealed: list[Never]
 
 a.append(1)
-reveal_type(a)  # revealed: list[Literal[1]]
+reveal_type(a)  # revealed: list[int]
 
 d = {}
 reveal_type(d)  # revealed: dict[Never, Never]
@@ -80,8 +85,8 @@ class A[T]:
 def foo(a: A[object]): ...
 
 a = A(1)
-reveal_type(a)  # revealed: A[Literal[1]]
-reveal_type(a.x())  # revealed: Literal[1]
+reveal_type(a)  # revealed: A[int]
+reveal_type(a.x())  # revealed: int
 
 # an invariant observer locks the specialization to its declared type
 foo(a)
@@ -102,7 +107,7 @@ class A[T]:
     def y(self, t: T): ...
 
 a = A(1)
-reveal_type(a.x())  # revealed: Literal[1]
+reveal_type(a.x())  # revealed: int
 
 a.y(object())
 reveal_type(a.x())  # revealed: object
@@ -123,14 +128,14 @@ if a:
     pass
 
 for x in a:
-    reveal_type(x)  # revealed: Literal[1]
+    reveal_type(x)  # revealed: int
 
 a
 a.pop()
-reveal_type(a)  # revealed: list[Literal[1]]
+reveal_type(a)  # revealed: list[int]
 
 a.append("a")
-reveal_type(a)  # revealed: list[Literal[1, "a"]]
+reveal_type(a)  # revealed: list[int | str]
 ```
 
 ## aliasing locks
@@ -141,7 +146,7 @@ specialization is promoted and locked, and later widening uses are errors again
 ```py
 a = [1]
 a.append(2)
-reveal_type(a)  # revealed: list[Literal[1, 2]]
+reveal_type(a)  # revealed: list[int]
 
 b = a
 reveal_type(b)  # revealed: list[int]
@@ -191,7 +196,7 @@ def wants_objects(v: list[object]): ...
 
 a = [1]
 a.append("x")
-reveal_type(a)  # revealed: list[Literal[1, "x"]]
+reveal_type(a)  # revealed: list[int | str]
 
 wants_objects(a)
 reveal_type(a)  # revealed: list[object]
@@ -202,7 +207,7 @@ reveal_type(a)  # revealed: list[object]
 ```py
 a = [1]
 a[0] = "x"
-reveal_type(a)  # revealed: list[Literal[1, "x"]]
+reveal_type(a)  # revealed: list[int | str]
 ```
 
 ## widening in branches
@@ -218,7 +223,7 @@ a = [1]
 if coin():
     a.append("x")
 
-reveal_type(a)  # revealed: list[Literal[1, "x"]]
+reveal_type(a)  # revealed: list[int | str]
 ```
 
 ## widening in loops
@@ -234,10 +239,10 @@ def coin() -> bool:
 a = [1]
 
 while coin():
-    reveal_type(a)  # revealed: list[Literal[1] | str]
+    reveal_type(a)  # revealed: list[int | str]
     a.append("x")
 
-reveal_type(a)  # revealed: list[Literal[1] | str]
+reveal_type(a)  # revealed: list[int | str]
 ```
 
 this keeps self-feeding loops convergent:
@@ -288,14 +293,14 @@ reveal_type(a)  # revealed: list[int]
 
 ```py
 s = {1}
-reveal_type(s)  # revealed: set[Literal[1]]
+reveal_type(s)  # revealed: set[int]
 s.add("x")
-reveal_type(s)  # revealed: set[Literal[1, "x"]]
+reveal_type(s)  # revealed: set[int | str]
 
 d = {1: "a"}
-reveal_type(d)  # revealed: dict[Literal[1], Literal["a"]]
+reveal_type(d)  # revealed: dict[int, str]
 d[2.0] = b"y"
-reveal_type(d)  # revealed: dict[Literal[1] | float, Literal["a", b"y"]]
+reveal_type(d)  # revealed: dict[int | float, str | bytes]
 ```
 
 ## generic parameters don't lock
@@ -309,11 +314,11 @@ def f2(a: list[int | str]): ...
 
 a = [1]
 f1(a)  # a parametric observer — doesn't lock
-reveal_type(a[0])  # revealed: Literal[1]
+reveal_type(a[0])  # revealed: int
 
 a.append(2)
 a.append(3)
-reveal_type(a)  # revealed: list[Literal[1, 2, 3]]
+reveal_type(a)  # revealed: list[int]
 
 f2(a)  # a concrete observer — locks the specialization in
 reveal_type(a[0])  # revealed: int | str
@@ -352,7 +357,7 @@ reveal_type(b)  # revealed: Sequence[int]
 
 a.append(2)
 a.append(3)
-reveal_type(a)  # revealed: list[Literal[1, 2, 3]]
+reveal_type(a)  # revealed: list[int]
 
 c = a
 reveal_type(c)  # revealed: list[int]
@@ -372,7 +377,7 @@ y = f(x)
 reveal_type(y)  # revealed: Sequence[int | str]
 
 x.append("s")
-reveal_type(x)  # revealed: list[Literal[1, "s"]]
+reveal_type(x)  # revealed: list[int | str]
 ```
 
 but only when the result is actually captured — a discarded result is an observer that does not
@@ -384,10 +389,10 @@ def f[T](t: list[T]) -> list[T]:
 
 a = [1]
 f(a)
-reveal_type(a)  # revealed: list[Literal[1]]
+reveal_type(a)  # revealed: list[int]
 
 a.append(2)
-reveal_type(a)  # revealed: list[Literal[1, 2]]
+reveal_type(a)  # revealed: list[int]
 ```
 
 the same holds for a bare-typevar identity, which observes the narrow view:
@@ -398,8 +403,8 @@ def ident[T](x: T) -> T:
 
 d = [1]
 yi = ident(d)
-reveal_type(yi)  # revealed: list[Literal[1]]
-reveal_type(d)  # revealed: list[Literal[1]]
+reveal_type(yi)  # revealed: list[int]
+reveal_type(d)  # revealed: list[int]
 ```
 
 but a generic function whose return type does not mention the solved typevars creates no surviving
@@ -411,10 +416,10 @@ def g[T](t: list[T]) -> int:
 
 b = [1]
 g(b)
-reveal_type(b)  # revealed: list[Literal[1]]
+reveal_type(b)  # revealed: list[int]
 
 b.append(2)
-reveal_type(b)  # revealed: list[Literal[1, 2]]
+reveal_type(b)  # revealed: list[int]
 ```
 
 ## typevar-blind observers don't lock
@@ -428,10 +433,10 @@ def blind(v: object): ...
 a = [1]
 print(a)
 blind(a)
-reveal_type(a)  # revealed: list[Literal[1]]
+reveal_type(a)  # revealed: list[int]
 
 a.append("x")
-reveal_type(a)  # revealed: list[Literal[1, "x"]]
+reveal_type(a)  # revealed: list[int | str]
 ```
 
 ## disabling fluid specializations

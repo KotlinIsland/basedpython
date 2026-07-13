@@ -22,7 +22,7 @@ def b(_: int) -> int:
     return 1
 
 x = [a, b]
-reveal_type(x)  # revealed: list[(def a(_: int) -> int) | (def b(_: int) -> int)]
+reveal_type(x)  # revealed: list[(_: int) -> int]
 ```
 
 The inferred `Callable` type is function-like, i.e. we can still access attributes like `__name__`:

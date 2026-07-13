@@ -59,7 +59,7 @@ def b(_: int) -> int:
     return 1
 
 x = {1: a, 2: b}
-reveal_type(x)  # revealed: dict[Literal[1, 2], (def a(_: int) -> int) | (def b(_: int) -> int)]
+reveal_type(x)  # revealed: dict[int, (_: int) -> int]
 ```
 
 ## Mixed dict
@@ -85,7 +85,7 @@ individual keys:
 from typing import TypedDict
 
 x1 = {"a": 1, "b": "2"}
-reveal_type(x1)  # revealed: dict[Literal["a", "b"], Literal[1, "2"]]
+reveal_type(x1)  # revealed: dict[str, int | str]
 reveal_type(x1["a"])  # revealed: Literal[1]
 reveal_type(x1["b"])  # revealed: Literal["2"]
 

@@ -7219,7 +7219,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         return fluid_def.is_some().then_some(Type::Never);
                     };
 
-                    let lower = if tcx.annotation.is_none() && fluid_def.is_none() {
+                    // Fluid element types are promoted, same as non-fluid collection literals:
+                    // a fluid binding widens across a promoted element type rather than an
+                    // accumulating literal union.
+                    //
+                    // TODO(perf): retaining literals (`list[Literal[1, 2]]`) is the intended
+                    // fluid behavior, but literal-parametrized generics blow up the cross-module
+                    // constraint solver (~40x, ecosystem timeouts). Promoting here trades that
+                    // precision for tractable performance until the solver cost is addressed;
+                    // see the fluid-specialization performance investigation.
+                    let lower = if tcx.annotation.is_none() {
                         // Constraints learned from later collection uses should follow the same
                         // promotion policy as literal elements: promote element literal types in
                         // invariant position unless an explicit annotation made them unpromotable.
@@ -7236,7 +7245,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         lower
                     };
 
-                    let lower = if elt_tcx_constraints.is_empty() && fluid_def.is_none() {
+                    let lower = if elt_tcx_constraints.is_empty() {
                         lower
                             // Promote singleton types to `T | Unknown` in inferred type parameters,
                             // so that e.g. `[None]` is inferred as `list[None | Unknown]`.

@@ -334,7 +334,7 @@ class Y[T]:
     value: T
 
 y1 = Y(value=1)
-reveal_type(y1)  # revealed: Y[Literal[1]]
+reveal_type(y1)  # revealed: Y[int]
 
 y2: Y[Any] = Y(value=1)
 reveal_type(y2)  # revealed: Y[Any]
@@ -348,7 +348,7 @@ class Z[T]:
         return super().__new__(cls)
 
 z1 = Z(1)
-reveal_type(z1)  # revealed: Z[Literal[1]]
+reveal_type(z1)  # revealed: Z[int]
 
 z2: Z[Any] = Z(1)
 reveal_type(z2)  # revealed: Z[Any]

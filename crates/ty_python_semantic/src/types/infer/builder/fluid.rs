@@ -6,18 +6,24 @@
 //! refine the inferred specialization instead of being checked against it:
 //!
 //! ```py
-//! a = [1]          # list[Literal[1]]
-//! a[0]             # Literal[1] — reads don't change anything
-//! a.append(2)      # no error — the specialization widens
-//! a[0]             # Literal[1, 2]
-//! b = a            # the value escapes: promote and lock — a and b are list[int]
+//! a = [1]          # list[int]
+//! a[0]             # int — reads don't change anything
+//! a.append("x")    # no error — the specialization widens
+//! a[0]             # int | str
+//! b = a            # the value escapes: lock — a and b are list[int | str]
 //! ```
 //!
 //! the moment the value escapes to a context the checker can't analyze
 //! (passed to a function whose parameter constrains the class typevars,
 //! aliased to another name, stored in a container, ...), the specialization
 //! is "locked": the escape's declared type context is adopted if there is
-//! one, literals are promoted, and later incompatible uses are errors again
+//! one, and later incompatible uses are errors again
+//!
+//! TODO(perf): element types are promoted (`a = [1]` is `list[int]`, not
+//! `list[Literal[1]]`). retaining literals is the intended behavior, but
+//! literal-parametrized generics blow up the cross-module constraint solver
+//! (~40x, ecosystem timeouts), so precision is traded for performance until
+//! the solver cost is addressed
 //!
 //! this is flow-sensitive: each use of the binding solves the specialization
 //! from the creation-time constraints plus the constraining events that can
@@ -145,15 +151,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             None
         };
 
-        let tcx = if fluid_def.is_some() {
-            TypeContext {
-                preserve_literals: true,
-                ..tcx
-            }
-        } else {
-            tcx
-        };
-
+        // TODO(perf): fluid constructor calls promote their element types (`A(1)` is `A[int]`,
+        // not `A[Literal[1]]`), matching fluid collection literals. Retaining literals is the
+        // intended behavior but is too expensive in the cross-module constraint solver; see the
+        // fluid-specialization performance investigation.
         let ty = self.infer_call_expression_impl(call_expr, callable_type, tcx);
 
         if let Some(fluid_def) = fluid_def
@@ -436,22 +437,21 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                         )
                                 })
                                 .map(|constraint| {
-                                    // A widening event inside a loop may execute any
-                                    // number of times with different values, so its
-                                    // literal types are promoted. This also keeps
-                                    // self-feeding loops like
-                                    // `for n in nums: nums.add(n + 1)` convergent.
-                                    if use_.loops.is_empty() {
-                                        constraint
-                                    } else {
-                                        self.solve_fluid_specialization(
-                                            identity_instance,
-                                            generic_context,
-                                            std::iter::once(constraint),
-                                            true,
-                                        )
-                                        .unwrap_or(constraint)
-                                    }
+                                    // TODO(perf): widening events promote their literal types
+                                    // (`a.append("x")` widens to `str`, not `Literal["x"]`), so
+                                    // the element type stays promoted like the creation type. This
+                                    // also keeps self-feeding loops like
+                                    // `for n in nums: nums.add(n + 1)` convergent. Retaining
+                                    // literals is the intended behavior but is too expensive in the
+                                    // cross-module constraint solver; see the fluid-specialization
+                                    // performance investigation.
+                                    self.solve_fluid_specialization(
+                                        identity_instance,
+                                        generic_context,
+                                        std::iter::once(constraint),
+                                        true,
+                                    )
+                                    .unwrap_or(constraint)
                                 }),
                         );
                     }

@@ -181,7 +181,7 @@ class BadTD(TypedDict):
 d1_literal = {"x": 1}
 d1_dict = dict(x=1)
 
-reveal_type(d1_literal)  # revealed: dict[Literal["x"], Literal[1]]
+reveal_type(d1_literal)  # revealed: dict[str, int]
 reveal_type(d1_dict)  # revealed: dict[str, int]
 
 d2_literal: TD = {"x": 1}
@@ -679,7 +679,7 @@ def typed_dict_peer_is_only_a_hint(value: Payload | None, flag: bool) -> None:
 
 def stored_literal_is_not_fresh(values: dict[Key, int] | None) -> None:
     fallback = {"foo": 0}
-    reveal_type(fallback)  # revealed: dict[Literal["foo"], Literal[0]]
+    reveal_type(fallback)  # revealed: dict[str, int]
     result = values or fallback
     reveal_type(result)  # revealed: (dict[Key, int] & ~AlwaysFalsy) | dict[str, int]
 
@@ -922,14 +922,14 @@ entire scope:
 x1 = []
 x1.append(1)
 x1.append("2")
-reveal_type(x1)  # revealed: list[Literal[1, "2"]]
+reveal_type(x1)  # revealed: list[int | str]
 ```
 
 ```py
 x1_sorted = []
 x1_sorted.append("x")
 x1_sorted.sort()
-reveal_type(x1_sorted)  # revealed: list[Literal["x"]]
+reveal_type(x1_sorted)  # revealed: list[str]
 ```
 
 Bare empty `list()`, `set()`, and `dict()` calls are fluid specialization candidates too, so they
@@ -940,40 +940,40 @@ applies to calls through aliases and shadowed names.
 list_result = list()
 list_result.append(1)
 list_result.append("2")
-reveal_type(list_result)  # revealed: list[Literal[1, "2"]]
+reveal_type(list_result)  # revealed: list[int | str]
 
 set_result = set()
 set_result.add(1)
 set_result.add("2")
-reveal_type(set_result)  # revealed: set[Literal[1, "2"]]
+reveal_type(set_result)  # revealed: set[int | str]
 
 dict_result = dict()
 dict_result["a"] = 1
 dict_result["b"] = "2"
-reveal_type(dict_result)  # revealed: dict[Literal["a", "b"], Literal[1, "2"]]
+reveal_type(dict_result)  # revealed: dict[str, int | str]
 
 def make_list() -> list[str]:
     result = list()
     result.append(1)
-    reveal_type(result)  # revealed: list[Literal[1]]
+    reveal_type(result)  # revealed: list[int]
     return result  # error: [invalid-return-type]
 
 def make_set() -> set[str]:
     result = set()
     result.add(1)
-    reveal_type(result)  # revealed: set[Literal[1]]
+    reveal_type(result)  # revealed: set[int]
     return result  # error: [invalid-return-type]
 
 def make_dict() -> dict[str, str]:
     result = dict()
     result["x"] = 1
-    reveal_type(result)  # revealed: dict[Literal["x"], Literal[1]]
+    reveal_type(result)  # revealed: dict[str, int]
     return result  # error: [invalid-return-type]
 
 set_alias = set
 aliased_result = set_alias()
 aliased_result.add(1)
-reveal_type(aliased_result)  # revealed: set[Literal[1]]
+reveal_type(aliased_result)  # revealed: set[int]
 
 from typing import Never
 
@@ -1007,11 +1007,11 @@ def _(flag: bool):
     if flag:
         x2 = []
         x2.append(1)
-        reveal_type(x2)  # revealed: list[Literal[1]]
+        reveal_type(x2)  # revealed: list[int]
     else:
         x2 = []
         x2.append("2")
-        reveal_type(x2)  # revealed: list[Literal["2"]]
+        reveal_type(x2)  # revealed: list[str]
 ```
 
 ```py
@@ -1072,8 +1072,8 @@ x9.append(1)
 x9.append("2")
 x10.append(3)
 
-reveal_type(x9)  # revealed: list[Literal[1, "2"]]
-reveal_type(x10)  # revealed: list[Literal[3]]
+reveal_type(x9)  # revealed: list[int | str]
+reveal_type(x10)  # revealed: list[int]
 ```
 
 ```py
@@ -1135,7 +1135,7 @@ def _(i):
 ```py
 x17 = {}
 x17.update(a=1)
-reveal_type(x17)  # revealed: dict[str, Literal[1]]
+reveal_type(x17)  # revealed: dict[str, int]
 ```
 
 ```py
@@ -1148,14 +1148,14 @@ reveal_type(x18)  # revealed: dict[str, int]
 x19 = {}
 x19["a"] = 1
 x19["b"] = "2"
-reveal_type(x19)  # revealed: dict[Literal["a", "b"], Literal[1, "2"]]
+reveal_type(x19)  # revealed: dict[str, int | str]
 ```
 
 ```py
 x20 = {}
 x20["a"] = len(x20)
 x20.setdefault("b", str(len(x20)))
-reveal_type(x20)  # revealed: dict[Literal["a", "b"], int | str]
+reveal_type(x20)  # revealed: dict[str, int | str]
 ```
 
 ```py
@@ -1187,13 +1187,13 @@ x23 = [None, None, None]
 x23[0] = 1
 x23[1] = "2"
 x23[2] = 3.0
-reveal_type(x23)  # revealed: list[None | Literal[1, "2"] | float]
+reveal_type(x23)  # revealed: list[None | Unknown | int | str | float]
 ```
 
 ```py
 x24 = {"a": 1}
 x24[1] = "b"
-reveal_type(x24)  # revealed: dict[Literal["a", 1], Literal[1, "b"]]
+reveal_type(x24)  # revealed: dict[str | int, int | str]
 ```
 
 ## Multi-inference diagnostics
