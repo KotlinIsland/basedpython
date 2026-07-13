@@ -20,6 +20,7 @@ use itertools::Itertools;
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::{self as ast, name::Name};
+use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::FxHashMap;
 
 use crate::Db;
@@ -308,6 +309,381 @@ fn spell_class_literal<'db>(
         .or_else(|| builtins_symbol(db, name).place.ignore_possibly_undefined())?;
     let resolved_literal = resolved.as_class_literal()?;
     (resolved_literal == literal).then(|| name.to_string())
+}
+
+/// How a parametric type test (`x is C[args]`, keyword form) resolves.
+///
+/// Rust-style: the test is answered from static types at compile time
+/// wherever possible; the runtime residue is an equality check of reified
+/// type-param cells or a witness probe. When neither exists the test is
+/// *unchecked* — the lowering falls back to a `__orig_class__` probe and the
+/// checker warns.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParametricIsPlan {
+    /// statically decided — the test lowers to a constant
+    Fold(bool),
+    /// conjunction of runtime equality checks of reified type-param cells
+    /// against target arguments, each spelled by its source range in the rhs
+    TokenEq(Vec<(Name, TextRange)>),
+    /// the lhs is a union of same-origin specializations with pairwise
+    /// disjoint arguments — one witness element decides which arm this is
+    /// (an empty collection has no witness and answers `False`)
+    Witness(WitnessPlan),
+    /// undecidable — probe `__orig_class__` at runtime; the checker warns
+    Probe(UncheckedReason),
+}
+
+/// where the witness element lives and the class (by source range in the
+/// rhs) it must be an instance of
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WitnessPlan {
+    /// first element of the iterable
+    Element { class: TextRange },
+    /// first key of the mapping
+    DictKey { class: TextRange },
+    /// first value of the mapping
+    DictValue { class: TextRange },
+    /// a fixed tuple position
+    TupleIndex { index: usize, class: TextRange },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UncheckedReason {
+    /// the value's type is (or mentions) a type parameter with no reified cell
+    ErasedGenerics,
+    /// the value's static type is unknown or dynamic
+    Dynamic,
+}
+
+/// Classify how `lhs is rhs` (keyword form, `rhs` a subscripted generic
+/// class evaluating to `rhs_alias`) resolves, from the already-inferred
+/// static type of the lhs.
+pub(crate) fn classify_parametric_is<'db>(
+    db: &'db dyn Db,
+    lhs_ty: Type<'db>,
+    rhs_alias: crate::types::class::GenericAlias<'db>,
+    rhs_node: &ast::ExprSubscript,
+) -> ParametricIsPlan {
+    let target_origin = ClassLiteral::Static(rhs_alias.origin(db));
+    let target_args_ast: Vec<&ast::Expr> = match rhs_node.slice.as_ref() {
+        ast::Expr::Tuple(tuple) => tuple.elts.iter().collect(),
+        single => vec![single],
+    };
+    classify_value(
+        db,
+        lhs_ty.promote(db),
+        target_origin,
+        rhs_alias,
+        &target_args_ast,
+        rhs_node,
+    )
+}
+
+fn classify_value<'db>(
+    db: &'db dyn Db,
+    value_ty: Type<'db>,
+    target_origin: ClassLiteral<'db>,
+    rhs_alias: crate::types::class::GenericAlias<'db>,
+    target_args_ast: &[&ast::Expr],
+    rhs_node: &ast::ExprSubscript,
+) -> ParametricIsPlan {
+    match value_ty {
+        // `x: T` against `C[args]` — the whole target compares against the
+        // reified cell (`T == C[args]`)
+        Type::TypeVar(bound_typevar) => {
+            if is_reified_function_typevar(db, bound_typevar) {
+                ParametricIsPlan::TokenEq(vec![(bound_typevar.name(db).clone(), rhs_node.range())])
+            } else {
+                ParametricIsPlan::Probe(UncheckedReason::ErasedGenerics)
+            }
+        }
+        Type::NominalInstance(instance) => match instance.class(db) {
+            ClassType::Generic(alias)
+                if ClassLiteral::Static(alias.origin(db)) == target_origin =>
+            {
+                let mut tokens = Vec::new();
+                match unify_specializations(
+                    db,
+                    target_origin,
+                    alias.specialization(db),
+                    rhs_alias.specialization(db),
+                    Some(target_args_ast),
+                    &mut tokens,
+                ) {
+                    Ok(()) if tokens.is_empty() => ParametricIsPlan::Fold(true),
+                    Ok(()) => ParametricIsPlan::TokenEq(tokens),
+                    Err(plan) => plan,
+                }
+            }
+            // a different class: a *disjoint* static type excludes the target
+            // (`x: str` is never `list[int]`), but a wider one (`object`, a
+            // protocol, a superclass) merely fails to verify it
+            _ => {
+                let target_instance = Type::instance(db, ClassType::Generic(rhs_alias));
+                if value_ty.is_disjoint_from(db, target_instance) {
+                    ParametricIsPlan::Fold(false)
+                } else {
+                    ParametricIsPlan::Probe(UncheckedReason::Dynamic)
+                }
+            }
+        },
+        Type::Union(union) => classify_union(db, union, target_origin, rhs_alias, target_args_ast),
+        Type::Dynamic(_) => ParametricIsPlan::Probe(UncheckedReason::Dynamic),
+        other => {
+            if other.has_typevar(db) {
+                ParametricIsPlan::Probe(UncheckedReason::ErasedGenerics)
+            } else {
+                ParametricIsPlan::Probe(UncheckedReason::Dynamic)
+            }
+        }
+    }
+}
+
+/// Unify the value's specialization against the target's, position by
+/// position. Equal arguments vanish; a reified type variable in the value's
+/// side becomes a runtime token comparison against the target argument's
+/// source. `Err` short-circuits with the final plan (a static mismatch folds
+/// the whole test to `False`; anything undecidable degrades to a probe).
+fn unify_specializations<'db>(
+    db: &'db dyn Db,
+    origin: ClassLiteral<'db>,
+    value_spec: Specialization<'db>,
+    target_spec: Specialization<'db>,
+    target_args_ast: Option<&[&ast::Expr]>,
+    tokens: &mut Vec<(Name, TextRange)>,
+) -> Result<(), ParametricIsPlan> {
+    if origin.is_known(db, KnownClass::Tuple) {
+        return match (value_spec.tuple(db), target_spec.tuple(db)) {
+            (Some(Tuple::Fixed(value)), Some(Tuple::Fixed(target))) => {
+                if value.elements_slice().len() != target.elements_slice().len() {
+                    return Err(ParametricIsPlan::Fold(false));
+                }
+                for (index, (s, t)) in value
+                    .elements_slice()
+                    .iter()
+                    .zip(target.elements_slice())
+                    .enumerate()
+                {
+                    unify_argument(
+                        db,
+                        *s,
+                        *t,
+                        target_args_ast.and_then(|args| args.get(index).copied()),
+                        tokens,
+                    )?;
+                }
+                Ok(())
+            }
+            _ => Err(ParametricIsPlan::Probe(UncheckedReason::Dynamic)),
+        };
+    }
+    let value_types = value_spec.types(db);
+    let target_types = target_spec.types(db);
+    if value_types.len() != target_types.len() {
+        return Err(ParametricIsPlan::Probe(UncheckedReason::Dynamic));
+    }
+    for (index, (s, t)) in value_types.iter().zip(target_types).enumerate() {
+        unify_argument(
+            db,
+            *s,
+            *t,
+            target_args_ast.and_then(|args| args.get(index).copied()),
+            tokens,
+        )?;
+    }
+    Ok(())
+}
+
+fn unify_argument<'db>(
+    db: &'db dyn Db,
+    value: Type<'db>,
+    target: Type<'db>,
+    target_ast: Option<&ast::Expr>,
+    tokens: &mut Vec<(Name, TextRange)>,
+) -> Result<(), ParametricIsPlan> {
+    if value == target || value.is_equivalent_to(db, target) {
+        return Ok(());
+    }
+    if let Type::TypeVar(bound_typevar) = value {
+        if !is_reified_function_typevar(db, bound_typevar) {
+            return Err(ParametricIsPlan::Probe(UncheckedReason::ErasedGenerics));
+        }
+        // a pep 696 default can leave a target position with no source
+        // expression to compare against
+        let Some(target_ast) = target_ast else {
+            return Err(ParametricIsPlan::Probe(UncheckedReason::Dynamic));
+        };
+        tokens.push((bound_typevar.name(db).clone(), target_ast.range()));
+        return Ok(());
+    }
+    if value.is_dynamic() || target.is_dynamic() {
+        return Err(ParametricIsPlan::Probe(UncheckedReason::Dynamic));
+    }
+    // both sides specializations of the same class: recurse structurally
+    // (`list[T]` vs the `list[int]` written in the rhs)
+    if let (Type::NominalInstance(value_instance), Type::NominalInstance(target_instance)) =
+        (value, target)
+        && let (ClassType::Generic(value_alias), ClassType::Generic(target_alias)) =
+            (value_instance.class(db), target_instance.class(db))
+    {
+        if value_alias.origin(db) != target_alias.origin(db) {
+            return Err(ParametricIsPlan::Fold(false));
+        }
+        let nested_ast: Option<Vec<&ast::Expr>> =
+            if let Some(ast::Expr::Subscript(subscript)) = target_ast {
+                Some(match subscript.slice.as_ref() {
+                    ast::Expr::Tuple(tuple) => tuple.elts.iter().collect(),
+                    single => vec![single],
+                })
+            } else {
+                None
+            };
+        return unify_specializations(
+            db,
+            ClassLiteral::Static(value_alias.origin(db)),
+            value_alias.specialization(db),
+            target_alias.specialization(db),
+            nested_ast.as_deref(),
+            tokens,
+        );
+    }
+    if value.has_typevar(db) || target.has_typevar(db) {
+        return Err(ParametricIsPlan::Probe(UncheckedReason::ErasedGenerics));
+    }
+    Err(ParametricIsPlan::Fold(false))
+}
+
+/// A union of same-origin specializations is decidable when the target is
+/// one of its arms and some argument position discriminates it from every
+/// other arm (pairwise disjoint, isinstance-able) — then one witness element
+/// answers the test.
+fn classify_union<'db>(
+    db: &'db dyn Db,
+    union: crate::types::UnionType<'db>,
+    target_origin: ClassLiteral<'db>,
+    rhs_alias: crate::types::class::GenericAlias<'db>,
+    target_args_ast: &[&ast::Expr],
+) -> ParametricIsPlan {
+    let mut arm_specs = Vec::new();
+    for element in union.elements(db) {
+        let Type::NominalInstance(instance) = element else {
+            return ParametricIsPlan::Probe(UncheckedReason::Dynamic);
+        };
+        let ClassType::Generic(alias) = instance.class(db) else {
+            return ParametricIsPlan::Probe(UncheckedReason::Dynamic);
+        };
+        if ClassLiteral::Static(alias.origin(db)) != target_origin {
+            return ParametricIsPlan::Probe(UncheckedReason::Dynamic);
+        }
+        if element.has_typevar(db) {
+            return ParametricIsPlan::Probe(UncheckedReason::ErasedGenerics);
+        }
+        arm_specs.push(alias.specialization(db));
+    }
+
+    let arm_args: Vec<Vec<Type<'db>>> = if target_origin.is_known(db, KnownClass::Tuple) {
+        let mut args = Vec::with_capacity(arm_specs.len() + 1);
+        for spec in arm_specs.iter().chain([&rhs_alias.specialization(db)]) {
+            match spec.tuple(db) {
+                Some(Tuple::Fixed(fixed)) => args.push(fixed.elements_slice().to_vec()),
+                _ => return ParametricIsPlan::Probe(UncheckedReason::Dynamic),
+            }
+        }
+        args
+    } else {
+        arm_specs
+            .iter()
+            .chain([&rhs_alias.specialization(db)])
+            .map(|spec| spec.types(db).to_vec())
+            .collect()
+    };
+    let (target_args, arm_args) = arm_args.split_last().expect("chain includes the target");
+    if arm_args.iter().any(|args| args.len() != target_args.len()) {
+        return ParametricIsPlan::Probe(UncheckedReason::Dynamic);
+    }
+    if target_args.iter().any(Type::is_dynamic) {
+        return ParametricIsPlan::Probe(UncheckedReason::Dynamic);
+    }
+
+    let arms_equal_target: Vec<bool> = arm_args
+        .iter()
+        .map(|args| {
+            args.iter()
+                .zip(target_args)
+                .all(|(a, t)| *a == *t || a.is_equivalent_to(db, *t))
+        })
+        .collect();
+    // the static type excludes the target entirely
+    if !arms_equal_target.iter().any(|equal| *equal) {
+        return ParametricIsPlan::Fold(false);
+    }
+    if arms_equal_target.iter().all(|equal| *equal) {
+        return ParametricIsPlan::Fold(true);
+    }
+
+    // find an argument position where the target's class is disjoint from
+    // every non-matching arm's — a single witness there decides the arm
+    let discriminant = (0..target_args.len()).find(|&index| {
+        let target_arg = target_args[index];
+        // the witness check is a runtime isinstance, so the discriminant
+        // must be a plain class
+        let plain = matches!(
+            target_arg,
+            Type::NominalInstance(instance)
+                if matches!(instance.class(db), ClassType::NonGeneric(_))
+        );
+        plain
+            && target_args_ast.get(index).is_some()
+            && arm_args
+                .iter()
+                .zip(&arms_equal_target)
+                .filter(|(_, equal)| !**equal)
+                .all(|(args, _)| target_arg.is_disjoint_from(db, args[index]))
+    });
+    let Some(index) = discriminant else {
+        return ParametricIsPlan::Probe(UncheckedReason::Dynamic);
+    };
+    let class = target_args_ast[index].range();
+
+    if target_origin.is_known(db, KnownClass::Dict) {
+        match index {
+            0 => ParametricIsPlan::Witness(WitnessPlan::DictKey { class }),
+            _ => ParametricIsPlan::Witness(WitnessPlan::DictValue { class }),
+        }
+    } else if target_origin.is_known(db, KnownClass::Tuple) {
+        ParametricIsPlan::Witness(WitnessPlan::TupleIndex { index, class })
+    } else if matches!(
+        target_origin.known(db),
+        Some(KnownClass::List | KnownClass::Set | KnownClass::FrozenSet)
+    ) {
+        ParametricIsPlan::Witness(WitnessPlan::Element { class })
+    } else {
+        // arbitrary generic classes have no canonical element to witness
+        ParametricIsPlan::Probe(UncheckedReason::Dynamic)
+    }
+}
+
+/// whether this type variable has a runtime cell to compare against — a
+/// plain type parameter of a function that reifies it
+fn is_reified_function_typevar<'db>(
+    db: &'db dyn Db,
+    bound_typevar: crate::types::typevar::BoundTypeVarInstance<'db>,
+) -> bool {
+    let crate::types::typevar::BindingContext::Definition(definition) =
+        bound_typevar.binding_context(db)
+    else {
+        return false;
+    };
+    let def_file = definition.file(db);
+    let module = parsed_module(db, def_file).load(db);
+    let ty_python_core::definition::DefinitionKind::Function(function) = definition.kind(db) else {
+        return false;
+    };
+    let node = function.node(&module);
+    let source = ruff_db::source::source_text(db, def_file);
+    crate::reified::reified_type_param_names(source.as_str(), node)
+        .iter()
+        .any(|name| name == bound_typevar.name(db))
 }
 
 /// why an override's reified type-parameter list is incompatible with the

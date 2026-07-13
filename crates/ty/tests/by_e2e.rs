@@ -1021,3 +1021,92 @@ print(sorted(s))
         "__main__.A[int] 1\n[1, 2]\n{'k': 1}\n(1, 'x')\n[3]"
     );
 }
+
+#[test]
+fn parametric_is_folds_and_lowers() {
+    // a concrete value folds statically; a dynamic value probes at runtime
+    let out = transpile_at_313(
+        "\
+xs = [1, 2]
+a = xs is list[int]
+b = xs is list[str]
+
+def f(x) -> bool:
+    return x is list[int]
+",
+    );
+    assert!(
+        out.contains("a = True"),
+        "concrete match folds true:\n{out}"
+    );
+    assert!(
+        out.contains("b = False"),
+        "concrete mismatch folds false:\n{out}"
+    );
+    assert!(
+        out.contains("return _parametric_is(x, list[int])"),
+        "dynamic value probes __orig_class__:\n{out}"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn parametric_is_observable_at_runtime() {
+    // the acceptance case: an untyped value probes `__orig_class__`, which no
+    // builtin collection carries, so a parametric test answers `False`; a
+    // reified type parameter carries the exact specialization; a disjoint
+    // union is discriminated by a witness element
+    let Some(python) = ["python3.13"].into_iter().find(|p| {
+        Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }) else {
+        eprintln!("skipping: no python 3.13 interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def f(x):
+    print(x is list[int])
+
+f(list[object]((1, 2, 3)))
+
+def g[T](x: T) -> bool:
+    return x is list[int]
+
+print(g([1, 2]))
+print(g(\"x\"))
+
+def h(items: list[int] | list[str]) -> bool:
+    return items is list[int]
+
+print(h([1, 2]))
+print(h([\"a\"]))
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "False\nTrue\nFalse\nTrue\nFalse"
+    );
+}

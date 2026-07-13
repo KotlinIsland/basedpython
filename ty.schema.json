@@ -1437,6 +1437,16 @@
             }
           ]
         },
+        "unchecked-type-check": {
+          "title": "detects parametric type tests that cannot be verified",
+          "description": "## What it does\nChecks for parametric type tests (`x is list[int]`) that cannot be\nverified — neither statically from the value's type, nor at runtime\nthrough a reified type parameter or a witness element.\n\n## Why is this bad?\nA parametric `is` test is answered from static types wherever\npossible (Rust-style). When the value's static type is unknown or an\nerased type parameter, no verified answer exists: at runtime the test\nfalls back to the value's `__orig_class__` and answers `False` for\nvalues that don't carry one — which includes every builtin\ncollection.\n\n## Example\n\n```by\ndef f(x):\n    return x is list[int]  # warning: unchecked type-check\n```\n\nAnnotate the value, or reify the type parameter:\n\n```by\ndef f[T](x: T):\n    return x is list[int]  # ok — compares the reified `T`\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "undefined-reveal": {
           "title": "detects usages of `reveal_type` without importing it",
           "description": "## What it does\n\nChecks for calls to `reveal_type` without importing it.\n\n## Why is this bad?\n\nUsing `reveal_type` without importing it will raise a `NameError` at runtime.\n\n## Examples\n\n```python\n# NameError: name 'reveal_type' is not defined\n# error\nreveal_type(1)  # revealed: Literal[1]\n```",

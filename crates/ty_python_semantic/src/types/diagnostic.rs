@@ -132,6 +132,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
     registry.register_lint(&REIFIED_CLASSMETHOD);
+    registry.register_lint(&UNCHECKED_TYPE_CHECK);
     registry.register_lint(&OVERRIDE_OF_FINAL_METHOD);
     registry.register_lint(&OVERRIDE_OF_FINAL_VARIABLE);
     registry.register_lint(&INEFFECTIVE_FINAL);
@@ -991,6 +992,40 @@ declare_lint! {
         summary: "detects classmethods with reified type parameters",
         status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for parametric type tests (`x is list[int]`) that cannot be
+    /// verified — neither statically from the value's type, nor at runtime
+    /// through a reified type parameter or a witness element.
+    ///
+    /// ## Why is this bad?
+    /// A parametric `is` test is answered from static types wherever
+    /// possible (Rust-style). When the value's static type is unknown or an
+    /// erased type parameter, no verified answer exists: at runtime the test
+    /// falls back to the value's `__orig_class__` and answers `False` for
+    /// values that don't carry one — which includes every builtin
+    /// collection.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def f(x):
+    ///     return x is list[int]  # warning: unchecked type-check
+    /// ```
+    ///
+    /// Annotate the value, or reify the type parameter:
+    ///
+    /// ```by
+    /// def f[T](x: T):
+    ///     return x is list[int]  # ok — compares the reified `T`
+    /// ```
+    pub(crate) static UNCHECKED_TYPE_CHECK = {
+        summary: "detects parametric type tests that cannot be verified",
+        status: LintStatus::stable("0.0.1-alpha.3"),
+        default_level: Level::Warn,
     }
 }
 

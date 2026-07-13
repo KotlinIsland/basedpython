@@ -40,6 +40,10 @@ the builtin collections silently reject the `__orig_class__` stamp, so for
 literals the reification lives in the generated source (and costs one extra
 constructor call); the constructed value is identical
 
+the stamp is what makes a runtime specialization visible — see
+[parametric type tests](parametric-type-tests.md) for `x is list[int]`, which
+reads it back.
+
 ## where the types come from
 
 the injected spelling is read from the specialization ty already inferred for

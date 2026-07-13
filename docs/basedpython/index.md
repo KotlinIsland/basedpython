@@ -47,6 +47,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [explicit generic call sites](features/generic-calls.md)
 - [reified type parameters](features/reified-generics.md)
 - [type reification](features/type-reification.md)
+- [parametric type tests](features/parametric-type-tests.md)
 - [automatic forward references](features/forward-references.md)
 - [implicit typing imports](features/implicit-typing.md)
 - [typed lambda](features/typed-lambda.md)

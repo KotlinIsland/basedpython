@@ -1,19 +1,24 @@
 //! detection of reified type parameters (basedpython)
 //!
 //! a pep 695 type parameter is *reified* when the function body references it
-//! in a value position — anywhere other than a type annotation. detection is
-//! purely syntactic so the transpiler and the type checker agree on it without
-//! sharing inference state
+//! in a value position — anywhere other than a type annotation — or when a
+//! parameter whose annotation mentions it is parametrically type-tested
+//! (`x is list[int]` on `x: T`, which lowers to a comparison of the reified
+//! `T` cell). detection is purely syntactic so the transpiler and the type
+//! checker agree on it without sharing inference state; the source text is
+//! needed only to tell the keyword `is` form from the `===` identity
+//! operator, which the parser flattens to the same ast
 
 use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{self as ast, Expr, Stmt};
-use rustc_hash::FxHashSet;
+use ruff_python_ast::{self as ast, CmpOp, Expr, Stmt};
+use ruff_text_size::Ranged;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// names of the function's plain type parameters that its body references in
 /// a value position, in declaration order. `*Ts` / `**P` parameters never
 /// participate (their reification is not supported yet)
-pub fn reified_type_param_names(function: &ast::StmtFunctionDef) -> Vec<Name> {
+pub fn reified_type_param_names(source: &str, function: &ast::StmtFunctionDef) -> Vec<Name> {
     let Some(type_params) = function.type_params.as_deref() else {
         return Vec::new();
     };
@@ -31,8 +36,11 @@ pub fn reified_type_param_names(function: &ast::StmtFunctionDef) -> Vec<Name> {
 
     let mut active: FxHashSet<&str> = candidates.iter().map(|name| name.as_str()).collect();
     shadow_bound_names(&function.body, &mut active);
+    let param_typevars = param_annotation_typevars(&function.parameters, &active);
     let mut finder = ValueUseFinder {
+        source,
         active,
+        param_typevars,
         found: FxHashSet::default(),
     };
     for stmt in &function.body {
@@ -44,6 +52,59 @@ pub fn reified_type_param_names(function: &ast::StmtFunctionDef) -> Vec<Name> {
         .filter(|name| finder.found.contains(name.as_str()))
         .cloned()
         .collect()
+}
+
+/// whether the `is` / `is not` between two compare operands is the keyword
+/// form (isinstance semantics) rather than the `===` / `!==` identity
+/// operators, which the parser flattens to the same ast
+pub fn is_keyword_comparison(source: &str, op: CmpOp, lhs: &Expr, rhs: &Expr) -> bool {
+    let between = &source[usize::from(lhs.range().end())..usize::from(rhs.range().start())];
+    let trimmed = between.trim();
+    match op {
+        CmpOp::Is => trimmed == "is",
+        CmpOp::IsNot => !trimmed.starts_with("!=="),
+        _ => false,
+    }
+}
+
+/// parameter name → the still-active type-param names its annotation
+/// mentions. a parametric `is` test on such a parameter lowers to an equality
+/// check of those params' reified cells, so the test is a value-position use
+fn param_annotation_typevars<'a>(
+    parameters: &'a ast::Parameters,
+    active: &FxHashSet<&'a str>,
+) -> FxHashMap<&'a str, Vec<&'a str>> {
+    let mut map = FxHashMap::default();
+    for parameter in parameters {
+        if let Some(annotation) = parameter.annotation() {
+            let mut mentions = AnnotationMentions {
+                active,
+                mentioned: Vec::new(),
+            };
+            mentions.visit_expr(annotation);
+            if !mentions.mentioned.is_empty() {
+                map.insert(parameter.name().id.as_str(), mentions.mentioned);
+            }
+        }
+    }
+    map
+}
+
+struct AnnotationMentions<'a, 'b> {
+    active: &'b FxHashSet<&'a str>,
+    mentioned: Vec<&'a str>,
+}
+
+impl<'a> Visitor<'a> for AnnotationMentions<'a, '_> {
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if let Expr::Name(name) = expr
+            && self.active.contains(name.id.as_str())
+            && !self.mentioned.contains(&name.id.as_str())
+        {
+            self.mentioned.push(name.id.as_str());
+        }
+        walk_expr(self, expr);
+    }
 }
 
 /// remove from `active` every name the body binds itself — a local binding
@@ -100,7 +161,11 @@ impl<'a> Visitor<'a> for StoredNames<'a> {
 }
 
 struct ValueUseFinder<'a> {
+    source: &'a str,
     active: FxHashSet<&'a str>,
+    /// parameters of the innermost enclosing def whose annotations mention
+    /// active type params — parametric `is` tests on them reify those params
+    param_typevars: FxHashMap<&'a str, Vec<&'a str>>,
     found: FxHashSet<&'a str>,
 }
 
@@ -116,6 +181,28 @@ impl<'a> ValueUseFinder<'a> {
             self.visit_stmt(stmt);
         }
         self.active = saved;
+    }
+
+    /// a keyword-form `is` / `is not` pair testing a `T`-annotated parameter
+    /// against a subscripted type reifies `T` — the lowering compares the
+    /// reified cell against the target's type arguments
+    fn check_parametric_tests(&mut self, compare: &'a ast::ExprCompare) {
+        let mut lhs: &Expr = &compare.left;
+        for (op, rhs) in compare.ops.iter().zip(&compare.comparators) {
+            if matches!(op, CmpOp::Is | CmpOp::IsNot)
+                && matches!(rhs, Expr::Subscript(_))
+                && is_keyword_comparison(self.source, *op, lhs, rhs)
+                && let Expr::Name(name) = lhs
+                && let Some(typevars) = self.param_typevars.get(name.id.as_str())
+            {
+                for typevar in typevars {
+                    if self.active.contains(typevar) {
+                        self.found.insert(typevar);
+                    }
+                }
+            }
+            lhs = rhs;
+        }
     }
 }
 
@@ -146,7 +233,17 @@ impl<'a> Visitor<'a> for ValueUseFinder<'a> {
                     .flat_map(|tp| tp.type_params.iter().map(|p| p.name().id.as_str()));
                 let param_names = def.parameters.iter().map(|param| param.name().id.as_str());
                 let shadowed: Vec<&str> = own_type_params.chain(param_names).collect();
+                // a nested def's parameters may re-annotate with an enclosing
+                // (still-active) type param; parametric tests on them inside
+                // the nested body reach the same reified cell via the closure
+                let mut nested_active = self.active.clone();
+                for name in &shadowed {
+                    nested_active.remove(name);
+                }
+                let nested_map = param_annotation_typevars(&def.parameters, &nested_active);
+                let saved_map = std::mem::replace(&mut self.param_typevars, nested_map);
                 self.visit_nested_body(&def.body, shadowed.into_iter());
+                self.param_typevars = saved_map;
             }
             Stmt::ClassDef(def) => {
                 for decorator in &def.decorator_list {
@@ -173,6 +270,10 @@ impl<'a> Visitor<'a> for ValueUseFinder<'a> {
                 if name.ctx.is_load() && self.active.contains(name.id.as_str()) {
                     self.found.insert(name.id.as_str());
                 }
+            }
+            Expr::Compare(compare) => {
+                self.check_parametric_tests(compare);
+                walk_expr(self, expr);
             }
             // `value cast T` parses as a call whose first argument is the
             // target type — a type position

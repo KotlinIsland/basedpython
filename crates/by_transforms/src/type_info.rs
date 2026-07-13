@@ -63,6 +63,17 @@ pub(crate) trait TypeInfo {
     /// elements, a TypedDict-typed dict display, a shadowed builtin name)
     fn collection_literal_spelling(&self, expr: &Expr) -> Option<String>;
 
+    /// how the keyword-form parametric type test `lhs is rhs` resolves
+    /// (rust-style: statically folded, reified-cell token equality, witness
+    /// probe, or an unchecked runtime probe). `None` when `rhs` is not a
+    /// subscripted generic class — the pair is then an ordinary isinstance
+    /// lowering
+    fn parametric_is_plan(
+        &self,
+        lhs: &Expr,
+        rhs: &ruff_python_ast::ExprSubscript,
+    ) -> Option<ty_python_semantic::ParametricIsPlan>;
+
     /// whether `expr` resolves to `typing.Any` (the explicitly-annotated
     /// dynamic type). distinguishes the special form from a shadowing binding
     /// or the `Unknown` that an unresolved / invalid type expression yields,
@@ -179,6 +190,14 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn collection_literal_spelling(&self, expr: &Expr) -> Option<String> {
         self.reified_collection_literal_spelling(expr)
+    }
+
+    fn parametric_is_plan(
+        &self,
+        lhs: &Expr,
+        rhs: &ruff_python_ast::ExprSubscript,
+    ) -> Option<ty_python_semantic::ParametricIsPlan> {
+        SemanticModel::parametric_is_plan(self, lhs, rhs)
     }
 
     fn is_any(&self, expr: &Expr) -> bool {
