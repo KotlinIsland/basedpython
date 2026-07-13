@@ -210,7 +210,7 @@ mod tests {
         let supertypes = test.supertypes();
         insta::assert_snapshot!(
             snapshot(&test.db, &supertypes),
-            @"vendored://stdlib/builtins.byi:2677:2683 object :: builtins",
+            @"vendored://stdlib/builtins.byi:2684:2690 object :: builtins",
         );
     }
 
@@ -424,12 +424,12 @@ mod tests {
         let item = test.prepare().unwrap();
         insta::assert_snapshot!(
             snapshot(&test.db, &[item]),
-            @"vendored://stdlib/builtins.byi:7359:7363 type :: builtins",
+            @"vendored://stdlib/builtins.byi:7366:7370 type :: builtins",
         );
         let supertypes = test.supertypes();
         insta::assert_snapshot!(
             snapshot(&test.db, &supertypes),
-            @"vendored://stdlib/builtins.byi:2677:2683 object :: builtins",
+            @"vendored://stdlib/builtins.byi:2684:2690 object :: builtins",
         );
     }
 
@@ -481,7 +481,7 @@ mod tests {
         let supertypes = test.supertypes();
         insta::assert_snapshot!(
             snapshot(&test.db, &supertypes),
-            @"vendored://stdlib/builtins.byi:100771:100776 tuple :: builtins",
+            @"vendored://stdlib/builtins.byi:100778:100783 tuple :: builtins",
         );
     }
 
