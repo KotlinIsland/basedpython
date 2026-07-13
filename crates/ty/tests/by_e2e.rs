@@ -928,3 +928,96 @@ Box().kind[float]()
         "<class 'int'>\nTrue\n<class 'str'>\nFalse\n<class 'int'>\n<class 'bytes'>\n<class 'float'>"
     );
 }
+
+#[test]
+fn type_reification_makes_specializations_explicit() {
+    // bare generic constructor calls and collection literals carry their
+    // inferred specialization in the generated python
+    let out = transpile_at_313(
+        "\
+class A[T]:
+    def __init__(self, t: T):
+        self.t = t
+
+a = A(1)
+xs = [1, 2]
+d = {\"k\": 1}
+t = 1, \"x\"
+",
+    );
+    assert!(
+        out.contains("a = A[int](1)"),
+        "constructor should reify:\n{out}"
+    );
+    assert!(
+        out.contains("xs = list[int]([1, 2])"),
+        "list literal should reify:\n{out}"
+    );
+    assert!(
+        out.contains("d = dict[str, int]({\"k\": 1})"),
+        "dict literal should reify:\n{out}"
+    );
+    assert!(
+        out.contains("t = tuple[int, str]((1, \"x\"))"),
+        "tuple literal should reify:\n{out}"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn type_reification_observable_at_runtime() {
+    // `A[int](…)` routes through `GenericAlias.__call__`, which stamps
+    // `__orig_class__` on the instance — the specialization becomes a runtime
+    // value. wrapped collection literals construct identical values
+    let Some(python) = ["python3.13"].into_iter().find(|p| {
+        Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }) else {
+        eprintln!("skipping: no python 3.13 interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+class A[T]:
+    def __init__(self, t: T):
+        self.t = t
+
+a = A(1)
+print(getattr(a, \"__orig_class__\", None), a.t)
+xs = [1, 2]
+print(xs)
+d = {\"k\": 1}
+print(d)
+t = 1, \"x\"
+print(t)
+s = {3}
+print(sorted(s))
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "__main__.A[int] 1\n[1, 2]\n{'k': 1}\n(1, 'x')\n[3]"
+    );
+}

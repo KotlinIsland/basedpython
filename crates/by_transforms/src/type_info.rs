@@ -50,6 +50,19 @@ pub(crate) trait TypeInfo {
     /// or none is possible (ty reports the latter)
     fn reified_call_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String>;
 
+    /// the comma-joined type arguments to inject at a bare constructor call
+    /// of a generic class (`A(1)` → `"int"`), or `None` when the callee is
+    /// not a generic class literal or the solved specialization has no
+    /// runtime spelling — reification of constructors is best-effort, a
+    /// missing spelling is never an error
+    fn constructor_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String>;
+
+    /// the runtime spelling (`list[int]`, `tuple[int, str]`) that makes a
+    /// collection literal's inferred element types explicit, or `None` when
+    /// the literal's type has no spelling (empty / partially-`Unknown`
+    /// elements, a TypedDict-typed dict display, a shadowed builtin name)
+    fn collection_literal_spelling(&self, expr: &Expr) -> Option<String>;
+
     /// whether `expr` resolves to `typing.Any` (the explicitly-annotated
     /// dynamic type). distinguishes the special form from a shadowing binding
     /// or the `Unknown` that an unresolved / invalid type expression yields,
@@ -158,6 +171,14 @@ impl TypeInfo for SemanticModel<'_> {
     fn reified_call_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String> {
         let arguments = self.reified_call_type_arguments(call)?;
         Some(arguments.join(", "))
+    }
+
+    fn constructor_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String> {
+        self.reified_constructor_type_arguments(call)
+    }
+
+    fn collection_literal_spelling(&self, expr: &Expr) -> Option<String> {
+        self.reified_collection_literal_spelling(expr)
     }
 
     fn is_any(&self, expr: &Expr) -> bool {

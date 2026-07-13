@@ -17,8 +17,8 @@ use crate::place::implicit_globals::all_implicit_module_globals;
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
 use crate::types::list_members::{Member, all_members, all_reachable_members};
 use crate::types::{
-    CycleDetector, SpecialFormType, Type, TypeQualifiers, binding_type, infer_complete_scope_types,
-    inferred_declaration,
+    CycleDetector, KnownClass, SpecialFormType, Type, TypeQualifiers, binding_type,
+    infer_complete_scope_types, inferred_declaration,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::place_table;
@@ -97,6 +97,40 @@ impl<'db> SemanticModel<'db> {
         crate::types::reified_infer::injectable_call_type_arguments(
             db, self.file, callee_ty, function, positional, keywords,
         )
+    }
+
+    /// basedpython: the bracketed type-argument spelling the transpiler
+    /// injects at a bare constructor call of a generic class (`A(1)` →
+    /// `"int"`), read from the inferred type of the constructed instance.
+    /// `None` when the callee is not a generic class literal or no runtime
+    /// spelling exists — reification of constructors is best-effort, never
+    /// an error
+    pub fn reified_constructor_type_arguments(&self, call: &ast::ExprCall) -> Option<String> {
+        let callee_ty = call.func.inferred_type(self)?;
+        let class_literal = callee_ty.as_class_literal()?;
+        let constructed = call.inferred_type(self)?;
+        crate::types::reified_infer::constructor_specialization_display(
+            self.db,
+            self.file,
+            class_literal,
+            constructed,
+        )
+    }
+
+    /// basedpython: the runtime spelling (`list[int]`) with which the
+    /// transpiler wraps a collection literal to make its inferred element
+    /// types explicit (`[1, 2]` → `list[int]([1, 2])`). `None` for
+    /// non-display expressions or when no spelling exists
+    pub fn reified_collection_literal_spelling(&self, expr: &ast::Expr) -> Option<String> {
+        let expected = match expr {
+            ast::Expr::List(_) => KnownClass::List,
+            ast::Expr::Set(_) => KnownClass::Set,
+            ast::Expr::Dict(_) => KnownClass::Dict,
+            ast::Expr::Tuple(_) => KnownClass::Tuple,
+            _ => return None,
+        };
+        let ty = expr.inferred_type(self)?;
+        crate::types::reified_infer::collection_literal_spelling(self.db, self.file, ty, expected)
     }
 
     pub fn line_index(&self) -> LineIndex {

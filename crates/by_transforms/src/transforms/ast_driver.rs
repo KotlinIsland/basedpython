@@ -40,8 +40,8 @@ use super::{
     just_float, kw_subscript, literal_types, main_function, modifiers, mutable_defaults,
     none_chain, optional_type, overload, postfix_await, propagate, reified_generic,
     repeated_underscore, sentinel, some_ctor, soundness, string_tag, super_keyword,
-    symbolic_type_op, top_star, tuple_index, type_is, typed_dict_literal, typed_lambda,
-    typeof_keyword, unpack, use_site_variance,
+    symbolic_type_op, top_star, tuple_index, type_is, type_reification, typed_dict_literal,
+    typed_lambda, typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -462,6 +462,8 @@ pub(crate) fn run_against_source<'a>(
     let generic_call_pass = generic_call::GenericCallStripPass::new(source_ref);
     let reified_generic_pass =
         reified_generic::ReifiedGenericPass::new(source_ref, config.min_version);
+    let type_reification_pass =
+        type_reification::TypeReificationPass::new(config.min_version, config.is_stub);
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
     let tuple_types_pass = annotation::TupleLiteralTypePass::new(source_ref);
     let literal_types_pass = literal_types::LiteralTypePass::new(source_ref);
@@ -546,6 +548,12 @@ pub(crate) fn run_against_source<'a>(
         // function's specialized calls (they route through `generic.__getitem__`)
         &reified_generic_pass,
         &generic_call_pass,
+        // type reification: bare generic constructor calls get their solved
+        // specialization (`A(1)` → `A[int](1)`) and collection literals their
+        // inferred element types (`[1, 2]` → `list[int]([1, 2])`). disjoint
+        // from the two passes above — they handle *function* callees, this one
+        // class callees and displays
+        &type_reification_pass,
         &implicit_typing_pass,
         &tuple_types_pass,
         &literal_types_pass,

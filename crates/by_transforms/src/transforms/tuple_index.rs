@@ -80,7 +80,7 @@ mod tests {
 
     #[test]
     fn literal_tuple() {
-        check("x = (1, 2).0\n", "x = (1, 2)[0]\n");
+        check("x = (1, 2).0\n", "x = tuple[int, int]((1, 2))[0]\n");
     }
 
     #[test]
@@ -95,7 +95,10 @@ mod tests {
 
     #[test]
     fn nested() {
-        check("v = (1, (2, 3)).1.0\n", "v = (1, (2, 3))[1][0]\n");
+        check(
+            "v = (1, (2, 3)).1.0\n",
+            "v = tuple[int, tuple[int, int]]((1, tuple[int, int]((2, 3))))[1][0]\n",
+        );
     }
 
     #[test]
