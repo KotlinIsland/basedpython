@@ -546,8 +546,15 @@ fn build_project_db(
     cwd: &Path,
     files: &[PathBuf],
 ) -> anyhow::Result<(ProjectDatabase, Vec<(PathBuf, ruff_db::files::File)>)> {
-    let sys_cwd = SystemPath::from_std_path(cwd)
-        .with_context(|| format!("non-utf8 path: {}", cwd.display()))?;
+    // the project root must be canonicalized the same way the included files
+    // are (below) so it stays a path *prefix* of them: otherwise a file's
+    // search path isn't recognized as first-party and boundary diagnostics
+    // (e.g. `subclass-of-sealed-class`) misfire. this bites on windows, where
+    // `canonicalize` rewrites files to the `\\?\` long-path form while an
+    // un-canonicalized root keeps its short (`RUNNER~1`) components
+    let canonical_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let sys_cwd = SystemPath::from_std_path(&canonical_cwd)
+        .with_context(|| format!("non-utf8 path: {}", canonical_cwd.display()))?;
     let system = OsSystem::new(sys_cwd);
     let project_metadata = ProjectMetadata::discover(sys_cwd, &system)
         .with_context(|| format!("failed to discover project at {sys_cwd}"))?;
