@@ -54,8 +54,8 @@ use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
 use crate::types::diagnostic::{
     self, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS, CYCLIC_TYPE_ALIAS_DEFINITION,
-    FINAL_ON_VARIABLE, GeneratorMismatchKind, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE,
-    INVALID_ASSIGNMENT, INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION,
+    ERASED_TYPE_CHECK, FINAL_ON_VARIABLE, GeneratorMismatchKind, INEFFECTIVE_FINAL,
+    INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT, INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION,
     INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE,
     INVALID_TYPE_FORM, INVALID_TYPE_GUARD_CALL, INVALID_TYPE_VARIABLE_BOUND,
     INVALID_TYPE_VARIABLE_CONSTRAINTS, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
@@ -11008,6 +11008,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                 let range = TextRange::new(left.start(), right.end());
 
+                // a basedpython parametric type test (`x is list[int]`) is a
+                // runtime specialization check, not python identity: it always
+                // yields a `bool`, and its reachability is decided by narrowing
+                // (not by the instance-vs-class-object disjointness that would
+                // otherwise type it `Literal[False]` and kill a live branch)
+                if let Some(ty) =
+                    builder.check_parametric_is_test(left, right, left_ty, right_ty, *op)
+                {
+                    return (ty, range);
+                }
+
                 let ty = comparisons::infer_binary_type_comparison(
                     &builder.context,
                     left_ty,
@@ -11040,6 +11051,66 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 (ty, range)
             },
         )
+    }
+
+    /// basedpython: classify a parametric type test (`x is list[int]`,
+    /// keyword form). Returns `Some(bool)` — the runtime result type — when
+    /// this pair is such a test, and errors when the target is a builtin
+    /// collection whose runtime instances erase their type arguments, so no
+    /// runtime probe of the value can ever confirm the specialization.
+    /// `None` when the pair is an ordinary comparison, so the caller keeps
+    /// its usual comparison typing
+    fn check_parametric_is_test(
+        &mut self,
+        left: &ast::Expr,
+        right: &ast::Expr,
+        left_ty: Type<'db>,
+        right_ty: Type<'db>,
+        op: ast::CmpOp,
+    ) -> Option<Type<'db>> {
+        if !matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot) || !self.is_basedpython_file() {
+            return None;
+        }
+        let ast::Expr::Subscript(subscript) = right else {
+            return None;
+        };
+        let Type::GenericAlias(alias) = right_ty else {
+            return None;
+        };
+        let source = ruff_db::source::source_text(self.db(), self.file());
+        if !crate::reified::is_keyword_comparison(source.as_str(), op, left, right) {
+            return None;
+        }
+        let plan = crate::types::reified_infer::classify_parametric_is(
+            self.db(),
+            left_ty,
+            alias,
+            subscript,
+        );
+        let bool_ty = KnownClass::Bool.to_instance(self.db());
+        // only a probe against a runtime-erased builtin is an error; every
+        // other plan (fold, reified-cell equality, witness, or a probe of a
+        // user generic that carries `__orig_class__`) is a valid test
+        if plan != crate::types::reified_infer::ParametricIsPlan::ErasedTarget {
+            return Some(bool_ty);
+        }
+        let range = TextRange::new(left.start(), right.end());
+        let Some(builder) = self.context.report_lint(&ERASED_TYPE_CHECK, range) else {
+            return Some(bool_ty);
+        };
+        let target = &source[subscript.range()];
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "`is {target}` cannot be checked at runtime: builtin collections erase their type arguments"
+        ));
+        diagnostic.info(format_args!(
+            "a `list` / `dict` / `set` / `tuple` built at runtime carries no record of \
+             its type arguments, so no runtime check can confirm the specialization"
+        ));
+        diagnostic.info(format_args!(
+            "reify the type parameter (`def f[T](x: T)`), or test against a user-defined \
+             generic whose instances carry `__orig_class__`"
+        ));
+        Some(bool_ty)
     }
 
     fn infer_type_parameters(&mut self, type_parameters: &ast::TypeParams) {

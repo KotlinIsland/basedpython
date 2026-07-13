@@ -117,6 +117,24 @@ impl<'db> SemanticModel<'db> {
         )
     }
 
+    /// basedpython: how the parametric type test `lhs is rhs` (keyword form)
+    /// resolves, from the operands' inferred types. `None` when `rhs` does
+    /// not evaluate to a subscripted generic class — the test is then an
+    /// ordinary isinstance lowering
+    pub fn parametric_is_plan(
+        &self,
+        lhs: &ast::Expr,
+        rhs: &ast::ExprSubscript,
+    ) -> Option<crate::types::reified_infer::ParametricIsPlan> {
+        let Type::GenericAlias(alias) = rhs.inferred_type(self)? else {
+            return None;
+        };
+        let lhs_ty = lhs.inferred_type(self)?;
+        Some(crate::types::reified_infer::classify_parametric_is(
+            self.db, lhs_ty, alias, rhs,
+        ))
+    }
+
     /// basedpython: the runtime spelling (`list[int]`) with which the
     /// transpiler wraps a collection literal to make its inferred element
     /// types explicit (`[1, 2]` → `list[int]([1, 2])`). `None` for

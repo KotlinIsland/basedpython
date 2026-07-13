@@ -20,6 +20,7 @@ use itertools::Itertools;
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::{self as ast, name::Name};
+use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::FxHashMap;
 
 use crate::Db;
@@ -30,6 +31,7 @@ use crate::types::function::FunctionType;
 use crate::types::generics::Specialization;
 use crate::types::tuple::Tuple;
 use crate::types::typevar::TypeVarBoundOrConstraints;
+use crate::types::variance::TypeVarVariance;
 use crate::types::{KnownClass, Type};
 
 /// why a bare call of a reified generic cannot be accepted
@@ -308,6 +310,318 @@ fn spell_class_literal<'db>(
         .or_else(|| builtins_symbol(db, name).place.ignore_possibly_undefined())?;
     let resolved_literal = resolved.as_class_literal()?;
     (resolved_literal == literal).then(|| name.to_string())
+}
+
+/// How a parametric type test (`x is C[args]`, keyword form) resolves.
+///
+/// A test means `type(value) <: C[args]` (isinstance-with-parameters
+/// semantics, so it respects `C`'s declared variance). It is answered from
+/// static types at compile time wherever possible; the runtime residue is an
+/// equality check of reified type-param cells or a variance-aware
+/// `__orig_class__` probe. The probe only works when the target's instances
+/// carry `__orig_class__` — a user-defined generic. Against a builtin
+/// collection, whose instances erase their type arguments, no sound runtime
+/// answer exists and the test is an error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParametricIsPlan {
+    /// statically decided — the test lowers to a constant
+    Fold(bool),
+    /// conjunction of runtime equality checks of reified type-param cells
+    /// against target arguments, each spelled by its source range in the rhs
+    TokenEq(Vec<(Name, TextRange)>),
+    /// not decidable from static types, but the target is a user-defined
+    /// generic whose instances carry `__orig_class__` — probe it at runtime,
+    /// matching each argument by the target's declared variance (one entry
+    /// per type parameter). a legitimate, unwarned runtime test
+    Probe(Box<[ArgVariance]>),
+    /// not decidable from static types, and the target is a builtin
+    /// collection whose instances never carry `__orig_class__`, so no sound
+    /// runtime probe exists — the test is an error
+    ErasedTarget,
+}
+
+/// how the runtime probe matches one type argument of the reified
+/// specialization against the target's, per the target's declared variance
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgVariance {
+    /// exact match required
+    Invariant,
+    /// reified argument must be a subtype of the target's (`out T`)
+    Covariant,
+    /// target argument must be a subtype of the reified's (`in T`)
+    Contravariant,
+    /// matches either way
+    Bivariant,
+}
+
+/// whether specialized instances of `origin` carry `__orig_class__` at
+/// runtime. the builtin collections are C types that erase their type
+/// arguments and reject the attribute; a user-defined generic carries it
+/// (set by `types.GenericAlias.__call__` after construction)
+fn target_carries_orig_class<'db>(db: &'db dyn Db, origin: ClassLiteral<'db>) -> bool {
+    !matches!(
+        origin.known(db),
+        Some(
+            KnownClass::List
+                | KnownClass::Dict
+                | KnownClass::Set
+                | KnownClass::FrozenSet
+                | KnownClass::Tuple
+        )
+    )
+}
+
+/// Classify how `lhs is rhs` (keyword form, `rhs` a subscripted generic
+/// class evaluating to `rhs_alias`) resolves, from the already-inferred
+/// static type of the lhs.
+pub(crate) fn classify_parametric_is<'db>(
+    db: &'db dyn Db,
+    lhs_ty: Type<'db>,
+    rhs_alias: crate::types::class::GenericAlias<'db>,
+    rhs_node: &ast::ExprSubscript,
+) -> ParametricIsPlan {
+    let target_origin = ClassLiteral::Static(rhs_alias.origin(db));
+    let target_args_ast: Vec<&ast::Expr> = match rhs_node.slice.as_ref() {
+        ast::Expr::Tuple(tuple) => tuple.elts.iter().collect(),
+        single => vec![single],
+    };
+    let plan = classify_value(
+        db,
+        lhs_ty.promote(db),
+        target_origin,
+        rhs_alias,
+        &target_args_ast,
+        rhs_node,
+    );
+    // a runtime `__orig_class__` probe is the last resort. it only works when
+    // the target's instances carry that attribute — a builtin collection
+    // never does, so the test cannot be checked at runtime and becomes an error
+    match plan {
+        ParametricIsPlan::Probe(_) if !target_carries_orig_class(db, target_origin) => {
+            ParametricIsPlan::ErasedTarget
+        }
+        other => other,
+    }
+}
+
+fn classify_value<'db>(
+    db: &'db dyn Db,
+    value_ty: Type<'db>,
+    target_origin: ClassLiteral<'db>,
+    rhs_alias: crate::types::class::GenericAlias<'db>,
+    target_args_ast: &[&ast::Expr],
+    rhs_node: &ast::ExprSubscript,
+) -> ParametricIsPlan {
+    // when the value's type is carried by a reified type parameter, the answer
+    // lives in a runtime cell rather than the static type — extract the cell
+    // comparisons before falling back to static subtyping
+    if value_ty.has_typevar(db)
+        && let Some(plan) = try_token_eq(
+            db,
+            value_ty,
+            target_origin,
+            rhs_alias,
+            target_args_ast,
+            rhs_node,
+        )
+    {
+        return plan;
+    }
+
+    // `a is C[args]` means `type(a) <: C[args]`, so the static answer is a
+    // subtype question — this respects `C`'s declared variance for free
+    let target_instance = Type::instance(db, ClassType::Generic(rhs_alias));
+    if value_ty.is_subtype_of(db, target_instance) {
+        ParametricIsPlan::Fold(true)
+    } else if value_ty.is_disjoint_from(db, target_instance) {
+        ParametricIsPlan::Fold(false)
+    } else {
+        // undecidable statically; `classify_parametric_is` turns this into a
+        // runtime probe (user generic) or an erased-target error (builtin)
+        ParametricIsPlan::Probe(target_variances(db, target_origin))
+    }
+}
+
+/// The reified-cell comparisons for a value whose static type is (or is built
+/// from) a reified type parameter — `x: T` against `C[args]` is `T == C[args]`,
+/// `x: list[T]` against `list[int]` is `T == int`. `None` when the value is
+/// not so shaped (the caller then resolves it statically).
+fn try_token_eq<'db>(
+    db: &'db dyn Db,
+    value_ty: Type<'db>,
+    target_origin: ClassLiteral<'db>,
+    rhs_alias: crate::types::class::GenericAlias<'db>,
+    target_args_ast: &[&ast::Expr],
+    rhs_node: &ast::ExprSubscript,
+) -> Option<ParametricIsPlan> {
+    match value_ty {
+        Type::TypeVar(bound_typevar) if is_reified_function_typevar(db, bound_typevar) => Some(
+            ParametricIsPlan::TokenEq(vec![(bound_typevar.name(db).clone(), rhs_node.range())]),
+        ),
+        Type::NominalInstance(instance) => {
+            let ClassType::Generic(alias) = instance.class(db) else {
+                return None;
+            };
+            if ClassLiteral::Static(alias.origin(db)) != target_origin {
+                return None;
+            }
+            let mut tokens = Vec::new();
+            unify_specializations(
+                db,
+                target_origin,
+                alias.specialization(db),
+                rhs_alias.specialization(db),
+                Some(target_args_ast),
+                &mut tokens,
+            )
+            .ok()
+            .filter(|()| !tokens.is_empty())
+            .map(|()| ParametricIsPlan::TokenEq(tokens))
+        }
+        _ => None,
+    }
+}
+
+/// the declared variance of each of the target class's type parameters — how
+/// the runtime probe matches each argument
+fn target_variances<'db>(db: &'db dyn Db, origin: ClassLiteral<'db>) -> Box<[ArgVariance]> {
+    let Some(generic_context) = origin.generic_context(db) else {
+        return Box::default();
+    };
+    generic_context
+        .variables(db)
+        .map(|bound_typevar| match bound_typevar.variance(db) {
+            TypeVarVariance::Invariant => ArgVariance::Invariant,
+            TypeVarVariance::Covariant => ArgVariance::Covariant,
+            TypeVarVariance::Contravariant => ArgVariance::Contravariant,
+            TypeVarVariance::Bivariant => ArgVariance::Bivariant,
+        })
+        .collect()
+}
+
+/// Match the value's specialization against the target's, position by
+/// position, collecting a runtime token comparison for each reified type
+/// variable found on the value side. `Err(())` means the two do not unify to
+/// a set of token comparisons (the caller then resolves the test statically).
+fn unify_specializations<'db>(
+    db: &'db dyn Db,
+    origin: ClassLiteral<'db>,
+    value_spec: Specialization<'db>,
+    target_spec: Specialization<'db>,
+    target_args_ast: Option<&[&ast::Expr]>,
+    tokens: &mut Vec<(Name, TextRange)>,
+) -> Result<(), ()> {
+    if origin.is_known(db, KnownClass::Tuple) {
+        return match (value_spec.tuple(db), target_spec.tuple(db)) {
+            (Some(Tuple::Fixed(value)), Some(Tuple::Fixed(target)))
+                if value.elements_slice().len() == target.elements_slice().len() =>
+            {
+                for (index, (s, t)) in value
+                    .elements_slice()
+                    .iter()
+                    .zip(target.elements_slice())
+                    .enumerate()
+                {
+                    unify_argument(
+                        db,
+                        *s,
+                        *t,
+                        target_args_ast.and_then(|args| args.get(index).copied()),
+                        tokens,
+                    )?;
+                }
+                Ok(())
+            }
+            _ => Err(()),
+        };
+    }
+    let value_types = value_spec.types(db);
+    let target_types = target_spec.types(db);
+    if value_types.len() != target_types.len() {
+        return Err(());
+    }
+    for (index, (s, t)) in value_types.iter().zip(target_types).enumerate() {
+        unify_argument(
+            db,
+            *s,
+            *t,
+            target_args_ast.and_then(|args| args.get(index).copied()),
+            tokens,
+        )?;
+    }
+    Ok(())
+}
+
+fn unify_argument<'db>(
+    db: &'db dyn Db,
+    value: Type<'db>,
+    target: Type<'db>,
+    target_ast: Option<&ast::Expr>,
+    tokens: &mut Vec<(Name, TextRange)>,
+) -> Result<(), ()> {
+    if value == target || value.is_equivalent_to(db, target) {
+        return Ok(());
+    }
+    if let Type::TypeVar(bound_typevar) = value {
+        if !is_reified_function_typevar(db, bound_typevar) {
+            return Err(());
+        }
+        // a pep 696 default can leave a target position with no source
+        // expression to compare against
+        let target_ast = target_ast.ok_or(())?;
+        tokens.push((bound_typevar.name(db).clone(), target_ast.range()));
+        return Ok(());
+    }
+    // both sides specializations of the same class: recurse structurally
+    // (`list[T]` vs the `list[int]` written in the rhs)
+    if let (Type::NominalInstance(value_instance), Type::NominalInstance(target_instance)) =
+        (value, target)
+        && let (ClassType::Generic(value_alias), ClassType::Generic(target_alias)) =
+            (value_instance.class(db), target_instance.class(db))
+        && value_alias.origin(db) == target_alias.origin(db)
+    {
+        let nested_ast: Option<Vec<&ast::Expr>> =
+            if let Some(ast::Expr::Subscript(subscript)) = target_ast {
+                Some(match subscript.slice.as_ref() {
+                    ast::Expr::Tuple(tuple) => tuple.elts.iter().collect(),
+                    single => vec![single],
+                })
+            } else {
+                None
+            };
+        return unify_specializations(
+            db,
+            ClassLiteral::Static(value_alias.origin(db)),
+            value_alias.specialization(db),
+            target_alias.specialization(db),
+            nested_ast.as_deref(),
+            tokens,
+        );
+    }
+    Err(())
+}
+
+/// whether this type variable has a runtime cell to compare against — a
+/// plain type parameter of a function that reifies it
+fn is_reified_function_typevar<'db>(
+    db: &'db dyn Db,
+    bound_typevar: crate::types::typevar::BoundTypeVarInstance<'db>,
+) -> bool {
+    let crate::types::typevar::BindingContext::Definition(definition) =
+        bound_typevar.binding_context(db)
+    else {
+        return false;
+    };
+    let def_file = definition.file(db);
+    let module = parsed_module(db, def_file).load(db);
+    let ty_python_core::definition::DefinitionKind::Function(function) = definition.kind(db) else {
+        return false;
+    };
+    let node = function.node(&module);
+    let source = ruff_db::source::source_text(db, def_file);
+    crate::reified::reified_type_param_names(source.as_str(), node)
+        .iter()
+        .any(|name| name == bound_typevar.name(db))
 }
 
 /// why an override's reified type-parameter list is incompatible with the

@@ -132,6 +132,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
     registry.register_lint(&REIFIED_CLASSMETHOD);
+    registry.register_lint(&ERASED_TYPE_CHECK);
     registry.register_lint(&OVERRIDE_OF_FINAL_METHOD);
     registry.register_lint(&OVERRIDE_OF_FINAL_VARIABLE);
     registry.register_lint(&INEFFECTIVE_FINAL);
@@ -989,6 +990,45 @@ declare_lint! {
     /// ```
     pub(crate) static REIFIED_CLASSMETHOD = {
         summary: "detects classmethods with reified type parameters",
+        status: LintStatus::stable("0.0.1-alpha.3"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for parametric type tests (`x is list[int]`) against a builtin
+    /// collection whose instances erase their type arguments at runtime.
+    ///
+    /// ## Why is this bad?
+    /// A parametric `is` test is answered from static types wherever possible
+    /// (Rust-style). When it cannot be — the value's type is dynamic or
+    /// erased — the last resort is a runtime probe of the value's
+    /// `__orig_class__`. A builtin `list` / `dict` / `set` / `tuple` built at
+    /// runtime carries no such attribute, so the probe can never succeed: the
+    /// test is always `False`, whatever the value actually is.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def f(x):
+    ///     return x is list[int]  # error: builtin collections erase type arguments
+    /// ```
+    ///
+    /// Reify the type parameter (so the test compares the reified cell), or
+    /// test against a user-defined generic (whose instances carry
+    /// `__orig_class__`):
+    ///
+    /// ```by
+    /// def f[T](x: T):
+    ///     return x is list[int]  # ok — compares the reified `T`
+    ///
+    /// class A[T]: ...
+    /// def g(x):
+    ///     return x is A[int]     # ok — probes `x.__orig_class__`
+    /// ```
+    pub(crate) static ERASED_TYPE_CHECK = {
+        summary: "detects parametric type tests against a runtime-erased builtin",
         status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
     }

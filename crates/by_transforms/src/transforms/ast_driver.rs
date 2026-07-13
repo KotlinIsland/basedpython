@@ -38,7 +38,7 @@ use super::{
     decl_site_variance, decorator_keyword, dedent_string, dynamic_keyword, empty_declarations,
     float_const, force_unwrap, generic_call, generics, identity_swap, implicit_typing, init_method,
     just_float, kw_subscript, literal_types, main_function, modifiers, mutable_defaults,
-    none_chain, optional_type, overload, postfix_await, propagate, reified_generic,
+    none_chain, optional_type, overload, parametric_is, postfix_await, propagate, reified_generic,
     repeated_underscore, sentinel, some_ctor, soundness, string_tag, super_keyword,
     symbolic_type_op, top_star, tuple_index, type_is, type_reification, typed_dict_literal,
     typed_lambda, typeof_keyword, unpack, use_site_variance,
@@ -464,6 +464,7 @@ pub(crate) fn run_against_source<'a>(
         reified_generic::ReifiedGenericPass::new(source_ref, config.min_version);
     let type_reification_pass =
         type_reification::TypeReificationPass::new(config.min_version, config.is_stub);
+    let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref);
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
     let tuple_types_pass = annotation::TupleLiteralTypePass::new(source_ref);
     let literal_types_pass = literal_types::LiteralTypePass::new(source_ref);
@@ -554,6 +555,11 @@ pub(crate) fn run_against_source<'a>(
         // from the two passes above — they handle *function* callees, this one
         // class callees and displays
         &type_reification_pass,
+        // parametric type tests (`x is list[int]`): identity_swap leaves
+        // keyword-form `is` pairs with a subscripted rhs for this pass, which
+        // resolves them rust-style from static types (fold / reified-cell
+        // token equality / witness probe / unchecked runtime probe)
+        &parametric_is_pass,
         &implicit_typing_pass,
         &tuple_types_pass,
         &literal_types_pass,

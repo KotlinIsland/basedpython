@@ -448,7 +448,8 @@ impl<'db> OverloadLiteral<'db> {
         }
         let module = parsed_module(db, file).load(db);
         let node = self.body_scope(db).node(db).expect_function().node(&module);
-        crate::reified::reified_type_param_names(node).into_boxed_slice()
+        let source = source_text(db, file);
+        crate::reified::reified_type_param_names(source.as_str(), node).into_boxed_slice()
     }
 
     /// basedpython: reified type parameters with no pep 696 default — these

@@ -1021,3 +1021,254 @@ print(sorted(s))
         "__main__.A[int] 1\n[1, 2]\n{'k': 1}\n(1, 'x')\n[3]"
     );
 }
+
+#[test]
+fn parametric_is_folds_and_lowers() {
+    // a concrete value folds statically; a dynamic value against a builtin
+    // erases to `False`, but against a user generic probes `__orig_class__`
+    let out = transpile_at_313(
+        "\
+class A[T]:
+    def __init__(self, t: T): ...
+
+xs = [1, 2]
+a = xs is list[int]
+b = xs is list[str]
+
+def f(x) -> bool:
+    return x is list[int]
+
+def p(x) -> bool:
+    return x is A[int]
+",
+    );
+    assert!(
+        out.contains("a = True"),
+        "concrete match folds true:\n{out}"
+    );
+    assert!(
+        out.contains("b = False"),
+        "concrete mismatch folds false:\n{out}"
+    );
+    assert!(
+        out.contains("return False"),
+        "dynamic value against an erased builtin folds false:\n{out}"
+    );
+    assert!(
+        out.contains("return _parametric_is(x, A[int], ("),
+        "dynamic value against a user generic probes __orig_class__:\n{out}"
+    );
+}
+
+#[test]
+fn parametric_is_erased_builtin_is_a_check_error() {
+    // the acceptance case: `a is list[bool]` on an `object` can never be true
+    // (builtins erase their type arguments), so `by run` refuses to execute;
+    // `a is A[bool]` against a user generic is fine
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+class A[T]:
+    def __init__(self, t: T): ...
+
+def x(a: object):
+    print(a is list[bool])
+    print(a is A[bool])
+
+x(A(True))
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(!output.status.success(), "expected non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("erased-type-check"),
+        "stderr should carry the erased-type-check error:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("A[bool]"),
+        "the user-generic test must not be diagnosed:\n{stderr}"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn parametric_is_observable_at_runtime() {
+    // a user-generic probe reads `__orig_class__` (stamped by `A[int](…)`); a
+    // reified type parameter carries the exact specialization even against a
+    // builtin target; a user-generic union is discriminated per arm by the
+    // probe (an invariant field keeps the union from collapsing)
+    let Some(python) = ["python3.13"].into_iter().find(|p| {
+        Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }) else {
+        eprintln!("skipping: no python 3.13 interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+class A[T]:
+    def __init__(self, t: T):
+        self.v: list[T] = [t]
+
+def probe(a: object) -> bool:
+    return a is A[int]
+
+print(probe(A(1)))
+print(probe(A(\"x\")))
+print(probe([1]))
+
+def g[T](x: T) -> bool:
+    return x is list[int]
+
+print(g([1, 2]))
+print(g(\"x\"))
+
+def h(items: A[int] | A[str]) -> bool:
+    return items is A[int]
+
+print(h(A(1)))
+print(h(A(\"x\")))
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "True\nFalse\nFalse\nTrue\nFalse\nTrue\nFalse"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn parametric_is_respects_variance_at_runtime() {
+    // `a is C[args]` means `type(a) <: C[args]`, so the runtime probe follows
+    // the target's variance: a covariant `A[int]` is an `A[object]`, an
+    // invariant one is not, and a contravariant `A[object]` is an `A[int]`
+    let Some(python) = ["python3.13"].into_iter().find(|p| {
+        Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }) else {
+        eprintln!("skipping: no python 3.13 interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+class Co[out T]:
+    def __init__(self): ...
+
+class Inv[T]:
+    def __init__(self):
+        self.v: list[T] = []
+
+class Con[in T]:
+    def __init__(self): ...
+
+def co(a: object):
+    print(a is Co[object], a is Co[str])
+
+def inv(a: object):
+    print(a is Inv[object])
+
+def con(a: object):
+    print(a is Con[int])
+
+co(Co[int]())
+inv(Inv[int]())
+con(Con[object]())
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        // covariant Co[int] is Co[object] but not Co[str]; invariant Inv[int]
+        // is not Inv[object]; contravariant Con[object] is Con[int]
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "True False\nFalse\nTrue"
+    );
+}
+
+#[test]
+fn parametric_is_empty_builtin_union_does_not_lie() {
+    // regression: an empty `list[int]` passed as `list[int] | list[str]` used
+    // to witness the (absent) first element and answer `False`. the test is
+    // now a check error instead of a silently-wrong result
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def x(a: list[int] | list[str]):
+    print(a is list[int])
+
+a: list[int] = []
+x(a)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(!output.status.success(), "expected non-zero exit");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stderr.contains("erased-type-check"),
+        "the undecidable builtin union must be an error:\n{stderr}"
+    );
+    assert!(
+        !stdout.contains("False"),
+        "it must not print a wrong answer:\nstdout: {stdout}"
+    );
+}

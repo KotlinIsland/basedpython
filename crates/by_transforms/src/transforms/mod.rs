@@ -32,6 +32,7 @@ pub(crate) mod none_chain;
 pub(crate) mod not_type;
 pub(crate) mod optional_type;
 pub(crate) mod overload;
+pub(crate) mod parametric_is;
 pub(crate) mod postfix_await;
 pub(crate) mod propagate;
 pub(crate) mod reified_generic;
