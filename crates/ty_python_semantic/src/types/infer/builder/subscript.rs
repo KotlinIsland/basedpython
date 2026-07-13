@@ -118,6 +118,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     pub(super) fn infer_subscript_expression(
         &mut self,
         subscript: &ast::ExprSubscript,
+        tcx: TypeContext<'db>,
     ) -> Type<'db> {
         let ast::ExprSubscript {
             value,
@@ -143,12 +144,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         match ctx {
-            ExprContext::Load => self.infer_subscript_load(subscript),
+            ExprContext::Load => self.infer_subscript_load(subscript, tcx),
             ExprContext::Store => {
                 let value_ty = self.infer_expression(value, TypeContext::default());
                 self.store_typed_dict_key_expected_type(slice, value_ty);
                 let slice_ty = self.infer_expression(slice, TypeContext::default());
-                self.infer_subscript_expression_types(subscript, value_ty, slice_ty, *ctx);
+                self.infer_subscript_expression_types(
+                    subscript,
+                    value_ty,
+                    slice_ty,
+                    *ctx,
+                    TypeContext::default(),
+                );
                 Type::Never
             }
             ExprContext::Del => {
@@ -161,13 +168,23 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             ExprContext::Invalid => {
                 let value_ty = self.infer_expression(value, TypeContext::default());
                 let slice_ty = self.infer_expression(slice, TypeContext::default());
-                self.infer_subscript_expression_types(subscript, value_ty, slice_ty, *ctx);
+                self.infer_subscript_expression_types(
+                    subscript,
+                    value_ty,
+                    slice_ty,
+                    *ctx,
+                    TypeContext::default(),
+                );
                 Type::unknown()
             }
         }
     }
 
-    pub(super) fn infer_subscript_load(&mut self, subscript: &ast::ExprSubscript) -> Type<'db> {
+    pub(super) fn infer_subscript_load(
+        &mut self,
+        subscript: &ast::ExprSubscript,
+        tcx: TypeContext<'db>,
+    ) -> Type<'db> {
         let value_ty = self.infer_expression(&subscript.value, TypeContext::default());
 
         // If we have an implicit type alias like `MyList = list[T]`, and if `MyList` is being
@@ -177,13 +194,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return self.infer_explicit_type_alias_specialization(subscript, value_ty, false);
         }
 
-        self.infer_subscript_load_impl(value_ty, subscript)
+        self.infer_subscript_load_impl(value_ty, subscript, tcx)
     }
 
     pub(super) fn infer_subscript_load_impl(
         &mut self,
         value_ty: Type<'db>,
         subscript: &ast::ExprSubscript,
+        tcx: TypeContext<'db>,
     ) -> Type<'db> {
         let db = self.db();
 
@@ -230,7 +248,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     // Even if we can obtain the subscript type based on the assignments, we still perform default type inference
                     // (to store the expression type and to report errors).
                     let slice_ty = self.infer_expression(slice, TypeContext::default());
-                    self.infer_subscript_expression_types(subscript, value_ty, slice_ty, *ctx);
+                    self.infer_subscript_expression_types(
+                        subscript,
+                        value_ty,
+                        slice_ty,
+                        *ctx,
+                        TypeContext::default(),
+                    );
                     return ty;
                 }
             }
@@ -490,7 +514,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         let slice_ty = self.infer_expression(slice, TypeContext::default());
-        let result_ty = self.infer_subscript_expression_types(subscript, value_ty, slice_ty, *ctx);
+        let result_ty =
+            self.infer_subscript_expression_types(subscript, value_ty, slice_ty, *ctx, tcx);
         self.narrow_expr_with_applicable_constraints(subscript, result_ty, &constraint_keys)
     }
 
@@ -1378,6 +1403,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         value_ty: Type<'db>,
         slice_ty: Type<'db>,
         expr_context: ExprContext,
+        tcx: TypeContext<'db>,
     ) -> Type<'db> {
         let db = self.db();
 
@@ -1414,7 +1440,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let generic_context = GenericContext::from_typevar_instances(db, variables);
                 Ok(Type::Dynamic(DynamicType::UnknownGeneric(generic_context)))
             }
-            _ => value_ty.subscript(db, slice_ty, expr_context),
+            _ => value_ty.subscript(db, slice_ty, expr_context, tcx),
         };
 
         subscript_result.unwrap_or_else(|e| {

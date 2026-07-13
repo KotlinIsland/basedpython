@@ -161,9 +161,10 @@ class X:
 # error: [unsupported-operator] "Operator `+` is not supported between objects of type `X` and `list[int | str]`"
 x: list[int | str] = X() + [1]
 
-# TODO: We also don't yet support generic function calls like this.
-# error: [invalid-assignment] "Object of type `list[int]` is not assignable to `list[int | str]`"
+# A `Never`-defaulted output parameter on `list.__mul__` lets the result widen to the target type
+# (see `generics/output_widening.md`).
 x: list[int | str] = list1(42) * 3
+reveal_type(x)  # revealed: list[int | str]
 ```
 
 `typed_dict.py`:

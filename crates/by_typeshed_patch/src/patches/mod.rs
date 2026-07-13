@@ -2,3 +2,4 @@
 //! each in `all_patches()` in the crate root
 
 pub mod mapping;
+pub mod output_widening;

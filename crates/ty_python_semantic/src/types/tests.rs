@@ -196,7 +196,12 @@ fn divergent_type() {
     assert!(top_div.try_upcast_to_callable(&db).is_none());
     assert!(
         top_div
-            .subscript(&db, Type::int_literal(0), ast::ExprContext::Load)
+            .subscript(
+                &db,
+                Type::int_literal(0),
+                ast::ExprContext::Load,
+                TypeContext::default()
+            )
             .is_err()
     );
     assert_eq!(top_div.recursive_type_normalized_impl(&db, div, true), None);

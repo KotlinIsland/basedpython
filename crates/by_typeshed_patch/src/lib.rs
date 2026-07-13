@@ -42,11 +42,37 @@ pub struct Edit {
     pub replacement: String,
 }
 
-/// registry of every patch the sync pipeline must apply, in declared order
+/// registry of every legacy-form patch the sync pipeline must apply, in
+/// declared order. these run before the pep 695 conversion and see the legacy
+/// `TypeVar` + `Generic[...]` form
 pub fn all_patches() -> Vec<Box<dyn Patch>> {
     // patches are added here as upstream syncs surface concrete drift. each
     // entry must have a corresponding module in `src/patches/` with tests
     vec![Box::new(patches::mapping::MappingKeyCovariance)]
+}
+
+/// registry of patches that run *after* the pep 695 conversion, over the final
+/// form with explicit variance keywords. a patch belongs here when it needs the
+/// resolved variance (`in out` vs `out`) that only the converted form exposes
+pub fn all_post_patches() -> Vec<Box<dyn Patch>> {
+    vec![Box::new(patches::output_widening::OutputWidening)]
+}
+
+/// dotted module name for a typeshed file path relative to `stdlib/`, e.g.
+/// `typing.byi` -> `typing`, `os/path.byi` -> `os.path`,
+/// `asyncio/__init__.byi` -> `asyncio`
+pub(crate) fn module_qualname(path: &Path) -> Option<String> {
+    let stem = path.file_stem()?.to_str()?;
+    let mut parts: Vec<&str> = path
+        .parent()
+        .into_iter()
+        .flat_map(Path::components)
+        .filter_map(|component| component.as_os_str().to_str())
+        .collect();
+    if stem != "__init__" {
+        parts.push(stem);
+    }
+    Some(parts.join("."))
 }
 
 /// apply `edits` to `source`, returning the new text. edits must be disjoint;

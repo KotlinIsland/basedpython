@@ -560,6 +560,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                 left_ty,
                                 right_ty,
                                 op,
+                                TypeContext::default(),
                             ) {
                                 return result;
                             }

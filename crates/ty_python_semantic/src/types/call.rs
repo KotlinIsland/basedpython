@@ -97,19 +97,46 @@ impl<'db> Type<'db> {
         op: ast::Operator,
         right_ty: Type<'db>,
     ) -> Option<Type<'db>> {
-        #[salsa::tracked(cycle_initial=|_, _, _, _, _| None, heap_size=ruff_memory_usage::heap_size)]
+        Self::try_call_bin_op_return_type_with_tcx(
+            db,
+            left_ty,
+            op,
+            right_ty,
+            TypeContext::default(),
+        )
+    }
+
+    /// Like [`Self::try_call_bin_op_return_type`], but forwards the outer type context (the
+    /// expected type of the whole expression) into the dunder call, so that a `Never`-defaulted
+    /// output parameter can widen to the assignment target — e.g. `x: list[int | None] = a + a`.
+    pub(crate) fn try_call_bin_op_return_type_with_tcx(
+        db: &'db dyn Db,
+        left_ty: Type<'db>,
+        op: ast::Operator,
+        right_ty: Type<'db>,
+        tcx: TypeContext<'db>,
+    ) -> Option<Type<'db>> {
+        #[salsa::tracked(cycle_initial=|_, _, _, _, _, _| None, heap_size=ruff_memory_usage::heap_size)]
         fn try_call_bin_op_return_type_impl<'db>(
             db: &'db dyn Db,
             left_ty: Type<'db>,
             op: ast::Operator,
             right_ty: Type<'db>,
+            tcx: TypeContext<'db>,
         ) -> Option<Type<'db>> {
-            Type::try_call_bin_op(db, left_ty, op, right_ty)
-                .ok()
-                .map(|bindings| bindings.return_type(db))
+            Type::try_call_bin_op_with_policy(
+                db,
+                left_ty,
+                op,
+                right_ty,
+                tcx,
+                MemberLookupPolicy::default(),
+            )
+            .ok()
+            .map(|bindings| bindings.return_type(db))
         }
 
-        try_call_bin_op_return_type_impl(db, left_ty, op, right_ty)
+        try_call_bin_op_return_type_impl(db, left_ty, op, right_ty, tcx)
     }
 
     pub(crate) fn try_call_bin_op(
@@ -118,7 +145,14 @@ impl<'db> Type<'db> {
         op: ast::Operator,
         right_ty: Type<'db>,
     ) -> Result<Bindings<'db>, CallBinOpError> {
-        Self::try_call_bin_op_with_policy(db, left_ty, op, right_ty, MemberLookupPolicy::default())
+        Self::try_call_bin_op_with_policy(
+            db,
+            left_ty,
+            op,
+            right_ty,
+            TypeContext::default(),
+            MemberLookupPolicy::default(),
+        )
     }
 
     pub(crate) fn try_call_bin_op_with_policy(
@@ -126,6 +160,7 @@ impl<'db> Type<'db> {
         left_ty: Type<'db>,
         op: ast::Operator,
         right_ty: Type<'db>,
+        tcx: TypeContext<'db>,
         policy: MemberLookupPolicy,
     ) -> Result<Bindings<'db>, CallBinOpError> {
         // We either want to call lhs.__op__ or rhs.__rop__. The full decision tree from
@@ -158,7 +193,7 @@ impl<'db> Type<'db> {
                     db,
                     reflected_dunder,
                     &mut CallArguments::positional([left_ty]),
-                    TypeContext::default(),
+                    tcx,
                     policy,
                 );
 
@@ -168,7 +203,7 @@ impl<'db> Type<'db> {
                             db,
                             op.dunder(),
                             &mut CallArguments::positional([right_ty]),
-                            TypeContext::default(),
+                            tcx,
                             policy,
                         )
                     })?);
@@ -178,7 +213,7 @@ impl<'db> Type<'db> {
                     db,
                     op.dunder(),
                     &mut CallArguments::positional([right_ty]),
-                    TypeContext::default(),
+                    tcx,
                     policy,
                 );
 
@@ -204,7 +239,7 @@ impl<'db> Type<'db> {
             db,
             op.dunder(),
             &mut CallArguments::positional([right_ty]),
-            TypeContext::default(),
+            tcx,
             policy,
         );
 
@@ -216,7 +251,7 @@ impl<'db> Type<'db> {
                     db,
                     op.reflected_dunder(),
                     &mut CallArguments::positional([left_ty]),
-                    TypeContext::default(),
+                    tcx,
                     policy,
                 )?)
             }

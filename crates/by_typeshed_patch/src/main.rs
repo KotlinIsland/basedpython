@@ -1,17 +1,18 @@
 //! binary entry: walks the basedpython typeshed and rewrites each `.byi`
 //! stub. invoked by `scripts/sync_typeshed_by.sh` after reverse-transpile
 //!
-//! each file is rewritten in two passes:
+//! each file is rewritten in three passes:
 //!
 //! 1. the registered semantic [`Patch`]es (e.g. mapping key covariance), which
 //!    operate on the legacy `TypeVar` + `Generic[...]` form
 //! 1. the pep 695 conversion ([`by_typeshed_patch::pep695`]), which turns
 //!    legacy generic classes into pep 695 headers with explicit variance and
 //!    nice names
+//! 1. the post-conversion [`Patch`]es (e.g. output widening), which need the
+//!    explicit variance keywords the conversion emits
 //!
-//! the passes run sequentially with a re-parse in between: a patch may rewrite
-//! a typevar reference (covariance) that the conversion then renames, so the
-//! conversion must see the patched source
+//! the passes run sequentially with a re-parse between each: a pass may rewrite
+//! a reference the next pass depends on, so each must see the prior output
 //!
 //! usage:
 //!   `by_typeshed_patch` `<typeshed-stdlib-dir>`
@@ -27,7 +28,7 @@ use ruff_python_ast::PySourceType;
 use ruff_python_parser::parse_unchecked_source;
 use walkdir::WalkDir;
 
-use by_typeshed_patch::{Patch, all_patches, apply_edits, pep695};
+use by_typeshed_patch::{Patch, all_patches, all_post_patches, apply_edits, pep695};
 
 fn main() -> ExitCode {
     match run() {
@@ -50,7 +51,8 @@ fn run() -> Result<()> {
     }
 
     let patches = all_patches();
-    if patches.is_empty() {
+    let post_patches = all_post_patches();
+    if patches.is_empty() && post_patches.is_empty() {
         eprintln!("no patches registered; nothing to do");
         return Ok(());
     }
@@ -64,7 +66,7 @@ fn run() -> Result<()> {
         }
         visited += 1;
         let rel = path.strip_prefix(&root).unwrap_or(path);
-        if apply_patches_to_file(path, rel, &patches)
+        if apply_patches_to_file(path, rel, &patches, &post_patches)
             .with_context(|| format!("applying patches to {}", path.display()))?
         {
             patched += 1;
@@ -74,7 +76,12 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn apply_patches_to_file(path: &Path, rel: &Path, patches: &[Box<dyn Patch>]) -> Result<bool> {
+fn apply_patches_to_file(
+    path: &Path,
+    rel: &Path,
+    patches: &[Box<dyn Patch>],
+    post_patches: &[Box<dyn Patch>],
+) -> Result<bool> {
     let original = fs::read_to_string(path).with_context(|| format!("{}", path.display()))?;
 
     // pass 1: registered semantic patches over the legacy form
@@ -98,10 +105,23 @@ fn apply_patches_to_file(path: &Path, rel: &Path, patches: &[Box<dyn Patch>]) ->
     // any typevar references the patches rewrote)
     let reparsed = parse_unchecked_source(&patched, PySourceType::BasedPythonStub);
     let conversion = pep695::convert_module(&reparsed, &patched);
-    let final_source = if conversion.is_empty() {
+    let converted = if conversion.is_empty() {
         patched
     } else {
         apply_edits(&patched, conversion)
+    };
+
+    // pass 3: post-conversion patches over the final pep 695 form (re-parsed so
+    // they see the explicit variance keywords the conversion emitted)
+    let reparsed = parse_unchecked_source(&converted, PySourceType::BasedPythonStub);
+    let mut post_edits = Vec::new();
+    for patch in post_patches {
+        post_edits.extend(patch.rewrite(rel, &reparsed, &converted));
+    }
+    let final_source = if post_edits.is_empty() {
+        converted
+    } else {
+        apply_edits(&converted, post_edits)
     };
 
     if final_source == original {
