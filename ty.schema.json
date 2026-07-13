@@ -507,6 +507,16 @@
             }
           ]
         },
+        "erased-type-check": {
+          "title": "detects parametric type tests against a runtime-erased builtin",
+          "description": "## What it does\nChecks for parametric type tests (`x is list[int]`) against a builtin\ncollection whose instances erase their type arguments at runtime.\n\n## Why is this bad?\nA parametric `is` test is answered from static types wherever possible\n(Rust-style). When it cannot be — the value's type is dynamic or\nerased — the last resort is a runtime probe of the value's\n`__orig_class__`. A builtin `list` / `dict` / `set` / `tuple` built at\nruntime carries no such attribute, so the probe can never succeed: the\ntest is always `False`, whatever the value actually is.\n\n## Example\n\n```by\ndef f(x):\n    return x is list[int]  # error: builtin collections erase type arguments\n```\n\nReify the type parameter (so the test compares the reified cell), or\ntest against a user-defined generic (whose instances carry\n`__orig_class__`):\n\n```by\ndef f[T](x: T):\n    return x is list[int]  # ok — compares the reified `T`\n\nclass A[T]: ...\ndef g(x):\n    return x is A[int]     # ok — probes `x.__orig_class__`\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "escape-character-in-forward-annotation": {
           "title": "detects forward type annotations with escape characters",
           "description": "## What it does\n\nChecks for forward annotations that contain escape characters.\n\n## Why is this bad?\n\nStatic analysis tools like ty can't analyze type annotations that contain escape characters.\n\n## Example\n\n```python\ndef foo() -> \"intt\\b\": ...  # error\n```",
@@ -1431,16 +1441,6 @@
           "title": "detects type variables used outside of their bound scope",
           "description": "## What it does\n\nChecks for type variables that are used in a scope where they are not bound\nto any enclosing generic context.\n\n## Why is this bad?\n\nUsing a type variable outside of a scope that binds it has no well-defined meaning.\n\n## Examples\n\n```python\nfrom typing import TypeVar, Generic\n\nT = TypeVar(\"T\")\nS = TypeVar(\"S\")\n\n# unbound type variable in module scope\nx: T  # error\n\n\nclass C(Generic[T]):\n    # S is not in this class's generic context\n    x: list[S] = []  # error\n```\n\n## References\n\n- [Typing spec: Scoping rules for type variables](https://typing.python.org/en/latest/spec/generics.html#scoping-rules-for-type-variables)",
           "default": "error",
-          "oneOf": [
-            {
-              "$ref": "#/definitions/Level"
-            }
-          ]
-        },
-        "unchecked-type-check": {
-          "title": "detects parametric type tests that cannot be verified",
-          "description": "## What it does\nChecks for parametric type tests (`x is list[int]`) that cannot be\nverified — neither statically from the value's type, nor at runtime\nthrough a reified type parameter or a witness element.\n\n## Why is this bad?\nA parametric `is` test is answered from static types wherever\npossible (Rust-style). When the value's static type is unknown or an\nerased type parameter, no verified answer exists: at runtime the test\nfalls back to the value's `__orig_class__` and answers `False` for\nvalues that don't carry one — which includes every builtin\ncollection.\n\n## Example\n\n```by\ndef f(x):\n    return x is list[int]  # warning: unchecked type-check\n```\n\nAnnotate the value, or reify the type parameter:\n\n```by\ndef f[T](x: T):\n    return x is list[int]  # ok — compares the reified `T`\n```",
-          "default": "warn",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"

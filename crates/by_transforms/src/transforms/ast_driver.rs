@@ -464,7 +464,7 @@ pub(crate) fn run_against_source<'a>(
         reified_generic::ReifiedGenericPass::new(source_ref, config.min_version);
     let type_reification_pass =
         type_reification::TypeReificationPass::new(config.min_version, config.is_stub);
-    let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref, config.min_version);
+    let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref);
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
     let tuple_types_pass = annotation::TupleLiteralTypePass::new(source_ref);
     let literal_types_pass = literal_types::LiteralTypePass::new(source_ref);
