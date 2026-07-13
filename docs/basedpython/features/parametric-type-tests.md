@@ -3,22 +3,27 @@
 basedpython's `is` keyword is an instance test (`x is int` lowers to
 `isinstance(x, int)`). when the right-hand side is a *parameterized* generic
 — `x is list[int]` — plain `isinstance` cannot answer it: `isinstance(x, list[int])` is a runtime `TypeError`, and the builtins erase their type
-arguments anyway. basedpython resolves the test rust-style, from static types
+arguments anyway. `x is C[args]` means `type(x) <: C[args]`, so it follows
+`C`'s declared variance. basedpython resolves it rust-style, from static types
 at compile time, keeping a runtime residue only where one is needed:
 
 ```by
-xs: list[object] = [1, 2, 3]
-xs is list[int]   # False — a list[object] is never a list[int]
+class Box[out T]:
+    def __init__(self): ...
+
+b: Box[int] = Box[int]()
+b is Box[object]   # True — Box is covariant, and int <: object
 ```
 
 ## how a test resolves
 
 the value's static type decides the strategy:
 
-- **fully known → folded**. the test becomes a constant. arguments are
-    invariant and exact, so `list[object]` is never `list[int]`. a value whose
-    static type is disjoint from the target (`str is list[int]`) also folds to
-    `False`. side effects in the tested expression are preserved
+- **statically provable → folded**. when `type(x)` is a subtype of `C[args]`
+    the test folds to `True`; when the two are disjoint, to `False`. this uses
+    ty's own subtyping, so it respects variance automatically — a covariant
+    `Box[int]` is a `Box[object]`, an invariant `list[object]` is not a
+    `list[int]`. side effects in the tested expression are preserved
 - **reified type parameter → token equality**. a value typed by a reified
     type parameter carries the specialization in that parameter's runtime cell,
     so the test compares cells: `x: T` against `C[args]` lowers to
@@ -26,18 +31,17 @@ the value's static type decides the strategy:
     `T == int`. the parameter is [reified](reified-generics.md) for this. this
     works against a builtin target too — the cell holds the alias, nothing is
     erased
-- **disjoint union → witness**. a union of same-origin specializations whose
-    arguments are pairwise disjoint is discriminated by a single witness
-    element: `x: list[int] | list[str]` against `list[int]` probes the first
-    element's type. an empty collection has no witness and answers `False`
 - **undecidable, user-generic target → `__orig_class__` probe**. when none of
     the above apply, the last resort reads the value's `__orig_class__` — which
-    `A[int](…)` [stamps](type-reification.md) on user generics. a legitimate
-    runtime test; answers `False` for values that carry none
+    `A[int](…)` [stamps](type-reification.md) on user generics — and matches
+    each type argument by the target's variance. it discriminates a union
+    soundly (`x: A[int] | A[str]` against `A[int]`); answers `False` for values
+    that carry no `__orig_class__`
 - **undecidable, builtin target → error**. a runtime `list` / `dict` / `set`
-    / `tuple` carries no record of its type arguments, so the probe can never
-    succeed — the test can never be true. this is an
-    [`erased-type-check`](#the-erased-type-check-error) error
+    / `tuple` carries no record of its type arguments, so it cannot be checked
+    at runtime. this is an [`erased-type-check`](#the-erased-type-check-error)
+    error — there is deliberately no "check the first element" heuristic, since
+    an empty collection has no element and a builtin's element type is erased
 
 so of the two undecidable cases, only the *target* distinguishes them:
 
@@ -52,15 +56,20 @@ def f(a: object):
 ## narrowing
 
 the positive branch narrows to the tested specialization. the negative
-branch does not narrow — an unreified or empty value answers `False` even
-when its static type matches, so the test does not prove the negation:
+branch does not narrow — a value that carries no `__orig_class__` answers
+`False` even when its static type matches, so the test does not prove the
+negation:
 
 ```by
-def f(x: list[int] | list[str]):
-    if x is list[int]:
-        reveal_type(x)  # list[int]
+class A[T]:
+    def __init__(self, t: T):
+        self.v: list[T] = [t]
+
+def f(x: A[int] | A[str]):
+    if x is A[int]:
+        reveal_type(x)  # A[int]
     else:
-        reveal_type(x)  # list[int] | list[str]
+        reveal_type(x)  # A[int] | A[str]
 ```
 
 ## the erased-type-check error

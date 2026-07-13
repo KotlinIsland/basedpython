@@ -29,11 +29,45 @@ def g[T](x: list[T]) -> bool:
     return x is list[int]
 ```
 
-## unions of disjoint specializations are verified by witness
+## a builtin union cannot be discriminated at runtime
+
+There is no sound runtime way to tell a `list[int]` from a `list[str]`: an empty list has no element
+to inspect, and a builtin's element type is erased. So a builtin union is an error, not a guess.
 
 ```by
 def f(x: list[int] | list[str]) -> bool:
-    return x is list[int]
+    return x is list[int]  # error: [erased-type-check]
+```
+
+## variance is respected
+
+`a is C[args]` means `type(a) <: C[args]`, so it follows `C`'s declared variance. With a covariant
+`out T`, `A[int]` is an `A[object]` (because `int <: object`), and a statically-`A[int]` value folds
+the test to `True`.
+
+```by
+class A[out T]:
+    def __init__(self): ...
+
+def f(a: A[int]) -> bool:
+    return a is A[object]
+
+def g(a: A[object]) -> bool:
+    return a is A[int]
+```
+
+## a user-generic union is discriminated by the probe
+
+`A`'s instances carry `__orig_class__`, so each arm is distinguishable at runtime (an invariant
+field keeps ty from collapsing the union).
+
+```by
+class A[T]:
+    def __init__(self, t: T):
+        self.v: list[T] = [t]
+
+def f(x: A[int] | A[str]) -> bool:
+    return x is A[int]
 ```
 
 ## a builtin target on a dynamic value is an error
@@ -83,14 +117,19 @@ def g(x: object) -> bool:
 ## positive narrowing
 
 The positive branch narrows to the tested specialization. The negative branch does not narrow: an
-unreified or empty value answers `False` even when its static type matches.
+unreified value answers `False` even when its static type matches, so the test does not prove the
+negation.
 
 ```by
-def f(x: list[int] | list[str]):
-    if x is list[int]:
-        reveal_type(x)  # revealed: list[int]
+class A[T]:
+    def __init__(self, t: T):
+        self.v: list[T] = [t]
+
+def f(x: A[int] | A[str]):
+    if x is A[int]:
+        reveal_type(x)  # revealed: A[int]
     else:
-        reveal_type(x)  # revealed: list[int] | list[str]
+        reveal_type(x)  # revealed: A[int] | A[str]
 ```
 
 ## `===` keeps identity semantics

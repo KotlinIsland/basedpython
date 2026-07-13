@@ -11100,7 +11100,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
         let target = &source[subscript.range()];
         let mut diagnostic = builder.into_diagnostic(format_args!(
-            "`is {target}` can never be true: builtin collections erase their type arguments"
+            "`is {target}` cannot be checked at runtime: builtin collections erase their type arguments"
         ));
         diagnostic.info(format_args!(
             "a `list` / `dict` / `set` / `tuple` built at runtime carries no record of \
