@@ -12,16 +12,16 @@
 //!   structurally and lowers to equality checks of the reified cells:
 //!   `x: T` is `list[int]` → `T == list[int]`; `x: list[T]` is `list[int]`
 //!   → `T == int`
-//! - the value is a union of same-origin specializations with disjoint
-//!   arguments → one witness element decides the arm (`x: list[int] |
-//!   list[str]` is `list[int]` → probe the first element; an empty
-//!   collection has no witness and answers `False`)
-//! - the value is undecidable but the target is a *user-defined* generic →
-//!   probe the value's `__orig_class__`, natively stamped on user generics by
-//!   `A[int](…)`; answers `False` for values that carry none
+//! - the value is undecidable statically (a mixed union, a dynamic value) but
+//!   the target is a *user-defined* generic → probe the value's
+//!   `__orig_class__`, natively stamped on user generics by `A[int](…)`;
+//!   answers `False` for values that carry none. this soundly discriminates a
+//!   `A[int] | A[str]` union too, per arm
 //! - the value is undecidable and the target is a *builtin* collection, whose
 //!   runtime instances erase their type arguments → ty errors
-//!   (`erased-type-check`) and the lowering is the constant `False`
+//!   (`erased-type-check`) and the lowering is the constant `False`. there is
+//!   no element-witness heuristic: an empty `list[int]` has no element, and a
+//!   builtin's element type is erased, so "check the first item" is unsound
 //!
 //! a subscripted rhs that is *not* a generic class (`x is candidates[0]`)
 //! falls back to the ordinary `isinstance` lowering that
@@ -31,33 +31,52 @@ use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, CmpOp, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 use ty_python_semantic::reified::is_keyword_comparison;
-use ty_python_semantic::{ParametricIsPlan, WitnessPlan};
+use ty_python_semantic::{ArgVariance, ParametricIsPlan};
 
 use super::ast_driver::{PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
 
-/// probes a value's `__orig_class__` against a target alias — the unchecked
-/// fallback when a parametric test can't be resolved statically
+/// probes a value's `__orig_class__` against a target alias — the runtime
+/// residue when a parametric test against a user-defined generic can't be
+/// resolved statically. `variances` gives the target's per-parameter
+/// variance (0 invariant, 1 covariant, 2 contravariant, 3 bivariant), so the
+/// match respects `out T` / `in T`: `A[int]` is an `A[object]` when `T` is
+/// covariant. `_sub` is a deliberately conservative one-level subtype check —
+/// exact, the `object` top type, or an unparameterized supertype origin — so
+/// it never reports a subtype that does not hold
 pub(crate) const PARAMETRIC_IS_RUNTIME: &str = "\
-def _parametric_is(value, alias):
+def _parametric_is(value, alias, variances):
     origin = getattr(alias, \"__origin__\", alias)
     if not isinstance(value, origin):
         return False
     reified = getattr(value, \"__orig_class__\", None)
-    return (
-        reified is not None
-        and getattr(reified, \"__origin__\", None) is origin
-        and getattr(reified, \"__args__\", None) == alias.__args__
-    )
-";
+    if reified is None or getattr(reified, \"__origin__\", None) is not origin:
+        return False
+    reified_args = getattr(reified, \"__args__\", ())
+    target_args = getattr(alias, \"__args__\", ())
+    if len(reified_args) != len(target_args) or len(target_args) != len(variances):
+        return False
+    for r, t, v in zip(reified_args, target_args, variances):
+        if v == 3 or r == t:
+            continue
+        if v == 1 and _parametric_is_sub(r, t):
+            continue
+        if v == 2 and _parametric_is_sub(t, r):
+            continue
+        return False
+    return True
 
-/// whether a collection's first element is an instance of `ty` — decides
-/// which arm of a disjoint union a value is. empty means no witness: `False`
-pub(crate) const WITNESS_RUNTIME: &str = "\
-def _witness_is(items, ty):
-    for item in items:
-        return isinstance(item, ty)
-    return False
+def _parametric_is_sub(a, b):
+    if a is b or b is object:
+        return True
+    a_origin = getattr(a, \"__origin__\", a)
+    b_origin = getattr(b, \"__origin__\", b)
+    if isinstance(a_origin, type) and isinstance(b_origin, type) and not getattr(b, \"__args__\", ()):
+        try:
+            return issubclass(a_origin, b_origin)
+        except TypeError:
+            return False
+    return a == b
 ";
 
 struct ParametricIs<'src, 'ti> {
@@ -65,7 +84,6 @@ struct ParametricIs<'src, 'ti> {
     types: &'ti dyn TypeInfo,
     edits: Vec<(TextRange, String)>,
     needs_probe: bool,
-    needs_witness: bool,
 }
 
 impl ParametricIs<'_, '_> {
@@ -123,34 +141,26 @@ impl ParametricIs<'_, '_> {
                 };
                 self.with_lhs_effects(lhs, check)
             }
-            ParametricIsPlan::Witness(witness) => {
-                self.needs_witness = true;
-                let lhs_src = self.src(lhs.range());
-                let check = match witness {
-                    WitnessPlan::Element { class } => {
-                        format!("_witness_is({lhs_src}, {})", self.src(class))
-                    }
-                    WitnessPlan::DictKey { class } => {
-                        format!("_witness_is(({lhs_src}).keys(), {})", self.src(class))
-                    }
-                    WitnessPlan::DictValue { class } => {
-                        format!("_witness_is(({lhs_src}).values(), {})", self.src(class))
-                    }
-                    WitnessPlan::TupleIndex { index, class } => {
-                        format!("isinstance(({lhs_src})[{index}], {})", self.src(class))
-                    }
-                };
-                if negate {
-                    format!("not {check}")
-                } else {
-                    check
-                }
-            }
-            // a user-defined generic target carries `__orig_class__`; probe it
-            ParametricIsPlan::Probe => {
+            // a user-defined generic target carries `__orig_class__`; probe it,
+            // matching each type argument by the target's declared variance
+            ParametricIsPlan::Probe(variances) => {
                 self.needs_probe = true;
+                let codes = variances
+                    .iter()
+                    .map(|variance| match variance {
+                        ArgVariance::Invariant => "0",
+                        ArgVariance::Covariant => "1",
+                        ArgVariance::Contravariant => "2",
+                        ArgVariance::Bivariant => "3",
+                    })
+                    .collect::<Vec<_>>();
+                // a one-element tuple needs its trailing comma
+                let tuple = match codes.as_slice() {
+                    [single] => format!("({single},)"),
+                    _ => format!("({})", codes.join(", ")),
+                };
                 let call = format!(
-                    "_parametric_is({}, {})",
+                    "_parametric_is({}, {}, {tuple})",
                     self.src(lhs.range()),
                     self.src(rhs.range())
                 );
@@ -205,7 +215,6 @@ impl TypeAwarePass for ParametricIsPass<'_> {
             types,
             edits: Vec::new(),
             needs_probe: false,
-            needs_witness: false,
         };
         for stmt in stmts {
             inner.visit_stmt(stmt);
@@ -217,9 +226,6 @@ impl TypeAwarePass for ParametricIsPass<'_> {
         // on any target
         if inner.needs_probe {
             ctx.required_imports.push(PARAMETRIC_IS_RUNTIME.to_owned());
-        }
-        if inner.needs_witness {
-            ctx.required_imports.push(WITNESS_RUNTIME.to_owned());
         }
         ctx.text_edits.extend(inner.edits);
     }
@@ -269,6 +275,38 @@ mod tests {
         assert!(
             out.contains("print(False)"),
             "str excludes list[int]: {out}"
+        );
+    }
+
+    #[test]
+    fn covariant_subtype_folds_true() {
+        // `A[int]` is an `A[object]` when `T` is covariant (`out T`), so a
+        // statically-`A[int]` value folds the test to True
+        let out = out(indoc! {"
+            class A[out T]:
+                def __init__(self): ...
+            def f(a: A[int]) -> bool:
+                return a is A[object]
+        "});
+        assert!(
+            out.contains("return True"),
+            "covariant A[int] is an A[object]: {out}"
+        );
+    }
+
+    #[test]
+    fn covariant_dynamic_probes_with_variance() {
+        // a dynamic value against a covariant target emits a probe whose
+        // variance code (1) makes the runtime match respect `out T`
+        let out = out(indoc! {"
+            class A[out T]:
+                def __init__(self): ...
+            def f(a: object) -> bool:
+                return a is A[object]
+        "});
+        assert!(
+            out.contains("return _parametric_is(a, A[object], (1,))"),
+            "covariant probe carries variance code 1: {out}"
         );
     }
 
@@ -336,11 +374,11 @@ mod tests {
                 return x is A[int]
         "});
         assert!(
-            out.contains("return _parametric_is(x, A[int])"),
+            out.contains("return _parametric_is(x, A[int], ("),
             "dynamic lhs against a user generic probes __orig_class__: {out}"
         );
         assert!(
-            out.contains("def _parametric_is(value, alias):"),
+            out.contains("def _parametric_is(value, alias, variances):"),
             "probe polyfill emitted: {out}"
         );
     }
@@ -364,35 +402,46 @@ mod tests {
     }
 
     #[test]
-    fn disjoint_union_uses_witness() {
+    fn builtin_union_is_an_error_not_a_witness() {
+        // a builtin collection's element type is erased at runtime and an
+        // empty list has no element to witness, so a builtin union can't be
+        // discriminated — ty errors and the lowering is the constant `False`
         let out = out(indoc! {"
             def f(x: list[int] | list[str]) -> bool:
                 return x is list[int]
         "});
         assert!(
-            out.contains("return _witness_is(x, int)"),
-            "disjoint union discriminates by witness: {out}"
+            out.contains("return False"),
+            "builtin union is erased, not witnessed: {out}"
         );
         assert!(
-            out.contains("def _witness_is(items, ty):"),
-            "witness polyfill emitted: {out}"
+            !out.contains("_witness_is") && !out.contains("_parametric_is"),
+            "no runtime heuristic for a builtin union: {out}"
         );
     }
 
     #[test]
-    fn dict_union_witnesses_discriminating_side() {
+    fn user_generic_union_probes_orig_class() {
+        // a user generic carries `__orig_class__`, so a union against it is
+        // soundly discriminated per arm by the probe (an invariant field
+        // keeps ty from collapsing the union)
         let out = out(indoc! {"
-            def f(x: dict[str, int] | dict[str, bytes]) -> bool:
-                return x is dict[str, int]
+            class A[T]:
+                def __init__(self, t: T):
+                    self.v: list[T] = [t]
+            def f(x: A[int] | A[str]) -> bool:
+                return x is A[int]
         "});
         assert!(
-            out.contains("return _witness_is((x).values(), int)"),
-            "values discriminate when keys agree: {out}"
+            out.contains("return _parametric_is(x, A[int], (0,))"),
+            "user-generic union probes __orig_class__ with invariant T: {out}"
         );
     }
 
     #[test]
     fn union_excluding_target_folds_false() {
+        // no arm matches `list[bytes]`, so the whole test folds statically,
+        // independent of runtime erasure
         let out = out(indoc! {"
             def f(x: list[int] | list[str]) -> bool:
                 return x is list[bytes]
