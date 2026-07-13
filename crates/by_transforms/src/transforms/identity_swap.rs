@@ -57,7 +57,14 @@ impl State<'_> {
                                 TextRange::new(op_start, op_start + TextSize::from(3u32));
                             self.edits.push((op_range, "is".to_owned()));
                         }
-                    } else if trimmed == "is" && !rhs.is_literal_expr() {
+                    } else if trimmed == "is"
+                        && !rhs.is_literal_expr()
+                        // a subscripted rhs may be a parametric type test
+                        // (`x is list[int]`); the type-aware parametric_is
+                        // pass lowers those (and falls back to isinstance
+                        // for value subscripts)
+                        && !matches!(rhs, Expr::Subscript(_))
+                    {
                         let call = isinstance_call(lhs.clone(), rhs.clone(), false);
                         let pair_range = TextRange::new(lhs.range().start(), rhs.range().end());
                         self.edits.push((pair_range, render_expr(&call)));
@@ -71,7 +78,7 @@ impl State<'_> {
                                 TextRange::new(op_start, op_start + TextSize::from(3u32));
                             self.edits.push((op_range, "is not".to_owned()));
                         }
-                    } else if !rhs.is_literal_expr() {
+                    } else if !rhs.is_literal_expr() && !matches!(rhs, Expr::Subscript(_)) {
                         let call = isinstance_call(lhs.clone(), rhs.clone(), true);
                         let pair_range = TextRange::new(lhs.range().start(), rhs.range().end());
                         self.edits.push((pair_range, render_expr(&call)));

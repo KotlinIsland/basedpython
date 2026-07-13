@@ -3463,9 +3463,17 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
                 && let Some(narrowable) = PlaceExpr::try_from_expr(left)
             {
                 let positive = is_positive == matches!(op, ast::CmpOp::Is);
-                if let Some(constraint_ty) = ClassInfoConstraintFunction::IsInstance
-                    .generate_constraint(self.db, rhs_ty, positive)
-                {
+                // a parametric test (`x is list[int]`) verifies the exact
+                // specialization, so the positive branch narrows to it. no
+                // negative narrowing: an unreified or witness-less (empty)
+                // value answers `False` even when it *is* one statically
+                let constraint = if let Type::GenericAlias(alias) = rhs_ty {
+                    positive.then(|| Type::instance(self.db, ClassType::Generic(alias)))
+                } else {
+                    ClassInfoConstraintFunction::IsInstance
+                        .generate_constraint(self.db, rhs_ty, positive)
+                };
+                if let Some(constraint_ty) = constraint {
                     let place = self.expect_place(&narrowable);
                     let constraint = NarrowingConstraint::intersection(
                         constraint_ty.negate_if(self.db, !positive),

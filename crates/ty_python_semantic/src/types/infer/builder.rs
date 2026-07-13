@@ -59,8 +59,8 @@ use crate::types::diagnostic::{
     INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE,
     INVALID_TYPE_FORM, INVALID_TYPE_GUARD_CALL, INVALID_TYPE_VARIABLE_BOUND,
     INVALID_TYPE_VARIABLE_CONSTRAINTS, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
-    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
-    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
+    UNCHECKED_TYPE_CHECK, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL,
+    UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
     hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
     report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
@@ -11008,6 +11008,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                 let range = TextRange::new(left.start(), right.end());
 
+                // a basedpython parametric type test (`x is list[int]`) is a
+                // runtime specialization check, not python identity: it always
+                // yields a `bool`, and its reachability is decided by narrowing
+                // (not by the instance-vs-class-object disjointness that would
+                // otherwise type it `Literal[False]` and kill a live branch)
+                if let Some(ty) =
+                    builder.check_parametric_is_test(left, right, left_ty, right_ty, *op)
+                {
+                    return (ty, range);
+                }
+
                 let ty = comparisons::infer_binary_type_comparison(
                     &builder.context,
                     left_ty,
@@ -11040,6 +11051,78 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 (ty, range)
             },
         )
+    }
+
+    /// basedpython: classify a parametric type test (`x is list[int]`,
+    /// keyword form). Returns `Some(bool)` — the runtime result type — when
+    /// this pair is such a test, and warns when it can be verified neither
+    /// statically from the value's type nor at runtime through a reified type
+    /// parameter or a witness element (the lowering then probes
+    /// `__orig_class__` and answers `False` for values that carry none).
+    /// `None` when the pair is an ordinary comparison, so the caller keeps
+    /// its usual comparison typing
+    fn check_parametric_is_test(
+        &mut self,
+        left: &ast::Expr,
+        right: &ast::Expr,
+        left_ty: Type<'db>,
+        right_ty: Type<'db>,
+        op: ast::CmpOp,
+    ) -> Option<Type<'db>> {
+        if !matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot) || !self.is_basedpython_file() {
+            return None;
+        }
+        let ast::Expr::Subscript(subscript) = right else {
+            return None;
+        };
+        let Type::GenericAlias(alias) = right_ty else {
+            return None;
+        };
+        let source = ruff_db::source::source_text(self.db(), self.file());
+        if !crate::reified::is_keyword_comparison(source.as_str(), op, left, right) {
+            return None;
+        }
+        let plan = crate::types::reified_infer::classify_parametric_is(
+            self.db(),
+            left_ty,
+            alias,
+            subscript,
+        );
+        let bool_ty = KnownClass::Bool.to_instance(self.db());
+        let crate::types::reified_infer::ParametricIsPlan::Probe(reason) = plan else {
+            return Some(bool_ty);
+        };
+        let range = TextRange::new(left.start(), right.end());
+        let Some(builder) = self.context.report_lint(&UNCHECKED_TYPE_CHECK, range) else {
+            return Some(bool_ty);
+        };
+        let mut diagnostic = match reason {
+            crate::types::reified_infer::UncheckedReason::ErasedGenerics => {
+                let mut diagnostic = builder
+                    .into_diagnostic(format_args!("unsafe `is` check due to erased generics"));
+                diagnostic.info(format_args!(
+                    "the value's type mentions a type parameter with no reified \
+                     runtime value, so the type arguments cannot be verified"
+                ));
+                diagnostic
+            }
+            crate::types::reified_infer::UncheckedReason::Dynamic => {
+                let mut diagnostic = builder.into_diagnostic(format_args!("unchecked type-check"));
+                diagnostic.info(format_args!(
+                    "the value's static type is unknown, so the type arguments \
+                     cannot be verified"
+                ));
+                diagnostic
+            }
+        };
+        diagnostic.info(format_args!(
+            "at runtime the test reads the value's `__orig_class__` and answers \
+             `False` when it carries none — every builtin collection does"
+        ));
+        diagnostic.info(format_args!(
+            "annotate the value, or reify the type parameter (`def f[T](x: T)`)"
+        ));
+        Some(bool_ty)
     }
 
     fn infer_type_parameters(&mut self, type_parameters: &ast::TypeParams) {

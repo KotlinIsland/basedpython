@@ -169,7 +169,7 @@ impl<'src> ReifiedGeneric<'src> {
     }
 
     fn wrap(&mut self, function: &StmtFunctionDef) {
-        if reified_type_param_names(function).is_empty() {
+        if reified_type_param_names(self.source, function).is_empty() {
             return;
         }
         if !self.supports_native_generics {
