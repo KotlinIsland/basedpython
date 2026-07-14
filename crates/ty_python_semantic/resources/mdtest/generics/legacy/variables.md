@@ -37,6 +37,29 @@ T = TypeVar(name="T")
 reveal_type(T.__name__)  # revealed: Literal["T"]
 ```
 
+### Type variable introspection dunders
+
+`__bound__`, `__constraints__`, and `__default__` are resolved precisely from the type variable
+itself, independent of how typeshed spells the member (a `@property` or a `let` attribute):
+
+```py
+from typing import TypeVar
+from typing_extensions import TypeVar as TypeVarExt
+
+Unbounded = TypeVar("Unbounded")
+reveal_type(Unbounded.__bound__)  # revealed: None
+reveal_type(Unbounded.__constraints__)  # revealed: tuple[()]
+
+Bounded = TypeVar("Bounded", bound=int)
+reveal_type(Bounded.__bound__)  # revealed: int
+
+Constrained = TypeVar("Constrained", int, str)
+reveal_type(Constrained.__constraints__)  # revealed: tuple[int, str]
+
+WithDefault = TypeVarExt("WithDefault", default=int)
+reveal_type(WithDefault.__default__)  # revealed: int
+```
+
 ### Must be directly assigned to a variable
 
 > A `TypeVar()` expression must always directly be assigned to a variable (it should not be used as
@@ -818,9 +841,7 @@ python-version = "3.10"
 from typing_extensions import TypeVar
 
 T = TypeVar("T", default=int)
-# TODO: should not error, should reveal `int`
-# error: [unresolved-attribute]
-reveal_type(T.__default__)  # revealed: Unknown
+reveal_type(T.__default__)  # revealed: int
 ```
 
 ## Callability

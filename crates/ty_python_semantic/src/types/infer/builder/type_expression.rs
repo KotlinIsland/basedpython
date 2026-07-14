@@ -118,6 +118,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         {
             return ty;
         }
+        // basedpython: a bare enum member (`E.A`) in type position denotes its
+        // enum-literal type — `a: E.A` is `a: Literal[E.A]`
+        if self.is_basedpython_file() && ty.as_enum_literal().is_some() {
+            return ty;
+        }
         report_missing_type_arguments(&self.context, ty, annotation);
         let result_ty = ty
             .default_specialize(self.db())
@@ -1351,6 +1356,52 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             }
             ast::Expr::CallableType(callable) => {
                 let db = self.db();
+                // basedpython: a trailing bare `**ParamSpec` marks the
+                // ParamSpec/Concatenate callable forms — `(**P) -> R` is
+                // `Callable[P, R]` and `(T1, …, **P) -> R` is
+                // `Callable[Concatenate[T1, …, P], R]`. `**P` parses to
+                // `Starred(Starred(Name))`; an annotated `**kwargs: T` is a
+                // `Named` node and is left to the ordinary variadic handling
+                if let Some((last, prefix)) = callable.args.split_last()
+                    && let ast::Expr::Starred(outer) = last
+                    && let ast::Expr::Starred(inner) = outer.value.as_ref()
+                    && matches!(inner.value.as_ref(), ast::Expr::Name(_))
+                {
+                    let paramspec_expr = inner.value.as_ref();
+                    // resolve the bare name; only a `ParamSpec` takes this path (a
+                    // plain `**kwargs` that isn't one falls through to the ordinary
+                    // variadic handling below)
+                    let prev = self
+                        .context
+                        .inference_flags
+                        .replace(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, true);
+                    let ps_ty = self.infer_type_expression_no_store(paramspec_expr);
+                    self.context
+                        .inference_flags
+                        .set(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, prev);
+                    if let Type::TypeVar(tv) = ps_ty
+                        && tv.is_paramspec(db)
+                    {
+                        let return_type = self.infer_type_expression(&callable.returns);
+                        let parameters = if prefix.is_empty() {
+                            // pure ParamSpec `(**P)` — identical to `Callable[P, R]`
+                            Parameters::paramspec(db, tv)
+                        } else {
+                            // `(T1, …, **P)` — `Callable[Concatenate[T1, …, P], R]`
+                            let prefix_params: Vec<Parameter<'db>> = prefix
+                                .iter()
+                                .map(|t| {
+                                    Parameter::positional_only(None)
+                                        .with_annotated_type(self.infer_type_expression(t))
+                                })
+                                .collect();
+                            self.infer_concatenate_tail(paramspec_expr)
+                                .map(|tail| Parameters::concatenate(db, prefix_params, tail))
+                                .unwrap_or_else(Parameters::unknown)
+                        };
+                        return Type::single_callable(db, Signature::new(parameters, return_type));
+                    }
+                }
                 let slash = callable.parameter_slash.map(|i| i as usize);
                 let star = callable.parameter_star.map(|i| i as usize);
                 let mut params: Vec<Parameter<'db>> = Vec::with_capacity(callable.args.len());

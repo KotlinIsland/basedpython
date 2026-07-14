@@ -1493,6 +1493,27 @@ a = A()
 a.foo = 200  # ok — no Final qualifier inside class
 ```
 
+### valueless `let x: T` is read-only
+
+a typed `let` with no initializer declares a read-only attribute. unlike the valued form it is
+`Final` in every scope — including a class body — so it behaves like a read-only property. this is
+the stub form used throughout the basedpython typeshed.
+
+`m.byi`:
+
+```byi
+class C:
+    let member: int
+```
+
+```by
+from m import C
+
+c = C()
+reveal_type(c.member)  # revealed: int
+c.member = 5  # error: [invalid-assignment]
+```
+
 ### bare `final` on a variable is rejected
 
 `final` is a class/method modifier. on a bare assignment it lowers to a plain assignment and makes

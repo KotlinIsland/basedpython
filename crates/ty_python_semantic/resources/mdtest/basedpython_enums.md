@@ -324,3 +324,38 @@ variant fields are declared in parentheses; a brace payload is rejected with the
 enum class Bad2:
     case A { x: int }  # error: [invalid-syntax] "variant fields are declared in parentheses, e.g. `case A(x: int)`"
 ```
+
+## a variant is usable bare in type position
+
+a payload-less variant is an enum literal; basedpython accepts it bare in a type expression
+(`a: E.A` is `a: Literal[E.A]`), the same as any other bare literal.
+
+```by
+enum class E:
+    case A
+    case B
+    case C
+
+a: E.A = E.A
+reveal_type(a)  # revealed: E.A
+
+# only the named variant is assignable
+b: E.A = E.B  # error: [invalid-assignment]
+
+# unions of variants work as annotations
+def f(x: E.A | E.B) -> None:
+    reveal_type(x)  # revealed: E.A | E.B
+```
+
+This also works for an idiomatic `enum.Enum`:
+
+```by
+from enum import Enum
+
+class Color(Enum):
+    RED = 1
+    GREEN = 2
+
+c: Color.RED = Color.RED
+reveal_type(c)  # revealed: Color.RED
+```

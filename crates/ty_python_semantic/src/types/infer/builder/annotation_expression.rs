@@ -177,11 +177,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             }
         }
 
-        // basedpython annotation markers — `let x = v`, `class a = v`,
+        // basedpython annotation markers — `let x = v`, `final x: T`, `class a = v`,
         // `[modifiers] a = v`, `newtype X = T`, `abstract a: T`, `sentinel A`
         // parse to AnnAssign with a synthetic Name/Subscript annotation whose
-        // id is one of `__let__`, `__classvar__`, `__modifier_assign__`,
-        // `__newtype__`, `__abstract_annot__`, `__sentinel__`.
+        // id is one of `__let__`, `__final__`, `__classvar__`, `__modifier_assign__`,
+        // `__modifier_annot__`, `__newtype__`, `__abstract_annot__`, `__sentinel__`.
         // resolve them so ty applies the right qualifier without a transpile step
         if let Some(result) = self.synthetic_annotation_marker(annotation) {
             self.store_expression_type(annotation, result.inner_type());
@@ -461,15 +461,18 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 let ast::Expr::Name(value_name) = value.as_ref() else {
                     return None;
                 };
-                if value_name.id.as_str() != "__let__" {
-                    return None;
-                }
-                // typed `let x: T = v` — slice is the actual type
+                // typed `let x: T = v` / `final x: T = v` — slice is the type.
+                // `final` is `Final` everywhere; `let` only at module scope
+                let always_final = match value_name.id.as_str() {
+                    "__let__" => false,
+                    "__final__" => true,
+                    _ => return None,
+                };
                 let inner = self.infer_type_expression(slice);
-                let qualifiers = if in_class_scope {
-                    TypeQualifiers::empty()
-                } else {
+                let qualifiers = if always_final || !in_class_scope {
                     TypeQualifiers::FINAL
+                } else {
+                    TypeQualifiers::empty()
                 };
                 Some(TypeAndQualifiers::new(
                     inner,

@@ -21,3 +21,24 @@ class D:
 class E:
     abstract async def f(self) -> int
     final async def g(self) -> int
+
+
+# `let` declarations, including the valueless read-only form `let x: T`
+let count: int
+let name: str = "alice"
+
+
+class F:
+    let member: int
+    let label: str = "x"
+
+
+# `final` annotations (Final in every scope), including a modifier chain where the
+# sibling modifier is stripped but `final` is kept
+final MODULE_CONST: int
+final PAIR: tuple[int, str] = (1, "a")
+
+
+class G:
+    final tag: str
+    final override label: str = "x"

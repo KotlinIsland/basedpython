@@ -639,7 +639,7 @@ pub(crate) fn typing_symbol<'db>(db: &'db dyn Db, symbol: &str) -> PlaceAndQuali
 /// `typing` members that are implicitly available in basedpython source — keep
 /// this in sync with `by_transforms::transforms::implicit_typing::IMPLICIT_TYPING_NAMES`,
 /// which inserts the matching imports during transpilation
-pub(crate) const BASEDPYTHON_IMPLICIT_TYPING_NAMES: &[&str] = &[
+pub const BASEDPYTHON_IMPLICIT_TYPING_NAMES: &[&str] = &[
     "AbstractSet",
     "Annotated",
     "Any",
@@ -651,6 +651,7 @@ pub(crate) const BASEDPYTHON_IMPLICIT_TYPING_NAMES: &[&str] = &[
     "Awaitable",
     "BinaryIO",
     "ByteString",
+    "Callable",
     "ChainMap",
     "Collection",
     "Concatenate",

@@ -1,5 +1,6 @@
 use ruff_formatter::write;
 use ruff_python_ast::{Expr, StmtAnnAssign};
+use ruff_text_size::Ranged;
 
 use crate::expression::is_splittable_expression;
 use crate::expression::parentheses::{NeedsParentheses, OptionalParentheses, Parentheses};
@@ -23,6 +24,27 @@ fn synthetic_let(ann: &Expr) -> Option<Option<&Expr>> {
         }
         _ => None,
     }
+}
+
+/// detect a synthetic basedpython `final` annotation (`__final__[T]`), produced
+/// by the parser for `final x: T` and modifier chains like `final override x: T`.
+/// the surface modifier prefix (`final`, or `final override`, …) lives in the
+/// source between the marker start and the target; the type is the slice
+fn synthetic_final<'ast, 'src>(
+    ann: &'ast Expr,
+    target: &'ast Expr,
+    src: &'src str,
+) -> Option<(&'src str, &'ast Expr)> {
+    let Expr::Subscript(s) = ann else {
+        return None;
+    };
+    if !matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__final__") {
+        return None;
+    }
+    let start = u32::from(ann.range().start()) as usize;
+    let end = u32::from(target.range().start()) as usize;
+    let prefix = src.get(start..end)?.trim();
+    Some((prefix, s.slice.as_ref()))
 }
 
 /// detect a synthetic basedpython annotation marker name (classvar / newtype / sentinel)
@@ -73,6 +95,29 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
             if let Some(t) = type_ann {
                 write!(f, [token(":"), space(), t.format()])?;
             }
+            if let Some(v) = value {
+                write!(f, [space(), token("="), space(), v.format()])?;
+            }
+            return Ok(());
+        }
+        if f.options().is_basedpython()
+            && let Some((prefix, type_ann)) =
+                synthetic_final(annotation, target, f.context().source())
+        {
+            // `final [modifiers] NAME: T [= v]` — the surface modifier prefix is
+            // rendered verbatim from source (it may carry a stripped sibling
+            // modifier, e.g. `final override`), then the recovered type
+            write!(
+                f,
+                [
+                    text(prefix),
+                    space(),
+                    target.format(),
+                    token(":"),
+                    space(),
+                    type_ann.format()
+                ]
+            )?;
             if let Some(v) = value {
                 write!(f, [space(), token("="), space(), v.format()])?;
             }

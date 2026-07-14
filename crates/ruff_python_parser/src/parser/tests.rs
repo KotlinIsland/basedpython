@@ -41,6 +41,7 @@ fn basedpython_let_keyword_never_panics() {
         "for let in items:\n    pass",
         "let x = 5",
         "let x: int = 5",
+        "let x: int",
     ] {
         // success here is simply not panicking
         let _ = parse(
@@ -48,6 +49,119 @@ fn basedpython_let_keyword_never_panics() {
             ParseOptions::from(Mode::Module).with_basedpython(true),
         );
     }
+}
+
+#[test]
+fn basedpython_valueless_typed_let_parses_cleanly() {
+    // `let x: T` with no initializer is a read-only declaration; it must parse
+    // without error and produce an `AnnAssign` with no value
+    let parsed = parse(
+        "let x: int",
+        ParseOptions::from(Mode::Module).with_basedpython(true),
+    )
+    .expect("valueless typed `let` should parse");
+    assert!(
+        parsed.errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        parsed.errors()
+    );
+    let ruff_python_ast::Mod::Module(module) = parsed.syntax() else {
+        panic!("expected a module");
+    };
+    let [ruff_python_ast::Stmt::AnnAssign(assign)] = module.body.as_slice() else {
+        panic!("expected a single AnnAssign statement");
+    };
+    assert!(assign.value.is_none(), "valueless `let` must have no value");
+}
+
+#[test]
+fn basedpython_decorated_protocol_keyword() {
+    // a decorator before the `protocol` introducer (e.g. `@runtime_checkable
+    // protocol P:`) must route through the protocol parser, carrying the
+    // decorator, rather than erroring with "expected class after decorator"
+    let parsed = parse(
+        "@runtime_checkable\nprotocol P:\n    def m(self) -> int: ...\n",
+        ParseOptions::from(Mode::Module).with_basedpython(true),
+    )
+    .expect("decorated `protocol` should parse");
+    assert!(
+        parsed.errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        parsed.errors()
+    );
+    let ruff_python_ast::Mod::Module(module) = parsed.syntax() else {
+        panic!("expected a module");
+    };
+    let [ruff_python_ast::Stmt::ClassDef(class)] = module.body.as_slice() else {
+        panic!("expected a single ClassDef");
+    };
+    // the real decorator plus the synthetic `protocol_class` marker
+    let names: Vec<&str> = class
+        .decorator_list
+        .iter()
+        .filter_map(|d| d.expression.as_name_expr().map(|n| n.id.as_str()))
+        .collect();
+    assert_eq!(names, ["runtime_checkable", "protocol_class"]);
+}
+
+#[test]
+fn basedpython_final_in_modifier_chain_keeps_final_marker() {
+    // `final` combined with another modifier must still carry the `__final__`
+    // marker (a `__final__[T]` subscript) so ty applies `Final`, rather than the
+    // no-op `__modifier_annot__` that drops the qualifier
+    let parsed = parse_basedpython_module("final override x: int\n");
+    let [Stmt::AnnAssign(assign)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single AnnAssign");
+    };
+    let Expr::Subscript(sub) = assign.annotation.as_ref() else {
+        panic!("expected a `__final__[T]` subscript annotation");
+    };
+    assert!(matches!(sub.value.as_ref(), Expr::Name(n) if n.id == "__final__"));
+}
+
+#[test]
+fn basedpython_paramspec_arrow_params_parse() {
+    // a bare `**P` in an arrow parameter list encodes as `Starred(Starred(Name))`
+    // (a `ParamSpec`) — `(**P)` and the Concatenate `(T, **P)` both parse cleanly
+    // rather than dropping `**P` or erroring
+    for source in ["f: (**P) -> int\n", "g: (str, int, **P) -> bool\n"] {
+        let parsed = parse(
+            source,
+            ParseOptions::from(Mode::Module).with_basedpython(true),
+        )
+        .expect("should parse");
+        assert!(
+            parsed.errors().is_empty(),
+            "unexpected parse errors in {source:?}: {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+#[test]
+fn final_annotation_rejected_in_py_file() {
+    // `final x: T` is basedpython-only; a plain `.py` parse must report the gate
+    let has_error = match parse("final x: int\n", ParseOptions::from(Mode::Module)) {
+        Ok(parsed) => !parsed.errors().is_empty(),
+        Err(_) => true,
+    };
+    assert!(
+        has_error,
+        "`final` annotation must be rejected in a .py file"
+    );
+}
+
+#[test]
+fn decorated_protocol_rejected_in_py_file() {
+    // the `protocol` introducer is basedpython-only
+    let has_error = match parse(
+        "@runtime_checkable\nprotocol P: ...\n",
+        ParseOptions::from(Mode::Module),
+    ) {
+        Ok(parsed) => !parsed.errors().is_empty(),
+        Err(_) => true,
+    };
+    assert!(has_error, "`protocol` must be rejected in a .py file");
 }
 
 #[test]

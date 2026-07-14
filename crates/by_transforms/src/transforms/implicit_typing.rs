@@ -163,6 +163,29 @@ mod tests {
     use crate::{Config, transpile};
     use indoc::indoc;
 
+    // the implicit-typing name set is duplicated across three crates (this list,
+    // ty's `BASEDPYTHON_IMPLICIT_TYPING_NAMES`, and by_typeshed_patch's copy). if
+    // they drift, the typeshed transform strips imports ty won't provide (or keeps
+    // ones it would). this locks the two lists this crate can see together
+    #[test]
+    fn implicit_typing_names_match_ty() {
+        assert_eq!(
+            super::IMPLICIT_TYPING_NAMES,
+            ty_python_semantic::BASEDPYTHON_IMPLICIT_TYPING_NAMES,
+        );
+    }
+
+    #[test]
+    fn implicit_typing_names_sorted() {
+        // ty resolves the names with a binary search, so the list must stay sorted
+        let mut sorted = ty_python_semantic::BASEDPYTHON_IMPLICIT_TYPING_NAMES.to_vec();
+        sorted.sort_unstable();
+        assert_eq!(
+            ty_python_semantic::BASEDPYTHON_IMPLICIT_TYPING_NAMES,
+            sorted.as_slice(),
+        );
+    }
+
     fn check(input: &str, expected: &str) {
         assert_eq!(
             transpile(input, &Config::test_default()).unwrap(),

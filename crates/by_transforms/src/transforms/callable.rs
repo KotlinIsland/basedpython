@@ -47,6 +47,7 @@ pub(crate) struct CallableSyntax<'src> {
     claimed_ranges: &'src [TextRange],
     pub(crate) edits: Vec<Fix>,
     pub(crate) needs_import: bool,
+    pub(crate) needs_concatenate_import: bool,
     pub(crate) needs_protocol_import: bool,
     pub(crate) needs_intersection_import: bool,
     pub(crate) needs_typeof_import: bool,
@@ -80,6 +81,7 @@ impl<'src> CallableSyntax<'src> {
             claimed_ranges: &[],
             edits: Vec::new(),
             needs_import: false,
+            needs_concatenate_import: false,
             needs_protocol_import: false,
             needs_intersection_import: false,
             needs_typeof_import: false,
@@ -284,6 +286,27 @@ impl<'src> CallableSyntax<'src> {
             return None;
         }
         match expr {
+            // basedpython ParamSpec/Concatenate: `(**P) -> R` is `Callable[P, R]`
+            // and `(T1, …, **P) -> R` is `Callable[Concatenate[T1, …, P], R]`
+            Expr::CallableType(ct) if paramspec_tail(ct).is_some() => {
+                self.needs_import = true;
+                let (prefix, paramspec) = paramspec_tail(ct)?;
+                let ret_str = self.rewrite_or_leaf(&ct.returns);
+                let ps = self.rewrite_or_leaf(paramspec);
+                if prefix.is_empty() {
+                    Some(format!("Callable[{ps}, {ret_str}]"))
+                } else {
+                    self.needs_concatenate_import = true;
+                    let prefix_str = prefix
+                        .iter()
+                        .map(|a| self.rewrite_or_leaf(a))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    Some(format!(
+                        "Callable[Concatenate[{prefix_str}, {ps}], {ret_str}]"
+                    ))
+                }
+            }
             Expr::CallableType(ct) if self.is_non_denotable(ct) => {
                 self.needs_protocol_import = true;
                 let params = self.render_protocol_params(ct);
@@ -467,6 +490,33 @@ impl<'src> CallableSyntax<'src> {
 /// render a synthesized annotation as a forward-reference string literal so it
 /// is never evaluated at class-body time (the hoisted protocol class precedes
 /// the definitions its annotations mention)
+/// `(prefix, paramspec_name)` if the last arrow parameter is a bare `**P`
+/// (`Starred(Starred(Name))`) and the prefix is plain positional types with no
+/// `/` / `*` markers — the `ParamSpec` (empty prefix) or `Concatenate` form
+fn paramspec_tail(ct: &ExprCallableType) -> Option<(&[Expr], &Expr)> {
+    if ct.parameter_slash.is_some() || ct.parameter_star.is_some() {
+        return None;
+    }
+    let (last, prefix) = ct.args.split_last()?;
+    let Expr::Starred(outer) = last else {
+        return None;
+    };
+    let Expr::Starred(inner) = outer.value.as_ref() else {
+        return None;
+    };
+    if !matches!(inner.value.as_ref(), Expr::Name(_)) {
+        return None;
+    }
+    // a `Concatenate` prefix is plain positional types (no named/variadic params)
+    if prefix
+        .iter()
+        .any(|a| matches!(a, Expr::Named(_) | Expr::Starred(_)))
+    {
+        return None;
+    }
+    Some((prefix, inner.value.as_ref()))
+}
+
 fn quote_forward_ref(ty: &str) -> String {
     format!("\"{}\"", ty.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -507,11 +557,12 @@ pub(crate) fn lower_type_expr_full(
     rewrite_type_expr_with_imports(source, types, expr).map(|(text, _)| text)
 }
 
-/// if `expr` is `Subscript(Name("__let__"|"__classvar__"), slice)`, returns the slice
+/// if `expr` is `Subscript(Name("__let__"|"__classvar__"|"__final__"), slice)`,
+/// returns the slice
 pub(crate) fn synthetic_let_slice(expr: &Expr) -> Option<&Expr> {
     if let Expr::Subscript(s) = expr {
         if let Expr::Name(n) = s.value.as_ref() {
-            if matches!(n.id.as_str(), "__let__" | "__classvar__") {
+            if matches!(n.id.as_str(), "__let__" | "__classvar__" | "__final__") {
                 return Some(s.slice.as_ref());
             }
         }
@@ -630,6 +681,10 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
             ctx.required_imports
                 .push("from typing import Callable".to_owned());
         }
+        if inner.needs_concatenate_import {
+            ctx.required_imports
+                .push("from typing import Concatenate".to_owned());
+        }
         if inner.needs_protocol_import {
             ctx.required_imports
                 .push("from typing import Protocol".to_owned());
@@ -702,6 +757,30 @@ mod tests {
             indoc! {"
                 from typing import Callable
                 a: Callable[[], None]
+            "},
+        );
+    }
+
+    #[test]
+    fn paramspec_callable() {
+        // `(**P) -> R` is `Callable[P, R]`
+        check(
+            "a: (**P) -> int\n",
+            indoc! {"
+                from typing import Callable
+                a: Callable[P, int]
+            "},
+        );
+    }
+
+    #[test]
+    fn concatenate_callable() {
+        // `(T1, …, **P) -> R` is `Callable[Concatenate[T1, …, P], R]`
+        check(
+            "a: (int, str, **P) -> bool\n",
+            indoc! {"
+                from typing import Callable, Concatenate
+                a: Callable[Concatenate[int, str, P], bool]
             "},
         );
     }

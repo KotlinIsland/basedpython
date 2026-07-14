@@ -391,6 +391,16 @@ impl<'src> Parser<'src> {
                             ));
                             Some(self.parse_visibility_annot_decl(start))
                         }
+                        TokenKind::Colon if idx == 1 && self.is_final_modifier_at(0) => {
+                            // bare `final a: T` — a `Final` declaration in every
+                            // scope. unlike the generic modifier-annot path, this
+                            // keeps the real type in the AST (as `__final__[T]`) so
+                            // ty resolves it without a transpile step
+                            self.error_if_not_basedpython(
+                                "`final` annotations are not valid in .py files".to_string(),
+                            );
+                            Some(self.parse_final_annot_decl(start))
+                        }
                         TokenKind::Colon if idx >= 1 => {
                             // any other modifier chain on an annotated assignment
                             // (`override x: T`, `final override x: T`, …) — strip
@@ -419,6 +429,16 @@ impl<'src> Parser<'src> {
                 self.current_token_range(),
             );
         }
+    }
+
+    /// Returns whether the modifier-keyword token at chain position `idx` is `final`.
+    fn is_final_modifier_at(&mut self, idx: usize) -> bool {
+        let range = if idx == 0 {
+            self.current_token_range()
+        } else {
+            self.peek_nth(idx - 1).1
+        };
+        self.src_text(range) == "final"
     }
 
     /// Returns whether the modifier-keyword token at chain position `idx` is `abstract`.
@@ -630,7 +650,8 @@ impl<'src> Parser<'src> {
             node_index: AtomicNodeIndex::NONE,
         });
         // optional `: annotation` before `=`
-        let annotation = if self.eat(TokenKind::Colon) {
+        let typed = self.eat(TokenKind::Colon);
+        let annotation = if typed {
             let type_ann = self.parse_conditional_expression_or_higher().expr;
             let slice_range = type_ann.range();
             Expr::Subscript(ast::ExprSubscript {
@@ -644,12 +665,19 @@ impl<'src> Parser<'src> {
         } else {
             let_name
         };
-        // `expect` rather than `bump`: a `let NAME: ...` whose `=` is missing
-        // reports a recoverable error instead of panicking
-        self.expect(TokenKind::Equal);
-        let value = self
-            .parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
-            .expr;
+        // a typed `let NAME: T` may omit the initializer: it declares a
+        // read-only attribute (lowers to `NAME: Final[T]`). an untyped
+        // `let NAME` must have `= value` — `expect` reports a recoverable error
+        // rather than panicking if it is missing
+        let value = if typed && !self.at(TokenKind::Equal) {
+            None
+        } else {
+            self.expect(TokenKind::Equal);
+            Some(Box::new(
+                self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
+                    .expr,
+            ))
+        };
         let target = Expr::Name(ast::ExprName {
             id: name.id.clone(),
             ctx: ExprContext::Store,
@@ -661,7 +689,7 @@ impl<'src> Parser<'src> {
         Stmt::AnnAssign(ast::StmtAnnAssign {
             target: Box::new(target),
             annotation: Box::new(annotation),
-            value: Some(Box::new(value)),
+            value,
             simple: true,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
@@ -794,6 +822,58 @@ impl<'src> Parser<'src> {
         self.parse_modifier_annot_decl(start, "__abstract_annot__")
     }
 
+    /// Parses `final NAME: T [= v]` into an `AnnAssign` whose annotation is the
+    /// synthetic `Subscript(Name("__final__"), T)`, so ty resolves `T` and
+    /// applies `Final` while the forward transform recovers `NAME: Final[T]`.
+    /// Mirrors [`Parser::parse_let_decl`]; `final` is always typed (an untyped
+    /// `final x = v` is a `__modifier_assign__` instead).
+    fn parse_final_annot_decl(&mut self, start: TextSize) -> Stmt {
+        let final_range = self.current_token_range();
+        self.bump(TokenKind::Name); // consume "final"
+        let name = self.parse_identifier();
+        let final_marker = Expr::Name(ast::ExprName {
+            id: Name::new_static("__final__"),
+            ctx: ExprContext::Invalid,
+            range: final_range,
+            node_index: AtomicNodeIndex::NONE,
+        });
+        self.bump(TokenKind::Colon); // consume ":"
+        let type_ann = self.parse_conditional_expression_or_higher().expr;
+        let slice_range = type_ann.range();
+        let annotation = Expr::Subscript(ast::ExprSubscript {
+            value: Box::new(final_marker),
+            slice: Box::new(type_ann),
+            ctx: ExprContext::Load,
+            range: TextRange::new(final_range.start(), slice_range.end()),
+            node_index: AtomicNodeIndex::NONE,
+            is_typeof: false,
+        });
+        let value = if self.eat(TokenKind::Equal) {
+            Some(Box::new(
+                self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
+                    .expr,
+            ))
+        } else {
+            None
+        };
+        let target = Expr::Name(ast::ExprName {
+            id: name.id.clone(),
+            ctx: ExprContext::Store,
+            range: name.range,
+            node_index: AtomicNodeIndex::NONE,
+        });
+        self.eat(TokenKind::Semi);
+        self.eat(TokenKind::Newline);
+        Stmt::AnnAssign(ast::StmtAnnAssign {
+            target: Box::new(target),
+            annotation: Box::new(annotation),
+            value,
+            simple: true,
+            range: self.node_range(start),
+            node_index: AtomicNodeIndex::NONE,
+        })
+    }
+
     fn parse_visibility_annot_decl(&mut self, start: TextSize) -> Stmt {
         self.parse_modifier_annot_decl(start, "__visibility_annot__")
     }
@@ -806,10 +886,16 @@ impl<'src> Parser<'src> {
         let modifier_range = self.current_token_range();
         // consume modifier keywords until we reach the variable name (the Name
         // token immediately followed by `:`), so chains like `final override x: T`
-        // strip in full — not just the first modifier
+        // strip in full — not just the first modifier. remember a `final` in the
+        // chain: unlike the other modifiers (which ty ignores) its `Final`
+        // qualifier must survive
+        let mut final_range = None;
         loop {
             if self.peek() == TokenKind::Colon {
                 break;
+            }
+            if self.src_text(self.current_token_range()) == "final" {
+                final_range = Some(self.current_token_range());
             }
             self.bump(TokenKind::Name);
         }
@@ -818,16 +904,13 @@ impl<'src> Parser<'src> {
         let annotation_expr = self
             .parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
             .expr;
-        let value = if self.eat(TokenKind::Equal) {
+        let assigned = if self.eat(TokenKind::Equal) {
             Some(Box::new(
                 self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
                     .expr,
             ))
         } else {
-            // no `= value`: stash the user-typed annotation expression in `value`
-            // (matches the historical `abstract a: T` shape; transform only uses
-            // ranges, not AST semantics)
-            Some(Box::new(annotation_expr))
+            None
         };
         let target = Expr::Name(ast::ExprName {
             id: name.id.clone(),
@@ -835,17 +918,44 @@ impl<'src> Parser<'src> {
             range: name.range,
             node_index: AtomicNodeIndex::NONE,
         });
-        let synthetic_ann = Expr::Name(ast::ExprName {
-            id: Name::new_static(synthetic_id),
-            ctx: ExprContext::Invalid,
-            range: TextRange::new(modifier_range.start(), name.range.start()),
-            node_index: AtomicNodeIndex::NONE,
-        });
+        // a `final` anywhere in the chain keeps the real type under a `__final__[T]`
+        // marker so ty applies `Final` in every scope (mirrors the sole
+        // `final x: T` path); any other chain strips to the no-op marker with the
+        // annotation stashed in `value` (matches the historical `abstract a: T`
+        // shape — the transform uses ranges, not AST semantics)
+        let (annotation, value) = if let Some(final_range) = final_range {
+            let final_marker = Expr::Name(ast::ExprName {
+                id: Name::new_static("__final__"),
+                ctx: ExprContext::Invalid,
+                range: final_range,
+                node_index: AtomicNodeIndex::NONE,
+            });
+            let annotation = Expr::Subscript(ast::ExprSubscript {
+                range: TextRange::new(final_range.start(), annotation_expr.range().end()),
+                value: Box::new(final_marker),
+                slice: Box::new(annotation_expr),
+                ctx: ExprContext::Load,
+                node_index: AtomicNodeIndex::NONE,
+                is_typeof: false,
+            });
+            (annotation, assigned)
+        } else {
+            let synthetic_ann = Expr::Name(ast::ExprName {
+                id: Name::new_static(synthetic_id),
+                ctx: ExprContext::Invalid,
+                range: TextRange::new(modifier_range.start(), name.range.start()),
+                node_index: AtomicNodeIndex::NONE,
+            });
+            (
+                synthetic_ann,
+                Some(assigned.unwrap_or_else(|| Box::new(annotation_expr))),
+            )
+        };
         self.eat(TokenKind::Semi);
         self.eat(TokenKind::Newline);
         Stmt::AnnAssign(ast::StmtAnnAssign {
             target: Box::new(target),
-            annotation: Box::new(synthetic_ann),
+            annotation: Box::new(annotation),
             value,
             simple: true,
             range: self.node_range(start),
@@ -3239,6 +3349,7 @@ impl<'src> Parser<'src> {
         };
 
         let parameters = self.parse_parameters(FunctionKind::FunctionDef);
+        let params_end = parameters.range().end();
 
         // synthesise `self.<name>: <ann> = <name>` for every `let`-prefixed parameter
         // and prepend to the body so ty's instance-attribute analysis picks them up
@@ -3261,7 +3372,13 @@ impl<'src> Parser<'src> {
             body,
             decorator_list: vec![decorator].into(),
             is_async: false,
-            returns: None,
+            // `init(...)` is a `__init__`, which returns `None`. synthesise the
+            // annotation (zero-width, after the parameter list) so ty sees
+            // `-> None` without it appearing in the source
+            returns: Some(Box::new(Expr::NoneLiteral(ast::ExprNoneLiteral {
+                range: TextRange::empty(params_end),
+                node_index: AtomicNodeIndex::NONE,
+            }))),
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         }
@@ -4272,6 +4389,20 @@ impl<'src> Parser<'src> {
         }
 
         decorators.shrink_to_fit();
+
+        // basedpython: the `protocol` introducer may follow decorators, e.g.
+        // `@runtime_checkable protocol P:`. carry the decorators into
+        // `parse_protocol_def` so the synthetic `protocol_class` marker is
+        // appended after them.
+        if self.at(TokenKind::Name)
+            && self.src_text(self.current_token_range()) == "protocol"
+            && self.peek() == TokenKind::Name
+        {
+            self.error_if_not_basedpython(
+                "`protocol` class syntax is not valid in .py files".to_string(),
+            );
+            return self.parse_protocol_def(start, decorators);
+        }
 
         // basedpython: a modifier keyword may follow the decorators, e.g.
         // `@overload class def open(...)` or `@final static def helper(...)`.
