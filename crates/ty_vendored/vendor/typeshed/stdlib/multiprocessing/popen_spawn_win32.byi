@@ -7,10 +7,10 @@ from .util import Finalize
 if sys.platform == "win32":
     __all__ = ["Popen"]
 
-    TERMINATE: Final[int]
-    WINEXE: Final[bool]
-    WINSERVICE: Final[bool]
-    WINENV: Final[bool]
+    final TERMINATE: int
+    final WINEXE: bool
+    final WINSERVICE: bool
+    final WINENV: bool
 
     class Popen:
         """
@@ -23,7 +23,7 @@ if sys.platform == "win32":
         returncode: int | None
         sentinel: int
 
-        def __init__(self, process_obj: BaseProcess) -> None
+        init(self, process_obj: BaseProcess)
         def duplicate_for_child(self, handle: int) -> int
         def wait(self, timeout: float | None = None) -> int | None
         def poll(self) -> int | None

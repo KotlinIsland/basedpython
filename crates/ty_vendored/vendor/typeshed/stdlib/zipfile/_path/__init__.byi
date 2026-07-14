@@ -12,7 +12,7 @@ from _typeshed import StrPath
 from collections.abc import Iterator, Sequence
 from io import TextIOWrapper
 from os import PathLike
-from typing import IO, Literal, TypeVar
+from typing import Literal, TypeVar
 from typing_extensions import Self
 from zipfile import ZipFile
 
@@ -25,7 +25,7 @@ if sys.version_info >= (3, 12):
         Mix-in to save the initialization state for pickling.
         """
 
-        def __init__(self, *args: object, **kwargs: object) -> None
+        init(self, *args: object, **kwargs: object)
         def __getstate__(self) -> (list[object], dict[object, object])
         def __setstate__(self, state: Sequence[(list[object], dict[object, object])]) -> None
 
@@ -165,7 +165,7 @@ if sys.version_info >= (3, 12):
 
         root: CompleteDirs
         at: str
-        def __init__(self, root: ZipFile | StrPath | IO[bytes], at: str = "") -> None:
+        init(self, root: ZipFile | StrPath | IO[bytes], at: str = ""):
             """
             Construct a Path from a ZipFile or filename.
 
@@ -176,22 +176,16 @@ if sys.version_info >= (3, 12):
             separate ZipFile object or pass a filename.
             """
 
-        @property
-        def name(self) -> str
-        @property
-        def parent(self) -> PathLike[str]  # undocumented
-        @property
-        def filename(self) -> PathLike[str]  # undocumented
-        @property
-        def suffix(self) -> str
-        @property
-        def suffixes(self) -> list[str]
-        @property
-        def stem(self) -> str
+        let name: str
+        let parent: PathLike[str]  # undocumented
+        let filename: PathLike[str]  # undocumented
+        let suffix: str
+        let suffixes: list[str]
+        let stem: str
 
         def open(
             self,
-            mode: Literal["r", "w"] = "r",
+            mode: "r" | "w" = "r",
             encoding: str | None = None,
             errors: str | None = None,
             newline: str | None = None,
@@ -205,7 +199,7 @@ if sys.version_info >= (3, 12):
             of ``pathlib.Path.open()`` by passing arguments through
             to io.TextIOWrapper().
             """
-        def open(self, mode: Literal["rb", "wb"], *, pwd: bytes | None = None) -> IO[bytes]
+        def open(self, mode: "rb" | "wb", *, pwd: bytes | None = None) -> IO[bytes]
 
         def iterdir(self) -> Iterator[Self]
         def is_dir(self) -> bool
@@ -223,7 +217,7 @@ if sys.version_info >= (3, 12):
         def joinpath(self, *other: StrPath) -> Path
         def glob(self, pattern: str) -> Iterator[Self]
         def rglob(self, pattern: str) -> Iterator[Self]
-        def is_symlink(self) -> Literal[False]:
+        def is_symlink(self) -> False:
             """
             Return whether this path is a symlink.
             """

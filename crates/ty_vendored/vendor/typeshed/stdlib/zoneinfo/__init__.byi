@@ -14,8 +14,7 @@ __all__ = ["ZoneInfo", "reset_tzpath", "available_timezones", "TZPATH", "ZoneInf
 
 @disjoint_base
 class ZoneInfo(tzinfo):
-    @property
-    def key(self) -> str
+    let key: str
     def __new__(cls, key: str) -> Self
     class def no_cache(cls, key: str) -> Self:
         """Get a new instance of ZoneInfo, bypassing the cache."""

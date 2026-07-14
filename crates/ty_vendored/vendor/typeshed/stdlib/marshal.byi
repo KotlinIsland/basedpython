@@ -31,11 +31,11 @@ import builtins
 import sys
 import types
 from _typeshed import ReadableBuffer, SupportsRead, SupportsWrite
-from typing import Any, Final, TypeAlias
+from typing import Final, TypeAlias
 
-version: Final[int]
+final version: int
 
-_Marshallable: TypeAlias = (
+type _Marshallable = (
     # handled in w_object() in marshal.c
     None
     | type[StopIteration]
@@ -47,10 +47,10 @@ _Marshallable: TypeAlias = (
     | complex
     | bytes
     | str
-    | tuple[_Marshallable, ...]
-    | list[Any]
-    | dict[Any, Any]
-    | set[Any]
+    | (*: _Marshallable)
+    | list[dynamic]
+    | dict[dynamic, dynamic]
+    | set[dynamic]
     | frozenset[_Marshallable]
     | types.CodeType
     | ReadableBuffer

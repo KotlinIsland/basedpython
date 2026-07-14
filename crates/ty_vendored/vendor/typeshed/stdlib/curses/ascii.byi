@@ -40,7 +40,7 @@ US: Final = 0x1F
 SP: Final = 0x20
 DEL: Final = 0x7F
 
-controlnames: Final[list[int]]
+final controlnames: list[int]
 
 def isalnum(c: str | int) -> bool
 def isalpha(c: str | int) -> bool

@@ -48,7 +48,6 @@ specifies whether or not chunks are aligned on 2-byte boundaries.  The
 default is 1, i.e. aligned.
 """
 
-from typing import IO
 
 class Chunk:
     closed: bool
@@ -59,7 +58,7 @@ class Chunk:
     size_read: int
     offset: int
     seekable: bool
-    def __init__(self, file: IO[bytes], align: bool = True, bigendian: bool = True, inclheader: bool = False) -> None
+    init(self, file: IO[bytes], align: bool = True, bigendian: bool = True, inclheader: bool = False)
     def getname(self) -> bytes:
         """Return the name (ID) of the current chunk."""
 

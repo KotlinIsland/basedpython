@@ -15,7 +15,7 @@ RUNNING: Final = "RUNNING"
 CANCELLED: Final = "CANCELLED"
 CANCELLED_AND_NOTIFIED: Final = "CANCELLED_AND_NOTIFIED"
 FINISHED: Final = "FINISHED"
-_STATE_TO_DESCRIPTION_MAP: Final[dict[str, str]]
+final _STATE_TO_DESCRIPTION_MAP: dict[str, str]
 LOGGER: Logger
 
 class Error(Exception):
@@ -63,7 +63,7 @@ class Future[in out Element]:
     def done(self) -> bool:
         """Return True if the future was cancelled or finished executing."""
 
-    def add_done_callback(self, fn: Callable[[Future[Element]], object]) -> None:
+    def add_done_callback(self, fn: (Future[Element]) -> object) -> None:
         """Attaches a callable that will be called when the future finishes.
 
         Args:
@@ -160,7 +160,7 @@ class Future[in out Element]:
 class Executor:
     """This is an abstract base class for concrete asynchronous executors."""
 
-    def submit[**P, Element](self, fn: Callable[P, Element], /, *args: P.args, **kwargs: P.kwargs) -> Future[Element]:
+    def submit[**P, Element](self, fn: (**P) -> Element, /, *args: P.args, **kwargs: P.kwargs) -> Future[Element]:
         """Submits a callable to be executed with the given arguments.
 
         Schedules the callable to be executed as fn(*args, **kwargs) and
@@ -254,7 +254,7 @@ class Executor:
     ) -> bool | None
 
 @type_check_only
-class _AsCompletedFuture[out Element](Protocol):
+protocol _AsCompletedFuture[out Element]:
     # as_completed only mutates non-generic aspects of passed Futures and does not do any nominal
     # checks. Therefore, we can use a Protocol here to allow as_completed to act covariantly.
     # See the tests for concurrent.futures
@@ -339,12 +339,12 @@ class _AllCompletedWaiter(_Waiter):
     num_pending_calls: int
     stop_on_exception: bool
     lock: threading.Lock
-    def __init__(self, num_pending_calls: int, stop_on_exception: bool) -> None
+    init(self, num_pending_calls: int, stop_on_exception: bool)
 
 class _AcquireFutures:
     """A context manager that does an ordered acquire of Future conditions."""
 
     futures: Iterable[Future[dynamic]]
-    def __init__(self, futures: Iterable[Future[dynamic]]) -> None
+    init(self, futures: Iterable[Future[dynamic]])
     def __enter__(self) -> None
     def __exit__(self, *args: Unused) -> None

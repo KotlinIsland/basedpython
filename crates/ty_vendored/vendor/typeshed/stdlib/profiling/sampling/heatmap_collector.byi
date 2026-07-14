@@ -16,7 +16,7 @@ class HeatmapCollector(Collector):
     """
 
     FILE_INDEX_FORMAT: str
-    def __init__(self, sample_interval_usec: int, *, skip_idle: bool = False) -> None:
+    init(self, sample_interval_usec: int, *, skip_idle: bool = False):
         """Initialize the heatmap collector with data structures for analysis."""
 
     def collect(

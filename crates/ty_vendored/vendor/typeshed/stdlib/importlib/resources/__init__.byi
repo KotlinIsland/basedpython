@@ -13,7 +13,7 @@ from collections.abc import Iterator
 from contextlib import AbstractContextManager
 from pathlib import Path
 from types import ModuleType
-from typing import Any, BinaryIO, Literal, TextIO, TypeAlias
+from typing import Literal, TypeAlias
 from typing_extensions import deprecated
 
 if sys.version_info >= (3, 11):
@@ -24,7 +24,7 @@ else:
 if sys.version_info >= (3, 11):
     from importlib.resources._common import Package as Package
 else:
-    Package: TypeAlias = str | ModuleType
+    type Package = str | ModuleType
 
 __all__ = [
     "Package",
@@ -44,9 +44,9 @@ if sys.version_info < (3, 13):
     __all__ += ["Resource"]
 
 if sys.version_info < (3, 11):
-    Resource: TypeAlias = str | os.PathLike[Any]
+    type Resource = str | os.PathLike[dynamic]
 elif sys.version_info < (3, 13):
-    Resource: TypeAlias = str
+    type Resource = str
 
 if sys.version_info >= (3, 12):
     from importlib.resources._common import Anchor as Anchor
@@ -81,7 +81,7 @@ else:
         bytes.decode().
         """
 
-    def path(package: Package, resource: Resource) -> AbstractContextManager[Path, Literal[False]]:
+    def path(package: Package, resource: Resource) -> AbstractContextManager[Path, False]:
         """A context manager providing a file path object to the resource.
 
         If the resource does not already exist on its own on the file system,
@@ -109,7 +109,7 @@ else:
 if sys.version_info >= (3, 11):
     from importlib.resources._common import as_file as as_file
 else:
-    def as_file(path: Traversable) -> AbstractContextManager[Path, Literal[False]]:
+    def as_file(path: Traversable) -> AbstractContextManager[Path, False]:
         """
         Given a Traversable object, return that object as a
         path on the local file system in a context manager.

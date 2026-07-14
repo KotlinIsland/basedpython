@@ -126,7 +126,7 @@ from _decimal import (
 )
 from collections.abc import Container, Sequence
 from types import TracebackType
-from typing import Any, ClassVar, Literal, NamedTuple, TypeAlias, final, type_check_only
+from typing import ClassVar, Literal, NamedTuple, TypeAlias, final, type_check_only
 from typing_extensions import Self, disjoint_base
 
 if sys.version_info >= (3, 14):
@@ -134,19 +134,18 @@ if sys.version_info >= (3, 14):
 if sys.version_info >= (3, 15):
     from _decimal import SPEC_VERSION as SPEC_VERSION
 
-_Decimal: TypeAlias = Decimal | int
-_DecimalNew: TypeAlias = Decimal | float | str | tuple[int, Sequence[int], int]
-_ComparableNum: TypeAlias = Decimal | float | numbers.Rational
-_TrapType: TypeAlias = type[DecimalException]
+type _Decimal = Decimal | int
+type _DecimalNew = Decimal | float | str | tuple[int, Sequence[int], int]
+type _ComparableNum = Decimal | float | numbers.Rational
+type _TrapType = type[DecimalException]
 
 # At runtime, these classes are implemented in C as part of "_decimal".
 # However, they consider themselves to live in "decimal", so we'll put them here.
 
 # This type isn't exposed at runtime. It calls itself decimal.ContextManager
-@final
 @type_check_only
-class _ContextManager:
-    def __init__(self, new_context: Context) -> None
+final class _ContextManager:
+    init(self, new_context: Context)
     def __enter__(self) -> Context
     def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None
 
@@ -155,7 +154,7 @@ class DecimalTuple(NamedTuple):
 
     sign: int
     digits: (*: int)
-    exponent: int | Literal["n", "N", "F"]
+    exponent: int | "n" | "N" | "F"
 
 class DecimalException(ArithmeticError)
 class Clamped(DecimalException)
@@ -328,10 +327,8 @@ class Decimal:
     def __trunc__(self) -> int:
         """Return the Integral closest to x between 0 and x."""
 
-    @property
-    def real(self) -> Decimal
-    @property
-    def imag(self) -> Decimal
+    let real: Decimal
+    let imag: Decimal
     def conjugate(self) -> Decimal:
         """Return self."""
 
@@ -739,7 +736,7 @@ class Context:
     clamp: int
     traps: dict[_TrapType, bool]
     flags: dict[_TrapType, bool]
-    def __init__(
+    init(
         self,
         prec: int | None = None,
         rounding: str | None = None,
@@ -749,8 +746,8 @@ class Context:
         clamp: int | None = None,
         flags: dict[_TrapType, bool] | Container[_TrapType] | None = None,
         traps: dict[_TrapType, bool] | Container[_TrapType] | None = None,
-    ) -> None
-    def __reduce__(self) -> (type[Self], (*: Any))
+    )
+    def __reduce__(self) -> (type[Self], (*: dynamic))
     def clear_flags(self) -> None:
         """Reset all flags to False."""
 
@@ -762,7 +759,7 @@ class Context:
 
     def __copy__(self) -> Context
     # see https://github.com/python/cpython/issues/94107
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     """Return hash(self)."""
 
     def Etiny(self) -> int:

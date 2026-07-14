@@ -82,86 +82,86 @@ if sys.version_info >= (3, 12):
 if sys.version_info >= (3, 14):
     __all__ += ["TSTRING_START", "TSTRING_MIDDLE", "TSTRING_END"]
 
-ENDMARKER: Final[int]
-NAME: Final[int]
-NUMBER: Final[int]
-STRING: Final[int]
-NEWLINE: Final[int]
-INDENT: Final[int]
-DEDENT: Final[int]
-LPAR: Final[int]
-RPAR: Final[int]
-LSQB: Final[int]
-RSQB: Final[int]
-COLON: Final[int]
-COMMA: Final[int]
-SEMI: Final[int]
-PLUS: Final[int]
-MINUS: Final[int]
-STAR: Final[int]
-SLASH: Final[int]
-VBAR: Final[int]
-AMPER: Final[int]
-LESS: Final[int]
-GREATER: Final[int]
-EQUAL: Final[int]
-DOT: Final[int]
-PERCENT: Final[int]
-LBRACE: Final[int]
-RBRACE: Final[int]
-EQEQUAL: Final[int]
-NOTEQUAL: Final[int]
-LESSEQUAL: Final[int]
-GREATEREQUAL: Final[int]
-TILDE: Final[int]
-CIRCUMFLEX: Final[int]
-LEFTSHIFT: Final[int]
-RIGHTSHIFT: Final[int]
-DOUBLESTAR: Final[int]
-PLUSEQUAL: Final[int]
-MINEQUAL: Final[int]
-STAREQUAL: Final[int]
-SLASHEQUAL: Final[int]
-PERCENTEQUAL: Final[int]
-AMPEREQUAL: Final[int]
-VBAREQUAL: Final[int]
-CIRCUMFLEXEQUAL: Final[int]
-LEFTSHIFTEQUAL: Final[int]
-RIGHTSHIFTEQUAL: Final[int]
-DOUBLESTAREQUAL: Final[int]
-DOUBLESLASH: Final[int]
-DOUBLESLASHEQUAL: Final[int]
-AT: Final[int]
-RARROW: Final[int]
-ELLIPSIS: Final[int]
-ATEQUAL: Final[int]
+final ENDMARKER: int
+final NAME: int
+final NUMBER: int
+final STRING: int
+final NEWLINE: int
+final INDENT: int
+final DEDENT: int
+final LPAR: int
+final RPAR: int
+final LSQB: int
+final RSQB: int
+final COLON: int
+final COMMA: int
+final SEMI: int
+final PLUS: int
+final MINUS: int
+final STAR: int
+final SLASH: int
+final VBAR: int
+final AMPER: int
+final LESS: int
+final GREATER: int
+final EQUAL: int
+final DOT: int
+final PERCENT: int
+final LBRACE: int
+final RBRACE: int
+final EQEQUAL: int
+final NOTEQUAL: int
+final LESSEQUAL: int
+final GREATEREQUAL: int
+final TILDE: int
+final CIRCUMFLEX: int
+final LEFTSHIFT: int
+final RIGHTSHIFT: int
+final DOUBLESTAR: int
+final PLUSEQUAL: int
+final MINEQUAL: int
+final STAREQUAL: int
+final SLASHEQUAL: int
+final PERCENTEQUAL: int
+final AMPEREQUAL: int
+final VBAREQUAL: int
+final CIRCUMFLEXEQUAL: int
+final LEFTSHIFTEQUAL: int
+final RIGHTSHIFTEQUAL: int
+final DOUBLESTAREQUAL: int
+final DOUBLESLASH: int
+final DOUBLESLASHEQUAL: int
+final AT: int
+final RARROW: int
+final ELLIPSIS: int
+final ATEQUAL: int
 if sys.version_info < (3, 13):
-    AWAIT: Final[int]
-    ASYNC: Final[int]
-OP: Final[int]
-ERRORTOKEN: Final[int]
-N_TOKENS: Final[int]
-NT_OFFSET: Final[int]
-tok_name: Final[dict[int, str]]
-COMMENT: Final[int]
-NL: Final[int]
-ENCODING: Final[int]
-TYPE_COMMENT: Final[int]
-TYPE_IGNORE: Final[int]
-COLONEQUAL: Final[int]
-EXACT_TOKEN_TYPES: Final[dict[str, int]]
-SOFT_KEYWORD: Final[int]
+    final AWAIT: int
+    final ASYNC: int
+final OP: int
+final ERRORTOKEN: int
+final N_TOKENS: int
+final NT_OFFSET: int
+final tok_name: dict[int, str]
+final COMMENT: int
+final NL: int
+final ENCODING: int
+final TYPE_COMMENT: int
+final TYPE_IGNORE: int
+final COLONEQUAL: int
+final EXACT_TOKEN_TYPES: dict[str, int]
+final SOFT_KEYWORD: int
 
 if sys.version_info >= (3, 12):
-    EXCLAMATION: Final[int]
-    FSTRING_END: Final[int]
-    FSTRING_MIDDLE: Final[int]
-    FSTRING_START: Final[int]
+    final EXCLAMATION: int
+    final FSTRING_END: int
+    final FSTRING_MIDDLE: int
+    final FSTRING_START: int
 
 if sys.version_info >= (3, 14):
-    TSTRING_START: Final[int]
-    TSTRING_MIDDLE: Final[int]
-    TSTRING_END: Final[int]
+    final TSTRING_START: int
+    final TSTRING_MIDDLE: int
+    final TSTRING_END: int
 
 def ISTERMINAL(x: int) -> bool
 def ISNONTERMINAL(x: int) -> bool

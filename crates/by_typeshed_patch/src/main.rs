@@ -105,28 +105,26 @@ fn apply_patches_to_file(
     // any typevar references the patches rewrote)
     let reparsed = parse_unchecked_source(&patched, PySourceType::BasedPythonStub);
     let conversion = pep695::convert_module(&reparsed, &patched);
-    let converted = if conversion.is_empty() {
+    let mut current = if conversion.is_empty() {
         patched
     } else {
         apply_edits(&patched, conversion)
     };
 
-    // pass 3: post-conversion patches over the final pep 695 form (re-parsed so
-    // they see the explicit variance keywords the conversion emitted)
-    let reparsed = parse_unchecked_source(&converted, PySourceType::BasedPythonStub);
-    let mut post_edits = Vec::new();
+    // pass 3: post-conversion beautification. each post-patch runs over its own
+    // re-parse of the current form and is applied before the next one, so no two
+    // patches have to reason about each other's byte offsets
     for patch in post_patches {
-        post_edits.extend(patch.rewrite(rel, &reparsed, &converted));
+        let reparsed = parse_unchecked_source(&current, PySourceType::BasedPythonStub);
+        let edits = patch.rewrite(rel, &reparsed, &current);
+        if !edits.is_empty() {
+            current = apply_edits(&current, edits);
+        }
     }
-    let final_source = if post_edits.is_empty() {
-        converted
-    } else {
-        apply_edits(&converted, post_edits)
-    };
 
-    if final_source == original {
+    if current == original {
         return Ok(false);
     }
-    fs::write(path, &final_source).with_context(|| format!("{}", path.display()))?;
+    fs::write(path, &current).with_context(|| format!("{}", path.display()))?;
     Ok(true)
 }

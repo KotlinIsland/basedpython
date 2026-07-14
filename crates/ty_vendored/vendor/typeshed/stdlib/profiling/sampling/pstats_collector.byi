@@ -6,7 +6,7 @@ from _remote_debugging import AwaitedInfo, InterpreterInfo
 from .collector import Collector, _Timestamps
 
 class PstatsCollector(Collector):
-    def __init__(self, sample_interval_usec: int, *, skip_idle: bool = False) -> None
+    init(self, sample_interval_usec: int, *, skip_idle: bool = False)
     def collect(
         self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None
     ) -> None

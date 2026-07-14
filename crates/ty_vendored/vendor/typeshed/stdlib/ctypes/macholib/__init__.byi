@@ -8,4 +8,4 @@ And also Apple's documentation.
 
 from typing import Final
 
-__version__: Final[str]
+final __version__: str

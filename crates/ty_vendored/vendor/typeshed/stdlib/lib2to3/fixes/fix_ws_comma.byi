@@ -11,7 +11,7 @@ from .. import fixer_base
 from ..pytree import Leaf
 
 class FixWsComma(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[False]]
+    BM_compatible: ClassVar[False]
     PATTERN: ClassVar[str]
     COMMA: Leaf
     COLON: Leaf

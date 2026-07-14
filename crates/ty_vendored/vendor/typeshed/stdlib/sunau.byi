@@ -104,10 +104,10 @@ is destroyed.
 """
 
 from _typeshed import Unused
-from typing import IO, Final, Literal, NamedTuple, NoReturn, TypeAlias
+from typing import Final, Literal, NamedTuple, TypeAlias
 from typing_extensions import Self
 
-_File: TypeAlias = str | IO[bytes]
+type _File = str | IO[bytes]
 
 class Error(Exception)
 
@@ -137,7 +137,7 @@ class _sunau_params(NamedTuple):
     compname: str
 
 class Au_read:
-    def __init__(self, f: _File) -> None
+    init(self, f: _File)
     def __enter__(self) -> Self
     def __exit__(self, *args: Unused) -> None
     def __del__(self) -> None
@@ -158,7 +158,7 @@ class Au_read:
     def readframes(self, nframes: int) -> bytes | None
 
 class Au_write:
-    def __init__(self, f: _File) -> None
+    init(self, f: _File)
     def __enter__(self) -> Self
     def __exit__(self, *args: Unused) -> None
     def __del__(self) -> None
@@ -181,6 +181,6 @@ class Au_write:
     def writeframes(self, data: bytes) -> None
     def close(self) -> None
 
-def open(f: _File, mode: Literal["r", "rb"]) -> Au_read
-def open(f: _File, mode: Literal["w", "wb"]) -> Au_write
+def open(f: _File, mode: "r" | "rb") -> Au_read
+def open(f: _File, mode: "w" | "wb") -> Au_write
 def open(f: _File, mode: str | None = None) -> dynamic

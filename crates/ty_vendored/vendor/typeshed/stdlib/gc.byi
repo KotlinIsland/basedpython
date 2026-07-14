@@ -29,7 +29,7 @@ DEBUG_SAVEALL: Final = 32
 DEBUG_STATS: Final = 1
 DEBUG_UNCOLLECTABLE: Final = 4
 
-_CallbackType: TypeAlias = Callable[[Literal["start", "stop"], dict[str, int]], object]
+type _CallbackType = (Literal["start", "stop"], dict[str, int]) -> object
 
 callbacks: list[_CallbackType]
 garbage: list[dynamic]

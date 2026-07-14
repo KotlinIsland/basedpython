@@ -25,7 +25,7 @@ class HeaderWriteError(MessageError):
 class MessageDefect(ValueError):
     """Base class for a message defect."""
 
-    def __init__(self, line: str | None = None) -> None
+    init(self, line: str | None = None)
 
 class NoBoundaryInMultipartDefect(MessageDefect):
     """A message claimed to be a multipart but had no boundary parameter."""
@@ -77,7 +77,7 @@ class HeaderMissingRequiredValue(HeaderDefect):
 class NonPrintableDefect(HeaderDefect):
     """ASCII characters outside the ascii-printable range found"""
 
-    def __init__(self, non_printables: str | None) -> None
+    init(self, non_printables: str | None)
 
 class ObsoleteHeaderDefect(HeaderDefect):
     """Header uses syntax declared obsolete by RFC 5322"""

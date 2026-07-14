@@ -34,7 +34,7 @@ from _ast import (
 from _typeshed import ReadableBuffer, Unused
 from collections.abc import Iterable, Iterator, Sequence
 from types import EllipsisType
-from typing import Any, ClassVar, Generic, Literal, TypedDict, TypeVar as _TypeVar, type_check_only
+from typing import ClassVar, Generic, Literal, TypedDict, TypeVar as _TypeVar, type_check_only
 from typing_extensions import Self, Unpack, deprecated, disjoint_base
 
 if sys.version_info >= (3, 13):
@@ -113,7 +113,7 @@ class Expression(mod):
 
     __match_args__ = ("body",)
     body: expr
-    def __init__(self, body: expr) -> None
+    init(self, body: expr)
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, body: expr = ...) -> Self:
@@ -170,7 +170,7 @@ class stmt(AST):
     col_offset: int
     end_lineno: int | None
     end_col_offset: int | None
-    def __init__(self, **kwargs: Unpack[_Attributes]) -> None
+    init(self, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, **kwargs: Unpack[_Attributes]) -> Self:
@@ -398,7 +398,7 @@ class Return(stmt):
 
     __match_args__ = ("value",)
     value: expr | None
-    def __init__(self, value: expr | None = None, **kwargs: Unpack[_Attributes]) -> None
+    init(self, value: expr | None = None, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, value: expr | None = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -464,7 +464,7 @@ if sys.version_info >= (3, 12):
             ) -> None
 
         if sys.version_info >= (3, 14):
-            def __replace__(  # type: ignore[override]
+            def __replace__(
                 self,
                 *,
                 name: Name = ...,
@@ -481,9 +481,9 @@ class AugAssign(stmt):
     target: Name | Attribute | Subscript
     op: operator
     value: expr
-    def __init__(
+    init(
         self, target: Name | Attribute | Subscript, op: operator, value: expr, **kwargs: Unpack[_Attributes]
-    ) -> None
+    )
 
     if sys.version_info >= (3, 14):
         def __replace__(
@@ -505,15 +505,15 @@ class AnnAssign(stmt):
     value: expr | None
     simple: int
 
-    def __init__(
+    init(
         self,
         target: Name | Attribute | Subscript,
         annotation: expr,
         value: expr | None,
         simple: int,
         **kwargs: Unpack[_Attributes],
-    ) -> None
-    def __init__(
+    )
+    init(
         self,
         target: Name | Attribute | Subscript,
         annotation: expr,
@@ -521,7 +521,7 @@ class AnnAssign(stmt):
         *,
         simple: int,
         **kwargs: Unpack[_Attributes],
-    ) -> None
+    )
 
     if sys.version_info >= (3, 14):
         def __replace__(
@@ -729,7 +729,7 @@ class Raise(stmt):
     __match_args__ = ("exc", "cause")
     exc: expr | None
     cause: expr | None
-    def __init__(self, exc: expr | None = None, cause: expr | None = None, **kwargs: Unpack[_Attributes]) -> None
+    init(self, exc: expr | None = None, cause: expr | None = None, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, exc: expr | None = ..., cause: expr | None = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -820,7 +820,7 @@ class Assert(stmt):
     __match_args__ = ("test", "msg")
     test: expr
     msg: expr | None
-    def __init__(self, test: expr, msg: expr | None = None, **kwargs: Unpack[_Attributes]) -> None
+    init(self, test: expr, msg: expr | None = None, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, test: expr = ..., msg: expr | None = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -939,7 +939,7 @@ class Expr(stmt):
 
     __match_args__ = ("value",)
     value: expr
-    def __init__(self, value: expr, **kwargs: Unpack[_Attributes]) -> None
+    init(self, value: expr, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, value: expr = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -990,7 +990,7 @@ class expr(AST):
     col_offset: int
     end_lineno: int | None
     end_col_offset: int | None
-    def __init__(self, **kwargs: Unpack[_Attributes]) -> None
+    init(self, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, **kwargs: Unpack[_Attributes]) -> Self:
@@ -1017,7 +1017,7 @@ class NamedExpr(expr):
     __match_args__ = ("target", "value")
     target: Name
     value: expr
-    def __init__(self, target: Name, value: expr, **kwargs: Unpack[_Attributes]) -> None
+    init(self, target: Name, value: expr, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, target: Name = ..., value: expr = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1030,7 +1030,7 @@ class BinOp(expr):
     left: expr
     op: operator
     right: expr
-    def __init__(self, left: expr, op: operator, right: expr, **kwargs: Unpack[_Attributes]) -> None
+    init(self, left: expr, op: operator, right: expr, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, left: expr = ..., op: operator = ..., right: expr = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1042,7 +1042,7 @@ class UnaryOp(expr):
     __match_args__ = ("op", "operand")
     op: unaryop
     operand: expr
-    def __init__(self, op: unaryop, operand: expr, **kwargs: Unpack[_Attributes]) -> None
+    init(self, op: unaryop, operand: expr, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, op: unaryop = ..., operand: expr = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1054,7 +1054,7 @@ class Lambda(expr):
     __match_args__ = ("args", "body")
     args: arguments
     body: expr
-    def __init__(self, args: arguments, body: expr, **kwargs: Unpack[_Attributes]) -> None
+    init(self, args: arguments, body: expr, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, args: arguments = ..., body: expr = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1067,7 +1067,7 @@ class IfExp(expr):
     test: expr
     body: expr
     orelse: expr
-    def __init__(self, test: expr, body: expr, orelse: expr, **kwargs: Unpack[_Attributes]) -> None
+    init(self, test: expr, body: expr, orelse: expr, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, test: expr = ..., body: expr = ..., orelse: expr = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1190,7 +1190,7 @@ class Await(expr):
 
     __match_args__ = ("value",)
     value: expr
-    def __init__(self, value: expr, **kwargs: Unpack[_Attributes]) -> None
+    init(self, value: expr, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, value: expr = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1201,7 +1201,7 @@ class Yield(expr):
 
     __match_args__ = ("value",)
     value: expr | None
-    def __init__(self, value: expr | None = None, **kwargs: Unpack[_Attributes]) -> None
+    init(self, value: expr | None = None, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, value: expr | None = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1212,7 +1212,7 @@ class YieldFrom(expr):
 
     __match_args__ = ("value",)
     value: expr
-    def __init__(self, value: expr, **kwargs: Unpack[_Attributes]) -> None
+    init(self, value: expr, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, value: expr = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1265,7 +1265,7 @@ class FormattedValue(expr):
     value: expr
     conversion: int
     format_spec: expr | None
-    def __init__(self, value: expr, conversion: int, format_spec: expr | None = None, **kwargs: Unpack[_Attributes]) -> None
+    init(self, value: expr, conversion: int, format_spec: expr | None = None, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(
@@ -1293,7 +1293,7 @@ if sys.version_info >= (3, 14):
 
         __match_args__ = ("values",)
         values: list[expr]
-        def __init__(self, values: list[expr] = ..., **kwargs: Unpack[_Attributes]) -> None
+        init(self, values: list[expr] = ..., **kwargs: Unpack[_Attributes])
         def __replace__(self, *, values: list[expr] = ..., **kwargs: Unpack[_Attributes]) -> Self:
             """Return a copy of the AST node with new values for the specified fields."""
 
@@ -1305,14 +1305,14 @@ if sys.version_info >= (3, 14):
         str: builtins.str
         conversion: int
         format_spec: expr | None = None
-        def __init__(
+        init(
             self,
             value: expr = ...,
             str: builtins.str = ...,
             conversion: int = ...,
             format_spec: expr | None = ...,
             **kwargs: Unpack[_Attributes],
-        ) -> None
+        )
         def __replace__(
             self,
             *,
@@ -1324,7 +1324,7 @@ if sys.version_info >= (3, 14):
         ) -> Self:
             """Return a copy of the AST node with new values for the specified fields."""
 
-_ConstantValue: typing_extensions.TypeAlias = str | bytes | bool | int | float | complex | None | EllipsisType
+type _ConstantValue = str | bytes | bool | int | float | complex | None | EllipsisType
 
 class Constant(expr):
     """Constant(constant value, string? kind)"""
@@ -1340,7 +1340,7 @@ class Constant(expr):
             """Deprecated. Use value instead."""
         @n.setter
         @deprecated("Removed in Python 3.14. Use `value` instead.")
-        def n(self, value: _ConstantValue) -> None: ...
+        def n(self, value: _ConstantValue) -> None
 
         @property
         @deprecated("Removed in Python 3.14. Use `value` instead.")
@@ -1348,9 +1348,9 @@ class Constant(expr):
             """Deprecated. Use value instead."""
         @s.setter
         @deprecated("Removed in Python 3.14. Use `value` instead.")
-        def s(self, value: _ConstantValue) -> None: ...
+        def s(self, value: _ConstantValue) -> None
 
-    def __init__(self, value: _ConstantValue, kind: str | None = None, **kwargs: Unpack[_Attributes]) -> None
+    init(self, value: _ConstantValue, kind: str | None = None, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, value: _ConstantValue = ..., kind: str | None = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1363,7 +1363,7 @@ class Attribute(expr):
     value: expr
     attr: str
     ctx: expr_context  # Not present in Python < 3.13 if not passed to `__init__`
-    def __init__(self, value: expr, attr: str, ctx: expr_context = ..., **kwargs: Unpack[_Attributes]) -> None
+    init(self, value: expr, attr: str, ctx: expr_context = ..., **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(
@@ -1378,7 +1378,7 @@ class Subscript(expr):
     value: expr
     slice: expr
     ctx: expr_context  # Not present in Python < 3.13 if not passed to `__init__`
-    def __init__(self, value: expr, slice: expr, ctx: expr_context = ..., **kwargs: Unpack[_Attributes]) -> None
+    init(self, value: expr, slice: expr, ctx: expr_context = ..., **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(
@@ -1392,7 +1392,7 @@ class Starred(expr):
     __match_args__ = ("value", "ctx")
     value: expr
     ctx: expr_context  # Not present in Python < 3.13 if not passed to `__init__`
-    def __init__(self, value: expr, ctx: expr_context = ..., **kwargs: Unpack[_Attributes]) -> None
+    init(self, value: expr, ctx: expr_context = ..., **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, value: expr = ..., ctx: expr_context = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1404,7 +1404,7 @@ class Name(expr):
     __match_args__ = ("id", "ctx")
     id: str
     ctx: expr_context  # Not present in Python < 3.13 if not passed to `__init__`
-    def __init__(self, id: str, ctx: expr_context = ..., **kwargs: Unpack[_Attributes]) -> None
+    init(self, id: str, ctx: expr_context = ..., **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, id: str = ..., ctx: expr_context = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1454,9 +1454,9 @@ class Slice(expr):
     lower: expr | None
     upper: expr | None
     step: expr | None
-    def __init__(
+    init(
         self, lower: expr | None = None, upper: expr | None = None, step: expr | None = None, **kwargs: Unpack[_Attributes]
-    ) -> None
+    )
 
     if sys.version_info >= (3, 14):
         def __replace__(
@@ -1468,13 +1468,13 @@ class Slice(expr):
 class ExtSlice(slice):
     """Deprecated AST node class. Use ast.Tuple instead."""
 
-    def __new__(cls, dims: Iterable[slice] = (), **kwargs: Unpack[_Attributes]) -> Tuple  # type: ignore[misc]
+    def __new__(cls, dims: Iterable[slice] = (), **kwargs: Unpack[_Attributes]) -> Tuple
 
 @deprecated("Deprecated since Python 3.9. Use the index value directly instead.")
 class Index(slice):
     """Deprecated AST node class. Use the index value directly instead."""
 
-    def __new__(cls, value: expr, **kwargs: Unpack[_Attributes]) -> expr  # type: ignore[misc]
+    def __new__(cls, value: expr, **kwargs: Unpack[_Attributes]) -> expr
 
 class expr_context(AST):
     """expr_context = Load | Store | Del"""
@@ -1628,7 +1628,7 @@ class excepthandler(AST):
     col_offset: int
     end_lineno: int | None
     end_col_offset: int | None
-    def __init__(self, **kwargs: Unpack[_Attributes]) -> None
+    init(self, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(
@@ -1740,9 +1740,9 @@ class arg(AST):
     arg: str
     annotation: expr | None
     type_comment: str | None
-    def __init__(
+    init(
         self, arg: str, annotation: expr | None = None, type_comment: str | None = None, **kwargs: Unpack[_Attributes]
-    ) -> None
+    )
 
     if sys.version_info >= (3, 14):
         def __replace__(
@@ -1761,8 +1761,8 @@ class keyword(AST):
     arg: str | None
     value: expr
 
-    def __init__(self, arg: str | None, value: expr, **kwargs: Unpack[_Attributes]) -> None
-    def __init__(self, arg: str | None = None, *, value: expr, **kwargs: Unpack[_Attributes]) -> None
+    init(self, arg: str | None, value: expr, **kwargs: Unpack[_Attributes])
+    init(self, arg: str | None = None, *, value: expr, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, arg: str | None = ..., value: expr = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1778,7 +1778,7 @@ class alias(AST):
     col_offset: int
     end_lineno: int | None
     end_col_offset: int | None
-    def __init__(self, name: str, asname: str | None = None, **kwargs: Unpack[_Attributes]) -> None
+    init(self, name: str, asname: str | None = None, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, name: str = ..., asname: str | None = ..., **kwargs: Unpack[_Attributes]) -> Self:
@@ -1790,7 +1790,7 @@ class withitem(AST):
     __match_args__ = ("context_expr", "optional_vars")
     context_expr: expr
     optional_vars: expr | None
-    def __init__(self, context_expr: expr, optional_vars: expr | None = None) -> None
+    init(self, context_expr: expr, optional_vars: expr | None = None)
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, context_expr: expr = ..., optional_vars: expr | None = ...) -> Self:
@@ -1811,7 +1811,7 @@ class pattern(AST):
     col_offset: int
     end_lineno: int
     end_col_offset: int
-    def __init__(self, **kwargs: Unpack[_Attributes[int]]) -> None
+    init(self, **kwargs: Unpack[_Attributes[int]])
 
     if sys.version_info >= (3, 14):
         def __replace__(
@@ -1856,7 +1856,7 @@ class MatchValue(pattern):
 
     __match_args__ = ("value",)
     value: expr
-    def __init__(self, value: expr, **kwargs: Unpack[_Attributes[int]]) -> None
+    init(self, value: expr, **kwargs: Unpack[_Attributes[int]])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, value: expr = ..., **kwargs: Unpack[_Attributes[int]]) -> Self:
@@ -1867,7 +1867,7 @@ class MatchSingleton(pattern):
 
     __match_args__ = ("value",)
     value: bool | None
-    def __init__(self, value: bool | None, **kwargs: Unpack[_Attributes[int]]) -> None
+    init(self, value: bool | None, **kwargs: Unpack[_Attributes[int]])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, value: bool | None = ..., **kwargs: Unpack[_Attributes[int]]) -> Self:
@@ -1962,7 +1962,7 @@ class MatchStar(pattern):
 
     __match_args__ = ("name",)
     name: str | None
-    def __init__(self, name: str | None = None, **kwargs: Unpack[_Attributes[int]]) -> None
+    init(self, name: str | None = None, **kwargs: Unpack[_Attributes[int]])
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, name: str | None = ..., **kwargs: Unpack[_Attributes[int]]) -> Self:
@@ -1974,9 +1974,9 @@ class MatchAs(pattern):
     __match_args__ = ("pattern", "name")
     pattern: ast.pattern | None
     name: str | None
-    def __init__(
+    init(
         self, pattern: ast.pattern | None = None, name: str | None = None, **kwargs: Unpack[_Attributes[int]]
-    ) -> None
+    )
 
     if sys.version_info >= (3, 14):
         def __replace__(
@@ -2007,7 +2007,7 @@ class TypeIgnore(type_ignore):
     __match_args__ = ("lineno", "tag")
     lineno: int
     tag: str
-    def __init__(self, lineno: int, tag: str) -> None
+    init(self, lineno: int, tag: str)
 
     if sys.version_info >= (3, 14):
         def __replace__(self, *, lineno: int = ..., tag: str = ...) -> Self:
@@ -2024,7 +2024,7 @@ if sys.version_info >= (3, 12):
         col_offset: int
         end_lineno: int
         end_col_offset: int
-        def __init__(self, **kwargs: Unpack[_Attributes[int]]) -> None
+        init(self, **kwargs: Unpack[_Attributes[int]])
 
         if sys.version_info >= (3, 14):
             def __replace__(self, **kwargs: Unpack[_Attributes[int]]) -> Self:
@@ -2101,42 +2101,42 @@ if sys.version_info >= (3, 12):
 if sys.version_info >= (3, 14):
     @type_check_only
     class _ABC(type):
-        def __init__(cls, *args: Unused) -> None
+        init(cls, *args: Unused)
 
 else:
     class _ABC(type):
-        def __init__(cls, *args: Unused) -> None
+        init(cls, *args: Unused)
 
 if sys.version_info < (3, 14):
     @deprecated("Removed in Python 3.14. Use `ast.Constant` instead.")
     class Num(Constant, metaclass=_ABC):
         """Deprecated AST node class. Use ast.Constant instead"""
 
-        def __new__(cls, n: complex, **kwargs: Unpack[_Attributes]) -> Constant  # type: ignore[misc]  # pyright: ignore[reportInconsistentConstructor]
+        def __new__(cls, n: complex, **kwargs: Unpack[_Attributes]) -> Constant
 
     @deprecated("Removed in Python 3.14. Use `ast.Constant` instead.")
     class Str(Constant, metaclass=_ABC):
         """Deprecated AST node class. Use ast.Constant instead"""
 
-        def __new__(cls, s: str, **kwargs: Unpack[_Attributes]) -> Constant  # type: ignore[misc]  # pyright: ignore[reportInconsistentConstructor]
+        def __new__(cls, s: str, **kwargs: Unpack[_Attributes]) -> Constant
 
     @deprecated("Removed in Python 3.14. Use `ast.Constant` instead.")
     class Bytes(Constant, metaclass=_ABC):
         """Deprecated AST node class. Use ast.Constant instead"""
 
-        def __new__(cls, s: bytes, **kwargs: Unpack[_Attributes]) -> Constant  # type: ignore[misc]  # pyright: ignore[reportInconsistentConstructor]
+        def __new__(cls, s: bytes, **kwargs: Unpack[_Attributes]) -> Constant
 
     @deprecated("Removed in Python 3.14. Use `ast.Constant` instead.")
     class NameConstant(Constant, metaclass=_ABC):
         """Deprecated AST node class. Use ast.Constant instead"""
 
-        def __new__(cls, value: _ConstantValue, kind: str | None, **kwargs: Unpack[_Attributes]) -> Constant  # type: ignore[misc]  # pyright: ignore[reportInconsistentConstructor]
+        def __new__(cls, value: _ConstantValue, kind: str | None, **kwargs: Unpack[_Attributes]) -> Constant
 
     @deprecated("Removed in Python 3.14. Use `ast.Constant` instead.")
     class Ellipsis(Constant, metaclass=_ABC):
         """Deprecated AST node class. Use ast.Constant instead"""
 
-        def __new__(cls, **kwargs: Unpack[_Attributes]) -> Constant  # type: ignore[misc]  # pyright: ignore[reportInconsistentConstructor]
+        def __new__(cls, **kwargs: Unpack[_Attributes]) -> Constant
 
 # everything below here is defined in ast.py
 
@@ -2146,11 +2146,11 @@ if sys.version_info >= (3, 15):
     def parse(
         source: _T,
         filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
-        mode: Literal["exec", "eval", "func_type", "single"] = "exec",
+        mode: "exec" | "eval" | "func_type" | "single" = "exec",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
         module: str | None = None,
     ) -> _T:
         """
@@ -2161,68 +2161,68 @@ if sys.version_info >= (3, 15):
     def parse(
         source: str | ReadableBuffer,
         filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
-        mode: Literal["exec"] = "exec",
+        mode: "exec" = "exec",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
         module: str | None = None,
     ) -> Module
     def parse(
         source: str | ReadableBuffer,
         filename: str | bytes | os.PathLike[dynamic],
-        mode: Literal["eval"],
+        mode: "eval",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
         module: str | None = None,
     ) -> Expression
     def parse(
         source: str | ReadableBuffer,
         filename: str | bytes | os.PathLike[dynamic],
-        mode: Literal["func_type"],
+        mode: "func_type",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
         module: str | None = None,
     ) -> FunctionType
     def parse(
         source: str | ReadableBuffer,
         filename: str | bytes | os.PathLike[dynamic],
-        mode: Literal["single"],
+        mode: "single",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
         module: str | None = None,
     ) -> Interactive
     def parse(
         source: str | ReadableBuffer,
         *,
-        mode: Literal["eval"],
+        mode: "eval",
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
         module: str | None = None,
     ) -> Expression
     def parse(
         source: str | ReadableBuffer,
         *,
-        mode: Literal["func_type"],
+        mode: "func_type",
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
         module: str | None = None,
     ) -> FunctionType
     def parse(
         source: str | ReadableBuffer,
         *,
-        mode: Literal["single"],
+        mode: "single",
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
         module: str | None = None,
     ) -> Interactive
     def parse(
@@ -2232,18 +2232,18 @@ if sys.version_info >= (3, 15):
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
         module: str | None = None,
     ) -> mod
 elif sys.version_info >= (3, 13):
     def parse(
         source: _T,
         filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
-        mode: Literal["exec", "eval", "func_type", "single"] = "exec",
+        mode: "exec" | "eval" | "func_type" | "single" = "exec",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
     ) -> _T:
         """
         Parse the source into an AST node.
@@ -2253,62 +2253,62 @@ elif sys.version_info >= (3, 13):
     def parse(
         source: str | ReadableBuffer,
         filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
-        mode: Literal["exec"] = "exec",
+        mode: "exec" = "exec",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
     ) -> Module
     def parse(
         source: str | ReadableBuffer,
         filename: str | bytes | os.PathLike[dynamic],
-        mode: Literal["eval"],
+        mode: "eval",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
     ) -> Expression
     def parse(
         source: str | ReadableBuffer,
         filename: str | bytes | os.PathLike[dynamic],
-        mode: Literal["func_type"],
+        mode: "func_type",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
     ) -> FunctionType
     def parse(
         source: str | ReadableBuffer,
         filename: str | bytes | os.PathLike[dynamic],
-        mode: Literal["single"],
+        mode: "single",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
     ) -> Interactive
     def parse(
         source: str | ReadableBuffer,
         *,
-        mode: Literal["eval"],
+        mode: "eval",
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
     ) -> Expression
     def parse(
         source: str | ReadableBuffer,
         *,
-        mode: Literal["func_type"],
+        mode: "func_type",
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
     ) -> FunctionType
     def parse(
         source: str | ReadableBuffer,
         *,
-        mode: Literal["single"],
+        mode: "single",
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
     ) -> Interactive
     def parse(
         source: str | ReadableBuffer,
@@ -2317,13 +2317,13 @@ elif sys.version_info >= (3, 13):
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
-        optimize: Literal[-1, 0, 1, 2] = -1,
+        optimize: -1 | 0 | 1 | 2 = -1,
     ) -> mod
 else:
     def parse(
         source: _T,
         filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
-        mode: Literal["exec", "eval", "func_type", "single"] = "exec",
+        mode: "exec" | "eval" | "func_type" | "single" = "exec",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
@@ -2336,7 +2336,7 @@ else:
     def parse(
         source: str | ReadableBuffer,
         filename: str | bytes | os.PathLike[dynamic] = "<unknown>",
-        mode: Literal["exec"] = "exec",
+        mode: "exec" = "exec",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
@@ -2344,7 +2344,7 @@ else:
     def parse(
         source: str | ReadableBuffer,
         filename: str | bytes | os.PathLike[dynamic],
-        mode: Literal["eval"],
+        mode: "eval",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
@@ -2352,7 +2352,7 @@ else:
     def parse(
         source: str | ReadableBuffer,
         filename: str | bytes | os.PathLike[dynamic],
-        mode: Literal["func_type"],
+        mode: "func_type",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
@@ -2360,7 +2360,7 @@ else:
     def parse(
         source: str | ReadableBuffer,
         filename: str | bytes | os.PathLike[dynamic],
-        mode: Literal["single"],
+        mode: "single",
         *,
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
@@ -2368,21 +2368,21 @@ else:
     def parse(
         source: str | ReadableBuffer,
         *,
-        mode: Literal["eval"],
+        mode: "eval",
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
     ) -> Expression
     def parse(
         source: str | ReadableBuffer,
         *,
-        mode: Literal["func_type"],
+        mode: "func_type",
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
     ) -> FunctionType
     def parse(
         source: str | ReadableBuffer,
         *,
-        mode: Literal["single"],
+        mode: "single",
         type_comments: bool = False,
         feature_version: None | int | (int, int) = None,
     ) -> Interactive
@@ -2499,7 +2499,7 @@ def increment_lineno(node: _T, n: int = 1) -> _T:
     location in a file.
     """
 
-def iter_fields(node: AST) -> Iterator[(str, Any)]:
+def iter_fields(node: AST) -> Iterator[(str, dynamic)]:
     """
     Yield a tuple of ``(fieldname, value)`` for each field in ``node._fields``
     that is present on *node*.
@@ -2708,15 +2708,15 @@ class NodeVisitor:
 
     if sys.version_info < (3, 14):
         @deprecated("Removed in Python 3.14. Use `visit_Constant` instead.")
-        def visit_Num(self, node: Num) -> dynamic  # type: ignore[deprecated]
+        def visit_Num(self, node: Num) -> dynamic
         @deprecated("Removed in Python 3.14. Use `visit_Constant` instead.")
-        def visit_Str(self, node: Str) -> dynamic  # type: ignore[deprecated]
+        def visit_Str(self, node: Str) -> dynamic
         @deprecated("Removed in Python 3.14. Use `visit_Constant` instead.")
-        def visit_Bytes(self, node: Bytes) -> dynamic  # type: ignore[deprecated]
+        def visit_Bytes(self, node: Bytes) -> dynamic
         @deprecated("Removed in Python 3.14. Use `visit_Constant` instead.")
-        def visit_NameConstant(self, node: NameConstant) -> dynamic  # type: ignore[deprecated]
+        def visit_NameConstant(self, node: NameConstant) -> dynamic
         @deprecated("Removed in Python 3.14. Use `visit_Constant` instead.")
-        def visit_Ellipsis(self, node: Ellipsis) -> dynamic  # type: ignore[deprecated]
+        def visit_Ellipsis(self, node: Ellipsis) -> dynamic
 
 class NodeTransformer(NodeVisitor):
     """

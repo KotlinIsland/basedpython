@@ -1,6 +1,5 @@
 """Different kinds of SAX Exceptions"""
 
-from typing import NoReturn
 from xml.sax.xmlreader import Locator
 
 class SAXException(Exception):
@@ -14,7 +13,7 @@ class SAXException(Exception):
     it.
     """
 
-    def __init__(self, msg: str, exception: Exception | None = None) -> None:
+    init(self, msg: str, exception: Exception | None = None):
         """Creates an exception. The message is required, but the exception
         is optional.
         """
@@ -44,7 +43,7 @@ class SAXParseException(SAXException):
     the ability to wrap another exception.
     """
 
-    def __init__(self, msg: str, exception: Exception | None, locator: Locator) -> None:
+    init(self, msg: str, exception: Exception | None, locator: Locator):
         """Creates the exception. The exception parameter is allowed to be None."""
 
     def getColumnNumber(self) -> int | None:

@@ -6,7 +6,7 @@ from sre_constants import _NamedIntConstant
 from sre_parse import SubPattern
 from typing import Final
 
-MAXCODE: Final[int]
+final MAXCODE: int
 
 def dis(code: list[_NamedIntConstant]) -> None
 def isstring(obj: object) -> obj is str | bytes

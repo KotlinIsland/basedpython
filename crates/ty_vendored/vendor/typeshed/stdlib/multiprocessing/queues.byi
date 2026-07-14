@@ -12,7 +12,7 @@ _SimpleQueueState = NewType("_SimpleQueueState", object)
 class Queue[in out Element]:
     # FIXME: `ctx` is a circular dependency and it's not actually optional.
     # It's marked as such to be able to use the generic Queue in __init__.pyi.
-    def __init__(self, maxsize: int = 0, *, ctx: dynamic = ...) -> None
+    init(self, maxsize: int = 0, *, ctx: dynamic = ...)
     def __getstate__(self) -> _QueueState
     def __setstate__(self, state: _QueueState) -> None
     def put(self, obj: Element, block: bool = True, timeout: float | None = None) -> None
@@ -34,13 +34,13 @@ class Queue[in out Element]:
             """
 
 class JoinableQueue[in out Element](Queue[Element]):
-    def __getstate__(self) -> _JoinableQueueState  # type: ignore[override]
-    def __setstate__(self, state: _JoinableQueueState) -> None  # type: ignore[override]
+    def __getstate__(self) -> _JoinableQueueState
+    def __setstate__(self, state: _JoinableQueueState) -> None
     def task_done(self) -> None
     def join(self) -> None
 
 class SimpleQueue[in out Element]:
-    def __init__(self, *, ctx: dynamic = ...) -> None
+    init(self, *, ctx: dynamic = ...)
     def close(self) -> None
     def empty(self) -> bool
     def __getstate__(self) -> _SimpleQueueState

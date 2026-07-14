@@ -9,10 +9,10 @@ from types import ModuleType
 from typing import Final, TypeAlias
 from typing_extensions import deprecated
 
-_SortComparisonMethod: TypeAlias = Callable[[str, str], int]
-_SuiteClass: TypeAlias = Callable[[list[unittest.case.TestCase]], unittest.suite.TestSuite]
+type _SortComparisonMethod = (str, str) -> int
+type _SuiteClass = (list[unittest.case.TestCase]) -> unittest.suite.TestSuite
 
-VALID_MODULE_NAME: Final[Pattern[str]]
+final VALID_MODULE_NAME: Pattern[str]
 
 class TestLoader:
     """

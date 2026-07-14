@@ -5,7 +5,7 @@ import types
 from _typeshed import SupportsAllComparisons, SupportsItems
 from collections.abc import Callable, Hashable, Iterable, Sized
 from types import GenericAlias
-from typing import Any, Final, Generic, Literal, NamedTuple, ParamSpec, TypeAlias, TypedDict, TypeVar, final, type_check_only
+from typing import Final, Generic, Literal, NamedTuple, ParamSpec, TypeAlias, TypedDict, TypeVar, final, type_check_only
 from typing_extensions import Self, disjoint_base
 
 __all__ = [
@@ -27,7 +27,7 @@ __all__ = [
 
 
 if sys.version_info >= (3, 14):
-    def reduce[Element, Other](function: Callable[[Element, Other], Element], iterable: Iterable[Other], /, initial: Element) -> Element:
+    def reduce[Element, Other](function: (Element, Other) -> Element, iterable: Iterable[Other], /, initial: Element) -> Element:
         """Apply a function of two arguments cumulatively to the items of an iterable, from left to right.
 
         This effectively reduces the iterable to a single value.  If initial is
@@ -38,7 +38,7 @@ if sys.version_info >= (3, 14):
         calculates ((((1 + 2) + 3) + 4) + 5).
         """
 else:
-    def reduce[Element, Other](function: Callable[[Element, Other], Element], iterable: Iterable[Other], initial: Element, /) -> Element:
+    def reduce[Element, Other](function: (Element, Other) -> Element, iterable: Iterable[Other], initial: Element, /) -> Element:
         """reduce(function, iterable[, initial], /) -> value
 
         Apply a function of two arguments cumulatively to the items of an iterable, from left to right.
@@ -51,7 +51,7 @@ else:
         calculates ((((1 + 2) + 3) + 4) + 5).
         """
 
-def reduce[Element](function: Callable[[Element, Element], Element], iterable: Iterable[Element], /) -> Element:
+def reduce[Element](function: (Element, Element) -> Element, iterable: Iterable[Element], /) -> Element:
     """Apply a function of two arguments cumulatively to the items of an iterable, from left to right.
 
     This effectively reduces the iterable to a single value.  If initial is
@@ -109,7 +109,7 @@ final class _lru_cache_wrapper[out Element]:
     __name__: str
     __qualname__: str
 
-def lru_cache[Element](maxsize: int | None = 128, typed: bool = False) -> Callable[[(...) -> Element], _lru_cache_wrapper[Element]]:
+def lru_cache[Element](maxsize: int | None = 128, typed: bool = False) -> ((...) -> Element) -> _lru_cache_wrapper[Element]:
     """Least-recently-used cache decorator.
 
     If *maxsize* is set to None, the LRU features are disabled and the cache
@@ -132,17 +132,17 @@ def lru_cache[Element](maxsize: int | None = 128, typed: bool = False) -> Callab
 def lru_cache[Element](maxsize: (...) -> Element, typed: bool = False) -> _lru_cache_wrapper[Element]
 
 if sys.version_info >= (3, 14):
-    WRAPPER_ASSIGNMENTS: Final[(Literal["__module__"], Literal["__name__"], Literal["__qualname__"], Literal["__doc__"], Literal["__annotate__"], Literal["__type_params__"])]
+    final WRAPPER_ASSIGNMENTS: ("__module__", "__name__", "__qualname__", "__doc__", "__annotate__", "__type_params__")
 elif sys.version_info >= (3, 12):
-    WRAPPER_ASSIGNMENTS: Final[(Literal["__module__"], Literal["__name__"], Literal["__qualname__"], Literal["__doc__"], Literal["__annotations__"], Literal["__type_params__"])]
+    final WRAPPER_ASSIGNMENTS: ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__", "__type_params__")
 else:
-    WRAPPER_ASSIGNMENTS: Final[(Literal["__module__"], Literal["__name__"], Literal["__qualname__"], Literal["__doc__"], Literal["__annotations__"])]
+    final WRAPPER_ASSIGNMENTS: ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__")
 
-WRAPPER_UPDATES: Final[(Literal["__dict__"],)]
+final WRAPPER_UPDATES: ("__dict__",)
 
 @type_check_only
 class _Wrapped[**PWrapped, in out RWrapped, **PWrapper, in out RWrapper]:
-    __wrapped__: Callable[PWrapped, RWrapped]
+    __wrapped__: (**PWrapped) -> RWrapped
     def __call__(self, *args: PWrapper.args, **kwargs: PWrapper.kwargs) -> RWrapper
     # as with ``Callable``, we'll assume that these attributes exist
     __name__: str
@@ -150,12 +150,12 @@ class _Wrapped[**PWrapped, in out RWrapped, **PWrapper, in out RWrapper]:
 
 @type_check_only
 class _Wrapper[**PWrapped, in out RWrapped]:
-    def __call__[**PWrapper, RWrapper](self, f: Callable[PWrapper, RWrapper]) -> _Wrapped[PWrapped, RWrapped, PWrapper, RWrapper]
+    def __call__[**PWrapper, RWrapper](self, f: (**PWrapper) -> RWrapper) -> _Wrapped[PWrapped, RWrapped, PWrapper, RWrapper]
 
 if sys.version_info >= (3, 14):
     def update_wrapper[**PWrapper, RWrapper, **PWrapped, RWrapped](
-        wrapper: Callable[PWrapper, RWrapper],
-        wrapped: Callable[PWrapped, RWrapped],
+        wrapper: (**PWrapper) -> RWrapper,
+        wrapped: (**PWrapped) -> RWrapped,
         assigned: Iterable[str] = ("__module__", "__name__", "__qualname__", "__doc__", "__annotate__", "__type_params__"),
         updated: Iterable[str] = ("__dict__",),
     ) -> _Wrapped[PWrapped, RWrapped, PWrapper, RWrapper]:
@@ -172,7 +172,7 @@ if sys.version_info >= (3, 14):
         """
 
     def wraps[**PWrapped, RWrapped](
-        wrapped: Callable[PWrapped, RWrapped],
+        wrapped: (**PWrapped) -> RWrapped,
         assigned: Iterable[str] = ("__module__", "__name__", "__qualname__", "__doc__", "__annotate__", "__type_params__"),
         updated: Iterable[str] = ("__dict__",),
     ) -> _Wrapper[PWrapped, RWrapped]:
@@ -187,8 +187,8 @@ if sys.version_info >= (3, 14):
 
 elif sys.version_info >= (3, 12):
     def update_wrapper[**PWrapper, RWrapper, **PWrapped, RWrapped](
-        wrapper: Callable[PWrapper, RWrapper],
-        wrapped: Callable[PWrapped, RWrapped],
+        wrapper: (**PWrapper) -> RWrapper,
+        wrapped: (**PWrapped) -> RWrapped,
         assigned: Iterable[str] = ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__", "__type_params__"),
         updated: Iterable[str] = ("__dict__",),
     ) -> _Wrapped[PWrapped, RWrapped, PWrapper, RWrapper]:
@@ -205,7 +205,7 @@ elif sys.version_info >= (3, 12):
         """
 
     def wraps[**PWrapped, RWrapped](
-        wrapped: Callable[PWrapped, RWrapped],
+        wrapped: (**PWrapped) -> RWrapped,
         assigned: Iterable[str] = ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__", "__type_params__"),
         updated: Iterable[str] = ("__dict__",),
     ) -> _Wrapper[PWrapped, RWrapped]:
@@ -220,8 +220,8 @@ elif sys.version_info >= (3, 12):
 
 else:
     def update_wrapper[**PWrapper, RWrapper, **PWrapped, RWrapped](
-        wrapper: Callable[PWrapper, RWrapper],
-        wrapped: Callable[PWrapped, RWrapped],
+        wrapper: (**PWrapper) -> RWrapper,
+        wrapped: (**PWrapped) -> RWrapped,
         assigned: Iterable[str] = ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__"),
         updated: Iterable[str] = ("__dict__",),
     ) -> _Wrapped[PWrapped, RWrapped, PWrapper, RWrapper]:
@@ -238,7 +238,7 @@ else:
         """
 
     def wraps[**PWrapped, RWrapped](
-        wrapped: Callable[PWrapped, RWrapped],
+        wrapped: (**PWrapped) -> RWrapped,
         assigned: Iterable[str] = ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__"),
         updated: Iterable[str] = ("__dict__",),
     ) -> _Wrapper[PWrapped, RWrapped]:
@@ -254,7 +254,7 @@ else:
 def total_ordering[Element](cls: type[Element]) -> type[Element]:
     """Class decorator that fills in missing ordering methods"""
 
-def cmp_to_key[Element](mycmp: Callable[[Element, Element], int]) -> Callable[[Element], SupportsAllComparisons]:
+def cmp_to_key[Element](mycmp: (Element, Element) -> int) -> (Element) -> SupportsAllComparisons:
     """Convert a cmp= function into a key= function.
 
     mycmp
@@ -267,17 +267,11 @@ class partial[in out Element]:
     and keywords.
     """
 
-    @property
-    def func(self) -> (...) -> Element:
-        """function object to use in future partial calls"""
+    let func: (...) -> Element
 
-    @property
-    def args(self) -> (*: Any):
-        """tuple of arguments to future partial calls"""
+    let args: (*: dynamic)
 
-    @property
-    def keywords(self) -> dict[str, dynamic]:
-        """dictionary of keyword arguments to future partial calls"""
+    let keywords: dict[str, dynamic]
 
     def __new__(cls, func: (...) -> Element, /, *args: dynamic, **kwargs: dynamic) -> Self
     def __call__(self, /, *args: dynamic, **kwargs: dynamic) -> Element:
@@ -287,7 +281,7 @@ class partial[in out Element]:
         """partial is generic over the wrapped function's return type"""
 
 # With protocols, this could change into a generic protocol that defines __get__ and returns _T
-_Descriptor: TypeAlias = Any
+type _Descriptor = dynamic
 
 class partialmethod[in out Element]:
     """Method descriptor with partial application of the given arguments
@@ -298,7 +292,7 @@ class partialmethod[in out Element]:
     """
 
     func: (...) -> Element | _Descriptor
-    args: (*: Any)
+    args: (*: dynamic)
     keywords: dict[str, dynamic]
     if sys.version_info >= (3, 14):
         def __new__(self, func: (...) -> Element, /, *args: dynamic, **keywords: dynamic) -> Self
@@ -308,8 +302,7 @@ class partialmethod[in out Element]:
         def __init__(self, func: _Descriptor, /, *args: dynamic, **keywords: dynamic) -> None
 
     def __get__(self, obj: dynamic, cls: type[dynamic] | None = None) -> (...) -> Element
-    @property
-    def __isabstractmethod__(self) -> bool
+    let __isabstractmethod__: bool
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
@@ -318,18 +311,18 @@ class partialmethod[in out Element]:
         """
 
 if sys.version_info >= (3, 11):
-    _RegType: TypeAlias = type[Any] | types.UnionType
+    type _RegType = type[dynamic] | types.UnionType
 else:
-    _RegType: TypeAlias = type[Any]
+    type _RegType = type[dynamic]
 
 @type_check_only
 class _SingleDispatchCallable[in out Element]:
-    registry: types.MappingProxyType[Any, (...) -> Element]
+    registry: types.MappingProxyType[dynamic, (...) -> Element]
     def dispatch(self, cls: dynamic) -> (...) -> Element
 
     # @fun.register(complex)
     # def _(arg, verbose=False): ...
-    def register(self, cls: _RegType, func: None = None) -> Callable[[(...) -> Element], (...) -> Element]
+    def register(self, cls: _RegType, func: None = None) -> ((...) -> Element) -> (...) -> Element
     # @fun.register
     # def _(arg: int, verbose=False):
     def register(self, cls: (...) -> Element, func: None = None) -> (...) -> Element
@@ -358,11 +351,10 @@ class singledispatchmethod[in out Element]:
 
     dispatcher: _SingleDispatchCallable[Element]
     func: (...) -> Element
-    def __init__(self, func: (...) -> Element) -> None
-    @property
-    def __isabstractmethod__(self) -> bool
+    init(self, func: (...) -> Element)
+    let __isabstractmethod__: bool
 
-    def register(self, cls: _RegType, method: None = None) -> Callable[[(...) -> Element], (...) -> Element]:
+    def register(self, cls: _RegType, method: None = None) -> ((...) -> Element) -> (...) -> Element:
         """generic_method.register(cls, func) -> func
 
         Registers a new implementation for the given *cls* on a *generic_method*.
@@ -373,16 +365,16 @@ class singledispatchmethod[in out Element]:
     def __get__[Other](self, obj: Other, cls: type[Other] | None = None) -> (...) -> Element
 
 class cached_property[out Element]:
-    func: Callable[[dynamic], Element]
+    func: (dynamic) -> Element
     attrname: str | None
-    def __init__(self, func: Callable[[dynamic], Element]) -> None
+    init(self, func: (dynamic) -> Element)
 
     def __get__(self, instance: None, owner: type[dynamic] | None = None) -> Self
     def __get__(self, instance: object, owner: type[dynamic] | None = None) -> Element
 
     def __set_name__(self, owner: type[dynamic], name: str) -> None
     # __set__ is not defined at runtime, but @cached_property is designed to be settable
-    def __set__(self, instance: object, value: Element) -> None  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]
+    def __set__(self, instance: object, value: Element) -> None
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
@@ -401,7 +393,7 @@ def _make_key(
     fasttypes: set[type] = ...,
     tuple: type = ...,
     type: dynamic = ...,
-    len: Callable[[Sized], int] = ...,
+    len: (Sized) -> int = ...,
 ) -> Hashable:
     """Make a cache key from optionally typed positional and keyword arguments
 
@@ -421,6 +413,6 @@ if sys.version_info >= (3, 14):
         Used as a placeholder for partial arguments.
         """
 
-    Placeholder: Final[_PlaceholderType]
+    final Placeholder: _PlaceholderType
 
     __all__ += ["Placeholder"]

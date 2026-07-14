@@ -409,12 +409,13 @@ def flag() -> bool:
 
 t = int if flag() else str
 
-# error: [invalid-argument-type] "Argument to function `issubclass` is incorrect: Expected `type | UnionType | tuple[Divergent, ...]`, found `Literal["str"]"
+# error: [invalid-argument-type] "Argument to function `issubclass` is incorrect: Expected `_ClassInfo`, found `Literal["str"]"
 if issubclass(t, "str"):
     reveal_type(t)  # revealed: <class 'int'> | <class 'str'>
 
-# TODO: this should cause us to emit a diagnostic during
-# type checking
+# the recursive `_ClassInfo` alias lets us check tuple elements, so a non-class
+# element in the tuple is now correctly rejected
+# error: [invalid-argument-type] "Argument to function `issubclass` is incorrect: Expected `_ClassInfo`, found `tuple[<class 'bytes'>, Literal["str"]]`"
 if issubclass(t, (bytes, "str")):
     reveal_type(t)  # revealed: <class 'int'> | <class 'str'>
 

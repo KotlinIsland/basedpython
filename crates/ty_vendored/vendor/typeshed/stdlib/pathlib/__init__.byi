@@ -22,7 +22,7 @@ from collections.abc import Callable, Generator, Iterator, Sequence
 from io import BufferedRandom, BufferedReader, BufferedWriter, FileIO, TextIOWrapper
 from os import PathLike, stat_result
 from types import GenericAlias, TracebackType
-from typing import IO, BinaryIO, ClassVar, Literal, TypeVar
+from typing import ClassVar, Literal, TypeVar
 from typing_extensions import Never, Self, deprecated
 
 
@@ -78,47 +78,21 @@ class PurePath(PathLike[str]):
             pattern is matched against the entire path.
             """
 
-    @property
-    def parts(self) -> (*: str):
-        """An object providing sequence-like access to the
-        components in the filesystem path.
-        """
+    let parts: (*: str)
 
-    @property
-    def drive(self) -> str:
-        """The drive prefix (letter or UNC path), if any."""
+    let drive: str
 
-    @property
-    def root(self) -> str:
-        """The root of the path, if any."""
+    let root: str
 
-    @property
-    def anchor(self) -> str:
-        """The concatenation of the drive and root, or ''."""
+    let anchor: str
 
-    @property
-    def name(self) -> str:
-        """The final path component, if any."""
+    let name: str
 
-    @property
-    def suffix(self) -> str:
-        """
-        The final component's last suffix, if any.
+    let suffix: str
 
-        This includes the leading period. For example: '.txt'
-        """
+    let suffixes: list[str]
 
-    @property
-    def suffixes(self) -> list[str]:
-        """
-        A list of the final component's suffixes, if any.
-
-        These include the leading periods. For example: ['.tar', '.gz']
-        """
-
-    @property
-    def stem(self) -> str:
-        """The final path component, minus its last suffix."""
+    let stem: str
 
     if sys.version_info >= (3, 12):
         def __new__(cls, *args: StrPath, **kwargs: Unused) -> Self:
@@ -128,7 +102,7 @@ class PurePath(PathLike[str]):
             new PurePath object.
             """
 
-        def __init__(self, *args: StrPath) -> None  # pyright: ignore[reportInconsistentConstructor]
+        def __init__(self, *args: StrPath) -> None
     else:
         def __new__(cls, *args: StrPath) -> Self:
             """Construct a PurePath from one or several strings and or existing
@@ -263,13 +237,9 @@ class PurePath(PathLike[str]):
         anchored).
         """
 
-    @property
-    def parents(self) -> Sequence[Self]:
-        """A sequence of this path's logical parents."""
+    let parents: Sequence[Self]
 
-    @property
-    def parent(self) -> Self:
-        """The logical parent of the path."""
+    let parent: Self
 
     if sys.version_info < (3, 11):
         def __class_getitem__(cls, type: dynamic) -> GenericAlias
@@ -315,7 +285,7 @@ class Path(PurePath):
         __slots__ = ()
 
     if sys.version_info >= (3, 12):
-        def __new__(cls, *args: StrPath, **kwargs: Unused) -> Self  # pyright: ignore[reportInconsistentConstructor]
+        def __new__(cls, *args: StrPath, **kwargs: Unused) -> Self
     else:
         def __new__(cls, *args: StrPath, **kwargs: Unused) -> Self
 
@@ -495,29 +465,29 @@ class Path(PurePath):
             of this path.
             """
 
-        def move_into[PathT: PurePath](self, target_dir: PathT) -> PathT:  # type: ignore[overload-overlap]
+        def move_into[PathT: PurePath](self, target_dir: PathT) -> PathT:
             """
             Move this file or directory tree into the given existing directory.
             """
-        def move_into(self, target_dir: StrPath) -> Self  # type: ignore[overload-overlap]
+        def move_into(self, target_dir: StrPath) -> Self
 
-        def move[PathT: PurePath](self, target: PathT) -> PathT:  # type: ignore[overload-overlap]
+        def move[PathT: PurePath](self, target: PathT) -> PathT:
             """
             Recursively move this file or directory tree to the given destination.
             """
-        def move(self, target: StrPath) -> Self  # type: ignore[overload-overlap]
+        def move(self, target: StrPath) -> Self
 
-        def copy_into[PathT: PurePath](self, target_dir: PathT, *, follow_symlinks: bool = True, preserve_metadata: bool = False) -> PathT:  # type: ignore[overload-overlap]
+        def copy_into[PathT: PurePath](self, target_dir: PathT, *, follow_symlinks: bool = True, preserve_metadata: bool = False) -> PathT:
             """
             Copy this file or directory tree into the given existing directory.
             """
-        def copy_into(self, target_dir: StrPath, *, follow_symlinks: bool = True, preserve_metadata: bool = False) -> Self  # type: ignore[overload-overlap]
+        def copy_into(self, target_dir: StrPath, *, follow_symlinks: bool = True, preserve_metadata: bool = False) -> Self
 
-        def copy[PathT: PurePath](self, target: PathT, *, follow_symlinks: bool = True, preserve_metadata: bool = False) -> PathT:  # type: ignore[overload-overlap]
+        def copy[PathT: PurePath](self, target: PathT, *, follow_symlinks: bool = True, preserve_metadata: bool = False) -> PathT:
             """
             Recursively copy this file or directory tree to the given destination.
             """
-        def copy(self, target: StrPath, *, follow_symlinks: bool = True, preserve_metadata: bool = False) -> Self  # type: ignore[overload-overlap]
+        def copy(self, target: StrPath, *, follow_symlinks: bool = True, preserve_metadata: bool = False) -> Self
 
     # Adapted from builtins.open
     # Text mode: always returns a TextIOWrapper
@@ -536,13 +506,13 @@ class Path(PurePath):
         """
     # Unbuffered binary mode: returns a FileIO
     def open(
-        self, mode: OpenBinaryMode, buffering: Literal[0], encoding: None = None, errors: None = None, newline: None = None
+        self, mode: OpenBinaryMode, buffering: 0, encoding: None = None, errors: None = None, newline: None = None
     ) -> FileIO
     # Buffering is on: return BufferedRandom, BufferedReader, or BufferedWriter
     def open(
         self,
         mode: OpenBinaryModeUpdating,
-        buffering: Literal[-1, 1] = -1,
+        buffering: -1 | 1 = -1,
         encoding: None = None,
         errors: None = None,
         newline: None = None,
@@ -550,7 +520,7 @@ class Path(PurePath):
     def open(
         self,
         mode: OpenBinaryModeWriting,
-        buffering: Literal[-1, 1] = -1,
+        buffering: -1 | 1 = -1,
         encoding: None = None,
         errors: None = None,
         newline: None = None,
@@ -558,7 +528,7 @@ class Path(PurePath):
     def open(
         self,
         mode: OpenBinaryModeReading,
-        buffering: Literal[-1, 1] = -1,
+        buffering: -1 | 1 = -1,
         encoding: None = None,
         errors: None = None,
         newline: None = None,
@@ -576,23 +546,23 @@ class Path(PurePath):
     if sys.platform == "win32":
         if sys.version_info >= (3, 13):
             # raises UnsupportedOperation:
-            def owner(self: Never, *, follow_symlinks: bool = True) -> str:  # type: ignore[misc]
+            def owner(self: Never, *, follow_symlinks: bool = True) -> str:
                 """
                 Return the login name of the file owner.
                 """
 
-            def group(self: Never, *, follow_symlinks: bool = True) -> str:  # type: ignore[misc]
+            def group(self: Never, *, follow_symlinks: bool = True) -> str:
                 """
                 Return the group name of the file gid.
                 """
 
         else:
-            def owner(self: Never) -> str:  # type: ignore[misc]
+            def owner(self: Never) -> str:
                 """
                 Return the login name of the file owner.
                 """
 
-            def group(self: Never) -> str:  # type: ignore[misc]
+            def group(self: Never) -> str:
                 """
                 Return the group name of the file gid.
                 """
@@ -623,7 +593,7 @@ class Path(PurePath):
     # This method does "exist" on Windows on <3.12, but always raises NotImplementedError
     # On py312+, it works properly on Windows, as with all other platforms
     if sys.platform == "win32" and sys.version_info < (3, 12):
-        def is_mount(self: Never) -> bool:  # type: ignore[misc]
+        def is_mount(self: Never) -> bool:
             """
             Check if this path is a POSIX mount point
             """
@@ -748,7 +718,7 @@ class Path(PurePath):
 
     if sys.version_info >= (3, 12):
         def walk(
-            self, top_down: bool = True, on_error: Callable[[OSError], object] | None = None, follow_symlinks: bool = False
+            self, top_down: bool = True, on_error: ((OSError) -> object) | None = None, follow_symlinks: bool = False
         ) -> Iterator[(Self, list[str], list[str])]:
             """Walk the directory tree from this directory, similar to os.walk()."""
 

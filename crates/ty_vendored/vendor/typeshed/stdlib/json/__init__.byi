@@ -116,7 +116,7 @@ def dumps(
     cls: type[JSONEncoder] | None = None,
     indent: None | int | str = None,
     separators: (str, str) | None = None,
-    default: Callable[[dynamic], dynamic] | None = None,
+    default: ((dynamic) -> dynamic) | None = None,
     sort_keys: bool = False,
     **kwds: dynamic,
 ) -> str:
@@ -174,7 +174,7 @@ def dump(
     cls: type[JSONEncoder] | None = None,
     indent: None | int | str = None,
     separators: (str, str) | None = None,
-    default: Callable[[dynamic], dynamic] | None = None,
+    default: ((dynamic) -> dynamic) | None = None,
     sort_keys: bool = False,
     **kwds: dynamic,
 ) -> None:
@@ -227,12 +227,12 @@ if sys.version_info >= (3, 15):
         s: str | bytes | bytearray,
         *,
         cls: type[JSONDecoder] | None = None,
-        object_hook: Callable[[dict[dynamic, dynamic]], dynamic] | None = None,
-        parse_float: Callable[[str], dynamic] | None = None,
-        parse_int: Callable[[str], dynamic] | None = None,
-        parse_constant: Callable[[str], dynamic] | None = None,
-        object_pairs_hook: Callable[[list[tuple[dynamic, dynamic]]], dynamic] | None = None,
-        array_hook: Callable[[list[dynamic]], dynamic] | None = None,
+        object_hook: ((dict[dynamic, dynamic]) -> dynamic) | None = None,
+        parse_float: ((str) -> dynamic) | None = None,
+        parse_int: ((str) -> dynamic) | None = None,
+        parse_constant: ((str) -> dynamic) | None = None,
+        object_pairs_hook: ((list[tuple[dynamic, dynamic]]) -> dynamic) | None = None,
+        array_hook: ((list[dynamic]) -> dynamic) | None = None,
         **kwds: dynamic,
     ) -> dynamic:
         """Deserialize ``s`` (a ``str``, ``bytes`` or ``bytearray`` instance
@@ -281,12 +281,12 @@ if sys.version_info >= (3, 15):
         fp: SupportsRead[str | bytes],
         *,
         cls: type[JSONDecoder] | None = None,
-        object_hook: Callable[[dict[dynamic, dynamic]], dynamic] | None = None,
-        parse_float: Callable[[str], dynamic] | None = None,
-        parse_int: Callable[[str], dynamic] | None = None,
-        parse_constant: Callable[[str], dynamic] | None = None,
-        object_pairs_hook: Callable[[list[tuple[dynamic, dynamic]]], dynamic] | None = None,
-        array_hook: Callable[[list[dynamic]], dynamic] | None = None,
+        object_hook: ((dict[dynamic, dynamic]) -> dynamic) | None = None,
+        parse_float: ((str) -> dynamic) | None = None,
+        parse_int: ((str) -> dynamic) | None = None,
+        parse_constant: ((str) -> dynamic) | None = None,
+        object_pairs_hook: ((list[tuple[dynamic, dynamic]]) -> dynamic) | None = None,
+        array_hook: ((list[dynamic]) -> dynamic) | None = None,
         **kwds: dynamic,
     ) -> dynamic:
         """Deserialize ``fp`` (a ``.read()``-supporting file-like object containing
@@ -321,11 +321,11 @@ else:
         s: str | bytes | bytearray,
         *,
         cls: type[JSONDecoder] | None = None,
-        object_hook: Callable[[dict[dynamic, dynamic]], dynamic] | None = None,
-        parse_float: Callable[[str], dynamic] | None = None,
-        parse_int: Callable[[str], dynamic] | None = None,
-        parse_constant: Callable[[str], dynamic] | None = None,
-        object_pairs_hook: Callable[[list[tuple[dynamic, dynamic]]], dynamic] | None = None,
+        object_hook: ((dict[dynamic, dynamic]) -> dynamic) | None = None,
+        parse_float: ((str) -> dynamic) | None = None,
+        parse_int: ((str) -> dynamic) | None = None,
+        parse_constant: ((str) -> dynamic) | None = None,
+        object_pairs_hook: ((list[tuple[dynamic, dynamic]]) -> dynamic) | None = None,
         **kwds: dynamic,
     ) -> dynamic:
         """Deserialize ``s`` (a ``str``, ``bytes`` or ``bytearray`` instance
@@ -366,11 +366,11 @@ else:
         fp: SupportsRead[str | bytes],
         *,
         cls: type[JSONDecoder] | None = None,
-        object_hook: Callable[[dict[dynamic, dynamic]], dynamic] | None = None,
-        parse_float: Callable[[str], dynamic] | None = None,
-        parse_int: Callable[[str], dynamic] | None = None,
-        parse_constant: Callable[[str], dynamic] | None = None,
-        object_pairs_hook: Callable[[list[tuple[dynamic, dynamic]]], dynamic] | None = None,
+        object_hook: ((dict[dynamic, dynamic]) -> dynamic) | None = None,
+        parse_float: ((str) -> dynamic) | None = None,
+        parse_int: ((str) -> dynamic) | None = None,
+        parse_constant: ((str) -> dynamic) | None = None,
+        object_pairs_hook: ((list[tuple[dynamic, dynamic]]) -> dynamic) | None = None,
         **kwds: dynamic,
     ) -> dynamic:
         """Deserialize ``fp`` (a ``.read()``-supporting file-like object containing
@@ -394,4 +394,4 @@ else:
 
 def detect_encoding(
     b: bytes | bytearray,
-) -> Literal["utf-8", "utf-8-sig", "utf-16", "utf-16-be", "utf-16-le", "utf-32", "utf-32-be", "utf-32-le"]  # undocumented
+) -> "utf-8" | "utf-8-sig" | "utf-16" | "utf-16-be" | "utf-16-le" | "utf-32" | "utf-32-be" | "utf-32-le"  # undocumented

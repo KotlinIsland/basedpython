@@ -96,7 +96,7 @@ from sqlite3.dbapi2 import (
     threadsafety as threadsafety,
 )
 from types import TracebackType
-from typing import Any, Literal, Protocol, SupportsIndex, TypeAlias, TypeVar, final, type_check_only
+from typing import Literal, Protocol, TypeAlias, TypeVar, final, type_check_only
 from typing_extensions import Self, disjoint_base
 
 if sys.version_info < (3, 14):
@@ -248,36 +248,36 @@ if sys.version_info >= (3, 11):
 if sys.version_info < (3, 12):
     from sqlite3.dbapi2 import enable_shared_cache as enable_shared_cache, version as version
 
-_SqliteData: TypeAlias = str | ReadableBuffer | int | float | None
+type _SqliteData = str | ReadableBuffer | int | float | None
 # Data that is passed through adapters can be of any type accepted by an adapter.
-_AdaptedInputData: TypeAlias = _SqliteData | Any
+type _AdaptedInputData = _SqliteData | dynamic
 # The Mapping must really be a dict, but making it invariant is too annoying.
-_Parameters: TypeAlias = SupportsLenAndGetItem[_AdaptedInputData] | Mapping[str, _AdaptedInputData]
+type _Parameters = SupportsLenAndGetItem[_AdaptedInputData] | Mapping[str, _AdaptedInputData]
 # Controls the legacy transaction handling mode of sqlite3.
-_IsolationLevel: TypeAlias = Literal["DEFERRED", "EXCLUSIVE", "IMMEDIATE"] | None
-_RowFactoryOptions: TypeAlias = type[Row] | Callable[[Cursor, tuple[Any, ...]], object] | None
+type _IsolationLevel = "DEFERRED" | "EXCLUSIVE" | "IMMEDIATE" | None
+type _RowFactoryOptions = type[Row] | ((Cursor, tuple[dynamic, ...]) -> object) | None
 
 @type_check_only
-class _AnyParamWindowAggregateClass(Protocol):
+protocol _AnyParamWindowAggregateClass:
     def step(self, *args: dynamic) -> object
     def inverse(self, *args: dynamic) -> object
     def value(self) -> _SqliteData
     def finalize(self) -> _SqliteData
 
 @type_check_only
-class _WindowAggregateClass(Protocol):
+protocol _WindowAggregateClass:
     step: (...) -> object
     inverse: (...) -> object
     def value(self) -> _SqliteData
     def finalize(self) -> _SqliteData
 
 @type_check_only
-class _AggregateProtocol(Protocol):
+protocol _AggregateProtocol:
     def step(self, value: int, /) -> object
     def finalize(self) -> int
 
 @type_check_only
-class _SingleParamWindowAggregateClass(Protocol):
+protocol _SingleParamWindowAggregateClass:
     def step(self, param: dynamic, /) -> object
     def inverse(self, param: dynamic, /) -> object
     def value(self) -> _SqliteData
@@ -306,36 +306,24 @@ class Warning(Exception)
 class Connection:
     """SQLite database connection object."""
 
-    @property
-    def DataError(self) -> type[DataError]
-    @property
-    def DatabaseError(self) -> type[DatabaseError]
-    @property
-    def Error(self) -> type[Error]
-    @property
-    def IntegrityError(self) -> type[IntegrityError]
-    @property
-    def InterfaceError(self) -> type[InterfaceError]
-    @property
-    def InternalError(self) -> type[InternalError]
-    @property
-    def NotSupportedError(self) -> type[NotSupportedError]
-    @property
-    def OperationalError(self) -> type[OperationalError]
-    @property
-    def ProgrammingError(self) -> type[ProgrammingError]
-    @property
-    def Warning(self) -> type[Warning]
-    @property
-    def in_transaction(self) -> bool
+    let DataError: type[DataError]
+    let DatabaseError: type[DatabaseError]
+    let Error: type[Error]
+    let IntegrityError: type[IntegrityError]
+    let InterfaceError: type[InterfaceError]
+    let InternalError: type[InternalError]
+    let NotSupportedError: type[NotSupportedError]
+    let OperationalError: type[OperationalError]
+    let ProgrammingError: type[ProgrammingError]
+    let Warning: type[Warning]
+    let in_transaction: bool
     isolation_level: _IsolationLevel
-    @property
-    def total_changes(self) -> int
+    let total_changes: int
     if sys.version_info >= (3, 12):
         @property
-        def autocommit(self) -> int: ...
+        def autocommit(self) -> int
         @autocommit.setter
-        def autocommit(self, val: int) -> None: ...
+        def autocommit(self, val: int) -> None
 
     row_factory: _RowFactoryOptions
     text_factory: dynamic
@@ -394,11 +382,11 @@ class Connection:
         """
 
     if sys.version_info >= (3, 15):
-        def create_aggregate(self, name: str, n_arg: int, aggregate_class: Callable[[], _AggregateProtocol], /) -> None:
+        def create_aggregate(self, name: str, n_arg: int, aggregate_class: () -> _AggregateProtocol, /) -> None:
             """Creates a new aggregate."""
 
     else:
-        def create_aggregate(self, name: str, n_arg: int, aggregate_class: Callable[[], _AggregateProtocol]) -> None:
+        def create_aggregate(self, name: str, n_arg: int, aggregate_class: () -> _AggregateProtocol) -> None:
             """Creates a new aggregate.
 
             Note: Passing keyword arguments 'name', 'n_arg' and 'aggregate_class'
@@ -411,7 +399,7 @@ class Connection:
         # num_params determines how many params will be passed to the aggregate class. We provide an overload
         # for the case where num_params = 1, which is expected to be the common case.
         def create_window_function(
-            self, name: str, num_params: Literal[1], aggregate_class: Callable[[], _SingleParamWindowAggregateClass] | None, /
+            self, name: str, num_params: 1, aggregate_class: (() -> _SingleParamWindowAggregateClass) | None, /
         ) -> None:
             """Creates or redefines an aggregate window function. Non-standard.
 
@@ -426,13 +414,13 @@ class Connection:
             """
         # And for num_params = -1, which means the aggregate must accept any number of parameters.
         def create_window_function(
-            self, name: str, num_params: Literal[-1], aggregate_class: Callable[[], _AnyParamWindowAggregateClass] | None, /
+            self, name: str, num_params: -1, aggregate_class: (() -> _AnyParamWindowAggregateClass) | None, /
         ) -> None
         def create_window_function(
-            self, name: str, num_params: int, aggregate_class: Callable[[], _WindowAggregateClass] | None, /
+            self, name: str, num_params: int, aggregate_class: (() -> _WindowAggregateClass) | None, /
         ) -> None
 
-    def create_collation(self, name: str, callback: Callable[[str, str], SupportsIndex] | None, /) -> None:
+    def create_collation(self, name: str, callback: ((str, str) -> SupportsIndex) | None, /) -> None:
         """Creates a collation function."""
 
     if sys.version_info >= (3, 15):
@@ -454,7 +442,7 @@ class Connection:
 
     def cursor(self, factory: None = None) -> Cursor:
         """Return a cursor for the connection."""
-    def cursor[CursorT: Cursor](self, factory: Callable[[Connection], CursorT]) -> CursorT
+    def cursor[CursorT: Cursor](self, factory: (Connection) -> CursorT) -> CursorT
 
     def execute(self, sql: str, parameters: _Parameters = ..., /) -> Cursor:
         """Executes an SQL statement."""
@@ -488,11 +476,11 @@ class Connection:
 
     if sys.version_info >= (3, 15):
         def set_authorizer(
-            self, authorizer_callback: Callable[[int, str | None, str | None, str | None, str | None], int] | None, /
+            self, authorizer_callback: ((int, str | None, str | None, str | None, str | None) -> int) | None, /
         ) -> None:
             """Set authorizer callback."""
 
-        def set_progress_handler(self, progress_handler: Callable[[], int | None] | None, /, n: int) -> None:
+        def set_progress_handler(self, progress_handler: (() -> (int | None)) | None, /, n: int) -> None:
             """Set progress handler callback.
 
               progress_handler
@@ -507,12 +495,12 @@ class Connection:
             disabled.
             """
 
-        def set_trace_callback(self, trace_callback: Callable[[str], object] | None, /) -> None:
+        def set_trace_callback(self, trace_callback: ((str) -> object) | None, /) -> None:
             """Set a trace callback called for each SQL statement (passed as unicode)."""
 
     else:
         def set_authorizer(
-            self, authorizer_callback: Callable[[int, str | None, str | None, str | None, str | None], int] | None
+            self, authorizer_callback: ((int, str | None, str | None, str | None, str | None) -> int) | None
         ) -> None:
             """Set authorizer callback.
 
@@ -521,7 +509,7 @@ class Connection:
             'authorizer_callback' will become positional-only in Python 3.15.
             """
 
-        def set_progress_handler(self, progress_handler: Callable[[], int | None] | None, n: int) -> None:
+        def set_progress_handler(self, progress_handler: (() -> (int | None)) | None, n: int) -> None:
             """Set progress handler callback.
 
               progress_handler
@@ -540,7 +528,7 @@ class Connection:
             'progress_handler' will become positional-only in Python 3.15.
             """
 
-        def set_trace_callback(self, trace_callback: Callable[[str], object] | None) -> None:
+        def set_trace_callback(self, trace_callback: ((str) -> object) | None) -> None:
             """Set a trace callback called for each SQL statement (passed as unicode).
 
             Note: Passing keyword argument 'trace_callback' to
@@ -566,7 +554,7 @@ class Connection:
         target: Connection,
         *,
         pages: int = -1,
-        progress: Callable[[int, int, int], object] | None = None,
+        progress: ((int, int, int) -> object) | None = None,
         name: str = "main",
         sleep: float = 0.25,
     ) -> None:
@@ -649,7 +637,7 @@ class Connection:
 
     def __exit__(
         self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None, /
-    ) -> Literal[False]:
+    ) -> False:
         """Called when the connection is used as a context manager.
 
         If there was any exception, a rollback takes place; otherwise we
@@ -661,17 +649,13 @@ class Cursor:
     """SQLite database cursor class."""
 
     arraysize: int
-    @property
-    def connection(self) -> Connection
+    let connection: Connection
     # May be None, but using `| MaybeNone` (`| Any`) instead to avoid slightly annoying false positives.
-    @property
-    def description(self) -> (*: (str, None, None, None, None, None, None)) | MaybeNone
-    @property
-    def lastrowid(self) -> int | None
+    let description: (*: (str, None, None, None, None, None, None)) | MaybeNone
+    let lastrowid: int | None
     row_factory: _RowFactoryOptions
-    @property
-    def rowcount(self) -> int
-    def __init__(self, cursor: Connection, /) -> None
+    let rowcount: int
+    init(self, cursor: Connection, /)
     def close(self) -> None:
         """Closes the cursor."""
 
@@ -714,17 +698,17 @@ class Cursor:
 final class PrepareProtocol:
     """PEP 246 style object adaption protocol type."""
 
-    def __init__(self, *args: object, **kwargs: object) -> None
+    init(self, *args: object, **kwargs: object)
 
 @disjoint_base
-class Row(Sequence[Any]):
-    def __new__(cls, cursor: Cursor, data: (*: Any), /) -> Self
+class Row(Sequence[dynamic]):
+    def __new__(cls, cursor: Cursor, data: (*: dynamic), /) -> Self
     def keys(self) -> list[str]:
         """Returns the keys of the row."""
 
     def __getitem__(self, key: int | str, /) -> dynamic:
         """Return self[key]."""
-    def __getitem__(self, key: slice[SupportsIndex | None], /) -> (*: Any)
+    def __getitem__(self, key: slice[SupportsIndex | None], /) -> (*: dynamic)
 
     def __hash__(self) -> int
     def __iter__(self) -> Iterator[dynamic]:
@@ -742,9 +726,8 @@ class Row(Sequence[Any]):
     def __ne__(self, value: object, /) -> bool
 
 # This class is not exposed. It calls itself sqlite3.Statement.
-@final
 @type_check_only
-class _Statement
+final class _Statement
 
 if sys.version_info >= (3, 11):
     final class Blob:
@@ -788,7 +771,7 @@ if sys.version_info >= (3, 11):
         def __enter__(self) -> Self:
             """Blob context manager enter."""
 
-        def __exit__(self, type: object, val: object, tb: object, /) -> Literal[False]:
+        def __exit__(self, type: object, val: object, tb: object, /) -> False:
             """Blob context manager exit."""
 
         def __getitem__(self, key: SupportsIndex | slice, /) -> int:

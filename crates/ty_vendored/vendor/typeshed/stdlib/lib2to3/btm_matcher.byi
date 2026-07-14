@@ -21,7 +21,7 @@ class BMNode:
     fixers: Incomplete
     id: Incomplete
     content: str
-    def __init__(self) -> None
+    init(self)
 
 class BottomMatcher:
     """The main matcher class. After instantiating the patterns should
@@ -33,7 +33,7 @@ class BottomMatcher:
     nodes: Incomplete
     fixers: Incomplete
     logger: Incomplete
-    def __init__(self) -> None
+    init(self)
     def add_fixer(self, fixer: BaseFix) -> None:
         """Reduces a fixer's pattern tree to a linear path and adds it
         to the matcher(a common Aho-Corasick automaton). The fixer is

@@ -98,7 +98,7 @@ else:
         failed: int
         attempted: int
 
-OPTIONFLAGS_BY_NAME: Final[dict[str, int]]
+final OPTIONFLAGS_BY_NAME: dict[str, int]
 
 def register_optionflag(name: str) -> int
 
@@ -164,7 +164,7 @@ class Example:
     lineno: int
     indent: int
     options: dict[int, bool]
-    def __init__(
+    init(
         self,
         source: str,
         want: str,
@@ -172,7 +172,7 @@ class Example:
         lineno: int = 0,
         indent: int = 0,
         options: dict[int, bool] | None = None,
-    ) -> None
+    )
     def __hash__(self) -> int
     def __eq__(self, other: object) -> bool
 
@@ -207,7 +207,7 @@ class DocTest:
     filename: str | None
     lineno: int | None
     docstring: str | None
-    def __init__(
+    init(
         self,
         examples: list[Example],
         globs: dict[str, dynamic],
@@ -215,7 +215,7 @@ class DocTest:
         filename: str | None,
         lineno: int | None,
         docstring: str | None,
-    ) -> None:
+    ):
         """
         Create a new DocTest containing the given examples.  The
         DocTest's globals are initialized with a copy of `globs`.
@@ -270,9 +270,9 @@ class DocTestFinder:
     classmethods, and properties.
     """
 
-    def __init__(
+    init(
         self, verbose: bool = False, parser: DocTestParser = ..., recurse: bool = True, exclude_empty: bool = True
-    ) -> None:
+    ):
         """
         Create a new doctest finder.
 
@@ -332,7 +332,7 @@ class DocTestFinder:
 
         """
 
-_Out: TypeAlias = Callable[[str], object]
+type _Out = (str) -> object
 
 class DocTestRunner:
     """
@@ -405,7 +405,7 @@ class DocTestRunner:
     if sys.version_info >= (3, 13):
         skips: int
     test: DocTest
-    def __init__(self, checker: OutputChecker | None = None, verbose: bool | None = None, optionflags: int = 0) -> None:
+    init(self, checker: OutputChecker | None = None, verbose: bool | None = None, optionflags: int = 0):
         """
         Create a new test runner.
 
@@ -523,7 +523,7 @@ class DocTestFailure(Exception):
     test: DocTest
     example: Example
     got: str
-    def __init__(self, test: DocTest, example: Example, got: str) -> None
+    init(self, test: DocTest, example: Example, got: str)
 
 class UnexpectedException(Exception):
     """A DocTest example has encountered an unexpected exception
@@ -540,7 +540,7 @@ class UnexpectedException(Exception):
     test: DocTest
     example: Example
     exc_info: ExcInfo
-    def __init__(self, test: DocTest, example: Example, exc_info: ExcInfo) -> None
+    init(self, test: DocTest, example: Example, exc_info: ExcInfo)
 
 class DebugRunner(DocTestRunner):
     """Run doc tests but raise an exception as soon as there is a failure.
@@ -854,21 +854,21 @@ def set_unittest_reportflags(flags: int) -> int:
     """
 
 class DocTestCase(unittest.TestCase):
-    def __init__(
+    init(
         self,
         test: DocTest,
         optionflags: int = 0,
-        setUp: Callable[[DocTest], object] | None = None,
-        tearDown: Callable[[DocTest], object] | None = None,
+        setUp: ((DocTest) -> object) | None = None,
+        tearDown: ((DocTest) -> object) | None = None,
         checker: OutputChecker | None = None,
-    ) -> None
+    )
     def runTest(self) -> None
     def format_failure(self, err: str) -> str
     def __hash__(self) -> int
     def __eq__(self, other: object) -> bool
 
 class SkipDocTestCase(DocTestCase):
-    def __init__(self, module: types.ModuleType) -> None
+    init(self, module: types.ModuleType)
     def test_skip(self) -> None
 
 class _DocTestSuite(unittest.TestSuite)

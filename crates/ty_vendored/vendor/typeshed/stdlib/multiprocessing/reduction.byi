@@ -8,28 +8,28 @@ from collections.abc import Callable
 from copyreg import _DispatchTableType
 from multiprocessing import connection, popen_forkserver, popen_spawn_posix, resource_sharer
 from socket import socket
-from typing import Any, Final
+from typing import Final
 
 if sys.platform == "win32":
     __all__ = ["send_handle", "recv_handle", "ForkingPickler", "register", "dump", "DupHandle", "duplicate", "steal_handle"]
 else:
     __all__ = ["send_handle", "recv_handle", "ForkingPickler", "register", "dump", "DupFd", "sendfds", "recvfds"]
 
-HAVE_SEND_HANDLE: Final[bool]
+final HAVE_SEND_HANDLE: bool
 
 class ForkingPickler(pickle.Pickler):
     """Pickler subclass used by multiprocessing."""
 
     dispatch_table: _DispatchTableType
-    def __init__(
+    init(
         self,
         file: SupportsWrite[bytes],
         protocol: int | None = None,
         fix_imports: bool = True,
         buffer_callback: _BufferCallback = None,
         /,
-    ) -> None
-    class def register(cls, type: Type, reduce: Callable[[dynamic], _ReducedType]) -> None:
+    )
+    class def register(cls, type: Type, reduce: (dynamic) -> _ReducedType) -> None:
         """Register a reduce function for a type."""
 
     class def dumps(cls, obj: dynamic, protocol: int | None = None) -> memoryview
@@ -50,22 +50,22 @@ if sys.platform == "win32":
     def steal_handle(source_pid: int, handle: int) -> int:
         """Steal a handle from process identified by source_pid."""
 
-    def send_handle(conn: connection.PipeConnection[DupHandle, Any], handle: int, destination_pid: int) -> None:
+    def send_handle(conn: connection.PipeConnection[DupHandle, dynamic], handle: int, destination_pid: int) -> None:
         """Send a handle over a local connection."""
 
-    def recv_handle(conn: connection.PipeConnection[Any, DupHandle]) -> int:
+    def recv_handle(conn: connection.PipeConnection[dynamic, DupHandle]) -> int:
         """Receive a handle over a local connection."""
 
     class DupHandle:
         """Picklable wrapper for a handle."""
 
-        def __init__(self, handle: int, access: int, pid: int | None = None) -> None
+        init(self, handle: int, access: int, pid: int | None = None)
         def detach(self) -> int:
             """Get the handle.  This should only be called once."""
 
 else:
     if sys.version_info < (3, 14):
-        ACKNOWLEDGE: Final[bool]
+        final ACKNOWLEDGE: bool
 
     def recvfds(sock: socket, size: int) -> list[int]:
         """Receive an array of fds over an AF_UNIX socket."""
@@ -122,4 +122,4 @@ class AbstractReducer(metaclass=ABCMeta):
         recvfds = _recvfds
         DupFd = _DupFd
 
-    def __init__(self, *args: Unused) -> None
+    init(self, *args: Unused)

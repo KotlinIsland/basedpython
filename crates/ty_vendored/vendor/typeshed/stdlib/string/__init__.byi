@@ -39,12 +39,12 @@ __all__ = [
 whitespace: Final = " \t\n\r\v\f"
 ascii_lowercase: Final = "abcdefghijklmnopqrstuvwxyz"
 ascii_uppercase: Final = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-ascii_letters: Final[LiteralString]  # string too long
+final ascii_letters: LiteralString  # string too long
 digits: Final = "0123456789"
 hexdigits: Final = "0123456789abcdefABCDEF"
 octdigits: Final = "01234567"
 punctuation: Final = r"""!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""
-printable: Final[LiteralString]  # string too long
+final printable: LiteralString  # string too long
 
 def capwords(s: StrOrLiteralStr, sep: StrOrLiteralStr | None = None) -> StrOrLiteralStr:
     """capwords(s [,sep]) -> string
@@ -70,7 +70,7 @@ class Template:
     else:
         flags: ClassVar[RegexFlag]
     pattern: ClassVar[Pattern[str]]
-    def __init__(self, template: str) -> None
+    init(self, template: str)
     def substitute(self, mapping: Mapping[str, object] = {}, /, **kwds: object) -> str
     def safe_substitute(self, mapping: Mapping[str, object] = {}, /, **kwds: object) -> str
     if sys.version_info >= (3, 11):

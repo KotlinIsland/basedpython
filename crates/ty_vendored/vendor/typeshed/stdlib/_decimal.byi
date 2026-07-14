@@ -23,12 +23,12 @@ from decimal import (
 )
 from typing import Final, TypeAlias
 
-_TrapType: TypeAlias = type[DecimalException]
+type _TrapType = type[DecimalException]
 
-__version__: Final[str]
-__libmpdec_version__: Final[str]
+final __version__: str
+final __libmpdec_version__: str
 if sys.version_info >= (3, 15):
-    SPEC_VERSION: Final[str]
+    final SPEC_VERSION: str
 
 ROUND_DOWN: Final = "ROUND_DOWN"
 ROUND_HALF_UP: Final = "ROUND_HALF_UP"
@@ -38,14 +38,14 @@ ROUND_FLOOR: Final = "ROUND_FLOOR"
 ROUND_UP: Final = "ROUND_UP"
 ROUND_HALF_DOWN: Final = "ROUND_HALF_DOWN"
 ROUND_05UP: Final = "ROUND_05UP"
-HAVE_CONTEXTVAR: Final[bool]
-HAVE_THREADS: Final[bool]
-MAX_EMAX: Final[int]
-MAX_PREC: Final[int]
-MIN_EMIN: Final[int]
-MIN_ETINY: Final[int]
+final HAVE_CONTEXTVAR: bool
+final HAVE_THREADS: bool
+final MAX_EMAX: int
+final MAX_PREC: int
+final MIN_EMIN: int
+final MIN_ETINY: int
 if sys.version_info >= (3, 14):
-    IEEE_CONTEXT_MAX_BITS: Final[int]
+    final IEEE_CONTEXT_MAX_BITS: int
 
 def setcontext(context: Context, /) -> None:
     """Set a new default context."""

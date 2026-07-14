@@ -1,7 +1,7 @@
 import sys
 from _tracemalloc import *
 from collections.abc import Sequence
-from typing import SupportsIndex, TypeAlias
+from typing import TypeAlias
 
 def get_object_traceback(obj: object) -> Traceback | None:
     """
@@ -19,27 +19,25 @@ def take_snapshot() -> Snapshot:
 
 class BaseFilter:
     inclusive: bool
-    def __init__(self, inclusive: bool) -> None
+    init(self, inclusive: bool)
 
 class DomainFilter(BaseFilter):
-    @property
-    def domain(self) -> int
-    def __init__(self, inclusive: bool, domain: int) -> None
+    let domain: int
+    init(self, inclusive: bool, domain: int)
 
 class Filter(BaseFilter):
     domain: int | None
     lineno: int | None
-    @property
-    def filename_pattern(self) -> str
+    let filename_pattern: str
     all_frames: bool
-    def __init__(
+    init(
         self,
         inclusive: bool,
         filename_pattern: str,
         lineno: int | None = None,
         all_frames: bool = False,
         domain: int | None = None,
-    ) -> None
+    )
 
 class Statistic:
     """
@@ -50,7 +48,7 @@ class Statistic:
     count: int
     size: int
     traceback: Traceback
-    def __init__(self, traceback: Traceback, size: int, count: int) -> None
+    init(self, traceback: Traceback, size: int, count: int)
     def __eq__(self, other: object) -> bool
     def __hash__(self) -> int
 
@@ -66,11 +64,11 @@ class StatisticDiff:
     size: int
     size_diff: int
     traceback: Traceback
-    def __init__(self, traceback: Traceback, size: int, size_diff: int, count: int, count_diff: int) -> None
+    init(self, traceback: Traceback, size: int, size_diff: int, count: int, count_diff: int)
     def __eq__(self, other: object) -> bool
     def __hash__(self) -> int
 
-_FrameTuple: TypeAlias = tuple[str, int]
+type _FrameTuple = tuple[str, int]
 
 class Frame:
     """
@@ -78,11 +76,9 @@ class Frame:
     """
 
     __slots__ = ("_frame",)
-    @property
-    def filename(self) -> str
-    @property
-    def lineno(self) -> int
-    def __init__(self, frame: _FrameTuple) -> None
+    let filename: str
+    let lineno: int
+    init(self, frame: _FrameTuple)
     def __eq__(self, other: object) -> bool
     def __hash__(self) -> int
     def __lt__(self, other: Frame) -> bool
@@ -106,7 +102,7 @@ class Frame:
         def __le__(self, other: Frame, NotImplemented: dynamic = ...) -> bool:
             """Return a <= b.  Computed by @total_ordering from (a < b) or (a == b)."""
 
-_TraceTuple: TypeAlias = tuple[int, int, Sequence[_FrameTuple], int | None] | tuple[int, int, Sequence[_FrameTuple]]
+type _TraceTuple = tuple[int, int, Sequence[_FrameTuple], int | None] | tuple[int, int, Sequence[_FrameTuple]]
 
 class Trace:
     """
@@ -114,13 +110,10 @@ class Trace:
     """
 
     __slots__ = ("_trace",)
-    @property
-    def domain(self) -> int
-    @property
-    def size(self) -> int
-    @property
-    def traceback(self) -> Traceback
-    def __init__(self, trace: _TraceTuple) -> None
+    let domain: int
+    let size: int
+    let traceback: Traceback
+    init(self, trace: _TraceTuple)
     def __eq__(self, other: object) -> bool
     def __hash__(self) -> int
 
@@ -131,15 +124,14 @@ class Traceback(Sequence[Frame]):
     """
 
     __slots__ = ("_frames", "_total_nframe")
-    @property
-    def total_nframe(self) -> int | None
-    def __init__(self, frames: Sequence[_FrameTuple], total_nframe: int | None = None) -> None
+    let total_nframe: int | None
+    init(self, frames: Sequence[_FrameTuple], total_nframe: int | None = None)
     def format(self, limit: int | None = None, most_recent_first: bool = False) -> list[str]
 
     def __getitem__(self, index: SupportsIndex) -> Frame
     def __getitem__(self, index: slice[SupportsIndex | None]) -> Sequence[Frame]
 
-    def __contains__(self, frame: Frame) -> bool  # type: ignore[override]
+    def __contains__(self, frame: Frame) -> bool
     def __len__(self) -> int
     def __eq__(self, other: object) -> bool
     def __hash__(self) -> int
@@ -169,7 +161,7 @@ class Snapshot:
     Snapshot of traces of memory blocks allocated by Python.
     """
 
-    def __init__(self, traces: Sequence[_TraceTuple], traceback_limit: int) -> None
+    init(self, traces: Sequence[_TraceTuple], traceback_limit: int)
     def compare_to(self, old_snapshot: Snapshot, key_type: str, cumulative: bool = False) -> list[StatisticDiff]:
         """
         Compute the differences with an old snapshot old_snapshot. Get

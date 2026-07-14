@@ -9,9 +9,9 @@ from typing import Final, Literal, TypeAlias
 from xml.sax import _Source, xmlreader
 from xml.sax.handler import LexicalHandler, _ContentHandlerProtocol
 
-_BoolType: TypeAlias = Literal[0, 1] | bool
+type _BoolType = 0 | 1 | bool
 
-version: Final[str]
+final version: str
 AttributesImpl = xmlreader.AttributesImpl
 AttributesNSImpl = xmlreader.AttributesNSImpl
 
@@ -26,7 +26,7 @@ class ExpatLocator(xmlreader.Locator):
     a circular reference between the parser and the content handler.
     """
 
-    def __init__(self, parser: ExpatParser) -> None
+    init(self, parser: ExpatParser)
     def getColumnNumber(self) -> int | None
     def getLineNumber(self) -> int
     def getPublicId(self) -> str | None
@@ -35,7 +35,7 @@ class ExpatLocator(xmlreader.Locator):
 class ExpatParser(xmlreader.IncrementalParser, xmlreader.Locator):
     """SAX driver for the pyexpat C module."""
 
-    def __init__(self, namespaceHandling: _BoolType = 0, bufsize: int = 65516) -> None
+    init(self, namespaceHandling: _BoolType = 0, bufsize: int = 65516)
     def parse(self, source: xmlreader.InputSource | _Source) -> None:
         """Parse an XML document from a URL or an InputSource."""
 
@@ -44,14 +44,14 @@ class ExpatParser(xmlreader.IncrementalParser, xmlreader.Locator):
     def getFeature(self, name: str) -> _BoolType
     def setFeature(self, name: str, state: _BoolType) -> None
 
-    def getProperty(self, name: Literal["http://xml.org/sax/properties/lexical-handler"]) -> LexicalHandler | None
-    def getProperty(self, name: Literal["http://www.python.org/sax/properties/interning-dict"]) -> dict[str, dynamic] | None
-    def getProperty(self, name: Literal["http://xml.org/sax/properties/xml-string"]) -> bytes | None
+    def getProperty(self, name: "http://xml.org/sax/properties/lexical-handler") -> LexicalHandler | None
+    def getProperty(self, name: "http://www.python.org/sax/properties/interning-dict") -> dict[str, dynamic] | None
+    def getProperty(self, name: "http://xml.org/sax/properties/xml-string") -> bytes | None
     def getProperty(self, name: str) -> object
 
-    def setProperty(self, name: Literal["http://xml.org/sax/properties/lexical-handler"], value: LexicalHandler) -> None
+    def setProperty(self, name: "http://xml.org/sax/properties/lexical-handler", value: LexicalHandler) -> None
     def setProperty(
-        self, name: Literal["http://www.python.org/sax/properties/interning-dict"], value: dict[str, dynamic]
+        self, name: "http://www.python.org/sax/properties/interning-dict", value: dict[str, dynamic]
     ) -> None
     def setProperty(self, name: str, value: object) -> None
 

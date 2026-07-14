@@ -4,21 +4,18 @@ import sys
 from _typeshed import ReadableBuffer
 from collections.abc import Callable
 from types import ModuleType
-from typing import AnyStr, Protocol, TypeAlias, final, type_check_only
+from typing import Protocol, TypeAlias, final, type_check_only
 from typing_extensions import Self, disjoint_base
 
-_DigestMod: TypeAlias = str | Callable[[], _HashObject] | ModuleType | None
+type _DigestMod = str | (() -> _HashObject) | ModuleType | None
 
 openssl_md_meth_names: frozenset[str]
 
 @type_check_only
-class _HashObject(Protocol):
-    @property
-    def digest_size(self) -> int
-    @property
-    def block_size(self) -> int
-    @property
-    def name(self) -> str
+protocol _HashObject:
+    let digest_size: int
+    let block_size: int
+    let name: str
     def copy(self) -> Self
     def digest(self) -> bytes
     def hexdigest(self) -> str
@@ -41,12 +38,9 @@ class HASH:
     digest_size -- number of bytes in this hashes output
     """
 
-    @property
-    def digest_size(self) -> int
-    @property
-    def block_size(self) -> int
-    @property
-    def name(self) -> str
+    let digest_size: int
+    let block_size: int
+    let name: str
     def copy(self) -> Self:
         """Return a copy of the hash object."""
 
@@ -77,10 +71,10 @@ class HASHXOF(HASH):
     digest_size -- number of bytes in this hashes output
     """
 
-    def digest(self, length: int) -> bytes:  # type: ignore[override]
+    def digest(self, length: int) -> bytes:
         """Return the digest value as a bytes object."""
 
-    def hexdigest(self, length: int) -> str:  # type: ignore[override]
+    def hexdigest(self, length: int) -> str:
         """Return the digest value as a string of hexadecimal digits."""
 
 final class HMAC:
@@ -99,12 +93,9 @@ final class HMAC:
     digest_size -- number of bytes in digest() output
     """
 
-    @property
-    def digest_size(self) -> int
-    @property
-    def block_size(self) -> int
-    @property
-    def name(self) -> str
+    let digest_size: int
+    let block_size: int
+    let name: str
     def copy(self) -> Self:
         """Return a copy ("clone") of the HMAC object."""
 

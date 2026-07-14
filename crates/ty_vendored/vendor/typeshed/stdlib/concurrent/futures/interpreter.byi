@@ -3,21 +3,21 @@
 import sys
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Literal, ParamSpec, Protocol, TypeAlias, type_check_only
+from typing import Literal, ParamSpec, Protocol, TypeAlias, type_check_only
 from typing_extensions import Self, TypeVar, TypeVarTuple, Unpack
 
-_Task: TypeAlias = tuple[bytes, Literal["function", "script"]]
+type _Task = tuple[bytes, "function" | "script"]
 
 @type_check_only
-class _TaskFunc(Protocol):
-    def __call__[**P, R](self, fn: Callable[P, R], *args: P.args, **kwargs: P.kwargs) -> (bytes, Literal["function"])
-    def __call__(self, fn: str) -> (bytes, Literal["script"])
+protocol _TaskFunc:
+    def __call__[**P, R](self, fn: (**P) -> R, *args: P.args, **kwargs: P.kwargs) -> (bytes, "function")
+    def __call__(self, fn: str) -> (bytes, "script")
 
 if sys.version_info >= (3, 14):
     from concurrent.futures.thread import BrokenThreadPool, WorkerContext as ThreadWorkerContext
     from concurrent.interpreters import Interpreter, Queue
 
-    def do_call[R](results: Queue, func: (...) -> R, args: (*: Any), kwargs: dict[str, dynamic]) -> R
+    def do_call[R](results: Queue, func: (...) -> R, args: (*: dynamic), kwargs: dict[str, dynamic]) -> R
 
     class WorkerContext(ThreadWorkerContext):
         interp: Interpreter | None
@@ -25,12 +25,12 @@ if sys.version_info >= (3, 14):
 
         class def prepare[*Ts](
             cls, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)
-        ) -> (Callable[[], Self], _TaskFunc)
-        class def prepare(cls, initializer: Callable[[], object], initargs: tuple[()]) -> (Callable[[], Self], _TaskFunc)
+        ) -> (() -> Self, _TaskFunc)
+        class def prepare(cls, initializer: () -> object, initargs: tuple[()]) -> (() -> Self, _TaskFunc)
 
-        def __init__(self, initdata: _Task) -> None
+        init(self, initdata: _Task)
         def __del__(self) -> None
-        def run(self, task: _Task) -> None  # type: ignore[override]
+        def run(self, task: _Task) -> None
 
     class BrokenInterpreterPool(BrokenThreadPool):
         """
@@ -41,19 +41,19 @@ if sys.version_info >= (3, 14):
         BROKEN: type[BrokenInterpreterPool]
 
         class def prepare_context(
-            cls, initializer: Callable[[], object], initargs: tuple[()]
-        ) -> (Callable[[], WorkerContext], _TaskFunc)
+            cls, initializer: () -> object, initargs: tuple[()]
+        ) -> (() -> WorkerContext, _TaskFunc)
         class def prepare_context[*Ts](
             cls, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)
-        ) -> (Callable[[], WorkerContext], _TaskFunc)
+        ) -> (() -> WorkerContext, _TaskFunc)
 
-        def __init__(
+        init(
             self,
             max_workers: int | None = None,
             thread_name_prefix: str = "",
-            initializer: Callable[[], object] | None = None,
+            initializer: (() -> object) | None = None,
             initargs: tuple[()] = (),
-        ) -> None:
+        ):
             """Initializes a new InterpreterPoolExecutor instance.
 
             Args:

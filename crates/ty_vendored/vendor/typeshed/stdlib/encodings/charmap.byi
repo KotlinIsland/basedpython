@@ -22,22 +22,22 @@ class Codec(codecs.Codec):
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
     mapping: _CharMap | None
-    def __init__(self, errors: str = "strict", mapping: _CharMap | None = None) -> None
+    init(self, errors: str = "strict", mapping: _CharMap | None = None)
     def encode(self, input: str, final: bool = False) -> bytes
 
 class IncrementalDecoder(codecs.IncrementalDecoder):
     mapping: _CharMap | None
-    def __init__(self, errors: str = "strict", mapping: _CharMap | None = None) -> None
+    init(self, errors: str = "strict", mapping: _CharMap | None = None)
     def decode(self, input: ReadableBuffer, final: bool = False) -> str
 
 class StreamWriter(Codec, codecs.StreamWriter):
     mapping: _CharMap | None
-    def __init__(self, stream: codecs._WritableStream, errors: str = "strict", mapping: _CharMap | None = None) -> None
-    def encode(self, input: str, errors: str = "strict") -> (bytes, int)  # type: ignore[override]
+    init(self, stream: codecs._WritableStream, errors: str = "strict", mapping: _CharMap | None = None)
+    def encode(self, input: str, errors: str = "strict") -> (bytes, int)
 
 class StreamReader(Codec, codecs.StreamReader):
     mapping: _CharMap | None
-    def __init__(self, stream: codecs._ReadableStream, errors: str = "strict", mapping: _CharMap | None = None) -> None
-    def decode(self, input: ReadableBuffer, errors: str = "strict") -> (str, int)  # type: ignore[override]
+    init(self, stream: codecs._ReadableStream, errors: str = "strict", mapping: _CharMap | None = None)
+    def decode(self, input: ReadableBuffer, errors: str = "strict") -> (str, int)
 
 def getregentry() -> codecs.CodecInfo

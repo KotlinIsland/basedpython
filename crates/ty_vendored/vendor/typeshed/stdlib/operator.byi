@@ -62,7 +62,7 @@ from _operator import (
     xor as xor,
 )
 from _typeshed import SupportsGetItem
-from typing import Any, Generic, TypeVar, final
+from typing import Generic, TypeVar, final
 from typing_extensions import Self, TypeVarTuple, Unpack
 
 
@@ -193,10 +193,10 @@ final class attrgetter[out Element]:
     """
 
     def __new__(cls, attr: str, /) -> attrgetter[dynamic]
-    def __new__(cls, attr: str, attr2: str, /) -> attrgetter[(Any, Any)]
-    def __new__(cls, attr: str, attr2: str, attr3: str, /) -> attrgetter[(Any, Any, Any)]
-    def __new__(cls, attr: str, attr2: str, attr3: str, attr4: str, /) -> attrgetter[(Any, Any, Any, Any)]
-    def __new__(cls, attr: str, /, *attrs: str) -> attrgetter[(*: Any)]
+    def __new__(cls, attr: str, attr2: str, /) -> attrgetter[(dynamic, dynamic)]
+    def __new__(cls, attr: str, attr2: str, attr3: str, /) -> attrgetter[(dynamic, dynamic, dynamic)]
+    def __new__(cls, attr: str, attr2: str, attr3: str, attr4: str, /) -> attrgetter[(dynamic, dynamic, dynamic, dynamic)]
+    def __new__(cls, attr: str, /, *attrs: str) -> attrgetter[(*: dynamic)]
 
     def __call__(self, obj: dynamic, /) -> Element:
         """Call self as a function."""

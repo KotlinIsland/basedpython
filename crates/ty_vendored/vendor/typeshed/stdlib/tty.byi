@@ -2,18 +2,18 @@
 
 import sys
 import termios
-from typing import IO, Final, TypeAlias
+from typing import Final, TypeAlias
 
 if sys.platform != "win32":
     __all__ = ["setraw", "setcbreak"]
     if sys.version_info >= (3, 12):
         __all__ += ["cfmakeraw", "cfmakecbreak"]
 
-        _ModeSetterReturn: TypeAlias = termios._AttrReturn
+        type _ModeSetterReturn = termios._AttrReturn
     else:
-        _ModeSetterReturn: TypeAlias = None
+        type _ModeSetterReturn = None
 
-    _FD: TypeAlias = int | IO[str]
+    type _FD = int | IO[str]
 
     # XXX: Undocumented integer constants
     IFLAG: Final = 0

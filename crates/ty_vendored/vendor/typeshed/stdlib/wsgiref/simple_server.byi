@@ -18,9 +18,9 @@ from .handlers import SimpleHandler
 
 __all__ = ["WSGIServer", "WSGIRequestHandler", "demo_app", "make_server"]
 
-server_version: Final[str]  # undocumented
-sys_version: Final[str]  # undocumented
-software_version: Final[str]  # undocumented
+final server_version: str  # undocumented
+final sys_version: str  # undocumented
+final software_version: str  # undocumented
 
 class ServerHandler(SimpleHandler):  # undocumented
     server_software: str

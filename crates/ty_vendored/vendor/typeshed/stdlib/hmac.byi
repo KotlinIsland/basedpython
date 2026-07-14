@@ -9,7 +9,7 @@ from collections.abc import Callable
 from types import ModuleType
 from typing import TypeAlias
 
-_DigestMod: TypeAlias = str | Callable[[], _HashObject] | ModuleType
+type _DigestMod = str | (() -> _HashObject) | ModuleType
 
 trans_5C: bytes
 trans_36: bytes
@@ -46,9 +46,8 @@ class HMAC:
     __slots__ = ("_hmac", "_inner", "_outer", "block_size", "digest_size")
     digest_size: int
     block_size: int
-    @property
-    def name(self) -> str
-    def __init__(self, key: bytes | bytearray, msg: ReadableBuffer | None = None, digestmod: _DigestMod = "") -> None:
+    let name: str
+    init(self, key: bytes | bytearray, msg: ReadableBuffer | None = None, digestmod: _DigestMod = ""):
         """Create a new HMAC object.
 
         key: bytes or buffer, key for the keyed hash object.

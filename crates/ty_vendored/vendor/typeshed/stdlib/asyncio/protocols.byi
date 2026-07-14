@@ -2,7 +2,6 @@
 
 from _typeshed import ReadableBuffer
 from asyncio import transports
-from typing import Any
 
 # Keep asyncio.__all__ updated with any changes to __all__ here
 __all__ = ("BaseProtocol", "Protocol", "DatagramProtocol", "SubprocessProtocol", "BufferedProtocol")
@@ -159,7 +158,7 @@ class DatagramProtocol(BaseProtocol):
     """Interface for datagram protocol."""
 
     __slots__ = ()
-    def connection_made(self, transport: transports.DatagramTransport) -> None:  # type: ignore[override]
+    def connection_made(self, transport: transports.DatagramTransport) -> None:
         """Called when a connection is made.
 
         The argument is the transport representing the pipe connection.
@@ -171,7 +170,7 @@ class DatagramProtocol(BaseProtocol):
     # Use tuple[str | Any, int] to not cause typechecking issues on most usual cases.
     # This could be improved by using tuple[AnyOf[str, int], int] if the AnyOf feature is accepted.
     # See https://github.com/python/typing/issues/566
-    def datagram_received(self, data: bytes, addr: (str | Any, int)) -> None:
+    def datagram_received(self, data: bytes, addr: (str | dynamic, int)) -> None:
         """Called when some datagram is received."""
 
     def error_received(self, exc: Exception) -> None:

@@ -14,8 +14,8 @@ if sys.platform == "win32":
         def Modify(self, mode: int, record: _Record) -> None
         def Close(self) -> None
         # Don't exist at runtime
-        __new__: None  # type: ignore[assignment]
-        __init__: None  # type: ignore[assignment]
+        __new__: None
+        __init__: None
 
     # Actual typename SummaryInformation, not exposed by the implementation
     @type_check_only
@@ -25,8 +25,8 @@ if sys.platform == "win32":
         def SetProperty(self, field: int, value: int | str) -> None
         def Persist(self) -> None
         # Don't exist at runtime
-        __new__: None  # type: ignore[assignment]
-        __init__: None  # type: ignore[assignment]
+        __new__: None
+        __init__: None
 
     # Actual typename Database, not exposed by the implementation
     @type_check_only
@@ -36,8 +36,8 @@ if sys.platform == "win32":
         def GetSummaryInformation(self, updateCount: int) -> _SummaryInformation
         def Close(self) -> None
         # Don't exist at runtime
-        __new__: None  # type: ignore[assignment]
-        __init__: None  # type: ignore[assignment]
+        __new__: None
+        __init__: None
 
     # Actual typename Record, not exposed by the implementation
     @type_check_only
@@ -50,8 +50,8 @@ if sys.platform == "win32":
         def SetInteger(self, field: int, int: int) -> None
         def ClearData(self) -> None
         # Don't exist at runtime
-        __new__: None  # type: ignore[assignment]
-        __init__: None  # type: ignore[assignment]
+        __new__: None
+        __init__: None
 
     def UuidCreate() -> str:
         """Return the string representation of a new unique identifier."""
@@ -82,42 +82,42 @@ if sys.platform == "win32":
           the number of fields of the record
         """
 
-    MSICOLINFO_NAMES: Final[int]
-    MSICOLINFO_TYPES: Final[int]
-    MSIDBOPEN_CREATE: Final[int]
-    MSIDBOPEN_CREATEDIRECT: Final[int]
-    MSIDBOPEN_DIRECT: Final[int]
-    MSIDBOPEN_PATCHFILE: Final[int]
-    MSIDBOPEN_READONLY: Final[int]
-    MSIDBOPEN_TRANSACT: Final[int]
-    MSIMODIFY_ASSIGN: Final[int]
-    MSIMODIFY_DELETE: Final[int]
-    MSIMODIFY_INSERT: Final[int]
-    MSIMODIFY_INSERT_TEMPORARY: Final[int]
-    MSIMODIFY_MERGE: Final[int]
-    MSIMODIFY_REFRESH: Final[int]
-    MSIMODIFY_REPLACE: Final[int]
-    MSIMODIFY_SEEK: Final[int]
-    MSIMODIFY_UPDATE: Final[int]
-    MSIMODIFY_VALIDATE: Final[int]
-    MSIMODIFY_VALIDATE_DELETE: Final[int]
-    MSIMODIFY_VALIDATE_FIELD: Final[int]
-    MSIMODIFY_VALIDATE_NEW: Final[int]
+    final MSICOLINFO_NAMES: int
+    final MSICOLINFO_TYPES: int
+    final MSIDBOPEN_CREATE: int
+    final MSIDBOPEN_CREATEDIRECT: int
+    final MSIDBOPEN_DIRECT: int
+    final MSIDBOPEN_PATCHFILE: int
+    final MSIDBOPEN_READONLY: int
+    final MSIDBOPEN_TRANSACT: int
+    final MSIMODIFY_ASSIGN: int
+    final MSIMODIFY_DELETE: int
+    final MSIMODIFY_INSERT: int
+    final MSIMODIFY_INSERT_TEMPORARY: int
+    final MSIMODIFY_MERGE: int
+    final MSIMODIFY_REFRESH: int
+    final MSIMODIFY_REPLACE: int
+    final MSIMODIFY_SEEK: int
+    final MSIMODIFY_UPDATE: int
+    final MSIMODIFY_VALIDATE: int
+    final MSIMODIFY_VALIDATE_DELETE: int
+    final MSIMODIFY_VALIDATE_FIELD: int
+    final MSIMODIFY_VALIDATE_NEW: int
 
-    PID_APPNAME: Final[int]
-    PID_AUTHOR: Final[int]
-    PID_CHARCOUNT: Final[int]
-    PID_CODEPAGE: Final[int]
-    PID_COMMENTS: Final[int]
-    PID_CREATE_DTM: Final[int]
-    PID_KEYWORDS: Final[int]
-    PID_LASTAUTHOR: Final[int]
-    PID_LASTPRINTED: Final[int]
-    PID_LASTSAVE_DTM: Final[int]
-    PID_PAGECOUNT: Final[int]
-    PID_REVNUMBER: Final[int]
-    PID_SECURITY: Final[int]
-    PID_SUBJECT: Final[int]
-    PID_TEMPLATE: Final[int]
-    PID_TITLE: Final[int]
-    PID_WORDCOUNT: Final[int]
+    final PID_APPNAME: int
+    final PID_AUTHOR: int
+    final PID_CHARCOUNT: int
+    final PID_CODEPAGE: int
+    final PID_COMMENTS: int
+    final PID_CREATE_DTM: int
+    final PID_KEYWORDS: int
+    final PID_LASTAUTHOR: int
+    final PID_LASTPRINTED: int
+    final PID_LASTSAVE_DTM: int
+    final PID_PAGECOUNT: int
+    final PID_REVNUMBER: int
+    final PID_SECURITY: int
+    final PID_SUBJECT: int
+    final PID_TEMPLATE: int
+    final PID_TITLE: int
+    final PID_WORDCOUNT: int

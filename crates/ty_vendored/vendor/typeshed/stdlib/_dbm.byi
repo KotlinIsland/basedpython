@@ -5,16 +5,15 @@ from typing import Final, TypeAlias, TypeVar, final, type_check_only
 from typing_extensions import Self
 
 if sys.platform != "win32":
-    _KeyType: TypeAlias = str | ReadOnlyBuffer
-    _ValueType: TypeAlias = str | ReadOnlyBuffer
+    type _KeyType = str | ReadOnlyBuffer
+    type _ValueType = str | ReadOnlyBuffer
 
     class error(OSError)
-    library: Final[str]
+    final library: str
 
     # Actual typename dbm, not exposed by the implementation
-    @final
     @type_check_only
-    class _dbm:
+    final class _dbm:
         def close(self) -> None
         if sys.version_info >= (3, 13):
             def clear(self) -> None
@@ -34,8 +33,8 @@ if sys.platform != "win32":
         def keys(self) -> list[bytes]
         def setdefault(self, k: _KeyType, default: _ValueType = b"", /) -> bytes
         # This isn't true, but the class can't be instantiated. See #13024
-        __new__: None  # type: ignore[assignment]
-        __init__: None  # type: ignore[assignment]
+        __new__: None
+        __init__: None
 
     if sys.version_info >= (3, 11):
         def open(filename: StrOrBytesPath, flags: str = "r", mode: int = 0o666, /) -> _dbm:

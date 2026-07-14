@@ -40,7 +40,7 @@ from collections.abc import Iterable, Iterator
 from io import BufferedIOBase, RawIOBase, TextIOBase, UnsupportedOperation as UnsupportedOperation
 from os import _Opener
 from types import TracebackType
-from typing import IO, Any, BinaryIO, Final, Generic, Literal, Protocol, TextIO, TypeVar, type_check_only
+from typing import Final, Generic, Literal, Protocol, TypeVar, type_check_only
 from typing_extensions import Self, disjoint_base
 
 
@@ -134,7 +134,7 @@ if sys.version_info >= (3, 12):
             If False, read() will raise OSError.
             """
 
-        read: (...) -> Any
+        read: (...) -> dynamic
         def readlines(self, hint: int = -1, /) -> list[bytes]:
             """Return a list of lines from the stream.
 
@@ -186,7 +186,7 @@ if sys.version_info >= (3, 12):
             If False, write() will raise OSError.
             """
 
-        write: (...) -> Any
+        write: (...) -> dynamic
         def writelines(self, lines: Iterable[ReadableBuffer], /) -> None:
             """Write a list of lines to stream.
 
@@ -207,8 +207,7 @@ if sys.version_info >= (3, 12):
         def __del__(self) -> None:
             """Called when the instance is about to be destroyed."""
 
-        @property
-        def closed(self) -> bool
+        let closed: bool
         def _checkClosed(self) -> None  # undocumented
 
 else:
@@ -284,7 +283,7 @@ else:
             If False, read() will raise OSError.
             """
 
-        read: (...) -> Any
+        read: (...) -> dynamic
         def readlines(self, hint: int = -1, /) -> list[bytes]:
             """Return a list of lines from the stream.
 
@@ -334,7 +333,7 @@ else:
             If False, write() will raise OSError.
             """
 
-        write: (...) -> Any
+        write: (...) -> dynamic
         def writelines(self, lines: Iterable[ReadableBuffer], /) -> None:
             """Write a list of lines to stream.
 
@@ -353,8 +352,7 @@ else:
             """
 
         def __del__(self) -> None
-        @property
-        def closed(self) -> bool
+        let closed: bool
         def _checkClosed(self) -> None  # undocumented
 
 class _RawIOBase(_IOBase):
@@ -431,7 +429,7 @@ class _BufferedIOBase(_IOBase):
         """
 
 @disjoint_base
-class FileIO(RawIOBase, _RawIOBase, BinaryIO):  # type: ignore[misc]  # incompatible definitions of writelines in the base classes
+class FileIO(RawIOBase, _RawIOBase, BinaryIO):
     """Open a file.
 
     The mode can be 'r' (default), 'w', 'x' or 'a' for reading,
@@ -457,12 +455,10 @@ class FileIO(RawIOBase, _RawIOBase, BinaryIO):  # type: ignore[misc]  # incompat
     # but that can make FileIO incompatible with other I/O types that assume
     # "name" is a str. In the future, making FileIO generic might help.
     name: dynamic
-    def __init__(
+    init(
         self, file: FileDescriptorOrPath, mode: str = "r", closefd: bool = True, opener: _Opener | None = None
-    ) -> None
-    @property
-    def closefd(self) -> bool:
-        """True if the file descriptor will be closed by close()."""
+    )
+    let closefd: bool
 
     def seek(self, pos: int, whence: int = 0, /) -> int:
         """Move to new file position and return the file position.
@@ -491,10 +487,10 @@ class FileIO(RawIOBase, _RawIOBase, BinaryIO):  # type: ignore[misc]  # incompat
         """
 
 @disjoint_base
-class BytesIO(BufferedIOBase, _BufferedIOBase, BinaryIO):  # type: ignore[misc]  # incompatible definitions of methods in the base classes
+class BytesIO(BufferedIOBase, _BufferedIOBase, BinaryIO):
     """Buffered I/O implementation using an in-memory bytes buffer."""
 
-    def __init__(self, initial_bytes: ReadableBuffer = b"") -> None
+    init(self, initial_bytes: ReadableBuffer = b"")
     # BytesIO does not contain a "name" field. This workaround is necessary
     # to allow BytesIO sub-classes to add this field, as it is defined
     # as a read-only property on IO[].
@@ -531,7 +527,7 @@ class BytesIO(BufferedIOBase, _BufferedIOBase, BinaryIO):  # type: ignore[misc] 
         """
 
 @type_check_only
-class _BufferedReaderStream(Protocol):
+protocol _BufferedReaderStream:
     def read(self, n: int = ..., /) -> bytes
     # Optional: def readall(self) -> bytes: ...
     def readinto(self, b: memoryview, /) -> int | None
@@ -540,8 +536,7 @@ class _BufferedReaderStream(Protocol):
     def truncate(self, size: int, /) -> int
     def flush(self) -> object
     def close(self) -> object
-    @property
-    def closed(self) -> bool
+    let closed: bool
     def readable(self) -> bool
     def seekable(self) -> bool
 
@@ -558,7 +553,7 @@ class _BufferedReaderStream(Protocol):
 
 
 @disjoint_base
-class BufferedReader[in out BufferedReaderStreamT: _BufferedReaderStream = _BufferedReaderStream](BufferedIOBase, _BufferedIOBase, BinaryIO):  # type: ignore[misc]  # incompatible definitions of methods in the base classes
+class BufferedReader[in out BufferedReaderStreamT: _BufferedReaderStream = _BufferedReaderStream](BufferedIOBase, _BufferedIOBase, BinaryIO):
     """Create a new buffered reader using the given readable raw IO object."""
 
     raw: BufferedReaderStreamT
@@ -572,15 +567,14 @@ class BufferedReader[in out BufferedReaderStreamT: _BufferedReaderStream = _Buff
     def truncate(self, pos: int | None = None, /) -> int
 
 @type_check_only
-class _BufferedWriterStream(Protocol):
+protocol _BufferedWriterStream:
     def write(self, b: WriteableBuffer, /) -> int | None
     def seek(self, pos: int, whence: int, /) -> int
     def tell(self) -> int
     def truncate(self, size: int, /) -> int
     def flush(self) -> object
     def close(self) -> object
-    @property
-    def closed(self) -> bool
+    let closed: bool
     def writable(self) -> bool
     def seekable(self) -> bool
 
@@ -597,7 +591,7 @@ class _BufferedWriterStream(Protocol):
 
 
 @disjoint_base
-class BufferedWriter[in out BufferedWriterStreamT: _BufferedWriterStream = _BufferedWriterStream](BufferedIOBase, _BufferedIOBase, BinaryIO):  # type: ignore[misc]  # incompatible definitions of writelines in the base classes
+class BufferedWriter[in out BufferedWriterStreamT: _BufferedWriterStream = _BufferedWriterStream](BufferedIOBase, _BufferedIOBase, BinaryIO):
     """A buffer for a writeable sequential RawIO object.
 
     The constructor creates a BufferedWriter for the given writeable raw
@@ -616,7 +610,7 @@ class BufferedWriter[in out BufferedWriterStreamT: _BufferedWriterStream = _Buff
     def truncate(self, pos: int | None = None, /) -> int
 
 @disjoint_base
-class BufferedRandom(BufferedIOBase, _BufferedIOBase, BinaryIO):  # type: ignore[misc]  # incompatible definitions of methods in the base classes
+class BufferedRandom(BufferedIOBase, _BufferedIOBase, BinaryIO):
     """A buffered interface to random access streams.
 
     The constructor creates a reader and writer for a seekable stream,
@@ -688,10 +682,10 @@ class _TextIOBase(_IOBase):
     Subclasses should override.
     """
 
-    def __iter__(self) -> Iterator[str]:  # type: ignore[override]
+    def __iter__(self) -> Iterator[str]:
         """Implement iter(self)."""
 
-    def __next__(self) -> str:  # type: ignore[override]
+    def __next__(self) -> str:
         """Implement next(self)."""
 
     def detach(self) -> BinaryIO:
@@ -708,21 +702,21 @@ class _TextIOBase(_IOBase):
         (which is always equal to the length of the string).
         """
 
-    def writelines(self, lines: Iterable[str], /) -> None:  # type: ignore[override]
+    def writelines(self, lines: Iterable[str], /) -> None:
         """Write a list of lines to stream.
 
         Line separators are not added, so it is usual for each of the
         lines provided to have a line separator at the end.
         """
 
-    def readline(self, size: int = -1, /) -> str:  # type: ignore[override]
+    def readline(self, size: int = -1, /) -> str:
         """Read until newline or EOF.
 
         Return an empty string if EOF is hit immediately.
         If size is specified, at most size characters will be read.
         """
 
-    def readlines(self, hint: int = -1, /) -> list[str]:  # type: ignore[override]
+    def readlines(self, hint: int = -1, /) -> list[str]:
         """Return a list of lines from the stream.
 
         hint can be specified to control the number of lines read: no more
@@ -738,13 +732,11 @@ class _TextIOBase(_IOBase):
         """
 
 @type_check_only
-class _WrappedBuffer(Protocol):
+protocol _WrappedBuffer:
     # "name" is wrapped by TextIOWrapper. Its type is inconsistent between
     # the various I/O types.
-    @property
-    def name(self) -> dynamic
-    @property
-    def closed(self) -> bool
+    let name: dynamic
+    let closed: bool
     def read(self, size: int = ..., /) -> ReadableBuffer
     # Optional: def read1(self, size: int, /) -> ReadableBuffer: ...
     def write(self, b: bytes, /) -> object
@@ -762,7 +754,7 @@ class _WrappedBuffer(Protocol):
 
 
 @disjoint_base
-class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _TextIOBase, TextIO):  # type: ignore[misc]  # incompatible definitions of write in the base classes
+class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _TextIOBase, TextIO):
     """Character and line based layer over a BufferedIOBase object, buffer.
 
     encoding gives the name of the encoding that the stream will be
@@ -793,7 +785,7 @@ class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _T
     write contains a newline character.
     """
 
-    def __init__(
+    init(
         self,
         buffer: BufferT,
         encoding: str | None = None,
@@ -801,14 +793,11 @@ class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _T
         newline: str | None = None,
         line_buffering: bool = False,
         write_through: bool = False,
-    ) -> None
+    )
     # Equals the "buffer" argument passed in to the constructor.
-    @property
-    def buffer(self) -> BufferT  # type: ignore[override]
-    @property
-    def line_buffering(self) -> bool
-    @property
-    def write_through(self) -> bool
+    let buffer: BufferT
+    let line_buffering: bool
+    let write_through: bool
     def reconfigure(
         self,
         *,
@@ -823,9 +812,9 @@ class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _T
         This also does an implicit stream flush.
         """
 
-    def readline(self, size: int = -1, /) -> str  # type: ignore[override]
+    def readline(self, size: int = -1, /) -> str
     # Equals the "buffer" argument passed in to the constructor.
-    def detach(self) -> BufferT  # type: ignore[override]
+    def detach(self) -> BufferT
     # TextIOWrapper's version of seek only supports a limited subset of
     # operations.
     def seek(self, cookie: int, whence: int = 0, /) -> int:
@@ -852,14 +841,14 @@ class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _T
     def truncate(self, pos: int | None = None, /) -> int
 
 @disjoint_base
-class StringIO(TextIOBase, _TextIOBase, TextIO):  # type: ignore[misc]  # incompatible definitions of write in the base classes
+class StringIO(TextIOBase, _TextIOBase, TextIO):
     """Text I/O implementation using an in-memory buffer.
 
     The initial_value argument sets the value of object.  The newline
     argument is like the one of TextIOWrapper's constructor.
     """
 
-    def __init__(self, initial_value: str | None = "", newline: str | None = "\n") -> None
+    init(self, initial_value: str | None = "", newline: str | None = "\n")
     # StringIO does not contain a "name" field. This workaround is necessary
     # to allow StringIO sub-classes to add this field, as it is defined
     # as a read-only property on IO[].
@@ -867,8 +856,7 @@ class StringIO(TextIOBase, _TextIOBase, TextIO):  # type: ignore[misc]  # incomp
     def getvalue(self) -> str:
         """Retrieve the entire contents of the object."""
 
-    @property
-    def line_buffering(self) -> bool
+    let line_buffering: bool
     def seek(self, pos: int, whence: int = 0, /) -> int:
         """Change stream position.
 
@@ -900,15 +888,14 @@ class IncrementalNewlineDecoder:
     decoder.
     """
 
-    def __init__(self, decoder: codecs.IncrementalDecoder | None, translate: bool, errors: str = "strict") -> None
+    init(self, decoder: codecs.IncrementalDecoder | None, translate: bool, errors: str = "strict")
     def decode(self, input: ReadableBuffer | str, final: bool = False) -> str
-    @property
-    def newlines(self) -> str | (*: str) | None
+    let newlines: str | (*: str) | None
     def getstate(self) -> (bytes, int)
     def reset(self) -> None
     def setstate(self, state: (bytes, int), /) -> None
 
-def text_encoding(encoding: None, stacklevel: int = 2, /) -> Literal["locale", "utf-8"]:
+def text_encoding(encoding: None, stacklevel: int = 2, /) -> "locale" | "utf-8":
     """A helper function to choose the text encoding.
 
     When encoding is not None, this function returns it.

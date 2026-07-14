@@ -3,7 +3,7 @@
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
-_Cap: TypeAlias = dict[str, str | int]
+type _Cap = dict[str, str | int]
 
 __all__ = ["getcaps", "findmatch"]
 

@@ -7,20 +7,20 @@ from abc import ABCMeta
 from email.errors import MessageDefect
 from email.header import Header
 from email.message import Message
-from typing import Any, Generic, Protocol, TypeVar, type_check_only
+from typing import Generic, Protocol, TypeVar, type_check_only
 from typing_extensions import Self
 
 __all__ = ["Policy", "Compat32", "compat32"]
 
 
 @type_check_only
-class _MessageFactory[in out MessageT: Message[Any, Any] = Message[str, str]](Protocol):
+protocol _MessageFactory[in out MessageT: Message[dynamic, dynamic] = Message[str, str]]:
     def __call__(self, policy: Policy[MessageT]) -> MessageT
 
 # Policy below is the only known direct subclass of _PolicyBase. We therefore
 # assume that the __init__ arguments and attributes of _PolicyBase are
 # the same as those of Policy.
-class _PolicyBase[out MessageT: Message[Any, Any] = Message[str, str]]:
+class _PolicyBase[out MessageT: Message[dynamic, dynamic] = Message[str, str]]:
     """Policy Object basic framework.
 
     This class is useless unless subclassed.  A subclass should define
@@ -51,7 +51,7 @@ class _PolicyBase[out MessageT: Message[Any, Any] = Message[str, str]]:
     # Added in Python 3.9.20, 3.10.15, 3.11.10, 3.12.5
     verify_generated_headers: bool
 
-    def __init__(
+    init(
         self,
         *,
         max_line_length: int | None = 78,
@@ -62,7 +62,7 @@ class _PolicyBase[out MessageT: Message[Any, Any] = Message[str, str]]:
         message_factory: _MessageFactory[MessageT] | None = None,
         # Added in Python 3.9.20, 3.10.15, 3.11.10, 3.12.5
         verify_generated_headers: bool = True,
-    ) -> None:
+    ):
         """Create new Policy, possibly overriding some defaults.
 
         See class docstring for a list of overridable attributes.
@@ -95,7 +95,7 @@ class _PolicyBase[out MessageT: Message[Any, Any] = Message[str, str]]:
 
         """
 
-class Policy[out MessageT: Message[Any, Any] = Message[str, str]](_PolicyBase[MessageT], metaclass=ABCMeta):
+class Policy[out MessageT: Message[dynamic, dynamic] = Message[str, str]](_PolicyBase[MessageT], metaclass=ABCMeta):
     """Controls for how messages are interpreted and formatted.
 
     Most of the classes and many of the methods in the email package accept
@@ -239,7 +239,7 @@ class Policy[out MessageT: Message[Any, Any] = Message[str, str]](_PolicyBase[Me
 
         """
 
-class Compat32[out MessageT: Message[Any, Any] = Message[str, str]](Policy[MessageT]):
+class Compat32[out MessageT: Message[dynamic, dynamic] = Message[str, str]](Policy[MessageT]):
     """Controls for how messages are interpreted and formatted.
 
     Most of the classes and many of the methods in the email package accept
@@ -316,7 +316,7 @@ class Compat32[out MessageT: Message[Any, Any] = Message[str, str]](Policy[Messa
         The name and value are returned unmodified.
         """
 
-    def header_fetch_parse(self, name: str, value: str) -> str | Header:  # type: ignore[override]
+    def header_fetch_parse(self, name: str, value: str) -> str | Header:
         """Given the header name and the value from the model, return the value
         to be returned to the application program that is requesting that
         header.  The value passed in by the email package may contain

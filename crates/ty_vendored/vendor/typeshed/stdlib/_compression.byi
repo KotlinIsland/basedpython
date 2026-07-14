@@ -9,18 +9,16 @@ from typing import Protocol, type_check_only
 BUFFER_SIZE = DEFAULT_BUFFER_SIZE
 
 @type_check_only
-class _Reader(Protocol):
+protocol _Reader:
     def read(self, n: int, /) -> bytes
     def seekable(self) -> bool
     def seek(self, n: int, /) -> dynamic
 
 @type_check_only
-class _Decompressor(Protocol):
+protocol _Decompressor:
     def decompress(self, data: ReadableBuffer, /, max_length: int = ...) -> bytes
-    @property
-    def unused_data(self) -> bytes
-    @property
-    def eof(self) -> bool
+    let unused_data: bytes
+    let eof: bool
     # `zlib._Decompress` does not have next property, but `DecompressReader` calls it:
     # @property
     # def needs_input(self) -> bool: ...
@@ -31,13 +29,13 @@ class BaseStream(BufferedIOBase):
 class DecompressReader(RawIOBase):
     """Adapts the decompressor API to a RawIOBase reader API"""
 
-    def __init__(
+    init(
         self,
         fp: _Reader,
         decomp_factory: (...) -> _Decompressor,
         trailing_error: type[Exception] | (*: type[Exception]) = (),
         **decomp_args: dynamic,  # These are passed to decomp_factory.
-    ) -> None
+    )
     def readinto(self, b: WriteableBuffer) -> int
     def read(self, size: int = -1) -> bytes
     def seek(self, offset: int, whence: int = 0) -> int

@@ -6,7 +6,7 @@ from _typeshed import Unused
 from collections import deque
 from collections.abc import Callable
 from types import TracebackType
-from typing import Any, Literal, TypeVar
+from typing import Literal, TypeVar
 from typing_extensions import Self
 
 from .futures import Future
@@ -77,12 +77,12 @@ class Lock(_ContextManagerMixin, _LoopBoundMixin):
 
     """
 
-    _waiters: deque[Future[Any]] | None
-    def __init__(self) -> None
+    _waiters: deque[Future[dynamic]] | None
+    init(self)
     def locked(self) -> bool:
         """Return True if lock is acquired."""
 
-    async def acquire(self) -> Literal[True]:
+    async def acquire(self) -> True:
         """Acquire a lock.
 
         This method blocks until the lock is unlocked, then sets it to
@@ -110,8 +110,8 @@ class Event(_LoopBoundMixin):
     initially false.
     """
 
-    _waiters: deque[Future[Any]]
-    def __init__(self) -> None
+    _waiters: deque[Future[dynamic]]
+    init(self)
     def is_set(self) -> bool:
         """Return True if and only if the internal flag is true."""
 
@@ -127,7 +127,7 @@ class Event(_LoopBoundMixin):
         to true again.
         """
 
-    async def wait(self) -> Literal[True]:
+    async def wait(self) -> True:
         """Block until the internal flag is true.
 
         If the internal flag is true on entry, return True
@@ -145,12 +145,12 @@ class Condition(_ContextManagerMixin, _LoopBoundMixin):
     A new Lock object is created and used as the underlying lock.
     """
 
-    _waiters: deque[Future[Any]]
-    def __init__(self, lock: Lock | None = None) -> None
+    _waiters: deque[Future[dynamic]]
+    init(self, lock: Lock | None = None)
     def locked(self) -> bool
-    async def acquire(self) -> Literal[True]
+    async def acquire(self) -> True
     def release(self) -> None
-    async def wait(self) -> Literal[True]:
+    async def wait(self) -> True:
         """Wait until notified.
 
         If the calling task has not acquired the lock when this
@@ -166,7 +166,7 @@ class Condition(_ContextManagerMixin, _LoopBoundMixin):
         re-check the state and be prepared to wait() again.
         """
 
-    async def wait_for[Element](self, predicate: Callable[[], Element]) -> Element:
+    async def wait_for[Element](self, predicate: () -> Element) -> Element:
         """Wait until a predicate becomes true.
 
         The predicate should be a callable whose result will be
@@ -211,12 +211,12 @@ class Semaphore(_ContextManagerMixin, _LoopBoundMixin):
     """
 
     _value: int
-    _waiters: deque[Future[Any]] | None
-    def __init__(self, value: int = 1) -> None
+    _waiters: deque[Future[dynamic]] | None
+    init(self, value: int = 1)
     def locked(self) -> bool:
         """Returns True if semaphore cannot be acquired immediately."""
 
-    async def acquire(self) -> Literal[True]:
+    async def acquire(self) -> True:
         """Acquire a semaphore.
 
         If the internal counter is larger than zero on entry,
@@ -259,7 +259,7 @@ if sys.version_info >= (3, 11):
         have all made their call.
         """
 
-        def __init__(self, parties: int) -> None:
+        init(self, parties: int):
             """Create a barrier, initialised to 'parties' tasks."""
 
         async def __aenter__(self) -> Self
@@ -286,14 +286,8 @@ if sys.version_info >= (3, 11):
             raised.
             """
 
-        @property
-        def parties(self) -> int:
-            """Return the number of tasks required to trip the barrier."""
+        let parties: int
 
-        @property
-        def n_waiting(self) -> int:
-            """Return the number of tasks currently waiting at the barrier."""
+        let n_waiting: int
 
-        @property
-        def broken(self) -> bool:
-            """Return True if the barrier is in a broken state."""
+        let broken: bool

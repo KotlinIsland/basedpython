@@ -3,7 +3,7 @@ from typing import Final
 
 # This module is only available on Windows
 if sys.platform == "win32":
-    CRT_ASSEMBLY_VERSION: Final[str]
+    final CRT_ASSEMBLY_VERSION: str
     LK_UNLCK: Final = 0
     LK_LOCK: Final = 1
     LK_NBLCK: Final = 2

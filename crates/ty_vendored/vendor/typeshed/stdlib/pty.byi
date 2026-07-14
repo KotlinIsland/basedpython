@@ -7,7 +7,7 @@ from typing_extensions import deprecated
 
 if sys.platform != "win32":
     __all__ = ["openpty", "fork", "spawn"]
-    _Reader: TypeAlias = Callable[[int], bytes]
+    type _Reader = (int) -> bytes
 
     STDIN_FILENO: Final = 0
     STDOUT_FILENO: Final = 1

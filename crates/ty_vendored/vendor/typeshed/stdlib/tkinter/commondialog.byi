@@ -10,5 +10,5 @@ class Dialog:
     # Types of options are very dynamic. They depend on the command and are
     # sometimes changed to a different type.
     options: Mapping[str, dynamic]
-    def __init__(self, master: Misc | None = None, **options: dynamic) -> None
+    init(self, master: Misc | None = None, **options: dynamic)
     def show(self, **options: dynamic) -> dynamic

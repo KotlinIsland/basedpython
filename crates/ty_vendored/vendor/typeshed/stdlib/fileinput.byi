@@ -69,7 +69,7 @@ import sys
 from _typeshed import AnyStr_co, StrOrBytesPath
 from collections.abc import Callable, Iterable
 from types import GenericAlias, TracebackType
-from typing import IO, AnyStr, Generic, Literal, Protocol, TypeAlias, type_check_only
+from typing import Generic, Literal, Protocol, TypeAlias, type_check_only
 from typing_extensions import Self, deprecated
 
 __all__ = [
@@ -88,9 +88,9 @@ __all__ = [
 ]
 
 if sys.version_info >= (3, 11):
-    _TextMode: TypeAlias = Literal["r"]
+    type _TextMode = "r"
 else:
-    _TextMode: TypeAlias = Literal["r", "rU", "U"]
+    type _TextMode = "r" | "rU" | "U"
 
 @type_check_only
 class _HasReadlineAndFileno(Protocol[AnyStr_co]):
@@ -104,7 +104,7 @@ def input(
     backup: str = "",
     *,
     mode: _TextMode = "r",
-    openhook: Callable[[StrOrBytesPath, str], _HasReadlineAndFileno[str]] | None = None,
+    openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[str]) | None = None,
     encoding: str | None = None,
     errors: str | None = None,
 ) -> FileInput[str]:
@@ -119,8 +119,8 @@ def input(
     inplace: bool = False,
     backup: str = "",
     *,
-    mode: Literal["rb"],
-    openhook: Callable[[StrOrBytesPath, str], _HasReadlineAndFileno[bytes]] | None = None,
+    mode: "rb",
+    openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[bytes]) | None = None,
     encoding: None = None,
     errors: None = None,
 ) -> FileInput[bytes]
@@ -130,7 +130,7 @@ def input(
     backup: str = "",
     *,
     mode: str,
-    openhook: Callable[[StrOrBytesPath, str], _HasReadlineAndFileno[dynamic]] | None = None,
+    openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[dynamic]) | None = None,
     encoding: str | None = None,
     errors: str | None = None,
 ) -> FileInput[dynamic]
@@ -201,39 +201,39 @@ class FileInput(Generic[AnyStr]):
     """
 
     # encoding and errors are added
-    def __init__(
+    init(
         self: FileInput[str],
         files: StrOrBytesPath | Iterable[StrOrBytesPath] | None = None,
         inplace: bool = False,
         backup: str = "",
         *,
         mode: _TextMode = "r",
-        openhook: Callable[[StrOrBytesPath, str], _HasReadlineAndFileno[str]] | None = None,
+        openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[str]) | None = None,
         encoding: str | None = None,
         errors: str | None = None,
-    ) -> None
-    def __init__(
+    )
+    init(
         self: FileInput[bytes],
         files: StrOrBytesPath | Iterable[StrOrBytesPath] | None = None,
         inplace: bool = False,
         backup: str = "",
         *,
-        mode: Literal["rb"],
-        openhook: Callable[[StrOrBytesPath, str], _HasReadlineAndFileno[bytes]] | None = None,
+        mode: "rb",
+        openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[bytes]) | None = None,
         encoding: None = None,
         errors: None = None,
-    ) -> None
-    def __init__(
+    )
+    init(
         self: FileInput[dynamic],
         files: StrOrBytesPath | Iterable[StrOrBytesPath] | None = None,
         inplace: bool = False,
         backup: str = "",
         *,
         mode: str,
-        openhook: Callable[[StrOrBytesPath, str], _HasReadlineAndFileno[dynamic]] | None = None,
+        openhook: ((StrOrBytesPath, str) -> _HasReadlineAndFileno[dynamic]) | None = None,
         encoding: str | None = None,
         errors: str | None = None,
-    ) -> None
+    )
 
     def __del__(self) -> None
     def close(self) -> None
@@ -265,4 +265,4 @@ def hook_compressed(
     filename: StrOrBytesPath, mode: str, *, encoding: str | None = None, errors: str | None = None
 ) -> IO[dynamic]
 @deprecated("Deprecated since Python 3.10. Use `fileinput.input` or `fileinput.FileInput` instead.")
-def hook_encoded(encoding: str, errors: str | None = None) -> Callable[[StrOrBytesPath, str], IO[dynamic]]
+def hook_encoded(encoding: str, errors: str | None = None) -> (StrOrBytesPath, str) -> IO[dynamic]

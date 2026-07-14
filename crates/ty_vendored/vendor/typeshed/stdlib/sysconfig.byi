@@ -1,7 +1,7 @@
 """Access to Python's configuration information."""
 
 import sys
-from typing import IO, Literal
+from typing import Literal
 from typing_extensions import LiteralString, deprecated
 
 __all__ = [
@@ -19,7 +19,7 @@ __all__ = [
 ]
 
 @deprecated("SO is deprecated, use EXT_SUFFIX. Support is removed in Python 3.11")
-def get_config_var(name: Literal["SO"]) -> dynamic:
+def get_config_var(name: "SO") -> dynamic:
     """Return the value of a single variable using the dictionary returned by
     'get_config_vars()'.
 
@@ -43,10 +43,10 @@ def get_scheme_names() -> (*: str):
     """Return a tuple containing the schemes names."""
 
 def get_default_scheme() -> LiteralString
-def get_preferred_scheme(key: Literal["prefix", "home", "user"]) -> LiteralString
+def get_preferred_scheme(key: "prefix" | "home" | "user") -> LiteralString
 
 # Documented -- see https://docs.python.org/3/library/sysconfig.html#sysconfig._get_preferred_schemes
-def _get_preferred_schemes() -> dict[Literal["prefix", "home", "user"], LiteralString]
+def _get_preferred_schemes() -> dict["prefix" | "home" | "user", LiteralString]
 def get_path_names() -> (*: str):
     """Return a tuple containing the paths names."""
 

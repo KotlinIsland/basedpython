@@ -25,6 +25,6 @@ class IncrementalDecoder(codecs.BufferedIncrementalDecoder):
 class StreamWriter(Codec, codecs.StreamWriter)
 
 class StreamReader(Codec, codecs.StreamReader):
-    def decode(self, input: str | ReadableBuffer, errors: str = "strict") -> (str, int)  # type: ignore[override]
+    def decode(self, input: str | ReadableBuffer, errors: str = "strict") -> (str, int)
 
 def getregentry() -> codecs.CodecInfo

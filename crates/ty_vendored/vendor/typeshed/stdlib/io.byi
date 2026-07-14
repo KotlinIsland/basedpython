@@ -154,7 +154,7 @@ class TextIOBase(_TextIOBase, IOBase):
     """
 
 if sys.version_info >= (3, 14):
-    class Reader[out Element](Protocol):
+    protocol Reader[out Element]:
         """Protocol for simple I/O reader instances.
 
         This protocol only supports blocking I/O.
@@ -168,7 +168,7 @@ if sys.version_info >= (3, 14):
             read.
             """
 
-    class Writer[in Input](Protocol):
+    protocol Writer[in Input]:
         """Protocol for simple I/O writer instances.
 
         This protocol only supports blocking I/O.

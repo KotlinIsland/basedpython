@@ -11,6 +11,6 @@ from .. import fixer_base
 
 class FixSysExc(fixer_base.BaseFix):
     exc_info: ClassVar[list[str]]
-    BM_compatible: ClassVar[Literal[True]]
+    BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     def transform(self, node, results)

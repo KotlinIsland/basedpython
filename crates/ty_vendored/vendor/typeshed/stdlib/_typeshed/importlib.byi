@@ -8,11 +8,11 @@ from typing import Protocol
 
 __all__ = ["LoaderProtocol", "MetaPathFinderProtocol", "PathEntryFinderProtocol"]
 
-class LoaderProtocol(Protocol):
+protocol LoaderProtocol:
     def load_module(self, fullname: str, /) -> ModuleType
 
-class MetaPathFinderProtocol(Protocol):
+protocol MetaPathFinderProtocol:
     def find_spec(self, fullname: str, path: Sequence[str] | None, target: ModuleType | None = ..., /) -> ModuleSpec | None
 
-class PathEntryFinderProtocol(Protocol):
+protocol PathEntryFinderProtocol:
     def find_spec(self, fullname: str, target: ModuleType | None = ..., /) -> ModuleSpec | None

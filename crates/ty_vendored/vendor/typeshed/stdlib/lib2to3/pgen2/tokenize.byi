@@ -100,14 +100,14 @@ __all__ = [
     "COLONEQUAL",
 ]
 
-_Coord: TypeAlias = tuple[int, int]
-_TokenEater: TypeAlias = Callable[[int, str, _Coord, _Coord, str], object]
-_TokenInfo: TypeAlias = tuple[int, str, _Coord, _Coord, str]
+type _Coord = tuple[int, int]
+type _TokenEater = (int, str, _Coord, _Coord, str) -> object
+type _TokenInfo = tuple[int, str, _Coord, _Coord, str]
 
 class TokenError(Exception)
 class StopTokenizing(Exception)
 
-def tokenize(readline: Callable[[], str], tokeneater: _TokenEater = ...) -> None:
+def tokenize(readline: () -> str, tokeneater: _TokenEater = ...) -> None:
     """
     The tokenize() function accepts two parameters: one representing the
     input stream, and one providing an output mechanism for tokenize().
@@ -148,7 +148,7 @@ def untokenize(iterable: Iterable[_TokenInfo]) -> str:
         assert t1 == t2
     """
 
-def generate_tokens(readline: Callable[[], str]) -> Iterator[_TokenInfo]:
+def generate_tokens(readline: () -> str) -> Iterator[_TokenInfo]:
     """
     The generate_tokens() generator requires one argument, readline, which
     must be a callable object which provides the same interface as the

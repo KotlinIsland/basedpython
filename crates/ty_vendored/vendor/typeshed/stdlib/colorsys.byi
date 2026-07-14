@@ -28,6 +28,6 @@ def rgb_to_hsv(r: float, g: float, b: float) -> (float, float, float)
 def hsv_to_rgb(h: float, s: float, v: float) -> (float, float, float)
 
 # undocumented
-ONE_SIXTH: Final[float]
-ONE_THIRD: Final[float]
-TWO_THIRD: Final[float]
+final ONE_SIXTH: float
+final ONE_THIRD: float
+final TWO_THIRD: float

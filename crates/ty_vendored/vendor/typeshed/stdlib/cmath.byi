@@ -2,18 +2,18 @@
 numbers.
 """
 
-from typing import Final, SupportsComplex, SupportsFloat, SupportsIndex, TypeAlias
+from typing import Final, TypeAlias
 
-e: Final[float]
-pi: Final[float]
-inf: Final[float]
-infj: Final[complex]
-nan: Final[float]
-nanj: Final[complex]
-tau: Final[float]
+final e: float
+final pi: float
+final inf: float
+final infj: complex
+final nan: float
+final nanj: complex
+final tau: float
 
-_F: TypeAlias = SupportsFloat | SupportsIndex
-_C: TypeAlias = SupportsFloat | SupportsComplex | SupportsIndex | complex
+type _F = SupportsFloat | SupportsIndex
+type _C = SupportsFloat | SupportsComplex | SupportsIndex | complex
 
 def acos(z: _C, /) -> complex:
     """Return the arc cosine of z."""

@@ -26,7 +26,6 @@ read_mime_types(file) -- parse one file, return a dictionary or None
 import sys
 from _typeshed import StrPath
 from collections.abc import Iterable
-from typing import IO
 
 __all__ = [
     "knownfiles",
@@ -134,7 +133,7 @@ class MimeTypes:
     encodings_map: dict[str, str]
     types_map: (dict[str, str], dict[str, str])
     types_map_inv: (dict[str, str], dict[str, str])
-    def __init__(self, filenames: Iterable[StrPath] = (), strict: bool = True) -> None
+    init(self, filenames: Iterable[StrPath] = (), strict: bool = True)
     def add_type(self, type: str, ext: str, strict: bool = True) -> None:
         """Add a mapping between a type and an extension.
 

@@ -9,9 +9,9 @@ from ..pytree import Node
 bind_warning: str
 
 class FixNext(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[True]]
+    BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
-    order: ClassVar[Literal["pre"]]
+    order: ClassVar["pre"]
     shadowed_next: bool
     def start_tree(self, tree: Node, filename: StrPath) -> None
     def transform(self, node, results) -> None

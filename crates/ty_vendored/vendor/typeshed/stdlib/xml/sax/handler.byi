@@ -9,13 +9,13 @@ of the interfaces.
 $Id$
 """
 
-from typing import Final, NoReturn, Protocol, type_check_only
+from typing import Final, Protocol, type_check_only
 from xml.sax import xmlreader
 
-version: Final[str]
+final version: str
 
 @type_check_only
-class _ErrorHandlerProtocol(Protocol):  # noqa: Y046  # Protocol is not used
+protocol _ErrorHandlerProtocol:  # noqa: Y046  # Protocol is not used
     def error(self, exception: BaseException) -> NoReturn
     def fatalError(self, exception: BaseException) -> NoReturn
     def warning(self, exception: BaseException) -> None
@@ -41,7 +41,7 @@ class ErrorHandler:
         """Handle a warning."""
 
 @type_check_only
-class _ContentHandlerProtocol(Protocol):  # noqa: Y046  # Protocol is not used
+protocol _ContentHandlerProtocol:  # noqa: Y046  # Protocol is not used
     def setDocumentLocator(self, locator: xmlreader.Locator) -> None
     def startDocument(self) -> None
     def endDocument(self) -> None
@@ -225,7 +225,7 @@ class ContentHandler:
         """
 
 @type_check_only
-class _DTDHandlerProtocol(Protocol):  # noqa: Y046  # Protocol is not used
+protocol _DTDHandlerProtocol:  # noqa: Y046  # Protocol is not used
     def notationDecl(self, name: str, publicId: str | None, systemId: str) -> None
     def unparsedEntityDecl(self, name: str, publicId: str | None, systemId: str, ndata: str) -> None
 
@@ -243,7 +243,7 @@ class DTDHandler:
         """Handle an unparsed entity declaration event."""
 
 @type_check_only
-class _EntityResolverProtocol(Protocol):  # noqa: Y046  # Protocol is not used
+protocol _EntityResolverProtocol:  # noqa: Y046  # Protocol is not used
     def resolveEntity(self, publicId: str | None, systemId: str) -> str
 
 class EntityResolver:
@@ -264,16 +264,16 @@ feature_namespaces: Final = "http://xml.org/sax/features/namespaces"
 feature_namespace_prefixes: Final = "http://xml.org/sax/features/namespace-prefixes"
 feature_string_interning: Final = "http://xml.org/sax/features/string-interning"
 feature_validation: Final = "http://xml.org/sax/features/validation"
-feature_external_ges: Final[str]  # too long string
-feature_external_pes: Final[str]  # too long string
-all_features: Final[list[str]]
+final feature_external_ges: str  # too long string
+final feature_external_pes: str  # too long string
+final all_features: list[str]
 property_lexical_handler: Final = "http://xml.org/sax/properties/lexical-handler"
 property_declaration_handler: Final = "http://xml.org/sax/properties/declaration-handler"
 property_dom_node: Final = "http://xml.org/sax/properties/dom-node"
 property_xml_string: Final = "http://xml.org/sax/properties/xml-string"
 property_encoding: Final = "http://www.python.org/sax/properties/encoding"
-property_interning_dict: Final[str]  # too long string
-all_properties: Final[list[str]]
+final property_interning_dict: str  # too long string
+final all_properties: list[str]
 
 class LexicalHandler:
     """Optional SAX2 handler for lexical events.

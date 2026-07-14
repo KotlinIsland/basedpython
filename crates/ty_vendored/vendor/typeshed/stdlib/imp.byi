@@ -21,7 +21,7 @@ from _imp import (
 from _typeshed import StrPath
 from os import PathLike
 from types import TracebackType
-from typing import IO, Any, Final, Protocol, type_check_only
+from typing import Final, Protocol, type_check_only
 
 SEARCH_ERROR: Final = 0
 PY_SOURCE: Final = 1
@@ -89,14 +89,14 @@ class NullImporter:
 
     """
 
-    def __init__(self, path: StrPath) -> None
+    init(self, path: StrPath)
     def find_module(self, fullname: dynamic) -> None:
         """Always returns None."""
 
 # Technically, a text file has to support a slightly different set of operations than a binary file,
 # but we ignore that here.
 @type_check_only
-class _FileLike(Protocol):
+protocol _FileLike:
     closed: bool
     mode: str
     def read(self) -> str | bytes
@@ -124,7 +124,7 @@ def load_module(name: str, file: _FileLike | None, filename: str, details: (str,
 # IO[Any] is a TextIOWrapper if name is a .py file, and a FileIO otherwise.
 def find_module(
     name: str, path: None | list[str] | list[PathLike[str]] | list[StrPath] = None
-) -> (IO[Any], str, (str, str, int)):
+) -> (IO[dynamic], str, (str, str, int)):
     """**DEPRECATED**
 
     Search for a module.

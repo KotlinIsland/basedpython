@@ -12,7 +12,7 @@ import types
 from _codecs import *
 from _typeshed import ReadableBuffer
 from collections.abc import Callable, Generator, Iterable
-from typing import BinaryIO, ClassVar, Final, Literal, Protocol, TextIO, TypeAlias, type_check_only
+from typing import ClassVar, Final, Literal, Protocol, TypeAlias, type_check_only
 from typing_extensions import Self, deprecated, disjoint_base
 
 __all__ = [
@@ -67,35 +67,22 @@ BOM32_LE: Final = b"\xff\xfe"
 BOM64_BE: Final = b"\x00\x00\xfe\xff"
 BOM64_LE: Final = b"\xff\xfe\x00\x00"
 
-_BufferedEncoding: TypeAlias = Literal[
-    "idna",
-    "raw-unicode-escape",
-    "unicode-escape",
-    "utf-16",
-    "utf-16-be",
-    "utf-16-le",
-    "utf-32",
-    "utf-32-be",
-    "utf-32-le",
-    "utf-7",
-    "utf-8",
-    "utf-8-sig",
-]
+type _BufferedEncoding = "idna" | "raw-unicode-escape" | "unicode-escape" | "utf-16" | "utf-16-be" | "utf-16-le" | "utf-32" | "utf-32-be" | "utf-32-le" | "utf-7" | "utf-8" | "utf-8-sig"
 
 @type_check_only
-class _WritableStream(Protocol):
+protocol _WritableStream:
     def write(self, data: bytes, /) -> object
     def seek(self, offset: int, whence: int, /) -> object
     def close(self) -> object
 
 @type_check_only
-class _ReadableStream(Protocol):
+protocol _ReadableStream:
     def read(self, size: int = ..., /) -> bytes
     def seek(self, offset: int, whence: int, /) -> object
     def close(self) -> object
 
 @type_check_only
-class _Stream(_WritableStream, _ReadableStream, Protocol)
+protocol _Stream(_WritableStream, _ReadableStream)
 
 # TODO: this only satisfies the most common interface, where
 # bytes is the raw form and str is the cooked form.
@@ -104,31 +91,31 @@ class _Stream(_WritableStream, _ReadableStream, Protocol)
 # They were much more common in Python 2 than in Python 3.
 
 @type_check_only
-class _Encoder(Protocol):
+protocol _Encoder:
     def __call__(self, input: str, errors: str = ..., /) -> (bytes, int)  # signature of Codec().encode
 
 @type_check_only
-class _Decoder(Protocol):
+protocol _Decoder:
     def __call__(self, input: ReadableBuffer, errors: str = ..., /) -> (str, int)  # signature of Codec().decode
 
 @type_check_only
-class _StreamReader(Protocol):
+protocol _StreamReader:
     def __call__(self, stream: _ReadableStream, errors: str = ..., /) -> StreamReader
 
 @type_check_only
-class _StreamWriter(Protocol):
+protocol _StreamWriter:
     def __call__(self, stream: _WritableStream, errors: str = ..., /) -> StreamWriter
 
 @type_check_only
-class _IncrementalEncoder(Protocol):
+protocol _IncrementalEncoder:
     def __call__(self, errors: str = ...) -> IncrementalEncoder
 
 @type_check_only
-class _IncrementalDecoder(Protocol):
+protocol _IncrementalDecoder:
     def __call__(self, errors: str = ...) -> IncrementalDecoder
 
 @type_check_only
-class _BufferedIncrementalDecoder(Protocol):
+protocol _BufferedIncrementalDecoder:
     def __call__(self, errors: str = ...) -> BufferedIncrementalDecoder
 
 if sys.version_info >= (3, 12):
@@ -136,18 +123,12 @@ if sys.version_info >= (3, 12):
         """Codec details when looking up the codec registry"""
 
         _is_text_encoding: bool
-        @property
-        def encode(self) -> _Encoder
-        @property
-        def decode(self) -> _Decoder
-        @property
-        def streamreader(self) -> _StreamReader
-        @property
-        def streamwriter(self) -> _StreamWriter
-        @property
-        def incrementalencoder(self) -> _IncrementalEncoder
-        @property
-        def incrementaldecoder(self) -> _IncrementalDecoder
+        let encode: _Encoder
+        let decode: _Decoder
+        let streamreader: _StreamReader
+        let streamwriter: _StreamWriter
+        let incrementalencoder: _IncrementalEncoder
+        let incrementaldecoder: _IncrementalDecoder
         name: str
         def __new__(
             cls,
@@ -168,18 +149,12 @@ else:
         """Codec details when looking up the codec registry"""
 
         _is_text_encoding: bool
-        @property
-        def encode(self) -> _Encoder
-        @property
-        def decode(self) -> _Decoder
-        @property
-        def streamreader(self) -> _StreamReader
-        @property
-        def streamwriter(self) -> _StreamWriter
-        @property
-        def incrementalencoder(self) -> _IncrementalEncoder
-        @property
-        def incrementaldecoder(self) -> _IncrementalDecoder
+        let encode: _Encoder
+        let decode: _Decoder
+        let streamreader: _StreamReader
+        let streamwriter: _StreamWriter
+        let incrementalencoder: _IncrementalEncoder
+        let incrementaldecoder: _IncrementalDecoder
         name: str
         def __new__(
             cls,
@@ -323,14 +298,14 @@ def iterdecode(iterator: Iterable[bytes], encoding: str, errors: str = "strict")
     constructor.
     """
 
-BOM: Final[Literal[b"\xff\xfe", b"\xfe\xff"]]  # depends on `sys.byteorder`
+final BOM: b"\xff\xfe" | b"\xfe\xff"  # depends on `sys.byteorder`
 BOM_BE: Final = b"\xfe\xff"
 BOM_LE: Final = b"\xff\xfe"
 BOM_UTF8: Final = b"\xef\xbb\xbf"
-BOM_UTF16: Final[Literal[b"\xff\xfe", b"\xfe\xff"]]  # depends on `sys.byteorder`
+final BOM_UTF16: b"\xff\xfe" | b"\xfe\xff"  # depends on `sys.byteorder`
 BOM_UTF16_BE: Final = b"\xfe\xff"
 BOM_UTF16_LE: Final = b"\xff\xfe"
-BOM_UTF32: Final[Literal[b"\xff\xfe\x00\x00", b"\x00\x00\xfe\xff"]]  # depends on `sys.byteorder`
+final BOM_UTF32: b"\xff\xfe\x00\x00" | b"\x00\x00\xfe\xff"  # depends on `sys.byteorder`
 BOM_UTF32_BE: Final = b"\x00\x00\xfe\xff"
 BOM_UTF32_LE: Final = b"\xff\xfe\x00\x00"
 
@@ -424,7 +399,7 @@ class IncrementalEncoder:
     """
 
     errors: str
-    def __init__(self, errors: str = "strict") -> None:
+    init(self, errors: str = "strict"):
         """
         Creates an IncrementalEncoder instance.
 
@@ -463,7 +438,7 @@ class IncrementalDecoder:
     """
 
     errors: str
-    def __init__(self, errors: str = "strict") -> None:
+    init(self, errors: str = "strict"):
         """
         Create an IncrementalDecoder instance.
 
@@ -512,7 +487,7 @@ class BufferedIncrementalEncoder(IncrementalEncoder):
     """
 
     buffer: str
-    def __init__(self, errors: str = "strict") -> None
+    init(self, errors: str = "strict")
     abstract def _buffer_encode(self, input: str, errors: str, final: bool) -> (bytes, int)
     def encode(self, input: str, final: bool = False) -> bytes
 
@@ -524,7 +499,7 @@ class BufferedIncrementalDecoder(IncrementalDecoder):
     """
 
     buffer: bytes
-    def __init__(self, errors: str = "strict") -> None
+    init(self, errors: str = "strict")
     abstract def _buffer_decode(self, input: ReadableBuffer, errors: str, final: bool) -> (str, int)
     def decode(self, input: ReadableBuffer, final: bool = False) -> str
 
@@ -533,7 +508,7 @@ class BufferedIncrementalDecoder(IncrementalDecoder):
 class StreamWriter(Codec):
     stream: _WritableStream
     errors: str
-    def __init__(self, stream: _WritableStream, errors: str = "strict") -> None:
+    init(self, stream: _WritableStream, errors: str = "strict"):
         """Creates a StreamWriter instance.
 
         stream must be a file-like object open for writing.
@@ -576,7 +551,7 @@ class StreamWriter(Codec):
     def seek(self, offset: int, whence: int = 0) -> None
     def __enter__(self) -> Self
     def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
-    def __getattr__(self, name: str, getattr: Callable[[dynamic, str], dynamic] = ...) -> dynamic:
+    def __getattr__(self, name: str, getattr: (dynamic, str) -> dynamic = ...) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
 class StreamReader(Codec):
@@ -584,7 +559,7 @@ class StreamReader(Codec):
     errors: str
     # This is set to str, but some subclasses set to bytes instead.
     charbuffertype: ClassVar[type] = ...
-    def __init__(self, stream: _ReadableStream, errors: str = "strict") -> None:
+    init(self, stream: _ReadableStream, errors: str = "strict"):
         """Creates a StreamReader instance.
 
         stream must be a file-like object open for reading.
@@ -671,7 +646,7 @@ class StreamReader(Codec):
     def __next__(self) -> str:
         """Return the next decoded line from the input stream."""
 
-    def __getattr__(self, name: str, getattr: Callable[[dynamic, str], dynamic] = ...) -> dynamic:
+    def __getattr__(self, name: str, getattr: (dynamic, str) -> dynamic = ...) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
 # Doesn't actually inherit from TextIO, but wraps a BinaryIO to provide text reading and writing
@@ -687,7 +662,7 @@ class StreamReaderWriter(TextIO):
     """
 
     stream: _Stream
-    def __init__(self, stream: _Stream, Reader: _StreamReader, Writer: _StreamWriter, errors: str = "strict") -> None:
+    init(self, stream: _Stream, Reader: _StreamReader, Writer: _StreamWriter, errors: str = "strict"):
         """Creates a StreamReaderWriter instance.
 
         stream must be a Stream-like object.
@@ -707,10 +682,10 @@ class StreamReaderWriter(TextIO):
         """Return the next decoded line from the input stream."""
 
     def __iter__(self) -> Self
-    def write(self, data: str) -> None  # type: ignore[override]
+    def write(self, data: str) -> None
     def writelines(self, list: Iterable[str]) -> None
     def reset(self) -> None
-    def seek(self, offset: int, whence: int = 0) -> None  # type: ignore[override]
+    def seek(self, offset: int, whence: int = 0) -> None
     def __enter__(self) -> Self
     def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
     def __getattr__(self, name: str) -> dynamic:
@@ -746,7 +721,7 @@ class StreamRecoder(BinaryIO):
 
     data_encoding: str
     file_encoding: str
-    def __init__(
+    init(
         self,
         stream: _Stream,
         encode: _Encoder,
@@ -754,7 +729,7 @@ class StreamRecoder(BinaryIO):
         Reader: _StreamReader,
         Writer: _StreamWriter,
         errors: str = "strict",
-    ) -> None:
+    ):
         """Creates a StreamRecoder instance which implements a two-way
         conversion: encode and decode work on the frontend (the
         data visible to .read() and .write()) while Reader and Writer
@@ -782,15 +757,15 @@ class StreamRecoder(BinaryIO):
 
     def __iter__(self) -> Self
     # Base class accepts more types than just bytes
-    def write(self, data: bytes) -> None  # type: ignore[override]
-    def writelines(self, list: Iterable[bytes]) -> None  # type: ignore[override]
+    def write(self, data: bytes) -> None
+    def writelines(self, list: Iterable[bytes]) -> None
     def reset(self) -> None
     def __getattr__(self, name: str) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
     def __enter__(self) -> Self
     def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
-    def seek(self, offset: int, whence: int = 0) -> None  # type: ignore[override]
+    def seek(self, offset: int, whence: int = 0) -> None
     # These methods don't actually exist directly, but they are needed to satisfy the BinaryIO
     # interface. At runtime, they are delegated through __getattr__.
     def close(self) -> None

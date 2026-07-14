@@ -27,7 +27,7 @@ class RobotFileParser:
 
     """
 
-    def __init__(self, url: str = "") -> None
+    init(self, url: str = "")
     def set_url(self, url: str) -> None:
         """Sets the URL referring to a robots.txt file."""
 

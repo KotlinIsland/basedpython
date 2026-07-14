@@ -2,12 +2,12 @@
 
 from collections.abc import Iterable
 from email.charset import Charset
-from typing import Any, ClassVar
+from typing import ClassVar
 
 __all__ = ["Header", "decode_header", "make_header"]
 
 class Header:
-    def __init__(
+    init(
         self,
         s: bytes | bytearray | str | None = None,
         charset: Charset | str | None = None,
@@ -15,7 +15,7 @@ class Header:
         header_name: str | None = None,
         continuation_ws: str = " ",
         errors: str = "strict",
-    ) -> None:
+    ):
         """Create a MIME-compliant header that can contain many character sets.
 
         Optional s is the initial header value.  If None, the initial header
@@ -99,14 +99,14 @@ class Header:
         line separators when needed.
         """
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     def __eq__(self, other: object) -> bool
     def __ne__(self, value: object, /) -> bool
 
 # decode_header() either returns list[tuple[str, None]] if the header
 # contains no encoded parts, or list[tuple[bytes, str | None]] if the header
 # contains at least one encoded part.
-def decode_header(header: Header | str) -> list[(Any, Any | None)]:
+def decode_header(header: Header | str) -> list[(dynamic, dynamic | None)]:
     """Decode a message header value without converting charset.
 
     For historical reasons, this function may return either:

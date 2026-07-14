@@ -16,7 +16,7 @@ from re import Pattern
 from string import Template
 from time import struct_time
 from types import FrameType, GenericAlias, TracebackType
-from typing import Any, ClassVar, Final, Generic, Literal, Protocol, TextIO, TypeAlias, TypeVar, type_check_only
+from typing import ClassVar, Final, Generic, Literal, Protocol, TypeAlias, TypeVar, type_check_only
 from typing_extensions import Self, deprecated
 
 __all__ = [
@@ -69,24 +69,24 @@ if sys.version_info >= (3, 11):
 if sys.version_info >= (3, 12):
     __all__ += ["getHandlerByName", "getHandlerNames"]
 
-_SysExcInfoType: TypeAlias = tuple[type[BaseException], BaseException, TracebackType | None] | tuple[None, None, None]
-_ExcInfoType: TypeAlias = None | bool | _SysExcInfoType | BaseException
-_ArgsType: TypeAlias = tuple[object, ...] | Mapping[str, object]
-_Level: TypeAlias = int | str
-_FormatStyle: TypeAlias = Literal["%", "{", "$"]
+type _SysExcInfoType = tuple[type[BaseException], BaseException, TracebackType | None] | tuple[None, None, None]
+type _ExcInfoType = None | bool | _SysExcInfoType | BaseException
+type _ArgsType = (*: object) | Mapping[str, object]
+type _Level = int | str
+type _FormatStyle = "%" | "{" | "$"
 
 if sys.version_info >= (3, 12):
     @type_check_only
-    class _SupportsFilter(Protocol):
+    protocol _SupportsFilter:
         def filter(self, record: LogRecord, /) -> bool | LogRecord
 
-    _FilterType: TypeAlias = Filter | Callable[[LogRecord], bool | LogRecord] | _SupportsFilter
+    type _FilterType = Filter | ((LogRecord) -> (bool | LogRecord)) | _SupportsFilter
 else:
     @type_check_only
-    class _SupportsFilter(Protocol):
+    protocol _SupportsFilter:
         def filter(self, record: LogRecord, /) -> bool
 
-    _FilterType: TypeAlias = Filter | Callable[[LogRecord], bool] | _SupportsFilter
+    type _FilterType = Filter | ((LogRecord) -> bool) | _SupportsFilter
 
 raiseExceptions: bool
 logThreads: bool
@@ -169,7 +169,7 @@ class Manager:  # undocumented
     loggerDict: dict[str, Logger | PlaceHolder]
     loggerClass: type[Logger] | None
     logRecordFactory: (...) -> LogRecord | None
-    def __init__(self, rootnode: RootLogger) -> None:
+    init(self, rootnode: RootLogger):
         """
         Initialize the manager with the root node of the logger hierarchy.
         """
@@ -221,7 +221,7 @@ class Logger(Filterer):
     disabled: bool  # undocumented
     root: ClassVar[RootLogger]  # undocumented
     manager: Manager  # undocumented
-    def __init__(self, name: str, level: _Level = 0) -> None:
+    init(self, name: str, level: _Level = 0):
         """
         Initialize the logger with a name and an optional level.
         """
@@ -498,7 +498,7 @@ class Handler(Filterer):
     formatter: Formatter | None  # undocumented
     lock: threading.Lock | None  # undocumented
     name: str | None  # undocumented
-    def __init__(self, level: _Level = 0) -> None:
+    init(self, level: _Level = 0):
         """
         Initializes the instance - basically setting the formatter to None
         and the filter list to empty.
@@ -647,14 +647,14 @@ class Formatter:
                         the record is emitted
     """
 
-    converter: Callable[[float | None], struct_time]
+    converter: (float | None) -> struct_time
     _fmt: str | None  # undocumented
     datefmt: str | None  # undocumented
     _style: PercentStyle  # undocumented
     default_time_format: str
     default_msec_format: str | None
 
-    def __init__(
+    init(
         self,
         fmt: str | None = None,
         datefmt: str | None = None,
@@ -662,7 +662,7 @@ class Formatter:
         validate: bool = True,
         *,
         defaults: Mapping[str, dynamic] | None = None,
-    ) -> None:
+    ):
         """
         Initialize the formatter with specified format strings.
 
@@ -744,7 +744,7 @@ class BufferingFormatter:
     """
 
     linefmt: Formatter
-    def __init__(self, linefmt: Formatter | None = None) -> None:
+    init(self, linefmt: Formatter | None = None):
         """
         Optionally specify a formatter which will be used to format each
         individual record.
@@ -779,7 +779,7 @@ class Filter:
 
     name: str  # undocumented
     nlen: int  # undocumented
-    def __init__(self, name: str = "") -> None:
+    init(self, name: str = ""):
         """
         Initialize a filter.
 
@@ -847,7 +847,7 @@ class LogRecord:
     if sys.version_info >= (3, 12):
         taskName: str | None
 
-    def __init__(
+    init(
         self,
         name: str,
         level: int,
@@ -858,7 +858,7 @@ class LogRecord:
         exc_info: _SysExcInfoType | None,
         func: str | None = None,
         sinfo: str | None = None,
-    ) -> None:
+    ):
         """
         Initialize a logging record with interesting information.
         """
@@ -875,7 +875,7 @@ class LogRecord:
     def __setattr__(self, name: str, value: dynamic, /) -> None
 
 
-class LoggerAdapter[in out L: Logger | LoggerAdapter[Any]]:
+class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
     """
     An adapter for loggers which makes it easier to specify contextual
     information in logging output.
@@ -924,7 +924,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[Any]]:
     if sys.version_info >= (3, 13):
         merge_extra: bool
 
-    def process(self, msg: dynamic, kwargs: MutableMapping[str, dynamic]) -> (Any, MutableMapping[str, Any]):
+    def process(self, msg: dynamic, kwargs: MutableMapping[str, dynamic]) -> (dynamic, MutableMapping[str, dynamic]):
         """
         Process the logging message and keyword arguments passed in to
         a logging call to insert contextual information. You can either
@@ -1095,8 +1095,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[Any]]:
             Low-level log implementation, proxied to allow nested logger adapters.
             """
 
-    @property
-    def name(self) -> str  # undocumented
+    let name: str  # undocumented
     if sys.version_info >= (3, 11):
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
             """Represent a PEP 585 generic type
@@ -1431,13 +1430,13 @@ class StreamHandler[in out StreamT: SupportsWrite[str]](Handler):
     stream: StreamT  # undocumented
     terminator: str
 
-    def __init__(self: StreamHandler[TextIO], stream: None = None) -> None:
+    init(self: StreamHandler[TextIO], stream: None = None):
         """
         Initialize the handler.
 
         If stream is not specified, sys.stderr is used.
         """
-    def __init__(self: StreamHandler[StreamT], stream: StreamT) -> None  # pyright: ignore[reportInvalidTypeVarUse]  #11780
+    init(self: StreamHandler[StreamT], stream: StreamT)
 
     def setStream(self, stream: StreamT) -> StreamT | None:
         """
@@ -1466,10 +1465,10 @@ class FileHandler(StreamHandler[TextIOWrapper]):
     encoding: str | None  # undocumented
     delay: bool  # undocumented
     errors: str | None  # undocumented
-    stream: TextIOWrapper | None  # type: ignore[assignment]  # None when delay=True or after close()
-    def __init__(
+    stream: TextIOWrapper | None
+    init(
         self, filename: StrPath, mode: str = "a", encoding: str | None = None, delay: bool = False, errors: str | None = None
-    ) -> None:
+    ):
         """
         Open the specified file and use it as the stream for logging.
         """
@@ -1499,7 +1498,7 @@ class PlaceHolder:  # undocumented
     """
 
     loggerMap: dict[Logger, None]
-    def __init__(self, alogger: Logger) -> None:
+    init(self, alogger: Logger):
         """
         Initialize with the specified logger being a child of this placeholder.
         """
@@ -1518,7 +1517,7 @@ class RootLogger(Logger):
     the hierarchy.
     """
 
-    def __init__(self, level: int) -> None:
+    init(self, level: int):
         """
         Initialize the logger with the name "root".
         """
@@ -1532,7 +1531,7 @@ class PercentStyle:  # undocumented
     validation_pattern: Pattern[str]
     _fmt: str
 
-    def __init__(self, fmt: str, *, defaults: Mapping[str, dynamic] | None = None) -> None
+    init(self, fmt: str, *, defaults: Mapping[str, dynamic] | None = None)
     def usesTime(self) -> bool
     def validate(self) -> None:
         """Validate the input format, ensure it matches the correct style"""
@@ -1546,6 +1545,6 @@ class StrFormatStyle(PercentStyle):  # undocumented
 class StringTemplateStyle(PercentStyle):  # undocumented
     _tpl: Template
 
-_STYLES: Final[dict[str, (PercentStyle, str)]]
+final _STYLES: dict[str, (PercentStyle, str)]
 
 BASIC_FORMAT: Final = "%(levelname)s:%(name)s:%(message)s"

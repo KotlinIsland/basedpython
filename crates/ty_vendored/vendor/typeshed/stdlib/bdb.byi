@@ -5,16 +5,16 @@ from _typeshed import ExcInfo, ReadableBuffer, TraceFunction, Unused
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from types import CodeType, FrameType, TracebackType
-from typing import IO, Final, Literal, ParamSpec, SupportsInt, TypeAlias, TypeVar
+from typing import Final, Literal, ParamSpec, TypeAlias, TypeVar
 
 __all__ = ["BdbQuit", "Bdb", "Breakpoint"]
 
-_Backend: TypeAlias = Literal["settrace", "monitoring"]
+type _Backend = "settrace" | "monitoring"
 
 # A union of code-object flags at runtime.
 # The exact values of code-object flags are implementation details,
 # so we don't include the value of this constant in the stubs.
-GENERATOR_AND_COROUTINE_FLAGS: Final[int]
+final GENERATOR_AND_COROUTINE_FLAGS: int
 
 class BdbQuit(Exception):
     """Exception to give up completely."""
@@ -119,7 +119,7 @@ class Bdb:
         """
 
     if sys.version_info >= (3, 13):
-        def dispatch_opcode(self, frame: FrameType, arg: Unused) -> Callable[[FrameType, str, dynamic], TraceFunction]:
+        def dispatch_opcode(self, frame: FrameType, arg: Unused) -> (FrameType, str, dynamic) -> TraceFunction:
             """Invoke user function and return trace function for opcode event.
             If the debugger stops on the current opcode, invoke
             self.user_opcode(). Raise BdbQuit if self.quitting is set.
@@ -306,7 +306,7 @@ class Bdb:
         globals defaults to __main__.dict; locals defaults to globals.
         """
 
-    def runcall[**P, Element](self, func: Callable[P, Element], /, *args: P.args, **kwds: P.kwargs) -> Element | None:
+    def runcall[**P, Element](self, func: (**P) -> Element, /, *args: P.args, **kwds: P.kwargs) -> Element | None:
         """Debug a single function call.
 
         Return the result of the function call.
@@ -353,9 +353,9 @@ class Breakpoint:
     ignore: int
     hits: int
     number: int
-    def __init__(
+    init(
         self, file: str, line: int, temporary: bool = False, cond: str | None = None, funcname: str | None = None
-    ) -> None
+    )
     if sys.version_info >= (3, 11):
         static def clearBreakpoints() -> None
 

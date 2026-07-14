@@ -11,9 +11,9 @@ RFC2047_CHROME_LEN: Final = 7  # undocumented
 DEFAULT_CHARSET: Final = "us-ascii"  # undocumented
 UNKNOWN8BIT: Final = "unknown-8bit"  # undocumented
 EMPTYSTRING: Final = ""  # undocumented
-CHARSETS: Final[dict[str, (int | None, int | None, str | None)]]
-ALIASES: Final[dict[str, str]]
-CODEC_MAP: Final[dict[str, str | None]]  # undocumented
+final CHARSETS: dict[str, (int | None, int | None, str | None)]
+final ALIASES: dict[str, str]
+final CODEC_MAP: dict[str, str | None]  # undocumented
 
 class Charset:
     """Map character sets to their email properties.
@@ -66,8 +66,8 @@ class Charset:
     output_charset: str | None
     input_codec: str | None
     output_codec: str | None
-    def __init__(self, input_charset: str = "us-ascii") -> None
-    def get_body_encoding(self) -> str | Callable[[Message], None]:
+    init(self, input_charset: str = "us-ascii")
+    def get_body_encoding(self) -> str | ((Message) -> None):
         """Return the content-transfer-encoding used for body encoding.
 
         This is either the string 'quoted-printable' or 'base64' depending on
@@ -129,7 +129,7 @@ class Charset:
         """
     def body_encode(self, string: str | bytes) -> str
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     def __eq__(self, other: object) -> bool
     def __ne__(self, value: object, /) -> bool
 

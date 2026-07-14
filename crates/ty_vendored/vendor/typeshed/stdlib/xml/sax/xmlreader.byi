@@ -59,10 +59,10 @@ class XMLReader:
         request a locale change in the middle of a parse.
         """
 
-    def getFeature(self, name: str) -> Literal[0, 1] | bool:
+    def getFeature(self, name: str) -> 0 | 1 | bool:
         """Looks up and returns the state of a SAX2 feature."""
 
-    def setFeature(self, name: str, state: Literal[0, 1] | bool) -> None:
+    def setFeature(self, name: str, state: 0 | 1 | bool) -> None:
         """Sets the state of a SAX2 feature."""
 
     def getProperty(self, name: str) -> object:
@@ -92,7 +92,7 @@ class IncrementalParser(XMLReader):
     writers.
     """
 
-    def __init__(self, bufsize: int = 65536) -> None
+    init(self, bufsize: int = 65536)
     def parse(self, source: InputSource | _Source) -> None
     def feed(self, data: str | ReadableBuffer) -> None:
         """This method gives the raw XML data in the data parameter to
@@ -164,7 +164,7 @@ class InputSource:
     application, although it may make copies and modify those.
     """
 
-    def __init__(self, system_id: str | None = None) -> None
+    init(self, system_id: str | None = None)
     def setPublicId(self, public_id: str | None) -> None:
         """Sets the public identifier of this InputSource."""
 
@@ -225,7 +225,7 @@ class InputSource:
 
 
 class AttributesImpl[in out AttrKey = str]:
-    def __init__(self, attrs: Mapping[AttrKey, str]) -> None:
+    init(self, attrs: Mapping[AttrKey, str]):
         """Non-NS-aware implementation.
 
         attrs should be of the form {name : value}.
@@ -251,10 +251,10 @@ class AttributesImpl[in out AttrKey = str]:
     def items(self) -> list[(AttrKey, str)]
     def values(self) -> list[str]
 
-_NSName: TypeAlias = tuple[str | None, str]
+type _NSName = tuple[str | None, str]
 
 class AttributesNSImpl(AttributesImpl[_NSName]):
-    def __init__(self, attrs: Mapping[_NSName, str], qnames: Mapping[_NSName, str]) -> None:
+    init(self, attrs: Mapping[_NSName, str], qnames: Mapping[_NSName, str]):
         """NS-aware implementation.
 
         attrs should be of the form {(ns_uri, lname): value, ...}.

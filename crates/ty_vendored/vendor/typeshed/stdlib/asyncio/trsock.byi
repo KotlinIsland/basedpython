@@ -4,14 +4,14 @@ from _typeshed import ReadableBuffer
 from builtins import type as Type  # alias to avoid name clashes with property named "type"
 from collections.abc import Iterable
 from types import TracebackType
-from typing import Any, BinaryIO, NoReturn, TypeAlias
+from typing import TypeAlias
 from typing_extensions import deprecated
 
 # These are based in socket, maybe move them out into _typeshed.pyi or such
-_Address: TypeAlias = socket._Address
-_RetAddress: TypeAlias = Any
-_WriteBuffer: TypeAlias = bytearray | memoryview
-_CMSG: TypeAlias = tuple[int, int, bytes]
+type _Address = socket._Address
+type _RetAddress = dynamic
+type _WriteBuffer = bytearray | memoryview
+type _CMSG = tuple[int, int, bytes]
 
 class TransportSocket:
     """A socket-like wrapper for exposing real transport sockets.
@@ -22,13 +22,10 @@ class TransportSocket:
     """
 
     __slots__ = ("_sock",)
-    def __init__(self, sock: socket.socket) -> None
-    @property
-    def family(self) -> int
-    @property
-    def type(self) -> int
-    @property
-    def proto(self) -> int
+    init(self, sock: socket.socket)
+    let family: int
+    let type: int
+    let proto: int
     def __getstate__(self) -> NoReturn
     def fileno(self) -> int
     def dup(self) -> socket.socket
@@ -123,9 +120,9 @@ class TransportSocket:
         @deprecated("Removed in Python 3.11.")
         def recvmsg_into(
             self, buffers: Iterable[_WriteBuffer], ancbufsize: int = 0, flags: int = 0, /
-        ) -> (int, list[_CMSG], int, Any)
+        ) -> (int, list[_CMSG], int, dynamic)
         @deprecated("Removed in Python 3.11.")
-        def recvmsg(self, bufsize: int, ancbufsize: int = 0, flags: int = 0, /) -> (bytes, list[_CMSG], int, Any)
+        def recvmsg(self, bufsize: int, ancbufsize: int = 0, flags: int = 0, /) -> (bytes, list[_CMSG], int, dynamic)
         @deprecated("Removed in Python 3.11.")
         def recvfrom(self, bufsize: int, flags: int = 0) -> (bytes, _RetAddress)
         @deprecated("Removed in Python 3.11.")

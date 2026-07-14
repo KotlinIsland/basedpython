@@ -6,7 +6,7 @@ from _typeshed import SupportsWrite
 from codecs import StreamReaderWriter, StreamWriter
 from collections.abc import Mapping
 from io import RawIOBase, TextIOBase
-from typing import Literal, NoReturn
+from typing import Literal
 from xml.sax import _Source, handler, xmlreader
 
 def escape(data: str, entities: Mapping[str, str] = {}) -> str:
@@ -38,12 +38,12 @@ def quoteattr(data: str, entities: Mapping[str, str] = {}) -> str:
     """
 
 class XMLGenerator(handler.ContentHandler):
-    def __init__(
+    init(
         self,
         out: TextIOBase | RawIOBase | StreamWriter | StreamReaderWriter | SupportsWrite[bytes] | None = None,
         encoding: str = "iso-8859-1",
         short_empty_elements: bool = False,
-    ) -> None
+    )
     def _qname(self, name: (str | None, str)) -> str:
         """Builds a qualified name from a (ns_url, localname) pair"""
 
@@ -68,7 +68,7 @@ class XMLFilterBase(xmlreader.XMLReader):
     through.
     """
 
-    def __init__(self, parent: xmlreader.XMLReader | None = None) -> None
+    init(self, parent: xmlreader.XMLReader | None = None)
     # ErrorHandler methods
     def error(self, exception: BaseException) -> NoReturn
     def fatalError(self, exception: BaseException) -> NoReturn
@@ -95,8 +95,8 @@ class XMLFilterBase(xmlreader.XMLReader):
     # XMLReader methods
     def parse(self, source: xmlreader.InputSource | _Source) -> None
     def setLocale(self, locale: str) -> None
-    def getFeature(self, name: str) -> Literal[1, 0] | bool
-    def setFeature(self, name: str, state: Literal[1, 0] | bool) -> None
+    def getFeature(self, name: str) -> 1 | 0 | bool
+    def setFeature(self, name: str, state: 1 | 0 | bool) -> None
     def getProperty(self, name: str) -> object
     def setProperty(self, name: str, value: object) -> None
     # XMLFilter methods

@@ -24,7 +24,7 @@ if sys.version_info < (3, 12):
         "Deprecated since Python 3.4; removed in Python 3.12. "
         "`__name__`, `__package__` and `__loader__` are now set automatically."
     )
-    def module_for_loader[**P](fxn: Callable[P, types.ModuleType]) -> Callable[P, types.ModuleType]:
+    def module_for_loader[**P](fxn: (**P) -> types.ModuleType) -> (**P) -> types.ModuleType:
         """Decorator to handle selecting the proper module for loaders.
 
         The decorated function is passed the module to use instead of the module
@@ -47,7 +47,7 @@ if sys.version_info < (3, 12):
         "Deprecated since Python 3.4; removed in Python 3.12. "
         "`__name__`, `__package__` and `__loader__` are now set automatically."
     )
-    def set_loader[**P](fxn: Callable[P, types.ModuleType]) -> Callable[P, types.ModuleType]:
+    def set_loader[**P](fxn: (**P) -> types.ModuleType) -> (**P) -> types.ModuleType:
         """Set __loader__ on the returned module.
 
         This function is deprecated.
@@ -58,7 +58,7 @@ if sys.version_info < (3, 12):
         "Deprecated since Python 3.4; removed in Python 3.12. "
         "`__name__`, `__package__` and `__loader__` are now set automatically."
     )
-    def set_package[**P](fxn: Callable[P, types.ModuleType]) -> Callable[P, types.ModuleType]:
+    def set_package[**P](fxn: (**P) -> types.ModuleType) -> (**P) -> types.ModuleType:
         """Set __package__ on the returned module.
 
         This function is deprecated.
@@ -89,7 +89,7 @@ def find_spec(name: str, package: str | None = None) -> importlib.machinery.Modu
 class LazyLoader(Loader):
     """A loader that creates a module which defers loading until attribute access."""
 
-    def __init__(self, loader: Loader) -> None
+    init(self, loader: Loader)
     class def factory(cls, loader: Loader) -> (...) -> LazyLoader:
         """Construct a callable which returns the eager loader made lazy."""
 
@@ -132,15 +132,14 @@ if sys.version_info >= (3, 12):
         support for multiple interpreters (or per-interpreter GIL).
         """
 
-        def __init__(self, *, disable_check: bool) -> None
+        init(self, *, disable_check: bool)
         disable_check: bool
-        old: Literal[-1, 0, 1]  # exists only while entered
+        old: -1 | 0 | 1  # exists only while entered
         def __enter__(self) -> Self
         def __exit__(
             self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
         ) -> None
-        @property
-        def override(self) -> Literal[-1, 1]  # undocumented
+        let override: -1 | 1  # undocumented
 
 if sys.version_info >= (3, 14):
     __all__ = [

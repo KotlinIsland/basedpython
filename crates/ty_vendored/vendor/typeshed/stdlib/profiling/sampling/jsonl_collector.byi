@@ -84,7 +84,7 @@ class JsonlCollector(StackTraceCollector):
     ``export()`` time.
     """
 
-    def __init__(self, sample_interval_usec: int, *, skip_idle: bool = False, mode: int | None = None) -> None
+    init(self, sample_interval_usec: int, *, skip_idle: bool = False, mode: int | None = None)
     def collect(
         self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None
     ) -> None

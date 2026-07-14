@@ -21,7 +21,7 @@ from _typeshed import (
 )
 from collections.abc import Callable, Container, Iterable, MutableMapping, MutableSequence, Sequence
 from operator import attrgetter as attrgetter, itemgetter as itemgetter, methodcaller as methodcaller
-from typing import AnyStr, ParamSpec, Protocol, SupportsAbs, SupportsIndex, TypeAlias, TypeVar, type_check_only
+from typing import ParamSpec, Protocol, TypeAlias, TypeVar, type_check_only
 
 
 # The following protocols return "Any" instead of bool, since the comparison
@@ -29,33 +29,33 @@ from typing import AnyStr, ParamSpec, Protocol, SupportsAbs, SupportsIndex, Type
 # the numpy.array comparison dunders return another numpy.array.
 
 @type_check_only
-class _SupportsDunderLT(Protocol):
+protocol _SupportsDunderLT:
     def __lt__(self, other: dynamic, /) -> dynamic
 
 @type_check_only
-class _SupportsDunderGT(Protocol):
+protocol _SupportsDunderGT:
     def __gt__(self, other: dynamic, /) -> dynamic
 
 @type_check_only
-class _SupportsDunderLE(Protocol):
+protocol _SupportsDunderLE:
     def __le__(self, other: dynamic, /) -> dynamic
 
 @type_check_only
-class _SupportsDunderGE(Protocol):
+protocol _SupportsDunderGE:
     def __ge__(self, other: dynamic, /) -> dynamic
 
-_SupportsComparison: TypeAlias = _SupportsDunderLE | _SupportsDunderGE | _SupportsDunderGT | _SupportsDunderLT
+type _SupportsComparison = _SupportsDunderLE | _SupportsDunderGE | _SupportsDunderGT | _SupportsDunderLT
 
 @type_check_only
-class _SupportsInversion[out Element](Protocol):
+protocol _SupportsInversion[out Element]:
     def __invert__(self) -> Element
 
 @type_check_only
-class _SupportsNeg[out Element](Protocol):
+protocol _SupportsNeg[out Element]:
     def __neg__(self) -> Element
 
 @type_check_only
-class _SupportsPos[out Element](Protocol):
+protocol _SupportsPos[out Element]:
     def __pos__(self) -> Element
 
 # All four comparison functions must have the same signature, or we get false-positive errors
@@ -229,7 +229,7 @@ def ixor(a, b, /):
     """Same as a ^= b."""
 
 if sys.version_info >= (3, 11):
-    def call[**P, R](obj: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R:
+    def call[**P, R](obj: (**P) -> R, /, *args: P.args, **kwargs: P.kwargs) -> R:
         """Same as obj(*args, **kwargs)."""
 
 def _compare_digest(a: AnyStr, b: AnyStr, /) -> bool:

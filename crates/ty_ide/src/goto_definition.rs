@@ -2079,7 +2079,7 @@ p = Point<CURSOR>(1, 2)
         info: Found 1 definition
           --> stdlib/builtins.byi:LL:9
            |
-        LL |     def __dictoffset__(self) -> int
+        LL |     let __dictoffset__: int
            |         --------------
            |
         ");
@@ -2167,7 +2167,7 @@ p = Point<CURSOR>(1, 2)
         info: Found 1 definition
           --> stdlib/builtins.byi:LL:9
            |
-        LL |     def __dictoffset__(self) -> int
+        LL |     let __dictoffset__: int
            |         --------------
            |
         ");

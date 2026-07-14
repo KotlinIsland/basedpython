@@ -21,16 +21,16 @@ from re import Pattern
 from socket import socket as _socket
 from ssl import SSLContext, SSLSocket
 from types import TracebackType
-from typing import IO, Any, Literal, SupportsAbs, SupportsInt, TypeAlias
+from typing import Literal, TypeAlias
 from typing_extensions import Self, deprecated
 
 __all__ = ["IMAP4", "IMAP4_stream", "Internaldate2tuple", "Int2AP", "ParseFlags", "Time2Internaldate", "IMAP4_SSL"]
 
 # TODO: Commands should use their actual return types, not this type alias.
 #       E.g. Tuple[Literal["OK"], List[bytes]]
-_CommandResults: TypeAlias = tuple[str, list[Any]]
+type _CommandResults = tuple[str, list[dynamic]]
 
-_AnyResponseData: TypeAlias = list[None] | list[bytes | tuple[bytes, bytes]]
+type _AnyResponseData = list[None] | list[bytes | tuple[bytes, bytes]]
 
 Commands: dict[str, (*: str)]
 
@@ -100,7 +100,7 @@ class IMAP4:
     welcome: bytes
     capabilities: (*: str)
     PROTOCOL_VERSION: str
-    def __init__(self, host: str = "", port: int = 143, timeout: float | None = None) -> None
+    init(self, host: str = "", port: int = 143, timeout: float | None = None)
     def open(self, host: str = "", port: int = 143, timeout: float | None = None) -> None:
         """Setup connection to remote server on "host:port"
             (default: localhost:standard IMAP4 port).
@@ -165,7 +165,7 @@ class IMAP4:
                 All args except 'message' can be None.
         """
 
-    def authenticate(self, mechanism: str, authobject: Callable[[bytes], bytes | None]) -> (str, str):
+    def authenticate(self, mechanism: str, authobject: (bytes) -> (bytes | None)) -> (str, str):
         """Authenticate command - requires response processing.
 
         'mechanism' specifies which authentication mechanism is to
@@ -300,7 +300,7 @@ class IMAP4:
         'data' is list of LIST responses.
         """
 
-    def login(self, user: str, password: str) -> (Literal["OK"], _list[bytes]):
+    def login(self, user: str, password: str) -> ("OK", _list[bytes]):
         """Identify client using plaintext password.
 
         (typ, [data]) = <instance>.login(user, password)
@@ -416,7 +416,7 @@ class IMAP4:
         (typ, [data]) = <instance>.sort(sort_criteria, charset, search_criteria, ...)
         """
 
-    def starttls(self, ssl_context: dynamic | None = None) -> (Literal["OK"], _list[None])
+    def starttls(self, ssl_context: dynamic | None = None) -> ("OK", _list[None])
     def status(self, mailbox: str, names: str) -> _CommandResults:
         """Request named status conditions for mailbox.
 
@@ -488,9 +488,9 @@ if sys.version_info >= (3, 14):
         Note: The name and structure of this class are subject to change.
         """
 
-        def __init__(self, imap: IMAP4, duration: float | None = None) -> None
+        init(self, imap: IMAP4, duration: float | None = None)
         def __enter__(self) -> Self
-        def __exit__(self, exc_type: object, exc_val: Unused, exc_tb: Unused) -> Literal[False]
+        def __exit__(self, exc_type: object, exc_val: Unused, exc_tb: Unused) -> False
         def __iter__(self) -> Self
         def __next__(self) -> (str, float | None)
         def burst(self, interval: float = 0.1) -> Generator[(str, float | None)]:
@@ -578,7 +578,7 @@ class IMAP4_stream(IMAP4):
     """
 
     command: str
-    def __init__(self, command: str) -> None
+    init(self, command: str)
     if sys.version_info >= (3, 14):
         @property
         @deprecated("IMAP4_stream.file is unsupported, can cause errors, and may be removed.")
@@ -599,8 +599,8 @@ class _Authenticator:
     for base64-based authentication conversation.
     """
 
-    mech: Callable[[bytes], bytes | bytearray | memoryview | str | None]
-    def __init__(self, mechinst: Callable[[bytes], bytes | bytearray | memoryview | str | None]) -> None
+    mech: (bytes) -> (bytes | bytearray | memoryview | str | None)
+    init(self, mechinst: (bytes) -> (bytes | bytearray | memoryview | str | None))
     def process(self, data: str) -> str
     def encode(self, inp: bytes | bytearray | memoryview) -> str
     def decode(self, inp: str | SizedBuffer) -> bytes
@@ -618,7 +618,7 @@ def Int2AP(num: SupportsAbs[SupportsInt]) -> bytes:
 def ParseFlags(resp: ReadableBuffer) -> (*: bytes):
     """Convert IMAP4 flags response to python tuple."""
 
-_TimeLike: TypeAlias = float | time.struct_time | time._TimeTuple | datetime | str
+type _TimeLike = float | time.struct_time | time._TimeTuple | datetime | str
 
 def Time2Internaldate(date_time: _TimeLike) -> str:
     """Convert date_time to IMAP4 INTERNALDATE representation.

@@ -36,7 +36,7 @@ import sys
 from _typeshed import MaybeNone, ReadableBuffer, StrOrBytesPath
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from types import GenericAlias, TracebackType
-from typing import IO, Any, AnyStr, Final, Generic, Literal, TypeAlias, TypeVar
+from typing import Final, Generic, Literal, TypeAlias, TypeVar
 from typing_extensions import Self
 
 __all__ = [
@@ -93,19 +93,19 @@ if sys.platform == "win32":
 #    reveal_type(x)  # bytes, based on the overloads
 # except TimeoutError as e:
 #    reveal_type(e.cmd)  # Any, but morally is _CMD
-_FILE: TypeAlias = None | int | IO[Any]
-_InputString: TypeAlias = ReadableBuffer | str
-_CMD: TypeAlias = StrOrBytesPath | Sequence[StrOrBytesPath]
+type _FILE = None | int | IO[dynamic]
+type _InputString = ReadableBuffer | str
+type _CMD = StrOrBytesPath | Sequence[StrOrBytesPath]
 if sys.platform == "win32":
-    _ENV: TypeAlias = Mapping[str, str]
+    type _ENV = Mapping[str, str]
 else:
-    _ENV: TypeAlias = Mapping[bytes, StrOrBytesPath] | Mapping[str, StrOrBytesPath]
+    type _ENV = Mapping[bytes, StrOrBytesPath] | Mapping[str, StrOrBytesPath]
 
 
 # These two are private but documented
 if sys.version_info >= (3, 11):
-    _USE_VFORK: Final[bool]
-_USE_POSIX_SPAWN: Final[bool]
+    final _USE_VFORK: bool
+final _USE_POSIX_SPAWN: bool
 
 class CompletedProcess[in out Element]:
     """A process that has finished running.
@@ -126,7 +126,7 @@ class CompletedProcess[in out Element]:
     # and writing all the overloads would be horrific.
     stdout: Element
     stderr: Element
-    def __init__(self, args: _CMD, returncode: int, stdout: Element | None = None, stderr: Element | None = None) -> None
+    init(self, args: _CMD, returncode: int, stdout: Element | None = None, stderr: Element | None = None)
     def check_returncode(self) -> None:
         """Raise CalledProcessError if the exit code is non-zero."""
 
@@ -146,12 +146,12 @@ if sys.version_info >= (3, 11):
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
-        universal_newlines: Literal[True] | None = None,
+        universal_newlines: True | None = None,
         startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
@@ -163,7 +163,7 @@ if sys.version_info >= (3, 11):
         encoding: str | None = None,
         errors: str | None = None,
         input: str | None = None,
-        text: Literal[True],
+        text: True,
         timeout: float | None = None,
         user: str | int | None = None,
         group: str | int | None = None,
@@ -207,7 +207,7 @@ if sys.version_info >= (3, 11):
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -240,7 +240,7 @@ if sys.version_info >= (3, 11):
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -273,13 +273,13 @@ if sys.version_info >= (3, 11):
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         *,
-        universal_newlines: Literal[True],
+        universal_newlines: True,
         startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
@@ -291,7 +291,7 @@ if sys.version_info >= (3, 11):
         encoding: str | None = None,
         errors: str | None = None,
         input: str | None = None,
-        text: Literal[True] | None = None,
+        text: True | None = None,
         timeout: float | None = None,
         user: str | int | None = None,
         group: str | int | None = None,
@@ -307,12 +307,12 @@ if sys.version_info >= (3, 11):
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
-        universal_newlines: Literal[False] | None = None,
+        universal_newlines: False | None = None,
         startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
@@ -324,7 +324,7 @@ if sys.version_info >= (3, 11):
         encoding: None = None,
         errors: None = None,
         input: ReadableBuffer | None = None,
-        text: Literal[False] | None = None,
+        text: False | None = None,
         timeout: float | None = None,
         user: str | int | None = None,
         group: str | int | None = None,
@@ -340,7 +340,7 @@ if sys.version_info >= (3, 11):
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -375,12 +375,12 @@ else:
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
-        universal_newlines: Literal[True] | None = None,
+        universal_newlines: True | None = None,
         startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
@@ -392,7 +392,7 @@ else:
         encoding: str | None = None,
         errors: str | None = None,
         input: str | None = None,
-        text: Literal[True],
+        text: True,
         timeout: float | None = None,
         user: str | int | None = None,
         group: str | int | None = None,
@@ -435,7 +435,7 @@ else:
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -467,7 +467,7 @@ else:
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -499,13 +499,13 @@ else:
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         *,
-        universal_newlines: Literal[True],
+        universal_newlines: True,
         startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
@@ -517,7 +517,7 @@ else:
         encoding: str | None = None,
         errors: str | None = None,
         input: str | None = None,
-        text: Literal[True] | None = None,
+        text: True | None = None,
         timeout: float | None = None,
         user: str | int | None = None,
         group: str | int | None = None,
@@ -532,12 +532,12 @@ else:
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
-        universal_newlines: Literal[False] | None = None,
+        universal_newlines: False | None = None,
         startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
@@ -549,7 +549,7 @@ else:
         encoding: None = None,
         errors: None = None,
         input: ReadableBuffer | None = None,
-        text: Literal[False] | None = None,
+        text: False | None = None,
         timeout: float | None = None,
         user: str | int | None = None,
         group: str | int | None = None,
@@ -564,7 +564,7 @@ else:
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -600,7 +600,7 @@ if sys.version_info >= (3, 11):
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -639,7 +639,7 @@ else:
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -678,7 +678,7 @@ if sys.version_info >= (3, 11):
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -719,7 +719,7 @@ else:
         stdin: _FILE = None,
         stdout: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -758,12 +758,12 @@ if sys.version_info >= (3, 11):
         executable: StrOrBytesPath | None = None,
         stdin: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
-        universal_newlines: Literal[True] | None = None,
+        universal_newlines: True | None = None,
         startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
@@ -774,7 +774,7 @@ if sys.version_info >= (3, 11):
         input: _InputString | None = None,
         encoding: str | None = None,
         errors: str | None = None,
-        text: Literal[True],
+        text: True,
         user: str | int | None = None,
         group: str | int | None = None,
         extra_groups: Iterable[str | int] | None = None,
@@ -822,7 +822,7 @@ if sys.version_info >= (3, 11):
         executable: StrOrBytesPath | None = None,
         stdin: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -852,7 +852,7 @@ if sys.version_info >= (3, 11):
         executable: StrOrBytesPath | None = None,
         stdin: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -882,13 +882,13 @@ if sys.version_info >= (3, 11):
         executable: StrOrBytesPath | None = None,
         stdin: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         *,
-        universal_newlines: Literal[True],
+        universal_newlines: True,
         startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
@@ -899,7 +899,7 @@ if sys.version_info >= (3, 11):
         input: _InputString | None = None,
         encoding: str | None = None,
         errors: str | None = None,
-        text: Literal[True] | None = None,
+        text: True | None = None,
         user: str | int | None = None,
         group: str | int | None = None,
         extra_groups: Iterable[str | int] | None = None,
@@ -913,12 +913,12 @@ if sys.version_info >= (3, 11):
         executable: StrOrBytesPath | None = None,
         stdin: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
-        universal_newlines: Literal[False] | None = None,
+        universal_newlines: False | None = None,
         startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
@@ -929,7 +929,7 @@ if sys.version_info >= (3, 11):
         input: _InputString | None = None,
         encoding: None = None,
         errors: None = None,
-        text: Literal[False] | None = None,
+        text: False | None = None,
         user: str | int | None = None,
         group: str | int | None = None,
         extra_groups: Iterable[str | int] | None = None,
@@ -943,7 +943,7 @@ if sys.version_info >= (3, 11):
         executable: StrOrBytesPath | None = None,
         stdin: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -975,12 +975,12 @@ else:
         executable: StrOrBytesPath | None = None,
         stdin: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
-        universal_newlines: Literal[True] | None = None,
+        universal_newlines: True | None = None,
         startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
@@ -991,7 +991,7 @@ else:
         input: _InputString | None = None,
         encoding: str | None = None,
         errors: str | None = None,
-        text: Literal[True],
+        text: True,
         user: str | int | None = None,
         group: str | int | None = None,
         extra_groups: Iterable[str | int] | None = None,
@@ -1038,7 +1038,7 @@ else:
         executable: StrOrBytesPath | None = None,
         stdin: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -1067,7 +1067,7 @@ else:
         executable: StrOrBytesPath | None = None,
         stdin: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -1096,13 +1096,13 @@ else:
         executable: StrOrBytesPath | None = None,
         stdin: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
         *,
-        universal_newlines: Literal[True],
+        universal_newlines: True,
         startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
@@ -1113,7 +1113,7 @@ else:
         input: _InputString | None = None,
         encoding: str | None = None,
         errors: str | None = None,
-        text: Literal[True] | None = None,
+        text: True | None = None,
         user: str | int | None = None,
         group: str | int | None = None,
         extra_groups: Iterable[str | int] | None = None,
@@ -1126,12 +1126,12 @@ else:
         executable: StrOrBytesPath | None = None,
         stdin: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
         env: _ENV | None = None,
-        universal_newlines: Literal[False] | None = None,
+        universal_newlines: False | None = None,
         startupinfo: dynamic = None,
         creationflags: int = 0,
         restore_signals: bool = True,
@@ -1142,7 +1142,7 @@ else:
         input: _InputString | None = None,
         encoding: None = None,
         errors: None = None,
-        text: Literal[False] | None = None,
+        text: False | None = None,
         user: str | int | None = None,
         group: str | int | None = None,
         extra_groups: Iterable[str | int] | None = None,
@@ -1155,7 +1155,7 @@ else:
         executable: StrOrBytesPath | None = None,
         stdin: _FILE = None,
         stderr: _FILE = None,
-        preexec_fn: Callable[[], object] | None = None,
+        preexec_fn: (() -> object) | None = None,
         close_fds: bool = True,
         shell: bool = False,
         cwd: StrOrBytesPath | None = None,
@@ -1179,9 +1179,9 @@ else:
         pipesize: int = -1,
     ) -> dynamic  # morally: -> str | bytes
 
-PIPE: Final[int]
-STDOUT: Final[int]
-DEVNULL: Final[int]
+final PIPE: int
+final STDOUT: int
+final DEVNULL: int
 
 class SubprocessError(Exception)
 
@@ -1193,9 +1193,9 @@ class TimeoutExpired(SubprocessError):
         cmd, output, stdout, stderr, timeout
     """
 
-    def __init__(
+    init(
         self, cmd: _CMD, timeout: float, output: str | bytes | None = None, stderr: str | bytes | None = None
-    ) -> None
+    )
     # morally: _CMD
     cmd: dynamic
     timeout: float
@@ -1223,9 +1223,9 @@ class CalledProcessError(SubprocessError):
     """Alias for output attribute, to match stderr"""
 
     stderr: dynamic
-    def __init__(
+    init(
         self, returncode: int, cmd: _CMD, output: str | bytes | None = None, stderr: str | bytes | None = None
-    ) -> None
+    )
 
 class Popen(Generic[AnyStr]):
     """Execute a child program in a new process.
@@ -1302,7 +1302,7 @@ class Popen(Generic[AnyStr]):
             stdin: _FILE | None = None,
             stdout: _FILE | None = None,
             stderr: _FILE | None = None,
-            preexec_fn: Callable[[], object] | None = None,
+            preexec_fn: (() -> object) | None = None,
             close_fds: bool = True,
             shell: bool = False,
             cwd: StrOrBytesPath | None = None,
@@ -1333,7 +1333,7 @@ class Popen(Generic[AnyStr]):
             stdin: _FILE | None = None,
             stdout: _FILE | None = None,
             stderr: _FILE | None = None,
-            preexec_fn: Callable[[], object] | None = None,
+            preexec_fn: (() -> object) | None = None,
             close_fds: bool = True,
             shell: bool = False,
             cwd: StrOrBytesPath | None = None,
@@ -1363,13 +1363,13 @@ class Popen(Generic[AnyStr]):
             stdin: _FILE | None = None,
             stdout: _FILE | None = None,
             stderr: _FILE | None = None,
-            preexec_fn: Callable[[], object] | None = None,
+            preexec_fn: (() -> object) | None = None,
             close_fds: bool = True,
             shell: bool = False,
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
             *,
-            universal_newlines: Literal[True],
+            universal_newlines: True,
             startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
@@ -1394,19 +1394,19 @@ class Popen(Generic[AnyStr]):
             stdin: _FILE | None = None,
             stdout: _FILE | None = None,
             stderr: _FILE | None = None,
-            preexec_fn: Callable[[], object] | None = None,
+            preexec_fn: (() -> object) | None = None,
             close_fds: bool = True,
             shell: bool = False,
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
-            universal_newlines: Literal[True] | None = None,
+            universal_newlines: True | None = None,
             startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
             pass_fds: Collection[int] = (),
             *,
-            text: Literal[True],
+            text: True,
             encoding: str | None = None,
             errors: str | None = None,
             user: str | int | None = None,
@@ -1424,19 +1424,19 @@ class Popen(Generic[AnyStr]):
             stdin: _FILE | None = None,
             stdout: _FILE | None = None,
             stderr: _FILE | None = None,
-            preexec_fn: Callable[[], object] | None = None,
+            preexec_fn: (() -> object) | None = None,
             close_fds: bool = True,
             shell: bool = False,
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
-            universal_newlines: Literal[False] | None = None,
+            universal_newlines: False | None = None,
             startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
             pass_fds: Collection[int] = (),
             *,
-            text: Literal[False] | None = None,
+            text: False | None = None,
             encoding: None = None,
             errors: None = None,
             user: str | int | None = None,
@@ -1454,7 +1454,7 @@ class Popen(Generic[AnyStr]):
             stdin: _FILE | None = None,
             stdout: _FILE | None = None,
             stderr: _FILE | None = None,
-            preexec_fn: Callable[[], object] | None = None,
+            preexec_fn: (() -> object) | None = None,
             close_fds: bool = True,
             shell: bool = False,
             cwd: StrOrBytesPath | None = None,
@@ -1486,7 +1486,7 @@ class Popen(Generic[AnyStr]):
             stdin: _FILE | None = None,
             stdout: _FILE | None = None,
             stderr: _FILE | None = None,
-            preexec_fn: Callable[[], object] | None = None,
+            preexec_fn: (() -> object) | None = None,
             close_fds: bool = True,
             shell: bool = False,
             cwd: StrOrBytesPath | None = None,
@@ -1516,7 +1516,7 @@ class Popen(Generic[AnyStr]):
             stdin: _FILE | None = None,
             stdout: _FILE | None = None,
             stderr: _FILE | None = None,
-            preexec_fn: Callable[[], object] | None = None,
+            preexec_fn: (() -> object) | None = None,
             close_fds: bool = True,
             shell: bool = False,
             cwd: StrOrBytesPath | None = None,
@@ -1545,13 +1545,13 @@ class Popen(Generic[AnyStr]):
             stdin: _FILE | None = None,
             stdout: _FILE | None = None,
             stderr: _FILE | None = None,
-            preexec_fn: Callable[[], object] | None = None,
+            preexec_fn: (() -> object) | None = None,
             close_fds: bool = True,
             shell: bool = False,
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
             *,
-            universal_newlines: Literal[True],
+            universal_newlines: True,
             startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
@@ -1575,19 +1575,19 @@ class Popen(Generic[AnyStr]):
             stdin: _FILE | None = None,
             stdout: _FILE | None = None,
             stderr: _FILE | None = None,
-            preexec_fn: Callable[[], object] | None = None,
+            preexec_fn: (() -> object) | None = None,
             close_fds: bool = True,
             shell: bool = False,
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
-            universal_newlines: Literal[True] | None = None,
+            universal_newlines: True | None = None,
             startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
             pass_fds: Collection[int] = (),
             *,
-            text: Literal[True],
+            text: True,
             encoding: str | None = None,
             errors: str | None = None,
             user: str | int | None = None,
@@ -1604,19 +1604,19 @@ class Popen(Generic[AnyStr]):
             stdin: _FILE | None = None,
             stdout: _FILE | None = None,
             stderr: _FILE | None = None,
-            preexec_fn: Callable[[], object] | None = None,
+            preexec_fn: (() -> object) | None = None,
             close_fds: bool = True,
             shell: bool = False,
             cwd: StrOrBytesPath | None = None,
             env: _ENV | None = None,
-            universal_newlines: Literal[False] | None = None,
+            universal_newlines: False | None = None,
             startupinfo: dynamic | None = None,
             creationflags: int = 0,
             restore_signals: bool = True,
             start_new_session: bool = False,
             pass_fds: Collection[int] = (),
             *,
-            text: Literal[False] | None = None,
+            text: False | None = None,
             encoding: None = None,
             errors: None = None,
             user: str | int | None = None,
@@ -1633,7 +1633,7 @@ class Popen(Generic[AnyStr]):
             stdin: _FILE | None = None,
             stdout: _FILE | None = None,
             stderr: _FILE | None = None,
-            preexec_fn: Callable[[], object] | None = None,
+            preexec_fn: (() -> object) | None = None,
             close_fds: bool = True,
             shell: bool = False,
             cwd: StrOrBytesPath | None = None,
@@ -1807,7 +1807,7 @@ if sys.platform == "win32":
         __all__ += ["STARTF_FORCEOFFFEEDBACK", "STARTF_FORCEONFEEDBACK"]
 
     class STARTUPINFO:
-        def __init__(
+        init(
             self,
             *,
             dwFlags: int = 0,
@@ -1816,7 +1816,7 @@ if sys.platform == "win32":
             hStdError: dynamic | None = None,
             wShowWindow: int = 0,
             lpAttributeList: Mapping[str, dynamic] | None = None,
-        ) -> None
+        )
         dwFlags: int
         hStdInput: dynamic | None
         hStdOutput: dynamic | None

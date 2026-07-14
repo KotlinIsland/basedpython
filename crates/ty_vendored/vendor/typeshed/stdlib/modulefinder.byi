@@ -3,15 +3,15 @@
 import sys
 from collections.abc import Container, Iterable, Iterator, Sequence
 from types import CodeType
-from typing import IO, Any, Final
+from typing import Final
 
 if sys.version_info < (3, 11):
-    LOAD_CONST: Final[int]  # undocumented
-    IMPORT_NAME: Final[int]  # undocumented
-    STORE_NAME: Final[int]  # undocumented
-    STORE_GLOBAL: Final[int]  # undocumented
-    STORE_OPS: Final[(int, int)]  # undocumented
-    EXTENDED_ARG: Final[int]  # undocumented
+    final LOAD_CONST: int  # undocumented
+    final IMPORT_NAME: int  # undocumented
+    final STORE_NAME: int  # undocumented
+    final STORE_GLOBAL: int  # undocumented
+    final STORE_OPS: (int, int)  # undocumented
+    final EXTENDED_ARG: int  # undocumented
 
 packagePathMap: dict[str, list[str]]  # undocumented
 
@@ -22,7 +22,7 @@ replacePackageMap: dict[str, str]  # undocumented
 def ReplacePackage(oldname: str, newname: str) -> None
 
 class Module:  # undocumented
-    def __init__(self, name: str, file: str | None = None, path: str | None = None) -> None
+    init(self, name: str, file: str | None = None, path: str | None = None)
 
 class ModuleFinder:
     modules: dict[str, Module]
@@ -33,13 +33,13 @@ class ModuleFinder:
     excludes: Container[str]  # undocumented
     replace_paths: Sequence[(str, str)]  # undocumented
 
-    def __init__(
+    init(
         self,
         path: list[str] | None = None,
         debug: int = 0,
         excludes: Container[str] | None = None,
         replace_paths: Sequence[(str, str)] | None = None,
-    ) -> None
+    )
     def msg(self, level: int, str: str, *args: dynamic) -> None  # undocumented
     def msgin(self, *args: dynamic) -> None  # undocumented
     def msgout(self, *args: dynamic) -> None  # undocumented
@@ -55,13 +55,13 @@ class ModuleFinder:
     def find_all_submodules(self, m: Module) -> Iterable[str]  # undocumented
     def import_module(self, partname: str, fqname: str, parent: Module) -> Module | None  # undocumented
     def load_module(self, fqname: str, fp: IO[str], pathname: str, file_info: (str, str, str)) -> Module  # undocumented
-    def scan_opcodes(self, co: CodeType) -> Iterator[(str, (*: Any))]  # undocumented
+    def scan_opcodes(self, co: CodeType) -> Iterator[(str, (*: dynamic))]  # undocumented
     def scan_code(self, co: CodeType, m: Module) -> None  # undocumented
     def load_package(self, fqname: str, pathname: str) -> Module  # undocumented
     def add_module(self, fqname: str) -> Module  # undocumented
     def find_module(
         self, name: str, path: str | None, parent: Module | None = None
-    ) -> (IO[Any] | None, str | None, (str, str, int))  # undocumented
+    ) -> (IO[dynamic] | None, str | None, (str, str, int))  # undocumented
     def report(self) -> None:
         """Print a report to stdout, listing the found modules with their
         paths, as well as modules that are missing, or seem to be missing.

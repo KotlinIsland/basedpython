@@ -3,129 +3,87 @@ from collections.abc import Callable
 from typing import Final, TypeAlias, final
 from typing_extensions import Self
 
-_Location: TypeAlias = tuple[int, int, int, int] | LocationInfo | None
-_Frame: TypeAlias = tuple[str, _Location, str, int | None] | FrameInfo
-_Stats: TypeAlias = dict[str, int | float]
+type _Location = tuple[int, int, int, int] | LocationInfo | None
+type _Frame = tuple[str, _Location, str, int | None] | FrameInfo
+type _Stats = dict[str, int | float]
 
-PROCESS_VM_READV_SUPPORTED: Final[int]
-THREAD_STATUS_GIL_REQUESTED: Final[int]
-THREAD_STATUS_HAS_EXCEPTION: Final[int]
-THREAD_STATUS_HAS_GIL: Final[int]
-THREAD_STATUS_MAIN_THREAD: Final[int]
-THREAD_STATUS_ON_CPU: Final[int]
-THREAD_STATUS_UNKNOWN: Final[int]
+final PROCESS_VM_READV_SUPPORTED: int
+final THREAD_STATUS_GIL_REQUESTED: int
+final THREAD_STATUS_HAS_EXCEPTION: int
+final THREAD_STATUS_HAS_GIL: int
+final THREAD_STATUS_MAIN_THREAD: int
+final THREAD_STATUS_ON_CPU: int
+final THREAD_STATUS_UNKNOWN: int
 
 final class LocationInfo(structseq[int], tuple[int, int, int, int]):
     """Source location information: (lineno, end_lineno, col_offset, end_col_offset)"""
 
     __match_args__: Final = ("lineno", "end_lineno", "col_offset", "end_col_offset")
-    @property
-    def lineno(self) -> int:
-        """Line number"""
+    let lineno: int
 
-    @property
-    def end_lineno(self) -> int:
-        """End line number"""
+    let end_lineno: int
 
-    @property
-    def col_offset(self) -> int:
-        """Column offset"""
+    let col_offset: int
 
-    @property
-    def end_col_offset(self) -> int:
-        """End column offset"""
+    let end_col_offset: int
 
 final class FrameInfo(structseq[object], tuple[str, _Location, str, int | None]):
     """Information about a frame"""
 
     __match_args__: Final = ("filename", "location", "funcname", "opcode")
-    @property
-    def filename(self) -> str:
-        """Source code filename"""
+    let filename: str
 
-    @property
-    def location(self) -> _Location:
-        """LocationInfo structseq or None for synthetic frames"""
+    let location: _Location
 
-    @property
-    def funcname(self) -> str:
-        """Function name"""
+    let funcname: str
 
-    @property
-    def opcode(self) -> int | None:
-        """Opcode being executed (None if not gathered)"""
+    let opcode: int | None
 
 final class CoroInfo(structseq[object], tuple[list[_Frame], int | str]):
     """Information about a coroutine"""
 
     __match_args__: Final = ("call_stack", "task_name")
-    @property
-    def call_stack(self) -> list[_Frame]:
-        """Coroutine call stack"""
+    let call_stack: list[_Frame]
 
-    @property
-    def task_name(self) -> int | str:
-        """Task name"""
+    let task_name: int | str
 
 final class TaskInfo(structseq[object], tuple[int, str, list[CoroInfo], list[CoroInfo]]):
     """Information about an asyncio task"""
 
     __match_args__: Final = ("task_id", "task_name", "coroutine_stack", "awaited_by")
-    @property
-    def task_id(self) -> int:
-        """Task ID (memory address)"""
+    let task_id: int
 
-    @property
-    def task_name(self) -> str:
-        """Task name"""
+    let task_name: str
 
-    @property
-    def coroutine_stack(self) -> list[CoroInfo]:
-        """Coroutine call stack"""
+    let coroutine_stack: list[CoroInfo]
 
-    @property
-    def awaited_by(self) -> list[CoroInfo]:
-        """Tasks awaiting this task"""
+    let awaited_by: list[CoroInfo]
 
 final class ThreadInfo(structseq[object], tuple[int, int, list[_Frame]]):
     """Information about a thread"""
 
     __match_args__: Final = ("thread_id", "status", "frame_info")
-    @property
-    def thread_id(self) -> int:
-        """Thread ID"""
+    let thread_id: int
 
-    @property
-    def status(self) -> int:
-        """Thread status (flags: HAS_GIL, ON_CPU, UNKNOWN or legacy enum)"""
+    let status: int
 
-    @property
-    def frame_info(self) -> list[_Frame]:
-        """Frame information"""
+    let frame_info: list[_Frame]
 
 final class InterpreterInfo(structseq[object], tuple[int, list[ThreadInfo]]):
     """Information about an interpreter"""
 
     __match_args__: Final = ("interpreter_id", "threads")
-    @property
-    def interpreter_id(self) -> int:
-        """Interpreter ID"""
+    let interpreter_id: int
 
-    @property
-    def threads(self) -> list[ThreadInfo]:
-        """List of threads in this interpreter"""
+    let threads: list[ThreadInfo]
 
 final class AwaitedInfo(structseq[object], tuple[int, list[TaskInfo]]):
     """Information about what a thread is awaiting"""
 
     __match_args__: Final = ("thread_id", "awaited_by")
-    @property
-    def thread_id(self) -> int:
-        """Thread ID"""
+    let thread_id: int
 
-    @property
-    def awaited_by(self) -> list[TaskInfo]:
-        """List of tasks awaited by this thread"""
+    let awaited_by: list[TaskInfo]
 
 final class GCStatsInfo(structseq[object], tuple[int, int, int, int, int, int, int, int, int, float]):
     """Information about a garbage collector stats sample"""
@@ -142,50 +100,30 @@ final class GCStatsInfo(structseq[object], tuple[int, int, int, int, int, int, i
         "heap_size",
         "duration",
     )
-    @property
-    def gen(self) -> int:
-        """GC generation number"""
+    let gen: int
 
-    @property
-    def iid(self) -> int:
-        """Interpreter ID"""
+    let iid: int
 
-    @property
-    def ts_start(self) -> int:
-        """Raw timestamp at collection start"""
+    let ts_start: int
 
-    @property
-    def ts_stop(self) -> int:
-        """Raw timestamp at collection stop"""
+    let ts_stop: int
 
-    @property
-    def collections(self) -> int:
-        """Total number of collections"""
+    let collections: int
 
-    @property
-    def collected(self) -> int:
-        """Total number of collected objects"""
+    let collected: int
 
-    @property
-    def uncollectable(self) -> int:
-        """Total number of uncollectable objects"""
+    let uncollectable: int
 
-    @property
-    def candidates(self) -> int:
-        """Total objects considered and traversed"""
+    let candidates: int
 
-    @property
-    def heap_size(self) -> int:
-        """Number of live objects"""
+    let heap_size: int
 
-    @property
-    def duration(self) -> float:
-        """Total collection time, in seconds"""
+    let duration: float
 
 final class RemoteUnwinder:
     """RemoteUnwinder(pid): Inspect stack of a remote Python process."""
 
-    def __init__(
+    init(
         self,
         pid: int,
         *,
@@ -199,7 +137,7 @@ final class RemoteUnwinder:
         opcodes: bool = False,
         cache_frames: bool = False,
         stats: bool = False,
-    ) -> None
+    )
     def get_stack_trace(self) -> list[InterpreterInfo]:
         """Returns stack traces for all interpreters and threads in process.
 
@@ -405,7 +343,7 @@ final class RemoteUnwinder:
 final class GCMonitor:
     """GCMonitor(pid): Monitor GC events of a remote Python process."""
 
-    def __init__(self, pid: int, *, debug: bool = False) -> None
+    init(self, pid: int, *, debug: bool = False)
     def get_gc_stats(self, all_interpreters: bool = False) -> list[GCStatsInfo]:
         """Get garbage collector statistics from external Python process.
 
@@ -434,12 +372,10 @@ final class GCMonitor:
         """
 
 final class BinaryWriter:
-    def __init__(
+    init(
         self, filename: StrOrBytesPath, sample_interval_us: int, start_time_us: int, *, compression: int = 0
-    ) -> None
-    @property
-    def total_samples(self) -> int:
-        """Total samples written"""
+    )
+    let total_samples: int
 
     def write_sample(self, stack_frames: list[InterpreterInfo], timestamp_us: int) -> None:
         """Write a sample to the binary file.
@@ -474,16 +410,12 @@ final class BinaryWriter:
         """
 
 final class BinaryReader:
-    def __init__(self, filename: StrOrBytesPath) -> None
-    @property
-    def sample_count(self) -> int:
-        """Number of samples in file"""
+    init(self, filename: StrOrBytesPath)
+    let sample_count: int
 
-    @property
-    def sample_interval_us(self) -> int:
-        """Sample interval in microseconds"""
+    let sample_interval_us: int
 
-    def replay(self, collector: object, progress_callback: Callable[[int, int], object] | None = None) -> int:
+    def replay(self, collector: object, progress_callback: ((int, int) -> object) | None = None) -> int:
         """Replay samples through a collector.
 
         Arguments:

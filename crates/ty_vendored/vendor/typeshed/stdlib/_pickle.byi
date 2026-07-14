@@ -3,22 +3,22 @@
 from _typeshed import ReadableBuffer, SupportsWrite
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from pickle import PickleBuffer as PickleBuffer
-from typing import Any, Protocol, TypeAlias, type_check_only
+from typing import Protocol, TypeAlias, type_check_only
 from typing_extensions import disjoint_base
 
 @type_check_only
-class _ReadableFileobj(Protocol):
+protocol _ReadableFileobj:
     def read(self, n: int, /) -> bytes
     def readline(self) -> bytes
 
-_BufferCallback: TypeAlias = Callable[[PickleBuffer], Any] | None
+type _BufferCallback = ((PickleBuffer) -> dynamic) | None
 
-_ReducedType: TypeAlias = (
+type _ReducedType = (
     str
-    | tuple[Callable[..., Any], tuple[Any, ...]]
-    | tuple[Callable[..., Any], tuple[Any, ...], Any]
-    | tuple[Callable[..., Any], tuple[Any, ...], Any, Iterator[Any] | None]
-    | tuple[Callable[..., Any], tuple[Any, ...], Any, Iterator[Any] | None, Iterator[Any] | None]
+    | tuple[(...) -> dynamic, (*: dynamic)]
+    | tuple[(...) -> dynamic, (*: dynamic), dynamic]
+    | tuple[(...) -> dynamic, (*: dynamic), dynamic, Iterator[dynamic] | None]
+    | tuple[(...) -> dynamic, (*: dynamic), dynamic, Iterator[dynamic] | None, Iterator[dynamic] | None]
 )
 
 def dump(
@@ -143,7 +143,7 @@ class UnpicklingError(PickleError)
 @type_check_only
 class PicklerMemoProxy:
     def clear(self, /) -> None
-    def copy(self, /) -> dict[int, (int, Any)]
+    def copy(self, /) -> dict[int, (int, dynamic)]
 
 @disjoint_base
 class Pickler:
@@ -180,20 +180,20 @@ class Pickler:
     """
 
     fast: bool
-    dispatch_table: Mapping[type, Callable[[dynamic], _ReducedType]]
+    dispatch_table: Mapping[type, (dynamic) -> _ReducedType]
     bin: bool  # undocumented
-    def __init__(
+    init(
         self,
         file: SupportsWrite[bytes],
         protocol: int | None = None,
         fix_imports: bool = True,
         buffer_callback: _BufferCallback = None,
-    ) -> None
+    )
 
     @property
-    def memo(self) -> PicklerMemoProxy: ...
+    def memo(self) -> PicklerMemoProxy
     @memo.setter
-    def memo(self, value: PicklerMemoProxy | dict[int, (int, Any)]) -> None: ...
+    def memo(self, value: PicklerMemoProxy | dict[int, (int, dynamic)]) -> None
 
     def dump(self, obj: dynamic, /) -> None:
         """Write a pickled representation of the given object to the open file."""
@@ -217,7 +217,7 @@ class Pickler:
 @type_check_only
 class UnpicklerMemoProxy:
     def clear(self, /) -> None
-    def copy(self, /) -> dict[int, (int, Any)]
+    def copy(self, /) -> dict[int, (int, dynamic)]
 
 @disjoint_base
 class Unpickler:
@@ -243,7 +243,7 @@ class Unpickler:
     string instances as bytes objects.
     """
 
-    def __init__(
+    init(
         self,
         file: _ReadableFileobj,
         *,
@@ -251,12 +251,12 @@ class Unpickler:
         encoding: str = "ASCII",
         errors: str = "strict",
         buffers: Iterable[dynamic] | None = (),
-    ) -> None
+    )
 
     @property
-    def memo(self) -> UnpicklerMemoProxy: ...
+    def memo(self) -> UnpicklerMemoProxy
     @memo.setter
-    def memo(self, value: UnpicklerMemoProxy | dict[int, (int, Any)]) -> None: ...
+    def memo(self, value: UnpicklerMemoProxy | dict[int, (int, dynamic)]) -> None
 
     def load(self) -> dynamic:
         """Load a pickle.

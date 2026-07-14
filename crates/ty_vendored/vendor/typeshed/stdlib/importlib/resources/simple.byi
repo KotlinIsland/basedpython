@@ -7,7 +7,7 @@ import sys
 from _typeshed import StrPath
 from collections.abc import Iterator
 from io import TextIOWrapper
-from typing import IO, BinaryIO, Literal, NoReturn
+from typing import Literal
 from typing_extensions import Never
 
 if sys.version_info >= (3, 11):
@@ -45,8 +45,7 @@ if sys.version_info >= (3, 11):
             Obtain a File-like for a named resource.
             """
 
-        @property
-        def name(self) -> str
+        let name: str
 
     class ResourceHandle(Traversable, metaclass=abc.ABCMeta):
         """
@@ -54,23 +53,23 @@ if sys.version_info >= (3, 11):
         """
 
         parent: ResourceContainer
-        def __init__(self, parent: ResourceContainer, name: str) -> None
-        def is_file(self) -> Literal[True]
-        def is_dir(self) -> Literal[False]
+        init(self, parent: ResourceContainer, name: str)
+        def is_file(self) -> True
+        def is_dir(self) -> False
 
         def open(
             self,
-            mode: Literal["r"] = "r",
+            mode: "r" = "r",
             encoding: str | None = None,
             errors: str | None = None,
             newline: str | None = None,
             line_buffering: bool = False,
             write_through: bool = False,
         ) -> TextIOWrapper
-        def open(self, mode: Literal["rb"]) -> BinaryIO
+        def open(self, mode: "rb") -> BinaryIO
         def open(self, mode: str) -> IO[dynamic]
 
-        def joinpath(self, name: Never) -> NoReturn  # type: ignore[override]
+        def joinpath(self, name: Never) -> NoReturn
 
     class ResourceContainer(Traversable, metaclass=abc.ABCMeta):
         """
@@ -78,11 +77,11 @@ if sys.version_info >= (3, 11):
         """
 
         reader: SimpleReader
-        def __init__(self, reader: SimpleReader) -> None
-        def is_dir(self) -> Literal[True]
-        def is_file(self) -> Literal[False]
+        init(self, reader: SimpleReader)
+        def is_dir(self) -> True
+        def is_file(self) -> False
         def iterdir(self) -> Iterator[ResourceHandle | ResourceContainer]
-        def open(self, *args: Never, **kwargs: Never) -> NoReturn  # type: ignore[override]
+        def open(self, *args: Never, **kwargs: Never) -> NoReturn
         if sys.version_info < (3, 12):
             def joinpath(self, *descendants: StrPath) -> Traversable
 

@@ -37,7 +37,7 @@ class Queue[in out Element]:
     # Despite the fact that `queue` has `deque` type,
     # we treat it as `Any` to allow different implementations in subtypes.
     queue: dynamic  # undocumented
-    def __init__(self, maxsize: int = 0) -> None
+    init(self, maxsize: int = 0)
     def _init(self, maxsize: int) -> None
     def empty(self) -> bool:
         """Return True if the queue is empty, False otherwise (not reliable!).

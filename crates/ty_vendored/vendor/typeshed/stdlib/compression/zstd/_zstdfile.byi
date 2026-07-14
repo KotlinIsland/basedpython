@@ -9,17 +9,17 @@ from _zstd import ZstdCompressor, _ZstdCompressorFlushBlock, _ZstdCompressorFlus
 
 __all__ = ("ZstdFile", "open")
 
-_ReadBinaryMode: TypeAlias = Literal["r", "rb"]
-_WriteBinaryMode: TypeAlias = Literal["w", "wb", "x", "xb", "a", "ab"]
-_ReadTextMode: TypeAlias = Literal["rt"]
-_WriteTextMode: TypeAlias = Literal["wt", "xt", "at"]
+type _ReadBinaryMode = "r" | "rb"
+type _WriteBinaryMode = "w" | "wb" | "x" | "xb" | "a" | "ab"
+type _ReadTextMode = "rt"
+type _WriteTextMode = "wt" | "xt" | "at"
 
 @type_check_only
-class _FileBinaryRead(_streams._Reader, Protocol):
+protocol _FileBinaryRead(_streams._Reader):
     def close(self) -> None
 
 @type_check_only
-class _FileBinaryWrite(SupportsWrite[bytes], Protocol):
+protocol _FileBinaryWrite(SupportsWrite[bytes]):
     def close(self) -> None
 
 class ZstdFile(_streams.BaseStream):
@@ -35,7 +35,7 @@ class ZstdFile(_streams.BaseStream):
     FLUSH_BLOCK = ZstdCompressor.FLUSH_BLOCK
     FLUSH_FRAME = ZstdCompressor.FLUSH_FRAME
 
-    def __init__(
+    init(
         self,
         file: StrOrBytesPath | _FileBinaryRead,
         /,
@@ -44,7 +44,7 @@ class ZstdFile(_streams.BaseStream):
         level: None = None,
         options: Mapping[int, int] | None = None,
         zstd_dict: ZstdDict | (ZstdDict, int) | None = None,
-    ) -> None:
+    ):
         """Open a Zstandard compressed file in binary mode.
 
         *file* can be either an file-like object, or a file name to open.
@@ -63,7 +63,7 @@ class ZstdFile(_streams.BaseStream):
         *zstd_dict* is an optional ZstdDict object, a pre-trained Zstandard
         dictionary. See train_dict() to train ZstdDict on sample data.
         """
-    def __init__(
+    init(
         self,
         file: StrOrBytesPath | _FileBinaryWrite,
         /,
@@ -72,7 +72,7 @@ class ZstdFile(_streams.BaseStream):
         level: int | None = None,
         options: Mapping[int, int] | None = None,
         zstd_dict: ZstdDict | (ZstdDict, int) | None = None,
-    ) -> None
+    )
 
     def write(self, data: ReadableBuffer, /) -> int:
         """Write a bytes-like object *data* to the file.
@@ -83,7 +83,7 @@ class ZstdFile(_streams.BaseStream):
         or .close() is called.
         """
 
-    def flush(self, mode: _ZstdCompressorFlushBlock | _ZstdCompressorFlushFrame = 1) -> bytes:  # type: ignore[override]
+    def flush(self, mode: _ZstdCompressorFlushBlock | _ZstdCompressorFlushFrame = 1) -> bytes:
         """Flush remaining data to the underlying stream.
 
         The mode argument can be FLUSH_BLOCK or FLUSH_FRAME. Abuse of this
@@ -154,10 +154,8 @@ class ZstdFile(_streams.BaseStream):
         The exact number of bytes returned is unspecified.
         """
 
-    @property
-    def name(self) -> str | bytes
-    @property
-    def mode(self) -> Literal["rb", "wb"]
+    let name: str | bytes
+    let mode: "rb" | "wb"
 
 def open(
     file: StrOrBytesPath | _FileBinaryRead,

@@ -7,7 +7,7 @@ from typing_extensions import deprecated
 
 # Many functions in binascii accept buffer objects
 # or ASCII-only strings.
-_AsciiBuffer: TypeAlias = str | ReadableBuffer
+type _AsciiBuffer = str | ReadableBuffer
 
 def a2b_uu(data: _AsciiBuffer, /) -> bytes:
     """Decode a line of uuencoded data."""

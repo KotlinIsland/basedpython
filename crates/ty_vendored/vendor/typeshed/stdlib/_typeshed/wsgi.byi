@@ -7,9 +7,9 @@
 import sys
 from _typeshed import OptExcInfo
 from collections.abc import Callable, Iterable, Iterator
-from typing import Any, Protocol, TypeAlias
+from typing import Protocol, TypeAlias
 
-class _Readable(Protocol):
+protocol _Readable:
     def read(self, size: int = ..., /) -> bytes
     # Optional: def close(self) -> object: ...
 
@@ -17,27 +17,27 @@ if sys.version_info >= (3, 11):
     from wsgiref.types import *
 else:
     # stable
-    class StartResponse(Protocol):
+    protocol StartResponse:
         def __call__(
             self, status: str, headers: list[(str, str)], exc_info: OptExcInfo | None = ..., /
-        ) -> Callable[[bytes], object]
+        ) -> (bytes) -> object
 
-    WSGIEnvironment: TypeAlias = dict[str, Any]  # stable
-    WSGIApplication: TypeAlias = Callable[[WSGIEnvironment, StartResponse], Iterable[bytes]]  # stable
+    type WSGIEnvironment = dict[str, dynamic]  # stable
+    type WSGIApplication = (WSGIEnvironment, StartResponse) -> Iterable[bytes]  # stable
 
     # WSGI input streams per PEP 3333, stable
-    class InputStream(Protocol):
+    protocol InputStream:
         def read(self, size: int = ..., /) -> bytes
         def readline(self, size: int = ..., /) -> bytes
         def readlines(self, hint: int = ..., /) -> list[bytes]
         def __iter__(self) -> Iterator[bytes]
 
     # WSGI error streams per PEP 3333, stable
-    class ErrorStream(Protocol):
+    protocol ErrorStream:
         def flush(self) -> object
         def write(self, s: str, /) -> object
         def writelines(self, seq: list[str], /) -> object
 
     # Optional file wrapper in wsgi.file_wrapper
-    class FileWrapper(Protocol):
+    protocol FileWrapper:
         def __call__(self, file: _Readable, block_size: int = ..., /) -> Iterable[bytes]

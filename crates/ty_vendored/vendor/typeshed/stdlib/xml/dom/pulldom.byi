@@ -1,7 +1,7 @@
 import sys
 from _typeshed import Incomplete, Unused
 from collections.abc import MutableSequence, Sequence
-from typing import Final, Literal, NoReturn, TypeAlias
+from typing import Final, Literal, TypeAlias
 from typing_extensions import Self
 from xml.dom.minidom import Comment, Document, DOMImplementation, Element, ProcessingInstruction, Text
 from xml.sax import _SupportsReadClose
@@ -17,18 +17,18 @@ PROCESSING_INSTRUCTION: Final = "PROCESSING_INSTRUCTION"
 IGNORABLE_WHITESPACE: Final = "IGNORABLE_WHITESPACE"
 CHARACTERS: Final = "CHARACTERS"
 
-_NSName: TypeAlias = tuple[str | None, str]
-_DocumentFactory: TypeAlias = DOMImplementation | None
+type _NSName = tuple[str | None, str]
+type _DocumentFactory = DOMImplementation | None
 
-_Event: TypeAlias = (
-    tuple[Literal["START_ELEMENT"], Element]
-    | tuple[Literal["END_ELEMENT"], Element]
-    | tuple[Literal["COMMENT"], Comment]
-    | tuple[Literal["START_DOCUMENT"], Document]
-    | tuple[Literal["END_DOCUMENT"], Document]
-    | tuple[Literal["PROCESSING_INSTRUCTION"], ProcessingInstruction]
-    | tuple[Literal["IGNORABLE_WHITESPACE"], Text]
-    | tuple[Literal["CHARACTERS"], Text]
+type _Event = (
+    tuple["START_ELEMENT", Element]
+    | tuple["END_ELEMENT", Element]
+    | tuple["COMMENT", Comment]
+    | tuple["START_DOCUMENT", Document]
+    | tuple["END_DOCUMENT", Document]
+    | tuple["PROCESSING_INSTRUCTION", ProcessingInstruction]
+    | tuple["IGNORABLE_WHITESPACE", Text]
+    | tuple["CHARACTERS", Text]
 )
 
 class PullDOM(ContentHandler):
@@ -51,9 +51,9 @@ class PullDOM(ContentHandler):
 
     elementStack: MutableSequence[Element | Document]
     pending_events: (
-        list[Sequence[(Literal["COMMENT"], str) | (Literal["PROCESSING_INSTRUCTION"], str, str) | None]] | None
+        list[Sequence[("COMMENT", str) | ("PROCESSING_INSTRUCTION", str, str) | None]] | None
     )
-    def __init__(self, documentFactory: _DocumentFactory = None) -> None
+    init(self, documentFactory: _DocumentFactory = None)
     def pop(self) -> Element | Document
     def setDocumentLocator(self, locator: Locator) -> None
     def startPrefixMapping(self, prefix: str | None, uri: str) -> None
@@ -82,7 +82,7 @@ class DOMEventStream:
     parser: XMLReader  # Set to none after .clear() is called
     bufsize: int
     pulldom: PullDOM
-    def __init__(self, stream: _SupportsReadClose[bytes] | _SupportsReadClose[str], parser: XMLReader, bufsize: int) -> None
+    init(self, stream: _SupportsReadClose[bytes] | _SupportsReadClose[str], parser: XMLReader, bufsize: int)
     if sys.version_info < (3, 11):
         def __getitem__(self, pos: Unused) -> _Event
 
@@ -101,7 +101,7 @@ class SAX2DOM(PullDOM):
     def ignorableWhitespace(self, chars: str) -> None
     def characters(self, chars: str) -> None
 
-default_bufsize: Final[int]
+final default_bufsize: int
 
 def parse(
     stream_or_string: str | _SupportsReadClose[bytes] | _SupportsReadClose[str],

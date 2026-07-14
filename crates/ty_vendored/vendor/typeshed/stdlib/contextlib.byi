@@ -6,7 +6,7 @@ from _typeshed import FileDescriptorOrPath, Unused
 from abc import ABC
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Iterator
 from types import TracebackType
-from typing import Any, Generic, ParamSpec, Protocol, TypeAlias, TypeVar, runtime_checkable, type_check_only
+from typing import Generic, ParamSpec, Protocol, TypeAlias, TypeVar, runtime_checkable, type_check_only
 from typing_extensions import Self, deprecated
 
 __all__ = [
@@ -30,13 +30,13 @@ if sys.version_info >= (3, 11):
 
 
 
-_ExitFunc: TypeAlias = Callable[[type[BaseException] | None, BaseException | None, TracebackType | None], bool | None]
+type _ExitFunc = (type[BaseException] | None, BaseException | None, TracebackType | None) -> (bool | None)
 
 # mypy and pyright object to this being both ABC and Protocol.
 # At runtime it inherits from ABC and is not a Protocol, but it is on the
 # allowlist for use as a Protocol.
 @runtime_checkable
-class AbstractContextManager[out Element, out ExitT: bool | None = bool | None](ABC, Protocol):  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]
+protocol AbstractContextManager[out Element, out ExitT: bool | None = bool | None](ABC):
     """An abstract base class for context managers."""
 
     __slots__ = ()
@@ -52,7 +52,7 @@ class AbstractContextManager[out Element, out ExitT: bool | None = bool | None](
 # At runtime it inherits from ABC and is not a Protocol, but it is on the
 # allowlist for use as a Protocol.
 @runtime_checkable
-class AbstractAsyncContextManager[out Element, out ExitT: bool | None = bool | None](ABC, Protocol):  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]
+protocol AbstractAsyncContextManager[out Element, out ExitT: bool | None = bool | None](ABC):
     """An abstract base class for asynchronous context managers."""
 
     __slots__ = ()
@@ -78,16 +78,16 @@ class ContextDecorator:
         See issue #11647 for details.
         """
 
-    def __call__[F: Callable[..., Any]](self, func: F) -> F
+    def __call__[F: (...) -> dynamic](self, func: F) -> F
 
-class _GeneratorContextManagerBase[out G: Generator[Any, Any, Any] | AsyncGenerator[Any, Any]]:
+class _GeneratorContextManagerBase[out G: Generator[dynamic, dynamic, dynamic] | AsyncGenerator[dynamic, dynamic]]:
     """Shared functionality for @contextmanager and @asynccontextmanager."""
 
     # Ideally this would use ParamSpec, but that requires (*args, **kwargs), which this isn't. see #6676
-    def __init__(self, func: (...) -> G, args: (*: Any), kwds: dict[str, dynamic]) -> None
+    init(self, func: (...) -> G, args: (*: dynamic), kwds: dict[str, dynamic])
     gen: G
     func: (...) -> G
-    args: (*: Any)
+    args: (*: dynamic)
     kwds: dict[str, dynamic]
 
 class _GeneratorContextManager[out Element, in Sent = None, out Return = None](_GeneratorContextManagerBase[Generator[Element, Sent, Return]], AbstractContextManager[Element, bool | None], ContextDecorator):
@@ -97,7 +97,7 @@ class _GeneratorContextManager[out Element, in Sent = None, out Return = None](_
         self, typ: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
     ) -> bool | None
 
-def contextmanager[**P, Element](func: Callable[P, Generator[Element, None, object]]) -> Callable[P, _GeneratorContextManager[Element]]:
+def contextmanager[**P, Element](func: (**P) -> Generator[Element, None, object]) -> (**P) -> _GeneratorContextManager[Element]:
     """@contextmanager decorator.
 
     Typical usage:
@@ -127,7 +127,7 @@ def contextmanager[**P, Element](func: Callable[P, Generator[Element, None, obje
 @deprecated(
     "Annotating the return type as `-> Iterator[Foo]` with `@contextmanager` is deprecated. Use `-> Generator[Foo]` instead."
 )
-def contextmanager[**P, Element](func: Callable[P, Iterator[Element]]) -> Callable[P, _GeneratorContextManager[Element]]
+def contextmanager[**P, Element](func: (**P) -> Iterator[Element]) -> (**P) -> _GeneratorContextManager[Element]
 
 
 class AsyncContextDecorator:
@@ -136,7 +136,7 @@ class AsyncContextDecorator:
     def _recreate_cm(self) -> Self:
         """Return a recreated instance of self."""
 
-    def __call__[AF: Callable[..., Awaitable[Any]]](self, func: AF) -> AF
+    def __call__[AF: (...) -> Awaitable[dynamic]](self, func: AF) -> AF
 
 class _AsyncGeneratorContextManager[out Element, in Sent = None](_GeneratorContextManagerBase[AsyncGenerator[Element, Sent]], AbstractAsyncContextManager[Element, bool | None], AsyncContextDecorator):
     """Helper for @asynccontextmanager decorator."""
@@ -145,7 +145,7 @@ class _AsyncGeneratorContextManager[out Element, in Sent = None](_GeneratorConte
         self, typ: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
     ) -> bool | None
 
-def asynccontextmanager[**P, Element](func: Callable[P, AsyncGenerator[Element]]) -> Callable[P, _AsyncGeneratorContextManager[Element]]:
+def asynccontextmanager[**P, Element](func: (**P) -> AsyncGenerator[Element]) -> (**P) -> _AsyncGeneratorContextManager[Element]:
     """@asynccontextmanager decorator.
 
     Typical usage:
@@ -176,10 +176,10 @@ def asynccontextmanager[**P, Element](func: Callable[P, AsyncGenerator[Element]]
     "Annotating the return type as `-> AsyncIterator[Foo]` with `@asynccontextmanager` is deprecated. "
     "Use `-> AsyncGenerator[Foo]` instead."
 )
-def asynccontextmanager[**P, Element](func: Callable[P, AsyncIterator[Element]]) -> Callable[P, _AsyncGeneratorContextManager[Element]]
+def asynccontextmanager[**P, Element](func: (**P) -> AsyncIterator[Element]) -> (**P) -> _AsyncGeneratorContextManager[Element]
 
 @type_check_only
-class _SupportsClose(Protocol):
+protocol _SupportsClose:
     def close(self) -> object
 
 
@@ -201,11 +201,11 @@ class closing[in out SupportsCloseT: _SupportsClose](AbstractContextManager[Supp
 
     """
 
-    def __init__(self, thing: SupportsCloseT) -> None
+    init(self, thing: SupportsCloseT)
     def __exit__(self, *exc_info: Unused) -> None
 
 @type_check_only
-class _SupportsAclose(Protocol):
+protocol _SupportsAclose:
     def aclose(self) -> Awaitable[object]
 
 
@@ -228,7 +228,7 @@ class aclosing[in out SupportsAcloseT: _SupportsAclose](AbstractAsyncContextMana
 
     """
 
-    def __init__(self, thing: SupportsAcloseT) -> None
+    init(self, thing: SupportsAcloseT)
     async def __aexit__(self, *exc_info: Unused) -> None
 
 class suppress(AbstractContextManager[None, bool]):
@@ -242,7 +242,7 @@ class suppress(AbstractContextManager[None, bool]):
          # Execution still resumes here if the file was already removed
     """
 
-    def __init__(self, *exceptions: type[BaseException]) -> None
+    init(self, *exceptions: type[BaseException])
     def __exit__(
         self, exctype: type[BaseException] | None, excinst: BaseException | None, exctb: TracebackType | None
     ) -> bool
@@ -251,13 +251,13 @@ class suppress(AbstractContextManager[None, bool]):
 # of `redirect_stdout` and `redirect_stderr`.
 # https://github.com/python/typeshed/issues/14903
 @type_check_only
-class _SupportsRedirect(Protocol):
+protocol _SupportsRedirect:
     def write(self, s: str, /) -> int
     def flush(self) -> None
 
 
 class _RedirectStream[in out SupportsRedirectT: _SupportsRedirect | None](AbstractContextManager[SupportsRedirectT, None]):
-    def __init__(self, new_target: SupportsRedirectT) -> None
+    init(self, new_target: SupportsRedirectT)
     def __exit__(
         self, exctype: type[BaseException] | None, excinst: BaseException | None, exctb: TracebackType | None
     ) -> None
@@ -288,7 +288,7 @@ class _BaseExitStack[out ExitT: bool | None = bool | None]:
         returns the result of the __enter__ method.
         """
 
-    def push[CM_EF: AbstractContextManager[Any, Any] | _ExitFunc](self, exit: CM_EF) -> CM_EF:
+    def push[CM_EF: AbstractContextManager[dynamic, dynamic] | _ExitFunc](self, exit: CM_EF) -> CM_EF:
         """Registers a callback with the standard __exit__ method signature.
 
         Can suppress exceptions the same way __exit__ method can.
@@ -296,7 +296,7 @@ class _BaseExitStack[out ExitT: bool | None = bool | None]:
         to the method instead of the object itself).
         """
 
-    def callback[**P, Element](self, callback: Callable[P, Element], /, *args: P.args, **kwds: P.kwargs) -> Callable[P, Element]:
+    def callback[**P, Element](self, callback: (**P) -> Element, /, *args: P.args, **kwds: P.kwargs) -> (**P) -> Element:
         """Registers an arbitrary callback and arguments.
 
         Cannot suppress exceptions.
@@ -332,9 +332,7 @@ class ExitStack[out ExitT: bool | None = bool | None](_BaseExitStackAbstract[Exi
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None, /
     ) -> ExitT
 
-_ExitCoroFunc: TypeAlias = Callable[
-    [type[BaseException] | None, BaseException | None, TracebackType | None], Awaitable[bool | None]
-]
+type _ExitCoroFunc = (type[BaseException] | None, BaseException | None, TracebackType | None) -> Awaitable[bool | None]
 
 # In reality this is a subclass of `AbstractContextManager`, but we can't provide `Self` as the argument for `__enter__`
 #  https://discuss.python.org/t/self-as-typevar-default/90939
@@ -358,7 +356,7 @@ class AsyncExitStack[out ExitT: bool | None = bool | None](_BaseExitStackAbstrac
         returns the result of the __aenter__ method.
         """
 
-    def push_async_exit[ACM_EF: AbstractAsyncContextManager[Any, Any] | _ExitCoroFunc](self, exit: ACM_EF) -> ACM_EF:
+    def push_async_exit[ACM_EF: AbstractAsyncContextManager[dynamic, dynamic] | _ExitCoroFunc](self, exit: ACM_EF) -> ACM_EF:
         """Registers a coroutine function with the standard __aexit__ method
         signature.
 
@@ -368,8 +366,8 @@ class AsyncExitStack[out ExitT: bool | None = bool | None](_BaseExitStackAbstrac
         """
 
     def push_async_callback[**P, Element](
-        self, callback: Callable[P, Awaitable[Element]], /, *args: P.args, **kwds: P.kwargs
-    ) -> Callable[P, Awaitable[Element]]:
+        self, callback: (**P) -> Awaitable[Element], /, *args: P.args, **kwds: P.kwargs
+    ) -> (**P) -> Awaitable[Element]:
         """Registers an arbitrary coroutine function and arguments.
 
         Cannot suppress exceptions.
@@ -396,8 +394,8 @@ class nullcontext[in out Element](AbstractContextManager[Element, None], Abstrac
 
     enter_result: Element
 
-    def __init__(self: nullcontext[None]) -> None
-    def __init__(self: nullcontext[Element], enter_result: Element) -> None  # pyright: ignore[reportInvalidTypeVarUse]  #11780
+    init(self: nullcontext[None])
+    init(self: nullcontext[Element], enter_result: Element)
 
     def __enter__(self) -> Element
     def __exit__(self, *exctype: Unused) -> None
@@ -410,6 +408,6 @@ if sys.version_info >= (3, 11):
         """Non thread-safe context manager to change the current working directory."""
 
         path: T_fd_or_any_path
-        def __init__(self, path: T_fd_or_any_path) -> None
+        init(self, path: T_fd_or_any_path)
         def __enter__(self) -> None
         def __exit__(self, *excinfo: Unused) -> None

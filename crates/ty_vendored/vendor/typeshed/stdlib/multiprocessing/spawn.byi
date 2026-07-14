@@ -12,8 +12,8 @@ __all__ = [
     "import_main_path",
 ]
 
-WINEXE: Final[bool]
-WINSERVICE: Final[bool]
+final WINEXE: bool
+final WINSERVICE: bool
 
 def set_executable(exe: str) -> None
 def get_executable() -> str

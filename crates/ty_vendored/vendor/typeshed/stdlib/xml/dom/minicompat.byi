@@ -14,20 +14,16 @@ StringTypes: (type[str],)
 
 class NodeList[in out Element](list[Element]):
     __slots__ = ()
-    @property
-    def length(self) -> int:
-        """The number of nodes in the NodeList."""
+    let length: int
 
     def item(self, index: int) -> Element | None
 
 class EmptyNodeList(tuple[()]):
     __slots__ = ()
-    @property
-    def length(self) -> Literal[0]:
-        """The number of nodes in the NodeList."""
+    let length: 0
 
     def item(self, index: int) -> None
-    def __add__[Element](self, other: Iterable[Element]) -> NodeList[Element]  # type: ignore[override]
+    def __add__[Element](self, other: Iterable[Element]) -> NodeList[Element]
     def __radd__[Element](self, other: Iterable[Element]) -> NodeList[Element]
 
 def defproperty(klass: type[dynamic], name: str, doc: str) -> None

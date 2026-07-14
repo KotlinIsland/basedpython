@@ -1,7 +1,7 @@
 import _tkinter
 import itertools
 import tkinter
-from typing import Any, ClassVar, Final, Literal, TypeAlias, TypedDict, type_check_only
+from typing import ClassVar, Final, Literal, TypeAlias, TypedDict, type_check_only
 from typing_extensions import Unpack
 
 __all__ = ["NORMAL", "ROMAN", "BOLD", "ITALIC", "nametofont", "Font", "families", "names"]
@@ -11,14 +11,14 @@ ROMAN: Final = "roman"
 BOLD: Final = "bold"
 ITALIC: Final = "italic"
 
-_FontDescription: TypeAlias = (
+type _FontDescription = (
     str  # "Helvetica 12"
     | Font  # A font object constructed in Python
-    | list[Any]  # ["Helvetica", 12, BOLD]
+    | list[dynamic]  # ["Helvetica", 12, BOLD]
     | tuple[str]  # ("Liberation Sans",) needs wrapping in tuple/list to handle spaces
     # ("Liberation Sans", 12) or ("Liberation Sans", 12, "bold", "italic", "underline")
-    | tuple[str, int, Unpack[tuple[str, ...]]]  # Any number of trailing options is permitted
-    | tuple[str, int, list[str] | tuple[str, ...]]  # Options can also be passed as list/tuple
+    | tuple[str, int, Unpack[(*: str)]]  # Any number of trailing options is permitted
+    | tuple[str, int, list[str] | (*: str)]  # Options can also be passed as list/tuple
     | _tkinter.Tcl_Obj  # A font object constructed in Tcl
 )
 
@@ -26,8 +26,8 @@ _FontDescription: TypeAlias = (
 class _FontDict(TypedDict):
     family: str
     size: int
-    weight: Literal["normal", "bold"]
-    slant: Literal["roman", "italic"]
+    weight: "normal" | "bold"
+    slant: "roman" | "italic"
     underline: bool
     overstrike: bool
 
@@ -63,7 +63,7 @@ class Font:
     name: str
     delete_font: bool
     counter: ClassVar[itertools.count[int]]  # undocumented
-    def __init__(
+    init(
         self,
         # In tkinter, 'root' refers to tkinter.Tk by convention, but the code
         # actually works with any tkinter widget so we use tkinter.Misc.
@@ -74,30 +74,30 @@ class Font:
         *,
         family: str = ...,
         size: int = ...,
-        weight: Literal["normal", "bold"] = ...,
-        slant: Literal["roman", "italic"] = ...,
+        weight: "normal" | "bold" = ...,
+        slant: "roman" | "italic" = ...,
         underline: bool = ...,
         overstrike: bool = ...,
-    ) -> None
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    )
+    __hash__: ClassVar[None]
     def __setitem__(self, key: str, value: dynamic) -> None
 
-    def cget(self, option: Literal["family"]) -> str:
+    def cget(self, option: "family") -> str:
         """Get font attribute"""
-    def cget(self, option: Literal["size"]) -> int
-    def cget(self, option: Literal["weight"]) -> Literal["normal", "bold"]
-    def cget(self, option: Literal["slant"]) -> Literal["roman", "italic"]
-    def cget(self, option: Literal["underline", "overstrike"]) -> bool
+    def cget(self, option: "size") -> int
+    def cget(self, option: "weight") -> "normal" | "bold"
+    def cget(self, option: "slant") -> "roman" | "italic"
+    def cget(self, option: "underline" | "overstrike") -> bool
     def cget(self, option: str) -> dynamic
 
     __getitem__ = cget
 
-    def actual(self, option: Literal["family"], displayof: tkinter.Misc | None = None) -> str:
+    def actual(self, option: "family", displayof: tkinter.Misc | None = None) -> str:
         """Return actual font attributes"""
-    def actual(self, option: Literal["size"], displayof: tkinter.Misc | None = None) -> int
-    def actual(self, option: Literal["weight"], displayof: tkinter.Misc | None = None) -> Literal["normal", "bold"]
-    def actual(self, option: Literal["slant"], displayof: tkinter.Misc | None = None) -> Literal["roman", "italic"]
-    def actual(self, option: Literal["underline", "overstrike"], displayof: tkinter.Misc | None = None) -> bool
+    def actual(self, option: "size", displayof: tkinter.Misc | None = None) -> int
+    def actual(self, option: "weight", displayof: tkinter.Misc | None = None) -> "normal" | "bold"
+    def actual(self, option: "slant", displayof: tkinter.Misc | None = None) -> "roman" | "italic"
+    def actual(self, option: "underline" | "overstrike", displayof: tkinter.Misc | None = None) -> bool
     def actual(self, option: None, displayof: tkinter.Misc | None = None) -> _FontDict
     def actual(self, *, displayof: tkinter.Misc | None = None) -> _FontDict
 
@@ -106,8 +106,8 @@ class Font:
         *,
         family: str = ...,
         size: int = ...,
-        weight: Literal["normal", "bold"] = ...,
-        slant: Literal["roman", "italic"] = ...,
+        weight: "normal" | "bold" = ...,
+        slant: "roman" | "italic" = ...,
         underline: bool = ...,
         overstrike: bool = ...,
     ) -> _FontDict | None:
@@ -117,13 +117,13 @@ class Font:
     def copy(self) -> Font:
         """Return a distinct copy of the current font"""
 
-    def metrics(self, option: Literal["ascent", "descent", "linespace"], /, *, displayof: tkinter.Misc | None = ...) -> int:
+    def metrics(self, option: "ascent" | "descent" | "linespace", /, *, displayof: tkinter.Misc | None = ...) -> int:
         """Return font metrics.
 
         For best performance, create a dummy widget
         using this font before calling this method.
         """
-    def metrics(self, option: Literal["fixed"], /, *, displayof: tkinter.Misc | None = ...) -> bool
+    def metrics(self, option: "fixed", /, *, displayof: tkinter.Misc | None = ...) -> bool
     def metrics(self, *, displayof: tkinter.Misc | None = ...) -> _MetricsDict
 
     def measure(self, text: str, displayof: tkinter.Misc | None = None) -> int:

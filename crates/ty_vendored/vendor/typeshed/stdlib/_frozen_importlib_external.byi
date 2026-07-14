@@ -22,15 +22,15 @@ from typing import Final, Literal
 from typing_extensions import deprecated
 
 if sys.platform == "win32":
-    path_separators: Literal["\\/"]
-    path_sep: Literal["\\"]
-    path_sep_tuple: (Literal["\\"], Literal["/"])
+    path_separators: "\\/"
+    path_sep: "\\"
+    path_sep_tuple: ("\\", "/")
 else:
-    path_separators: Literal["/"]
-    path_sep: Literal["/"]
-    path_sep_tuple: (Literal["/"],)
+    path_separators: "/"
+    path_sep: "/"
+    path_sep_tuple: ("/",)
 
-MAGIC_NUMBER: Final[bytes]
+final MAGIC_NUMBER: bytes
 
 @deprecated(
     "The `debug_override` parameter is deprecated since Python 3.5; will be removed in Python 3.15. Use `optimization` instead."
@@ -143,11 +143,11 @@ class PathFinder(importlib.abc.MetaPathFinder):
 
             """
 
-SOURCE_SUFFIXES: Final[list[str]]
+final SOURCE_SUFFIXES: list[str]
 DEBUG_BYTECODE_SUFFIXES: Final = [".pyc"]
 OPTIMIZED_BYTECODE_SUFFIXES: Final = [".pyc"]
 BYTECODE_SUFFIXES: Final = [".pyc"]
-EXTENSION_SUFFIXES: Final[list[str]]
+final EXTENSION_SUFFIXES: list[str]
 
 class FileFinder(importlib.abc.PathEntryFinder):
     """File-based finder.
@@ -158,7 +158,7 @@ class FileFinder(importlib.abc.PathEntryFinder):
     """
 
     path: str
-    def __init__(self, path: str, *loader_details: (type[importlib.abc.Loader], list[str])) -> None:
+    init(self, path: str, *loader_details: (type[importlib.abc.Loader], list[str])):
         """Initialize with the path to search on and a variable number of
         2-tuples containing the loader and the file suffixes the loader
         recognizes.
@@ -166,7 +166,7 @@ class FileFinder(importlib.abc.PathEntryFinder):
 
     class def path_hook(
         cls, *loader_details: (type[importlib.abc.Loader], list[str])
-    ) -> Callable[[str], importlib.abc.PathEntryFinder]:
+    ) -> (str) -> importlib.abc.PathEntryFinder:
         """A class method which returns a closure to use on sys.path_hook
         which will return an instance using the specified loaders and the path
         called on the closure.
@@ -248,7 +248,7 @@ class FileLoader:
 
     name: str
     path: str
-    def __init__(self, fullname: str, path: str) -> None:
+    init(self, fullname: str, path: str):
         """Cache the module name and the path to the file found by the
         finder.
         """
@@ -268,7 +268,7 @@ class FileLoader:
 
     def get_resource_reader(self, name: str | None = None) -> importlib.readers.FileReader
 
-class SourceFileLoader(importlib.abc.FileLoader, FileLoader, importlib.abc.SourceLoader, SourceLoader):  # type: ignore[misc]  # incompatible method arguments in base classes
+class SourceFileLoader(importlib.abc.FileLoader, FileLoader, importlib.abc.SourceLoader, SourceLoader):
     """Concrete implementation of SourceLoader using the file system."""
 
     def set_data(self, path: str, data: ReadableBuffer, *, _mode: int = 0o666) -> None:
@@ -277,7 +277,7 @@ class SourceFileLoader(importlib.abc.FileLoader, FileLoader, importlib.abc.Sourc
     def path_stats(self, path: str) -> Mapping[str, dynamic]:
         """Return the metadata for the path."""
 
-    def source_to_code(  # type: ignore[override]  # incompatible with InspectLoader.source_to_code
+    def source_to_code(
         self,
         data: ReadableBuffer | str | _ast.Module | _ast.Expression | _ast.Interactive,
         path: bytes | StrPath,
@@ -303,7 +303,7 @@ class ExtensionFileLoader(FileLoader, _LoaderBasics, importlib.abc.ExecutionLoad
 
     """
 
-    def __init__(self, name: str, path: str) -> None
+    init(self, name: str, path: str)
     def get_filename(self, fullname: str | None = None) -> str:
         """Return the path to the source file as found by the finder."""
 
@@ -324,11 +324,11 @@ class ExtensionFileLoader(FileLoader, _LoaderBasics, importlib.abc.ExecutionLoad
 
 if sys.version_info >= (3, 11):
     class NamespaceLoader(importlib.abc.InspectLoader):
-        def __init__(
-            self, name: str, path: MutableSequence[str], path_finder: Callable[[str, tuple[str, ...]], ModuleSpec]
-        ) -> None
-        def is_package(self, fullname: str) -> Literal[True]
-        def get_source(self, fullname: str) -> Literal[""]
+        init(
+            self, name: str, path: MutableSequence[str], path_finder: (str, tuple[str, ...]) -> ModuleSpec
+        )
+        def is_package(self, fullname: str) -> True
+        def get_source(self, fullname: str) -> ""
         def get_code(self, fullname: str) -> types.CodeType
         def create_module(self, spec: ModuleSpec) -> None:
             """Use default semantics for module creation."""
@@ -359,11 +359,11 @@ if sys.version_info >= (3, 11):
     _NamespaceLoader = NamespaceLoader
 else:
     class _NamespaceLoader:
-        def __init__(
-            self, name: str, path: MutableSequence[str], path_finder: Callable[[str, tuple[str, ...]], ModuleSpec]
-        ) -> None
-        def is_package(self, fullname: str) -> Literal[True]
-        def get_source(self, fullname: str) -> Literal[""]
+        init(
+            self, name: str, path: MutableSequence[str], path_finder: (str, tuple[str, ...]) -> ModuleSpec
+        )
+        def is_package(self, fullname: str) -> True
+        def get_source(self, fullname: str) -> ""
         def get_code(self, fullname: str) -> types.CodeType
         def create_module(self, spec: ModuleSpec) -> None:
             """Use default semantics for module creation."""

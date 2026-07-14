@@ -2,7 +2,6 @@
 
 import sys
 from collections.abc import Callable
-from typing import Any
 
 __all__ = ["JSONDecoder", "JSONDecodeError"]
 
@@ -22,7 +21,7 @@ class JSONDecodeError(ValueError):
     pos: int
     lineno: int
     colno: int
-    def __init__(self, msg: str, doc: str, pos: int) -> None
+    init(self, msg: str, doc: str, pos: int)
 
 class JSONDecoder:
     """Simple JSON <https://json.org> decoder
@@ -55,24 +54,24 @@ class JSONDecoder:
     """
 
     if sys.version_info >= (3, 15):
-        array_hook: Callable[[list[dynamic]], dynamic] | None
-    object_hook: Callable[[dict[str, dynamic]], dynamic]
-    parse_float: Callable[[str], dynamic]
-    parse_int: Callable[[str], dynamic]
-    parse_constant: Callable[[str], dynamic]
+        array_hook: ((list[dynamic]) -> dynamic) | None
+    object_hook: (dict[str, dynamic]) -> dynamic
+    parse_float: (str) -> dynamic
+    parse_int: (str) -> dynamic
+    parse_constant: (str) -> dynamic
     strict: bool
-    object_pairs_hook: Callable[[list[tuple[str, dynamic]]], dynamic]
+    object_pairs_hook: (list[tuple[str, dynamic]]) -> dynamic
     if sys.version_info >= (3, 15):
         def __init__(
             self,
             *,
-            object_hook: Callable[[dict[str, dynamic]], dynamic] | None = None,
-            parse_float: Callable[[str], dynamic] | None = None,
-            parse_int: Callable[[str], dynamic] | None = None,
-            parse_constant: Callable[[str], dynamic] | None = None,
+            object_hook: ((dict[str, dynamic]) -> dynamic) | None = None,
+            parse_float: ((str) -> dynamic) | None = None,
+            parse_int: ((str) -> dynamic) | None = None,
+            parse_constant: ((str) -> dynamic) | None = None,
             strict: bool = True,
-            object_pairs_hook: Callable[[list[tuple[str, dynamic]]], dynamic] | None = None,
-            array_hook: Callable[[list[dynamic]], dynamic] | None = None,
+            object_pairs_hook: ((list[tuple[str, dynamic]]) -> dynamic) | None = None,
+            array_hook: ((list[dynamic]) -> dynamic) | None = None,
         ) -> None:
             """``object_hook``, if specified, will be called with the result
             of every JSON object decoded and its return value will be used in
@@ -119,12 +118,12 @@ class JSONDecoder:
         def __init__(
             self,
             *,
-            object_hook: Callable[[dict[str, dynamic]], dynamic] | None = None,
-            parse_float: Callable[[str], dynamic] | None = None,
-            parse_int: Callable[[str], dynamic] | None = None,
-            parse_constant: Callable[[str], dynamic] | None = None,
+            object_hook: ((dict[str, dynamic]) -> dynamic) | None = None,
+            parse_float: ((str) -> dynamic) | None = None,
+            parse_int: ((str) -> dynamic) | None = None,
+            parse_constant: ((str) -> dynamic) | None = None,
             strict: bool = True,
-            object_pairs_hook: Callable[[list[tuple[str, dynamic]]], dynamic] | None = None,
+            object_pairs_hook: ((list[tuple[str, dynamic]]) -> dynamic) | None = None,
         ) -> None:
             """``object_hook``, if specified, will be called with the result
             of every JSON object decoded and its return value will be used in
@@ -159,13 +158,13 @@ class JSONDecoder:
             including ``'\\t'`` (tab), ``'\\n'``, ``'\\r'`` and ``'\\0'``.
             """
 
-    def decode(self, s: str, _w: (...) -> Any = ...) -> dynamic:  # _w is undocumented
+    def decode(self, s: str, _w: (...) -> dynamic = ...) -> dynamic:  # _w is undocumented
         """Return the Python representation of ``s`` (a ``str`` instance
         containing a JSON document).
 
         """
 
-    def raw_decode(self, s: str, idx: int = 0) -> (Any, int):
+    def raw_decode(self, s: str, idx: int = 0) -> (dynamic, int):
         """Decode a JSON document from ``s`` (a ``str`` beginning with
         a JSON document) and return a 2-tuple of the Python
         representation and the index in ``s`` where the document ended.

@@ -26,9 +26,9 @@ error[invalid-await]: `Literal[1]` is not awaitable
   2 |     await 1  # error: [invalid-await]
     |           ^
     |
-   ::: stdlib/builtins.byi:292:7
+   ::: stdlib/builtins.byi:275:7
     |
-292 | class int:
+275 | class int:
     |       --- type defined here
     |
 info: `__await__` is missing

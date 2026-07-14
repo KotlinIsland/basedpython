@@ -31,29 +31,29 @@ else:
 if sys.version_info >= (3, 13):
     __all__ += ["hasjump"]
 
-cmp_op: (Literal["<"], Literal["<="], Literal["=="], Literal["!="], Literal[">"], Literal[">="])
-hasconst: Final[list[int]]
-hasname: Final[list[int]]
-hasjrel: Final[list[int]]
-hasjabs: Final[list[int]]
-haslocal: Final[list[int]]
-hascompare: Final[list[int]]
-hasfree: Final[list[int]]
+cmp_op: ("<", "<=", "==", "!=", ">", ">=")
+final hasconst: list[int]
+final hasname: list[int]
+final hasjrel: list[int]
+final hasjabs: list[int]
+final haslocal: list[int]
+final hascompare: list[int]
+final hasfree: list[int]
 if sys.version_info >= (3, 12):
-    hasarg: Final[list[int]]
-    hasexc: Final[list[int]]
+    final hasarg: list[int]
+    final hasexc: list[int]
 else:
-    hasnargs: Final[list[int]]
+    final hasnargs: list[int]
 if sys.version_info >= (3, 13):
-    hasjump: Final[list[int]]
-opname: Final[list[str]]
+    final hasjump: list[int]
+final opname: list[str]
 
 if sys.version_info >= (3, 15):
-    opmap: Final[frozendict[str, int]]
+    final opmap: frozendict[str, int]
 else:
-    opmap: Final[dict[str, int]]
-HAVE_ARGUMENT: Final[int]
-EXTENDED_ARG: Final[int]
+    final opmap: dict[str, int]
+final HAVE_ARGUMENT: int
+final EXTENDED_ARG: int
 
 def stack_effect(opcode: int, oparg: int | None = None, /, *, jump: bool | None = None) -> int:
     """Compute the stack effect of the opcode."""

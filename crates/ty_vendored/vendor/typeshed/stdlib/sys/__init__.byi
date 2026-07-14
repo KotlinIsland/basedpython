@@ -78,14 +78,14 @@ from builtins import object as _object
 from collections.abc import AsyncGenerator, Callable, Sequence
 from io import TextIOWrapper
 from types import FrameType, ModuleType, SimpleNamespace, TracebackType
-from typing import Any, Final, Literal, NoReturn, Protocol, TextIO, TypeAlias, TypeVar, final, type_check_only
+from typing import Final, Literal, Protocol, TypeAlias, TypeVar, final, type_check_only
 from typing_extensions import LiteralString, deprecated
 
-_LazyImportMode: TypeAlias = Literal["normal", "all", "none"]
-_LazyImportFilter: TypeAlias = Callable[[str | None, str, tuple[str, ...] | None], bool]
+type _LazyImportMode = "normal" | "all" | "none"
+type _LazyImportFilter = (str | None, str, tuple[str, ...] | None) -> bool
 
 # see https://github.com/python/typeshed/issues/8513#issue-1333671093 for the rationale behind this alias
-_ExitCode: TypeAlias = str | int | None
+type _ExitCode = str | int | None
 
 if sys.version_info >= (3, 15):
     @type_check_only
@@ -93,7 +93,7 @@ if sys.version_info >= (3, 15):
         pointer_bits: int
         free_threaded: bool
         debug: bool
-        byteorder: Literal["little", "big"]
+        byteorder: "little" | "big"
 
 # ----- sys variables -----
 if sys.platform != "win32":
@@ -103,21 +103,21 @@ if sys.version_info >= (3, 15):
 argv: list[str]
 base_exec_prefix: str
 base_prefix: str
-byteorder: Literal["little", "big"]
+byteorder: "little" | "big"
 builtin_module_names: Sequence[str]  # actually a tuple of strings
 copyright: str
 if sys.platform == "win32":
     dllhandle: int
 dont_write_bytecode: bool
-displayhook: Callable[[object], dynamic]
+displayhook: (object) -> dynamic
 """Print an object to sys.stdout and also save it in builtins._"""
 
-excepthook: Callable[[type[BaseException], BaseException, TracebackType | None], dynamic]
+excepthook: (type[BaseException], BaseException, TracebackType | None) -> dynamic
 """Handle an exception by displaying it with a traceback on sys.stderr."""
 
 exec_prefix: str
 executable: str
-float_repr_style: Literal["short", "legacy"]
+float_repr_style: "short" | "legacy"
 hexversion: int
 last_type: type[BaseException] | None
 last_value: BaseException | None
@@ -132,7 +132,7 @@ if sys.version_info >= (3, 15):
     lazy_modules: set[str]
 orig_argv: list[str]
 path: list[str]
-path_hooks: list[Callable[[str], PathEntryFinderProtocol]]
+path_hooks: list[(str) -> PathEntryFinderProtocol]
 path_importer_cache: dict[str, PathEntryFinderProtocol | None]
 platform: LiteralString
 platlibdir: str
@@ -156,9 +156,9 @@ stdout: TextIO | MaybeNone
 stderr: TextIO | MaybeNone
 stdlib_module_names: frozenset[str]
 
-__stdin__: Final[TextIOWrapper | None]  # Contains the original value of stdin
-__stdout__: Final[TextIOWrapper | None]  # Contains the original value of stdout
-__stderr__: Final[TextIOWrapper | None]  # Contains the original value of stderr
+final __stdin__: TextIOWrapper | None  # Contains the original value of stdin
+final __stdout__: TextIOWrapper | None  # Contains the original value of stdout
+final __stderr__: TextIOWrapper | None  # Contains the original value of stderr
 tracebacklimit: int | None
 version: str
 api_version: int
@@ -171,7 +171,7 @@ _xoptions: dict[dynamic, dynamic]
 
 # Type alias used as a mixin for structseq classes that cannot be instantiated at runtime
 # This can't be represented in the type system, so we just use `structseq[Any]`
-_UninstantiableStructseq: TypeAlias = structseq[Any]
+_UninstantiableStructseq: TypeAlias = structseq[dynamic]
 
 flags: _flags
 """sys.flags
@@ -190,9 +190,8 @@ Flags provided through command line arguments or environment vars.
 # 3.9 is 15 or 16-tuple
 # 3.10 is 16 or 17-tuple
 # 3.11+ is an 18-tuple.
-@final
 @type_check_only
-class _flags(_UninstantiableStructseq, tuple[int, ...]):
+final class _flags(_UninstantiableStructseq, (*: int)):
     """sys.flags
 
     Flags provided through command line arguments or environment vars.
@@ -241,69 +240,37 @@ class _flags(_UninstantiableStructseq, tuple[int, ...]):
             "int_max_str_digits",
         )
 
-    @property
-    def debug(self) -> int:
-        """-d"""
+    let debug: int
 
-    @property
-    def inspect(self) -> int:
-        """-i"""
+    let inspect: int
 
-    @property
-    def interactive(self) -> int:
-        """-i"""
+    let interactive: int
 
-    @property
-    def optimize(self) -> int:
-        """-O or -OO"""
+    let optimize: int
 
-    @property
-    def dont_write_bytecode(self) -> int:
-        """-B"""
+    let dont_write_bytecode: int
 
-    @property
-    def no_user_site(self) -> int:
-        """-s"""
+    let no_user_site: int
 
-    @property
-    def no_site(self) -> int:
-        """-S"""
+    let no_site: int
 
-    @property
-    def ignore_environment(self) -> int:
-        """-E"""
+    let ignore_environment: int
 
-    @property
-    def verbose(self) -> int:
-        """-v"""
+    let verbose: int
 
-    @property
-    def bytes_warning(self) -> int:
-        """-b"""
+    let bytes_warning: int
 
-    @property
-    def quiet(self) -> int:
-        """-q"""
+    let quiet: int
 
-    @property
-    def hash_randomization(self) -> int:
-        """-R"""
+    let hash_randomization: int
 
-    @property
-    def isolated(self) -> int:
-        """-I"""
+    let isolated: int
 
-    @property
-    def dev_mode(self) -> bool:
-        """-X dev"""
+    let dev_mode: bool
 
-    @property
-    def utf8_mode(self) -> int:
-        """-X utf8"""
+    let utf8_mode: int
 
-    @property
-    def warn_default_encoding(self) -> int:
-        """-X warn_default_encoding"""
+    let warn_default_encoding: int
 
     if sys.version_info >= (3, 11):
         @property
@@ -312,16 +279,16 @@ class _flags(_UninstantiableStructseq, tuple[int, ...]):
 
     if sys.version_info >= (3, 13):
         @property
-        def gil(self) -> Literal[0, 1]:
+        def gil(self) -> 0 | 1:
             """-X gil"""
 
     if sys.version_info >= (3, 14):
         @property
-        def thread_inherit_context(self) -> Literal[0, 1]:
+        def thread_inherit_context(self) -> 0 | 1:
             """-X thread_inherit_context"""
 
         @property
-        def context_aware_warnings(self) -> Literal[0, 1]:
+        def context_aware_warnings(self) -> 0 | 1:
             """-X context_aware_warnings"""
 
     # Whether or not this exists on lower versions of Python
@@ -329,9 +296,7 @@ class _flags(_UninstantiableStructseq, tuple[int, ...]):
     # (it was backported to all Python versions on 3.8+ as a security fix)
     # Added in: 3.9.14, 3.10.7
     # and present in all versions of 3.11 and later.
-    @property
-    def int_max_str_digits(self) -> int:
-        """-X int_max_str_digits"""
+    let int_max_str_digits: int
 
 float_info: _float_info
 """sys.float_info
@@ -342,9 +307,8 @@ your system's :file:`float.h` for more information.
 """
 
 # This class is not exposed at runtime. It calls itself sys.float_info.
-@final
 @type_check_only
-class _float_info(structseq[float], tuple[float, int, int, float, int, int, int, int, float, int, int]):
+final class _float_info(structseq[float], tuple[float, int, int, float, int, int, int, int, float, int, int]):
     """sys.float_info
 
     A named tuple holding information about the float type. It contains low level
@@ -366,49 +330,27 @@ class _float_info(structseq[float], tuple[float, int, int, float, int, int, int,
         "rounds",
     )
 
-    @property
-    def max(self) -> float:  # DBL_MAX
-        """DBL_MAX -- maximum representable finite float"""
+    let max: float
 
-    @property
-    def max_exp(self) -> int:  # DBL_MAX_EXP
-        """DBL_MAX_EXP -- maximum int e such that radix**(e-1) is representable"""
+    let max_exp: int
 
-    @property
-    def max_10_exp(self) -> int:  # DBL_MAX_10_EXP
-        """DBL_MAX_10_EXP -- maximum int e such that 10**e is representable"""
+    let max_10_exp: int
 
-    @property
-    def min(self) -> float:  # DBL_MIN
-        """DBL_MIN -- Minimum positive normalized float"""
+    let min: float
 
-    @property
-    def min_exp(self) -> int:  # DBL_MIN_EXP
-        """DBL_MIN_EXP -- minimum int e such that radix**(e-1) is a normalized float"""
+    let min_exp: int
 
-    @property
-    def min_10_exp(self) -> int:  # DBL_MIN_10_EXP
-        """DBL_MIN_10_EXP -- minimum int e such that 10**e is a normalized float"""
+    let min_10_exp: int
 
-    @property
-    def dig(self) -> int:  # DBL_DIG
-        """DBL_DIG -- maximum number of decimal digits that can be faithfully represented in a float"""
+    let dig: int
 
-    @property
-    def mant_dig(self) -> int:  # DBL_MANT_DIG
-        """DBL_MANT_DIG -- mantissa digits"""
+    let mant_dig: int
 
-    @property
-    def epsilon(self) -> float:  # DBL_EPSILON
-        """DBL_EPSILON -- Difference between 1 and the next representable float"""
+    let epsilon: float
 
-    @property
-    def radix(self) -> int:  # FLT_RADIX
-        """FLT_RADIX -- radix of exponent"""
+    let radix: int
 
-    @property
-    def rounds(self) -> int:  # FLT_ROUNDS
-        """FLT_ROUNDS -- rounding mode used for arithmetic operations"""
+    let rounds: int
 
 hash_info: _hash_info
 """hash_info
@@ -418,9 +360,8 @@ hashes. The attributes are read only.
 """
 
 # This class is not exposed at runtime. It calls itself sys.hash_info.
-@final
 @type_check_only
-class _hash_info(structseq[Any | int], tuple[int, int, int, int, int, str, int, int, int]):
+final class _hash_info(structseq[dynamic | int], tuple[int, int, int, int, int, str, int, int, int]):
     """hash_info
 
     A named tuple providing parameters used for computing
@@ -429,41 +370,23 @@ class _hash_info(structseq[Any | int], tuple[int, int, int, int, int, str, int, 
 
     __match_args__: Final = ("width", "modulus", "inf", "nan", "imag", "algorithm", "hash_bits", "seed_bits", "cutoff")
 
-    @property
-    def width(self) -> int:
-        """width of the type used for hashing, in bits"""
+    let width: int
 
-    @property
-    def modulus(self) -> int:
-        """prime number giving the modulus on which the hash function is based"""
+    let modulus: int
 
-    @property
-    def inf(self) -> int:
-        """value to be used for hash of a positive infinity"""
+    let inf: int
 
-    @property
-    def nan(self) -> int:
-        """value to be used for hash of a nan"""
+    let nan: int
 
-    @property
-    def imag(self) -> int:
-        """multiplier used for the imaginary part of a complex number"""
+    let imag: int
 
-    @property
-    def algorithm(self) -> str:
-        """name of the algorithm for hashing of str, bytes and memoryviews"""
+    let algorithm: str
 
-    @property
-    def hash_bits(self) -> int:
-        """internal output size of hash algorithm"""
+    let hash_bits: int
 
-    @property
-    def seed_bits(self) -> int:
-        """seed size of hash algorithm"""
+    let seed_bits: int
 
-    @property
-    def cutoff(self) -> int:  # undocumented
-        """small string optimization cutoff"""
+    let cutoff: int
 
 implementation: _implementation
 
@@ -488,9 +411,8 @@ internal representation of integers.  The attributes are read only.
 """
 
 # This class is not exposed at runtime. It calls itself sys.int_info.
-@final
 @type_check_only
-class _int_info(structseq[int], tuple[int, int, int, int]):
+final class _int_info(structseq[int], tuple[int, int, int, int]):
     """sys.int_info
 
     A named tuple that holds information about Python's
@@ -499,29 +421,20 @@ class _int_info(structseq[int], tuple[int, int, int, int]):
 
     __match_args__: Final = ("bits_per_digit", "sizeof_digit", "default_max_str_digits", "str_digits_check_threshold")
 
-    @property
-    def bits_per_digit(self) -> int:
-        """size of a digit in bits"""
+    let bits_per_digit: int
 
-    @property
-    def sizeof_digit(self) -> int:
-        """size in bytes of the C type used to represent a digit"""
+    let sizeof_digit: int
 
-    @property
-    def default_max_str_digits(self) -> int:
-        """maximum string conversion digits limitation"""
+    let default_max_str_digits: int
 
-    @property
-    def str_digits_check_threshold(self) -> int:
-        """minimum positive value for int_max_str_digits"""
+    let str_digits_check_threshold: int
 
-_ThreadInfoName: TypeAlias = Literal["nt", "pthread", "pthread-stubs", "solaris"]
-_ThreadInfoLock: TypeAlias = Literal["semaphore", "mutex+cond"] | None
+type _ThreadInfoName = "nt" | "pthread" | "pthread-stubs" | "solaris"
+type _ThreadInfoLock = "semaphore" | "mutex+cond" | None
 
 # This class is not exposed at runtime. It calls itself sys.thread_info.
-@final
 @type_check_only
-class _thread_info(_UninstantiableStructseq, tuple[_ThreadInfoName, _ThreadInfoLock, str | None]):
+final class _thread_info(_UninstantiableStructseq, tuple[_ThreadInfoName, _ThreadInfoLock, str | None]):
     """sys.thread_info
 
     A named tuple holding information about the thread implementation.
@@ -529,17 +442,11 @@ class _thread_info(_UninstantiableStructseq, tuple[_ThreadInfoName, _ThreadInfoL
 
     __match_args__: Final = ("name", "lock", "version")
 
-    @property
-    def name(self) -> _ThreadInfoName:
-        """name of the thread implementation"""
+    let name: _ThreadInfoName
 
-    @property
-    def lock(self) -> _ThreadInfoLock:
-        """name of the lock implementation"""
+    let lock: _ThreadInfoLock
 
-    @property
-    def version(self) -> str | None:
-        """name and version of the thread library"""
+    let version: str | None
 
 thread_info: _thread_info
 """sys.thread_info
@@ -547,12 +454,11 @@ thread_info: _thread_info
 A named tuple holding information about the thread implementation.
 """
 
-_ReleaseLevel: TypeAlias = Literal["alpha", "beta", "candidate", "final"]
+type _ReleaseLevel = "alpha" | "beta" | "candidate" | "final"
 
 # This class is not exposed at runtime. It calls itself sys.version_info.
-@final
 @type_check_only
-class _version_info(_UninstantiableStructseq, tuple[int, int, int, _ReleaseLevel, int]):
+final class _version_info(_UninstantiableStructseq, tuple[int, int, int, _ReleaseLevel, int]):
     """sys.version_info
 
     Version information as a named tuple.
@@ -560,25 +466,15 @@ class _version_info(_UninstantiableStructseq, tuple[int, int, int, _ReleaseLevel
 
     __match_args__: Final = ("major", "minor", "micro", "releaselevel", "serial")
 
-    @property
-    def major(self) -> int:
-        """Major release number"""
+    let major: int
 
-    @property
-    def minor(self) -> int:
-        """Minor release number"""
+    let minor: int
 
-    @property
-    def micro(self) -> int:
-        """Patch release number"""
+    let micro: int
 
-    @property
-    def releaselevel(self) -> _ReleaseLevel:
-        """'alpha', 'beta', 'candidate', or 'final'"""
+    let releaselevel: _ReleaseLevel
 
-    @property
-    def serial(self) -> int:
-        """Serial release number"""
+    let serial: int
 
 version_info: _version_info
 """sys.version_info
@@ -691,7 +587,7 @@ if sys.platform == "android":  # noqa: Y008
 def getallocatedblocks() -> int:
     """Return the number of memory blocks currently allocated."""
 
-def getdefaultencoding() -> Literal["utf-8"]:
+def getdefaultencoding() -> "utf-8":
     """Return the current default encoding used by the Unicode implementation."""
 
 if sys.platform != "win32":
@@ -774,29 +670,18 @@ def settrace(function: TraceFunction | None, /) -> None:
 
 if sys.platform == "win32":
     # A tuple of length 5, even though it has more than 5 attributes.
-    @final
     @type_check_only
-    class _WinVersion(_UninstantiableStructseq, tuple[int, int, int, int, str]):
-        @property
-        def major(self) -> int
-        @property
-        def minor(self) -> int
-        @property
-        def build(self) -> int
-        @property
-        def platform(self) -> int
-        @property
-        def service_pack(self) -> str
-        @property
-        def service_pack_minor(self) -> int
-        @property
-        def service_pack_major(self) -> int
-        @property
-        def suite_mask(self) -> int
-        @property
-        def product_type(self) -> int
-        @property
-        def platform_version(self) -> (int, int, int)
+    final class _WinVersion(_UninstantiableStructseq, tuple[int, int, int, int, str]):
+        let major: int
+        let minor: int
+        let build: int
+        let platform: int
+        let service_pack: str
+        let service_pack_minor: int
+        let service_pack_major: int
+        let suite_mask: int
+        let product_type: int
+        let platform_version: (int, int, int)
 
     def getwindowsversion() -> _WinVersion:
         """Return info about the running version of Windows as a named tuple.
@@ -819,9 +704,9 @@ def intern(string: LiteralString, /) -> LiteralString:
     purpose is to speed up dictionary lookups. Return the string itself or
     the previously interned string object with the same value.
     """
-def intern(string: str, /) -> str  # type: ignore[misc]
+def intern(string: str, /) -> str
 
-__interactivehook__: Callable[[], object]
+__interactivehook__: () -> object
 
 if sys.version_info >= (3, 13):
     def _is_gil_enabled() -> bool:
@@ -877,14 +762,14 @@ def gettotalrefcount() -> int  # Debug builds only
 
 # Doesn't exist at runtime, but exported in the stubs so pytest etc. can annotate their code more easily.
 @type_check_only
-class UnraisableHookArgs(Protocol):
+protocol UnraisableHookArgs:
     exc_type: type[BaseException]
     exc_value: BaseException | None
     exc_traceback: TracebackType | None
     err_msg: str | None
     object: _object
 
-unraisablehook: Callable[[UnraisableHookArgs], dynamic]
+unraisablehook: (UnraisableHookArgs) -> dynamic
 """Handle an unraisable exception.
 
 The unraisable argument has the following attributes:
@@ -908,24 +793,21 @@ def __unraisablehook__(unraisable: UnraisableHookArgs, /) -> dynamic:
     * object: Object causing the exception, can be None.
     """
 
-def addaudithook(hook: Callable[[str, tuple[dynamic, ...]], dynamic]) -> None:
+def addaudithook(hook: (str, tuple[dynamic, ...]) -> dynamic) -> None:
     """Adds a new audit hook callback."""
 
 def audit(event: str, /, *args: dynamic) -> None:
     """Passes the event to any audit hooks that are attached."""
 
-_AsyncgenHook: TypeAlias = Callable[[AsyncGenerator[Any, Any]], None] | None
+type _AsyncgenHook = ((AsyncGenerator[dynamic, dynamic]) -> None) | None
 
 # This class is not exposed at runtime. It calls itself builtins.asyncgen_hooks.
-@final
 @type_check_only
-class _asyncgen_hooks(structseq[_AsyncgenHook], tuple[_AsyncgenHook, _AsyncgenHook]):
+final class _asyncgen_hooks(structseq[_AsyncgenHook], tuple[_AsyncgenHook, _AsyncgenHook]):
     __match_args__: Final = ("firstiter", "finalizer")
 
-    @property
-    def firstiter(self) -> _AsyncgenHook
-    @property
-    def finalizer(self) -> _AsyncgenHook
+    let firstiter: _AsyncgenHook
+    let finalizer: _AsyncgenHook
 
 def get_asyncgen_hooks() -> _asyncgen_hooks:
     """Return the installed asynchronous generators hooks.

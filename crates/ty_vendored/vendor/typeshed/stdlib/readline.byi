@@ -6,8 +6,8 @@ from collections.abc import Callable, Sequence
 from typing import Literal, TypeAlias
 
 if sys.platform != "win32":
-    _Completer: TypeAlias = Callable[[str, int], str | None]
-    _CompDisp: TypeAlias = Callable[[str, Sequence[str], int], None]
+    type _Completer = (str, int) -> (str | None)
+    type _CompDisp = (str, Sequence[str], int) -> None
 
     def parse_and_bind(string: str, /) -> None:
         """Execute the init line provided in the string argument."""
@@ -78,14 +78,14 @@ if sys.platform != "win32":
     def set_auto_history(enabled: bool, /) -> None:
         """Enables or disables automatic history."""
 
-    def set_startup_hook(function: Callable[[], object] | None = None, /) -> None:
+    def set_startup_hook(function: (() -> object) | None = None, /) -> None:
         """Set or remove the function invoked by the rl_startup_hook callback.
 
         The function is called with no arguments just
         before readline prints the first prompt.
         """
 
-    def set_pre_input_hook(function: Callable[[], object] | None = None, /) -> None:
+    def set_pre_input_hook(function: (() -> object) | None = None, /) -> None:
         """Set or remove the function invoked by the rl_pre_input_hook callback.
 
         The function is called with no arguments after the first prompt
@@ -128,4 +128,4 @@ if sys.platform != "win32":
         """
 
     if sys.version_info >= (3, 13):
-        backend: Literal["readline", "editline"]
+        backend: "readline" | "editline"

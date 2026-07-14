@@ -43,19 +43,19 @@ from builtins import list as _list  # "list" conflicts with method name
 from collections.abc import Callable, Container, Mapping, MutableMapping
 from reprlib import Repr
 from types import MethodType, ModuleType, TracebackType
-from typing import IO, Any, AnyStr, Final, NoReturn, Protocol, TypeGuard, TypeVar, type_check_only
+from typing import Final, Protocol, TypeVar, type_check_only
 from typing_extensions import deprecated
 
 __all__ = ["help"]
 
 
-__author__: Final[str]
-__date__: Final[str]
-__version__: Final[str]
-__credits__: Final[str]
+final __author__: str
+final __date__: str
+final __version__: str
+final __credits__: str
 
 @type_check_only
-class _Pager(Protocol):
+protocol _Pager:
     def __call__(self, text: str, title: str = "") -> None
 
 def pathdirs() -> list[str]:
@@ -166,7 +166,7 @@ class Doc:
 class HTMLRepr(Repr):
     """Class for safely making an HTML representation of a Python object."""
 
-    def __init__(self) -> None
+    init(self)
     def escape(self, text: str) -> str
     def repr(self, object: object) -> str
     def repr1(self, x: object, level: complex) -> str
@@ -200,7 +200,7 @@ class HTMLDoc(Doc):
         ) -> str:
             """Format a section with a heading."""
 
-        def multicolumn[Element](self, list: list[Element], format: Callable[[Element], str]) -> str:
+        def multicolumn[Element](self, list: list[Element], format: (Element) -> str) -> str:
             """Format a list of items into a multi-column list."""
 
     else:
@@ -220,7 +220,7 @@ class HTMLDoc(Doc):
         ) -> str:
             """Format a section with a heading."""
 
-        def multicolumn[Element](self, list: list[Element], format: Callable[[Element], str], cols: int = 4) -> str:
+        def multicolumn[Element](self, list: list[Element], format: (Element) -> str, cols: int = 4) -> str:
             """Format a list of items into a multi-column list."""
 
     def bigsection(self, title: str, *args: dynamic) -> str:
@@ -245,7 +245,7 @@ class HTMLDoc(Doc):
     def markup(
         self,
         text: str,
-        escape: Callable[[str], str] | None = None,
+        escape: ((str) -> str) | None = None,
         funcs: Mapping[str, str] = {},
         classes: Mapping[str, str] = {},
         methods: Mapping[str, str] = {},
@@ -254,7 +254,7 @@ class HTMLDoc(Doc):
         Each context dictionary maps object names to anchor names.
         """
 
-    def formattree(self, tree: list[(type, (*: type)) | list[Any]], modname: str, parent: type | None = None) -> str:
+    def formattree(self, tree: list[(type, (*: type)) | list[dynamic]], modname: str, parent: type | None = None) -> str:
         """Produce HTML for a class tree as given by inspect.getclasstree()."""
 
     def docmodule(self, object: object, name: str | None = None, mod: str | None = None, *ignored: Unused) -> str:
@@ -278,7 +278,7 @@ class HTMLDoc(Doc):
         """Produce HTML documentation for a data object."""
 
     if sys.version_info >= (3, 11):
-        def docroutine(  # type: ignore[override]
+        def docroutine(
             self,
             object: object,
             name: str | None = None,
@@ -302,7 +302,7 @@ class HTMLDoc(Doc):
             """Produce html documentation for a data descriptor."""
 
     else:
-        def docroutine(  # type: ignore[override]
+        def docroutine(
             self,
             object: object,
             name: str | None = None,
@@ -314,10 +314,10 @@ class HTMLDoc(Doc):
         ) -> str:
             """Produce HTML documentation for a function or method object."""
 
-        def docproperty(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:  # type: ignore[override]
+        def docproperty(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:
             """Produce html documentation for a data descriptor."""
 
-        def docdata(self, object: object, name: str | None = None, mod: dynamic | None = None, cl: dynamic | None = None) -> str:  # type: ignore[override]
+        def docdata(self, object: object, name: str | None = None, mod: dynamic | None = None, cl: dynamic | None = None) -> str:
             """Produce html documentation for a data descriptor."""
 
     if sys.version_info >= (3, 11):
@@ -333,7 +333,7 @@ class HTMLDoc(Doc):
 class TextRepr(Repr):
     """Class for safely making a text representation of a Python object."""
 
-    def __init__(self) -> None
+    init(self)
     def repr1(self, x: object, level: complex) -> str
     def repr_string(self, x: str, level: complex) -> str
     def repr_str(self, x: str, level: complex) -> str
@@ -354,7 +354,7 @@ class TextDoc(Doc):
         """Format a section with a given heading."""
 
     def formattree(
-        self, tree: list[(type, (*: type)) | list[Any]], modname: str, parent: type | None = None, prefix: str = ""
+        self, tree: list[(type, (*: type)) | list[dynamic]], modname: str, parent: type | None = None, prefix: str = ""
     ) -> str:
         """Render in text a class tree as returned by inspect.getclasstree()."""
 
@@ -365,7 +365,7 @@ class TextDoc(Doc):
         """Format an argument default value as text."""
 
     if sys.version_info >= (3, 11):
-        def docroutine(  # type: ignore[override]
+        def docroutine(
             self,
             object: object,
             name: str | None = None,
@@ -401,19 +401,19 @@ class TextDoc(Doc):
             """Produce text documentation for a data object."""
 
     else:
-        def docroutine(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:  # type: ignore[override]
+        def docroutine(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:
             """Produce text documentation for a function or method object."""
 
-        def docmodule(self, object: object, name: str | None = None, mod: dynamic | None = None) -> str:  # type: ignore[override]
+        def docmodule(self, object: object, name: str | None = None, mod: dynamic | None = None) -> str:
             """Produce text documentation for a given module object."""
 
-        def docproperty(self, object: object, name: str | None = None, mod: dynamic | None = None, cl: dynamic | None = None) -> str:  # type: ignore[override]
+        def docproperty(self, object: object, name: str | None = None, mod: dynamic | None = None, cl: dynamic | None = None) -> str:
             """Produce text documentation for a data descriptor."""
 
-        def docdata(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:  # type: ignore[override]
+        def docdata(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:
             """Produce text documentation for a data descriptor."""
 
-        def docother(  # type: ignore[override]
+        def docother(
             self,
             object: object,
             name: str | None = None,
@@ -464,7 +464,7 @@ if sys.version_info >= (3, 13):
     ttypager = tty_pager
     plainpager = plain_pager
 else:
-    def getpager() -> Callable[[str], None]:
+    def getpager() -> (str) -> None:
         """Decide what method to use for paging through text."""
 
     def pipepager(text: str, cmd: str) -> None:
@@ -519,11 +519,9 @@ class Helper:
     keywords: dict[str, str | (str, str)]
     symbols: dict[str, str]
     topics: dict[str, str | (*: str)]
-    def __init__(self, input: IO[str] | None = None, output: IO[str] | None = None) -> None
-    @property
-    def input(self) -> IO[str]
-    @property
-    def output(self) -> IO[str]
+    init(self, input: IO[str] | None = None, output: IO[str] | None = None)
+    let input: IO[str]
+    let output: IO[str]
     def __call__(self, request: str | Helper | object = ...) -> None
     def interact(self) -> None
     def getline(self, prompt: str) -> str:
@@ -551,10 +549,10 @@ class ModuleScanner:
     quit: bool
     def run(
         self,
-        callback: Callable[[str | None, str, str], object],
+        callback: (str | None, str, str) -> object,
         key: str | None = None,
-        completer: Callable[[], object] | None = None,
-        onerror: Callable[[str], object] | None = None,
+        completer: (() -> object) | None = None,
+        onerror: ((str) -> object) | None = None,
     ) -> None
 
 def apropos(key: str) -> None:

@@ -4,13 +4,13 @@ from typing import TypeAlias
 from typing_extensions import disjoint_base
 
 # Actually Tuple[(int,) * 625]
-_State: TypeAlias = tuple[int, ...]
+type _State = (*: int)
 
 @disjoint_base
 class Random:
     """Random() -> create a random number generator with its own internal state."""
 
-    def __init__(self, seed: object = ..., /) -> None
+    init(self, seed: object = ..., /)
     def seed(self, n: object = None, /) -> None:
         """seed([n]) -> None.
 

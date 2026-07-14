@@ -10,7 +10,7 @@ from collections.abc import Iterable
 from typing import Literal, TypeVar
 
 
-def newer(source: StrOrBytesPath, target: StrOrBytesPath) -> bool | Literal[1]:
+def newer(source: StrOrBytesPath, target: StrOrBytesPath) -> bool | 1:
     """Return true if 'source' exists and is more recently modified than
     'target', or if 'source' exists and 'target' doesn't.  Return false if
     both exist and 'target' is the same age or younger than 'source'.
@@ -27,8 +27,8 @@ def newer_pairwise[SourcesT: StrOrBytesPath, TargetsT: StrOrBytesPath](
     """
 
 def newer_group(
-    sources: Iterable[StrOrBytesPath], target: StrOrBytesPath, missing: Literal["error", "ignore", "newer"] = "error"
-) -> Literal[0, 1]:
+    sources: Iterable[StrOrBytesPath], target: StrOrBytesPath, missing: "error" | "ignore" | "newer" = "error"
+) -> 0 | 1:
     """Return true if 'target' is out-of-date with respect to any file
     listed in 'sources'.  In other words, if 'target' exists and is newer
     than every file in 'sources', return false; otherwise return true.

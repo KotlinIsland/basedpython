@@ -42,7 +42,7 @@ if sys.version_info >= (3, 15):
     @deprecated("Deprecated since Python 3.15; use os.path.commonpath() for path prefixes.")
     def commonprefix(m: Sequence[StrPath], /) -> str
     @deprecated("Deprecated since Python 3.15; use os.path.commonpath() for path prefixes.")
-    def commonprefix(m: Sequence[BytesPath], /) -> bytes | Literal[""]
+    def commonprefix(m: Sequence[BytesPath], /) -> bytes | ""
     @deprecated("Deprecated since Python 3.15; use os.path.commonpath() for path prefixes.")
     def commonprefix(m: Sequence[list[SupportsRichComparisonT]], /) -> Sequence[SupportsRichComparisonT]
     @deprecated("Deprecated since Python 3.15; use os.path.commonpath() for path prefixes.")
@@ -51,7 +51,7 @@ else:
     def commonprefix(m: Sequence[LiteralString]) -> LiteralString:
         """Given a list of pathnames, returns the longest common leading component"""
     def commonprefix(m: Sequence[StrPath]) -> str
-    def commonprefix(m: Sequence[BytesPath]) -> bytes | Literal[""]
+    def commonprefix(m: Sequence[BytesPath]) -> bytes | ""
     def commonprefix(m: Sequence[list[SupportsRichComparisonT]]) -> Sequence[SupportsRichComparisonT]
     def commonprefix(m: Sequence[(*: SupportsRichComparisonT)]) -> Sequence[SupportsRichComparisonT]
 

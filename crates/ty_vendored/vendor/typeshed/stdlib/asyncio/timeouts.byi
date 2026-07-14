@@ -12,7 +12,7 @@ final class Timeout:
     directly.
     """
 
-    def __init__(self, when: float | None) -> None:
+    init(self, when: float | None):
         """Schedule a timeout that will trigger at a given loop time.
 
         - If `when` is `None`, the timeout will never trigger.

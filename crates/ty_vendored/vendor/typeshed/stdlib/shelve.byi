@@ -87,8 +87,8 @@ class Shelf[in out Value](MutableMapping[str, Value]):
             writeback: bool = False,
             keyencoding: str = "utf-8",
             *,
-            serializer: Callable[[dynamic], bytes] | None = None,
-            deserializer: Callable[[bytes], dynamic] | None = None,
+            serializer: ((dynamic) -> bytes) | None = None,
+            deserializer: ((bytes) -> dynamic) | None = None,
         ) -> None
 
     else:
@@ -110,7 +110,7 @@ class Shelf[in out Value](MutableMapping[str, Value]):
     def __getitem__(self, key: str) -> Value
     def __setitem__(self, key: str, value: Value) -> None
     def __delitem__(self, key: str) -> None
-    def __contains__(self, key: str) -> bool  # type: ignore[override]
+    def __contains__(self, key: str) -> bool
     def __enter__(self) -> Self
     def __exit__(
         self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
@@ -155,8 +155,8 @@ class DbfilenameShelf[in out Value](Shelf[Value]):
             protocol: int | None = None,
             writeback: bool = False,
             *,
-            serializer: Callable[[dynamic], bytes] | None = None,
-            deserializer: Callable[[bytes], dynamic] | None = None,
+            serializer: ((dynamic) -> bytes) | None = None,
+            deserializer: ((bytes) -> dynamic) | None = None,
         ) -> None
 
     elif sys.version_info >= (3, 11):
@@ -174,8 +174,8 @@ if sys.version_info >= (3, 15):
         protocol: int | None = None,
         writeback: bool = False,
         *,
-        serializer: Callable[[dynamic], bytes] | None = None,
-        deserializer: Callable[[bytes], dynamic] | None = None,
+        serializer: ((dynamic) -> bytes) | None = None,
+        deserializer: ((bytes) -> dynamic) | None = None,
     ) -> Shelf[dynamic]:
         """Open a persistent dictionary for reading and writing.
 

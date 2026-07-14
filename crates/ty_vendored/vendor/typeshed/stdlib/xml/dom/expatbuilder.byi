@@ -5,12 +5,12 @@ This avoids all the overhead of SAX and pulldom to gain performance.
 """
 
 from _typeshed import ReadableBuffer, SupportsRead
-from typing import Any, Final, NoReturn, TypeAlias
+from typing import Final, TypeAlias
 from xml.dom.minidom import Document, DocumentFragment, DOMImplementation, Element, Node, TypeInfo
 from xml.dom.xmlbuilder import DOMBuilderFilter, Options
 from xml.parsers.expat import XMLParserType
 
-_Model: TypeAlias = tuple[int, int, str | None, tuple[Any, ...]]  # same as in pyexpat
+type _Model = tuple[int, int, str | None, (*: dynamic)]  # same as in pyexpat
 
 TEXT_NODE: Final = Node.TEXT_NODE
 CDATA_SECTION_NODE: Final = Node.CDATA_SECTION_NODE
@@ -24,7 +24,7 @@ theDOMImplementation: DOMImplementation
 class ElementInfo:
     __slots__ = ("_attr_info", "_model", "tagName")
     tagName: str
-    def __init__(self, tagName: str, model: _Model | None = None) -> None
+    init(self, tagName: str, model: _Model | None = None)
     def getAttributeType(self, aname: str) -> TypeInfo
     def getAttributeTypeNS(self, namespaceURI: str | None, localName: str) -> TypeInfo
     def isElementContent(self) -> bool
@@ -39,7 +39,7 @@ class ExpatBuilder:
 
     document: Document  # Created in self.reset()
     curNode: DocumentFragment | Element | Document  # Created in self.reset()
-    def __init__(self, options: Options | None = None) -> None
+    init(self, options: Options | None = None)
     def createParser(self) -> XMLParserType:
         """Create a new parser object."""
 
@@ -96,13 +96,13 @@ class FilterVisibilityController:
 
     __slots__ = ("filter",)
     filter: DOMBuilderFilter
-    def __init__(self, filter: DOMBuilderFilter) -> None
+    init(self, filter: DOMBuilderFilter)
     def startContainer(self, node: Node) -> int
     def acceptNode(self, node: Node) -> int
 
 class FilterCrutch:
     __slots__ = ("_builder", "_level", "_old_start", "_old_end")
-    def __init__(self, builder: ExpatBuilder) -> None
+    init(self, builder: ExpatBuilder)
 
 class Rejecter(FilterCrutch):
     __slots__ = ()
@@ -126,14 +126,14 @@ class FragmentBuilder(ExpatBuilder):
     fragment: DocumentFragment | None
     originalDocument: Document
     context: Node
-    def __init__(self, context: Node, options: Options | None = None) -> None
+    init(self, context: Node, options: Options | None = None)
     def reset(self) -> None
-    def parseFile(self, file: SupportsRead[ReadableBuffer | str]) -> DocumentFragment:  # type: ignore[override]
+    def parseFile(self, file: SupportsRead[ReadableBuffer | str]) -> DocumentFragment:
         """Parse a document fragment from a file object, returning the
         fragment node.
         """
 
-    def parseString(self, string: ReadableBuffer | str) -> DocumentFragment:  # type: ignore[override]
+    def parseString(self, string: ReadableBuffer | str) -> DocumentFragment:
         """Parse a document fragment from a string, returning the
         fragment node.
         """
@@ -171,9 +171,9 @@ class InternalSubsetExtractor(ExpatBuilder):
     def getSubset(self) -> str:
         """Return the internal subset as a string."""
 
-    def parseFile(self, file: SupportsRead[ReadableBuffer | str]) -> None  # type: ignore[override]
-    def parseString(self, string: str | ReadableBuffer) -> None  # type: ignore[override]
-    def start_doctype_decl_handler(  # type: ignore[override]
+    def parseFile(self, file: SupportsRead[ReadableBuffer | str]) -> None
+    def parseString(self, string: str | ReadableBuffer) -> None
+    def start_doctype_decl_handler(
         self, name: str, publicId: str | None, systemId: str | None, has_internal_subset: bool
     ) -> None
     def end_doctype_decl_handler(self) -> NoReturn

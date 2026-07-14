@@ -85,7 +85,7 @@ class Extension:
     depends: list[str]
     language: str | None
     optional: bool | None
-    def __init__(
+    init(
         self,
         name: str,
         sources: list[str],
@@ -103,4 +103,4 @@ class Extension:
         depends: list[str] | None = None,
         language: str | None = None,
         optional: bool | None = None,
-    ) -> None
+    )

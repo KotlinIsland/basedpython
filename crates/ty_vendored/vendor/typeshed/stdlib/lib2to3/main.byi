@@ -5,7 +5,7 @@ Main program for 2to3.
 from _typeshed import FileDescriptorOrPath
 from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from logging import _ExcInfoType
-from typing import AnyStr, Literal
+from typing import Literal
 
 from . import refactor as refactor
 
@@ -24,7 +24,7 @@ class StdoutRefactoringTool(refactor.MultiprocessRefactoringTool):
 
     nobackups: bool
     show_diffs: bool
-    def __init__(
+    init(
         self,
         fixers: Iterable[str],
         options: Mapping[str, object] | None,
@@ -34,7 +34,7 @@ class StdoutRefactoringTool(refactor.MultiprocessRefactoringTool):
         input_base_dir: str = "",
         output_dir: str = "",
         append_suffix: str = "",
-    ) -> None:
+    ):
         """
         Args:
             fixers: A list of fixers to import.
@@ -55,7 +55,7 @@ class StdoutRefactoringTool(refactor.MultiprocessRefactoringTool):
         """
 
     # Same as super.log_error and Logger.error
-    def log_error(  # type: ignore[override]
+    def log_error(
         self,
         msg: str,
         *args: Iterable[str],
@@ -65,14 +65,14 @@ class StdoutRefactoringTool(refactor.MultiprocessRefactoringTool):
         extra: Mapping[str, object] | None = None,
     ) -> None
     # Same as super.write_file but without default values
-    def write_file(  # type: ignore[override]
+    def write_file(
         self, new_text: str, filename: FileDescriptorOrPath, old_text: str, encoding: str | None
     ) -> None
     # filename has to be str
-    def print_output(self, old: str, new: str, filename: str, equal: bool) -> None  # type: ignore[override]
+    def print_output(self, old: str, new: str, filename: str, equal: bool) -> None
 
 def warn(msg: object) -> None
-def main(fixer_pkg: str, args: Sequence[AnyStr] | None = None) -> Literal[0, 1, 2]:
+def main(fixer_pkg: str, args: Sequence[AnyStr] | None = None) -> 0 | 1 | 2:
     """Main program.
 
     Args:

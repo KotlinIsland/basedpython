@@ -18,19 +18,18 @@ class Connection:
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None
     ) -> None
-    def __init__(self, _in: dynamic, _out: dynamic) -> None
+    init(self, _in: dynamic, _out: dynamic)
     def close(self) -> None
     def poll(self, timeout: float = 0.0) -> bool
 
 class Listener:
     _backlog_queue: Queue[dynamic] | None
-    @property
-    def address(self) -> Queue[dynamic] | None
+    let address: Queue[dynamic] | None
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None
     ) -> None
-    def __init__(self, address: _Address | None = None, family: int | None = None, backlog: int = 1) -> None
+    init(self, address: _Address | None = None, family: int | None = None, backlog: int = 1)
     def accept(self) -> Connection
     def close(self) -> None
 

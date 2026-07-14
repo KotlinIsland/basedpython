@@ -17,7 +17,7 @@ from typing import ClassVar, Final, Literal
 from ..ccompiler import CCompiler
 from ..cmd import Command
 
-LANG_EXT: Final[dict[str, str]]
+final LANG_EXT: dict[str, str]
 
 class config(Command):
     description: str
@@ -106,8 +106,8 @@ class config(Command):
         include_dirs: Sequence[str] | None = None,
         libraries: Sequence[str] | None = None,
         library_dirs: Sequence[str] | None = None,
-        decl: bool | Literal[0, 1] = 0,
-        call: bool | Literal[0, 1] = 0,
+        decl: bool | 0 | 1 = 0,
+        call: bool | 0 | 1 = 0,
     ) -> bool:
         """Determine if function 'func' is available by constructing a
         source file that refers to 'func', and compiles and links it.

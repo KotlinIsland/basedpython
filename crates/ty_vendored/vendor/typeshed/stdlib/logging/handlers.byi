@@ -51,9 +51,9 @@ class WatchedFileHandler(FileHandler):
 
     dev: int  # undocumented
     ino: int  # undocumented
-    def __init__(
+    init(
         self, filename: StrPath, mode: str = "a", encoding: str | None = None, delay: bool = False, errors: str | None = None
-    ) -> None
+    )
     def _statstream(self) -> None  # undocumented
     def reopenIfNeeded(self) -> None:
         """
@@ -71,11 +71,11 @@ class BaseRotatingHandler(FileHandler):
     or TimedRotatingFileHandler.
     """
 
-    namer: Callable[[str], str] | None
-    rotator: Callable[[str, str], None] | None
-    def __init__(
+    namer: ((str) -> str) | None
+    rotator: ((str, str) -> None) | None
+    init(
         self, filename: StrPath, mode: str, encoding: str | None = None, delay: bool = False, errors: str | None = None
-    ) -> None:
+    ):
         """
         Use the specified filename for streamed logging
         """
@@ -117,7 +117,7 @@ class RotatingFileHandler(BaseRotatingHandler):
 
     maxBytes: int  # undocumented
     backupCount: int  # undocumented
-    def __init__(
+    init(
         self,
         filename: StrPath,
         mode: str = "a",
@@ -126,7 +126,7 @@ class RotatingFileHandler(BaseRotatingHandler):
         encoding: str | None = None,
         delay: bool = False,
         errors: str | None = None,
-    ) -> None:
+    ):
         """
         Open the specified file and use it as the stream for logging.
 
@@ -179,7 +179,7 @@ class TimedRotatingFileHandler(BaseRotatingHandler):
     dayOfWeek: int  # undocumented
     rolloverAt: int  # undocumented
     extMatch: Pattern[str]  # undocumented
-    def __init__(
+    init(
         self,
         filename: StrPath,
         when: str = "h",
@@ -190,7 +190,7 @@ class TimedRotatingFileHandler(BaseRotatingHandler):
         utc: bool = False,
         atTime: datetime.time | None = None,
         errors: str | None = None,
-    ) -> None
+    )
     def doRollover(self) -> None:
         """
         do a rollover; in this case, a date/time stamp is appended to the filename
@@ -242,7 +242,7 @@ class SocketHandler(Handler):
     retryStart: float  # undocumented
     retryFactor: float  # undocumented
     retryMax: float  # undocumented
-    def __init__(self, host: str, port: int | None) -> None:
+    init(self, host: str, port: int | None):
         """
         Initializes the handler with a specific host address and port.
 
@@ -290,7 +290,7 @@ class DatagramHandler(SocketHandler):
 
     """
 
-    def makeSocket(self) -> socket:  # type: ignore[override]
+    def makeSocket(self) -> socket:
         """
         The factory method of SocketHandler is here overridden to create
         a UDP socket (SOCK_DGRAM).
@@ -422,7 +422,7 @@ class NTEventLogHandler(Handler):
     which contains the message definitions you want to use in the event log.
     """
 
-    def __init__(self, appname: str, dllname: str | None = None, logtype: str = "Application") -> None
+    init(self, appname: str, dllname: str | None = None, logtype: str = "Application")
     def getEventCategory(self, record: LogRecord) -> int:
         """
         Return the event category for the record.
@@ -468,7 +468,7 @@ class SMTPHandler(Handler):
     subject: str  # undocumented
     secure: tuple[()] | (str,) | (str, str) | None  # undocumented
     timeout: float  # undocumented
-    def __init__(
+    init(
         self,
         mailhost: str | (str, int),
         fromaddr: str,
@@ -477,7 +477,7 @@ class SMTPHandler(Handler):
         credentials: (str, str) | None = None,
         secure: tuple[()] | (str,) | (str, str) | None = None,
         timeout: float = 5.0,
-    ) -> None:
+    ):
         """
         Initialize the handler.
 
@@ -513,7 +513,7 @@ class BufferingHandler(Handler):
 
     capacity: int  # undocumented
     buffer: list[LogRecord]  # undocumented
-    def __init__(self, capacity: int) -> None:
+    init(self, capacity: int):
         """
         Initialize the handler with the buffer size.
         """
@@ -536,7 +536,7 @@ class MemoryHandler(BufferingHandler):
     flushLevel: int  # undocumented
     target: Handler | None  # undocumented
     flushOnClose: bool  # undocumented
-    def __init__(self, capacity: int, flushLevel: int = 40, target: Handler | None = None, flushOnClose: bool = True) -> None:
+    init(self, capacity: int, flushLevel: int = 40, target: Handler | None = None, flushOnClose: bool = True):
         """
         Initialize the handler with the buffer size, the level at which
         flushing should occur and an optional target.
@@ -567,7 +567,7 @@ class HTTPHandler(Handler):
     secure: bool  # undocumented
     credentials: (str, str) | None  # undocumented
     context: ssl.SSLContext | None  # undocumented
-    def __init__(
+    init(
         self,
         host: str,
         url: str,
@@ -575,7 +575,7 @@ class HTTPHandler(Handler):
         secure: bool = False,
         credentials: (str, str) | None = None,
         context: ssl.SSLContext | None = None,
-    ) -> None:
+    ):
         """
         Initialize the instance with the host, the request URL, and the method
         ("GET" or "POST")
@@ -597,7 +597,7 @@ class HTTPHandler(Handler):
         """
 
 @type_check_only
-class _QueueLike[in out Element](Protocol):
+protocol _QueueLike[in out Element]:
     def get(self) -> Element
     def put_nowait(self, item: Element, /) -> None
 
@@ -613,7 +613,7 @@ class QueueHandler(Handler):
     """
 
     queue: _QueueLike[dynamic]
-    def __init__(self, queue: _QueueLike[dynamic]) -> None:
+    init(self, queue: _QueueLike[dynamic]):
         """
         Initialise an instance, using the passed queue.
         """
@@ -658,7 +658,7 @@ class QueueListener:
     respect_handler_level: bool  # undocumented
     queue: _QueueLike[dynamic]  # undocumented
     _thread: Thread | None  # undocumented
-    def __init__(self, queue: _QueueLike[dynamic], *handlers: Handler, respect_handler_level: bool = False) -> None:
+    init(self, queue: _QueueLike[dynamic], *handlers: Handler, respect_handler_level: bool = False):
         """
         Initialise an instance with the specified queue and
         handlers.

@@ -4,11 +4,11 @@ import sys
 from _typeshed import ReadableBuffer, SupportsRead
 from collections.abc import Callable
 from pyexpat import errors as errors, model as model
-from typing import Any, Final, TypeAlias, final
+from typing import Final, TypeAlias, final
 from typing_extensions import CapsuleType
 from xml.parsers.expat import ExpatError as ExpatError
 
-EXPAT_VERSION: Final[str]  # undocumented
+final EXPAT_VERSION: str  # undocumented
 version_info: (int, int, int)  # undocumented
 native_encoding: str  # undocumented
 features: list[(str, int)]  # undocumented
@@ -18,7 +18,7 @@ XML_PARAM_ENTITY_PARSING_NEVER: Final = 0
 XML_PARAM_ENTITY_PARSING_UNLESS_STANDALONE: Final = 1
 XML_PARAM_ENTITY_PARSING_ALWAYS: Final = 2
 
-_Model: TypeAlias = tuple[int, int, str | None, tuple[Any, ...]]
+type _Model = tuple[int, int, str | None, (*: dynamic)]
 
 final class XMLParserType:
     """XML parser"""
@@ -137,8 +137,7 @@ final class XMLParserType:
             library.
             """
 
-    @property
-    def intern(self) -> dict[str, str]
+    let intern: dict[str, str]
     buffer_size: int
     buffer_text: bool
     buffer_used: int
@@ -152,33 +151,33 @@ final class XMLParserType:
     CurrentByteIndex: int
     CurrentColumnNumber: int
     CurrentLineNumber: int
-    XmlDeclHandler: Callable[[str, str | None, int], dynamic] | None
-    StartDoctypeDeclHandler: Callable[[str, str | None, str | None, bool], dynamic] | None
-    EndDoctypeDeclHandler: Callable[[], dynamic] | None
-    ElementDeclHandler: Callable[[str, _Model], dynamic] | None
-    AttlistDeclHandler: Callable[[str, str, str, str | None, bool], dynamic] | None
+    XmlDeclHandler: ((str, str | None, int) -> dynamic) | None
+    StartDoctypeDeclHandler: ((str, str | None, str | None, bool) -> dynamic) | None
+    EndDoctypeDeclHandler: (() -> dynamic) | None
+    ElementDeclHandler: ((str, _Model) -> dynamic) | None
+    AttlistDeclHandler: ((str, str, str, str | None, bool) -> dynamic) | None
     StartElementHandler: (
-        Callable[[str, dict[str, str]], dynamic]
-        | Callable[[str, list[str]], dynamic]
-        | Callable[[str, dict[str, str], list[str]], dynamic]
+        ((str, dict[str, str]) -> dynamic)
+        | ((str, list[str]) -> dynamic)
+        | ((str, dict[str, str], list[str]) -> dynamic)
         | None
     )
-    EndElementHandler: Callable[[str], dynamic] | None
-    ProcessingInstructionHandler: Callable[[str, str], dynamic] | None
-    CharacterDataHandler: Callable[[str], dynamic] | None
-    UnparsedEntityDeclHandler: Callable[[str, str | None, str, str | None, str], dynamic] | None
-    EntityDeclHandler: Callable[[str, bool, str | None, str | None, str, str | None, str | None], dynamic] | None
-    NotationDeclHandler: Callable[[str, str | None, str, str | None], dynamic] | None
-    StartNamespaceDeclHandler: Callable[[str, str], dynamic] | None
-    EndNamespaceDeclHandler: Callable[[str], dynamic] | None
-    CommentHandler: Callable[[str], dynamic] | None
-    StartCdataSectionHandler: Callable[[], dynamic] | None
-    EndCdataSectionHandler: Callable[[], dynamic] | None
-    DefaultHandler: Callable[[str], dynamic] | None
-    DefaultHandlerExpand: Callable[[str], dynamic] | None
-    NotStandaloneHandler: Callable[[], int] | None
-    ExternalEntityRefHandler: Callable[[str, str | None, str | None, str | None], int] | None
-    SkippedEntityHandler: Callable[[str, bool], dynamic] | None
+    EndElementHandler: ((str) -> dynamic) | None
+    ProcessingInstructionHandler: ((str, str) -> dynamic) | None
+    CharacterDataHandler: ((str) -> dynamic) | None
+    UnparsedEntityDeclHandler: ((str, str | None, str, str | None, str) -> dynamic) | None
+    EntityDeclHandler: ((str, bool, str | None, str | None, str, str | None, str | None) -> dynamic) | None
+    NotationDeclHandler: ((str, str | None, str, str | None) -> dynamic) | None
+    StartNamespaceDeclHandler: ((str, str) -> dynamic) | None
+    EndNamespaceDeclHandler: ((str) -> dynamic) | None
+    CommentHandler: ((str) -> dynamic) | None
+    StartCdataSectionHandler: (() -> dynamic) | None
+    EndCdataSectionHandler: (() -> dynamic) | None
+    DefaultHandler: ((str) -> dynamic) | None
+    DefaultHandlerExpand: ((str) -> dynamic) | None
+    NotStandaloneHandler: (() -> int) | None
+    ExternalEntityRefHandler: ((str, str | None, str | None, str | None) -> int) | None
+    SkippedEntityHandler: ((str, bool) -> dynamic) | None
 
 def ErrorString(code: int, /) -> str:
     """Returns string error for given number."""

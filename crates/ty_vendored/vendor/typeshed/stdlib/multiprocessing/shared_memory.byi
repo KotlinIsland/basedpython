@@ -35,17 +35,11 @@ class SharedMemory:
     else:
         def __init__(self, name: str | None = None, create: bool = False, size: int = 0) -> None
 
-    @property
-    def buf(self) -> memoryview | None:
-        """A memoryview of contents of the shared memory block."""
+    let buf: memoryview | None
 
-    @property
-    def name(self) -> str:
-        """Unique name that identifies the shared memory block."""
+    let name: str
 
-    @property
-    def size(self) -> int:
-        """Size in bytes."""
+    let size: int
 
     def close(self) -> None:
         """Closes access to the shared memory from this instance but does
@@ -81,16 +75,14 @@ class ShareableList[in out SLT: constraints (int, float, bool, str, bytes, None)
 
     shm: SharedMemory
 
-    def __init__(self, sequence: None = None, *, name: str | None = None) -> None
-    def __init__(self, sequence: Iterable[SLT], *, name: str | None = None) -> None
+    init(self, sequence: None = None, *, name: str | None = None)
+    init(self, sequence: Iterable[SLT], *, name: str | None = None)
 
     def __getitem__(self, position: int) -> SLT
     def __setitem__(self, position: int, value: SLT) -> None
     def __reduce__(self) -> (Self, (*: SLT))
     def __len__(self) -> int
-    @property
-    def format(self) -> str:
-        """The struct packing format used by all currently stored items."""
+    let format: str
 
     def count(self, value: SLT) -> int:
         """L.count(value) -> integer -- return number of occurrences of value."""

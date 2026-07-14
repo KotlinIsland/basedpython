@@ -7,7 +7,7 @@ from collections.abc import Awaitable, Callable, Iterable, Iterator, Sequence, S
 from dataclasses import Field
 from os import PathLike
 from types import FrameType, NoneType as NoneType, TracebackType
-from typing import Any, AnyStr, ClassVar, Final, Generic, Literal, Protocol, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, TypeVar
+from typing import ClassVar, Final, Generic, Literal, Protocol, TypeAlias, TypeVar
 from typing_extensions import Buffer, LiteralString, Self as _Self
 
 
@@ -25,16 +25,16 @@ AnyStr_co = TypeVar("AnyStr_co", str, bytes, covariant=True)  # noqa: Y001
 # isn't possible or a type is already partially known. In cases like these,
 # use Incomplete instead of Any as a marker. For example, use
 # "Incomplete | None" instead of "Any | None".
-Incomplete: TypeAlias = Any  # stable
+type Incomplete = dynamic  # stable
 
 # To describe a function parameter that is unused and will work with anything.
-Unused: TypeAlias = object  # stable
+type Unused = object  # stable
 
 # Marker for return types that include None, but where forcing the user to
 # check for None can be detrimental. Sometimes called "the Any trick". See
 # https://typing.python.org/en/latest/guides/writing_stubs.html#the-any-trick
 # for more information.
-MaybeNone: TypeAlias = Any  # stable
+type MaybeNone = dynamic  # stable
 
 # Used to mark arguments that default to a sentinel value. This prevents
 # stubtest from complaining about the default value not matching.
@@ -50,225 +50,165 @@ MaybeNone: TypeAlias = Any  # stable
 sentinel: dynamic  # stable
 
 # stable
-class IdentityFunction(Protocol):
+protocol IdentityFunction:
     def __call__[Element](self, x: Element, /) -> Element
 
 # stable
-class SupportsNext[out Element](Protocol):
+protocol SupportsNext[out Element]:
     def __next__(self) -> Element
 
 # stable
-class SupportsAnext[out Element](Protocol):
+protocol SupportsAnext[out Element]:
     def __anext__(self) -> Awaitable[Element]
 
-class SupportsBool(Protocol):
+protocol SupportsBool:
     def __bool__(self) -> bool
 
 # Comparison protocols
-class SupportsDunderLT[in Input](Protocol):
+protocol SupportsDunderLT[in Input]:
     def __lt__(self, other: Input, /) -> SupportsBool
 
-class SupportsDunderGT[in Input](Protocol):
+protocol SupportsDunderGT[in Input]:
     def __gt__(self, other: Input, /) -> SupportsBool
 
-class SupportsDunderLE[in Input](Protocol):
+protocol SupportsDunderLE[in Input]:
     def __le__(self, other: Input, /) -> SupportsBool
 
-class SupportsDunderGE[in Input](Protocol):
+protocol SupportsDunderGE[in Input]:
     def __ge__(self, other: Input, /) -> SupportsBool
 
-class SupportsAllComparisons(
-    SupportsDunderLT[Any], SupportsDunderGT[Any], SupportsDunderLE[Any], SupportsDunderGE[Any], Protocol
-)
+protocol SupportsAllComparisons(SupportsDunderLT[dynamic], SupportsDunderGT[dynamic], SupportsDunderLE[dynamic], SupportsDunderGE[dynamic])
 
-SupportsRichComparison: TypeAlias = SupportsDunderLT[Any] | SupportsDunderGT[Any]
+type SupportsRichComparison = SupportsDunderLT[dynamic] | SupportsDunderGT[dynamic]
 SupportsRichComparisonT = TypeVar("SupportsRichComparisonT", bound=SupportsRichComparison)  # noqa: Y001
 
 # Dunder protocols
 
-class SupportsAdd[in Input, out Element](Protocol):
+protocol SupportsAdd[in Input, out Element]:
     def __add__(self, x: Input, /) -> Element
 
-class SupportsRAdd[in Input, out Element](Protocol):
+protocol SupportsRAdd[in Input, out Element]:
     def __radd__(self, x: Input, /) -> Element
 
-class SupportsSub[in Input, out Element](Protocol):
+protocol SupportsSub[in Input, out Element]:
     def __sub__(self, x: Input, /) -> Element
 
-class SupportsRSub[in Input, out Element](Protocol):
+protocol SupportsRSub[in Input, out Element]:
     def __rsub__(self, x: Input, /) -> Element
 
-class SupportsMul[in Input, out Element](Protocol):
+protocol SupportsMul[in Input, out Element]:
     def __mul__(self, x: Input, /) -> Element
 
-class SupportsRMul[in Input, out Element](Protocol):
+protocol SupportsRMul[in Input, out Element]:
     def __rmul__(self, x: Input, /) -> Element
 
-class SupportsMod[in Input, out Element](Protocol):
+protocol SupportsMod[in Input, out Element]:
     def __mod__(self, other: Input, /) -> Element
 
-class SupportsRMod[in Input, out Element](Protocol):
+protocol SupportsRMod[in Input, out Element]:
     def __rmod__(self, other: Input, /) -> Element
 
-class SupportsDivMod[in Input, out Element](Protocol):
+protocol SupportsDivMod[in Input, out Element]:
     def __divmod__(self, other: Input, /) -> Element
 
-class SupportsRDivMod[in Input, out Element](Protocol):
+protocol SupportsRDivMod[in Input, out Element]:
     def __rdivmod__(self, other: Input, /) -> Element
 
 # This protocol is generic over the iterator type, while Iterable is
 # generic over the type that is iterated over.
-class SupportsIter[out Element](Protocol):
+protocol SupportsIter[out Element]:
     def __iter__(self) -> Element
 
 # This protocol is generic over the iterator type, while AsyncIterable is
 # generic over the type that is iterated over.
-class SupportsAiter[out Element](Protocol):
+protocol SupportsAiter[out Element]:
     def __aiter__(self) -> Element
 
-class SupportsLen(Protocol):
+protocol SupportsLen:
     def __len__(self) -> int
 
-class SupportsLenAndGetItem[out Element](Protocol):
+protocol SupportsLenAndGetItem[out Element]:
     def __len__(self) -> int
     def __getitem__(self, k: int, /) -> Element
 
-class SupportsTrunc(Protocol):
+protocol SupportsTrunc:
     def __trunc__(self) -> int
 
 # Mapping-like protocols
 
 # stable
-class SupportsItems[out Key, out Value](Protocol):
+protocol SupportsItems[out Key, out Value]:
     def items(self) -> AbstractSet[(Key, Value)]
 
 # stable
-class SupportsKeysAndGetItem[in out Key, out Value](Protocol):
+protocol SupportsKeysAndGetItem[in out Key, out Value]:
     def keys(self) -> Iterable[Key]
     def __getitem__(self, key: Key, /) -> Value
 
 # stable
-class SupportsGetItem[in KT, out Value](Protocol):
+protocol SupportsGetItem[in KT, out Value]:
     def __getitem__(self, key: KT, /) -> Value
 
 # stable
-class SupportsContainsAndGetItem[in KT, out Value](Protocol):
+protocol SupportsContainsAndGetItem[in KT, out Value]:
     def __contains__(self, x: dynamic, /) -> bool
     def __getitem__(self, key: KT, /) -> Value
 
 # stable
-class SupportsItemAccess[in KT, in out Value](Protocol):
+protocol SupportsItemAccess[in KT, in out Value]:
     def __contains__(self, x: dynamic, /) -> bool
     def __getitem__(self, key: KT, /) -> Value
     def __setitem__(self, key: KT, value: Value, /) -> None
     def __delitem__(self, key: KT, /) -> None
 
-StrPath: TypeAlias = str | PathLike[str]  # stable
-BytesPath: TypeAlias = bytes | PathLike[bytes]  # stable
-GenericPath: TypeAlias = AnyStr | PathLike[AnyStr]
-StrOrBytesPath: TypeAlias = str | bytes | PathLike[str] | PathLike[bytes]  # stable
+type StrPath = str | PathLike[str]  # stable
+type BytesPath = bytes | PathLike[bytes]  # stable
+type GenericPath = AnyStr | PathLike[AnyStr]
+type StrOrBytesPath = str | bytes | PathLike[str] | PathLike[bytes]  # stable
 
-OpenTextModeUpdating: TypeAlias = Literal[
-    "r+",
-    "+r",
-    "rt+",
-    "r+t",
-    "+rt",
-    "tr+",
-    "t+r",
-    "+tr",
-    "w+",
-    "+w",
-    "wt+",
-    "w+t",
-    "+wt",
-    "tw+",
-    "t+w",
-    "+tw",
-    "a+",
-    "+a",
-    "at+",
-    "a+t",
-    "+at",
-    "ta+",
-    "t+a",
-    "+ta",
-    "x+",
-    "+x",
-    "xt+",
-    "x+t",
-    "+xt",
-    "tx+",
-    "t+x",
-    "+tx",
-]
-OpenTextModeWriting: TypeAlias = Literal["w", "wt", "tw", "a", "at", "ta", "x", "xt", "tx"]
-OpenTextModeReading: TypeAlias = Literal["r", "rt", "tr", "U", "rU", "Ur", "rtU", "rUt", "Urt", "trU", "tUr", "Utr"]
-OpenTextMode: TypeAlias = OpenTextModeUpdating | OpenTextModeWriting | OpenTextModeReading
-OpenBinaryModeUpdating: TypeAlias = Literal[
-    "rb+",
-    "r+b",
-    "+rb",
-    "br+",
-    "b+r",
-    "+br",
-    "wb+",
-    "w+b",
-    "+wb",
-    "bw+",
-    "b+w",
-    "+bw",
-    "ab+",
-    "a+b",
-    "+ab",
-    "ba+",
-    "b+a",
-    "+ba",
-    "xb+",
-    "x+b",
-    "+xb",
-    "bx+",
-    "b+x",
-    "+bx",
-]
-OpenBinaryModeWriting: TypeAlias = Literal["wb", "bw", "ab", "ba", "xb", "bx"]
-OpenBinaryModeReading: TypeAlias = Literal["rb", "br", "rbU", "rUb", "Urb", "brU", "bUr", "Ubr"]
-OpenBinaryMode: TypeAlias = OpenBinaryModeUpdating | OpenBinaryModeReading | OpenBinaryModeWriting
+type OpenTextModeUpdating = "r+" | "+r" | "rt+" | "r+t" | "+rt" | "tr+" | "t+r" | "+tr" | "w+" | "+w" | "wt+" | "w+t" | "+wt" | "tw+" | "t+w" | "+tw" | "a+" | "+a" | "at+" | "a+t" | "+at" | "ta+" | "t+a" | "+ta" | "x+" | "+x" | "xt+" | "x+t" | "+xt" | "tx+" | "t+x" | "+tx"
+type OpenTextModeWriting = "w" | "wt" | "tw" | "a" | "at" | "ta" | "x" | "xt" | "tx"
+type OpenTextModeReading = "r" | "rt" | "tr" | "U" | "rU" | "Ur" | "rtU" | "rUt" | "Urt" | "trU" | "tUr" | "Utr"
+type OpenTextMode = OpenTextModeUpdating | OpenTextModeWriting | OpenTextModeReading
+type OpenBinaryModeUpdating = "rb+" | "r+b" | "+rb" | "br+" | "b+r" | "+br" | "wb+" | "w+b" | "+wb" | "bw+" | "b+w" | "+bw" | "ab+" | "a+b" | "+ab" | "ba+" | "b+a" | "+ba" | "xb+" | "x+b" | "+xb" | "bx+" | "b+x" | "+bx"
+type OpenBinaryModeWriting = "wb" | "bw" | "ab" | "ba" | "xb" | "bx"
+type OpenBinaryModeReading = "rb" | "br" | "rbU" | "rUb" | "Urb" | "brU" | "bUr" | "Ubr"
+type OpenBinaryMode = OpenBinaryModeUpdating | OpenBinaryModeReading | OpenBinaryModeWriting
 
 # stable
-class HasFileno(Protocol):
+protocol HasFileno:
     def fileno(self) -> int
 
-FileDescriptor: TypeAlias = int  # stable
-FileDescriptorLike: TypeAlias = int | HasFileno  # stable
-FileDescriptorOrPath: TypeAlias = int | StrOrBytesPath
+type FileDescriptor = int  # stable
+type FileDescriptorLike = int | HasFileno  # stable
+type FileDescriptorOrPath = int | StrOrBytesPath
 
 # stable
-class SupportsRead[out Element](Protocol):
+protocol SupportsRead[out Element]:
     def read(self, length: int = ..., /) -> Element
 
 # stable
-class SupportsReadline[out Element](Protocol):
+protocol SupportsReadline[out Element]:
     def readline(self, length: int = ..., /) -> Element
 
 # stable
-class SupportsNoArgReadline[out Element](Protocol):
+protocol SupportsNoArgReadline[out Element]:
     def readline(self) -> Element
 
 # stable
-class SupportsWrite[in Input](Protocol):
+protocol SupportsWrite[in Input]:
     def write(self, s: Input, /) -> object
 
 # stable
-class SupportsFlush(Protocol):
+protocol SupportsFlush:
     def flush(self) -> object
 
 # Suitable for dictionary view objects
-class Viewable[out Element](Protocol):
+protocol Viewable[out Element]:
     def __len__(self) -> int
     def __iter__(self) -> Iterator[Element]
 
-class SupportsGetItemViewable[in out Key, out Value](Protocol):
+protocol SupportsGetItemViewable[in out Key, out Value]:
     def __len__(self) -> int
     def __iter__(self) -> Iterator[Key]
     def __getitem__(self, key: Key, /) -> Value
@@ -277,28 +217,28 @@ class SupportsGetItemViewable[in out Key, out Value](Protocol):
 # from writable buffers. We use these aliases for readability for now.
 # Perhaps a future extension of the buffer protocol will allow us to
 # distinguish these cases in the type system.
-ReadOnlyBuffer: TypeAlias = Buffer  # stable
+type ReadOnlyBuffer = Buffer  # stable
 # Anything that implements the read-write buffer interface.
-WriteableBuffer: TypeAlias = Buffer
+type WriteableBuffer = Buffer
 # Same as WriteableBuffer, but also includes read-only buffer types (like bytes).
-ReadableBuffer: TypeAlias = Buffer  # stable
+type ReadableBuffer = Buffer  # stable
 
-class SliceableBuffer(Buffer, Protocol):
+protocol SliceableBuffer(Buffer):
     def __getitem__(self, slice: slice[SupportsIndex | None], /) -> Sequence[int]
 
-class IndexableBuffer(Buffer, Protocol):
+protocol IndexableBuffer(Buffer):
     def __getitem__(self, i: int, /) -> int
 
-class SupportsGetItemBuffer(SliceableBuffer, IndexableBuffer, Protocol):
+protocol SupportsGetItemBuffer(SliceableBuffer, IndexableBuffer):
     def __contains__(self, x: dynamic, /) -> bool
 
     def __getitem__(self, slice: slice[SupportsIndex | None], /) -> Sequence[int]
     def __getitem__(self, i: int, /) -> int
 
-class SizedBuffer(Sized, Buffer, Protocol)
+protocol SizedBuffer(Sized, Buffer)
 
-ExcInfo: TypeAlias = tuple[type[BaseException], BaseException, TracebackType]
-OptExcInfo: TypeAlias = ExcInfo | tuple[None, None, None]
+type ExcInfo = tuple[type[BaseException], BaseException, TracebackType]
+type OptExcInfo = ExcInfo | tuple[None, None, None]
 
 # This is an internal CPython type that is like, but subtly different from, a NamedTuple
 # Subclasses of this type are found in multiple modules.
@@ -306,9 +246,9 @@ OptExcInfo: TypeAlias = ExcInfo | tuple[None, None, None]
 # See discussion at #6546 & #6560
 # `structseq` classes are unsubclassable, so are all decorated with `@final`.
 class structseq[out Element]:
-    n_fields: Final[int]
-    n_unnamed_fields: Final[int]
-    n_sequence_fields: Final[int]
+    final n_fields: int
+    final n_unnamed_fields: int
+    final n_sequence_fields: int
     # The first parameter will generally only take an iterable of a specific length.
     # E.g. `os.uname_result` takes any iterable of length exactly 5.
     #
@@ -327,26 +267,24 @@ AnyOrLiteralStr = TypeVar("AnyOrLiteralStr", str, bytes, LiteralString)  # noqa:
 StrOrLiteralStr = TypeVar("StrOrLiteralStr", LiteralString, str)  # noqa: Y001
 
 # Objects suitable to be passed to sys.setprofile, threading.setprofile, and similar
-ProfileFunction: TypeAlias = Callable[[FrameType, Literal["call", "return", "c_call", "c_return", "c_exception"], Any], object]
+type ProfileFunction = (FrameType, Literal["call", "return", "c_call", "c_return", "c_exception"], dynamic) -> object
 
 # Objects suitable to be passed to sys.settrace, threading.settrace, and similar
-TraceFunction: TypeAlias = Callable[
-    [FrameType, Literal["call", "line", "return", "exception", "opcode"], Any], TraceFunction | None
-]
+type TraceFunction = (FrameType, Literal["call", "line", "return", "exception", "opcode"], dynamic) -> (TraceFunction | None)
 
 # experimental
 # Might not work as expected for pyright, see
 #   https://github.com/python/typeshed/pull/9362
 #   https://github.com/microsoft/pyright/issues/4339
-class DataclassInstance(Protocol):
+protocol DataclassInstance:
     __dataclass_fields__: ClassVar[dict[str, Field[dynamic]]]
 
 # Anything that can be passed to the int/float constructors
 if sys.version_info >= (3, 14):
-    ConvertibleToInt: TypeAlias = str | ReadableBuffer | SupportsInt | SupportsIndex
+    type ConvertibleToInt = str | ReadableBuffer | SupportsInt | SupportsIndex
 else:
-    ConvertibleToInt: TypeAlias = str | ReadableBuffer | SupportsInt | SupportsIndex | SupportsTrunc
-ConvertibleToFloat: TypeAlias = str | ReadableBuffer | SupportsFloat | SupportsIndex
+    type ConvertibleToInt = str | ReadableBuffer | SupportsInt | SupportsIndex | SupportsTrunc
+type ConvertibleToFloat = str | ReadableBuffer | SupportsFloat | SupportsIndex
 
 # A few classes updated from Foo(str, Enum) to Foo(StrEnum). This is a convenience so these
 # can be accurate on all python versions without getting too wordy
@@ -359,11 +297,11 @@ else:
 
 # Objects that appear in annotations or in type expressions.
 # Similar to PEP 747's TypeForm but a little broader.
-AnnotationForm: TypeAlias = Any
+type AnnotationForm = dynamic
 
 if sys.version_info >= (3, 14):
     from annotationlib import Format
 
     # These return annotations, which can be arbitrary objects
-    AnnotateFunc: TypeAlias = Callable[[Format], dict[str, AnnotationForm]]
-    EvaluateFunc: TypeAlias = Callable[[Format], AnnotationForm]
+    type AnnotateFunc = (Format) -> dict[str, AnnotationForm]
+    type EvaluateFunc = (Format) -> AnnotationForm

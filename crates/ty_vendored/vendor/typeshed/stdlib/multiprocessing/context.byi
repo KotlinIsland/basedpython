@@ -9,7 +9,7 @@ from multiprocessing.managers import SyncManager
 from multiprocessing.pool import Pool as _Pool
 from multiprocessing.process import BaseProcess
 from multiprocessing.sharedctypes import Synchronized, SynchronizedArray, SynchronizedString
-from typing import Any, ClassVar, Literal, TypeAlias, TypeVar
+from typing import ClassVar, Literal, TypeAlias, TypeVar
 
 if sys.platform != "win32":
     from multiprocessing.connection import Connection
@@ -18,7 +18,7 @@ else:
 
 __all__ = ()
 
-_LockLike: TypeAlias = synchronize.Lock | synchronize.RLock
+type _LockLike = synchronize.Lock | synchronize.RLock
 
 class ProcessError(Exception)
 class BufferTooShort(ProcessError)
@@ -65,11 +65,11 @@ class BaseContext:
     # The two connections should have the same generic types but inverted (Connection[_T1, _T2], Connection[_T2, _T1]).
     # However, TypeVars scoped entirely within a return annotation is unspecified in the spec.
     if sys.platform != "win32":
-        def Pipe(self, duplex: bool = True) -> (Connection[Any, Any], Connection[Any, Any]):
+        def Pipe(self, duplex: bool = True) -> (Connection[dynamic, dynamic], Connection[dynamic, dynamic]):
             """Returns two connection object connected by a pipe"""
 
     else:
-        def Pipe(self, duplex: bool = True) -> (PipeConnection[Any, Any], PipeConnection[Any, Any]):
+        def Pipe(self, duplex: bool = True) -> (PipeConnection[dynamic, dynamic], PipeConnection[dynamic, dynamic]):
             """Returns two connection object connected by a pipe"""
 
     def Barrier(
@@ -122,30 +122,30 @@ class BaseContext:
     def RawArray(self, typecode_or_type: str, size_or_initializer: int | Sequence[dynamic]) -> dynamic
 
     def Value[Element](
-        self, typecode_or_type: type[_SimpleCData[Element]], *args: dynamic, lock: Literal[True] | _LockLike = True
+        self, typecode_or_type: type[_SimpleCData[Element]], *args: dynamic, lock: True | _LockLike = True
     ) -> Synchronized[Element]:
         """Returns a synchronized shared object"""
-    def Value[CT: _CData](self, typecode_or_type: type[CT], *args: dynamic, lock: Literal[False]) -> Synchronized[CT]
-    def Value[CT: _CData](self, typecode_or_type: type[CT], *args: dynamic, lock: Literal[True] | _LockLike = True) -> Synchronized[CT]
-    def Value(self, typecode_or_type: str, *args: dynamic, lock: Literal[True] | _LockLike = True) -> Synchronized[dynamic]
+    def Value[CT: _CData](self, typecode_or_type: type[CT], *args: dynamic, lock: False) -> Synchronized[CT]
+    def Value[CT: _CData](self, typecode_or_type: type[CT], *args: dynamic, lock: True | _LockLike = True) -> Synchronized[CT]
+    def Value(self, typecode_or_type: str, *args: dynamic, lock: True | _LockLike = True) -> Synchronized[dynamic]
     def Value(self, typecode_or_type: str | type[_CData], *args: dynamic, lock: bool | _LockLike = True) -> dynamic
 
     def Array[Element](
-        self, typecode_or_type: type[_SimpleCData[Element]], size_or_initializer: int | Sequence[dynamic], *, lock: Literal[False]
+        self, typecode_or_type: type[_SimpleCData[Element]], size_or_initializer: int | Sequence[dynamic], *, lock: False
     ) -> SynchronizedArray[Element]:
         """Returns a synchronized shared array"""
     def Array(
-        self, typecode_or_type: type[c_char], size_or_initializer: int | Sequence[dynamic], *, lock: Literal[True] | _LockLike = True
+        self, typecode_or_type: type[c_char], size_or_initializer: int | Sequence[dynamic], *, lock: True | _LockLike = True
     ) -> SynchronizedString
     def Array[Element](
         self,
         typecode_or_type: type[_SimpleCData[Element]],
         size_or_initializer: int | Sequence[dynamic],
         *,
-        lock: Literal[True] | _LockLike = True,
+        lock: True | _LockLike = True,
     ) -> SynchronizedArray[Element]
     def Array(
-        self, typecode_or_type: str, size_or_initializer: int | Sequence[dynamic], *, lock: Literal[True] | _LockLike = True
+        self, typecode_or_type: str, size_or_initializer: int | Sequence[dynamic], *, lock: True | _LockLike = True
     ) -> SynchronizedArray[dynamic]
     def Array(
         self, typecode_or_type: str | type[_CData], size_or_initializer: int | Sequence[dynamic], *, lock: bool | _LockLike = True
@@ -177,7 +177,7 @@ class BaseContext:
 
     if sys.version_info >= (3, 15):
         def set_forkserver_preload(
-            self, module_names: list[str], *, on_error: Literal["ignore", "warn", "fail"] = "ignore"
+            self, module_names: list[str], *, on_error: "ignore" | "warn" | "fail" = "ignore"
         ) -> None:
             """Set list of module names to try to load in forkserver process.
 
@@ -193,14 +193,14 @@ class BaseContext:
             """
 
     def get_context(self, method: None = None) -> DefaultContext
-    def get_context(self, method: Literal["spawn"]) -> SpawnContext
+    def get_context(self, method: "spawn") -> SpawnContext
     if sys.platform != "win32":
-        def get_context(self, method: Literal["fork"]) -> ForkContext
-        def get_context(self, method: Literal["forkserver"]) -> ForkServerContext
+        def get_context(self, method: "fork") -> ForkContext
+        def get_context(self, method: "forkserver") -> ForkServerContext
 
     def get_context(self, method: str) -> BaseContext
 
-    def get_start_method(self, allow_none: Literal[False] = False) -> str
+    def get_start_method(self, allow_none: False = False) -> str
     def get_start_method(self, allow_none: bool) -> str | None
 
     def set_start_method(self, method: str | None, force: bool = False) -> None
@@ -211,7 +211,7 @@ class BaseContext:
         shared with other processes.
         """
     @reducer.setter
-    def reducer(self, reduction: str) -> None: ...
+    def reducer(self, reduction: str) -> None
 
     def _check_available(self) -> None
 
@@ -221,7 +221,7 @@ class Process(BaseProcess):
 
 class DefaultContext(BaseContext):
     Process: ClassVar[type[Process]]
-    def __init__(self, context: BaseContext) -> None
+    init(self, context: BaseContext)
     def get_start_method(self, allow_none: bool = False) -> str
     def get_all_start_methods(self) -> list[str]:
         """Returns a list of the supported start methods, default first."""

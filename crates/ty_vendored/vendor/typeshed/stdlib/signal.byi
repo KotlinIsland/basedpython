@@ -3,7 +3,7 @@ from _typeshed import structseq
 from collections.abc import Callable, Iterable
 from enum import IntEnum
 from types import FrameType
-from typing import Any, Final, TypeAlias, final
+from typing import Final, TypeAlias, final
 from typing_extensions import Never
 
 NSIG: int
@@ -69,8 +69,8 @@ class Handlers(IntEnum):
 SIG_DFL: Final = Handlers.SIG_DFL
 SIG_IGN: Final = Handlers.SIG_IGN
 
-_SIGNUM: TypeAlias = int | Signals
-_HANDLER: TypeAlias = Callable[[int, FrameType | None], Any] | int | Handlers | None
+type _SIGNUM = int | Signals
+type _HANDLER = ((int, FrameType | None) -> dynamic) | int | Handlers | None
 
 def default_int_handler(signalnum: int, frame: FrameType | None, /) -> Never:
     """The default handler for SIGINT installed by Python.
@@ -220,33 +220,19 @@ else:
 
             __match_args__: Final = ("si_signo", "si_code", "si_errno", "si_pid", "si_uid", "si_status", "si_band")
 
-            @property
-            def si_signo(self) -> int:
-                """signal number"""
+            let si_signo: int
 
-            @property
-            def si_code(self) -> int:
-                """signal code"""
+            let si_code: int
 
-            @property
-            def si_errno(self) -> int:
-                """errno associated with this signal"""
+            let si_errno: int
 
-            @property
-            def si_pid(self) -> int:
-                """sending process ID"""
+            let si_pid: int
 
-            @property
-            def si_uid(self) -> int:
-                """real user ID of sending process"""
+            let si_uid: int
 
-            @property
-            def si_status(self) -> int:
-                """exit value or signal"""
+            let si_status: int
 
-            @property
-            def si_band(self) -> int:
-                """band event for SIGPOLL"""
+            let si_band: int
 
         def sigtimedwait(sigset: Iterable[int], timeout: float, /) -> struct_siginfo | None:
             """Like sigwaitinfo(), but with a timeout.

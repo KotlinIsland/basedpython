@@ -184,7 +184,7 @@ from _typeshed import ReadableBuffer, Unused, WriteableBuffer
 from collections.abc import Iterable
 from enum import IntEnum, IntFlag
 from io import BufferedReader, BufferedRWPair, BufferedWriter, IOBase, RawIOBase, TextIOWrapper
-from typing import Any, Final, Literal, Protocol, SupportsIndex, type_check_only
+from typing import Final, Literal, Protocol, type_check_only
 from typing_extensions import Self
 
 __all__ = [
@@ -1255,9 +1255,9 @@ if sys.version_info >= (3, 14):
         __all__ += ["IP_FREEBIND", "IP_RECVORIGDSTADDR", "VMADDR_CID_LOCAL"]
 
 # Re-exported from errno
-EBADF: Final[int]
-EAGAIN: Final[int]
-EWOULDBLOCK: Final[int]
+final EBADF: int
+final EAGAIN: int
+final EWOULDBLOCK: int
 
 # These errors are implemented in _socket at runtime
 # but they consider themselves to live in socket so we'll put them here.
@@ -1490,7 +1490,7 @@ if sys.platform == "win32":
     errorTab: dict[int, str]  # undocumented
 
 @type_check_only
-class _SendableFile(Protocol):
+protocol _SendableFile:
     def read(self, size: int, /) -> bytes
     def seek(self, offset: int, /) -> object
 
@@ -1504,9 +1504,9 @@ class socket(_socket.socket):
     """A subclass of _socket.socket adding the makefile() method."""
 
     __slots__ = ["__weakref__", "_io_refs", "_closed"]
-    def __init__(
+    init(
         self, family: AddressFamily | int = -1, type: SocketKind | int = -1, proto: int = -1, fileno: int | None = None
-    ) -> None
+    )
     def __enter__(self) -> Self
     def __exit__(self, *args: Unused) -> None
     def dup(self) -> Self:
@@ -1528,8 +1528,8 @@ class socket(_socket.socket):
     # mode strings with duplicates are intentionally excluded
     def makefile(
         self,
-        mode: Literal["b", "rb", "br", "wb", "bw", "rwb", "rbw", "wrb", "wbr", "brw", "bwr"],
-        buffering: Literal[0],
+        mode: "b" | "rb" | "br" | "wb" | "bw" | "rwb" | "rbw" | "wrb" | "wbr" | "brw" | "bwr",
+        buffering: 0,
         *,
         encoding: str | None = None,
         errors: str | None = None,
@@ -1543,8 +1543,8 @@ class socket(_socket.socket):
         """
     def makefile(
         self,
-        mode: Literal["rwb", "rbw", "wrb", "wbr", "brw", "bwr"],
-        buffering: Literal[-1, 1] | None = None,
+        mode: "rwb" | "rbw" | "wrb" | "wbr" | "brw" | "bwr",
+        buffering: -1 | 1 | None = None,
         *,
         encoding: str | None = None,
         errors: str | None = None,
@@ -1552,8 +1552,8 @@ class socket(_socket.socket):
     ) -> BufferedRWPair
     def makefile(
         self,
-        mode: Literal["rb", "br"],
-        buffering: Literal[-1, 1] | None = None,
+        mode: "rb" | "br",
+        buffering: -1 | 1 | None = None,
         *,
         encoding: str | None = None,
         errors: str | None = None,
@@ -1561,8 +1561,8 @@ class socket(_socket.socket):
     ) -> BufferedReader
     def makefile(
         self,
-        mode: Literal["wb", "bw"],
-        buffering: Literal[-1, 1] | None = None,
+        mode: "wb" | "bw",
+        buffering: -1 | 1 | None = None,
         *,
         encoding: str | None = None,
         errors: str | None = None,
@@ -1570,7 +1570,7 @@ class socket(_socket.socket):
     ) -> BufferedWriter
     def makefile(
         self,
-        mode: Literal["b", "rb", "br", "wb", "bw", "rwb", "rbw", "wrb", "wbr", "brw", "bwr"],
+        mode: "b" | "rb" | "br" | "wb" | "bw" | "rwb" | "rbw" | "wrb" | "wbr" | "brw" | "bwr",
         buffering: int,
         *,
         encoding: str | None = None,
@@ -1579,7 +1579,7 @@ class socket(_socket.socket):
     ) -> IOBase
     def makefile(
         self,
-        mode: Literal["r", "w", "rw", "wr", ""] = "r",
+        mode: "r" | "w" | "rw" | "wr" | "" = "r",
         buffering: int | None = None,
         *,
         encoding: str | None = None,
@@ -1606,13 +1606,9 @@ class socket(_socket.socket):
         Non-blocking sockets are not supported.
         """
 
-    @property
-    def family(self) -> AddressFamily:
-        """Read-only access to the address family for this socket."""
+    let family: AddressFamily
 
-    @property
-    def type(self) -> SocketKind:
-        """Read-only access to the socket type."""
+    let type: SocketKind
 
     def get_inheritable(self) -> bool:
         """Get the inheritable flag of the socket"""
@@ -1636,7 +1632,7 @@ if sys.platform != "win32":
         Send the list of file descriptors fds over an AF_UNIX socket.
         """
 
-    def recv_fds(sock: socket, bufsize: int, maxfds: int, flags: int = 0) -> (bytes, list[int], int, Any):
+    def recv_fds(sock: socket, bufsize: int, maxfds: int, flags: int = 0) -> (bytes, list[int], int, dynamic):
         """recv_fds(sock, bufsize, maxfds[, flags]) -> (data, list of file
         descriptors, msg_flags, address)
 
@@ -1679,7 +1675,7 @@ class SocketIO(RawIOBase):
     the raw I/O interface on top of a socket object.
     """
 
-    def __init__(self, sock: socket, mode: Literal["r", "w", "rw", "rb", "wb", "rwb"]) -> None
+    init(self, sock: socket, mode: "r" | "w" | "rw" | "rb" | "wb" | "rwb")
     def readinto(self, b: WriteableBuffer) -> int | None:
         """Read up to len(b) bytes into the writable buffer *b* and return
         the number of bytes read.  If the socket is non-blocking and no bytes
@@ -1696,10 +1692,8 @@ class SocketIO(RawIOBase):
         non-blocking and no bytes could be written None is returned.
         """
 
-    @property
-    def name(self) -> int  # return value is really "int"
-    @property
-    def mode(self) -> Literal["rb", "wb", "rwb"]
+    let name: int  # return value is really "int"
+    let mode: "rb" | "wb" | "rwb"
 
 def getfqdn(name: str = "") -> str:
     """Get fully qualified domain name from name.

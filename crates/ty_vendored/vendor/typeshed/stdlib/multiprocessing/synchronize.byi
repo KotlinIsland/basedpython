@@ -7,19 +7,19 @@ from typing import TypeAlias
 
 __all__ = ["Lock", "RLock", "Semaphore", "BoundedSemaphore", "Condition", "Event"]
 
-_LockLike: TypeAlias = Lock | RLock
+type _LockLike = Lock | RLock
 
 class Barrier(threading.Barrier):
-    def __init__(
-        self, parties: int, action: Callable[[], object] | None = None, timeout: float | None = None, *, ctx: BaseContext
-    ) -> None
+    init(
+        self, parties: int, action: (() -> object) | None = None, timeout: float | None = None, *, ctx: BaseContext
+    )
 
 class Condition:
-    def __init__(self, lock: _LockLike | None = None, *, ctx: BaseContext) -> None
+    init(self, lock: _LockLike | None = None, *, ctx: BaseContext)
     def notify(self, n: int = 1) -> None
     def notify_all(self) -> None
     def wait(self, timeout: float | None = None) -> bool
-    def wait_for(self, predicate: Callable[[], bool], timeout: float | None = None) -> bool
+    def wait_for(self, predicate: () -> bool, timeout: float | None = None) -> bool
     def __enter__(self) -> bool
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None, /
@@ -30,7 +30,7 @@ class Condition:
     def release(self) -> None
 
 class Event:
-    def __init__(self, *, ctx: BaseContext) -> None
+    init(self, *, ctx: BaseContext)
     def is_set(self) -> bool
     def set(self) -> None
     def clear(self) -> None
@@ -38,7 +38,7 @@ class Event:
 
 # Not part of public API
 class SemLock:
-    def __init__(self, kind: int, value: int, maxvalue: int, *, ctx: BaseContext | None) -> None
+    init(self, kind: int, value: int, maxvalue: int, *, ctx: BaseContext | None)
     def __enter__(self) -> bool
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None, /
@@ -50,13 +50,13 @@ class SemLock:
         def locked(self) -> bool
 
 class Lock(SemLock):
-    def __init__(self, *, ctx: BaseContext) -> None
+    init(self, *, ctx: BaseContext)
 
 class RLock(SemLock):
-    def __init__(self, *, ctx: BaseContext) -> None
+    init(self, *, ctx: BaseContext)
 
 class Semaphore(SemLock):
-    def __init__(self, value: int = 1, *, ctx: BaseContext) -> None
+    init(self, value: int = 1, *, ctx: BaseContext)
     def get_value(self) -> int:
         """Returns current value of Semaphore.
 
@@ -65,4 +65,4 @@ class Semaphore(SemLock):
         """
 
 class BoundedSemaphore(Semaphore):
-    def __init__(self, value: int = 1, *, ctx: BaseContext) -> None
+    init(self, value: int = 1, *, ctx: BaseContext)

@@ -17,7 +17,7 @@ if sys.platform == "win32":
         left.
         """
 
-        def __init__(self, *args, **kw) -> None:
+        init(self, *args, **kw):
             """Dialog(database, name, x, y, w, h, attributes, title, first,
             default, cancel, bitmap=true)
             """
@@ -25,21 +25,21 @@ if sys.platform == "win32":
         def title(self, title) -> None:
             """Set the title text of the dialog at the top."""
 
-        def back(self, title, next, name: str = "Back", active: bool | Literal[0, 1] = 1) -> Control:
+        def back(self, title, next, name: str = "Back", active: bool | 0 | 1 = 1) -> Control:
             """Add a back button with a given title, the tab-next button,
             its name in the Control table, possibly initially disabled.
 
             Return the button, so that events can be associated
             """
 
-        def cancel(self, title, next, name: str = "Cancel", active: bool | Literal[0, 1] = 1) -> Control:
+        def cancel(self, title, next, name: str = "Cancel", active: bool | 0 | 1 = 1) -> Control:
             """Add a cancel button with a given title, the tab-next button,
             its name in the Control table, possibly initially disabled.
 
             Return the button, so that events can be associated
             """
 
-        def next(self, title, next, name: str = "Next", active: bool | Literal[0, 1] = 1) -> Control:
+        def next(self, title, next, name: str = "Next", active: bool | 0 | 1 = 1) -> Control:
             """Add a Next button with a given title, the tab-next button,
             its name in the Control table, possibly initially disabled.
 
@@ -60,7 +60,7 @@ if sys.platform == "win32":
         boolean_options: ClassVar[list[str]]
         all_versions: Incomplete
         other_version: str
-        def __init__(self, *args, **kw) -> None
+        init(self, *args, **kw)
         bdist_dir: Incomplete
         plat_name: Incomplete
         keep_temp: int

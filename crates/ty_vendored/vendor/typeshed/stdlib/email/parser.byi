@@ -12,7 +12,7 @@ from typing import Generic
 __all__ = ["Parser", "HeaderParser", "BytesParser", "BytesHeaderParser", "FeedParser", "BytesFeedParser"]
 
 class Parser(Generic[_MessageT]):
-    def __init__(self: Parser[Message[str, str]], _class: None = None) -> None:
+    init(self: Parser[Message[str, str]], _class: None = None):
         """Parser of RFC 5322 and MIME email messages.
 
         Creates an in-memory object tree representing the email message, which
@@ -33,8 +33,8 @@ class Parser(Generic[_MessageT]):
         backward compatibility.
 
         """
-    def __init__(self, _class: None = None, *, policy: Policy[_MessageT]) -> None
-    def __init__(self, _class: Callable[[], _MessageT] | None, *, policy: Policy[_MessageT] = ...) -> None
+    init(self, _class: None = None, *, policy: Policy[_MessageT])
+    init(self, _class: (() -> _MessageT) | None, *, policy: Policy[_MessageT] = ...)
 
     def parse(self, fp: SupportsRead[str], headersonly: bool = False) -> _MessageT:
         """Create a message structure from the data in a file.
@@ -61,7 +61,7 @@ class HeaderParser(Parser[_MessageT]):
 class BytesParser(Generic[_MessageT]):
     parser: Parser[_MessageT]
 
-    def __init__(self: BytesParser[Message[str, str]], _class: None = None) -> None:
+    init(self: BytesParser[Message[str, str]], _class: None = None):
         """Parser of binary RFC 5322 and MIME email messages.
 
         Creates an in-memory object tree representing the email message, which
@@ -77,8 +77,8 @@ class BytesParser(Generic[_MessageT]):
         must be created.  This class must have a constructor that can take
         zero arguments.  Default is Message.Message.
         """
-    def __init__(self, _class: None = None, *, policy: Policy[_MessageT]) -> None
-    def __init__(self, _class: Callable[[], _MessageT], *, policy: Policy[_MessageT] = ...) -> None
+    init(self, _class: None = None, *, policy: Policy[_MessageT])
+    init(self, _class: () -> _MessageT, *, policy: Policy[_MessageT] = ...)
 
     def parse(self, fp: _WrappedBuffer, headersonly: bool = False) -> _MessageT:
         """Create a message structure from the data in a binary file.

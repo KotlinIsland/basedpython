@@ -23,7 +23,7 @@ def traverse_imports(names) -> Generator[str]:
     """
 
 class FixImport(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[True]]
+    BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     skip: bool
     def start_tree(self, tree: Node, name: StrPath) -> None

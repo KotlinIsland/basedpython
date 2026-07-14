@@ -22,7 +22,7 @@ you - by calling your self.found_terminator() method.
 import asyncore
 
 class simple_producer:
-    def __init__(self, data: bytes, buffer_size: int = 512) -> None
+    init(self, data: bytes, buffer_size: int = 512)
     def more(self) -> bytes
 
 class async_chat(asyncore.dispatcher):

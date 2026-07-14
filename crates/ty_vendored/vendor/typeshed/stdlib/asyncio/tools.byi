@@ -3,7 +3,7 @@
 import sys
 from collections.abc import Iterable
 from enum import Enum
-from typing import NamedTuple, SupportsIndex, type_check_only
+from typing import NamedTuple, type_check_only
 
 @type_check_only
 class _AwaitedInfo(NamedTuple):  # AwaitedInfo_Type from _remote_debugging
@@ -37,7 +37,7 @@ class CycleFoundException(Exception):
 
     cycles: list[list[int]]
     id2name: dict[int, str]
-    def __init__(self, cycles: list[list[int]], id2name: dict[int, str]) -> None
+    init(self, cycles: list[list[int]], id2name: dict[int, str])
 
 def get_all_awaited_by(pid: SupportsIndex) -> list[_AwaitedInfo]
 def build_async_tree(result: Iterable[_AwaitedInfo], task_emoji: str = "(T)", cor_emoji: str = "") -> list[list[str]]:

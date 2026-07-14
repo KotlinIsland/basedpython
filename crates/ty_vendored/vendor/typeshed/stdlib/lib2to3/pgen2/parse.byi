@@ -15,7 +15,7 @@ from ..pytree import _NL, _RawNode
 from . import _Convert
 from .grammar import _DFAS, Grammar
 
-_Context: TypeAlias = Sequence[Incomplete]
+type _Context = Sequence[Incomplete]
 
 class ParseError(Exception):
     """Exception to signal the parser is stuck."""
@@ -24,7 +24,7 @@ class ParseError(Exception):
     type: int
     value: str | None
     context: _Context
-    def __init__(self, msg: str, type: int, value: str | None, context: _Context) -> None
+    init(self, msg: str, type: int, value: str | None, context: _Context)
 
 class Parser:
     """Parser engine.
@@ -61,7 +61,7 @@ class Parser:
     stack: list[(_DFAS, int, _RawNode)]
     rootnode: _NL | None
     used_names: set[str]
-    def __init__(self, grammar: Grammar, convert: _Convert | None = None) -> None:
+    init(self, grammar: Grammar, convert: _Convert | None = None):
         """Constructor.
 
         The grammar argument is a grammar.Grammar instance; see the

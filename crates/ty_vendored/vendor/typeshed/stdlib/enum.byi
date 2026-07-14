@@ -4,7 +4,7 @@ import types
 from _typeshed import SupportsKeysAndGetItem, Unused
 from builtins import property as _builtins_property
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from typing import Any, Final, Generic, Literal, SupportsIndex, TypeAlias, TypeVar
+from typing import Final, Generic, Literal, TypeAlias, TypeVar
 from typing_extensions import Self, disjoint_base
 
 __all__ = ["EnumMeta", "Enum", "IntEnum", "Flag", "IntFlag", "auto", "unique"]
@@ -52,8 +52,8 @@ if sys.version_info >= (3, 15):
 # <enum 'Foo'>
 # >>> Enum('Foo', names={'RED': 1, 'YELLOW': 2})
 # <enum 'Foo'>
-_EnumNames: TypeAlias = str | Iterable[str] | Iterable[Iterable[str | Any]] | Mapping[str, Any]
-_Signature: TypeAlias = Any  # TODO: Unable to import Signature from inspect module
+type _EnumNames = str | Iterable[str] | Iterable[Iterable[str | dynamic]] | Mapping[str, dynamic]
+type _Signature = dynamic  # TODO: Unable to import Signature from inspect module
 
 if sys.version_info >= (3, 11):
     class nonmember[in out EnumMemberT]:
@@ -62,7 +62,7 @@ if sys.version_info >= (3, 11):
         """
 
         value: EnumMemberT
-        def __init__(self, value: EnumMemberT) -> None
+        init(self, value: EnumMemberT)
 
     class member[in out EnumMemberT]:
         """
@@ -70,9 +70,9 @@ if sys.version_info >= (3, 11):
         """
 
         value: EnumMemberT
-        def __init__(self, value: EnumMemberT) -> None
+        init(self, value: EnumMemberT)
 
-class _EnumDict(dict[str, Any]):
+class _EnumDict(dict[str, dynamic]):
     """
     Track enum member order and ensure member names are not reused.
 
@@ -102,7 +102,7 @@ class _EnumDict(dict[str, Any]):
         # Unlike with MutableMapping.update(), the first argument is required,
         # hence the type: ignore
         def update(self, members: SupportsKeysAndGetItem[str, dynamic], **more_members: dynamic) -> None
-        def update(self, members: Iterable[(str, Any)], **more_members: dynamic) -> None
+        def update(self, members: Iterable[(str, dynamic)], **more_members: dynamic) -> None
 
     if sys.version_info >= (3, 13):
         @property
@@ -133,7 +133,7 @@ class EnumMeta(type):
             metacls: type[_typeshed.Self], cls: str, bases: (*: type), classdict: _EnumDict, **kwds: dynamic
         ) -> _typeshed.Self
 
-    class def __prepare__(metacls, cls: str, bases: (*: type), **kwds: dynamic) -> _EnumDict  # type: ignore[override]
+    class def __prepare__(metacls, cls: str, bases: (*: type), **kwds: dynamic) -> _EnumDict
     def __iter__[EnumMemberT](self: type[EnumMemberT]) -> Iterator[EnumMemberT]:
         """
         Return members in definition order.
@@ -186,7 +186,7 @@ class EnumMeta(type):
         Return the number of members (no aliases)
         """
 
-    def __bool__(self) -> Literal[True]:
+    def __bool__(self) -> True:
         """
         classes/types should always be True.
         """
@@ -447,7 +447,7 @@ class Enum(metaclass=EnumMeta):
         Returns format using actual value type unless __str__ has been overridden.
         """
 
-    def __reduce_ex__(self, proto: Unused) -> (*: Any)
+    def __reduce_ex__(self, proto: Unused) -> (*: dynamic)
     if sys.version_info >= (3, 11):
         def __copy__(self) -> Self
         def __deepcopy__(self, memo: dynamic) -> Self
@@ -509,11 +509,11 @@ class Flag(Enum):
     Support for flags
     """
 
-    _name_: str | None  # type: ignore[assignment]
+    _name_: str | None
     _value_: int
-    _numeric_repr_: Callable[[int], str]
+    _numeric_repr_: (int) -> str
     @_magic_enum_attr
-    def name(self) -> str | None:  # type: ignore[override]
+    def name(self) -> str | None:
         """The name of the Enum member."""
 
     @_magic_enum_attr
@@ -576,7 +576,7 @@ if sys.version_info >= (3, 11):
         Check an enumeration for various constraints. (see EnumCheck)
         """
 
-        def __init__(self, *checks: EnumCheck) -> None
+        init(self, *checks: EnumCheck)
         def __call__[EnumerationT: type[Enum]](self, enumeration: EnumerationT) -> EnumerationT
 
     class FlagBoundary(StrEnum):
@@ -639,7 +639,7 @@ if sys.version_info >= (3, 11):
 
 if sys.version_info >= (3, 12):
     # The body of the class is the same, but the base classes are different.
-    class IntFlag(int, ReprEnum, Flag, boundary=KEEP):  # type: ignore[misc]  # complaints about incompatible bases
+    class IntFlag(int, ReprEnum, Flag, boundary=KEEP):
         """
         Support for integer-based Flags
         """
@@ -656,7 +656,7 @@ if sys.version_info >= (3, 12):
 elif sys.version_info >= (3, 11):
     # The body of the class is the same, but the base classes are different.
     @disjoint_base
-    class IntFlag(int, ReprEnum, Flag, boundary=KEEP):  # type: ignore[misc]  # complaints about incompatible bases
+    class IntFlag(int, ReprEnum, Flag, boundary=KEEP):
         """
         Support for integer-based Flags
         """
@@ -672,7 +672,7 @@ elif sys.version_info >= (3, 11):
 
 else:
     @disjoint_base
-    class IntFlag(int, Flag):  # type: ignore[misc]  # complaints about incompatible bases
+    class IntFlag(int, Flag):
         """
         Support for integer-based Flags
         """
@@ -714,4 +714,4 @@ class auto:
 
 if sys.version_info >= (3, 11):
     def pickle_by_global_name(self: Enum, proto: int) -> str
-    def pickle_by_enum_name[EnumMemberT](self: EnumMemberT, proto: int) -> tuple[(...) -> Any, tuple[type[EnumMemberT], str]]
+    def pickle_by_enum_name[EnumMemberT](self: EnumMemberT, proto: int) -> tuple[(...) -> dynamic, tuple[type[EnumMemberT], str]]

@@ -7,7 +7,7 @@ from collections.abc import Iterable
 from typing import Final, Literal, TypeAlias
 from typing_extensions import Self, disjoint_base
 
-__version__: Final[str]
+final __version__: str
 
 QUOTE_ALL: Final = 1
 QUOTE_MINIMAL: Final = 0
@@ -18,13 +18,13 @@ if sys.version_info >= (3, 12):
     QUOTE_NOTNULL: Final = 5
 
 if sys.version_info >= (3, 12):
-    _QuotingType: TypeAlias = Literal[0, 1, 2, 3, 4, 5]
+    type _QuotingType = 0 | 1 | 2 | 3 | 4 | 5
 else:
-    _QuotingType: TypeAlias = Literal[0, 1, 2, 3]
+    type _QuotingType = 0 | 1 | 2 | 3
 
 class Error(Exception)
 
-_DialectLike: TypeAlias = str | Dialect | csv.Dialect | type[Dialect | csv.Dialect]
+type _DialectLike = str | Dialect | csv.Dialect | type[Dialect | csv.Dialect]
 
 @disjoint_base
 class Dialect:
@@ -63,8 +63,7 @@ class Reader:
     in CSV format.
     """
 
-    @property
-    def dialect(self) -> Dialect
+    let dialect: Dialect
     line_num: int
     def __iter__(self) -> Self:
         """Implement iter(self)."""
@@ -81,8 +80,7 @@ class Writer:
     in CSV format from sequence input.
     """
 
-    @property
-    def dialect(self) -> Dialect
+    let dialect: Dialect
     if sys.version_info >= (3, 13):
         def writerow(self, row: Iterable[dynamic], /) -> dynamic:
             """Construct and write a CSV record from an iterable of fields.

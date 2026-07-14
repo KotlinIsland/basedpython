@@ -77,7 +77,7 @@ from _typeshed import MaybeNone, ReadableBuffer, StrOrBytesPath, SupportsRead, S
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from email._policybase import _MessageT
 from socket import socket
-from typing import BinaryIO, Final, TypeAlias, TypeVar
+from typing import Final, TypeAlias, TypeVar
 from typing_extensions import Self, deprecated
 
 __all__ = [
@@ -102,8 +102,8 @@ __all__ = [
     "HTTPSConnection",
 ]
 
-_DataType: TypeAlias = SupportsRead[bytes] | Iterable[ReadableBuffer] | ReadableBuffer
-_HeaderValue: TypeAlias = ReadableBuffer | str | int
+type _DataType = SupportsRead[bytes] | Iterable[ReadableBuffer] | ReadableBuffer
+type _HeaderValue = ReadableBuffer | str | int
 
 HTTP_PORT: Final = 80
 HTTPS_PORT: Final = 443
@@ -199,11 +199,11 @@ class HTTPMessage(email.message.Message[str, str]):
 
         """
 
-def parse_headers(fp: SupportsReadline[bytes], _class: Callable[[], _MessageT]) -> _MessageT:
+def parse_headers(fp: SupportsReadline[bytes], _class: () -> _MessageT) -> _MessageT:
     """Parses only RFC 5322 headers from a file pointer."""
 def parse_headers(fp: SupportsReadline[bytes]) -> HTTPMessage
 
-class HTTPResponse(io.BufferedIOBase, BinaryIO):  # type: ignore[misc]  # incompatible method definitions in the base classes
+class HTTPResponse(io.BufferedIOBase, BinaryIO):
     msg: HTTPMessage
     headers: HTTPMessage
     version: int
@@ -220,7 +220,7 @@ class HTTPResponse(io.BufferedIOBase, BinaryIO):  # type: ignore[misc]  # incomp
     # to match urllib.response.addinfourl's interface.
     # It's not set in HTTPResponse.__init__ or any other method on the class
     url: str
-    def __init__(self, sock: socket, debuglevel: int = 0, method: str | None = None, url: str | None = None) -> None
+    init(self, sock: socket, debuglevel: int = 0, method: str | None = None, url: str | None = None)
     def peek(self, n: int = -1) -> bytes
     def read(self, amt: int | None = None) -> bytes:
         """Read and return the response body, or up to the next amt bytes."""
@@ -235,7 +235,7 @@ class HTTPResponse(io.BufferedIOBase, BinaryIO):  # type: ignore[misc]  # incomp
         of bytes read.
         """
 
-    def readline(self, limit: int = -1) -> bytes  # type: ignore[override]
+    def readline(self, limit: int = -1) -> bytes
 
     def getheader(self, name: str) -> str | None:
         """Returns the value of the header matching *name*.
@@ -501,13 +501,13 @@ class NotConnected(HTTPException)
 class InvalidURL(HTTPException)
 
 class UnknownProtocol(HTTPException):
-    def __init__(self, version: str) -> None
+    init(self, version: str)
 
 class UnknownTransferEncoding(HTTPException)
 class UnimplementedFileMode(HTTPException)
 
 class IncompleteRead(HTTPException):
-    def __init__(self, partial: bytes, expected: int | None = None) -> None
+    init(self, partial: bytes, expected: int | None = None)
     partial: bytes
     expected: int | None
 
@@ -517,9 +517,9 @@ class CannotSendHeader(ImproperConnectionState)
 class ResponseNotReady(ImproperConnectionState)
 
 class BadStatusLine(HTTPException):
-    def __init__(self, line: str) -> None
+    init(self, line: str)
 
 class LineTooLong(HTTPException):
-    def __init__(self, line_type: str) -> None
+    init(self, line_type: str)
 
 class RemoteDisconnected(ConnectionResetError, BadStatusLine)

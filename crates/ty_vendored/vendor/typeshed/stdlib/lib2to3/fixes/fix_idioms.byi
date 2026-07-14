@@ -30,11 +30,11 @@ from typing import ClassVar, Final, Literal
 
 from .. import fixer_base
 
-CMP: Final[str]
-TYPE: Final[str]
+final CMP: str
+final TYPE: str
 
 class FixIdioms(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[False]]
+    BM_compatible: ClassVar[False]
     PATTERN: ClassVar[str]
     def match(self, node)
     def transform(self, node, results)

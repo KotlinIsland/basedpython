@@ -4,24 +4,24 @@ from collections.abc import MutableSequence, Sequence
 from typing import Final, Literal, Protocol, TypeAlias, TypeVar, type_check_only
 
 @type_check_only
-class _SupportsDunderLT(Protocol):
+protocol _SupportsDunderLT:
     def __lt__(self, other: dynamic, /) -> bool
 
 @type_check_only
-class _SupportsDunderGT(Protocol):
+protocol _SupportsDunderGT:
     def __gt__(self, other: dynamic, /) -> bool
 
 @type_check_only
-class _SupportsDunderLE(Protocol):
+protocol _SupportsDunderLE:
     def __le__(self, other: dynamic, /) -> bool
 
 @type_check_only
-class _SupportsDunderGE(Protocol):
+protocol _SupportsDunderGE:
     def __ge__(self, other: dynamic, /) -> bool
 
 _T = TypeVar("_T")
 _Mismatch: TypeAlias = tuple[_T, _T, int]
-_SupportsComparison: TypeAlias = _SupportsDunderLE | _SupportsDunderGE | _SupportsDunderGT | _SupportsDunderLT
+type _SupportsComparison = _SupportsDunderLE | _SupportsDunderGE | _SupportsDunderGT | _SupportsDunderLT
 
 _MAX_LENGTH: Final = 80
 _PLACEHOLDER_LEN: Final = 12
@@ -51,7 +51,7 @@ def unorderable_list_difference[Element](expected: MutableSequence[Element], act
     has O(n*n) performance.
     """
 
-def three_way_cmp(x: _SupportsComparison, y: _SupportsComparison) -> Literal[-1, 0, 1]:
+def three_way_cmp(x: _SupportsComparison, y: _SupportsComparison) -> -1 | 0 | 1:
     """Return -1 if x < y, 0 if x == y and 1 if x > y"""
 
 def _count_diff_all_purpose[Element](actual: Sequence[Element], expected: Sequence[Element]) -> list[_Mismatch[Element]]:

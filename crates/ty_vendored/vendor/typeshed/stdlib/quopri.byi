@@ -6,7 +6,7 @@ from typing import Protocol, type_check_only
 __all__ = ["encode", "decode", "encodestring", "decodestring"]
 
 @type_check_only
-class _Input(SupportsRead[bytes], SupportsNoArgReadline[bytes], Protocol)
+protocol _Input(SupportsRead[bytes], SupportsNoArgReadline[bytes])
 
 def encode(input: _Input, output: SupportsWrite[bytes], quotetabs: int, header: bool = False) -> None:
     """Read 'input', apply quoted-printable encoding, and write to 'output'.

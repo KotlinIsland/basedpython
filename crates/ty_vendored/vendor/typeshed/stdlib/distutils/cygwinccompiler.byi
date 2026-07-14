@@ -26,7 +26,7 @@ CONFIG_H_OK: Final = "ok"
 CONFIG_H_NOTOK: Final = "not ok"
 CONFIG_H_UNCERTAIN: Final = "uncertain"
 
-def check_config_h() -> (Literal["ok", "not ok", "uncertain"], str):
+def check_config_h() -> ("ok" | "not ok" | "uncertain", str):
     """Check if the current Python installation appears amenable to building
     extensions with GCC.
 
@@ -44,7 +44,7 @@ def check_config_h() -> (Literal["ok", "not ok", "uncertain"], str):
     installed "pyconfig.h" contains the string "__GNUC__".
     """
 
-RE_VERSION: Final[Pattern[bytes]]
+final RE_VERSION: Pattern[bytes]
 
 def get_versions() -> (*: LooseVersion | None):
     """Try to find out the versions of gcc, ld and dllwrap.

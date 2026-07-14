@@ -1,5 +1,23 @@
 //! concrete typeshed patches, one module per semantic adjustment. register
-//! each in `all_patches()` in the crate root
+//! legacy-form patches in `all_patches()` and post-conversion beautifiers in
+//! `all_post_patches()`, both in the crate root
 
+pub mod any_to_dynamic;
+pub mod arrow_callable;
+pub mod builtins_tweaks;
+pub mod cleanup;
+pub mod dead_symbols;
+pub mod dead_typevars;
+pub mod final_annotation;
+pub mod final_modifier;
+pub mod homogeneous_tuple;
+pub mod init_shorthand;
+pub mod literal_unwrap;
 pub mod mapping;
 pub mod output_widening;
+pub mod property_to_let;
+pub mod protocol_keyword;
+pub mod redundant_overloads;
+pub mod stray_comments;
+pub mod strip_typing_imports;
+pub mod type_aliases;

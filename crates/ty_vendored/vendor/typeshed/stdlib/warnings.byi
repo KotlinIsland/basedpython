@@ -5,7 +5,7 @@ import sys
 from _warnings import warn as warn, warn_explicit as warn_explicit
 from collections.abc import Sequence
 from types import ModuleType, TracebackType
-from typing import Generic, Literal, TextIO, TypeAlias
+from typing import Generic, Literal, TypeAlias
 from typing_extensions import LiteralString, TypeVar
 
 __all__ = [
@@ -24,9 +24,9 @@ if sys.version_info >= (3, 13):
 
 
 if sys.version_info >= (3, 14):
-    _ActionKind: TypeAlias = Literal["default", "error", "ignore", "always", "module", "once"]
+    type _ActionKind = "default" | "error" | "ignore" | "always" | "module" | "once"
 else:
-    _ActionKind: TypeAlias = Literal["default", "error", "ignore", "always", "all", "module", "once"]
+    type _ActionKind = "default" | "error" | "ignore" | "always" | "all" | "module" | "once"
 filters: Sequence[(str, re.Pattern[str] | None, type[Warning] | (*: type[Warning]), re.Pattern[str] | None, int)]  # undocumented, do not mutate
 
 def showwarning(
@@ -133,7 +133,7 @@ class catch_warnings[out W: list[WarningMessage] | None = list[WarningMessage] |
         def __init__(
             self: catch_warnings[None],
             *,
-            record: Literal[False] = False,
+            record: False = False,
             module: ModuleType | None = None,
             action: _ActionKind | None = None,
             category: type[Warning] | (*: type[Warning]) = ...,
@@ -147,7 +147,7 @@ class catch_warnings[out W: list[WarningMessage] | None = list[WarningMessage] |
         def __init__(
             self: catch_warnings[list[WarningMessage]],
             *,
-            record: Literal[True],
+            record: True,
             module: ModuleType | None = None,
             action: _ActionKind | None = None,
             category: type[Warning] | (*: type[Warning]) = ...,
@@ -165,7 +165,7 @@ class catch_warnings[out W: list[WarningMessage] | None = list[WarningMessage] |
             append: bool = False,
         ) -> None
     else:
-        def __init__(self: catch_warnings[None], *, record: Literal[False] = False, module: ModuleType | None = None) -> None:
+        def __init__(self: catch_warnings[None], *, record: False = False, module: ModuleType | None = None) -> None:
             """Specify whether to record warnings and if an alternative module
             should be used other than sys.modules['warnings'].
 
@@ -174,7 +174,7 @@ class catch_warnings[out W: list[WarningMessage] | None = list[WarningMessage] |
 
             """
         def __init__(
-            self: catch_warnings[list[WarningMessage]], *, record: Literal[True], module: ModuleType | None = None
+            self: catch_warnings[list[WarningMessage]], *, record: True, module: ModuleType | None = None
         ) -> None
         def __init__(self, *, record: bool, module: ModuleType | None = None) -> None
 
@@ -230,5 +230,5 @@ if sys.version_info >= (3, 13):
         message: LiteralString
         category: type[Warning] | None
         stacklevel: int
-        def __init__(self, message: LiteralString, /, *, category: type[Warning] | None = ..., stacklevel: int = 1) -> None
+        init(self, message: LiteralString, /, *, category: type[Warning] | None = ..., stacklevel: int = 1)
         def __call__[Element](self, arg: Element, /) -> Element

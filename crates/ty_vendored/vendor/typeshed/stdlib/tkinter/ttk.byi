@@ -18,7 +18,7 @@ import tkinter
 from _typeshed import MaybeNone
 from collections.abc import Callable, Iterable, Sequence
 from tkinter.font import _FontDescription
-from typing import Any, Literal, ParamSpec, TypeAlias, TypedDict, TypeVar, type_check_only
+from typing import Literal, ParamSpec, TypeAlias, TypedDict, TypeVar, type_check_only
 from typing_extensions import Never, Unpack
 
 __all__ = [
@@ -63,7 +63,7 @@ def setup_master(master: tkinter.Misc | None = None):
     RuntimeError is raised.
     """
 
-_Padding: TypeAlias = (
+type _Padding = (
     float
     | str
     | tuple[float | str]
@@ -75,21 +75,21 @@ _Padding: TypeAlias = (
 # Last item (option value to apply) varies between different options so use Any.
 # It could also be any iterable with items matching the tuple, but that case
 # hasn't been added here for consistency with _Padding above.
-_Statespec: TypeAlias = tuple[Unpack[tuple[str, ...]], Any]
-_ImageStatespec: TypeAlias = tuple[Unpack[tuple[str, ...]], tkinter._Image | str]
-_VsapiStatespec: TypeAlias = tuple[Unpack[tuple[str, ...]], int]
+type _Statespec = tuple[Unpack[(*: str)], dynamic]
+type _ImageStatespec = tuple[Unpack[(*: str)], tkinter._Image | str]
+type _VsapiStatespec = tuple[Unpack[(*: str)], int]
 
 
 @type_check_only
 class _Layout(TypedDict, total=False):
-    side: Literal["left", "right", "top", "bottom"]
+    side: "left" | "right" | "top" | "bottom"
     sticky: str  # consists of letters 'n', 's', 'w', 'e', may contain repeats, may be empty
-    unit: Literal[0, 1] | bool
+    unit: 0 | 1 | bool
     children: _LayoutSpec
     # Note: there seem to be some other undocumented keys sometimes
 
 # This could be any sequence when passed as a parameter but will always be a list when returned.
-_LayoutSpec: TypeAlias = list[tuple[str, _Layout | None]]
+type _LayoutSpec = list[tuple[str, _Layout | None]]
 
 # Keep these in sync with the appropriate methods in Style
 @type_check_only
@@ -100,11 +100,11 @@ class _ElementCreateImageKwargs(TypedDict, total=False):
     sticky: str
     width: float | str
 
-_ElementCreateArgsCrossPlatform: TypeAlias = (
+type _ElementCreateArgsCrossPlatform = (
     # Could be any sequence here but types are not homogenous so just type it as tuple
-    tuple[Literal["image"], tkinter._Image | str, Unpack[tuple[_ImageStatespec, ...]], _ElementCreateImageKwargs]
-    | tuple[Literal["from"], str, str]
-    | tuple[Literal["from"], str]  # (fromelement is optional)
+    tuple["image", tkinter._Image | str, Unpack[(*: _ImageStatespec)], _ElementCreateImageKwargs]
+    | tuple["from", str, str]
+    | tuple["from", str]  # (fromelement is optional)
 )
 if sys.platform == "win32" and sys.version_info >= (3, 13):
     @type_check_only
@@ -120,34 +120,34 @@ if sys.platform == "win32" and sys.version_info >= (3, 13):
         width: float | str
         height: float | str
 
-    _ElementCreateVsapiKwargsDict: TypeAlias = (
+    type _ElementCreateVsapiKwargsDict = (
         _ElementCreateVsapiKwargsPadding | _ElementCreateVsapiKwargsMargin | _ElementCreateVsapiKwargsSize
     )
-    _ElementCreateArgs: TypeAlias = (  # noqa: Y047  # It doesn't recognise the usage below for whatever reason
+    type _ElementCreateArgs = (  # noqa: Y047  # It doesn't recognise the usage below for whatever reason
         _ElementCreateArgsCrossPlatform
-        | tuple[Literal["vsapi"], str, int, _ElementCreateVsapiKwargsDict]
-        | tuple[Literal["vsapi"], str, int, _VsapiStatespec, _ElementCreateVsapiKwargsDict]
+        | tuple["vsapi", str, int, _ElementCreateVsapiKwargsDict]
+        | tuple["vsapi", str, int, _VsapiStatespec, _ElementCreateVsapiKwargsDict]
     )
 else:
-    _ElementCreateArgs: TypeAlias = _ElementCreateArgsCrossPlatform
+    type _ElementCreateArgs = _ElementCreateArgsCrossPlatform
 _ThemeSettingsValue = TypedDict(
     "_ThemeSettingsValue",
     {
-        "configure": dict[str, Any],
+        "configure": dict[str, dynamic],
         "map": dict[str, Iterable[_Statespec]],
         "layout": _LayoutSpec,
         "element create": _ElementCreateArgs,
     },
     total=False,
 )
-_ThemeSettings: TypeAlias = dict[str, _ThemeSettingsValue]
+type _ThemeSettings = dict[str, _ThemeSettingsValue]
 
 class Style:
     """Manipulate style database."""
 
     master: tkinter.Misc
     tk: _tkinter.TkappType
-    def __init__(self, master: tkinter.Misc | None = None) -> None
+    init(self, master: tkinter.Misc | None = None)
 
     # For these methods, values given vary between options. Returned values
     # seem to be str, but this might not always be the case.
@@ -218,7 +218,7 @@ class Style:
     def element_create(
         self,
         elementname: str,
-        etype: Literal["image"],
+        etype: "image",
         default_image: tkinter._Image | str,
         /,
         *imagespec: _ImageStatespec,
@@ -229,7 +229,7 @@ class Style:
         width: float | str = ...,
     ) -> None:
         """Create a new element in the current theme of given etype."""
-    def element_create(self, elementname: str, etype: Literal["from"], themename: str, fromelement: str = ..., /) -> None
+    def element_create(self, elementname: str, etype: "from", themename: str, fromelement: str = ..., /) -> None
     if sys.platform == "win32" and sys.version_info >= (3, 13):  # and tk version >= 8.6
         # margin, padding, and (width + height) are mutually exclusive. width
         # and height must either both be present or not present at all. Note:
@@ -237,7 +237,7 @@ class Style:
         def element_create(
             self,
             elementname: str,
-            etype: Literal["vsapi"],
+            etype: "vsapi",
             class_: str,
             part: int,
             vs_statespec: _VsapiStatespec = ...,
@@ -249,7 +249,7 @@ class Style:
         def element_create(
             self,
             elementname: str,
-            etype: Literal["vsapi"],
+            etype: "vsapi",
             class_: str,
             part: int,
             vs_statespec: _VsapiStatespec = ...,
@@ -260,7 +260,7 @@ class Style:
         def element_create(
             self,
             elementname: str,
-            etype: Literal["vsapi"],
+            etype: "vsapi",
             class_: str,
             part: int,
             vs_statespec: _VsapiStatespec = ...,
@@ -308,7 +308,7 @@ class Style:
 class Widget(tkinter.Widget):
     """Base class for Tk themed widgets."""
 
-    def __init__(self, master: tkinter.Misc | None, widgetname: str | None, kw: dict[str, dynamic] | None = None) -> None:
+    init(self, master: tkinter.Misc | None, widgetname: str | None, kw: dict[str, dynamic] | None = None):
         """Constructs a Ttk Widget with the parent master.
 
         STANDARD OPTIONS
@@ -345,8 +345,8 @@ class Widget(tkinter.Widget):
         matches statespec. statespec is expected to be a sequence.
         """
     def instate[**P, Element](
-        self, statespec: Sequence[str], callback: Callable[P, Element], *args: P.args, **kw: P.kwargs
-    ) -> Literal[False] | Element
+        self, statespec: Sequence[str], callback: (**P) -> Element, *args: P.args, **kw: P.kwargs
+    ) -> False | Element
 
     def state(self, statespec: Sequence[str] | None = None) -> (*: str):
         """Modify or inquire widget state.
@@ -362,26 +362,26 @@ class Button(Widget):
     evaluates a command when pressed.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
         class_: str = "",
-        command: str | Callable[[], dynamic] = "",
-        compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = "",
+        command: str | (() -> dynamic) = "",
+        compound: "" | "text" | "image" | "top" | "left" | "center" | "right" | "bottom" | "none" = "",
         cursor: tkinter._Cursor = "",
-        default: Literal["normal", "active", "disabled"] = "normal",
+        default: "normal" | "active" | "disabled" = "normal",
         image: tkinter._Image | str = "",
         name: str = ...,
         padding=...,  # undocumented
         state: str = "normal",
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         text: float | str = "",
         textvariable: tkinter.Variable = ...,
         underline: int = -1,
-        width: int | Literal[""] = "",
-    ) -> None:
+        width: int | "" = "",
+    ):
         """Construct a Ttk Button widget with the parent master.
 
         STANDARD OPTIONS
@@ -398,20 +398,20 @@ class Button(Widget):
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        command: str | Callable[[], dynamic] = ...,
-        compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = ...,
+        command: str | (() -> dynamic) = ...,
+        compound: "" | "text" | "image" | "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         cursor: tkinter._Cursor = ...,
-        default: Literal["normal", "active", "disabled"] = ...,
+        default: "normal" | "active" | "disabled" = ...,
         image: tkinter._Image | str = ...,
         padding=...,
         state: str = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         text: float | str = ...,
         textvariable: tkinter.Variable = ...,
         underline: int = ...,
-        width: int | Literal[""] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        width: int | "" = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -424,7 +424,7 @@ class Button(Widget):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
     def invoke(self) -> dynamic:
@@ -433,13 +433,13 @@ class Button(Widget):
 class Checkbutton(Widget):
     """Ttk Checkbutton widget which is either in on- or off-state."""
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
         class_: str = "",
-        command: str | Callable[[], dynamic] = "",
-        compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = "",
+        command: str | (() -> dynamic) = "",
+        compound: "" | "text" | "image" | "top" | "left" | "center" | "right" | "bottom" | "none" = "",
         cursor: tkinter._Cursor = "",
         image: tkinter._Image | str = "",
         name: str = ...,
@@ -448,7 +448,7 @@ class Checkbutton(Widget):
         padding=...,  # undocumented
         state: str = "normal",
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         text: float | str = "",
         textvariable: tkinter.Variable = ...,
         underline: int = -1,
@@ -456,8 +456,8 @@ class Checkbutton(Widget):
         # empty string segfaults before Tcl 8.6.9. Search for ttk::checkbutton
         # here: https://sourceforge.net/projects/tcl/files/Tcl/8.6.9/tcltk-release-notes-8.6.9.txt/view
         variable: tkinter.Variable = ...,
-        width: int | Literal[""] = "",
-    ) -> None:
+        width: int | "" = "",
+    ):
         """Construct a Ttk Checkbutton widget with the parent master.
 
         STANDARD OPTIONS
@@ -474,8 +474,8 @@ class Checkbutton(Widget):
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        command: str | Callable[[], dynamic] = ...,
-        compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = ...,
+        command: str | (() -> dynamic) = ...,
+        compound: "" | "text" | "image" | "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         cursor: tkinter._Cursor = ...,
         image: tkinter._Image | str = ...,
         offvalue: dynamic = ...,
@@ -483,13 +483,13 @@ class Checkbutton(Widget):
         padding=...,
         state: str = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         text: float | str = ...,
         textvariable: tkinter.Variable = ...,
         underline: int = ...,
         variable: tkinter.Variable = ...,
-        width: int | Literal[""] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        width: int | "" = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -502,7 +502,7 @@ class Checkbutton(Widget):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
     def invoke(self) -> dynamic:
@@ -520,7 +520,7 @@ class Entry(Widget, tkinter.Entry):
     string to be edited by the user.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         widget: str | None = None,
@@ -531,19 +531,19 @@ class Entry(Widget, tkinter.Entry):
         exportselection: bool = True,
         font: _FontDescription = "TkTextFont",
         foreground: str = "",
-        invalidcommand: str | list[str] | (*: str) | Callable[[], bool] = "",
-        justify: Literal["left", "center", "right"] = "left",
+        invalidcommand: str | list[str] | (*: str) | (() -> bool) = "",
+        justify: "left" | "center" | "right" = "left",
         name: str = ...,
         show: str = "",
         state: str = "normal",
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         textvariable: tkinter.Variable = ...,
-        validate: Literal["none", "focus", "focusin", "focusout", "key", "all"] = "none",
-        validatecommand: str | list[str] | (*: str) | Callable[[], bool] = "",
+        validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = "none",
+        validatecommand: str | list[str] | (*: str) | (() -> bool) = "",
         width: int = 20,
-        xscrollcommand: str | Callable[[float, float], object] = "",
-    ) -> None:
+        xscrollcommand: str | ((float, float) -> object) = "",
+    ):
         """Constructs a Ttk Entry widget with the parent master.
 
         STANDARD OPTIONS
@@ -569,18 +569,18 @@ class Entry(Widget, tkinter.Entry):
         exportselection: bool = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
-        invalidcommand: str | list[str] | (*: str) | Callable[[], bool] = ...,
-        justify: Literal["left", "center", "right"] = ...,
+        invalidcommand: str | list[str] | (*: str) | (() -> bool) = ...,
+        justify: "left" | "center" | "right" = ...,
         show: str = ...,
         state: str = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         textvariable: tkinter.Variable = ...,
-        validate: Literal["none", "focus", "focusin", "focusout", "key", "all"] = ...,
-        validatecommand: str | list[str] | (*: str) | Callable[[], bool] = ...,
+        validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = ...,
+        validatecommand: str | list[str] | (*: str) | (() -> bool) = ...,
         width: int = ...,
-        xscrollcommand: str | Callable[[float, float], object] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        xscrollcommand: str | ((float, float) -> object) = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -593,7 +593,7 @@ class Entry(Widget, tkinter.Entry):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     # config must be copy/pasted, otherwise ttk.Entry().config is mypy error (don't know why)
     def config(
@@ -605,18 +605,18 @@ class Entry(Widget, tkinter.Entry):
         exportselection: bool = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
-        invalidcommand: str | list[str] | (*: str) | Callable[[], bool] = ...,
-        justify: Literal["left", "center", "right"] = ...,
+        invalidcommand: str | list[str] | (*: str) | (() -> bool) = ...,
+        justify: "left" | "center" | "right" = ...,
         show: str = ...,
         state: str = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         textvariable: tkinter.Variable = ...,
-        validate: Literal["none", "focus", "focusin", "focusout", "key", "all"] = ...,
-        validatecommand: str | list[str] | (*: str) | Callable[[], bool] = ...,
+        validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = ...,
+        validatecommand: str | list[str] | (*: str) | (() -> bool) = ...,
         width: int = ...,
-        xscrollcommand: str | Callable[[float, float], object] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        xscrollcommand: str | ((float, float) -> object) = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -629,9 +629,9 @@ class Entry(Widget, tkinter.Entry):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def config(self, cnf: str) -> (str, str, str, Any, Any)
+    def config(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
-    def bbox(self, index) -> (int, int, int, int):  # type: ignore[override]
+    def bbox(self, index) -> (int, int, int, int):
         """Return a tuple of (x, y, width, height) which describes the
         bounding box of the character given by index.
         """
@@ -652,7 +652,7 @@ class Combobox(Entry):
     values.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
@@ -663,21 +663,21 @@ class Combobox(Entry):
         font: _FontDescription = ...,  # undocumented
         foreground: str = ...,  # undocumented
         height: int = 10,
-        invalidcommand: str | list[str] | (*: str) | Callable[[], bool] = ...,  # undocumented
-        justify: Literal["left", "center", "right"] = "left",
+        invalidcommand: str | list[str] | (*: str) | (() -> bool) = ...,  # undocumented
+        justify: "left" | "center" | "right" = "left",
         name: str = ...,
-        postcommand: Callable[[], object] | str = "",
+        postcommand: (() -> object) | str = "",
         show=...,  # undocumented
         state: str = "normal",
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         textvariable: tkinter.Variable = ...,
-        validate: Literal["none", "focus", "focusin", "focusout", "key", "all"] = ...,  # undocumented
-        validatecommand: str | list[str] | (*: str) | Callable[[], bool] = ...,  # undocumented
+        validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = ...,  # undocumented
+        validatecommand: str | list[str] | (*: str) | (() -> bool) = ...,  # undocumented
         values: list[str] | (*: str) = ...,
         width: int = 20,
-        xscrollcommand: str | Callable[[float, float], object] = ...,  # undocumented
-    ) -> None:
+        xscrollcommand: str | ((float, float) -> object) = ...,  # undocumented
+    ):
         """Construct a Ttk Combobox widget with the parent master.
 
         STANDARD OPTIONS
@@ -700,20 +700,20 @@ class Combobox(Entry):
         font: _FontDescription = ...,
         foreground: str = ...,
         height: int = ...,
-        invalidcommand: str | list[str] | (*: str) | Callable[[], bool] = ...,
-        justify: Literal["left", "center", "right"] = ...,
-        postcommand: Callable[[], object] | str = ...,
+        invalidcommand: str | list[str] | (*: str) | (() -> bool) = ...,
+        justify: "left" | "center" | "right" = ...,
+        postcommand: (() -> object) | str = ...,
         show=...,
         state: str = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         textvariable: tkinter.Variable = ...,
-        validate: Literal["none", "focus", "focusin", "focusout", "key", "all"] = ...,
-        validatecommand: str | list[str] | (*: str) | Callable[[], bool] = ...,
+        validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = ...,
+        validatecommand: str | list[str] | (*: str) | (() -> bool) = ...,
         values: list[str] | (*: str) = ...,
         width: int = ...,
-        xscrollcommand: str | Callable[[float, float], object] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        xscrollcommand: str | ((float, float) -> object) = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -726,7 +726,7 @@ class Combobox(Entry):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     # config must be copy/pasted, otherwise ttk.Combobox().config is mypy error (don't know why)
     def config(
@@ -739,20 +739,20 @@ class Combobox(Entry):
         font: _FontDescription = ...,
         foreground: str = ...,
         height: int = ...,
-        invalidcommand: str | list[str] | (*: str) | Callable[[], bool] = ...,
-        justify: Literal["left", "center", "right"] = ...,
-        postcommand: Callable[[], object] | str = ...,
+        invalidcommand: str | list[str] | (*: str) | (() -> bool) = ...,
+        justify: "left" | "center" | "right" = ...,
+        postcommand: (() -> object) | str = ...,
         show=...,
         state: str = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         textvariable: tkinter.Variable = ...,
-        validate: Literal["none", "focus", "focusin", "focusout", "key", "all"] = ...,
-        validatecommand: str | list[str] | (*: str) | Callable[[], bool] = ...,
+        validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = ...,
+        validatecommand: str | list[str] | (*: str) | (() -> bool) = ...,
         values: list[str] | (*: str) = ...,
         width: int = ...,
-        xscrollcommand: str | Callable[[float, float], object] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        xscrollcommand: str | ((float, float) -> object) = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -765,7 +765,7 @@ class Combobox(Entry):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def config(self, cnf: str) -> (str, str, str, Any, Any)
+    def config(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     def current(self, newindex: int | None = None) -> int:
         """If newindex is supplied, sets the combobox value to the
@@ -784,7 +784,7 @@ class Frame(Widget):
 
     # This should be kept in sync with tkinter.ttk.LabeledScale.__init__()
     # (all of these keyword-only arguments are also present there)
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
@@ -795,11 +795,11 @@ class Frame(Widget):
         height: float | str = 0,
         name: str = ...,
         padding: _Padding = ...,
-        relief: Literal["raised", "sunken", "flat", "ridge", "solid", "groove"] = ...,
+        relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
         width: float | str = 0,
-    ) -> None:
+    ):
         """Construct a Ttk Frame with parent master.
 
         STANDARD OPTIONS
@@ -820,11 +820,11 @@ class Frame(Widget):
         cursor: tkinter._Cursor = ...,
         height: float | str = ...,
         padding: _Padding = ...,
-        relief: Literal["raised", "sunken", "flat", "ridge", "solid", "groove"] = ...,
+        relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         width: float | str = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -837,40 +837,40 @@ class Frame(Widget):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
 
 class Label(Widget):
     """Ttk Label widget displays a textual label and/or image."""
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
-        anchor: Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"] = ...,
+        anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         background: str = "",
         border: float | str = ...,  # alias for borderwidth
         borderwidth: float | str = ...,  # undocumented
         class_: str = "",
-        compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = "",
+        compound: "" | "text" | "image" | "top" | "left" | "center" | "right" | "bottom" | "none" = "",
         cursor: tkinter._Cursor = "",
         font: _FontDescription = ...,
         foreground: str = "",
         image: tkinter._Image | str = "",
-        justify: Literal["left", "center", "right"] = ...,
+        justify: "left" | "center" | "right" = ...,
         name: str = ...,
         padding: _Padding = ...,
-        relief: Literal["raised", "sunken", "flat", "ridge", "solid", "groove"] = ...,
+        relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         state: str = "normal",
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
         text: float | str = "",
         textvariable: tkinter.Variable = ...,
         underline: int = -1,
-        width: int | Literal[""] = "",
+        width: int | "" = "",
         wraplength: float | str = ...,
-    ) -> None:
+    ):
         """Construct a Ttk Label with parent master.
 
         STANDARD OPTIONS
@@ -888,27 +888,27 @@ class Label(Widget):
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        anchor: Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"] = ...,
+        anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         background: str = ...,
         border: float | str = ...,
         borderwidth: float | str = ...,
-        compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = ...,
+        compound: "" | "text" | "image" | "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         cursor: tkinter._Cursor = ...,
         font: _FontDescription = ...,
         foreground: str = ...,
         image: tkinter._Image | str = ...,
-        justify: Literal["left", "center", "right"] = ...,
+        justify: "left" | "center" | "right" = ...,
         padding: _Padding = ...,
-        relief: Literal["raised", "sunken", "flat", "ridge", "solid", "groove"] = ...,
+        relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         state: str = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         text: float | str = ...,
         textvariable: tkinter.Variable = ...,
         underline: int = ...,
-        width: int | Literal[""] = ...,
+        width: int | "" = ...,
         wraplength: float | str = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -921,7 +921,7 @@ class Label(Widget):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
 
@@ -931,7 +931,7 @@ class Labelframe(Widget):
     or another widget.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
@@ -940,17 +940,17 @@ class Labelframe(Widget):
         class_: str = "",
         cursor: tkinter._Cursor = "",
         height: float | str = 0,
-        labelanchor: Literal["nw", "n", "ne", "en", "e", "es", "se", "s", "sw", "ws", "w", "wn"] = ...,
+        labelanchor: "nw" | "n" | "ne" | "en" | "e" | "es" | "se" | "s" | "sw" | "ws" | "w" | "wn" = ...,
         labelwidget: tkinter.Misc = ...,
         name: str = ...,
         padding: _Padding = ...,
-        relief: Literal["raised", "sunken", "flat", "ridge", "solid", "groove"] = ...,  # undocumented
+        relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,  # undocumented
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
         text: float | str = "",
         underline: int = -1,
         width: float | str = 0,
-    ) -> None:
+    ):
         """Construct a Ttk Labelframe with parent master.
 
         STANDARD OPTIONS
@@ -970,16 +970,16 @@ class Labelframe(Widget):
         borderwidth: float | str = ...,
         cursor: tkinter._Cursor = ...,
         height: float | str = ...,
-        labelanchor: Literal["nw", "n", "ne", "en", "e", "es", "se", "s", "sw", "ws", "w", "wn"] = ...,
+        labelanchor: "nw" | "n" | "ne" | "en" | "e" | "es" | "se" | "s" | "sw" | "ws" | "w" | "wn" = ...,
         labelwidget: tkinter.Misc = ...,
         padding: _Padding = ...,
-        relief: Literal["raised", "sunken", "flat", "ridge", "solid", "groove"] = ...,
+        relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         text: float | str = ...,
         underline: int = ...,
         width: float | str = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -992,7 +992,7 @@ class Labelframe(Widget):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
 
@@ -1003,26 +1003,26 @@ class Menubutton(Widget):
     displays a menu when pressed.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
         class_: str = "",
-        compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = "",
+        compound: "" | "text" | "image" | "top" | "left" | "center" | "right" | "bottom" | "none" = "",
         cursor: tkinter._Cursor = "",
-        direction: Literal["above", "below", "left", "right", "flush"] = "below",
+        direction: "above" | "below" | "left" | "right" | "flush" = "below",
         image: tkinter._Image | str = "",
         menu: tkinter.Menu = ...,
         name: str = ...,
         padding=...,  # undocumented
         state: str = "normal",
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         text: float | str = "",
         textvariable: tkinter.Variable = ...,
         underline: int = -1,
-        width: int | Literal[""] = "",
-    ) -> None:
+        width: int | "" = "",
+    ):
         """Construct a Ttk Menubutton with parent master.
 
         STANDARD OPTIONS
@@ -1039,20 +1039,20 @@ class Menubutton(Widget):
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = ...,
+        compound: "" | "text" | "image" | "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         cursor: tkinter._Cursor = ...,
-        direction: Literal["above", "below", "left", "right", "flush"] = ...,
+        direction: "above" | "below" | "left" | "right" | "flush" = ...,
         image: tkinter._Image | str = ...,
         menu: tkinter.Menu = ...,
         padding=...,
         state: str = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         text: float | str = ...,
         textvariable: tkinter.Variable = ...,
         underline: int = ...,
-        width: int | Literal[""] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        width: int | "" = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1065,7 +1065,7 @@ class Menubutton(Widget):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
 
@@ -1075,7 +1075,7 @@ class Notebook(Widget):
     which the user may select to change the currently-displayed window.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
@@ -1085,9 +1085,9 @@ class Notebook(Widget):
         name: str = ...,
         padding: _Padding = ...,
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         width: int = 0,
-    ) -> None:
+    ):
         """Construct a Ttk Notebook with parent master.
 
         STANDARD OPTIONS
@@ -1125,9 +1125,9 @@ class Notebook(Widget):
         height: int = ...,
         padding: _Padding = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         width: int = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1140,21 +1140,21 @@ class Notebook(Widget):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
     def add(
         self,
         child: tkinter.Widget,
         *,
-        state: Literal["normal", "disabled", "hidden"] = ...,
+        state: "normal" | "disabled" | "hidden" = ...,
         sticky: str = ...,  # consists of letters 'n', 's', 'w', 'e', no repeats, may be empty
         padding: _Padding = ...,
         text: str = ...,
         # `image` is a sequence of an image name, followed by zero or more
         # (sequences of one or more state names followed by an image name)
         image=...,
-        compound: Literal["top", "left", "center", "right", "bottom", "none"] = ...,
+        compound: "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         underline: int = ...,
     ) -> None:
         """Adds a new tab to the notebook.
@@ -1163,7 +1163,7 @@ class Notebook(Widget):
         restored to its previous position.
         """
 
-    def forget(self, tab_id) -> None:  # type: ignore[override]
+    def forget(self, tab_id) -> None:
         """Removes the tab specified by tab_id, unmaps and unmanages the
         associated window.
         """
@@ -1241,7 +1241,7 @@ class Panedwindow(Widget, tkinter.PanedWindow):
     either vertically or horizontally.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
@@ -1250,11 +1250,11 @@ class Panedwindow(Widget, tkinter.PanedWindow):
         # width and height for tkinter.ttk.Panedwindow are int but for tkinter.PanedWindow they are screen units
         height: int = 0,
         name: str = ...,
-        orient: Literal["vertical", "horizontal"] = "vertical",  # can't be changed with configure()
+        orient: "vertical" | "horizontal" = "vertical",  # can't be changed with configure()
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
         width: int = 0,
-    ) -> None:
+    ):
         """Construct a Ttk Panedwindow with parent master.
 
         STANDARD OPTIONS
@@ -1286,9 +1286,9 @@ class Panedwindow(Widget, tkinter.PanedWindow):
         cursor: tkinter._Cursor = ...,
         height: int = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         width: int = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1301,7 +1301,7 @@ class Panedwindow(Widget, tkinter.PanedWindow):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     # config must be copy/pasted, otherwise ttk.Panedwindow().config is mypy error (don't know why)
     def config(
@@ -1311,9 +1311,9 @@ class Panedwindow(Widget, tkinter.PanedWindow):
         cursor: tkinter._Cursor = ...,
         height: int = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         width: int = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1326,7 +1326,7 @@ class Panedwindow(Widget, tkinter.PanedWindow):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def config(self, cnf: str) -> (str, str, str, Any, Any)
+    def config(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     forget = tkinter.PanedWindow.forget
     def insert(self, pos, child, **kw) -> None:
@@ -1366,7 +1366,7 @@ class Progressbar(Widget):
     that something is happening.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
@@ -1374,15 +1374,15 @@ class Progressbar(Widget):
         cursor: tkinter._Cursor = "",
         length: float | str = 100,
         maximum: float = 100,
-        mode: Literal["determinate", "indeterminate"] = "determinate",
+        mode: "determinate" | "indeterminate" = "determinate",
         name: str = ...,
-        orient: Literal["horizontal", "vertical"] = "horizontal",
+        orient: "horizontal" | "vertical" = "horizontal",
         phase: int = 0,  # docs say read-only but assigning int to this works
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
         value: float = 0.0,
         variable: tkinter.IntVar | tkinter.DoubleVar = ...,
-    ) -> None:
+    ):
         """Construct a Ttk Progressbar with parent master.
 
         STANDARD OPTIONS
@@ -1401,14 +1401,14 @@ class Progressbar(Widget):
         cursor: tkinter._Cursor = ...,
         length: float | str = ...,
         maximum: float = ...,
-        mode: Literal["determinate", "indeterminate"] = ...,
-        orient: Literal["horizontal", "vertical"] = ...,
+        mode: "determinate" | "indeterminate" = ...,
+        orient: "horizontal" | "vertical" = ...,
         phase: int = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         value: float = ...,
         variable: tkinter.IntVar | tkinter.DoubleVar = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1421,10 +1421,10 @@ class Progressbar(Widget):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
-    def start(self, interval: Literal["idle"] | int | None = None) -> None:
+    def start(self, interval: "idle" | int | None = None) -> None:
         """Begin autoincrement mode: schedules a recurring timer event
         that calls method step every interval milliseconds.
 
@@ -1447,27 +1447,27 @@ class Radiobutton(Widget):
     set of mutually-exclusive options.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
         class_: str = "",
-        command: str | Callable[[], dynamic] = "",
-        compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = "",
+        command: str | (() -> dynamic) = "",
+        compound: "" | "text" | "image" | "top" | "left" | "center" | "right" | "bottom" | "none" = "",
         cursor: tkinter._Cursor = "",
         image: tkinter._Image | str = "",
         name: str = ...,
         padding=...,  # undocumented
         state: str = "normal",
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         text: float | str = "",
         textvariable: tkinter.Variable = ...,
         underline: int = -1,
         value: dynamic = "1",
-        variable: tkinter.Variable | Literal[""] = ...,
-        width: int | Literal[""] = "",
-    ) -> None:
+        variable: tkinter.Variable | "" = ...,
+        width: int | "" = "",
+    ):
         """Construct a Ttk Radiobutton with parent master.
 
         STANDARD OPTIONS
@@ -1484,21 +1484,21 @@ class Radiobutton(Widget):
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        command: str | Callable[[], dynamic] = ...,
-        compound: Literal["", "text", "image", "top", "left", "center", "right", "bottom", "none"] = ...,
+        command: str | (() -> dynamic) = ...,
+        compound: "" | "text" | "image" | "top" | "left" | "center" | "right" | "bottom" | "none" = ...,
         cursor: tkinter._Cursor = ...,
         image: tkinter._Image | str = ...,
         padding=...,
         state: str = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         text: float | str = ...,
         textvariable: tkinter.Variable = ...,
         underline: int = ...,
         value: dynamic = ...,
-        variable: tkinter.Variable | Literal[""] = ...,
-        width: int | Literal[""] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        variable: tkinter.Variable | "" = ...,
+        width: int | "" = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1511,7 +1511,7 @@ class Radiobutton(Widget):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
     def invoke(self) -> dynamic:
@@ -1523,29 +1523,29 @@ class Radiobutton(Widget):
         """
 
 # type ignore, because identify() methods of Widget and tkinter.Scale are incompatible
-class Scale(Widget, tkinter.Scale):  # type: ignore[misc]
+class Scale(Widget, tkinter.Scale):
     """Ttk Scale widget is typically used to control the numeric value of
     a linked variable that varies uniformly over some range.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
         class_: str = "",
-        command: str | Callable[[str], object] = "",
+        command: str | ((str) -> object) = "",
         cursor: tkinter._Cursor = "",
         from_: float = 0,
         length: float | str = 100,
         name: str = ...,
-        orient: Literal["horizontal", "vertical"] = "horizontal",
+        orient: "horizontal" | "vertical" = "horizontal",
         state: str = ...,  # undocumented
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         to: float = 1.0,
         value: float = 0,
         variable: tkinter.IntVar | tkinter.DoubleVar = ...,
-    ) -> None:
+    ):
         """Construct a Ttk Scale with parent master.
 
         STANDARD OPTIONS
@@ -1561,42 +1561,42 @@ class Scale(Widget, tkinter.Scale):  # type: ignore[misc]
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        command: str | Callable[[str], object] = ...,
+        command: str | ((str) -> object) = ...,
         cursor: tkinter._Cursor = ...,
         from_: float = ...,
         length: float | str = ...,
-        orient: Literal["horizontal", "vertical"] = ...,
+        orient: "horizontal" | "vertical" = ...,
         state: str = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         to: float = ...,
         value: float = ...,
         variable: tkinter.IntVar | tkinter.DoubleVar = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Modify or query scale options.
 
         Setting a value for any of the "from", "from_" or "to" options
         generates a <<RangeChanged>> event.
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     # config must be copy/pasted, otherwise ttk.Scale().config is mypy error (don't know why)
     def config(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        command: str | Callable[[str], object] = ...,
+        command: str | ((str) -> object) = ...,
         cursor: tkinter._Cursor = ...,
         from_: float = ...,
         length: float | str = ...,
-        orient: Literal["horizontal", "vertical"] = ...,
+        orient: "horizontal" | "vertical" = ...,
         state: str = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         to: float = ...,
         value: float = ...,
         variable: tkinter.IntVar | tkinter.DoubleVar = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1609,7 +1609,7 @@ class Scale(Widget, tkinter.Scale):  # type: ignore[misc]
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def config(self, cnf: str) -> (str, str, str, Any, Any)
+    def config(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     def get(self, x: int | None = None, y: int | None = None) -> float:
         """Get the current value of the value option, or the value
@@ -1620,10 +1620,10 @@ class Scale(Widget, tkinter.Scale):  # type: ignore[misc]
         """
 
 # type ignore, because identify() methods of Widget and tkinter.Scale are incompatible
-class Scrollbar(Widget, tkinter.Scrollbar):  # type: ignore[misc]
+class Scrollbar(Widget, tkinter.Scrollbar):
     """Ttk Scrollbar controls the viewport of a scrollable widget."""
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
@@ -1631,10 +1631,10 @@ class Scrollbar(Widget, tkinter.Scrollbar):  # type: ignore[misc]
         command: (...) -> tuple[float, float] | None | str = "",
         cursor: tkinter._Cursor = "",
         name: str = ...,
-        orient: Literal["horizontal", "vertical"] = "vertical",
+        orient: "horizontal" | "vertical" = "vertical",
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = "",
-    ) -> None:
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+    ):
         """Construct a Ttk Scrollbar with parent master.
 
         STANDARD OPTIONS
@@ -1652,10 +1652,10 @@ class Scrollbar(Widget, tkinter.Scrollbar):  # type: ignore[misc]
         *,
         command: (...) -> tuple[float, float] | None | str = ...,
         cursor: tkinter._Cursor = ...,
-        orient: Literal["horizontal", "vertical"] = ...,
+        orient: "horizontal" | "vertical" = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1668,7 +1668,7 @@ class Scrollbar(Widget, tkinter.Scrollbar):  # type: ignore[misc]
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     # config must be copy/pasted, otherwise ttk.Scrollbar().config is mypy error (don't know why)
     def config(
@@ -1677,10 +1677,10 @@ class Scrollbar(Widget, tkinter.Scrollbar):  # type: ignore[misc]
         *,
         command: (...) -> tuple[float, float] | None | str = ...,
         cursor: tkinter._Cursor = ...,
-        orient: Literal["horizontal", "vertical"] = ...,
+        orient: "horizontal" | "vertical" = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1693,24 +1693,24 @@ class Scrollbar(Widget, tkinter.Scrollbar):  # type: ignore[misc]
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def config(self, cnf: str) -> (str, str, str, Any, Any)
+    def config(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
 class Separator(Widget):
     """Ttk Separator widget displays a horizontal or vertical separator
     bar.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
         class_: str = "",
         cursor: tkinter._Cursor = "",
         name: str = ...,
-        orient: Literal["horizontal", "vertical"] = "horizontal",
+        orient: "horizontal" | "vertical" = "horizontal",
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = "",
-    ) -> None:
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+    ):
         """Construct a Ttk Separator with parent master.
 
         STANDARD OPTIONS
@@ -1727,10 +1727,10 @@ class Separator(Widget):
         cnf: dict[str, dynamic] | None = None,
         *,
         cursor: tkinter._Cursor = ...,
-        orient: Literal["horizontal", "vertical"] = ...,
+        orient: "horizontal" | "vertical" = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1743,7 +1743,7 @@ class Separator(Widget):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
 
@@ -1752,7 +1752,7 @@ class Sizegrip(Widget):
     window by pressing and dragging the grip.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
@@ -1760,8 +1760,8 @@ class Sizegrip(Widget):
         cursor: tkinter._Cursor = ...,
         name: str = ...,
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = "",
-    ) -> None:
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
+    ):
         """Construct a Ttk Sizegrip with parent master.
 
         STANDARD OPTIONS
@@ -1775,8 +1775,8 @@ class Sizegrip(Widget):
         *,
         cursor: tkinter._Cursor = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1789,7 +1789,7 @@ class Sizegrip(Widget):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
 
@@ -1800,13 +1800,13 @@ class Spinbox(Entry):
     string values.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
         background: str = ...,  # undocumented
         class_: str = "",
-        command: Callable[[], object] | str | list[str] | (*: str) = "",
+        command: (() -> object) | str | list[str] | (*: str) = "",
         cursor: tkinter._Cursor = "",
         exportselection: bool = ...,  # undocumented
         font: _FontDescription = ...,  # undocumented
@@ -1814,22 +1814,22 @@ class Spinbox(Entry):
         format: str = "",
         from_: float = 0,
         increment: float = 1,
-        invalidcommand: str | list[str] | (*: str) | Callable[[], bool] = ...,  # undocumented
-        justify: Literal["left", "center", "right"] = ...,  # undocumented
+        invalidcommand: str | list[str] | (*: str) | (() -> bool) = ...,  # undocumented
+        justify: "left" | "center" | "right" = ...,  # undocumented
         name: str = ...,
         show=...,  # undocumented
         state: str = "normal",
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         textvariable: tkinter.Variable = ...,  # undocumented
         to: float = 0,
-        validate: Literal["none", "focus", "focusin", "focusout", "key", "all"] = "none",
-        validatecommand: str | list[str] | (*: str) | Callable[[], bool] = "",
+        validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = "none",
+        validatecommand: str | list[str] | (*: str) | (() -> bool) = "",
         values: list[str] | (*: str) = ...,
         width: int = ...,  # undocumented
         wrap: bool = False,
-        xscrollcommand: str | Callable[[float, float], object] = "",
-    ) -> None:
+        xscrollcommand: str | ((float, float) -> object) = "",
+    ):
         """Construct a Ttk Spinbox widget with the parent master.
 
         STANDARD OPTIONS
@@ -1847,7 +1847,7 @@ class Spinbox(Entry):
         cnf: dict[str, dynamic] | None = None,
         *,
         background: str = ...,
-        command: Callable[[], object] | str | list[str] | (*: str) = ...,
+        command: (() -> object) | str | list[str] | (*: str) = ...,
         cursor: tkinter._Cursor = ...,
         exportselection: bool = ...,
         font: _FontDescription = ...,
@@ -1855,21 +1855,21 @@ class Spinbox(Entry):
         format: str = ...,
         from_: float = ...,
         increment: float = ...,
-        invalidcommand: str | list[str] | (*: str) | Callable[[], bool] = ...,
-        justify: Literal["left", "center", "right"] = ...,
+        invalidcommand: str | list[str] | (*: str) | (() -> bool) = ...,
+        justify: "left" | "center" | "right" = ...,
         show=...,
         state: str = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         textvariable: tkinter.Variable = ...,
         to: float = ...,
-        validate: Literal["none", "focus", "focusin", "focusout", "key", "all"] = ...,
-        validatecommand: str | list[str] | (*: str) | Callable[[], bool] = ...,
+        validate: "none" | "focus" | "focusin" | "focusout" | "key" | "all" = ...,
+        validatecommand: str | list[str] | (*: str) | (() -> bool) = ...,
         values: list[str] | (*: str) = ...,
         width: int = ...,
         wrap: bool = ...,
-        xscrollcommand: str | Callable[[float, float], object] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        xscrollcommand: str | ((float, float) -> object) = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1882,19 +1882,19 @@ class Spinbox(Entry):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
-    config = configure  # type: ignore[assignment]
+    config = configure
     def set(self, value: dynamic) -> None:
         """Sets the value of the Spinbox to value."""
 
 @type_check_only
 class _TreeviewItemDict(TypedDict):
     text: str
-    image: list[str] | Literal[""]  # no idea why it's wrapped in list
-    values: list[dynamic] | Literal[""]
+    image: list[str] | ""  # no idea why it's wrapped in list
+    values: list[dynamic] | ""
     open: bool  # actually 0 or 1
-    tags: list[str] | Literal[""]
+    tags: list[str] | ""
 
 @type_check_only
 class _TreeviewTagDict(TypedDict):
@@ -1907,8 +1907,8 @@ class _TreeviewTagDict(TypedDict):
 @type_check_only
 class _TreeviewHeaderDict(TypedDict):
     text: str
-    image: list[str] | Literal[""]
-    anchor: Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
+    image: list[str] | ""
+    anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se"
     command: str
     state: str  # Doesn't seem to appear anywhere else than in these dicts
 
@@ -1917,7 +1917,7 @@ class _TreeviewColumnDict(TypedDict):
     width: int
     minwidth: int
     stretch: bool  # actually 0 or 1
-    anchor: Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"]
+    anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se"
     id: str
 
 class Treeview(Widget, tkinter.XView, tkinter.YView):
@@ -1928,7 +1928,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
     after the tree label.
     """
 
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         *,
@@ -1939,17 +1939,17 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         height: int = 10,
         name: str = ...,
         padding: _Padding = ...,
-        selectmode: Literal["extended", "browse", "none"] = "extended",
+        selectmode: "extended" | "browse" | "none" = "extended",
         # list/tuple of Literal don't actually work in mypy
         #
         # 'tree headings' is same as ['tree', 'headings'], and I wouldn't be
         # surprised if someone is using it.
-        show: Literal["tree", "headings", "tree headings", ""] | list[str] | (*: str) = ("tree", "headings"),
+        show: "tree" | "headings" | "tree headings" | "" | list[str] | (*: str) = ("tree", "headings"),
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
-        xscrollcommand: str | Callable[[float, float], object] = "",
-        yscrollcommand: str | Callable[[float, float], object] = "",
-    ) -> None:
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        xscrollcommand: str | ((float, float) -> object) = "",
+        yscrollcommand: str | ((float, float) -> object) = "",
+    ):
         """Construct a Ttk Treeview with parent master.
 
         STANDARD OPTIONS
@@ -1979,13 +1979,13 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         displaycolumns: str | int | list[str] | (*: str) | list[int] | (*: int) = ...,
         height: int = ...,
         padding: _Padding = ...,
-        selectmode: Literal["extended", "browse", "none"] = ...,
-        show: Literal["tree", "headings", "tree headings", ""] | list[str] | (*: str) = ...,
+        selectmode: "extended" | "browse" | "none" = ...,
+        show: "tree" | "headings" | "tree headings" | "" | list[str] | (*: str) = ...,
         style: str = ...,
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = ...,
-        xscrollcommand: str | Callable[[float, float], object] = ...,
-        yscrollcommand: str | Callable[[float, float], object] = ...,
-    ) -> dict[str, (str, str, str, Any, Any)] | None:
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
+        xscrollcommand: str | ((float, float) -> object) = ...,
+        yscrollcommand: str | ((float, float) -> object) = ...,
+    ) -> dict[str, (str, str, str, dynamic, dynamic)] | None:
         """Query or modify the configuration options of the widget.
 
         If no arguments are specified, return a dictionary describing
@@ -1998,10 +1998,10 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         is specified, then modify the widget option(s) to have the given
         value(s).
         """
-    def configure(self, cnf: str) -> (str, str, str, Any, Any)
+    def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
-    def bbox(self, item: str | int, column: str | int | None = None) -> (int, int, int, int) | Literal[""]:  # type: ignore[override]
+    def bbox(self, item: str | int, column: str | int | None = None) -> (int, int, int, int) | "":
         """Returns the bounding box (relative to the treeview widget's
         window) of the specified item in the form x y width height.
 
@@ -2024,16 +2024,16 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         ancestor of item.
         """
 
-    def column(self, column: str | int, option: Literal["width", "minwidth"]) -> int:
+    def column(self, column: str | int, option: "width" | "minwidth") -> int:
         """Query or modify the options for the specified column.
 
         If kw is not given, returns a dict of the column option values. If
         option is specified then the value for that option is returned.
         Otherwise, sets the options to the corresponding values.
         """
-    def column(self, column: str | int, option: Literal["stretch"]) -> bool  # actually 0 or 1
-    def column(self, column: str | int, option: Literal["anchor"]) -> _tkinter.Tcl_Obj
-    def column(self, column: str | int, option: Literal["id"]) -> str
+    def column(self, column: str | int, option: "stretch") -> bool  # actually 0 or 1
+    def column(self, column: str | int, option: "anchor") -> _tkinter.Tcl_Obj
+    def column(self, column: str | int, option: "id") -> str
     def column(self, column: str | int, option: str) -> dynamic
     def column(
         self,
@@ -2043,7 +2043,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         width: int = ...,
         minwidth: int = ...,
         stretch: bool = ...,
-        anchor: Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"] = ...,
+        anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
         # id is read-only
     ) -> _TreeviewColumnDict | None
 
@@ -2069,9 +2069,9 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         """If item is specified, sets the focus item to item. Otherwise,
         returns the current focus item, or '' if there is none.
         """
-    def focus(self, item: str | int) -> Literal[""]
+    def focus(self, item: str | int) -> ""
 
-    def heading(self, column: str | int, option: Literal["text"]) -> str:
+    def heading(self, column: str | int, option: "text") -> str:
         """Query or modify the heading options for the specified column.
 
         If kw is not given, returns a dict of the heading option values. If
@@ -2093,9 +2093,9 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
 
         To configure the tree column heading, call this with column = "#0"
         """
-    def heading(self, column: str | int, option: Literal["image"]) -> (str,) | str
-    def heading(self, column: str | int, option: Literal["anchor"]) -> _tkinter.Tcl_Obj
-    def heading(self, column: str | int, option: Literal["command"]) -> str
+    def heading(self, column: str | int, option: "image") -> (str,) | str
+    def heading(self, column: str | int, option: "anchor") -> _tkinter.Tcl_Obj
+    def heading(self, column: str | int, option: "command") -> str
     def heading(self, column: str | int, option: str) -> dynamic
     def heading(self, column: str | int, option: None = None) -> _TreeviewHeaderDict
     def heading(
@@ -2105,12 +2105,12 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         *,
         text: str = ...,
         image: tkinter._Image | str = ...,
-        anchor: Literal["nw", "n", "ne", "w", "center", "e", "sw", "s", "se"] = ...,
-        command: str | Callable[[], object] = ...,
+        anchor: "nw" | "n" | "ne" | "w" | "center" | "e" | "sw" | "s" | "se" = ...,
+        command: str | (() -> object) = ...,
     ) -> None
 
     # Internal Method. Leave untyped:
-    def identify(self, component, x, y):  # type: ignore[override]
+    def identify(self, component, x, y):
         """Returns a description of the specified component under the
         point given by x and y, or the empty string if no such component
         is present at that position.
@@ -2125,7 +2125,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         The tree column has ID #0.
         """
 
-    def identify_region(self, x: int, y: int) -> Literal["heading", "separator", "tree", "cell", "nothing"]:
+    def identify_region(self, x: int, y: int) -> "heading" | "separator" | "tree" | "cell" | "nothing":
         """Returns one of:
 
         heading: Tree heading area.
@@ -2150,13 +2150,13 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
     def insert(
         self,
         parent: str,
-        index: int | Literal["end"],
+        index: int | "end",
         iid: str | int | None = None,
         *,
         id: str | int = ...,  # same as iid
         text: str = ...,
         image: tkinter._Image | str = ...,
-        values: list[Any] | (*: Any) = ...,
+        values: list[dynamic] | (*: dynamic) = ...,
         open: bool = ...,
         tags: str | list[str] | (*: str) = ...,
     ) -> str:
@@ -2174,7 +2174,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         is generated.
         """
 
-    def item(self, item: str | int, option: Literal["text"]) -> str:
+    def item(self, item: str | int, option: "text") -> str:
         """Query or modify the options for the specified item.
 
         If no options are given, a dict with options/values for the item
@@ -2182,10 +2182,10 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         is returned. Otherwise, sets the options to the corresponding
         values as given by kw.
         """
-    def item(self, item: str | int, option: Literal["image"]) -> (str,) | Literal[""]
-    def item(self, item: str | int, option: Literal["values"]) -> (*: Any) | Literal[""]
-    def item(self, item: str | int, option: Literal["open"]) -> bool  # actually 0 or 1
-    def item(self, item: str | int, option: Literal["tags"]) -> (*: str) | Literal[""]
+    def item(self, item: str | int, option: "image") -> (str,) | ""
+    def item(self, item: str | int, option: "values") -> (*: dynamic) | ""
+    def item(self, item: str | int, option: "open") -> bool  # actually 0 or 1
+    def item(self, item: str | int, option: "tags") -> (*: str) | ""
     def item(self, item: str | int, option: str) -> dynamic
     def item(self, item: str | int, option: None = None) -> _TreeviewItemDict
     def item(
@@ -2195,12 +2195,12 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         *,
         text: str = ...,
         image: tkinter._Image | str = ...,
-        values: list[Any] | (*: Any) | Literal[""] = ...,
+        values: list[dynamic] | (*: dynamic) | "" = ...,
         open: bool = ...,
         tags: str | list[str] | (*: str) = ...,
     ) -> None
 
-    def move(self, item: str | int, parent: str, index: int | Literal["end"]) -> None:
+    def move(self, item: str | int, parent: str, index: int | "end") -> None:
         """Moves item to position index in parent's list of children.
 
         It is illegal to move an item under one of its descendants. If
@@ -2261,12 +2261,12 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         value of given column in given item to the specified value.
         """
     def set(self, item: str | int, column: str | int, value: None = None) -> dynamic
-    def set(self, item: str | int, column: str | int, value: dynamic) -> Literal[""]
+    def set(self, item: str | int, column: str | int, value: dynamic) -> ""
 
     # There's no tag_unbind() or 'add' argument for whatever reason.
     # Also, it's 'callback' instead of 'func' here.
     def tag_bind(
-        self, tagname: str, sequence: str | None = None, callback: Callable[[tkinter.Event[Treeview]], object] | None = None
+        self, tagname: str, sequence: str | None = None, callback: ((tkinter.Event[Treeview]) -> object) | None = None
     ) -> str:
         """Bind a callback for the given event sequence to the tag tagname.
         When an event is delivered to an item, the callbacks for each
@@ -2275,7 +2275,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
     def tag_bind(self, tagname: str, sequence: str | None, callback: str) -> None
     def tag_bind(self, tagname: str, *, callback: str) -> None
 
-    def tag_configure(self, tagname: str, option: Literal["foreground", "background"]) -> str:
+    def tag_configure(self, tagname: str, option: "foreground" | "background") -> str:
         """Query or modify the options for the specified tagname.
 
         If kw is not given, returns a dict of the option settings for tagname.
@@ -2283,8 +2283,8 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         specified tagname. Otherwise, sets the options to the corresponding
         values for the given tagname.
         """
-    def tag_configure(self, tagname: str, option: Literal["font"]) -> _FontDescription
-    def tag_configure(self, tagname: str, option: Literal["image"]) -> str
+    def tag_configure(self, tagname: str, option: "font") -> _FontDescription
+    def tag_configure(self, tagname: str, option: "image") -> str
     def tag_configure(
         self,
         tagname: str,
@@ -2318,7 +2318,7 @@ class LabeledScale(Frame):
     scale: Scale
     # This should be kept in sync with tkinter.ttk.Frame.__init__()
     # (all the keyword-only args except compound are from there)
-    def __init__(
+    init(
         self,
         master: tkinter.Misc | None = None,
         variable: tkinter.IntVar | tkinter.DoubleVar | None = None,
@@ -2328,16 +2328,16 @@ class LabeledScale(Frame):
         border: float | str = ...,
         borderwidth: float | str = ...,
         class_: str = "",
-        compound: Literal["top", "bottom"] = "top",
+        compound: "top" | "bottom" = "top",
         cursor: tkinter._Cursor = "",
         height: float | str = 0,
         name: str = ...,
         padding: _Padding = ...,
-        relief: Literal["raised", "sunken", "flat", "ridge", "solid", "groove"] = ...,
+        relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         style: str = "",
-        takefocus: bool | Literal[0, 1, ""] | Callable[[str], bool | None] = "",
+        takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
         width: float | str = 0,
-    ) -> None:
+    ):
         """Construct a horizontal LabeledScale with parent master, a
         variable to be associated with the Ttk Scale widget and its range.
         If variable is not specified, a tkinter.IntVar is created.
@@ -2367,8 +2367,8 @@ class OptionMenu(Menubutton):
             *values: str,
             # rest of these are keyword-only because *args syntax used above
             style: str = "",
-            direction: Literal["above", "below", "left", "right", "flush"] = "below",
-            command: Callable[[tkinter.StringVar], object] | None = None,
+            direction: "above" | "below" | "left" | "right" | "flush" = "below",
+            command: ((tkinter.StringVar) -> object) | None = None,
             name: str | None = None,
         ) -> None:
             """Construct a themed OptionMenu widget with master as the parent,
@@ -2395,8 +2395,8 @@ class OptionMenu(Menubutton):
             *values: str,
             # rest of these are keyword-only because *args syntax used above
             style: str = "",
-            direction: Literal["above", "below", "left", "right", "flush"] = "below",
-            command: Callable[[tkinter.StringVar], object] | None = None,
+            direction: "above" | "below" | "left" | "right" | "flush" = "below",
+            command: ((tkinter.StringVar) -> object) | None = None,
         ) -> None:
             """Construct a themed OptionMenu widget with master as the parent,
             the option textvariable set to variable, the initially selected

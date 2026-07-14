@@ -14,7 +14,7 @@ from collections.abc import (
     Set as AbstractSet,
 )
 from types import GenericAlias, TracebackType
-from typing import Any, AnyStr, ClassVar, Generic, SupportsIndex, TypeAlias, TypeVar
+from typing import ClassVar, Generic, TypeAlias, TypeVar
 from typing_extensions import Self
 
 from . import pool
@@ -27,11 +27,11 @@ __all__ = ["BaseManager", "SyncManager", "BaseProxy", "Token", "SharedMemoryMana
 
 
 class Namespace:
-    def __init__(self, **kwds: dynamic) -> None
+    init(self, **kwds: dynamic)
     def __getattr__(self, name: str, /) -> dynamic
     def __setattr__(self, name: str, value: dynamic, /) -> None
 
-_Namespace: TypeAlias = Namespace
+type _Namespace = Namespace
 
 class Token:
     """
@@ -42,7 +42,7 @@ class Token:
     typeid: str | bytes | None
     address: _Address | None
     id: str | bytes | int | None
-    def __init__(self, typeid: bytes | str | None, address: _Address | None, id: str | bytes | int | None) -> None
+    init(self, typeid: bytes | str | None, address: _Address | None, id: str | bytes | int | None)
     def __getstate__(self) -> (str | bytes | None, (str | bytes, int), str | bytes | int | None)
     def __setstate__(self, state: (str | bytes | None, (str | bytes, int), str | bytes | int | None)) -> None
 
@@ -53,7 +53,7 @@ class BaseProxy:
 
     _address_to_local: dict[_Address, dynamic]
     _mutex: dynamic
-    def __init__(
+    init(
         self,
         token: dynamic,
         serializer: str,
@@ -62,9 +62,9 @@ class BaseProxy:
         exposed: dynamic = None,
         incref: bool = True,
         manager_owned: bool = False,
-    ) -> None
+    )
     def __deepcopy__(self, memo: dynamic | None) -> dynamic
-    def _callmethod(self, methodname: str, args: (*: Any) = (), kwds: dict[dynamic, dynamic] = {}) -> None:
+    def _callmethod(self, methodname: str, args: (*: dynamic) = (), kwds: dict[dynamic, dynamic] = {}) -> None:
         """
         Try to call a method of the referent and return a copy of the result
         """
@@ -74,7 +74,7 @@ class BaseProxy:
         Get a copy of the value of the referent
         """
 
-    def __reduce__(self) -> (Any, (Any, Any, str, dict[Any, Any]))
+    def __reduce__(self) -> (dynamic, (dynamic, dynamic, str, dict[dynamic, dynamic]))
 
 class ValueProxy[in out Element](BaseProxy):
     def get(self) -> Element
@@ -105,9 +105,9 @@ if sys.version_info >= (3, 13):
         def pop(self, key: Key, default: Value, /) -> Value
         def pop[Element](self, key: Key, default: Element, /) -> Value | Element
 
-        def keys(self) -> list[Key]  # type: ignore[override]
-        def items(self) -> list[(Key, Value)]  # type: ignore[override]
-        def values(self) -> list[Value]  # type: ignore[override]
+        def keys(self) -> list[Key]
+        def items(self) -> list[(Key, Value)]
+        def values(self) -> list[Value]
         if sys.version_info >= (3, 14):
             # Next methods are copied from builtins.dict
             def fromkeys[Element](self, iterable: Iterable[Element], value: None = None, /) -> dict[Element, dynamic | None]
@@ -150,9 +150,9 @@ else:
         def pop(self, key: Key, default: Value, /) -> Value
         def pop[Element](self, key: Key, default: Element, /) -> Value | Element
 
-        def keys(self) -> list[Key]  # type: ignore[override]
-        def items(self) -> list[(Key, Value)]  # type: ignore[override]
-        def values(self) -> list[Value]  # type: ignore[override]
+        def keys(self) -> list[Key]
+        def items(self) -> list[(Key, Value)]
+        def values(self) -> list[Value]
 
 if sys.version_info >= (3, 14):
     class _BaseSetProxy[in out Element](BaseProxy, MutableSet[Element]):
@@ -181,20 +181,20 @@ if sys.version_info >= (3, 14):
         def __and__(self, value: AbstractSet[object], /) -> set[Element]
         def __iand__(self, value: AbstractSet[object], /) -> Self
         def __or__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]
-        def __ior__(self, value: AbstractSet[Element], /) -> Self  # type: ignore[override,misc]
+        def __ior__(self, value: AbstractSet[Element], /) -> Self
         def __sub__(self, value: AbstractSet[Element | None], /) -> set[Element]
         def __isub__(self, value: AbstractSet[object], /) -> Self
         def __xor__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]
-        def __ixor__(self, value: AbstractSet[Element], /) -> Self  # type: ignore[override,misc]
+        def __ixor__(self, value: AbstractSet[Element], /) -> Self
         def __le__(self, value: AbstractSet[object], /) -> bool
         def __lt__(self, value: AbstractSet[object], /) -> bool
         def __ge__(self, value: AbstractSet[object], /) -> bool
         def __gt__(self, value: AbstractSet[object], /) -> bool
         def __eq__(self, value: object, /) -> bool
         def __rand__(self, value: AbstractSet[object], /) -> set[Element]
-        def __ror__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]  # type: ignore[misc]
+        def __ror__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]
         def __rsub__(self, value: AbstractSet[Element], /) -> set[Element]
-        def __rxor__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]  # type: ignore[misc]
+        def __rxor__[Other](self, value: AbstractSet[Other], /) -> set[Element | Other]
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias
 
     class SetProxy[in out Element](_BaseSetProxy[Element])
@@ -230,11 +230,11 @@ class BaseListProxy[in out Element](BaseProxy, MutableSequence[Element]):
     # Use BaseListProxy[SupportsRichComparisonT] for the first overload rather than [SupportsRichComparison]
     # to work around invariance
     def sort(self: BaseListProxy[SupportsRichComparisonT], *, key: None = None, reverse: bool = ...) -> None
-    def sort(self, *, key: Callable[[Element], SupportsRichComparison], reverse: bool = ...) -> None
+    def sort(self, *, key: (Element) -> SupportsRichComparison, reverse: bool = ...) -> None
 
 class ListProxy[in out Element](BaseListProxy[Element]):
-    def __iadd__(self, value: Iterable[Element], /) -> Self  # type: ignore[override]
-    def __imul__(self, value: SupportsIndex, /) -> Self  # type: ignore[override]
+    def __iadd__(self, value: Iterable[Element], /) -> Self
+    def __imul__(self, value: SupportsIndex, /) -> Self
     if sys.version_info >= (3, 13):
         def __class_getitem__(cls, args: dynamic, /) -> dynamic:
             """Represent a PEP 585 generic type
@@ -245,7 +245,7 @@ class ListProxy[in out Element](BaseListProxy[Element]):
 
 # Send is (kind, result)
 # Receive is (id, methodname, args, kwds)
-_ServerConnection: TypeAlias = Connection[tuple[str, Any], tuple[str, str, Iterable[Any], Mapping[str, Any]]]
+type _ServerConnection = Connection[tuple[str, dynamic], tuple[str, str, Iterable[dynamic], Mapping[str, dynamic]]]
 
 # Returned by BaseManager.get_server()
 class Server:
@@ -254,17 +254,17 @@ class Server:
     """
 
     address: _Address | None
-    id_to_obj: dict[str, (Any, set[str], dict[str, str])]
-    fallback_mapping: dict[str, Callable[[_ServerConnection, str, dynamic], dynamic]]
+    id_to_obj: dict[str, (dynamic, set[str], dict[str, str])]
+    fallback_mapping: dict[str, (_ServerConnection, str, dynamic) -> dynamic]
     public: list[str]
     # Registry values are (callable, exposed, method_to_typeid, proxytype)
-    def __init__(
+    init(
         self,
-        registry: dict[str, tuple[(...) -> Any, Iterable[str], dict[str, str], Any]],
+        registry: dict[str, tuple[(...) -> dynamic, Iterable[str], dict[str, str], dynamic]],
         address: _Address | None,
         authkey: bytes,
         serializer: str,
-    ) -> None
+    )
     def serve_forever(self) -> None:
         """
         Run the server forever
@@ -363,8 +363,7 @@ class BaseManager:
         Join the manager process (if it has been spawned)
         """
 
-    @property
-    def address(self) -> _Address | None
+    let address: _Address | None
     class def register(
         cls,
         typeid: str,
@@ -395,7 +394,7 @@ class SyncManager(BaseManager):
     """
 
     def Barrier(
-        self, parties: int, action: Callable[[], None] | None = None, timeout: float | None = None
+        self, parties: int, action: (() -> None) | None = None, timeout: float | None = None
     ) -> threading.Barrier
     def BoundedSemaphore(self, value: int = 1) -> threading.BoundedSemaphore
     def Condition(self, lock: threading.Lock | threading._RLock | None = None) -> threading.Condition

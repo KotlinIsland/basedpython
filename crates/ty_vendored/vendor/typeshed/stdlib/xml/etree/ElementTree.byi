@@ -37,7 +37,7 @@ import sys
 from _collections_abc import dict_keys
 from _typeshed import FileDescriptorOrPath, ReadableBuffer, SupportsRead, SupportsWrite
 from collections.abc import Callable, Generator, ItemsView, Iterable, Iterator, Mapping, Sequence
-from typing import Any, Final, Generic, Literal, Protocol, SupportsIndex, TypeAlias, TypeGuard, TypeVar, type_check_only
+from typing import Final, Generic, Literal, Protocol, TypeAlias, TypeVar, type_check_only
 from typing_extensions import deprecated, disjoint_base
 from xml.parsers.expat import XMLParserType
 
@@ -71,11 +71,11 @@ __all__ = [
 if sys.version_info < (3, 15):
     __all__ += ["VERSION"]
 
-_FileRead: TypeAlias = FileDescriptorOrPath | SupportsRead[bytes] | SupportsRead[str]
-_FileWriteC14N: TypeAlias = FileDescriptorOrPath | SupportsWrite[bytes]
-_FileWrite: TypeAlias = _FileWriteC14N | SupportsWrite[str]
+type _FileRead = FileDescriptorOrPath | SupportsRead[bytes] | SupportsRead[str]
+type _FileWriteC14N = FileDescriptorOrPath | SupportsWrite[bytes]
+type _FileWrite = _FileWriteC14N | SupportsWrite[str]
 
-VERSION: Final[str]
+final VERSION: str
 
 class ParseError(SyntaxError):
     code: int
@@ -127,7 +127,7 @@ def canonicalize(
 
 # The tag for Element can be set to the Comment or ProcessingInstruction
 # functions defined in this module.
-_ElementCallable: TypeAlias = Callable[..., Element[_ElementCallable]]
+_ElementCallable: TypeAlias = (...) -> Element[_ElementCallable]
 
 
 @disjoint_base
@@ -144,7 +144,7 @@ class Element[in out Tag: str | _ElementCallable = str]:
     tail: str | None
     """A string of text directly after the end tag, or None"""
 
-    def __init__(self, tag: Tag, attrib: dict[str, str] = {}, **extra: str) -> None
+    init(self, tag: Tag, attrib: dict[str, str] = {}, **extra: str)
     def append(self, subelement: Element[dynamic], /) -> None
     def clear(self) -> None
     def extend(self, elements: Iterable[Element[dynamic]], /) -> None
@@ -161,7 +161,7 @@ class Element[in out Tag: str | _ElementCallable = str]:
     def items(self) -> ItemsView[str, str]
     def iter(self, tag: str | None = None) -> Generator[Element]
 
-    def iterfind(self, path: Literal[""], namespaces: dict[str, str] | None = None) -> None  # type: ignore[overload-overlap]
+    def iterfind(self, path: "", namespaces: dict[str, str] | None = None) -> None
     def iterfind(self, path: str, namespaces: dict[str, str] | None = None) -> Generator[Element]
 
     def itertext(self) -> Generator[str]
@@ -234,7 +234,7 @@ class QName:
     """
 
     text: str
-    def __init__(self, text_or_uri: str, tag: str | None = None) -> None
+    init(self, text_or_uri: str, tag: str | None = None)
     def __lt__(self, other: QName | str) -> bool
     def __le__(self, other: QName | str) -> bool
     def __gt__(self, other: QName | str) -> bool
@@ -255,7 +255,7 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
 
     """
 
-    def __init__(self, element: Element[dynamic] | None = None, file: _FileRead | None = None) -> None
+    init(self, element: Element[dynamic] | None = None, file: _FileRead | None = None)
     def getroot(self) -> Root:
         """Return root element of this tree."""
 
@@ -330,7 +330,7 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
 
         """
 
-    def iterfind(self, path: Literal[""], namespaces: dict[str, str] | None = None) -> None:  # type: ignore[overload-overlap]
+    def iterfind(self, path: "", namespaces: dict[str, str] | None = None) -> None:
         """Find all matching subelements by tag name or path.
 
         Same as getroot().iterfind(path), which is element.iterfind()
@@ -349,7 +349,7 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
         encoding: str | None = None,
         xml_declaration: bool | None = None,
         default_namespace: str | None = None,
-        method: Literal["xml", "html", "text", "c14n"] | None = None,
+        method: "xml" | "html" | "text" | "c14n" | None = None,
         *,
         short_empty_elements: bool = True,
     ) -> None:
@@ -381,7 +381,7 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
 
     def write_c14n(self, file: _FileWriteC14N) -> None
 
-HTML_EMPTY: Final[set[str]]
+final HTML_EMPTY: set[str]
 
 def register_namespace(prefix: str, uri: str) -> None:
     """Register a namespace prefix.
@@ -399,7 +399,7 @@ def register_namespace(prefix: str, uri: str) -> None:
 def tostring(
     element: Element[dynamic],
     encoding: None = None,
-    method: Literal["xml", "html", "text", "c14n"] | None = None,
+    method: "xml" | "html" | "text" | "c14n" | None = None,
     *,
     xml_declaration: bool | None = None,
     default_namespace: str | None = None,
@@ -420,8 +420,8 @@ def tostring(
     """
 def tostring(
     element: Element[dynamic],
-    encoding: Literal["unicode"],
-    method: Literal["xml", "html", "text", "c14n"] | None = None,
+    encoding: "unicode",
+    method: "xml" | "html" | "text" | "c14n" | None = None,
     *,
     xml_declaration: bool | None = None,
     default_namespace: str | None = None,
@@ -430,7 +430,7 @@ def tostring(
 def tostring(
     element: Element[dynamic],
     encoding: str,
-    method: Literal["xml", "html", "text", "c14n"] | None = None,
+    method: "xml" | "html" | "text" | "c14n" | None = None,
     *,
     xml_declaration: bool | None = None,
     default_namespace: str | None = None,
@@ -440,7 +440,7 @@ def tostring(
 def tostringlist(
     element: Element[dynamic],
     encoding: None = None,
-    method: Literal["xml", "html", "text", "c14n"] | None = None,
+    method: "xml" | "html" | "text" | "c14n" | None = None,
     *,
     xml_declaration: bool | None = None,
     default_namespace: str | None = None,
@@ -448,8 +448,8 @@ def tostringlist(
 ) -> list[bytes]
 def tostringlist(
     element: Element[dynamic],
-    encoding: Literal["unicode"],
-    method: Literal["xml", "html", "text", "c14n"] | None = None,
+    encoding: "unicode",
+    method: "xml" | "html" | "text" | "c14n" | None = None,
     *,
     xml_declaration: bool | None = None,
     default_namespace: str | None = None,
@@ -458,7 +458,7 @@ def tostringlist(
 def tostringlist(
     element: Element[dynamic],
     encoding: str,
-    method: Literal["xml", "html", "text", "c14n"] | None = None,
+    method: "xml" | "html" | "text" | "c14n" | None = None,
     *,
     xml_declaration: bool | None = None,
     default_namespace: str | None = None,
@@ -508,11 +508,11 @@ def parse(source: _FileRead, parser: XMLParser[dynamic] | None = None) -> Elemen
 #  * comment, pi: Element[_ElementCallable]
 #  * start-ns: tuple[str, str] (prefix, uri)
 #  * end-ns: None
-_EventType: TypeAlias = Literal["start", "end", "comment", "pi", "start-ns", "end-ns"]
+type _EventType = "start" | "end" | "comment" | "pi" | "start-ns" | "end-ns"
 
 # This class is defined inside the body of iterparse.
 @type_check_only
-class _IterParseIterator[out EventT: Element[str] | Element[_ElementCallable] | tuple[str, str] | None](Iterator[tuple[_EventType, EventT]], Protocol):
+protocol _IterParseIterator[out EventT: Element[str] | Element[_ElementCallable] | tuple[str, str] | None](Iterator[tuple[_EventType, EventT]]):
     if sys.version_info >= (3, 13):
         def close(self) -> None
     if sys.version_info >= (3, 11):
@@ -542,10 +542,10 @@ def iterparse(source: _FileRead, events: None = None) -> _IterParseIterator[Elem
 @deprecated("The `parser` parameter is deprecated since Python 3.4.")
 def iterparse(source: _FileRead, events: Iterable[_EventType], parser: XMLParser | None = None) -> _IterParseIterator[dynamic]
 
-_EventQueue: TypeAlias = tuple[str] | tuple[str, tuple[str, str]] | tuple[str, None]
+type _EventQueue = tuple[str] | tuple[str, tuple[str, str]] | tuple[str, None]
 
 class XMLPullParser[out EventT: Element[str] | Element[_ElementCallable] | tuple[str, str] | None]:
-    def __init__(self, events: Iterable[_EventType] | None = None, *, _parser: XMLParser[EventT] | None = None) -> None
+    init(self, events: Iterable[_EventType] | None = None, *, _parser: XMLParser[EventT] | None = None)
     def feed(self, data: str | ReadableBuffer) -> None:
         """Feed encoded data to parser."""
 
@@ -610,20 +610,20 @@ def fromstringlist(sequence: Sequence[str | ReadableBuffer], parser: XMLParser |
 # TreeBuilder is called by client code (they could pass strs, bytes or whatever);
 # but we don't want to use a too-broad type, or it would be too hard to write
 # elementfactories.
-_ElementFactory: TypeAlias = Callable[[Any, dict[Any, Any]], Element]
+type _ElementFactory = (dynamic, dict[dynamic, dynamic]) -> Element
 
 @disjoint_base
 class TreeBuilder:
     # comment_factory can take None because passing None to Comment is not an error
-    def __init__(
+    init(
         self,
         element_factory: _ElementFactory | None = None,
         *,
-        comment_factory: Callable[[str | None], Element[dynamic]] | None = None,
-        pi_factory: Callable[[str, str | None], Element[dynamic]] | None = None,
+        comment_factory: ((str | None) -> Element[dynamic]) | None = None,
+        pi_factory: ((str, str | None) -> Element[dynamic]) | None = None,
         insert_comments: bool = False,
         insert_pis: bool = False,
-    ) -> None
+    )
     insert_comments: bool
     insert_pis: bool
 
@@ -663,9 +663,9 @@ class C14NWriterTarget:
     - *exclude_tags*: a set of tag names that should not be serialised
     """
 
-    def __init__(
+    init(
         self,
-        write: Callable[[str], object],
+        write: (str) -> object,
         *,
         with_comments: bool = False,
         strip_text: bool = False,
@@ -674,7 +674,7 @@ class C14NWriterTarget:
         qname_aware_attrs: Iterable[str] | None = None,
         exclude_attrs: Iterable[str] | None = None,
         exclude_tags: Iterable[str] | None = None,
-    ) -> None
+    )
     def data(self, data: str) -> None
     def start_ns(self, prefix: str, uri: str) -> None
     def start(self, tag: str, attrs: Mapping[str, str]) -> None
@@ -686,7 +686,7 @@ class C14NWriterTarget:
 # require any particular attribute to be present. This documents the attributes
 # that can be present, but uncommenting any of them would require them.
 @type_check_only
-class _Target(Protocol)
+protocol _Target
 
 
 # This is generic because the return type of close() depends on the target.
@@ -700,7 +700,7 @@ class XMLParser[in out E = Element]:
     # TODO: what is entity used for???
     entity: dict[str, str]
     version: str
-    def __init__(self, *, target: _Target | None = None, encoding: str | None = None) -> None
+    init(self, *, target: _Target | None = None, encoding: str | None = None)
     def close(self) -> E
     def feed(self, data: str | ReadableBuffer, /) -> None
     def flush(self) -> None

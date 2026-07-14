@@ -12,12 +12,12 @@ dis(pickle, out=None, memo=None, indentlevel=4)
 
 import sys
 from collections.abc import Callable, Iterator, MutableMapping
-from typing import IO, Any, Final, TypeAlias
+from typing import Final, TypeAlias
 
 __all__ = ["dis", "genops", "optimize"]
 
-_Reader: TypeAlias = Callable[[IO[bytes]], Any]
-bytes_types: (*: type[Any])
+type _Reader = (IO[bytes]) -> dynamic
+bytes_types: (*: type[dynamic])
 
 UP_TO_NEWLINE: Final = -1
 TAKEN_FROM_ARGUMENT1: Final = -2
@@ -31,7 +31,7 @@ class ArgumentDescriptor:
     n: int
     reader: _Reader
     doc: str
-    def __init__(self, name: str, n: int, reader: _Reader, doc: str) -> None
+    init(self, name: str, n: int, reader: _Reader, doc: str)
 
 def read_uint1(f: IO[bytes]) -> int:
     """
@@ -378,9 +378,9 @@ long4: ArgumentDescriptor
 class StackObject:
     __slots__ = ("name", "obtype", "doc")
     name: str
-    obtype: type[Any] | (*: type[Any])
+    obtype: type[dynamic] | (*: type[dynamic])
     doc: str
-    def __init__(self, name: str, obtype: type[Any] | (*: type[Any]), doc: str) -> None
+    init(self, name: str, obtype: type[dynamic] | (*: type[dynamic]), doc: str)
 
 pyint: StackObject
 pylong: StackObject
@@ -410,7 +410,7 @@ class OpcodeInfo:
     stack_after: list[StackObject]
     proto: int
     doc: str
-    def __init__(
+    init(
         self,
         name: str,
         code: str,
@@ -419,11 +419,11 @@ class OpcodeInfo:
         stack_after: list[StackObject],
         proto: int,
         doc: str,
-    ) -> None
+    )
 
 opcodes: list[OpcodeInfo]
 
-def genops(pickle: bytes | bytearray | IO[bytes]) -> Iterator[(OpcodeInfo, Any | None, int | None)]:
+def genops(pickle: bytes | bytearray | IO[bytes]) -> Iterator[(OpcodeInfo, dynamic | None, int | None)]:
     """Generate all the opcodes in a pickle.
 
     'pickle' is a file-like object, or string, containing the pickle.

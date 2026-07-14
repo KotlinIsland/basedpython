@@ -105,12 +105,12 @@ from typing import ClassVar, Protocol, type_check_only
 __all__ = ["dnd_start", "DndHandler"]
 
 @type_check_only
-class _DndSource(Protocol):
+protocol _DndSource:
     def dnd_end(self, target: Widget | None, event: Event[Misc] | None, /) -> None
 
 class DndHandler:
     root: ClassVar[Tk | None]
-    def __init__(self, source: _DndSource, event: Event[Misc]) -> None
+    init(self, source: _DndSource, event: Event[Misc])
     def cancel(self, event: Event[Misc] | None = None) -> None
     def finish(self, event: Event[Misc] | None, commit: int = 0) -> None
     def on_motion(self, event: Event[Misc]) -> None

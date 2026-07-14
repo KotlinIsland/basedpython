@@ -43,9 +43,9 @@ if sys.version_info >= (3, 14):
     __all__ += ["heapify_max", "heappop_max", "heappush_max", "heappushpop_max", "heapreplace_max"]
 
 
-__about__: Final[str]
+final __about__: str
 
-def merge[Other](*iterables: Iterable[Other], key: Callable[[Other], SupportsRichComparison], reverse: bool = False) -> Generator[Other]:
+def merge[Other](*iterables: Iterable[Other], key: (Other) -> SupportsRichComparison, reverse: bool = False) -> Generator[Other]:
     """Merge multiple sorted inputs into a single sorted output.
 
     Similar to sorted(itertools.chain(*iterables)) but returns a generator,
@@ -64,14 +64,14 @@ def merge[Other](*iterables: Iterable[Other], key: Callable[[Other], SupportsRic
     """
 def merge(*iterables: Iterable[_T], key: None = None, reverse: bool = False) -> Generator[_T]
 
-def nlargest[Other](n: int, iterable: Iterable[Other], key: Callable[[Other], SupportsRichComparison]) -> list[Other]:
+def nlargest[Other](n: int, iterable: Iterable[Other], key: (Other) -> SupportsRichComparison) -> list[Other]:
     """Find the n largest elements in a dataset.
 
     Equivalent to:  sorted(iterable, key=key, reverse=True)[:n]
     """
 def nlargest(n: int, iterable: Iterable[_T], key: None = None) -> list[_T]
 
-def nsmallest[Other](n: int, iterable: Iterable[Other], key: Callable[[Other], SupportsRichComparison]) -> list[Other]:
+def nsmallest[Other](n: int, iterable: Iterable[Other], key: (Other) -> SupportsRichComparison) -> list[Other]:
     """Find the n smallest elements in a dataset.
 
     Equivalent to:  sorted(iterable, key=key)[:n]

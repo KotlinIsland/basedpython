@@ -259,39 +259,34 @@ final class TypeVar:
     details.
     """
 
-    @property
-    def __name__(self) -> str
-    @property
-    def __bound__(self) -> Any | None  # AnnotationForm
-    @property
-    def __constraints__(self) -> (*: Any)  # AnnotationForm
-    @property
-    def __covariant__(self) -> bool
-    @property
-    def __contravariant__(self) -> bool
+    let __name__: str
+    let __bound__: dynamic | None  # AnnotationForm
+    let __constraints__: (*: dynamic)  # AnnotationForm
+    let __covariant__: bool
+    let __contravariant__: bool
     if sys.version_info >= (3, 12):
         @property
         def __infer_variance__(self) -> bool
     if sys.version_info >= (3, 13):
         @property
-        def __default__(self) -> Any  # AnnotationForm
+        def __default__(self) -> dynamic  # AnnotationForm
     if sys.version_info >= (3, 13):
         def __new__(
             cls,
             name: str,
-            *constraints: Any,  # AnnotationForm
-            bound: Any | None = None,  # AnnotationForm
+            *constraints: dynamic,  # AnnotationForm
+            bound: dynamic | None = None,  # AnnotationForm
             contravariant: bool = False,
             covariant: bool = False,
             infer_variance: bool = False,
-            default: Any = ...,  # AnnotationForm
+            default: dynamic = ...,  # AnnotationForm
         ) -> Self
     elif sys.version_info >= (3, 12):
         def __new__(
             cls,
             name: str,
-            *constraints: Any,  # AnnotationForm
-            bound: Any | None = None,  # AnnotationForm
+            *constraints: dynamic,  # AnnotationForm
+            bound: dynamic | None = None,  # AnnotationForm
             covariant: bool = False,
             contravariant: bool = False,
             infer_variance: bool = False,
@@ -300,8 +295,8 @@ final class TypeVar:
         def __new__(
             cls,
             name: str,
-            *constraints: Any,  # AnnotationForm
-            bound: Any | None = None,  # AnnotationForm
+            *constraints: dynamic,  # AnnotationForm
+            bound: dynamic | None = None,  # AnnotationForm
             covariant: bool = False,
             contravariant: bool = False,
         ) -> Self
@@ -309,22 +304,22 @@ final class TypeVar:
         def __init__(
             self,
             name: str,
-            *constraints: Any,  # AnnotationForm
-            bound: Any | None = None,  # AnnotationForm
+            *constraints: dynamic,  # AnnotationForm
+            bound: dynamic | None = None,  # AnnotationForm
             covariant: bool = False,
             contravariant: bool = False,
         ) -> None
 
-    def __or__(self, right: Any, /) -> _SpecialForm:  # AnnotationForm
+    def __or__(self, right: dynamic, /) -> _SpecialForm:  # AnnotationForm
         """Return self|value."""
 
-    def __ror__(self, left: Any, /) -> _SpecialForm:  # AnnotationForm
+    def __ror__(self, left: dynamic, /) -> _SpecialForm:  # AnnotationForm
         """Return value|self."""
 
     if sys.version_info >= (3, 11):
-        def __typing_subst__(self, arg: Any, /) -> Any
+        def __typing_subst__(self, arg: dynamic, /) -> dynamic
     if sys.version_info >= (3, 13):
-        def __typing_prepare_subst__(self, alias: Any, args: Any, /) -> (*: Any)
+        def __typing_prepare_subst__(self, alias: dynamic, args: dynamic, /) -> (*: dynamic)
         def has_default(self) -> bool
     if sys.version_info >= (3, 14):
         @property
@@ -337,9 +332,9 @@ final class TypeVar:
 # N.B. Keep this definition in sync with typing_extensions._SpecialForm
 final class _SpecialForm(_Final):
     __slots__ = ("_name", "__doc__", "_getitem")
-    def __getitem__(self, parameters: Any) -> object
-    def __or__(self, other: Any) -> _SpecialForm
-    def __ror__(self, other: Any) -> _SpecialForm
+    def __getitem__(self, parameters: dynamic) -> object
+    def __or__(self, other: dynamic) -> _SpecialForm
+    def __ror__(self, other: dynamic) -> _SpecialForm
 
 Union: _SpecialForm
 """Represent a union type
@@ -778,11 +773,10 @@ if sys.version_info >= (3, 11):
         pickled.
         """
 
-        @property
-        def __name__(self) -> str
+        let __name__: str
         if sys.version_info >= (3, 15):
             @property
-            def __bound__(self) -> Any | None  # AnnotationForm
+            def __bound__(self) -> dynamic | None  # AnnotationForm
             @property
             def __covariant__(self) -> bool
             @property
@@ -791,7 +785,7 @@ if sys.version_info >= (3, 11):
             def __infer_variance__(self) -> bool
         if sys.version_info >= (3, 13):
             @property
-            def __default__(self) -> Any:  # AnnotationForm
+            def __default__(self) -> dynamic:  # AnnotationForm
                 """The default value for this TypeVarTuple."""
 
             def has_default(self) -> bool
@@ -800,24 +794,24 @@ if sys.version_info >= (3, 11):
                 cls,
                 name: str,
                 *,
-                bound: Any | None = None,  # AnnotationForm
+                bound: dynamic | None = None,  # AnnotationForm
                 covariant: bool = False,
                 contravariant: bool = False,
-                default: Any = ...,  # AnnotationForm
+                default: dynamic = ...,  # AnnotationForm
                 infer_variance: bool = False,
             ) -> Self
         elif sys.version_info >= (3, 13):
-            def __new__(cls, name: str, *, default: Any = ...) -> Self  # AnnotationForm
+            def __new__(cls, name: str, *, default: dynamic = ...) -> Self  # AnnotationForm
         elif sys.version_info >= (3, 12):
             def __new__(cls, name: str) -> Self
         else:
             def __init__(self, name: str) -> None
 
-        def __iter__(self) -> Any:
+        def __iter__(self) -> dynamic:
             """Implement iter(self)."""
 
         def __typing_subst__(self, arg: Never, /) -> Never
-        def __typing_prepare_subst__(self, alias: Any, args: Any, /) -> (*: Any)
+        def __typing_prepare_subst__(self, alias: dynamic, args: dynamic, /) -> (*: dynamic)
         if sys.version_info >= (3, 14):
             @property
             def evaluate_default(self) -> EvaluateFunc | None
@@ -837,15 +831,14 @@ final class ParamSpecArgs:
     to static type checkers.
     """
 
-    @property
-    def __origin__(self) -> ParamSpec
+    let __origin__: ParamSpec
     if sys.version_info >= (3, 12):
         def __new__(cls, origin: ParamSpec) -> Self
     else:
         def __init__(self, origin: ParamSpec) -> None
 
     def __eq__(self, other: object, /) -> bool
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
 
 final class ParamSpecKwargs:
     """The kwargs for a ParamSpec object.
@@ -862,15 +855,14 @@ final class ParamSpecKwargs:
     to static type checkers.
     """
 
-    @property
-    def __origin__(self) -> ParamSpec
+    let __origin__: ParamSpec
     if sys.version_info >= (3, 12):
         def __new__(cls, origin: ParamSpec) -> Self
     else:
         def __init__(self, origin: ParamSpec) -> None
 
     def __eq__(self, other: object, /) -> bool
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
 
 final class ParamSpec:
     """Parameter specification variable.
@@ -925,20 +917,16 @@ final class ParamSpec:
     scope can be pickled.
     """
 
-    @property
-    def __name__(self) -> str
-    @property
-    def __bound__(self) -> Any | None  # AnnotationForm
-    @property
-    def __covariant__(self) -> bool
-    @property
-    def __contravariant__(self) -> bool
+    let __name__: str
+    let __bound__: dynamic | None  # AnnotationForm
+    let __covariant__: bool
+    let __contravariant__: bool
     if sys.version_info >= (3, 12):
         @property
         def __infer_variance__(self) -> bool
     if sys.version_info >= (3, 13):
         @property
-        def __default__(self) -> Any:  # AnnotationForm
+        def __default__(self) -> dynamic:  # AnnotationForm
             """The default value for this ParamSpec."""
 
     if sys.version_info >= (3, 13):
@@ -946,47 +934,49 @@ final class ParamSpec:
             cls,
             name: str,
             *,
-            bound: Any | None = None,  # AnnotationForm
+            bound: dynamic | None = None,  # AnnotationForm
             contravariant: bool = False,
             covariant: bool = False,
             infer_variance: bool = False,
-            default: Any = ...,  # AnnotationForm
+            default: dynamic = ...,  # AnnotationForm
         ) -> Self
     elif sys.version_info >= (3, 12):
         def __new__(
             cls,
             name: str,
             *,
-            bound: Any | None = None,  # AnnotationForm
+            bound: dynamic | None = None,  # AnnotationForm
             contravariant: bool = False,
             covariant: bool = False,
             infer_variance: bool = False,
         ) -> Self
     elif sys.version_info >= (3, 11):
         def __new__(
-            cls, name: str, *, bound: Any | None = None, contravariant: bool = False, covariant: bool = False  # AnnotationForm
+            cls, name: str, *, bound: dynamic | None = None, contravariant: bool = False, covariant: bool = False  # AnnotationForm
         ) -> Self
     else:
         def __init__(
-            self, name: str, *, bound: Any | None = None, contravariant: bool = False, covariant: bool = False  # AnnotationForm
+            self, name: str, *, bound: dynamic | None = None, contravariant: bool = False, covariant: bool = False  # AnnotationForm
         ) -> None
 
+    # kept as a property: a data descriptor, not a read-only value — ty relies on the descriptor
     @property
     def args(self) -> ParamSpecArgs:
         """Represents positional arguments."""
 
+    # kept as a property: a data descriptor, not a read-only value — ty relies on the descriptor
     @property
     def kwargs(self) -> ParamSpecKwargs:
         """Represents keyword arguments."""
 
     if sys.version_info >= (3, 11):
-        def __typing_subst__(self, arg: Any, /) -> Any
-        def __typing_prepare_subst__(self, alias: Any, args: Any, /) -> (*: Any)
+        def __typing_subst__(self, arg: dynamic, /) -> dynamic
+        def __typing_prepare_subst__(self, alias: dynamic, args: dynamic, /) -> (*: dynamic)
 
-    def __or__(self, right: Any, /) -> _SpecialForm:
+    def __or__(self, right: dynamic, /) -> _SpecialForm:
         """Return self|value."""
 
-    def __ror__(self, left: Any, /) -> _SpecialForm:
+    def __ror__(self, left: dynamic, /) -> _SpecialForm:
         """Return value|self."""
 
     if sys.version_info >= (3, 13):
@@ -1097,14 +1087,14 @@ class NewType:
         num = UserId(5) + 1     # type: int
     """
 
-    def __init__(self, name: str, tp: Any) -> None  # AnnotationForm
+    init(self, name: str, tp: dynamic)  # AnnotationForm
     if sys.version_info >= (3, 11):
         static def __call__[Element](x: Element, /) -> Element
     else:
         def __call__[Element](self, x: Element) -> Element
 
-    def __or__(self, other: Any) -> _SpecialForm
-    def __ror__(self, other: Any) -> _SpecialForm
+    def __or__(self, other: dynamic) -> _SpecialForm
+    def __ror__(self, other: dynamic) -> _SpecialForm
     __supertype__: type | NewType
     __name__: str
 
@@ -1112,7 +1102,7 @@ class NewType:
 
 # These type variables are used by the container types.
 
-def overload[F: Callable[..., Any]](func: F) -> F:
+def overload[F: (...) -> dynamic](func: F) -> F:
     """Decorator for overloaded functions/methods.
 
     In a non-stub file, place two or more stub definitions for the same
@@ -1143,7 +1133,7 @@ def overload[F: Callable[..., Any]](func: F) -> F:
     get_overloads() function.
     """
 
-def no_type_check[F: Callable[..., Any]](arg: F) -> F:
+def no_type_check[F: (...) -> dynamic](arg: F) -> F:
     """Decorator to indicate that annotations are not type hints.
 
     The argument must be a class or function; if it is a class, it
@@ -1155,7 +1145,7 @@ def no_type_check[F: Callable[..., Any]](arg: F) -> F:
 
 if sys.version_info < (3, 15):
     @deprecated("Deprecated since Python 3.13; removed in Python 3.15.")
-    def no_type_check_decorator[**P, Element](decorator: Callable[P, Element]) -> Callable[P, Element]:
+    def no_type_check_decorator[**P, Element](decorator: (**P) -> Element) -> (**P) -> Element:
         """Decorator to give another decorator the @no_type_check effect.
 
         This wraps the decorator with something that wraps the decorated
@@ -1184,14 +1174,14 @@ if sys.version_info >= (3, 15):
         """
 
 # This itself is only available during type checking
-def type_check_only[FT: Callable[..., Any] | type](func_or_cls: FT) -> FT
+def type_check_only[FT: ((...) -> dynamic) | type](func_or_cls: FT) -> FT
 
 # Type aliases and type constructors
 
 @type_check_only
 class _Alias:
     # Class for defining generic aliases for library types.
-    def __getitem__(self, typeargs: Any) -> Any
+    def __getitem__(self, typeargs: dynamic) -> dynamic
 
 List = _Alias()
 """Deprecated alias to list."""
@@ -1331,7 +1321,7 @@ follows::
 
 class _ProtocolMeta(ABCMeta):
     if sys.version_info >= (3, 12):
-        def __init__(cls, *args: Any, **kwargs: Any) -> None
+        def __init__(cls, *args: dynamic, **kwargs: dynamic) -> None
 
 # Abstract base classes.
 
@@ -1356,49 +1346,49 @@ def runtime_checkable[TC: type[object]](cls: TC) -> TC:
     """
 
 @runtime_checkable
-class SupportsInt(Protocol, metaclass=ABCMeta):
+protocol SupportsInt(metaclass=ABCMeta):
     """A protocol with one abstract method __int__."""
 
     __slots__ = ()
     abstract def __int__(self) -> int
 
 @runtime_checkable
-class SupportsFloat(Protocol, metaclass=ABCMeta):
+protocol SupportsFloat(metaclass=ABCMeta):
     """A protocol with one abstract method __float__."""
 
     __slots__ = ()
     abstract def __float__(self) -> float
 
 @runtime_checkable
-class SupportsComplex(Protocol, metaclass=ABCMeta):
+protocol SupportsComplex(metaclass=ABCMeta):
     """A protocol with one abstract method __complex__."""
 
     __slots__ = ()
     abstract def __complex__(self) -> complex
 
 @runtime_checkable
-class SupportsBytes(Protocol, metaclass=ABCMeta):
+protocol SupportsBytes(metaclass=ABCMeta):
     """A protocol with one abstract method __bytes__."""
 
     __slots__ = ()
     abstract def __bytes__(self) -> bytes
 
 @runtime_checkable
-class SupportsIndex(Protocol, metaclass=ABCMeta):
+protocol SupportsIndex(metaclass=ABCMeta):
     """A protocol with one abstract method __index__."""
 
     __slots__ = ()
     abstract def __index__(self) -> int
 
 @runtime_checkable
-class SupportsAbs[out Element](Protocol):
+protocol SupportsAbs[out Element]:
     """A protocol with one abstract method __abs__ that is covariant in its return type."""
 
     __slots__ = ()
     abstract def __abs__(self) -> Element
 
 @runtime_checkable
-class SupportsRound[out Element](Protocol):
+protocol SupportsRound[out Element]:
     """A protocol with one abstract method __round__ that is covariant in its return type."""
 
     __slots__ = ()
@@ -1407,34 +1397,34 @@ class SupportsRound[out Element](Protocol):
     abstract def __round__(self, ndigits: int, /) -> Element
 
 @runtime_checkable
-class Sized(Protocol, metaclass=ABCMeta):
+protocol Sized(metaclass=ABCMeta):
     abstract def __len__(self) -> int
 
 @runtime_checkable
-class Hashable(Protocol, metaclass=ABCMeta):
+protocol Hashable(metaclass=ABCMeta):
     # TODO: This is special, in that a subclass of a hashable class may not be hashable
     #   (for example, list vs. object). It's not obvious how to represent this. This class
     #   is currently mostly useless for static checking.
     abstract def __hash__(self) -> int
 
 @runtime_checkable
-class Iterable[out Element](Protocol):
+protocol Iterable[out Element]:
     abstract def __iter__(self) -> Iterator[Element]
 
 @runtime_checkable
-class Iterator[out Element](Iterable[Element], Protocol):
+protocol Iterator[out Element](Iterable[Element]):
     abstract def __next__(self) -> Element:
         """Return the next item from the iterator. When exhausted, raise StopIteration"""
 
     def __iter__(self) -> Iterator[Element]
 
 @runtime_checkable
-class Reversible[out Element](Iterable[Element], Protocol):
+protocol Reversible[out Element](Iterable[Element]):
     abstract def __reversed__(self) -> Iterator[Element]
 
 
 @runtime_checkable
-class Generator[out Element, in Sent = None, out Return = None](Iterator[Element], Protocol):
+protocol Generator[out Element, in Sent = None, out Return = None](Iterator[Element]):
     def __next__(self) -> Element:
         """Return the next item from the generator.
         When exhausted, raise StopIteration.
@@ -1470,16 +1460,16 @@ else:
     from contextlib import AbstractAsyncContextManager, AbstractContextManager
 
     @runtime_checkable
-    class ContextManager[out Element](AbstractContextManager[Element, bool | None], Protocol):
+    protocol ContextManager[out Element](AbstractContextManager[Element, bool | None]):
         """A generic version of contextlib.AbstractContextManager."""
 
     @runtime_checkable
-    class AsyncContextManager[out Element](AbstractAsyncContextManager[Element, bool | None], Protocol):
+    protocol AsyncContextManager[out Element](AbstractAsyncContextManager[Element, bool | None]):
         """A generic version of contextlib.AbstractAsyncContextManager."""
 
 @runtime_checkable
-class Awaitable[out Element](Protocol):
-    abstract def __await__(self) -> Generator[Any, Any, Element]
+protocol Awaitable[out Element]:
+    abstract def __await__(self) -> Generator[dynamic, dynamic, Element]
 
 # Non-default variations to accommodate coroutines, and `AwaitableGenerator` having a 4th type parameter.
 
@@ -1503,57 +1493,50 @@ class Coroutine[out Element, in SendT_nd, out ReturnT_nd](Awaitable[ReturnT_nd])
     abstract def close(self) -> None:
         """Raise GeneratorExit inside coroutine."""
 
-# NOTE: This type does not exist in typing.py or PEP 484 but mypy needs it to exist.
-# The parameters correspond to Generator, but the 4th is the original type.
-# Obsolete, use _typeshed._type_checker_internals.AwaitableGenerator instead.
-@type_check_only
-class AwaitableGenerator[out Element, in SendT_nd, out ReturnT_nd, in out Other](Awaitable[ReturnT_nd], Generator[Element, SendT_nd, ReturnT_nd], metaclass=ABCMeta)
 
 @runtime_checkable
-class AsyncIterable[out Element](Protocol):
+protocol AsyncIterable[out Element]:
     abstract def __aiter__(self) -> AsyncIterator[Element]
 
 @runtime_checkable
-class AsyncIterator[out Element](AsyncIterable[Element], Protocol):
+protocol AsyncIterator[out Element](AsyncIterable[Element]):
     abstract def __anext__(self) -> Awaitable[Element]:
         """Return the next item or raise StopAsyncIteration when exhausted."""
 
     def __aiter__(self) -> AsyncIterator[Element]
 
 @runtime_checkable
-class AsyncGenerator[out Element, in Sent = None](AsyncIterator[Element], Protocol):
-    def __anext__(self) -> Coroutine[Any, Any, Element]:
+protocol AsyncGenerator[out Element, in Sent = None](AsyncIterator[Element]):
+    def __anext__(self) -> Coroutine[dynamic, dynamic, Element]:
         """Return the next item from the asynchronous generator.
         When exhausted, raise StopAsyncIteration.
         """
 
-    abstract def asend(self, value: Sent, /) -> Coroutine[Any, Any, Element]:
+    abstract def asend(self, value: Sent, /) -> Coroutine[dynamic, dynamic, Element]:
         """Send a value into the asynchronous generator.
         Return next yielded value or raise StopAsyncIteration.
         """
 
     abstract def athrow(
         self, typ: type[BaseException], val: BaseException | object = None, tb: TracebackType | None = None, /
-    ) -> Coroutine[Any, Any, Element]:
+    ) -> Coroutine[dynamic, dynamic, Element]:
         """Raise an exception in the asynchronous generator.
         Return next yielded value or raise StopAsyncIteration.
         """
     abstract def athrow(
         self, typ: BaseException, val: None = None, tb: TracebackType | None = None, /
-    ) -> Coroutine[Any, Any, Element]
+    ) -> Coroutine[dynamic, dynamic, Element]
 
-    def aclose(self) -> Coroutine[Any, Any, None]:
+    def aclose(self) -> Coroutine[dynamic, dynamic, None]:
         """Raise GeneratorExit inside coroutine."""
 
 
 @runtime_checkable
-class Container[in ContainerT = Any](Protocol):
-    # This is generic more on vibes than anything else
+protocol Container[in ContainerT = dynamic]:
     abstract def __contains__(self, x: ContainerT, /) -> bool
 
 @runtime_checkable
-class Collection[out Element](Iterable[Element], Container[Any], Protocol):
-    # Note: need to use Container[Any] instead of Container[_T_co] to ensure covariance.
+protocol Collection[out Element](Iterable[Element], Container[dynamic]):
     # Implement Sized (but don't have it as a base class).
     abstract def __len__(self) -> int
 
@@ -1568,7 +1551,7 @@ class Sequence[out Element](Reversible[Element], Collection[Element]):
     abstract def __getitem__(self, index: slice[int | None], /) -> Sequence[Element]
 
     # Mixin methods
-    def index(self, value: Any, start: int = 0, stop: int = ..., /) -> int:
+    def index(self, value: dynamic, start: int = 0, stop: int = ..., /) -> int:
         """S.index(value, [start, [stop]]) -> integer -- return first index of
         value.  Raises ValueError if the value is not present.
 
@@ -1576,7 +1559,7 @@ class Sequence[out Element](Reversible[Element], Collection[Element]):
         recommended.
         """
 
-    def count(self, value: Any, /) -> int:
+    def count(self, value: dynamic, /) -> int:
         """S.count(value) -> integer -- return number of occurrences of value"""
 
     def __contains__(self, value: object, /) -> bool
@@ -1665,16 +1648,16 @@ class AbstractSet[out Element](Collection[Element]):
         does not accept an iterable for an input.
         """
 
-    def __le__(self, other: AbstractSet[Any], /) -> bool
-    def __lt__(self, other: AbstractSet[Any], /) -> bool
-    def __gt__(self, other: AbstractSet[Any], /) -> bool
-    def __ge__(self, other: AbstractSet[Any], /) -> bool
-    def __and__(self, other: AbstractSet[Any], /) -> AbstractSet[Element]
+    def __le__(self, other: AbstractSet[dynamic], /) -> bool
+    def __lt__(self, other: AbstractSet[dynamic], /) -> bool
+    def __gt__(self, other: AbstractSet[dynamic], /) -> bool
+    def __ge__(self, other: AbstractSet[dynamic], /) -> bool
+    def __and__(self, other: AbstractSet[dynamic], /) -> AbstractSet[Element]
     def __or__[T](self, other: AbstractSet[T], /) -> AbstractSet[Element | T]
-    def __sub__(self, other: AbstractSet[Any], /) -> AbstractSet[Element]
+    def __sub__(self, other: AbstractSet[dynamic], /) -> AbstractSet[Element]
     def __xor__[T](self, other: AbstractSet[T], /) -> AbstractSet[Element | T]
     def __eq__(self, other: object, /) -> bool
-    def isdisjoint(self, other: Iterable[Any], /) -> bool:
+    def isdisjoint(self, other: Iterable[dynamic], /) -> bool:
         """Return True if two sets have a null intersection."""
 
 class MutableSet[in out Element](AbstractSet[Element]):
@@ -1705,46 +1688,46 @@ class MutableSet[in out Element](AbstractSet[Element]):
     def remove(self, value: Element, /) -> None:
         """Remove an element. If not a member, raise a KeyError."""
 
-    def __ior__(self, it: AbstractSet[Element], /) -> typing_extensions.Self  # type: ignore[override,misc]
-    def __iand__(self, it: AbstractSet[Any], /) -> typing_extensions.Self
-    def __ixor__(self, it: AbstractSet[Element], /) -> typing_extensions.Self  # type: ignore[override,misc]
-    def __isub__(self, it: AbstractSet[Any], /) -> typing_extensions.Self
+    def __ior__(self, it: AbstractSet[Element], /) -> typing_extensions.Self
+    def __iand__(self, it: AbstractSet[dynamic], /) -> typing_extensions.Self
+    def __ixor__(self, it: AbstractSet[Element], /) -> typing_extensions.Self
+    def __isub__(self, it: AbstractSet[dynamic], /) -> typing_extensions.Self
 
 class MappingView(Sized):
     __slots__ = ("_mapping",)
-    def __init__(self, mapping: Sized) -> None  # undocumented
+    init(self, mapping: Sized)  # undocumented
     def __len__(self) -> int
 
 class ItemsView[out Key, out Value](MappingView, AbstractSet[tuple[Key, Value]]):
-    def __init__(self, mapping: SupportsGetItemViewable[Key, Value]) -> None  # undocumented
+    init(self, mapping: SupportsGetItemViewable[Key, Value])  # undocumented
     class def _from_iterable[Other](cls, it: Iterable[Other], /) -> set[Other]
-    def __and__(self, other: Iterable[Any], /) -> set[(Key, Value)]
+    def __and__(self, other: Iterable[dynamic], /) -> set[(Key, Value)]
     def __rand__[Element](self, other: Iterable[Element], /) -> set[Element]
-    def __contains__(self, item: (object, object), /) -> bool  # type: ignore[override]
+    def __contains__(self, item: (object, object), /) -> bool
     def __iter__(self) -> Iterator[(Key, Value)]
     def __or__[Element](self, other: Iterable[Element], /) -> set[(Key, Value) | Element]
     def __ror__[Element](self, other: Iterable[Element], /) -> set[(Key, Value) | Element]
-    def __sub__(self, other: Iterable[Any], /) -> set[(Key, Value)]
+    def __sub__(self, other: Iterable[dynamic], /) -> set[(Key, Value)]
     def __rsub__[Element](self, other: Iterable[Element], /) -> set[Element]
     def __xor__[Element](self, other: Iterable[Element], /) -> set[(Key, Value) | Element]
     def __rxor__[Element](self, other: Iterable[Element], /) -> set[(Key, Value) | Element]
 
 class KeysView[out Key](MappingView, AbstractSet[Key]):
-    def __init__(self, mapping: Viewable[Key]) -> None  # undocumented
+    init(self, mapping: Viewable[Key])  # undocumented
     class def _from_iterable[Other](cls, it: Iterable[Other], /) -> set[Other]
-    def __and__(self, other: Iterable[Any], /) -> set[Key]
+    def __and__(self, other: Iterable[dynamic], /) -> set[Key]
     def __rand__[Element](self, other: Iterable[Element], /) -> set[Element]
     def __contains__(self, key: object, /) -> bool
     def __iter__(self) -> Iterator[Key]
     def __or__[Element](self, other: Iterable[Element], /) -> set[Key | Element]
     def __ror__[Element](self, other: Iterable[Element], /) -> set[Key | Element]
-    def __sub__(self, other: Iterable[Any], /) -> set[Key]
+    def __sub__(self, other: Iterable[dynamic], /) -> set[Key]
     def __rsub__[Element](self, other: Iterable[Element], /) -> set[Element]
     def __xor__[Element](self, other: Iterable[Element], /) -> set[Key | Element]
     def __rxor__[Element](self, other: Iterable[Element], /) -> set[Key | Element]
 
 class ValuesView[out Value](MappingView, Collection[Value]):
-    def __init__(self, mapping: SupportsGetItemViewable[Any, Value]) -> None  # undocumented
+    init(self, mapping: SupportsGetItemViewable[dynamic, Value])  # undocumented
     def __contains__(self, value: object, /) -> bool
     def __iter__(self) -> Iterator[Value]
 
@@ -1768,7 +1751,7 @@ class Mapping[out Key, out Value](Collection[Key]):
     # Mixin methods
     def get(self, key: object, /) -> Value | None:
         """D.get(k[,d]) -> D[k] if k in D, else d.  d defaults to None."""
-    def get(self, key: object, default: Value, /) -> Value  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues] # Covariant type as parameter
+    def get(self, key: object, default: Value, /) -> Value
     def get[Element](self, key: object, default: Element, /) -> Value | Element
 
     def items(self) -> ItemsView[Key, Value]:
@@ -1856,7 +1839,7 @@ class MutableMapping[in out Key, in out Value](Mapping[Key, Value]):
 
 Text = str
 
-TYPE_CHECKING: Final[bool]
+final TYPE_CHECKING: bool
 
 # In stubs, the arguments of the IO class are marked as positional-only.
 # This differs from runtime, but better reflects the fact that in reality
@@ -1878,22 +1861,19 @@ class IO[in out AnyStr: constraints (str, bytes)]:
     # but making them abstract in the stub is hugely disruptive, for not much gain.
     # See #8726
     __slots__ = ()
-    @property
-    def mode(self) -> str
+    let mode: str
     # Usually str, but may be bytes if a bytes path was passed to open(). See #10737.
     # If PEP 696 becomes available, we may want to use a defaulted TypeVar here.
-    @property
-    def name(self) -> str | Any
+    let name: str | dynamic
     abstract def close(self) -> None
-    @property
-    def closed(self) -> bool
+    let closed: bool
     abstract def fileno(self) -> int
     abstract def flush(self) -> None
     abstract def isatty(self) -> bool
-    abstract def read(self, n: int = -1, /) -> AnyStr
+    abstract def read[AnyStr: constraints (str, bytes)](self, n: int = -1, /) -> AnyStr
     abstract def readable(self) -> bool
-    abstract def readline(self, limit: int = -1, /) -> AnyStr
-    abstract def readlines(self, hint: int = -1, /) -> list[AnyStr]
+    abstract def readline[AnyStr: constraints (str, bytes)](self, limit: int = -1, /) -> AnyStr
+    abstract def readlines[AnyStr: constraints (str, bytes)](self, hint: int = -1, /) -> list[AnyStr]
     abstract def seek(self, offset: int, whence: int = 0, /) -> int
     abstract def seekable(self) -> bool
     abstract def tell(self) -> int
@@ -1903,16 +1883,16 @@ class IO[in out AnyStr: constraints (str, bytes)]:
     @abstractmethod
     def write(self: IO[bytes], s: ReadableBuffer, /) -> int
     @abstractmethod
-    def write(self, s: AnyStr, /) -> int
+    def write[AnyStr: constraints (str, bytes)](self, s: AnyStr, /) -> int
 
     @abstractmethod
     def writelines(self: IO[bytes], lines: Iterable[ReadableBuffer], /) -> None
     @abstractmethod
-    def writelines(self, lines: Iterable[AnyStr], /) -> None
+    def writelines[AnyStr: constraints (str, bytes)](self, lines: Iterable[AnyStr], /) -> None
 
-    abstract def __next__(self) -> AnyStr
-    abstract def __iter__(self) -> Iterator[AnyStr]
-    abstract def __enter__(self) -> IO[AnyStr]
+    abstract def __next__[AnyStr: constraints (str, bytes)](self) -> AnyStr
+    abstract def __iter__[AnyStr: constraints (str, bytes)](self) -> Iterator[AnyStr]
+    abstract def __enter__[AnyStr: constraints (str, bytes)](self) -> IO[AnyStr]
     abstract def __exit__(
         self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None, /
     ) -> None
@@ -1928,25 +1908,20 @@ class TextIO(IO[str]):
 
     # See comment regarding the @properties in the `IO` class
     __slots__ = ()
-    @property
-    def buffer(self) -> BinaryIO
-    @property
-    def encoding(self) -> str
-    @property
-    def errors(self) -> str | None
-    @property
-    def line_buffering(self) -> int  # int on PyPy, bool on CPython
-    @property
-    def newlines(self) -> Any  # None, str or tuple
+    let buffer: BinaryIO
+    let encoding: str
+    let errors: str | None
+    let line_buffering: int  # int on PyPy, bool on CPython
+    let newlines: dynamic  # None, str or tuple
     abstract def __enter__(self) -> TextIO
 
-ByteString: typing_extensions.TypeAlias = bytes | bytearray | memoryview
+type ByteString = bytes | bytearray | memoryview
 
 # Functions
 
-_get_type_hints_obj_allowed_types: typing_extensions.TypeAlias = (  # noqa: Y042
+type _get_type_hints_obj_allowed_types = (  # noqa: Y042
     object
-    | Callable[..., Any]
+    | ((...) -> dynamic)
     | FunctionType
     | BuiltinFunctionType
     | MethodType
@@ -1959,12 +1934,12 @@ _get_type_hints_obj_allowed_types: typing_extensions.TypeAlias = (  # noqa: Y042
 if sys.version_info >= (3, 14):
     def get_type_hints(
         obj: _get_type_hints_obj_allowed_types,
-        globalns: dict[str, Any] | None = None,
-        localns: Mapping[str, Any] | None = None,
+        globalns: dict[str, dynamic] | None = None,
+        localns: Mapping[str, dynamic] | None = None,
         include_extras: bool = False,
         *,
         format: Format | None = None,  # Default: Format.VALUE
-    ) -> dict[str, Any]:  # AnnotationForm
+    ) -> dict[str, dynamic]:  # AnnotationForm
         """Return type hints for an object.
 
         This is often the same as annotationlib.get_annotations(obj) or obj.__annotations__,
@@ -1999,10 +1974,10 @@ if sys.version_info >= (3, 14):
 else:
     def get_type_hints(
         obj: _get_type_hints_obj_allowed_types,
-        globalns: dict[str, Any] | None = None,
-        localns: Mapping[str, Any] | None = None,
+        globalns: dict[str, dynamic] | None = None,
+        localns: Mapping[str, dynamic] | None = None,
         include_extras: bool = False,
-    ) -> dict[str, Any]:  # AnnotationForm
+    ) -> dict[str, dynamic]:  # AnnotationForm
         """Return type hints for an object.
 
         This is often the same as inspect.get_annotations(obj) or obj.__annotations__,
@@ -2034,7 +2009,7 @@ else:
           locals, respectively.
         """
 
-def get_args(tp: Any) -> (*: Any):  # AnnotationForm
+def get_args(tp: dynamic) -> (*: dynamic):  # AnnotationForm
     """Get type arguments with all substitutions performed.
 
     For unions, basic simplifications used by Union constructor are performed.
@@ -2069,9 +2044,9 @@ def get_origin(tp: ParamSpecArgs | ParamSpecKwargs) -> ParamSpec:
     """
 def get_origin(tp: UnionType) -> type[UnionType]
 def get_origin(tp: GenericAlias) -> type
-def get_origin(tp: Any) -> Any | None  # AnnotationForm
+def get_origin(tp: dynamic) -> dynamic | None  # AnnotationForm
 
-def cast[Element](typ: type[Element], val: Any) -> Element:
+def cast[Element](typ: type[Element], val: dynamic) -> Element:
     """Cast a value to a type.
 
     This returns the value unchanged.  To the type checker this
@@ -2079,8 +2054,8 @@ def cast[Element](typ: type[Element], val: Any) -> Element:
     runtime we intentionally don't check anything (we want this
     to be as fast as possible).
     """
-def cast(typ: str, val: Any) -> Any
-def cast(typ: object, val: Any) -> Any
+def cast(typ: str, val: dynamic) -> dynamic
+def cast(typ: object, val: dynamic) -> dynamic
 
 if sys.version_info >= (3, 11):
     def reveal_type[Element](obj: Element, /) -> Element:
@@ -2119,7 +2094,7 @@ if sys.version_info >= (3, 11):
         At runtime, this throws an exception when called.
         """
 
-    def assert_type[Element](val: Element, typ: Any, /) -> Element:  # AnnotationForm
+    def assert_type[Element](val: Element, typ: dynamic, /) -> Element:  # AnnotationForm
         """Ask a static type checker to confirm that the value is of the given type.
 
         At runtime this does nothing: it returns the first argument unchanged with no
@@ -2145,8 +2120,8 @@ if sys.version_info >= (3, 11):
         order_default: bool = False,
         kw_only_default: bool = False,
         frozen_default: bool = False,  # on 3.11, runtime accepts it as part of kwargs
-        field_specifiers: tuple[type[Any] | (...) -> Any, ...] = (),
-        **kwargs: Any,
+        field_specifiers: (*: type[dynamic] | (...) -> dynamic) = (),
+        **kwargs: dynamic,
     ) -> IdentityFunction:
         """Decorator to mark an object as providing dataclass-like behavior.
 
@@ -2214,7 +2189,7 @@ if sys.version_info >= (3, 11):
 # Type constructors
 
 # Obsolete, will be changed to a function. Use _typeshed._type_checker_internals.NamedTupleFallback instead.
-class NamedTuple(tuple[Any, ...]):
+class NamedTuple((*: dynamic)):
     """Typed version of collections.namedtuple.
 
     Usage::
@@ -2235,24 +2210,23 @@ class NamedTuple(tuple[Any, ...]):
         Employee = NamedTuple('Employee', [('name', str), ('id', int)])
     """
 
-    _field_defaults: ClassVar[dict[str, Any]]
+    _field_defaults: ClassVar[dict[str, dynamic]]
     _fields: ClassVar[(*: str)]
     __match_args__: ClassVar[(*: str)] = ...
     # __orig_bases__ sometimes exists on <3.12, but not consistently
     # So we only add it to the stub on 3.12+.
     if sys.version_info >= (3, 12):
-        __orig_bases__: ClassVar[(*: Any)]
+        __orig_bases__: ClassVar[(*: dynamic)]
 
-    def __init__(self, typename: str, fields: Iterable[(str, Any)], /) -> None
+    init(self, typename: str, fields: Iterable[(str, dynamic)], /)
     @deprecated("Creating a typing.NamedTuple using keyword arguments is deprecated and support will be removed in Python 3.15")
-    def __init__(self, typename: str, fields: None = None, /, **kwargs: Any) -> None
+    def __init__(self, typename: str, fields: None = None, /, **kwargs: dynamic) -> None
 
-    @final
-    class def _make(cls, iterable: Iterable[Any]) -> typing_extensions.Self
-    final def _asdict(self) -> dict[str, Any]
-    final def _replace(self, **kwargs: Any) -> typing_extensions.Self
+    final class def _make(cls, iterable: Iterable[dynamic]) -> typing_extensions.Self
+    final def _asdict(self) -> dict[str, dynamic]
+    final def _replace(self, **kwargs: dynamic) -> typing_extensions.Self
     if sys.version_info >= (3, 13):
-        def __replace__(self, **kwargs: Any) -> typing_extensions.Self
+        def __replace__(self, **kwargs: dynamic) -> typing_extensions.Self
 
 # Internal mypy fallback type for all typed dicts (does not exist at runtime)
 # N.B. Keep this mostly in sync with typing_extensions._TypedDict/mypy_extensions._TypedDict
@@ -2265,21 +2239,21 @@ class _TypedDict(Mapping[str, object], metaclass=ABCMeta):
     # __orig_bases__ sometimes exists on <3.12, but not consistently,
     # so we only add it to the stub on 3.12+
     if sys.version_info >= (3, 12):
-        __orig_bases__: ClassVar[(*: Any)]
+        __orig_bases__: ClassVar[(*: dynamic)]
     if sys.version_info >= (3, 13):
         __readonly_keys__: ClassVar[frozenset[str]]
         __mutable_keys__: ClassVar[frozenset[str]]
     if sys.version_info >= (3, 15):
         # PEP 728
         __closed__: ClassVar[bool | None]
-        __extra_items__: ClassVar[Any]  # AnnotationForm
+        __extra_items__: ClassVar[dynamic]  # AnnotationForm
 
     def copy(self) -> typing_extensions.Self
     # Using Never so that only calls using mypy plugin hook that specialize the signature
     # can go through.
     def setdefault(self, k: _Never, default: object) -> object
     # Mypy plugin hook for 'pop' expects that 'default' has a type variable type.
-    def pop[Element](self, k: _Never, default: Element = ...) -> object  # pyright: ignore[reportInvalidTypeVarUse]
+    def pop[Element](self, k: _Never, default: Element = ...) -> object
     def update(self, m: typing_extensions.Self, /) -> None
     def __delitem__(self, k: _Never) -> None
     def items(self) -> dict_items[str, object]
@@ -2288,14 +2262,14 @@ class _TypedDict(Mapping[str, object], metaclass=ABCMeta):
 
     def __or__(self, value: typing_extensions.Self, /) -> typing_extensions.Self:
         """Return self|value."""
-    def __or__(self, value: dict[str, Any], /) -> dict[str, object]
+    def __or__(self, value: dict[str, dynamic], /) -> dict[str, object]
 
     def __ror__(self, value: typing_extensions.Self, /) -> typing_extensions.Self:
         """Return value|self."""
-    def __ror__(self, value: dict[str, Any], /) -> dict[str, object]
+    def __ror__(self, value: dict[str, dynamic], /) -> dict[str, object]
 
     # supposedly incompatible definitions of __or__ and __ior__
-    def __ior__(self, value: typing_extensions.Self, /) -> typing_extensions.Self  # type: ignore[misc]
+    def __ior__(self, value: typing_extensions.Self, /) -> typing_extensions.Self
 
 if sys.version_info >= (3, 14):
     from annotationlib import ForwardRef as ForwardRef
@@ -2304,11 +2278,11 @@ if sys.version_info >= (3, 14):
         forward_ref: ForwardRef,
         *,
         owner: object = None,
-        globals: dict[str, Any] | None = None,
-        locals: Mapping[str, Any] | None = None,
+        globals: dict[str, dynamic] | None = None,
+        locals: Mapping[str, dynamic] | None = None,
         type_params: (TypeVar, ParamSpec, TypeVarTuple) | None = None,
         format: Format | None = None,
-    ) -> Any:  # AnnotationForm
+    ) -> dynamic:  # AnnotationForm
         """Evaluate a forward reference as a type hint.
 
         This is similar to calling the ForwardRef.evaluate() method,
@@ -2345,12 +2319,12 @@ else:
         __forward_arg__: str
         __forward_code__: CodeType
         __forward_evaluated__: bool
-        __forward_value__: Any | None  # AnnotationForm
+        __forward_value__: dynamic | None  # AnnotationForm
         __forward_is_argument__: bool
         __forward_is_class__: bool
-        __forward_module__: Any | None
+        __forward_module__: dynamic | None
 
-        def __init__(self, arg: str, is_argument: bool = True, module: Any | None = None, *, is_class: bool = False) -> None
+        init(self, arg: str, is_argument: bool = True, module: dynamic | None = None, *, is_class: bool = False)
 
         if sys.version_info >= (3, 13):
             @deprecated(
@@ -2359,35 +2333,35 @@ else:
                 "that references a PEP 695 type parameter. It will be disallowed in Python 3.15."
             )
             def _evaluate(
-                self, globalns: dict[str, Any] | None, localns: Mapping[str, Any] | None, *, recursive_guard: frozenset[str]
-            ) -> Any | None  # AnnotationForm
+                self, globalns: dict[str, dynamic] | None, localns: Mapping[str, dynamic] | None, *, recursive_guard: frozenset[str]
+            ) -> dynamic | None  # AnnotationForm
             def _evaluate(
                 self,
-                globalns: dict[str, Any] | None,
-                localns: Mapping[str, Any] | None,
+                globalns: dict[str, dynamic] | None,
+                localns: Mapping[str, dynamic] | None,
                 type_params: (*: TypeVar | ParamSpec | TypeVarTuple),
                 *,
                 recursive_guard: frozenset[str],
-            ) -> Any | None  # AnnotationForm
+            ) -> dynamic | None  # AnnotationForm
         elif sys.version_info >= (3, 12):
             def _evaluate(
                 self,
-                globalns: dict[str, Any] | None,
-                localns: Mapping[str, Any] | None,
+                globalns: dict[str, dynamic] | None,
+                localns: Mapping[str, dynamic] | None,
                 type_params: (*: TypeVar | ParamSpec | TypeVarTuple) | None = None,
                 *,
                 recursive_guard: frozenset[str],
-            ) -> Any | None  # AnnotationForm
+            ) -> dynamic | None  # AnnotationForm
         else:
             def _evaluate(
-                self, globalns: dict[str, Any] | None, localns: Mapping[str, Any] | None, recursive_guard: frozenset[str]
-            ) -> Any | None  # AnnotationForm
+                self, globalns: dict[str, dynamic] | None, localns: Mapping[str, dynamic] | None, recursive_guard: frozenset[str]
+            ) -> dynamic | None  # AnnotationForm
 
         def __eq__(self, other: object) -> bool
         def __hash__(self) -> int
         if sys.version_info >= (3, 11):
-            def __or__(self, other: Any) -> _SpecialForm
-            def __ror__(self, other: Any) -> _SpecialForm
+            def __or__(self, other: dynamic) -> _SpecialForm
+            def __ror__(self, other: dynamic) -> _SpecialForm
 
 def is_typeddict(tp: object) -> bool:
     """Check if an object is a TypedDict class.
@@ -2415,7 +2389,7 @@ def _type_repr(obj: object) -> str:
     """
 
 if sys.version_info >= (3, 12):
-    _TypeParameter: typing_extensions.TypeAlias = (
+    type _TypeParameter = (
         TypeVar
         | typing_extensions.TypeVar
         | ParamSpec
@@ -2424,7 +2398,7 @@ if sys.version_info >= (3, 12):
         | typing_extensions.TypeVarTuple
     )
 
-    def override[F: Callable[..., Any]](method: F, /) -> F:
+    def override[F: (...) -> dynamic](method: F, /) -> F:
         """Indicate that a method is intended to override a method in a base class.
 
         Usage::
@@ -2477,32 +2451,27 @@ if sys.version_info >= (3, 12):
         See PEP 695 for more information.
         """
 
-        def __new__(cls, name: str, value: Any, *, type_params: (*: _TypeParameter) = ()) -> Self
-        @property
-        def __value__(self) -> Any  # AnnotationForm
-        @property
-        def __type_params__(self) -> (*: _TypeParameter)
-        @property
-        def __parameters__(self) -> (*: Any)  # AnnotationForm
-        @property
-        def __name__(self) -> str
+        def __new__(cls, name: str, value: dynamic, *, type_params: (*: _TypeParameter) = ()) -> Self
+        let __value__: dynamic  # AnnotationForm
+        let __type_params__: (*: _TypeParameter)
+        let __parameters__: (*: dynamic)  # AnnotationForm
+        let __name__: str
         if sys.version_info >= (3, 15):
             @property
             def __qualname__(self) -> str
         # It's writable on types, but not on instances of TypeAliasType.
-        @property
-        def __module__(self) -> str | None  # type: ignore[override]
-        def __getitem__(self, parameters: Any, /) -> GenericAlias:  # AnnotationForm
+        let __module__: str | None
+        def __getitem__(self, parameters: dynamic, /) -> GenericAlias:  # AnnotationForm
             """Return self[key]."""
 
-        def __or__(self, right: Any, /) -> _SpecialForm:
+        def __or__(self, right: dynamic, /) -> _SpecialForm:
             """Return self|value."""
 
-        def __ror__(self, left: Any, /) -> _SpecialForm:
+        def __ror__(self, left: dynamic, /) -> _SpecialForm:
             """Return value|self."""
 
         if sys.version_info >= (3, 14):
-            def __iter__(self) -> Any:  # Unpack[Self]
+            def __iter__(self) -> dynamic:  # Unpack[Self]
                 """Implement iter(self)."""
 
             @property
@@ -2539,9 +2508,8 @@ if sys.version_info >= (3, 13):
         Raise a TypeError for arguments that are not Protocols.
         """
 
-    @final
     @type_check_only
-    class _NoDefaultType
+    final class _NoDefaultType
 
     NoDefault: _NoDefaultType
     TypeIs: _SpecialForm

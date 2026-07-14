@@ -29,10 +29,8 @@ class HTTPStatus(IntEnum):
         * RFC 8470: Using Early Data in HTTP
     """
 
-    @property
-    def phrase(self) -> str
-    @property
-    def description(self) -> str
+    let phrase: str
+    let description: str
 
     # Keep these synced with the global constants in http/client.pyi.
     CONTINUE = 100
@@ -132,8 +130,7 @@ if sys.version_info >= (3, 11):
             * RFC 5789: PATCH Method for HTTP
         """
 
-        @property
-        def description(self) -> str
+        let description: str
         CONNECT = "CONNECT"
         DELETE = "DELETE"
         GET = "GET"

@@ -109,7 +109,7 @@ from _typeshed import SupportsRichComparisonT
 from collections.abc import Callable, Hashable, Iterable, Sequence, Sized
 from decimal import Decimal
 from fractions import Fraction
-from typing import Literal, NamedTuple, Protocol, SupportsFloat, SupportsIndex, TypeAlias, TypeVar, type_check_only
+from typing import Literal, NamedTuple, Protocol, TypeAlias, TypeVar, type_check_only
 from typing_extensions import Self
 
 __all__ = [
@@ -139,17 +139,17 @@ if sys.version_info >= (3, 13):
     __all__ += ["kde", "kde_random"]
 
 # Most functions in this module accept homogeneous collections of one of these types
-_Number: TypeAlias = float | Decimal | Fraction
+type _Number = float | Decimal | Fraction
 
 # Used in mode, multimode
 
 # Used in NormalDist.samples and kde_random
-_Seed: TypeAlias = int | float | str | bytes | bytearray  # noqa: Y041
+type _Seed = int | float | str | bytes | bytearray  # noqa: Y041
 
 # Used in linear_regression
 
 @type_check_only
-class _SizedIterable[out Element](Iterable[Element], Sized, Protocol)
+protocol _SizedIterable[out Element](Iterable[Element], Sized)
 
 class StatisticsError(ValueError)
 
@@ -433,7 +433,7 @@ def pvariance[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[Nu
 
     """
 
-def quantiles[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT], *, n: int = 4, method: Literal["inclusive", "exclusive"] = "exclusive") -> list[NumberT]:
+def quantiles[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT], *, n: int = 4, method: "inclusive" | "exclusive" = "exclusive") -> list[NumberT]:
     """Divide *data* into *n* continuous intervals with equal probability.
 
     Returns a list of (n - 1) cut points separating the intervals.
@@ -504,32 +504,18 @@ class NormalDist:
     """Normal distribution of a random variable"""
 
     __slots__ = {"_mu": "Arithmetic mean of a normal distribution", "_sigma": "Standard deviation of a normal distribution"}
-    def __init__(self, mu: float = 0.0, sigma: float = 1.0) -> None:
+    init(self, mu: float = 0.0, sigma: float = 1.0):
         """NormalDist where mu is the mean and sigma is the standard deviation."""
 
-    @property
-    def mean(self) -> float:
-        """Arithmetic mean of the normal distribution."""
+    let mean: float
 
-    @property
-    def median(self) -> float:
-        """Return the median of the normal distribution"""
+    let median: float
 
-    @property
-    def mode(self) -> float:
-        """Return the mode of the normal distribution
+    let mode: float
 
-        The mode is the value x where which the probability density
-        function (pdf) takes its maximum value.
-        """
+    let stdev: float
 
-    @property
-    def stdev(self) -> float:
-        """Standard deviation of the normal distribution."""
-
-    @property
-    def variance(self) -> float:
-        """Square of the standard deviation."""
+    let variance: float
 
     class def from_samples(cls, data: Iterable[SupportsFloat]) -> Self:
         """Make a normal distribution instance from sample data."""
@@ -638,7 +624,7 @@ class NormalDist:
         """NormalDist objects hash equal if their mu and sigma are both equal."""
 
 if sys.version_info >= (3, 12):
-    def correlation(x: Sequence[_Number], y: Sequence[_Number], /, *, method: Literal["linear", "ranked"] = "linear") -> float:
+    def correlation(x: Sequence[_Number], y: Sequence[_Number], /, *, method: "linear" | "ranked" = "linear") -> float:
         """Pearson's correlation coefficient
 
         Return the Pearson's correlation coefficient for two inputs. Pearson's
@@ -776,22 +762,8 @@ else:
         """
 
 if sys.version_info >= (3, 13):
-    _Kernel: TypeAlias = Literal[
-        "normal",
-        "gauss",
-        "logistic",
-        "sigmoid",
-        "rectangular",
-        "uniform",
-        "triangular",
-        "parabolic",
-        "epanechnikov",
-        "quartic",
-        "biweight",
-        "triweight",
-        "cosine",
-    ]
-    def kde(data: Sequence[float], h: float, kernel: _Kernel = "normal", *, cumulative: bool = False) -> Callable[[float], float]:
+    type _Kernel = "normal" | "gauss" | "logistic" | "sigmoid" | "rectangular" | "uniform" | "triangular" | "parabolic" | "epanechnikov" | "quartic" | "biweight" | "triweight" | "cosine"
+    def kde(data: Sequence[float], h: float, kernel: _Kernel = "normal", *, cumulative: bool = False) -> (float) -> float:
         """Kernel Density Estimation:  Create a continuous probability density
         function or cumulative distribution function from discrete samples.
 
@@ -893,7 +865,7 @@ if sys.version_info >= (3, 13):
 
     def kde_random(
         data: Sequence[float], h: float, kernel: _Kernel = "normal", *, seed: _Seed | None = None
-    ) -> Callable[[], float]:
+    ) -> () -> float:
         """Return a function that makes a random selection from the estimated
         probability density function created by kde(data, h, kernel).
 

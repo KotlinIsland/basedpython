@@ -27,7 +27,6 @@ saferepr()
 import sys
 from _typeshed import SupportsWrite
 from collections import deque
-from typing import IO
 
 __all__ = ["pprint", "pformat", "isreadable", "isrecursive", "saferepr", "PrettyPrinter", "pp"]
 

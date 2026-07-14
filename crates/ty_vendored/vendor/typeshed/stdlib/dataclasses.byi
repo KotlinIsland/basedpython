@@ -5,7 +5,7 @@ from _typeshed import DataclassInstance
 from builtins import type as Type  # alias to avoid name clashes with fields named "type"
 from collections.abc import Callable, Iterable, Mapping
 from types import GenericAlias
-from typing import Any, Final, Generic, Literal, Protocol, TypeVar, type_check_only
+from typing import Final, Generic, Literal, Protocol, TypeVar, type_check_only
 from typing_extensions import Never
 
 
@@ -27,7 +27,7 @@ __all__ = [
 
 
 @type_check_only
-class _DataclassFactory(Protocol):
+protocol _DataclassFactory:
     def __call__[Element](
         self,
         cls: type[Element],
@@ -77,9 +77,9 @@ def asdict(obj: DataclassInstance) -> dict[str, dynamic]:
     tuples, lists, dicts, and frozendicts. Other objects are copied
     with 'copy.deepcopy()'.
     """
-def asdict[Element](obj: DataclassInstance, *, dict_factory: Callable[[list[tuple[str, dynamic]]], Element]) -> Element
+def asdict[Element](obj: DataclassInstance, *, dict_factory: (list[tuple[str, dynamic]]) -> Element) -> Element
 
-def astuple(obj: DataclassInstance) -> (*: Any):
+def astuple(obj: DataclassInstance) -> (*: dynamic):
     """Return the fields of a dataclass instance as a new tuple of field values.
 
     Example usage::
@@ -98,7 +98,7 @@ def astuple(obj: DataclassInstance) -> (*: Any):
     tuples, lists, dicts, and frozendicts. Other objects are copied
     with 'copy.deepcopy()'.
     """
-def astuple[Element](obj: DataclassInstance, *, tuple_factory: Callable[[list[dynamic]], Element]) -> Element
+def astuple[Element](obj: DataclassInstance, *, tuple_factory: (list[dynamic]) -> Element) -> Element
 
 if sys.version_info >= (3, 11):
     def dataclass[Element](
@@ -143,7 +143,7 @@ if sys.version_info >= (3, 11):
         kw_only: bool = False,
         slots: bool = False,
         weakref_slot: bool = False,
-    ) -> Callable[[type[Element]], type[Element]]
+    ) -> (type[Element]) -> type[Element]
 else:
     def dataclass[Element](
         cls: type[Element],
@@ -186,11 +186,11 @@ else:
         match_args: bool = True,
         kw_only: bool = False,
         slots: bool = False,
-    ) -> Callable[[type[Element]], type[Element]]
+    ) -> (type[Element]) -> type[Element]
 
 # See https://github.com/python/mypy/issues/10750
 @type_check_only
-class _DefaultFactory[out Element](Protocol):
+protocol _DefaultFactory[out Element]:
     def __call__(self) -> Element
 
 class Field[in out Element]:
@@ -225,8 +225,8 @@ class Field[in out Element]:
         )
     name: str
     type: Type[Element] | str | dynamic
-    default: Element | Literal[_MISSING_TYPE.MISSING]
-    default_factory: _DefaultFactory[Element] | Literal[_MISSING_TYPE.MISSING]
+    default: Element | _MISSING_TYPE.MISSING
+    default_factory: _DefaultFactory[Element] | _MISSING_TYPE.MISSING
     repr: bool
     hash: bool | None
     init: bool
@@ -236,13 +236,13 @@ class Field[in out Element]:
     if sys.version_info >= (3, 14):
         doc: str | None
 
-    kw_only: bool | Literal[_MISSING_TYPE.MISSING]
+    kw_only: bool | _MISSING_TYPE.MISSING
 
     if sys.version_info >= (3, 14):
         def __init__(
             self,
             default: Element,
-            default_factory: Callable[[], Element],
+            default_factory: () -> Element,
             init: bool,
             repr: bool,
             hash: bool | None,
@@ -255,7 +255,7 @@ class Field[in out Element]:
         def __init__(
             self,
             default: Element,
-            default_factory: Callable[[], Element],
+            default_factory: () -> Element,
             init: bool,
             repr: bool,
             hash: bool | None,
@@ -278,13 +278,13 @@ if sys.version_info >= (3, 14):
     def field[Element](
         *,
         default: Element,
-        default_factory: Literal[_MISSING_TYPE.MISSING] = ...,
+        default_factory: _MISSING_TYPE.MISSING = ...,
         init: bool = True,
         repr: bool = True,
         hash: bool | None = None,
         compare: bool = True,
         metadata: Mapping[dynamic, dynamic] | None = None,
-        kw_only: bool | Literal[_MISSING_TYPE.MISSING] = ...,
+        kw_only: bool | _MISSING_TYPE.MISSING = ...,
         doc: str | None = None,
     ) -> Element:
         """Return an object to identify dataclass fields.
@@ -304,39 +304,39 @@ if sys.version_info >= (3, 14):
         """
     def field[Element](
         *,
-        default: Literal[_MISSING_TYPE.MISSING] = ...,
-        default_factory: Callable[[], Element],
+        default: _MISSING_TYPE.MISSING = ...,
+        default_factory: () -> Element,
         init: bool = True,
         repr: bool = True,
         hash: bool | None = None,
         compare: bool = True,
         metadata: Mapping[dynamic, dynamic] | None = None,
-        kw_only: bool | Literal[_MISSING_TYPE.MISSING] = ...,
+        kw_only: bool | _MISSING_TYPE.MISSING = ...,
         doc: str | None = None,
     ) -> Element
     def field(
         *,
-        default: Literal[_MISSING_TYPE.MISSING] = ...,
-        default_factory: Literal[_MISSING_TYPE.MISSING] = ...,
+        default: _MISSING_TYPE.MISSING = ...,
+        default_factory: _MISSING_TYPE.MISSING = ...,
         init: bool = True,
         repr: bool = True,
         hash: bool | None = None,
         compare: bool = True,
         metadata: Mapping[dynamic, dynamic] | None = None,
-        kw_only: bool | Literal[_MISSING_TYPE.MISSING] = ...,
+        kw_only: bool | _MISSING_TYPE.MISSING = ...,
         doc: str | None = None,
     ) -> dynamic
 else:
     def field[Element](
         *,
         default: Element,
-        default_factory: Literal[_MISSING_TYPE.MISSING] = ...,
+        default_factory: _MISSING_TYPE.MISSING = ...,
         init: bool = True,
         repr: bool = True,
         hash: bool | None = None,
         compare: bool = True,
         metadata: Mapping[dynamic, dynamic] | None = None,
-        kw_only: bool | Literal[_MISSING_TYPE.MISSING] = ...,
+        kw_only: bool | _MISSING_TYPE.MISSING = ...,
     ) -> Element:
         """Return an object to identify dataclass fields.
 
@@ -355,28 +355,28 @@ else:
         """
     def field[Element](
         *,
-        default: Literal[_MISSING_TYPE.MISSING] = ...,
-        default_factory: Callable[[], Element],
+        default: _MISSING_TYPE.MISSING = ...,
+        default_factory: () -> Element,
         init: bool = True,
         repr: bool = True,
         hash: bool | None = None,
         compare: bool = True,
         metadata: Mapping[dynamic, dynamic] | None = None,
-        kw_only: bool | Literal[_MISSING_TYPE.MISSING] = ...,
+        kw_only: bool | _MISSING_TYPE.MISSING = ...,
     ) -> Element
     def field(
         *,
-        default: Literal[_MISSING_TYPE.MISSING] = ...,
-        default_factory: Literal[_MISSING_TYPE.MISSING] = ...,
+        default: _MISSING_TYPE.MISSING = ...,
+        default_factory: _MISSING_TYPE.MISSING = ...,
         init: bool = True,
         repr: bool = True,
         hash: bool | None = None,
         compare: bool = True,
         metadata: Mapping[dynamic, dynamic] | None = None,
-        kw_only: bool | Literal[_MISSING_TYPE.MISSING] = ...,
+        kw_only: bool | _MISSING_TYPE.MISSING = ...,
     ) -> dynamic
 
-def fields(class_or_instance: DataclassInstance | type[DataclassInstance]) -> (*: Field[Any]):
+def fields(class_or_instance: DataclassInstance | type[DataclassInstance]) -> (*: Field[dynamic]):
     """Return a tuple describing the fields of this dataclass.
 
     Accepts a dataclass or an instance of one. Tuple elements are of
@@ -384,7 +384,7 @@ def fields(class_or_instance: DataclassInstance | type[DataclassInstance]) -> (*
     """
 
 # HACK: `obj: Never` typing matches if object argument is using `Any` type.
-def is_dataclass(obj: Never) -> obj is DataclassInstance | type[DataclassInstance]:  # type: ignore[narrowed-type-not-subtype]  # pyright: ignore[reportGeneralTypeIssues]
+def is_dataclass(obj: Never) -> obj is DataclassInstance | type[DataclassInstance]:
     """Returns True if obj is a dataclass or an instance of a
     dataclass.
     """
@@ -396,15 +396,15 @@ class FrozenInstanceError(AttributeError)
 class InitVar[in out Element]:
     __slots__ = ("type",)
     type: Type[Element]
-    def __init__(self, type: Type[Element]) -> None
+    init(self, type: Type[Element])
 
-    def __class_getitem__(cls, type: Type[Element]) -> InitVar[Element]  # pyright: ignore[reportInvalidTypeForm]
-    def __class_getitem__(cls, type: dynamic) -> InitVar[dynamic]  # pyright: ignore[reportInvalidTypeForm]
+    def __class_getitem__(cls, type: Type[Element]) -> InitVar[Element]
+    def __class_getitem__(cls, type: dynamic) -> InitVar[dynamic]
 
 if sys.version_info >= (3, 14):
     def make_dataclass(
         cls_name: str,
-        fields: Iterable[str | (str, Any) | (str, Any, Any)],
+        fields: Iterable[str | (str, dynamic) | (str, dynamic, dynamic)],
         *,
         bases: (*: type) = (),
         namespace: dict[str, dynamic] | None = None,
@@ -450,7 +450,7 @@ if sys.version_info >= (3, 14):
 elif sys.version_info >= (3, 12):
     def make_dataclass(
         cls_name: str,
-        fields: Iterable[str | (str, Any) | (str, Any, Any)],
+        fields: Iterable[str | (str, dynamic) | (str, dynamic, dynamic)],
         *,
         bases: (*: type) = (),
         namespace: dict[str, dynamic] | None = None,
@@ -495,7 +495,7 @@ elif sys.version_info >= (3, 12):
 elif sys.version_info >= (3, 11):
     def make_dataclass(
         cls_name: str,
-        fields: Iterable[str | (str, Any) | (str, Any, Any)],
+        fields: Iterable[str | (str, dynamic) | (str, dynamic, dynamic)],
         *,
         bases: (*: type) = (),
         namespace: dict[str, dynamic] | None = None,
@@ -536,7 +536,7 @@ elif sys.version_info >= (3, 11):
 else:
     def make_dataclass(
         cls_name: str,
-        fields: Iterable[str | (str, Any) | (str, Any, Any)],
+        fields: Iterable[str | (str, dynamic) | (str, dynamic, dynamic)],
         *,
         bases: (*: type) = (),
         namespace: dict[str, dynamic] | None = None,

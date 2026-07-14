@@ -11,11 +11,11 @@ if sys.version_info >= (3, 11):
 
 class IsolatedAsyncioTestCase(TestCase):
     if sys.version_info >= (3, 13):
-        loop_factory: Callable[[], AbstractEventLoop] | None = None
+        loop_factory: (() -> AbstractEventLoop) | None = None
 
     async def asyncSetUp(self) -> None
     async def asyncTearDown(self) -> None
-    def addAsyncCleanup[**P](self, func: Callable[P, Awaitable[object]], /, *args: P.args, **kwargs: P.kwargs) -> None
+    def addAsyncCleanup[**P](self, func: (**P) -> Awaitable[object], /, *args: P.args, **kwargs: P.kwargs) -> None
     if sys.version_info >= (3, 11):
         async def enterAsyncContext[Element](self, cm: AbstractAsyncContextManager[Element]) -> Element:
             """Enters the supplied asynchronous context manager.

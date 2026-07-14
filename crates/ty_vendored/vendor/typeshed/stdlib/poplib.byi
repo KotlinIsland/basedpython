@@ -9,12 +9,12 @@ import sys
 from _typeshed import StrOrBytesPath
 from builtins import list as _list  # conflicts with a method named "list"
 from re import Pattern
-from typing import BinaryIO, Final, NoReturn, TypeAlias
+from typing import Final, TypeAlias
 from typing_extensions import deprecated
 
 __all__ = ["POP3", "error_proto", "POP3_SSL"]
 
-_LongResp: TypeAlias = tuple[bytes, list[bytes], int]
+type _LongResp = tuple[bytes, list[bytes], int]
 
 class error_proto(Exception)
 
@@ -23,7 +23,7 @@ POP3_SSL_PORT: Final = 995
 CR: Final = b"\r"
 LF: Final = b"\n"
 CRLF: Final = b"\r\n"
-HAVE_SSL: Final[bool]
+final HAVE_SSL: bool
 
 class POP3:
     """This class supports both the minimal and optional command sets.
@@ -75,7 +75,7 @@ class POP3:
     sock: socket.socket
     file: BinaryIO
     welcome: bytes
-    def __init__(self, host: str, port: int = 110, timeout: float = ...) -> None
+    init(self, host: str, port: int = 110, timeout: float = ...)
     def getwelcome(self) -> bytes
     def set_debuglevel(self, level: int) -> None
     def user(self, user: str) -> bytes:

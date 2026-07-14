@@ -30,7 +30,7 @@ from collections.abc import (
     ValuesView,
 )
 from types import GenericAlias
-from typing import Any, ClassVar, Generic, NoReturn, SupportsIndex, TypeVar, final, type_check_only
+from typing import ClassVar, Generic, TypeVar, final, type_check_only
 from typing_extensions import Self, disjoint_base
 
 if sys.version_info >= (3, 15):
@@ -47,7 +47,7 @@ def namedtuple(
     rename: bool = False,
     module: str | None = None,
     defaults: Iterable[dynamic] | None = None,
-) -> type[(*: Any)]:
+) -> type[(*: dynamic)]:
     """Returns a new subclass of tuple with named fields.
 
     >>> Point = namedtuple('Point', ['x', 'y'])
@@ -75,26 +75,26 @@ class UserDict[in out Key, in out Value](MutableMapping[Key, Value]):
     data: dict[Key, Value]
 
     # __init__ should be kept roughly in line with `dict.__init__`, which has the same semantics
-    def __init__(self, dict: None = None, /) -> None
-    def __init__(
-        self: UserDict[str, Value], dict: None = None, /, **kwargs: Value  # pyright: ignore[reportInvalidTypeVarUse]  #11780
-    ) -> None
-    def __init__(self, dict: SupportsKeysAndGetItem[Key, Value], /) -> None
-    def __init__(
-        self: UserDict[str, Value],  # pyright: ignore[reportInvalidTypeVarUse]  #11780
+    init(self, dict: None = None, /)
+    init(
+        self: UserDict[str, Value], dict: None = None, /, **kwargs: Value
+    )
+    init(self, dict: SupportsKeysAndGetItem[Key, Value], /)
+    init(
+        self: UserDict[str, Value],
         dict: SupportsKeysAndGetItem[str, Value],
         /,
         **kwargs: Value,
-    ) -> None
-    def __init__(self, iterable: Iterable[(Key, Value)], /) -> None
-    def __init__(
-        self: UserDict[str, Value],  # pyright: ignore[reportInvalidTypeVarUse]  #11780
+    )
+    init(self, iterable: Iterable[(Key, Value)], /)
+    init(
+        self: UserDict[str, Value],
         iterable: Iterable[(str, Value)],
         /,
         **kwargs: Value,
-    ) -> None
-    def __init__(self: UserDict[str, str], iterable: Iterable[list[str]], /) -> None
-    def __init__(self: UserDict[bytes, bytes], iterable: Iterable[list[bytes]], /) -> None
+    )
+    init(self: UserDict[str, str], iterable: Iterable[list[str]], /)
+    init(self: UserDict[bytes, bytes], iterable: Iterable[list[bytes]], /)
 
     def __len__(self) -> int
     def __getitem__(self, key: Key) -> Value
@@ -133,10 +133,10 @@ class UserList[in out Element](MutableSequence[Element]):
 
     data: list[Element]
 
-    def __init__(self, initlist: None = None) -> None
-    def __init__(self, initlist: Iterable[Element]) -> None
+    init(self, initlist: None = None)
+    init(self, initlist: Iterable[Element])
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     def __lt__(self, other: list[Element] | UserList[Element]) -> bool
     def __le__(self, other: list[Element] | UserList[Element]) -> bool
     def __gt__(self, other: list[Element] | UserList[Element]) -> bool
@@ -172,13 +172,13 @@ class UserList[in out Element](MutableSequence[Element]):
 
     # All arguments are passed to `list.sort` at runtime, so the signature should be kept in line with `list.sort`.
     def sort(self: UserList[SupportsRichComparisonT], *, key: None = None, reverse: bool = False) -> None
-    def sort(self, *, key: Callable[[Element], SupportsRichComparison], reverse: bool = False) -> None
+    def sort(self, *, key: (Element) -> SupportsRichComparison, reverse: bool = False) -> None
 
     def extend(self, other: Iterable[Element]) -> None
 
 class UserString(Sequence[UserString]):
     data: str
-    def __init__(self, seq: object) -> None
+    init(self, seq: object)
     def __int__(self) -> int
     def __float__(self) -> float
     def __complex__(self) -> complex
@@ -252,12 +252,10 @@ class UserString(Sequence[UserString]):
 class deque[in out Element](MutableSequence[Element]):
     """A list-like sequence optimized for data accesses near its endpoints."""
 
-    @property
-    def maxlen(self) -> int | None:
-        """maximum size of a deque or None if unbounded"""
+    let maxlen: int | None
 
-    def __init__(self, *, maxlen: int | None = None) -> None
-    def __init__(self, iterable: Iterable[Element], maxlen: int | None = None) -> None
+    init(self, *, maxlen: int | None = None)
+    init(self, iterable: Iterable[Element], maxlen: int | None = None)
 
     def append(self, x: Element, /) -> None:
         """Add an element to the right side of the deque."""
@@ -286,7 +284,7 @@ class deque[in out Element](MutableSequence[Element]):
         Raises ValueError if the value is not present.
         """
 
-    def pop(self) -> Element:  # type: ignore[override]
+    def pop(self) -> Element:
         """Remove and return the rightmost element."""
 
     def popleft(self) -> Element:
@@ -304,15 +302,15 @@ class deque[in out Element](MutableSequence[Element]):
     def __len__(self) -> int:
         """Return len(self)."""
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     # These methods of deque don't take slices, unlike MutableSequence, hence the type: ignores
-    def __getitem__(self, key: SupportsIndex, /) -> Element:  # type: ignore[override]
+    def __getitem__(self, key: SupportsIndex, /) -> Element:
         """Return self[key]."""
 
-    def __setitem__(self, key: SupportsIndex, value: Element, /) -> None:  # type: ignore[override]
+    def __setitem__(self, key: SupportsIndex, value: Element, /) -> None:
         """Set self[key] to value."""
 
-    def __delitem__(self, key: SupportsIndex, /) -> None:  # type: ignore[override]
+    def __delitem__(self, key: SupportsIndex, /) -> None:
         """Delete self[key]."""
 
     def __contains__(self, key: object, /) -> bool:
@@ -386,7 +384,7 @@ class Counter[in out Element](dict[Element, int]):
 
     """
 
-    def __init__(self, iterable: None = None, /) -> None:
+    init(self, iterable: None = None, /):
         """Create a new, empty Counter object.  And if given, count elements
         from an input iterable.  Or, initialize the count from another mapping
         of elements to their counts.
@@ -397,9 +395,9 @@ class Counter[in out Element](dict[Element, int]):
         >>> c = Counter(a=4, b=2)                   # a new counter from keyword args
 
         """
-    def __init__(self: Counter[str], iterable: None = None, /, **kwargs: int) -> None
-    def __init__(self, mapping: SupportsKeysAndGetItem[Element, int], /) -> None
-    def __init__(self, iterable: Iterable[Element], /) -> None
+    init(self: Counter[str], iterable: None = None, /, **kwargs: int)
+    init(self, mapping: SupportsKeysAndGetItem[Element, int], /)
+    init(self, iterable: Iterable[Element], /)
 
     def copy(self) -> Self:
         """Return a shallow copy."""
@@ -432,7 +430,7 @@ class Counter[in out Element](dict[Element, int]):
 
         """
 
-    class def fromkeys(cls, iterable: dynamic, v: int | None = None) -> NoReturn  # type: ignore[override]
+    class def fromkeys(cls, iterable: dynamic, v: int | None = None) -> NoReturn
 
     def subtract(self, iterable: None = None, /) -> None:
         """Like dict.update() but subtracts counts instead of replacing them.
@@ -526,7 +524,7 @@ class Counter[in out Element](dict[Element, int]):
 
         """
 
-    def __or__[Other](self, other: Counter[Other]) -> Counter[Element | Other]:  # type: ignore[override]
+    def __or__[Other](self, other: Counter[Other]) -> Counter[Element | Other]:
         """Union is the maximum of value in either of the input counters.
 
         >>> Counter('abbb') | Counter('bcc')
@@ -535,7 +533,7 @@ class Counter[in out Element](dict[Element, int]):
         """
 
     if sys.version_info >= (3, 15):
-        def __xor__[Other](self, other: Counter[Other]) -> Counter[Element | Other]:  # type: ignore[override]
+        def __xor__[Other](self, other: Counter[Other]) -> Counter[Element | Other]:
             """Symmetric difference. Absolute value of count differences.
 
             The symmetric difference p ^ q is equivalent to:
@@ -561,7 +559,7 @@ class Counter[in out Element](dict[Element, int]):
         """
 
     # several type: ignores because __iadd__ is supposedly incompatible with __add__, etc.
-    def __iadd__(self, other: SupportsItems[Element, int]) -> Self:  # type: ignore[misc]
+    def __iadd__(self, other: SupportsItems[Element, int]) -> Self:
         """Inplace add from another counter, keeping only positive counts.
 
         >>> c = Counter('abbb')
@@ -591,7 +589,7 @@ class Counter[in out Element](dict[Element, int]):
 
         """
 
-    def __ior__(self, other: SupportsItems[Element, int]) -> Self:  # type: ignore[override,misc]
+    def __ior__(self, other: SupportsItems[Element, int]) -> Self:
         """Inplace union is the maximum of value from either counter.
 
         >>> c = Counter('abbb')
@@ -602,7 +600,7 @@ class Counter[in out Element](dict[Element, int]):
         """
 
     if sys.version_info >= (3, 15):
-        def __ixor__(self, other: Counter[Element]) -> Self:  # type: ignore[misc]
+        def __ixor__(self, other: Counter[Element]) -> Self:
             """Inplace symmetric difference. Absolute value of count differences.
 
             >>> c = Counter(a=5, b=3, c=2, d=2)
@@ -627,19 +625,16 @@ class _OrderedDictValuesView[out Value](ValuesView[Value]):
 # (At runtime, these are called `odict_keys`, `odict_items` and `odict_values`,
 # but they are not exposed anywhere)
 # pyright doesn't have a specific error code for subclassing error!
-@final
 @type_check_only
-class _odict_keys[out Key, out Value](dict_keys[Key, Value]):  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]
+final class _odict_keys[out Key, out Value](dict_keys[Key, Value]):
     def __reversed__(self) -> Iterator[Key]
 
-@final
 @type_check_only
-class _odict_items[out Key, out Value](dict_items[Key, Value]):  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]
+final class _odict_items[out Key, out Value](dict_items[Key, Value]):
     def __reversed__(self) -> Iterator[(Key, Value)]
 
-@final
 @type_check_only
-class _odict_values[out Key, out Value](dict_values[Key, Value]):  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]
+final class _odict_values[out Key, out Value](dict_values[Key, Value]):
     def __reversed__(self) -> Iterator[Value]
 
 @disjoint_base
@@ -703,9 +698,9 @@ class OrderedDict[in out Key, in out Value](dict[Key, Value]):
             """Return self|value."""
         def __or__[T1, T2](self, value: dict[T1, T2] | frozendict[T1, T2], /) -> OrderedDict[Key | T1, Value | T2]
 
-        def __ror__(self, value: dict[Key, Value] | frozendict[Key, Value], /) -> Self:  # type: ignore[override,misc]
+        def __ror__(self, value: dict[Key, Value] | frozendict[Key, Value], /) -> Self:
             """Return value|self."""
-        def __ror__[T1, T2](  # type: ignore[misc]
+        def __ror__[T1, T2](
             self, value: dict[T1, T2] | frozendict[T1, T2], /
         ) -> OrderedDict[Key | T1, Value | T2]
     else:
@@ -715,7 +710,7 @@ class OrderedDict[in out Key, in out Value](dict[Key, Value]):
 
         def __ror__(self, value: dict[Key, Value], /) -> Self:
             """Return value|self."""
-        def __ror__[T1, T2](self, value: dict[T1, T2], /) -> OrderedDict[Key | T1, Value | T2]  # type: ignore[misc]
+        def __ror__[T1, T2](self, value: dict[T1, T2], /) -> OrderedDict[Key | T1, Value | T2]
 
 @disjoint_base
 class defaultdict[in out Key, in out Value](dict[Key, Value]):
@@ -728,34 +723,34 @@ class defaultdict[in out Key, in out Value](dict[Key, Value]):
     passed to the dict constructor, including keyword arguments.
     """
 
-    default_factory: Callable[[], Value] | None
+    default_factory: (() -> Value) | None
     """Factory for default value called by __missing__()."""
 
-    def __init__(self) -> None
-    def __init__(self: defaultdict[str, Value], **kwargs: Value) -> None  # pyright: ignore[reportInvalidTypeVarUse]  #11780
-    def __init__(self, default_factory: Callable[[], Value] | None, /) -> None
-    def __init__(
-        self: defaultdict[str, Value],  # pyright: ignore[reportInvalidTypeVarUse]  #11780
-        default_factory: Callable[[], Value] | None,
+    init(self)
+    init(self: defaultdict[str, Value], **kwargs: Value)
+    init(self, default_factory: (() -> Value) | None, /)
+    init(
+        self: defaultdict[str, Value],
+        default_factory: (() -> Value) | None,
         /,
         **kwargs: Value,
-    ) -> None
-    def __init__(self, default_factory: Callable[[], Value] | None, map: SupportsKeysAndGetItem[Key, Value], /) -> None
-    def __init__(
-        self: defaultdict[str, Value],  # pyright: ignore[reportInvalidTypeVarUse]  #11780
-        default_factory: Callable[[], Value] | None,
+    )
+    init(self, default_factory: (() -> Value) | None, map: SupportsKeysAndGetItem[Key, Value], /)
+    init(
+        self: defaultdict[str, Value],
+        default_factory: (() -> Value) | None,
         map: SupportsKeysAndGetItem[str, Value],
         /,
         **kwargs: Value,
-    ) -> None
-    def __init__(self, default_factory: Callable[[], Value] | None, iterable: Iterable[(Key, Value)], /) -> None
-    def __init__(
-        self: defaultdict[str, Value],  # pyright: ignore[reportInvalidTypeVarUse]  #11780
-        default_factory: Callable[[], Value] | None,
+    )
+    init(self, default_factory: (() -> Value) | None, iterable: Iterable[(Key, Value)], /)
+    init(
+        self: defaultdict[str, Value],
+        default_factory: (() -> Value) | None,
         iterable: Iterable[(str, Value)],
         /,
         **kwargs: Value,
-    ) -> None
+    )
 
     def __missing__(self, key: Key, /) -> Value:
         """__missing__(key) # Called by __getitem__ for missing key; pseudo-code:
@@ -778,7 +773,7 @@ class defaultdict[in out Key, in out Value](dict[Key, Value]):
 
     def __ror__(self, value: dict[Key, Value], /) -> Self:
         """Return value|self."""
-    def __ror__[T1, T2](self, value: dict[T1, T2], /) -> defaultdict[Key | T1, Value | T2]  # type: ignore[misc]
+    def __ror__[T1, T2](self, value: dict[T1, T2], /) -> defaultdict[Key | T1, Value | T2]
 
 class ChainMap[in out Key, in out Value](MutableMapping[Key, Value]):
     """A ChainMap groups multiple dicts (or other mappings) together
@@ -795,7 +790,7 @@ class ChainMap[in out Key, in out Value](MutableMapping[Key, Value]):
     """
 
     maps: list[MutableMapping[Key, Value]]
-    def __init__(self, *maps: MutableMapping[Key, Value]) -> None:
+    init(self, *maps: MutableMapping[Key, Value]):
         """Initialize a ChainMap by setting *maps* to the given mappings.
         If no mappings are provided, a single empty dictionary is used.
 
@@ -807,9 +802,7 @@ class ChainMap[in out Key, in out Value](MutableMapping[Key, Value]):
         Keyword arguments update the map or new empty dict.
         """
 
-    @property
-    def parents(self) -> Self:
-        """New ChainMap from maps[1:]."""
+    let parents: Self
 
     def __setitem__(self, key: Key, value: Value) -> None
     def __delitem__(self, key: Key) -> None

@@ -7,7 +7,7 @@ from .. import fixer_base
 from ..pytree import Node
 
 class FixXrange(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[True]]
+    BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     transformed_xranges: set[Incomplete] | None
     def start_tree(self, tree: Node, filename: StrPath) -> None

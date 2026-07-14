@@ -18,7 +18,7 @@ from typing import Protocol, type_check_only
 __all__ = ["compile_dir", "compile_file", "compile_path"]
 
 @type_check_only
-class _SupportsSearch(Protocol):
+protocol _SupportsSearch:
     def search(self, string: str, /) -> dynamic
 
 def compile_dir(

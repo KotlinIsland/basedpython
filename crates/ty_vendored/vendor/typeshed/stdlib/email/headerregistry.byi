@@ -57,11 +57,9 @@ class BaseHeader(str):
     """
 
     # max_count is actually more of an abstract ClassVar (not defined on the base class, but expected to be defined in subclasses)
-    max_count: ClassVar[Literal[1] | None]
-    @property
-    def name(self) -> str
-    @property
-    def defects(self) -> (*: MessageDefect)
+    max_count: ClassVar[1 | None]
+    let name: str
+    let defects: (*: MessageDefect)
     def __new__(cls, name: str, value: dynamic) -> Self
     def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect]) -> None
     def fold(self, *, policy: Policy) -> str:
@@ -82,7 +80,7 @@ class BaseHeader(str):
         """
 
 class UnstructuredHeader:
-    max_count: ClassVar[Literal[1] | None]
+    max_count: ClassVar[1 | None]
     static def value_parser(value: str) -> UnstructuredTokenList:
         """unstructured = (*([FWS] vchar) *WSP) / obs-unstruct
            obs-unstruct = *((*LF *CR *(obs-utext) *LF *CR)) / FWS)
@@ -106,7 +104,7 @@ class UnstructuredHeader:
     class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
 
 class UniqueUnstructuredHeader(UnstructuredHeader):
-    max_count: ClassVar[Literal[1]]
+    max_count: ClassVar[1]
 
 class DateHeader:
     """Header whose value consists of a single timestamp.
@@ -118,10 +116,9 @@ class DateHeader:
     which means it is the output of format_datetime on the datetime.
     """
 
-    max_count: ClassVar[Literal[1] | None]
+    max_count: ClassVar[1 | None]
     def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect], datetime: _datetime) -> None
-    @property
-    def datetime(self) -> _datetime | None
+    let datetime: _datetime | None
     static def value_parser(value: str) -> UnstructuredTokenList:
         """unstructured = (*([FWS] vchar) *WSP) / obs-unstruct
            obs-unstruct = *((*LF *CR *(obs-utext) *LF *CR)) / FWS)
@@ -145,30 +142,27 @@ class DateHeader:
     class def parse(cls, value: str | _datetime, kwds: dict[str, dynamic]) -> None
 
 class UniqueDateHeader(DateHeader):
-    max_count: ClassVar[Literal[1]]
+    max_count: ClassVar[1]
 
 class AddressHeader:
-    max_count: ClassVar[Literal[1] | None]
+    max_count: ClassVar[1 | None]
     def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect], groups: Iterable[Group]) -> None
-    @property
-    def groups(self) -> (*: Group)
-    @property
-    def addresses(self) -> (*: Address)
+    let groups: (*: Group)
+    let addresses: (*: Address)
     static def value_parser(value: str) -> AddressList
     class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
 
 class UniqueAddressHeader(AddressHeader):
-    max_count: ClassVar[Literal[1]]
+    max_count: ClassVar[1]
 
 class SingleAddressHeader(AddressHeader):
-    @property
-    def address(self) -> Address
+    let address: Address
 
 class UniqueSingleAddressHeader(SingleAddressHeader):
-    max_count: ClassVar[Literal[1]]
+    max_count: ClassVar[1]
 
 class MIMEVersionHeader:
-    max_count: ClassVar[Literal[1]]
+    max_count: ClassVar[1]
     def init(
         self,
         name: str,
@@ -179,31 +173,24 @@ class MIMEVersionHeader:
         major: int | None,
         minor: int | None,
     ) -> None
-    @property
-    def version(self) -> str | None
-    @property
-    def major(self) -> int | None
-    @property
-    def minor(self) -> int | None
+    let version: str | None
+    let major: int | None
+    let minor: int | None
     static def value_parser(value: str) -> MIMEVersion:
         """mime-version = [CFWS] 1*digit [CFWS] "." [CFWS] 1*digit [CFWS]"""
 
     class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
 
 class ParameterizedMIMEHeader:
-    max_count: ClassVar[Literal[1]]
+    max_count: ClassVar[1]
     def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect], params: Mapping[str, dynamic]) -> None
-    @property
-    def params(self) -> types.MappingProxyType[str, dynamic]
+    let params: types.MappingProxyType[str, dynamic]
     class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
 
 class ContentTypeHeader(ParameterizedMIMEHeader):
-    @property
-    def content_type(self) -> str
-    @property
-    def maintype(self) -> str
-    @property
-    def subtype(self) -> str
+    let content_type: str
+    let maintype: str
+    let subtype: str
     static def value_parser(value: str) -> ContentType:
         """maintype "/" subtype *( ";" parameter )
 
@@ -214,22 +201,20 @@ class ContentTypeHeader(ParameterizedMIMEHeader):
 
 class ContentDispositionHeader(ParameterizedMIMEHeader):
     # init is redefined but has the same signature as parent class, so is omitted from the stub
-    @property
-    def content_disposition(self) -> str | None
+    let content_disposition: str | None
     static def value_parser(value: str) -> ContentDisposition:
         """disposition-type *( ";" parameter )"""
 
 class ContentTransferEncodingHeader:
-    max_count: ClassVar[Literal[1]]
+    max_count: ClassVar[1]
     def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect]) -> None
-    @property
-    def cte(self) -> str
+    let cte: str
     class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
     static def value_parser(value: str) -> ContentTransferEncoding:
         """mechanism"""
 
 class MessageIDHeader:
-    max_count: ClassVar[Literal[1]]
+    max_count: ClassVar[1]
     class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
     static def value_parser(value: str) -> MessageID:
         """message-id      =   "Message-ID:" msg-id CRLF"""
@@ -239,7 +224,7 @@ if sys.version_info >= (3, 13):
 
     # Added in Python 3.13.12, 3.14.3
     class ReferencesHeader:
-        max_count: ClassVar[Literal[1]]
+        max_count: ClassVar[1]
         class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
         static def value_parser(value: str) -> MessageIDList:
             """in-reply-to     =   "In-Reply-To:" 1*msg-id CRLF
@@ -247,8 +232,8 @@ if sys.version_info >= (3, 13):
             """
 
 @type_check_only
-class _HeaderParser(Protocol):
-    max_count: ClassVar[Literal[1] | None]
+protocol _HeaderParser:
+    max_count: ClassVar[1 | None]
     static def value_parser(value: str, /) -> TokenList
     class def parse(cls, value: str, kwds: dict[str, dynamic], /) -> None
 
@@ -258,9 +243,9 @@ class HeaderRegistry:
     registry: dict[str, type[_HeaderParser]]
     base_class: type[BaseHeader]
     default_class: type[_HeaderParser]
-    def __init__(
+    init(
         self, base_class: type[BaseHeader] = ..., default_class: type[_HeaderParser] = ..., use_default_map: bool = True
-    ) -> None:
+    ):
         """Create a header_factory that works with the Policy API.
 
         base_class is the class that will be the last class in the created
@@ -288,21 +273,14 @@ class HeaderRegistry:
         """
 
 class Address:
-    @property
-    def display_name(self) -> str
-    @property
-    def username(self) -> str
-    @property
-    def domain(self) -> str
-    @property
-    def addr_spec(self) -> str:
-        """The addr_spec (username@domain) portion of the address, quoted
-        according to RFC 5322 rules, but with no Content Transfer Encoding.
-        """
+    let display_name: str
+    let username: str
+    let domain: str
+    let addr_spec: str
 
-    def __init__(
+    init(
         self, display_name: str = "", username: str | None = "", domain: str | None = "", addr_spec: str | None = None
-    ) -> None:
+    ):
         """Create an object representing a full email address.
 
         An address can have a 'display_name', a 'username', and a 'domain'.  In
@@ -319,15 +297,13 @@ class Address:
 
         """
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     def __eq__(self, other: object) -> bool
 
 class Group:
-    @property
-    def display_name(self) -> str | None
-    @property
-    def addresses(self) -> (*: Address)
-    def __init__(self, display_name: str | None = None, addresses: Iterable[Address] | None = None) -> None:
+    let display_name: str | None
+    let addresses: (*: Address)
+    init(self, display_name: str | None = None, addresses: Iterable[Address] | None = None):
         """Create an object representing an address group.
 
         An address group consists of a display_name followed by colon and a
@@ -343,5 +319,5 @@ class Group:
 
         """
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     def __eq__(self, other: object) -> bool

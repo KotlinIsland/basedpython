@@ -11,8 +11,8 @@ from _typeshed import Incomplete
 from distutils.ccompiler import CCompiler
 from typing import ClassVar, Final
 
-PLAT_SPEC_TO_RUNTIME: Final[dict[str, str]]
-PLAT_TO_VCVARS: Final[dict[str, str]]
+final PLAT_SPEC_TO_RUNTIME: dict[str, str]
+final PLAT_TO_VCVARS: dict[str, str]
 
 class MSVCCompiler(CCompiler):
     """Concrete class that implements an interface to Microsoft Visual C++,

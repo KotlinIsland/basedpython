@@ -3336,9 +3336,9 @@ reveal_type(False.real)  # revealed: Literal[0]
 All attribute access on literal `bytes` types is currently delegated to `builtins.bytes`:
 
 ```py
-# revealed: bound method Literal[b"foo"].join(iterable_of_bytes: Iterable[Buffer], /) -> bytes
+# revealed: bound method Literal[b"foo"].join(iterable_of_bytes: Iterable[ReadableBuffer], /) -> bytes
 reveal_type(b"foo".join)
-# revealed: bound method Literal[b"foo"].endswith(suffix: Buffer | tuple[Buffer, ...], start: SupportsIndex | None = None, end: SupportsIndex | None = None, /) -> bool
+# revealed: bound method Literal[b"foo"].endswith(suffix: ReadableBuffer | tuple[ReadableBuffer, ...], start: SupportsIndex | None = None, end: SupportsIndex | None = None, /) -> bool
 reveal_type(b"foo".endswith)
 ```
 
@@ -3751,7 +3751,7 @@ class NestedListsConcat:
         self.y = [0]
 
     def f(self, y: list[Any]):
-        # The overload that fails to resolve is `list.__add__` in both of these cases.
+        # The relevant overload here is `list.__add__` in both of these cases.
         self.x = [self.x] + []
         self.y = [self.y].__add__(y)
 

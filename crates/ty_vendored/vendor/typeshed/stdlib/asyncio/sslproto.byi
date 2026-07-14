@@ -3,7 +3,7 @@ import sys
 from collections import deque
 from collections.abc import Callable
 from enum import Enum
-from typing import Any, ClassVar, Final, Literal, TypeAlias
+from typing import ClassVar, Final, Literal, TypeAlias
 
 from . import constants, events, futures, protocols, transports
 
@@ -62,9 +62,9 @@ if sys.version_info < (3, 11):
         _outgoing: ssl.MemoryBIO
         _sslobj: ssl.SSLObject | None
         _need_ssldata: bool
-        _handshake_cb: Callable[[BaseException | None], None] | None
-        _shutdown_cb: Callable[[], None] | None
-        def __init__(self, context: ssl.SSLContext, server_side: bool, server_hostname: str | None = None) -> None:
+        _handshake_cb: ((BaseException | None) -> None) | None
+        _shutdown_cb: (() -> None) | None
+        init(self, context: ssl.SSLContext, server_side: bool, server_hostname: str | None = None):
             """
             The *context* argument specifies the ssl.SSLContext to use.
 
@@ -76,32 +76,15 @@ if sys.version_info < (3, 11):
             the _ssl module supports Server Name Indication (SNI).
             """
 
-        @property
-        def context(self) -> ssl.SSLContext:
-            """The SSL context passed to the constructor."""
+        let context: ssl.SSLContext
 
-        @property
-        def ssl_object(self) -> ssl.SSLObject | None:
-            """The internal ssl.SSLObject instance.
+        let ssl_object: ssl.SSLObject | None
 
-            Return None if the pipe is not wrapped.
-            """
+        let need_ssldata: bool
 
-        @property
-        def need_ssldata(self) -> bool:
-            """Whether more record level data is needed to complete a handshake
-            that is currently in progress.
-            """
+        let wrapped: bool
 
-        @property
-        def wrapped(self) -> bool:
-            """
-            Whether a security layer is currently in effect.
-
-            Return False during handshake.
-            """
-
-        def do_handshake(self, callback: Callable[[BaseException | None], object] | None = None) -> list[bytes]:
+        def do_handshake(self, callback: ((BaseException | None) -> object) | None = None) -> list[bytes]:
             """Start the SSL handshake.
 
             Return a list of ssldata. A ssldata element is a list of buffers
@@ -111,7 +94,7 @@ if sys.version_info < (3, 11):
             called with None if successful, else an exception instance.
             """
 
-        def shutdown(self, callback: Callable[[], object] | None = None) -> list[bytes]:
+        def shutdown(self, callback: (() -> object) | None = None) -> list[bytes]:
             """Start the SSL shutdown sequence.
 
             Return a list of ssldata. A ssldata element is a list of buffers
@@ -169,12 +152,11 @@ class _SSLProtocolTransport(transports._FlowControlMixin, transports.Transport):
     else:
         _ssl_protocol: SSLProtocol
     _closed: bool
-    def __init__(self, loop: events.AbstractEventLoop, ssl_protocol: SSLProtocol) -> None
+    init(self, loop: events.AbstractEventLoop, ssl_protocol: SSLProtocol)
     def get_extra_info(self, name: str, default: dynamic | None = None) -> dict[str, dynamic]:
         """Get optional transport information."""
 
-    @property
-    def _protocol_paused(self) -> bool
+    let _protocol_paused: bool
     def write(self, data: bytes | bytearray | memoryview[dynamic]) -> None:  # any memoryview format or shape
         """Write some data bytes to the transport.
 
@@ -182,7 +164,7 @@ class _SSLProtocolTransport(transports._FlowControlMixin, transports.Transport):
         to be sent out asynchronously.
         """
 
-    def can_write_eof(self) -> Literal[False]:
+    def can_write_eof(self) -> False:
         """Return True if this transport supports write_eof(), False if not."""
 
     if sys.version_info >= (3, 11):
@@ -231,7 +213,7 @@ class SSLProtocol(_SSLProtocolBase):
     _extra: dict[str, dynamic]
     _write_backlog: deque[(bytes, int)]
     _write_buffer_size: int
-    _waiter: futures.Future[Any]
+    _waiter: futures.Future[dynamic]
     _loop: events.AbstractEventLoop
     _app_transport: _SSLProtocolTransport
     _transport: transports.BaseTransport | None
@@ -254,7 +236,7 @@ class SSLProtocol(_SSLProtocolBase):
             loop: events.AbstractEventLoop,
             app_protocol: protocols.BaseProtocol,
             sslcontext: ssl.SSLContext,
-            waiter: futures.Future[Any],
+            waiter: futures.Future[dynamic],
             server_side: bool = False,
             server_hostname: str | None = None,
             call_connection_made: bool = True,
@@ -267,7 +249,7 @@ class SSLProtocol(_SSLProtocolBase):
             loop: events.AbstractEventLoop,
             app_protocol: protocols.BaseProtocol,
             sslcontext: ssl.SSLContext,
-            waiter: futures.Future[Any],
+            waiter: futures.Future[dynamic],
             server_side: bool = False,
             server_hostname: str | None = None,
             call_connection_made: bool = True,

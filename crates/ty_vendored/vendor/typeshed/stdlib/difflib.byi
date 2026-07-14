@@ -30,7 +30,7 @@ import re
 import sys
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from types import GenericAlias
-from typing import AnyStr, Generic, Literal, NamedTuple, TypeVar
+from typing import Generic, Literal, NamedTuple, TypeVar
 
 __all__ = [
     "get_close_matches",
@@ -130,7 +130,7 @@ class SequenceMatcher[in out Element]:
     elements the sequences have in common; best case time is linear.
     """
 
-    def __init__(self, isjunk: Callable[[Element], bool] | None, a: Sequence[Element], b: Sequence[Element], autojunk: bool = True) -> None:
+    init(self, isjunk: ((Element) -> bool) | None, a: Sequence[Element], b: Sequence[Element], autojunk: bool = True):
         """Construct a SequenceMatcher.
 
         Optional arg isjunk is None (the default), or a one-argument
@@ -153,14 +153,14 @@ class SequenceMatcher[in out Element]:
         "automatic junk heuristic" that treats popular elements as junk
         (see module documentation for more information).
         """
-    def __init__(self, *, a: Sequence[Element], b: Sequence[Element], autojunk: bool = True) -> None
-    def __init__(
+    init(self, *, a: Sequence[Element], b: Sequence[Element], autojunk: bool = True)
+    init(
         self: SequenceMatcher[str],
-        isjunk: Callable[[str], bool] | None = None,
+        isjunk: ((str) -> bool) | None = None,
         a: Sequence[str] = "",
         b: Sequence[str] = "",
         autojunk: bool = True,
-    ) -> None
+    )
 
     def set_seqs(self, a: Sequence[Element], b: Sequence[Element]) -> None:
         """Set the two sequences to be compared.
@@ -278,7 +278,7 @@ class SequenceMatcher[in out Element]:
         [Match(a=0, b=0, size=2), Match(a=3, b=2, size=2), Match(a=5, b=4, size=0)]
         """
 
-    def get_opcodes(self) -> list[(Literal["replace", "delete", "insert", "equal"], int, int, int, int)]:
+    def get_opcodes(self) -> list[("replace" | "delete" | "insert" | "equal", int, int, int, int)]:
         """Return list of 5-tuples describing how to turn a into b.
 
         Each tuple is of the form (tag, i1, i2, j1, j2).  The first tuple
@@ -493,7 +493,7 @@ class Differ:
     +   5. Flat is better than nested.
     """
 
-    def __init__(self, linejunk: Callable[[str], bool] | None = None, charjunk: Callable[[str], bool] | None = None) -> None:
+    init(self, linejunk: ((str) -> bool) | None = None, charjunk: ((str) -> bool) | None = None):
         """
         Construct a text differencer, with optional filters.
 
@@ -540,7 +540,7 @@ class Differ:
         """
 
 if sys.version_info >= (3, 14):
-    def IS_LINE_JUNK(line: str, pat: Callable[[str], re.Match[str] | None] | None = None) -> bool:
+    def IS_LINE_JUNK(line: str, pat: ((str) -> (re.Match[str] | None)) | None = None) -> bool:
         """
         Return True for ignorable line: if `line` is blank or contains a single '#'.
 
@@ -555,7 +555,7 @@ if sys.version_info >= (3, 14):
         """
 
 else:
-    def IS_LINE_JUNK(line: str, pat: Callable[[str], re.Match[str] | None] = ...) -> bool:
+    def IS_LINE_JUNK(line: str, pat: (str) -> (re.Match[str] | None) = ...) -> bool:
         """
         Return True for ignorable line: iff `line` is blank or contains a single '#'.
 
@@ -746,8 +746,8 @@ def context_diff(
 def ndiff(
     a: Sequence[str],
     b: Sequence[str],
-    linejunk: Callable[[str], bool] | None = None,
-    charjunk: Callable[[str], bool] | None = ...,
+    linejunk: ((str) -> bool) | None = None,
+    charjunk: ((str) -> bool) | None = ...,
 ) -> Iterator[str]:
     """
     Compare `a` and `b` (lists of strings); return a `Differ`-style delta.
@@ -800,13 +800,13 @@ class HtmlDiff:
     See Doc/includes/diff.py for an example usage of this class.
     """
 
-    def __init__(
+    init(
         self,
         tabsize: int = 8,
         wrapcolumn: int | None = None,
-        linejunk: Callable[[str], bool] | None = None,
-        charjunk: Callable[[str], bool] | None = ...,
-    ) -> None:
+        linejunk: ((str) -> bool) | None = None,
+        charjunk: ((str) -> bool) | None = ...,
+    ):
         """HtmlDiff instance initializer
 
         Arguments:
@@ -895,7 +895,7 @@ def restore(delta: Iterable[str], which: int) -> Iterator[str]:
     """
 
 def diff_bytes(
-    dfunc: Callable[[Sequence[str], Sequence[str], str, str, str, str, int, str], Iterator[str]],
+    dfunc: (Sequence[str], Sequence[str], str, str, str, str, int, str) -> Iterator[str],
     a: Iterable[bytes | bytearray],
     b: Iterable[bytes | bytearray],
     fromfile: bytes | bytearray = b"",

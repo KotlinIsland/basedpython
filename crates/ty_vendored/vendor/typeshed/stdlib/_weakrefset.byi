@@ -7,19 +7,19 @@ __all__ = ["WeakSet"]
 
 
 class WeakSet[in out Element](MutableSet[Element]):
-    def __init__(self, data: None = None) -> None
-    def __init__(self, data: Iterable[Element]) -> None
+    init(self, data: None = None)
+    init(self, data: Iterable[Element])
 
     def add(self, item: Element) -> None
     def discard(self, item: Element) -> None
     def copy(self) -> Self
     def remove(self, item: Element) -> None
     def update(self, other: Iterable[Element]) -> None
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     def __contains__(self, item: object) -> bool
     def __len__(self) -> int
     def __iter__(self) -> Iterator[Element]
-    def __ior__(self, other: Iterable[Element]) -> Self  # type: ignore[override,misc]
+    def __ior__(self, other: Iterable[Element]) -> Self
     def difference(self, other: Iterable[Element]) -> Self
     def __sub__(self, other: Iterable[dynamic]) -> Self
     def difference_update(self, other: Iterable[dynamic]) -> None
@@ -38,7 +38,7 @@ class WeakSet[in out Element](MutableSet[Element]):
     def symmetric_difference[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
     def __xor__[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
     def symmetric_difference_update(self, other: Iterable[Element]) -> None
-    def __ixor__(self, other: Iterable[Element]) -> Self  # type: ignore[override,misc]
+    def __ixor__(self, other: Iterable[Element]) -> Self
     def union[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
     def __or__[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
     def isdisjoint(self, other: Iterable[Element]) -> bool

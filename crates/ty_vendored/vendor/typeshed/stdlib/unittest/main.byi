@@ -10,11 +10,11 @@ from types import ModuleType
 from typing import Final, Protocol, type_check_only
 from typing_extensions import deprecated
 
-MAIN_EXAMPLES: Final[str]
-MODULE_EXAMPLES: Final[str]
+final MAIN_EXAMPLES: str
+final MODULE_EXAMPLES: str
 
 @type_check_only
-class _TestRunner(Protocol):
+protocol _TestRunner:
     def run(self, test: unittest.suite.TestSuite | unittest.case.TestCase, /) -> unittest.result.TestResult
 
 # not really documented

@@ -85,9 +85,9 @@ error[missing-argument]: No argument provided for required parameter `arg` of bo
   | ^^^^^^^^^^^^^^
   |
 info: Parameter declared here
-    --> stdlib/typing_extensions.byi:1206:28
+    --> stdlib/typing_extensions.byi:1205:28
      |
-1206 |         def __call__(self, arg: _T, /) -> _T
+1205 |         def __call__(self, arg: _T, /) -> _T
      |                            ^^^^^^^
      |
 

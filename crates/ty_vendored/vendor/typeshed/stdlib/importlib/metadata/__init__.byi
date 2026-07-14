@@ -40,7 +40,7 @@ __all__ = [
 if sys.version_info >= (3, 15):
     __all__ += ["PackagePath", "MetadataNotFound", "SimplePath"]
 
-_SimplePath: TypeAlias = SimplePath
+type _SimplePath = SimplePath
 
 def packages_distributions() -> Mapping[str, list[str]]:
     """
@@ -56,8 +56,7 @@ def packages_distributions() -> Mapping[str, list[str]]:
 class PackageNotFoundError(ModuleNotFoundError):
     """The package was not found."""
 
-    @property
-    def name(self) -> str  # type: ignore[override]
+    let name: str
 
 if sys.version_info >= (3, 15):
     class MetadataNotFound(FileNotFoundError):
@@ -137,19 +136,16 @@ if sys.version_info >= (3, 11):
         value: str
         group: str
 
-        def __init__(self, name: str, value: str, group: str) -> None
+        init(self, name: str, value: str, group: str)
         def load(self) -> dynamic:  # Callable[[], Any] or an importable module
             """Load the entry point from its definition. If only a module
             is indicated by the value, return that module. Otherwise,
             return the named object.
             """
 
-        @property
-        def extras(self) -> list[str]
-        @property
-        def module(self) -> str
-        @property
-        def attr(self) -> str
+        let extras: list[str]
+        let module: str
+        let attr: str
         dist: ClassVar[Distribution | None]
         def matches(
             self,
@@ -217,12 +213,9 @@ else:
             return the named object.
             """
 
-        @property
-        def extras(self) -> list[str]
-        @property
-        def module(self) -> str
-        @property
-        def attr(self) -> str
+        let extras: list[str]
+        let module: str
+        let attr: str
         dist: ClassVar[Distribution | None]
         def matches(
             self,
@@ -261,13 +254,13 @@ else:
             """
 
 if sys.version_info >= (3, 12):
-    class EntryPoints(tuple[EntryPoint, ...]):
+    class EntryPoints((*: EntryPoint)):
         """
         An immutable collection of selectable EntryPoint objects.
         """
 
         __slots__ = ()
-        def __getitem__(self, name: str) -> EntryPoint:  # type: ignore[override]
+        def __getitem__(self, name: str) -> EntryPoint:
             """
             Get the EntryPoint in self matching name.
             """
@@ -287,17 +280,9 @@ if sys.version_info >= (3, 12):
             given parameters (typically group and/or name).
             """
 
-        @property
-        def names(self) -> set[str]:
-            """
-            Return the set of all names of all entry points.
-            """
+        let names: set[str]
 
-        @property
-        def groups(self) -> set[str]:
-            """
-            Return the set of all groups of all entry points.
-            """
+        let groups: set[str]
 
 else:
     class DeprecatedList[in out Element](list[Element]):
@@ -341,7 +326,7 @@ else:
 
         # int argument is deprecated since 3.10
         __slots__ = ()
-        def __getitem__(self, name: int | str) -> EntryPoint:  # type: ignore[override]
+        def __getitem__(self, name: int | str) -> EntryPoint:
             """
             Get the EntryPoint in self matching name.
             """
@@ -361,21 +346,9 @@ else:
             given parameters (typically group and/or name).
             """
 
-        @property
-        def names(self) -> set[str]:
-            """
-            Return the set of all names of all entry points.
-            """
+        let names: set[str]
 
-        @property
-        def groups(self) -> set[str]:
-            """
-            Return the set of all groups of all entry points.
-
-            For coverage while SelectableGroups is present.
-            >>> EntryPoints().groups
-            set()
-            """
+        let groups: set[str]
 
 if sys.version_info < (3, 12):
     class Deprecated[in out Key, in out Value]:
@@ -420,15 +393,8 @@ if sys.version_info < (3, 12):
         """
 
         class def load(cls, eps: Iterable[EntryPoint]) -> Self
-        @property
-        def groups(self) -> set[str]
-        @property
-        def names(self) -> set[str]:
-            """
-            for coverage:
-            >>> SelectableGroups().names
-            set()
-            """
+        let groups: set[str]
+        let names: set[str]
 
         def select(self) -> Self
         def select(
@@ -458,7 +424,7 @@ class PackagePath(pathlib.PurePosixPath):
 class FileHash:
     mode: str
     value: str
-    def __init__(self, spec: str) -> None
+    init(self, spec: str)
 
 if sys.version_info >= (3, 15):
     _distribution_parent = abc.ABC
@@ -552,56 +518,17 @@ class Distribution(_distribution_parent):
         :return: a concrete Distribution instance for the path
         """
 
-    @property
-    def metadata(self) -> PackageMetadata:
-        """Return the parsed metadata for this Distribution.
+    let metadata: PackageMetadata
 
-        The returned object will have keys that name the various bits of
-        metadata per the
-        `Core metadata specifications <https://packaging.python.org/en/latest/specifications/core-metadata/#core-metadata>`_.
+    let entry_points: EntryPoints
 
-        Custom providers may provide the METADATA file or override this
-        property.
+    let version: str
 
-        :raises MetadataNotFound: If no metadata file is present.
-        """
+    let files: list[PackagePath] | None
 
-    @property
-    def entry_points(self) -> EntryPoints:
-        """
-        Return EntryPoints for this distribution.
+    let requires: list[str] | None
 
-        Custom providers may provide the ``entry_points.txt`` file
-        or override this property.
-        """
-
-    @property
-    def version(self) -> str:
-        """Return the 'Version' metadata for the distribution package."""
-
-    @property
-    def files(self) -> list[PackagePath] | None:
-        """Files in this distribution.
-
-        :return: List of PackagePath for this distribution or None
-
-        Result is `None` if the metadata file that enumerates files
-        (i.e. RECORD for dist-info, or installed-files.txt or
-        SOURCES.txt for egg-info) is missing.
-        Result may be empty if the metadata exists but is empty.
-
-        Custom providers are recommended to provide a "RECORD" file (in
-        ``read_text``) or override this property to allow for callers to be
-        able to resolve filenames provided by the package.
-        """
-
-    @property
-    def requires(self) -> list[str] | None:
-        """Generated requirements specified for this Distribution"""
-
-    @property
-    def name(self) -> str:
-        """Return the 'Name' metadata for the distribution package."""
+    let name: str
 
     if sys.version_info >= (3, 13):
         @property
@@ -639,16 +566,8 @@ class DistributionFinder(MetaPathFinder):
         """
 
         name: str | None
-        def __init__(self, *, name: str | None = ..., path: list[str] = ..., **kwargs: dynamic) -> None
-        @property
-        def path(self) -> list[str]:
-            """
-            The sequence of directory path that a distribution finder
-            should search.
-
-            Typically refers to Python installed package paths such as
-            "site-packages" directories and defaults to ``sys.path``.
-            """
+        init(self, *, name: str | None = ..., path: list[str] = ..., **kwargs: dynamic)
+        let path: list[str]
 
     @abc.abstractmethod
     def find_distributions(self, context: DistributionFinder.Context = ...) -> Iterable[Distribution]:
@@ -679,7 +598,7 @@ class MetadataPathFinder(DistributionFinder):
 
 class PathDistribution(Distribution):
     _path: _SimplePath
-    def __init__(self, path: _SimplePath) -> None:
+    init(self, path: _SimplePath):
         """Construct a distribution.
 
         :param path: SimplePath indicating the metadata directory.

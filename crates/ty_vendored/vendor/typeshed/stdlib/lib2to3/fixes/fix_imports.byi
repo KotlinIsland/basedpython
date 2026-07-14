@@ -7,13 +7,13 @@ from typing import ClassVar, Final, Literal
 from .. import fixer_base
 from ..pytree import Node
 
-MAPPING: Final[dict[str, str]]
+final MAPPING: dict[str, str]
 
 def alternates(members)
 def build_pattern(mapping=...) -> Generator[str]
 
 class FixImports(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[True]]
+    BM_compatible: ClassVar[True]
     mapping = MAPPING
     def build_pattern(self)
     def compile_pattern(self) -> None

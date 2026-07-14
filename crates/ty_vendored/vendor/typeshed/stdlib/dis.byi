@@ -4,7 +4,7 @@ import sys
 import types
 from collections.abc import Callable, Iterator
 from opcode import *  # `dis` re-exports it as a part of public API
-from typing import IO, Any, Final, NamedTuple, TypeAlias
+from typing import Final, NamedTuple, TypeAlias
 from typing_extensions import Self, deprecated, disjoint_base
 
 __all__ = [
@@ -43,7 +43,7 @@ else:
 
 # Strictly this should not have to include Callable, but mypy doesn't use FunctionType
 # for functions (python/mypy#3171)
-_HaveCodeType: TypeAlias = types.MethodType | types.FunctionType | types.CodeType | type | Callable[..., Any]
+type _HaveCodeType = types.MethodType | types.FunctionType | types.CodeType | type | ((...) -> dynamic)
 
 if sys.version_info >= (3, 11):
     class Positions(NamedTuple):
@@ -69,7 +69,7 @@ if sys.version_info >= (3, 13):
         line_number: int | None
         label: int | None = None
         positions: Positions | None = None
-        cache_info: list[(str, int, Any)] | None = None
+        cache_info: list[(str, int, dynamic)] | None = None
 
 elif sys.version_info >= (3, 11):
     class _Instruction(NamedTuple):
@@ -179,7 +179,7 @@ if sys.version_info >= (3, 12):
                 line_number: int | None,
                 label: int | None = None,
                 positions: Positions | None = None,
-                cache_info: list[(str, int, Any)] | None = None,
+                cache_info: list[(str, int, dynamic)] | None = None,
             ) -> Instruction
 
 else:
@@ -275,7 +275,7 @@ class Bytecode:
     def dis(self) -> str:
         """Return a formatted view of the bytecode operations."""
 
-COMPILER_FLAG_NAMES: Final[dict[int, str]]
+final COMPILER_FLAG_NAMES: dict[int, str]
 
 def findlabels(code: _HaveCodeType) -> list[int]:
     """Detect all offsets in a byte code which are jump targets.

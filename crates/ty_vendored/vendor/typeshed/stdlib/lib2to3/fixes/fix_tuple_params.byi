@@ -24,7 +24,7 @@ from .. import fixer_base
 def is_docstring(stmt)
 
 class FixTupleParams(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[True]]
+    BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     def transform(self, node, results)
     def transform_lambda(self, node, results) -> None

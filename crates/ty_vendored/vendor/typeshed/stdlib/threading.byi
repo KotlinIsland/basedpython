@@ -7,7 +7,7 @@ from _typeshed import ProfileFunction, TraceFunction
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from contextvars import Context
 from types import TracebackType
-from typing import Any, Final, TypeVar, final
+from typing import Final, TypeVar, final
 from typing_extensions import Self, deprecated
 
 
@@ -161,7 +161,7 @@ if sys.version_info >= (3, 15):
 
         """
 
-        def __init__(self, iterable: Iterable[Element]) -> None
+        init(self, iterable: Iterable[Element])
         def __iter__(self) -> Self
         def __next__(self) -> Element
         def send(self, value: dynamic, /) -> Element:
@@ -236,7 +236,7 @@ def stack_size(size: int = 0, /) -> int:
     the suggested approach in the absence of more specific information).
     """
 
-TIMEOUT_MAX: Final[float]
+final TIMEOUT_MAX: float
 
 ThreadError = _thread.error
 local = _thread._local
@@ -258,15 +258,7 @@ class Thread:
 
     """
 
-    @property
-    def ident(self) -> int | None:
-        """Thread identifier of this thread or None if it has not been started.
-
-        This is a nonzero integer. See the get_ident() function. Thread
-        identifiers may be recycled when a thread exits and another thread is
-        created. The identifier is available even after the thread has exited.
-
-        """
+    let ident: int | None
 
     daemon: bool
     """A boolean value indicating whether this thread is a daemon thread.
@@ -401,14 +393,7 @@ class Thread:
 
         """
 
-    @property
-    def native_id(self) -> int | None:  # only available on some platforms
-        """Native integral thread ID of this thread, or None if it has not been started.
-
-        This is a non-negative integer. See the get_native_id() function.
-        This represents the Thread ID as reported by the kernel.
-
-        """
+    let native_id: int | None
 
     def is_alive(self) -> bool:
         """Return whether the thread is alive.
@@ -452,7 +437,7 @@ class Thread:
         """
 
 class _DummyThread(Thread):
-    def __init__(self) -> None
+    init(self)
 
 # This is actually the function _thread.allocate_lock for <= 3.12
 Lock = _thread.LockType
@@ -534,7 +519,7 @@ class Condition:
 
     """
 
-    def __init__(self, lock: Lock | _RLock | RLock | None = None) -> None
+    init(self, lock: Lock | _RLock | RLock | None = None)
     def __enter__(self) -> bool
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
@@ -568,7 +553,7 @@ class Condition:
 
         """
 
-    def wait_for[Element](self, predicate: Callable[[], Element], timeout: float | None = None) -> Element:
+    def wait_for[Element](self, predicate: () -> Element, timeout: float | None = None) -> Element:
         """Wait until a condition evaluates to True.
 
         predicate should be a callable which result will be interpreted as a
@@ -615,7 +600,7 @@ class Semaphore:
     """
 
     _value: int
-    def __init__(self, value: int = 1) -> None
+    init(self, value: int = 1)
     def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None
     def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
         """Acquire a semaphore, decrementing the internal counter by one.
@@ -745,8 +730,8 @@ class Event:
 
         """
 
-excepthook: Callable[[_ExceptHookArgs], object]
-__excepthook__: Callable[[_ExceptHookArgs], object]
+excepthook: (_ExceptHookArgs) -> object
+__excepthook__: (_ExceptHookArgs) -> object
 ExceptHookArgs = _ExceptHookArgs
 
 class Timer(Thread):
@@ -760,17 +745,17 @@ class Timer(Thread):
 
     args: Iterable[dynamic]  # undocumented
     finished: Event  # undocumented
-    function: (...) -> Any  # undocumented
+    function: (...) -> dynamic  # undocumented
     interval: float  # undocumented
     kwargs: Mapping[str, dynamic]  # undocumented
 
-    def __init__(
+    init(
         self,
         interval: float,
         function: (...) -> object,
         args: Iterable[dynamic] | None = None,
         kwargs: Mapping[str, dynamic] | None = None,
-    ) -> None
+    )
     def cancel(self) -> None:
         """Stop the timer if it hasn't finished yet."""
 
@@ -783,19 +768,13 @@ class Barrier:
 
     """
 
-    @property
-    def parties(self) -> int:
-        """Return the number of threads required to trip the barrier."""
+    let parties: int
 
-    @property
-    def n_waiting(self) -> int:
-        """Return the number of threads currently waiting at the barrier."""
+    let n_waiting: int
 
-    @property
-    def broken(self) -> bool:
-        """Return True if the barrier is in a broken state."""
+    let broken: bool
 
-    def __init__(self, parties: int, action: Callable[[], None] | None = None, timeout: float | None = None) -> None:
+    init(self, parties: int, action: (() -> None) | None = None, timeout: float | None = None):
         """Create a barrier, initialised to 'parties' threads.
 
         'action' is a callable which, when supplied, will be called by one of

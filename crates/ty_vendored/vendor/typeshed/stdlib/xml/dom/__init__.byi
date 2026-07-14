@@ -59,56 +59,56 @@ class DOMException(Exception):
     """
 
     code: int
-    def __init__(self, *args: dynamic, **kw: dynamic) -> None
+    init(self, *args: dynamic, **kw: dynamic)
     def _get_code(self) -> int
 
 class IndexSizeErr(DOMException):
-    code: Literal[1]
+    code: 1
 
 class DomstringSizeErr(DOMException):
-    code: Literal[2]
+    code: 2
 
 class HierarchyRequestErr(DOMException):
-    code: Literal[3]
+    code: 3
 
 class WrongDocumentErr(DOMException):
-    code: Literal[4]
+    code: 4
 
 class InvalidCharacterErr(DOMException):
-    code: Literal[5]
+    code: 5
 
 class NoDataAllowedErr(DOMException):
-    code: Literal[6]
+    code: 6
 
 class NoModificationAllowedErr(DOMException):
-    code: Literal[7]
+    code: 7
 
 class NotFoundErr(DOMException):
-    code: Literal[8]
+    code: 8
 
 class NotSupportedErr(DOMException):
-    code: Literal[9]
+    code: 9
 
 class InuseAttributeErr(DOMException):
-    code: Literal[10]
+    code: 10
 
 class InvalidStateErr(DOMException):
-    code: Literal[11]
+    code: 11
 
 class SyntaxErr(DOMException):
-    code: Literal[12]
+    code: 12
 
 class InvalidModificationErr(DOMException):
-    code: Literal[13]
+    code: 13
 
 class NamespaceErr(DOMException):
-    code: Literal[14]
+    code: 14
 
 class InvalidAccessErr(DOMException):
-    code: Literal[15]
+    code: 15
 
 class ValidationErr(DOMException):
-    code: Literal[16]
+    code: 16
 
 class UserDataHandler:
     """Class giving the operation constants for UserDataHandler.handle()."""
@@ -121,5 +121,5 @@ class UserDataHandler:
 XML_NAMESPACE: Final = "http://www.w3.org/XML/1998/namespace"
 XMLNS_NAMESPACE: Final = "http://www.w3.org/2000/xmlns/"
 XHTML_NAMESPACE: Final = "http://www.w3.org/1999/xhtml"
-EMPTY_NAMESPACE: Final[None]
-EMPTY_PREFIX: Final[None]
+final EMPTY_NAMESPACE: None
+final EMPTY_PREFIX: None

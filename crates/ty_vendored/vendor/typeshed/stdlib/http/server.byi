@@ -21,7 +21,7 @@ from _ssl import _PasswordType
 from _typeshed import ReadableBuffer, StrOrBytesPath, StrPath, SupportsRead, SupportsWrite
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from ssl import Purpose, SSLContext
-from typing import AnyStr, BinaryIO, ClassVar, Protocol, type_check_only
+from typing import ClassVar, Protocol, type_check_only
 from typing_extensions import Self, deprecated
 
 __all__ = ["HTTPServer", "ThreadingHTTPServer", "BaseHTTPRequestHandler", "SimpleHTTPRequestHandler"]
@@ -38,7 +38,7 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer)
 
 if sys.version_info >= (3, 14):
     @type_check_only
-    class _SSLModule(Protocol):
+    protocol _SSLModule:
         static def create_default_context(
             purpose: Purpose = ...,
             *,
@@ -53,17 +53,17 @@ if sys.version_info >= (3, 14):
         keyfile: StrOrBytesPath | None
         password: _PasswordType | None
         alpn_protocols: Iterable[str]
-        def __init__(
+        init(
             self,
             server_address: socketserver._AfInetAddress,
-            RequestHandlerClass: Callable[[dynamic, _socket._RetAddress, Self], socketserver.BaseRequestHandler],
+            RequestHandlerClass: (dynamic, _socket._RetAddress, Self) -> socketserver.BaseRequestHandler,
             bind_and_activate: bool = True,
             *,
             certfile: StrOrBytesPath,
             keyfile: StrOrBytesPath | None = None,
             password: _PasswordType | None = None,
             alpn_protocols: Iterable[str] | None = None,
-        ) -> None
+        )
         def server_activate(self) -> None:
             """Wrap the socket in SSLSocket."""
 

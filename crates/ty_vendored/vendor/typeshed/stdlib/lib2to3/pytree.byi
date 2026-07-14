@@ -15,10 +15,10 @@ from typing_extensions import Self
 from .fixer_base import BaseFix
 from .pgen2.grammar import Grammar
 
-_NL: TypeAlias = Node | Leaf
-_Context: TypeAlias = tuple[str, int, int]
-_Results: TypeAlias = dict[str, _NL]
-_RawNode: TypeAlias = tuple[int, str, _Context, list[_NL] | None]
+type _NL = Node | Leaf
+type _Context = tuple[str, int, int]
+type _Results = dict[str, _NL]
+type _RawNode = tuple[int, str, _Context, list[_NL] | None]
 
 HUGE: Final = 0x7FFFFFFF
 
@@ -47,7 +47,7 @@ class Base:
         This calls the method _eq().
         """
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     abstract def _eq(self, other: Base) -> bool:
         """
         Compare two nodes for equality.
@@ -92,19 +92,9 @@ class Base:
         parent's children before it was removed.
         """
 
-    @property
-    def next_sibling(self) -> _NL | None:
-        """
-        The node immediately following the invocant in their parent's children
-        list. If the invocant does not have a next sibling, it is None
-        """
+    let next_sibling: _NL | None
 
-    @property
-    def prev_sibling(self) -> _NL | None:
-        """
-        The node immediately preceding the invocant in their parent's children
-        list. If the invocant does not have a previous sibling, it is None.
-        """
+    let prev_sibling: _NL | None
 
     def leaves(self) -> Iterator[Leaf]
     def depth(self) -> int
@@ -122,14 +112,14 @@ class Node(Base):
     future_features: frozenset[Incomplete]
     # Is Unbound until set in pgen2.parse.Parser.pop
     used_names: set[str]
-    def __init__(
+    init(
         self,
         type: int,
         children: Iterable[_NL],
         context: Unused = None,
         prefix: str | None = None,
         fixers_applied: MutableSequence[BaseFix] | None = None,
-    ) -> None:
+    ):
         """
         Initializer.
 
@@ -183,14 +173,14 @@ class Leaf(Base):
     column: int
     value: str
     fixers_applied: MutableSequence[BaseFix]
-    def __init__(
+    init(
         self,
         type: int,
         value: str,
         context: _Context | None = None,
         prefix: str | None = None,
         fixers_applied: MutableSequence[BaseFix] = [],
-    ) -> None:
+    ):
         """
         Initializer.
 
@@ -278,7 +268,7 @@ class BasePattern:
         """
 
 class LeafPattern(BasePattern):
-    def __init__(self, type: int | None = None, content: str | None = None, name: str | None = None) -> None:
+    init(self, type: int | None = None, content: str | None = None, name: str | None = None):
         """
         Initializer.  Takes optional type, content, and name.
 
@@ -293,7 +283,7 @@ class LeafPattern(BasePattern):
 
 class NodePattern(BasePattern):
     wildcards: bool
-    def __init__(self, type: int | None = None, content: str | None = None, name: str | None = None) -> None:
+    init(self, type: int | None = None, content: str | None = None, name: str | None = None):
         """
         Initializer.  Takes optional type, content, and name.
 
@@ -325,7 +315,7 @@ class WildcardPattern(BasePattern):
 
     min: int
     max: int
-    def __init__(self, content: str | None = None, min: int = 0, max: int = 0x7FFFFFFF, name: str | None = None) -> None:
+    init(self, content: str | None = None, min: int = 0, max: int = 0x7FFFFFFF, name: str | None = None):
         """
         Initializer.
 
@@ -350,7 +340,7 @@ class WildcardPattern(BasePattern):
         """
 
 class NegatedPattern(BasePattern):
-    def __init__(self, content: str | None = None) -> None:
+    init(self, content: str | None = None):
         """
         Initializer.
 

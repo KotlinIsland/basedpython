@@ -4,15 +4,15 @@ import sys
 from collections.abc import Callable
 from decimal import Decimal
 from numbers import Rational, Real
-from typing import Literal, Protocol, SupportsIndex, TypeAlias, type_check_only
+from typing import Literal, Protocol, TypeAlias, type_check_only
 from typing_extensions import Self
 
-_ComparableNum: TypeAlias = int | float | Decimal | Real
+type _ComparableNum = int | float | Decimal | Real
 
 __all__ = ["Fraction"]
 
 @type_check_only
-class _ConvertibleToIntegerRatio(Protocol):
+protocol _ConvertibleToIntegerRatio:
     def as_integer_ratio(self) -> (int | Rational, int | Rational)
 
 class Fraction(Rational):
@@ -135,10 +135,8 @@ class Fraction(Rational):
         def is_integer(self) -> bool:
             """Return True if the Fraction is an integer."""
 
-    @property
-    def numerator(a) -> int
-    @property
-    def denominator(a) -> int
+    let numerator: int
+    let denominator: int
 
     def __add__(a, b: int | Fraction) -> Fraction:
         """a + b"""
@@ -261,7 +259,7 @@ class Fraction(Rational):
         """
     def __round__(self, ndigits: int) -> Fraction
 
-    def __hash__(self) -> int:  # type: ignore[override]
+    def __hash__(self) -> int:
         """hash(self)"""
 
     def __eq__(a, b: object) -> bool:
@@ -285,18 +283,14 @@ class Fraction(Rational):
     def __copy__(self) -> Self
     def __deepcopy__(self, memo: dynamic) -> Self
     if sys.version_info >= (3, 11):
-        def __int__(a, _index: Callable[[SupportsIndex], int] = ...) -> int:
+        def __int__(a, _index: (SupportsIndex) -> int = ...) -> int:
             """int(a)"""
 
     # Not actually defined within fractions.py, but provides more useful
     # overrides
-    @property
-    def real(self) -> Fraction:
-        """Real numbers are their real component."""
+    let real: Fraction
 
-    @property
-    def imag(self) -> Literal[0]:
-        """Real numbers have no imaginary component."""
+    let imag: 0
 
     def conjugate(self) -> Fraction:
         """Conjugate is a no-op for Reals."""

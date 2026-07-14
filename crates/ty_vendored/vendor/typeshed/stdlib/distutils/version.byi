@@ -76,7 +76,7 @@ class StrictVersion(Version):
     version_re: Pattern[str]
     version: (int, int, int)
     prerelease: (str, int) | None
-    def __init__(self, vstring: str | None = None) -> None
+    init(self, vstring: str | None = None)
     def parse(self, vstring: str) -> Self
     def __str__(self) -> str  # noqa: Y029
     def _cmp(self, other: Self | str) -> bool
@@ -116,7 +116,7 @@ class LooseVersion(Version):
     component_re: Pattern[str]
     vstring: str
     version: (*: str | int)
-    def __init__(self, vstring: str | None = None) -> None
+    init(self, vstring: str | None = None)
     def parse(self, vstring: str) -> Self
     def __str__(self) -> str  # noqa: Y029
     def _cmp(self, other: Self | str) -> bool
