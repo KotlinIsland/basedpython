@@ -3995,6 +3995,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             DeferredExpressionState::from(self.defer_annotations()),
         );
 
+        // basedpython: a valueless `let x: T` (declaration with no initializer)
+        // is read-only in every scope, matching a read-only property. the
+        // `__let__` marker only marks `FINAL` outside class scope, so add it here
+        // for the in-class case (idempotent at module scope, already `FINAL`)
+        let is_let_marker = match annotation {
+            ast::Expr::Name(n) => n.id.as_str() == "__let__",
+            ast::Expr::Subscript(s) => {
+                matches!(s.value.as_ref(), ast::Expr::Name(n) if n.id.as_str() == "__let__")
+            }
+            _ => false,
+        };
+        if value.is_none() && is_let_marker {
+            declared = declared.with_qualifier(TypeQualifiers::FINAL);
+        }
+
         // P.args and P.kwargs are only valid as annotations on *args and **kwargs,
         // not as variable annotations. Check both resolved type and AST form.
         if let Type::TypeVar(typevar) = declared.inner_type()

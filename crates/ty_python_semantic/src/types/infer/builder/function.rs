@@ -376,7 +376,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 && matches!(n.ctx, ast::ExprContext::Invalid)
                 && matches!(
                     n.id.as_str(),
-                    "decorator_keyword" | "private" | "export" | "open"
+                    // `__init_method__` marks the `init(...)` shorthand — a plain
+                    // `__init__`, so the synthetic marker is dropped too
+                    "decorator_keyword" | "private" | "export" | "open" | "__init_method__"
                 )
             {
                 continue;

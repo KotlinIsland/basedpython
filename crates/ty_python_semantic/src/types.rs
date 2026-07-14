@@ -4001,6 +4001,43 @@ impl<'db> Type<'db> {
                     .into()
                 }
 
+                // introspection dunders on a type parameter carry precise types
+                // that only depend on the type parameter itself, not on how
+                // typeshed spells the member. resolving them here — rather than
+                // in the property `__get__` binding — means they read the same
+                // whether typeshed declares them as a `@property` or a `let`
+                // attribute
+                Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) if name == "__name__" => {
+                    Place::bound(Type::string_literal(db, typevar.name(db))).into()
+                }
+                Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) if name == "__bound__" => {
+                    Place::bound(typevar.upper_bound(db).unwrap_or_else(|| Type::none(db))).into()
+                }
+                Type::KnownInstance(KnownInstanceType::TypeVar(typevar))
+                    if name == "__constraints__" =>
+                {
+                    Place::bound(Type::heterogeneous_tuple(
+                        db,
+                        typevar.constraints(db).into_iter().flatten(),
+                    ))
+                    .into()
+                }
+                Type::KnownInstance(KnownInstanceType::TypeVar(typevar))
+                    if name == "__default__" =>
+                {
+                    Place::bound(
+                        typevar
+                            .default_type(db)
+                            .unwrap_or_else(|| KnownClass::NoDefaultType.to_instance(db)),
+                    )
+                    .into()
+                }
+                Type::KnownInstance(KnownInstanceType::TypeAliasType(alias))
+                    if name == "__name__" =>
+                {
+                    Place::bound(Type::string_literal(db, alias.name(db))).into()
+                }
+
                 Type::ClassLiteral(class)
                     if name == "__get__" && class.is_known(db, KnownClass::FunctionType) =>
                 {

@@ -4456,6 +4456,23 @@ def takes_named(n: Named) -> str:
 takes_named(Person())  # ok
 ```
 
+### decorated `protocol` keyword
+
+a decorator may precede the `protocol` introducer. `@runtime_checkable protocol P` is equivalent to
+`@runtime_checkable class P(Protocol)`, so `P` may be used with `isinstance`.
+
+```by
+from typing import runtime_checkable
+
+@runtime_checkable
+protocol HasLen:
+    def __len__(self) -> int: ...
+
+def f(x: object) -> None:
+    if isinstance(x, HasLen):
+        reveal_type(x)  # revealed: HasLen
+```
+
 [mypy_protocol_docs]: https://mypy.readthedocs.io/en/stable/protocols.html#protocols-and-structural-subtyping
 [mypy_protocol_tests]: https://github.com/python/mypy/blob/master/test-data/unit/check-protocols.test
 [protocol conformance tests]: https://github.com/python/typing/tree/main/conformance/tests

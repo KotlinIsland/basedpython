@@ -7,9 +7,9 @@ use bitflags::bitflags;
 use ruff_db::{
     diagnostic::{Annotation, Span},
     files::FileRange,
-    parsed::ParsedModuleRef,
+    parsed::{ParsedModuleRef, parsed_module},
 };
-use ruff_python_ast::name::Name;
+use ruff_python_ast::{self as ast, name::Name};
 use ruff_python_stdlib::identifiers::is_mangled_private;
 use rustc_hash::FxHashSet;
 
@@ -451,6 +451,14 @@ fn check_class_declaration<'db>(
                             return None;
                         }
 
+                        // `let` is read-only, not `final`. but models a
+                        // read-only property, so overriding it is allowed.
+                        if superclass_symbol_id
+                            .is_some_and(|id| is_let_declaration(db, superclass_scope, id))
+                        {
+                            return None;
+                        }
+
                         // Find the declaration definition in the superclass for the secondary
                         // annotation.
                         let superclass_definition = superclass_symbol_id.and_then(|id| {
@@ -855,6 +863,42 @@ fn is_function_definition<'db>(
         .end_of_scope_symbol_bindings(symbol)
         .filter_map(|binding| binding.binding.definition())
         .any(|definition| definition.kind(db).is_function_def())
+}
+
+/// Salsa-tracked query to check whether a symbol in a superclass scope is
+/// declared with the basedpython valueless `let` marker.
+///
+/// A valueless `let x: T` lowers to a `Final` qualifier so the attribute is
+/// read-only, but — unlike an explicit `Final`/`final` — it models a read-only
+/// *property*, which subclasses are allowed to override. We therefore exclude
+/// `let`-declared members from the `override-of-final-variable` check.
+///
+/// This is a Salsa-tracked query for the same reason as [`is_function_definition`]:
+/// it inspects the declaration's AST node, which might live in another module.
+#[salsa::tracked(heap_size=ruff_memory_usage::heap_size)]
+fn is_let_declaration<'db>(db: &'db dyn Db, scope: ScopeId<'db>, symbol: ScopedSymbolId) -> bool {
+    let module = parsed_module(db, scope.file(db)).load(db);
+    use_def_map(db, scope)
+        .end_of_scope_symbol_declarations(symbol)
+        .filter_map(|declaration| declaration.declaration.definition())
+        .any(|definition| {
+            let DefinitionKind::AnnotatedAssignment(assignment) = definition.kind(db) else {
+                return false;
+            };
+            assignment.value(&module).is_none() && is_let_marker(assignment.annotation(&module))
+        })
+}
+
+/// Whether `annotation` is the synthetic basedpython `let` marker (`__let__` or
+/// `__let__[T]`), which the forward transform emits for a `let` declaration.
+fn is_let_marker(annotation: &ast::Expr) -> bool {
+    match annotation {
+        ast::Expr::Name(name) => name.id.as_str() == "__let__",
+        ast::Expr::Subscript(subscript) => {
+            matches!(subscript.value.as_ref(), ast::Expr::Name(name) if name.id.as_str() == "__let__")
+        }
+        _ => false,
+    }
 }
 
 /// Returns the variable kind for an attribute if it should participate in `ClassVar` override checks.

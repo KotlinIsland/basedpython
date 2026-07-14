@@ -3151,6 +3151,8 @@ impl<'src> Parser<'src> {
                     TokenKind::Slash | TokenKind::Star,
                     TokenKind::Comma | TokenKind::Rpar
                 ) | (TokenKind::Star | TokenKind::DoubleStar, TokenKind::Colon)
+                    // `, **P` — a trailing bare `ParamSpec` (Concatenate form)
+                    | (TokenKind::DoubleStar, TokenKind::Name)
             );
             if mid_tuple_marker {
                 self.error_if_not_basedpython(
@@ -3447,9 +3449,8 @@ impl<'src> Parser<'src> {
                     && self.peek() == TokenKind::Name
                     && self.peek2().1 == TokenKind::Colon)
                 || (self.at(TokenKind::DoubleStar) && matches!(self.peek(), TokenKind::Colon))
-                || (self.at(TokenKind::DoubleStar)
-                    && self.peek() == TokenKind::Name
-                    && self.peek2().1 == TokenKind::Colon);
+                // `**name: T` (kwargs) or a bare `**P` (ParamSpec, Concatenate form)
+                || (self.at(TokenKind::DoubleStar) && self.peek() == TokenKind::Name);
             if is_marker {
                 self.error_if_not_basedpython(
                     "Parameters spec syntax is not valid in .py files".to_string(),
@@ -3690,20 +3691,24 @@ impl<'src> Parser<'src> {
                     node_index: AtomicNodeIndex::NONE,
                 }));
             }
-            // `**name` (no type) — legacy form, treated like `**name: Any`
+            // `**name`: a bare `**P` is a `ParamSpec`; `**name: T` is a kwargs
+            // catch-all. both encode the double star as `Starred(Starred(...))`
             else if self.at(TokenKind::DoubleStar) {
+                let doublestar_start = self.node_start();
                 self.bump(TokenKind::DoubleStar);
                 if self.at(TokenKind::Name) {
-                    let mut target_name = self.parse_name(ExpressionContext::default());
-                    target_name.ctx = ExprContext::Invalid;
-                    // `**name: T`
+                    let target_name = self.parse_name(ExpressionContext::default());
+                    let target_range = target_name.range;
+                    // `**name: T` — kwargs catch-all: `Named(Starred(Starred(name)), T)`.
+                    // the name is a bare label, so mark it `Invalid` (not a reference)
                     if self.eat(TokenKind::Colon) {
+                        let mut name = target_name;
+                        name.ctx = ExprContext::Invalid;
                         let inner = self.parse_conditional_expression_or_higher_impl(
                             ExpressionContext::default(),
                         );
-                        let target_range = target_name.range;
                         let inner_starred = Expr::Starred(ast::ExprStarred {
-                            value: Box::new(Expr::Name(target_name)),
+                            value: Box::new(Expr::Name(name)),
                             ctx: ExprContext::Load,
                             range: target_range,
                             node_index: AtomicNodeIndex::NONE,
@@ -3720,8 +3725,22 @@ impl<'src> Parser<'src> {
                             range: target_range,
                             node_index: AtomicNodeIndex::NONE,
                         }));
+                    } else {
+                        // bare `**P` — a `ParamSpec`: `Starred(Starred(name))`. the
+                        // name keeps `Load` ctx so ty resolves it as a reference
+                        let inner_starred = Expr::Starred(ast::ExprStarred {
+                            value: Box::new(Expr::Name(target_name)),
+                            ctx: ExprContext::Load,
+                            range: target_range,
+                            node_index: AtomicNodeIndex::NONE,
+                        });
+                        elts.push(Expr::Starred(ast::ExprStarred {
+                            value: Box::new(inner_starred),
+                            ctx: ExprContext::Load,
+                            range: self.node_range(doublestar_start),
+                            node_index: AtomicNodeIndex::NONE,
+                        }));
                     }
-                    // bare `**name` — drop. nothing pushed
                 }
             } else {
                 let field_start = self.node_start();

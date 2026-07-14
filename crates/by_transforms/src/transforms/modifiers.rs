@@ -313,8 +313,29 @@ impl<'src> Modifiers<'src> {
     }
 
     fn process_ann_assign(&mut self, node: &StmtAnnAssign) {
-        let Some(value) = &node.value else { return };
         let name = self.src(node.target.range()).to_owned();
+
+        let Some(value) = &node.value else {
+            // valueless typed `let x: T` / `final x: T` → `x: Final[T]` — a
+            // read-only declaration with no initializer, `Final` in every scope
+            if let Expr::Subscript(s) = node.annotation.as_ref()
+                && matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__let__" | "__final__"))
+            {
+                let slice = s.slice.as_ref();
+                let pre_range =
+                    TextRange::new(node.annotation.range().start(), slice.range().start());
+                self.needs_final_annotation = true;
+                self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                    format!("{name}: Final["),
+                    pre_range,
+                )));
+                self.edits.push(Fix::safe_edit(Edit::insertion(
+                    "]".to_owned(),
+                    slice.range().end(),
+                )));
+            }
+            return;
+        };
 
         match node.annotation.as_ref() {
             Expr::Name(ann) => {
@@ -360,15 +381,18 @@ impl<'src> Modifiers<'src> {
                     _ => {}
                 }
             }
-            ann @ Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__let__") =>
+            ann @ Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__let__" | "__final__")) =>
             {
-                // typed: `let a: T = v` — annotation is Subscript(__let__, T)
-                // callable transform visits only the slice independently, so emit
-                // bracket edits around the slice range; they don't overlap with callable's edit
+                // typed: `let a: T = v` / `final a: T = v` — annotation is
+                // Subscript(__let__|__final__, T). callable transform visits only
+                // the slice independently, so emit bracket edits around the slice
+                // range; they don't overlap with callable's edit
+                let is_final =
+                    matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__final__");
                 let slice = s.slice.as_ref();
                 let pre_range = TextRange::new(ann.range().start(), slice.range().start());
                 let post_range = TextRange::new(slice.range().end(), value.range().start());
-                if self.class_depth > 0 {
+                if self.class_depth > 0 && !is_final {
                     // inside class: `a: T = v` (no Final wrapper; keep the type)
                     self.edits.push(Fix::safe_edit(Edit::range_replacement(
                         format!("{name}: "),
@@ -894,6 +918,34 @@ mod tests {
     }
 
     #[test]
+    fn let_decl_valueless_typed() {
+        check(
+            "let TOP: int\n",
+            indoc! {"
+                from typing import Final
+                TOP: Final[int]
+            "},
+        );
+    }
+
+    #[test]
+    fn let_decl_valueless_typed_in_class() {
+        // a valueless typed `let` is read-only in every scope, so it keeps the
+        // `Final` wrapper inside a class body (unlike the valued form)
+        check(
+            indoc! {"
+                class A:
+                    let member: int
+            "},
+            indoc! {"
+                from typing import Final
+                class A:
+                    member: Final[int]
+            "},
+        );
+    }
+
+    #[test]
     fn let_decl_string() {
         check(
             "let NAME = \"alice\"\n",
@@ -1062,7 +1114,12 @@ mod tests {
         // unannotated form — previously `override x: T` was a parse error while
         // `override x = v` worked
         check("override x: int = 1\n", "x: int = 1\n");
-        check("final override x: int = 1\n", "x: int = 1\n");
+        // `final` in a chain keeps its `Final` qualifier (only the other modifier
+        // is stripped); previously it was silently dropped
+        check(
+            "final override x: int = 1\n",
+            "from typing import Final\nx: Final[int] = 1\n",
+        );
         check("override x: int\n", "x: int\n");
     }
 
