@@ -19,7 +19,7 @@ from typing import Protocol, TypeVar, type_check_only
 
 
 @type_check_only
-class _SliceableT[out StrSequenceT: Sequence[str]](Protocol):
+protocol _SliceableT[out StrSequenceT: Sequence[str]]:
     def __getitem__(self, key: int, /) -> str
     def __getitem__(self, key: slice, /) -> StrSequenceT
 
@@ -76,6 +76,6 @@ def gnu_getopt(
 class GetoptError(Exception):
     msg: str
     opt: str
-    def __init__(self, msg: str, opt: str = "") -> None
+    init(self, msg: str, opt: str = "")
 
 error = GetoptError

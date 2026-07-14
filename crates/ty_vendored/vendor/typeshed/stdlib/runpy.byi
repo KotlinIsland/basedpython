@@ -18,13 +18,13 @@ class _TempModule:
 
     mod_name: str
     module: ModuleType
-    def __init__(self, mod_name: str) -> None
+    init(self, mod_name: str)
     def __enter__(self) -> Self
     def __exit__(self, *args: Unused) -> None
 
 class _ModifiedArgv0:
     value: dynamic
-    def __init__(self, value: dynamic) -> None
+    init(self, value: dynamic)
     def __enter__(self) -> None
     def __exit__(self, *args: Unused) -> None
 

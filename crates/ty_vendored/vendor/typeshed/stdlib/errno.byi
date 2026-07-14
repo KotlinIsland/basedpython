@@ -18,224 +18,224 @@ from typing import Final
 
 errorcode: Mapping[int, str]
 
-EPERM: Final[int]
-ENOENT: Final[int]
-ESRCH: Final[int]
-EINTR: Final[int]
-EIO: Final[int]
-ENXIO: Final[int]
-E2BIG: Final[int]
-ENOEXEC: Final[int]
-EBADF: Final[int]
-ECHILD: Final[int]
-EAGAIN: Final[int]
-ENOMEM: Final[int]
-EACCES: Final[int]
-EFAULT: Final[int]
-EBUSY: Final[int]
-EEXIST: Final[int]
-EXDEV: Final[int]
-ENODEV: Final[int]
-ENOTDIR: Final[int]
-EISDIR: Final[int]
-EINVAL: Final[int]
-ENFILE: Final[int]
-EMFILE: Final[int]
-ENOTTY: Final[int]
-ETXTBSY: Final[int]
-EFBIG: Final[int]
-ENOSPC: Final[int]
-ESPIPE: Final[int]
-EROFS: Final[int]
-EMLINK: Final[int]
-EPIPE: Final[int]
-EDOM: Final[int]
-ERANGE: Final[int]
-EDEADLK: Final[int]
-ENAMETOOLONG: Final[int]
-ENOLCK: Final[int]
-ENOSYS: Final[int]
-ENOTEMPTY: Final[int]
-ELOOP: Final[int]
-EWOULDBLOCK: Final[int]
-ENOMSG: Final[int]
-EIDRM: Final[int]
-ENOSTR: Final[int]
-ENODATA: Final[int]
-ETIME: Final[int]
-ENOSR: Final[int]
-EREMOTE: Final[int]
-ENOLINK: Final[int]
-EPROTO: Final[int]
-EBADMSG: Final[int]
-EOVERFLOW: Final[int]
-EILSEQ: Final[int]
-EUSERS: Final[int]
-ENOTSOCK: Final[int]
-EDESTADDRREQ: Final[int]
-EMSGSIZE: Final[int]
-EPROTOTYPE: Final[int]
-ENOPROTOOPT: Final[int]
-EPROTONOSUPPORT: Final[int]
-ESOCKTNOSUPPORT: Final[int]
-ENOTSUP: Final[int]
-EOPNOTSUPP: Final[int]
-EPFNOSUPPORT: Final[int]
-EAFNOSUPPORT: Final[int]
-EADDRINUSE: Final[int]
-EADDRNOTAVAIL: Final[int]
-ENETDOWN: Final[int]
-ENETUNREACH: Final[int]
-ENETRESET: Final[int]
-ECONNABORTED: Final[int]
-ECONNRESET: Final[int]
-ENOBUFS: Final[int]
-EISCONN: Final[int]
-ENOTCONN: Final[int]
-ESHUTDOWN: Final[int]
-ETOOMANYREFS: Final[int]
-ETIMEDOUT: Final[int]
-ECONNREFUSED: Final[int]
-EHOSTDOWN: Final[int]
-EHOSTUNREACH: Final[int]
-EALREADY: Final[int]
-EINPROGRESS: Final[int]
-ESTALE: Final[int]
-EDQUOT: Final[int]
-ECANCELED: Final[int]  # undocumented
-ENOTRECOVERABLE: Final[int]  # undocumented
-EOWNERDEAD: Final[int]  # undocumented
+final EPERM: int
+final ENOENT: int
+final ESRCH: int
+final EINTR: int
+final EIO: int
+final ENXIO: int
+final E2BIG: int
+final ENOEXEC: int
+final EBADF: int
+final ECHILD: int
+final EAGAIN: int
+final ENOMEM: int
+final EACCES: int
+final EFAULT: int
+final EBUSY: int
+final EEXIST: int
+final EXDEV: int
+final ENODEV: int
+final ENOTDIR: int
+final EISDIR: int
+final EINVAL: int
+final ENFILE: int
+final EMFILE: int
+final ENOTTY: int
+final ETXTBSY: int
+final EFBIG: int
+final ENOSPC: int
+final ESPIPE: int
+final EROFS: int
+final EMLINK: int
+final EPIPE: int
+final EDOM: int
+final ERANGE: int
+final EDEADLK: int
+final ENAMETOOLONG: int
+final ENOLCK: int
+final ENOSYS: int
+final ENOTEMPTY: int
+final ELOOP: int
+final EWOULDBLOCK: int
+final ENOMSG: int
+final EIDRM: int
+final ENOSTR: int
+final ENODATA: int
+final ETIME: int
+final ENOSR: int
+final EREMOTE: int
+final ENOLINK: int
+final EPROTO: int
+final EBADMSG: int
+final EOVERFLOW: int
+final EILSEQ: int
+final EUSERS: int
+final ENOTSOCK: int
+final EDESTADDRREQ: int
+final EMSGSIZE: int
+final EPROTOTYPE: int
+final ENOPROTOOPT: int
+final EPROTONOSUPPORT: int
+final ESOCKTNOSUPPORT: int
+final ENOTSUP: int
+final EOPNOTSUPP: int
+final EPFNOSUPPORT: int
+final EAFNOSUPPORT: int
+final EADDRINUSE: int
+final EADDRNOTAVAIL: int
+final ENETDOWN: int
+final ENETUNREACH: int
+final ENETRESET: int
+final ECONNABORTED: int
+final ECONNRESET: int
+final ENOBUFS: int
+final EISCONN: int
+final ENOTCONN: int
+final ESHUTDOWN: int
+final ETOOMANYREFS: int
+final ETIMEDOUT: int
+final ECONNREFUSED: int
+final EHOSTDOWN: int
+final EHOSTUNREACH: int
+final EALREADY: int
+final EINPROGRESS: int
+final ESTALE: int
+final EDQUOT: int
+final ECANCELED: int  # undocumented
+final ENOTRECOVERABLE: int  # undocumented
+final EOWNERDEAD: int  # undocumented
 
 if sys.platform == "sunos5" or sys.platform == "solaris":  # noqa: Y008
-    ELOCKUNMAPPED: Final[int]
-    ENOTACTIVE: Final[int]
+    final ELOCKUNMAPPED: int
+    final ENOTACTIVE: int
 
 if sys.platform != "win32":
-    ENOTBLK: Final[int]
-    EMULTIHOP: Final[int]
+    final ENOTBLK: int
+    final EMULTIHOP: int
 
 if sys.platform == "darwin":
     # All of the below are undocumented
-    EAUTH: Final[int]
-    EBADARCH: Final[int]
-    EBADEXEC: Final[int]
-    EBADMACHO: Final[int]
-    EBADRPC: Final[int]
-    EDEVERR: Final[int]
-    EFTYPE: Final[int]
-    ENEEDAUTH: Final[int]
-    ENOATTR: Final[int]
-    ENOPOLICY: Final[int]
-    EPROCLIM: Final[int]
-    EPROCUNAVAIL: Final[int]
-    EPROGMISMATCH: Final[int]
-    EPROGUNAVAIL: Final[int]
-    EPWROFF: Final[int]
-    ERPCMISMATCH: Final[int]
-    ESHLIBVERS: Final[int]
+    final EAUTH: int
+    final EBADARCH: int
+    final EBADEXEC: int
+    final EBADMACHO: int
+    final EBADRPC: int
+    final EDEVERR: int
+    final EFTYPE: int
+    final ENEEDAUTH: int
+    final ENOATTR: int
+    final ENOPOLICY: int
+    final EPROCLIM: int
+    final EPROCUNAVAIL: int
+    final EPROGMISMATCH: int
+    final EPROGUNAVAIL: int
+    final EPWROFF: int
+    final ERPCMISMATCH: int
+    final ESHLIBVERS: int
     if sys.version_info >= (3, 11):
-        EQFULL: Final[int]
-        ENOTCAPABLE: Final[int]  # available starting with 3.11.1
+        final EQFULL: int
+        final ENOTCAPABLE: int  # available starting with 3.11.1
 
 if sys.platform != "darwin":
-    EDEADLOCK: Final[int]
+    final EDEADLOCK: int
 
 if sys.platform != "win32" and sys.platform != "darwin":
-    ECHRNG: Final[int]
-    EL2NSYNC: Final[int]
-    EL3HLT: Final[int]
-    EL3RST: Final[int]
-    ELNRNG: Final[int]
-    EUNATCH: Final[int]
-    ENOCSI: Final[int]
-    EL2HLT: Final[int]
-    EBADE: Final[int]
-    EBADR: Final[int]
-    EXFULL: Final[int]
-    ENOANO: Final[int]
-    EBADRQC: Final[int]
-    EBADSLT: Final[int]
-    EBFONT: Final[int]
-    ENONET: Final[int]
-    ENOPKG: Final[int]
-    EADV: Final[int]
-    ESRMNT: Final[int]
-    ECOMM: Final[int]
-    EDOTDOT: Final[int]
-    ENOTUNIQ: Final[int]
-    EBADFD: Final[int]
-    EREMCHG: Final[int]
-    ELIBACC: Final[int]
-    ELIBBAD: Final[int]
-    ELIBSCN: Final[int]
-    ELIBMAX: Final[int]
-    ELIBEXEC: Final[int]
-    ERESTART: Final[int]
-    ESTRPIPE: Final[int]
-    EUCLEAN: Final[int]
-    ENOTNAM: Final[int]
-    ENAVAIL: Final[int]
-    EISNAM: Final[int]
-    EREMOTEIO: Final[int]
+    final ECHRNG: int
+    final EL2NSYNC: int
+    final EL3HLT: int
+    final EL3RST: int
+    final ELNRNG: int
+    final EUNATCH: int
+    final ENOCSI: int
+    final EL2HLT: int
+    final EBADE: int
+    final EBADR: int
+    final EXFULL: int
+    final ENOANO: int
+    final EBADRQC: int
+    final EBADSLT: int
+    final EBFONT: int
+    final ENONET: int
+    final ENOPKG: int
+    final EADV: int
+    final ESRMNT: int
+    final ECOMM: int
+    final EDOTDOT: int
+    final ENOTUNIQ: int
+    final EBADFD: int
+    final EREMCHG: int
+    final ELIBACC: int
+    final ELIBBAD: int
+    final ELIBSCN: int
+    final ELIBMAX: int
+    final ELIBEXEC: int
+    final ERESTART: int
+    final ESTRPIPE: int
+    final EUCLEAN: int
+    final ENOTNAM: int
+    final ENAVAIL: int
+    final EISNAM: int
+    final EREMOTEIO: int
     # All of the below are undocumented
-    EKEYEXPIRED: Final[int]
-    EKEYREJECTED: Final[int]
-    EKEYREVOKED: Final[int]
-    EMEDIUMTYPE: Final[int]
-    ENOKEY: Final[int]
-    ENOMEDIUM: Final[int]
-    ERFKILL: Final[int]
+    final EKEYEXPIRED: int
+    final EKEYREJECTED: int
+    final EKEYREVOKED: int
+    final EMEDIUMTYPE: int
+    final ENOKEY: int
+    final ENOMEDIUM: int
+    final ERFKILL: int
 
     if sys.version_info >= (3, 14):
-        EHWPOISON: Final[int]
+        final EHWPOISON: int
 
 if sys.platform == "win32":
     # All of these are undocumented
-    WSABASEERR: Final[int]
-    WSAEACCES: Final[int]
-    WSAEADDRINUSE: Final[int]
-    WSAEADDRNOTAVAIL: Final[int]
-    WSAEAFNOSUPPORT: Final[int]
-    WSAEALREADY: Final[int]
-    WSAEBADF: Final[int]
-    WSAECONNABORTED: Final[int]
-    WSAECONNREFUSED: Final[int]
-    WSAECONNRESET: Final[int]
-    WSAEDESTADDRREQ: Final[int]
-    WSAEDISCON: Final[int]
-    WSAEDQUOT: Final[int]
-    WSAEFAULT: Final[int]
-    WSAEHOSTDOWN: Final[int]
-    WSAEHOSTUNREACH: Final[int]
-    WSAEINPROGRESS: Final[int]
-    WSAEINTR: Final[int]
-    WSAEINVAL: Final[int]
-    WSAEISCONN: Final[int]
-    WSAELOOP: Final[int]
-    WSAEMFILE: Final[int]
-    WSAEMSGSIZE: Final[int]
-    WSAENAMETOOLONG: Final[int]
-    WSAENETDOWN: Final[int]
-    WSAENETRESET: Final[int]
-    WSAENETUNREACH: Final[int]
-    WSAENOBUFS: Final[int]
-    WSAENOPROTOOPT: Final[int]
-    WSAENOTCONN: Final[int]
-    WSAENOTEMPTY: Final[int]
-    WSAENOTSOCK: Final[int]
-    WSAEOPNOTSUPP: Final[int]
-    WSAEPFNOSUPPORT: Final[int]
-    WSAEPROCLIM: Final[int]
-    WSAEPROTONOSUPPORT: Final[int]
-    WSAEPROTOTYPE: Final[int]
-    WSAEREMOTE: Final[int]
-    WSAESHUTDOWN: Final[int]
-    WSAESOCKTNOSUPPORT: Final[int]
-    WSAESTALE: Final[int]
-    WSAETIMEDOUT: Final[int]
-    WSAETOOMANYREFS: Final[int]
-    WSAEUSERS: Final[int]
-    WSAEWOULDBLOCK: Final[int]
-    WSANOTINITIALISED: Final[int]
-    WSASYSNOTREADY: Final[int]
-    WSAVERNOTSUPPORTED: Final[int]
+    final WSABASEERR: int
+    final WSAEACCES: int
+    final WSAEADDRINUSE: int
+    final WSAEADDRNOTAVAIL: int
+    final WSAEAFNOSUPPORT: int
+    final WSAEALREADY: int
+    final WSAEBADF: int
+    final WSAECONNABORTED: int
+    final WSAECONNREFUSED: int
+    final WSAECONNRESET: int
+    final WSAEDESTADDRREQ: int
+    final WSAEDISCON: int
+    final WSAEDQUOT: int
+    final WSAEFAULT: int
+    final WSAEHOSTDOWN: int
+    final WSAEHOSTUNREACH: int
+    final WSAEINPROGRESS: int
+    final WSAEINTR: int
+    final WSAEINVAL: int
+    final WSAEISCONN: int
+    final WSAELOOP: int
+    final WSAEMFILE: int
+    final WSAEMSGSIZE: int
+    final WSAENAMETOOLONG: int
+    final WSAENETDOWN: int
+    final WSAENETRESET: int
+    final WSAENETUNREACH: int
+    final WSAENOBUFS: int
+    final WSAENOPROTOOPT: int
+    final WSAENOTCONN: int
+    final WSAENOTEMPTY: int
+    final WSAENOTSOCK: int
+    final WSAEOPNOTSUPP: int
+    final WSAEPFNOSUPPORT: int
+    final WSAEPROCLIM: int
+    final WSAEPROTONOSUPPORT: int
+    final WSAEPROTOTYPE: int
+    final WSAEREMOTE: int
+    final WSAESHUTDOWN: int
+    final WSAESOCKTNOSUPPORT: int
+    final WSAESTALE: int
+    final WSAETIMEDOUT: int
+    final WSAETOOMANYREFS: int
+    final WSAEUSERS: int
+    final WSAEWOULDBLOCK: int
+    final WSANOTINITIALISED: int
+    final WSASYSNOTREADY: int
+    final WSAVERNOTSUPPORTED: int

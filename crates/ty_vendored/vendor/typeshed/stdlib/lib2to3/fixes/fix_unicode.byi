@@ -15,7 +15,7 @@ from .. import fixer_base
 from ..pytree import Node
 
 class FixUnicode(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[True]]
+    BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     unicode_literals: bool
     def start_tree(self, tree: Node, filename: StrPath) -> None

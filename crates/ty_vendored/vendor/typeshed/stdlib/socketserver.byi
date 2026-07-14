@@ -125,7 +125,7 @@ from _typeshed import ReadableBuffer
 from collections.abc import Callable
 from io import BufferedIOBase
 from socket import socket as _socket
-from typing import Any, ClassVar, TypeAlias
+from typing import ClassVar, TypeAlias
 from typing_extensions import Self
 
 __all__ = [
@@ -152,10 +152,10 @@ if sys.platform != "win32":
     if sys.version_info >= (3, 12):
         __all__ += ["ForkingUnixStreamServer", "ForkingUnixDatagramServer"]
 
-_RequestType: TypeAlias = _socket | tuple[bytes, _socket]
-_AfUnixAddress: TypeAlias = str | ReadableBuffer  # address acceptable for an AF_UNIX socket
-_AfInetAddress: TypeAlias = tuple[str | bytes | bytearray, int]  # address acceptable for an AF_INET socket
-_AfInet6Address: TypeAlias = tuple[str | bytes | bytearray, int, int, int]  # address acceptable for an AF_INET6 socket
+type _RequestType = _socket | tuple[bytes, _socket]
+type _AfUnixAddress = str | ReadableBuffer  # address acceptable for an AF_UNIX socket
+type _AfInetAddress = tuple[str | bytes | bytearray, int]  # address acceptable for an AF_INET socket
+type _AfInet6Address = tuple[str | bytes | bytearray, int, int, int]  # address acceptable for an AF_INET6 socket
 
 # This can possibly be generic at some point:
 class BaseServer:
@@ -205,10 +205,10 @@ class BaseServer:
 
     server_address: _Address
     timeout: float | None
-    RequestHandlerClass: Callable[[dynamic, _RetAddress, Self], BaseRequestHandler]
-    def __init__(
-        self, server_address: _Address, RequestHandlerClass: Callable[[dynamic, _RetAddress, Self], BaseRequestHandler]
-    ) -> None:
+    RequestHandlerClass: (dynamic, _RetAddress, Self) -> BaseRequestHandler
+    init(
+        self, server_address: _Address, RequestHandlerClass: (dynamic, _RetAddress, Self) -> BaseRequestHandler
+    ):
         """Constructor.  May be extended, do not override."""
 
     def handle_request(self) -> None:
@@ -243,7 +243,7 @@ class BaseServer:
     def finish_request(self, request: _RequestType, client_address: _RetAddress) -> None:
         """Finish one request by instantiating RequestHandlerClass."""
 
-    def get_request(self) -> (Any, Any)  # Not implemented here, but expected to exist on subclasses
+    def get_request(self) -> (dynamic, dynamic)  # Not implemented here, but expected to exist on subclasses
     def handle_error(self, request: _RequestType, client_address: _RetAddress) -> None:
         """Handle an error gracefully.  May be overridden.
 
@@ -350,12 +350,12 @@ class TCPServer(BaseServer):
     if sys.version_info >= (3, 11):
         allow_reuse_port: bool
     server_address: _AfInetAddress | _AfInet6Address
-    def __init__(
+    init(
         self,
         server_address: _AfInetAddress | _AfInet6Address,
-        RequestHandlerClass: Callable[[dynamic, _RetAddress, Self], BaseRequestHandler],
+        RequestHandlerClass: (dynamic, _RetAddress, Self) -> BaseRequestHandler,
         bind_and_activate: bool = True,
-    ) -> None:
+    ):
         """Constructor.  May be extended, do not override."""
 
     def fileno(self) -> int:
@@ -383,27 +383,27 @@ class UDPServer(TCPServer):
     """UDP server class."""
 
     max_packet_size: ClassVar[int]
-    def get_request(self) -> ((bytes, _socket), _RetAddress)  # type: ignore[override]
+    def get_request(self) -> ((bytes, _socket), _RetAddress)
 
 if sys.platform != "win32":
     class UnixStreamServer(TCPServer):
-        server_address: _AfUnixAddress  # type: ignore[assignment]
-        def __init__(
+        server_address: _AfUnixAddress
+        init(
             self,
             server_address: _AfUnixAddress,
-            RequestHandlerClass: Callable[[dynamic, _RetAddress, Self], BaseRequestHandler],
+            RequestHandlerClass: (dynamic, _RetAddress, Self) -> BaseRequestHandler,
             bind_and_activate: bool = True,
-        ) -> None:
+        ):
             """Constructor.  May be extended, do not override."""
 
     class UnixDatagramServer(UDPServer):
-        server_address: _AfUnixAddress  # type: ignore[assignment]
-        def __init__(
+        server_address: _AfUnixAddress
+        init(
             self,
             server_address: _AfUnixAddress,
-            RequestHandlerClass: Callable[[dynamic, _RetAddress, Self], BaseRequestHandler],
+            RequestHandlerClass: (dynamic, _RetAddress, Self) -> BaseRequestHandler,
             bind_and_activate: bool = True,
-        ) -> None:
+        ):
             """Constructor.  May be extended, do not override."""
 
 if sys.platform != "win32":
@@ -491,7 +491,7 @@ class BaseRequestHandler:
     request: dynamic
     client_address: _RetAddress
     server: BaseServer
-    def __init__(self, request: _RequestType, client_address: _RetAddress, server: BaseServer) -> None
+    init(self, request: _RequestType, client_address: _RetAddress, server: BaseServer)
     def setup(self) -> None
     def handle(self) -> None
     def finish(self) -> None

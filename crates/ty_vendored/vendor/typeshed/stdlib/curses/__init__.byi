@@ -14,7 +14,7 @@ from _curses import *
 from _curses import window as window
 from _typeshed import structseq
 from collections.abc import Callable
-from typing import Concatenate, Final, ParamSpec, TypeVar, final, type_check_only
+from typing import Final, ParamSpec, TypeVar, final, type_check_only
 
 # NOTE: The _curses module is ordinarily only available on Unix, but the
 # windows-curses package makes it available on Windows as well with the same
@@ -27,10 +27,10 @@ LINES: int
 COLS: int
 
 # available after calling `curses.start_color()`
-COLORS: Final[int]
-COLOR_PAIRS: Final[int]
+final COLORS: int
+final COLOR_PAIRS: int
 
-def wrapper[**P, Element](func: Callable[Concatenate[window, P], Element], /, *arg: P.args, **kwds: P.kwargs) -> Element:
+def wrapper[**P, Element](func: (window, **P) -> Element, /, *arg: P.args, **kwds: P.kwargs) -> Element:
     """Wrapper function that initializes curses and calls another function,
     restoring normal keyboard/screen behavior on error.
     The callable object 'func' is then passed the main window 'stdscr'
@@ -41,14 +41,10 @@ def wrapper[**P, Element](func: Callable[Concatenate[window, P], Element], /, *a
 # At runtime this class is unexposed and calls itself curses.ncurses_version.
 # That name would conflict with the actual curses.ncurses_version, which is
 # an instance of this class.
-@final
 @type_check_only
-class _ncurses_version(structseq[int], tuple[int, int, int]):
+final class _ncurses_version(structseq[int], tuple[int, int, int]):
     __match_args__: Final = ("major", "minor", "patch")
 
-    @property
-    def major(self) -> int
-    @property
-    def minor(self) -> int
-    @property
-    def patch(self) -> int
+    let major: int
+    let minor: int
+    let patch: int

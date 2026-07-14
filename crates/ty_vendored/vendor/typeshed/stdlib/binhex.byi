@@ -6,7 +6,7 @@ hexbin(inputfilename, outputfilename)
 """
 
 from _typeshed import SizedBuffer
-from typing import IO, Final, TypeAlias
+from typing import Final, TypeAlias
 
 __all__ = ["binhex", "hexbin", "Error"]
 
@@ -21,19 +21,19 @@ class FInfo:
     Creator: str
     Flags: int
 
-_FileInfoTuple: TypeAlias = tuple[str, FInfo, int, int]
-_FileHandleUnion: TypeAlias = str | IO[bytes]
+type _FileInfoTuple = tuple[str, FInfo, int, int]
+type _FileHandleUnion = str | IO[bytes]
 
 def getfileinfo(name: str) -> _FileInfoTuple
 
 class openrsrc:
-    def __init__(self, *args: dynamic) -> None
+    init(self, *args: dynamic)
     def read(self, *args: dynamic) -> bytes
     def write(self, *args: dynamic) -> None
     def close(self) -> None
 
 class BinHex:
-    def __init__(self, name_finfo_dlen_rlen: _FileInfoTuple, ofp: _FileHandleUnion) -> None
+    init(self, name_finfo_dlen_rlen: _FileInfoTuple, ofp: _FileHandleUnion)
     def write(self, data: SizedBuffer) -> None
     def close_data(self) -> None
     def write_rsrc(self, data: SizedBuffer) -> None
@@ -43,7 +43,7 @@ def binhex(inp: str, out: str) -> None:
     """binhex(infilename, outfilename): create binhex-encoded copy of a file"""
 
 class HexBin:
-    def __init__(self, ifp: _FileHandleUnion) -> None
+    init(self, ifp: _FileHandleUnion)
     def read(self, *n: int) -> bytes
     def close_data(self) -> None
     def read_rsrc(self, *n: int) -> bytes

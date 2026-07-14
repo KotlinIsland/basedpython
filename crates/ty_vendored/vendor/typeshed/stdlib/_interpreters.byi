@@ -4,12 +4,12 @@ The 'interpreters' module provides a more convenient interface.
 
 import types
 from collections.abc import Callable
-from typing import Any, Final, Literal, SupportsIndex, TypeAlias, TypeVar
+from typing import Final, Literal, TypeAlias, TypeVar
 from typing_extensions import disjoint_base
 
 
-_Configs: TypeAlias = Literal["default", "isolated", "legacy", "empty", ""]
-_SharedDict: TypeAlias = dict[str, Any]  # many objects can be shared
+type _Configs = "default" | "isolated" | "legacy" | "empty" | ""
+type _SharedDict = dict[str, dynamic]  # many objects can be shared
 
 class InterpreterError(Exception):
     """A cross-interpreter operation failed"""
@@ -73,7 +73,7 @@ def whence(id: SupportsIndex) -> _Whence:
     """Return an identifier for where the interpreter was created."""
 
 def exec(
-    id: SupportsIndex, code: str | types.CodeType | Callable[[], object], shared: _SharedDict = {}, *, restrict: bool = False
+    id: SupportsIndex, code: str | types.CodeType | (() -> object), shared: _SharedDict = {}, *, restrict: bool = False
 ) -> None | types.SimpleNamespace:
     """Execute the provided code in the identified interpreter.
 
@@ -94,7 +94,7 @@ def exec(
 def call[R](
     id: SupportsIndex,
     callable: (...) -> R,
-    args: (*: Any) = (),
+    args: (*: dynamic) = (),
     kwargs: dict[str, dynamic] = {},
     *,
     preserve_exc: bool = False,
@@ -106,7 +106,7 @@ def call[R](
     """
 
 def run_string(
-    id: SupportsIndex, script: str | types.CodeType | Callable[[], object], shared: _SharedDict = {}, *, restrict: bool = False
+    id: SupportsIndex, script: str | types.CodeType | (() -> object), shared: _SharedDict = {}, *, restrict: bool = False
 ) -> None:
     """Execute the provided string in the identified interpreter.
 
@@ -114,7 +114,7 @@ def run_string(
     """
 
 def run_func(
-    id: SupportsIndex, func: types.CodeType | Callable[[], object], shared: _SharedDict = {}, *, restrict: bool = False
+    id: SupportsIndex, func: types.CodeType | (() -> object), shared: _SharedDict = {}, *, restrict: bool = False
 ) -> None:
     """Execute the body of the provided function in the identified interpreter.
 
@@ -142,7 +142,7 @@ def capture_exception(exc: BaseException) -> types.SimpleNamespace:
     """
 def capture_exception(exc: None = None) -> types.SimpleNamespace | None
 
-_Whence: TypeAlias = Literal[0, 1, 2, 3, 4, 5]
+type _Whence = 0 | 1 | 2 | 3 | 4 | 5
 WHENCE_UNKNOWN: Final = 0
 WHENCE_RUNTIME: Final = 1
 WHENCE_LEGACY_CAPI: Final = 2

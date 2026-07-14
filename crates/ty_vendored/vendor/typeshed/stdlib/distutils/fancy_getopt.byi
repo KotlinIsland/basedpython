@@ -13,12 +13,12 @@ from getopt import _SliceableT, _StrSequenceT_co
 from re import Pattern
 from typing import Final, TypeAlias
 
-_Option: TypeAlias = tuple[str, str | None, str]
+type _Option = tuple[str, str | None, str]
 
 longopt_pat: Final = r"[a-zA-Z](?:[a-zA-Z0-9-]*)"
-longopt_re: Final[Pattern[str]]
-neg_alias_re: Final[Pattern[str]]
-longopt_xlate: Final[dict[int, int]]
+final longopt_re: Pattern[str]
+final neg_alias_re: Pattern[str]
+final longopt_xlate: dict[int, int]
 
 class FancyGetopt:
     """Wrapper around the standard 'getopt()' module that provides some
@@ -32,7 +32,7 @@ class FancyGetopt:
         on the command line sets 'verbose' to false
     """
 
-    def __init__(self, option_table: list[_Option] | None = None) -> None
+    init(self, option_table: list[_Option] | None = None)
 
     # TODO: kinda wrong, `getopt(object=object())` is invalid
     def getopt(
@@ -71,7 +71,7 @@ def fancy_getopt(
     options: list[_Option], negative_opt: Mapping[_Option, _Option], object: dynamic, args: _SliceableT[_StrSequenceT_co] | None
 ) -> _StrSequenceT_co
 
-WS_TRANS: Final[dict[int, str]]
+final WS_TRANS: dict[int, str]
 
 def wrap_text(text: str, width: int) -> list[str]:
     """wrap_text(text : string, width : int) -> [string]
@@ -90,7 +90,7 @@ class OptionDummy:
     values as instance attributes.
     """
 
-    def __init__(self, options: Iterable[str] = []) -> None:
+    init(self, options: Iterable[str] = []):
         """Create a new OptionDummy instance.  The attributes listed in
         'options' will be initialized to None.
         """

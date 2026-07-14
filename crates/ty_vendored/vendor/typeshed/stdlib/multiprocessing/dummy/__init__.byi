@@ -43,8 +43,7 @@ class DummyProcess(threading.Thread):
     _parent: threading.Thread
     _pid: None
     _start_called: int
-    @property
-    def exitcode(self) -> Literal[0] | None
+    let exitcode: 0 | None
     if sys.version_info >= (3, 14):
         # Default changed in Python 3.14.1
         def __init__(
@@ -68,7 +67,7 @@ class DummyProcess(threading.Thread):
 Process = DummyProcess
 
 class Namespace:
-    def __init__(self, **kwds: dynamic) -> None
+    init(self, **kwds: dynamic)
     def __getattr__(self, name: str, /) -> dynamic
     def __setattr__(self, name: str, value: dynamic, /) -> None
 
@@ -76,7 +75,7 @@ class Value:
     _typecode: dynamic
     _value: dynamic
     value: dynamic
-    def __init__(self, typecode: dynamic, value: dynamic, lock: dynamic = True) -> None
+    init(self, typecode: dynamic, value: dynamic, lock: dynamic = True)
 
 def Array(typecode: dynamic, sequence: Sequence[dynamic], lock: dynamic = True) -> array.array[dynamic]
 def Manager() -> dynamic

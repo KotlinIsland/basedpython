@@ -3,7 +3,7 @@
 from typing import Protocol
 
 # As defined https://docs.python.org/3/library/xml.dom.html#domimplementation-objects
-class DOMImplementation(Protocol):
+protocol DOMImplementation:
     def hasFeature(self, feature: str, version: str | None, /) -> bool
     def createDocument(self, namespaceUri: str, qualifiedName: str, doctype: dynamic | None, /) -> dynamic
     def createDocumentType(self, qualifiedName: str, publicId: str, systemId: str, /) -> dynamic

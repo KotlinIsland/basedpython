@@ -1,0 +1,268 @@
+//! small, symbol-local semantic tweaks to `builtins`
+//!
+//! - [`FrozendictCovariant`] makes `frozendict` fully covariant (`in out` → `out`)
+//! - [`TypeDictProxyCovariant`] makes `type.__dict__`'s value projection
+//!   covariant (`out dynamic`)
+//!
+//! each patch is scoped to a single named symbol and is idempotent
+
+use std::path::Path;
+
+use ruff_python_ast::{Expr, ModModule, Stmt, StmtClassDef};
+use ruff_python_parser::Parsed;
+use ruff_text_size::{Ranged, TextRange};
+
+use crate::{Edit, Patch};
+
+fn in_builtins(module_path: &Path) -> bool {
+    crate::module_qualname(module_path).as_deref() == Some("builtins")
+}
+
+/// visit every class in the module, descending through version guards and
+/// nested scopes
+fn walk_classes<'a>(body: &'a [Stmt], f: &mut impl FnMut(&'a StmtClassDef)) {
+    for stmt in body {
+        match stmt {
+            Stmt::ClassDef(class) => {
+                f(class);
+                walk_classes(&class.body, f);
+            }
+            Stmt::If(node) => {
+                walk_classes(&node.body, f);
+                for clause in &node.elif_else_clauses {
+                    walk_classes(&clause.body, f);
+                }
+            }
+            Stmt::Try(node) => {
+                walk_classes(&node.body, f);
+                for handler in &node.handlers {
+                    let ruff_python_ast::ExceptHandler::ExceptHandler(h) = handler;
+                    walk_classes(&h.body, f);
+                }
+                walk_classes(&node.orelse, f);
+                walk_classes(&node.finalbody, f);
+            }
+            Stmt::With(node) => walk_classes(&node.body, f),
+            _ => {}
+        }
+    }
+}
+
+/// replace the source text of `range` when a substring transform changes it
+fn substitute(range: TextRange, source: &str, from: &str, to: &str) -> Option<Edit> {
+    let slice = &source[range];
+    if !slice.contains(from) {
+        return None;
+    }
+    Some(Edit {
+        start: range.start().to_usize(),
+        end: range.end().to_usize(),
+        replacement: slice.replace(from, to),
+    })
+}
+
+// ---------------------------------------------------------------------------
+
+pub struct FrozendictCovariant;
+
+impl Patch for FrozendictCovariant {
+    fn name(&self) -> &'static str {
+        "frozendict-covariant"
+    }
+    fn target_symbols(&self) -> &'static [&'static str] {
+        &["builtins.frozendict"]
+    }
+    fn rewrite(&self, module_path: &Path, parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
+        if !in_builtins(module_path) {
+            return Vec::new();
+        }
+        let mut edits = Vec::new();
+        walk_classes(&parsed.syntax().body, &mut |class| {
+            if class.name.as_str() == "frozendict"
+                && let Some(type_params) = &class.type_params
+                && let Some(edit) = substitute(type_params.range(), source, "in out ", "out ")
+            {
+                edits.push(edit);
+            }
+        });
+        edits
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+pub struct TypeDictProxyCovariant;
+
+impl Patch for TypeDictProxyCovariant {
+    fn name(&self) -> &'static str {
+        "type-dict-proxy-covariant"
+    }
+    fn target_symbols(&self) -> &'static [&'static str] {
+        &["builtins.type.__dict__"]
+    }
+    fn rewrite(&self, module_path: &Path, parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
+        if !in_builtins(module_path) {
+            return Vec::new();
+        }
+        let mut edits = Vec::new();
+        walk_classes(&parsed.syntax().body, &mut |class| {
+            if class.name.as_str() != "type" {
+                return;
+            }
+            for member in &class.body {
+                // `__dict__: Final[types.MappingProxyType[str, dynamic]]` becomes
+                // the read-only `final let __dict__: types.MappingProxyType[str,
+                // out dynamic]`, dropping the now-redundant explanatory comment
+                if let Stmt::AnnAssign(assign) = member
+                    && assign
+                        .target
+                        .as_name_expr()
+                        .is_some_and(|n| n.id == "__dict__")
+                    && let Expr::Subscript(final_sub) = assign.annotation.as_ref()
+                    && subscript_head(&final_sub.value) == Some("Final")
+                {
+                    let inner = final_sub.slice.as_ref();
+                    let inner_text = project_mapping_value(inner, source);
+                    let target_start = assign.target.range().start().to_usize();
+                    edits.push(Edit {
+                        start: target_start,
+                        end: target_start,
+                        replacement: "final let ".to_string(),
+                    });
+                    edits.push(Edit {
+                        start: assign.annotation.range().start().to_usize(),
+                        end: assign.annotation.range().end().to_usize(),
+                        replacement: inner_text,
+                    });
+                    if let Some(comment_edit) = delete_leading_comments(assign.range(), source) {
+                        edits.push(comment_edit);
+                    }
+                }
+            }
+        });
+        edits
+    }
+}
+
+/// render `inner` (a `types.MappingProxyType[str, VALUE]` expression) with its
+/// value projected to `out VALUE`
+fn project_mapping_value(inner: &Expr, source: &str) -> String {
+    let text = &source[inner.range()];
+    let Some(value_range) = mapping_proxy_value(inner) else {
+        return text.to_string();
+    };
+    if source[value_range].starts_with("out ") || source[value_range].starts_with("in ") {
+        return text.to_string();
+    }
+    let base = inner.range().start().to_usize();
+    let vs = value_range.start().to_usize() - base;
+    let ve = value_range.end().to_usize() - base;
+    format!("{}out {}{}", &text[..vs], &text[vs..ve], &text[ve..])
+}
+
+/// deletion edit for the run of comment lines directly above `range`'s statement
+/// (keeping the statement itself), or `None` if there are none
+fn delete_leading_comments(range: TextRange, source: &str) -> Option<Edit> {
+    let bytes = source.as_bytes();
+    let mut stmt_line = range.start().to_usize();
+    while stmt_line > 0 && bytes[stmt_line - 1] != b'\n' {
+        stmt_line -= 1;
+    }
+    let mut start = stmt_line;
+    while start > 0 {
+        let line_end = start - 1;
+        let mut line_start = line_end;
+        while line_start > 0 && bytes[line_start - 1] != b'\n' {
+            line_start -= 1;
+        }
+        if source[line_start..line_end].trim_start().starts_with('#') {
+            start = line_start;
+        } else {
+            break;
+        }
+    }
+    (start < stmt_line).then(|| Edit {
+        start,
+        end: stmt_line,
+        replacement: String::new(),
+    })
+}
+
+/// range of the value argument of a `...MappingProxyType[str, VALUE]` subscript
+/// found anywhere within `annotation`, if it is not already projected
+fn mapping_proxy_value(annotation: &Expr) -> Option<TextRange> {
+    fn find(expr: &Expr) -> Option<TextRange> {
+        if let Expr::Subscript(sub) = expr
+            && subscript_head(&sub.value) == Some("MappingProxyType")
+            && let Expr::Tuple(tuple) = &*sub.slice
+            && let [_key, value] = tuple.elts.as_slice()
+        {
+            return Some(value.range());
+        }
+        // descend into `Final[...]` and other wrappers
+        match expr {
+            Expr::Subscript(sub) => find(&sub.slice).or_else(|| find(&sub.value)),
+            _ => None,
+        }
+    }
+    find(annotation)
+}
+
+fn subscript_head(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Name(name) => Some(name.id.as_str()),
+        Expr::Attribute(attr) => Some(attr.attr.as_str()),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ruff_python_ast::PySourceType;
+    use ruff_python_parser::parse_unchecked_source;
+
+    use crate::apply_edits;
+
+    fn run(patch: &dyn Patch, src: &str) -> String {
+        let parsed = parse_unchecked_source(src, PySourceType::BasedPythonStub);
+        let edits = patch.rewrite(Path::new("builtins.byi"), &parsed, src);
+        apply_edits(src, edits)
+    }
+
+    #[test]
+    fn frozendict_becomes_covariant() {
+        let src = "class frozendict[in out Key, in out Value](Mapping[Key, Value]): ...\n";
+        let expected = "class frozendict[out Key, out Value](Mapping[Key, Value]): ...\n";
+        assert_eq!(run(&FrozendictCovariant, src), expected);
+        // idempotent
+        assert_eq!(run(&FrozendictCovariant, expected), expected);
+    }
+
+    #[test]
+    fn type_dict_becomes_final_let_and_drops_comment() {
+        let src = "\
+class type:
+    # type.__dict__ is read-only at runtime, but that can't be expressed currently.
+    # See https://github.com/python/typeshed/issues/11033 for a discussion.
+    __dict__: Final[types.MappingProxyType[str, dynamic]]
+";
+        let expected = "\
+class type:
+    final let __dict__: types.MappingProxyType[str, out dynamic]
+";
+        assert_eq!(run(&TypeDictProxyCovariant, src), expected);
+        // idempotent: the rewritten form is no longer a `Final[...]` annotation
+        assert_eq!(run(&TypeDictProxyCovariant, expected), expected);
+    }
+
+    #[test]
+    fn skips_non_builtins() {
+        let parsed = parse_unchecked_source(
+            "class frozendict[in out Key, in out Value]: ...\n",
+            PySourceType::BasedPythonStub,
+        );
+        let edits = FrozendictCovariant.rewrite(Path::new("types.byi"), &parsed, "irrelevant");
+        assert!(edits.is_empty());
+    }
+}

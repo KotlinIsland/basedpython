@@ -2,20 +2,16 @@ import sys
 from _typeshed import StrPath
 from collections.abc import Iterator
 from os import PathLike
-from typing import Any, Protocol
+from typing import Protocol
 from typing_extensions import TypeVar
 
 
-class PackageMetadata(Protocol):
+protocol PackageMetadata:
     def __len__(self) -> int
     def __contains__(self, item: str) -> bool
     def __getitem__(self, key: str) -> str
     def __iter__(self) -> Iterator[str]
-    @property
-    def json(self) -> dict[str, str | list[str]]:
-        """
-        A JSON-compatible form of the metadata.
-        """
+    let json: dict[str, str | list[str]]
 
     def get_all(self, name: str, failobj: None = None) -> list[dynamic] | None:
         """Helper for @overload to raise when called."""
@@ -27,7 +23,7 @@ class PackageMetadata(Protocol):
         def get[Element](self, name: str, failobj: Element) -> Element | str
 
 if sys.version_info >= (3, 13):
-    class SimplePath(Protocol):
+    protocol SimplePath:
         """
         A minimal subset of pathlib.Path required by Distribution.
         """
@@ -35,14 +31,13 @@ if sys.version_info >= (3, 13):
         def joinpath(self, other: StrPath, /) -> SimplePath
         def __truediv__(self, other: StrPath, /) -> SimplePath
         # Incorrect at runtime
-        @property
-        def parent(self) -> PathLike[str]
+        let parent: PathLike[str]
         def read_text(self, encoding: str | None = None) -> str
         def read_bytes(self) -> bytes
         def exists(self) -> bool
 
 elif sys.version_info >= (3, 12):
-    class SimplePath[out Element = Any](Protocol):
+    protocol SimplePath[out Element = dynamic]:
         """
         A minimal subset of pathlib.Path required by PathDistribution.
         """
@@ -50,14 +45,13 @@ elif sys.version_info >= (3, 12):
         # At runtime this is defined as taking `str | _T`, but that causes trouble.
         # See #11436.
         def joinpath(self, other: str, /) -> Element
-        @property
-        def parent(self) -> Element
+        let parent: Element
         def read_text(self) -> str
         # As with joinpath(), this is annotated as taking `str | _T` at runtime.
         def __truediv__(self, other: str, /) -> Element
 
 else:
-    class SimplePath(Protocol):
+    protocol SimplePath:
         """
         A minimal subset of pathlib.Path required by PathDistribution.
         """
@@ -65,8 +59,7 @@ else:
         # Actually takes only self at runtime, but that's clearly wrong
         def joinpath(self, other: dynamic, /) -> SimplePath
         # Not defined as a property at runtime, but it should be
-        @property
-        def parent(self) -> dynamic
+        let parent: dynamic
         def read_text(self) -> str
         # There was a bug in `SimplePath` definition in cpython, see #8451
         #  Strictly speaking `__div__` was defined in 3.10, not __truediv__,

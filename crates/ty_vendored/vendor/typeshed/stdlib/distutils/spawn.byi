@@ -11,9 +11,9 @@ from typing import Literal
 
 def spawn(
     cmd: Iterable[str],
-    search_path: bool | Literal[0, 1] = 1,
-    verbose: bool | Literal[0, 1] = 0,
-    dry_run: bool | Literal[0, 1] = 0,
+    search_path: bool | 0 | 1 = 1,
+    verbose: bool | 0 | 1 = 0,
+    dry_run: bool | 0 | 1 = 0,
 ) -> None:
     """Run another program, specified as a command list 'cmd', in a new process.
 

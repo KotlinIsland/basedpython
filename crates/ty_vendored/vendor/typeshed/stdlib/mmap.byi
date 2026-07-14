@@ -2,7 +2,7 @@ import os
 import sys
 from _typeshed import ReadableBuffer, Unused
 from collections.abc import Iterator
-from typing import Final, Literal, NoReturn, SupportsIndex
+from typing import Final, Literal
 from typing_extensions import Self, disjoint_base
 
 ACCESS_DEFAULT: Final = 0
@@ -10,29 +10,29 @@ ACCESS_READ: Final = 1
 ACCESS_WRITE: Final = 2
 ACCESS_COPY: Final = 3
 
-ALLOCATIONGRANULARITY: Final[int]
+final ALLOCATIONGRANULARITY: int
 
 if sys.platform == "linux":
-    MAP_DENYWRITE: Final[int]
-    MAP_EXECUTABLE: Final[int]
-    MAP_POPULATE: Final[int]
+    final MAP_DENYWRITE: int
+    final MAP_EXECUTABLE: int
+    final MAP_POPULATE: int
 if sys.version_info >= (3, 11) and sys.platform != "win32" and sys.platform != "darwin":
-    MAP_STACK: Final[int]
+    final MAP_STACK: int
 
 if sys.platform != "win32":
-    MAP_ANON: Final[int]
-    MAP_ANONYMOUS: Final[int]
-    MAP_PRIVATE: Final[int]
-    MAP_SHARED: Final[int]
-    PROT_EXEC: Final[int]
-    PROT_READ: Final[int]
-    PROT_WRITE: Final[int]
+    final MAP_ANON: int
+    final MAP_ANONYMOUS: int
+    final MAP_PRIVATE: int
+    final MAP_SHARED: int
+    final PROT_EXEC: int
+    final PROT_READ: int
+    final PROT_WRITE: int
     if sys.version_info >= (3, 15):
-        MS_ASYNC: Final[int]
-        MS_INVALIDATE: Final[int]
-        MS_SYNC: Final[int]
+        final MS_ASYNC: int
+        final MS_INVALIDATE: int
+        final MS_SYNC: int
 
-PAGESIZE: Final[int]
+final PAGESIZE: int
 
 @disjoint_base
 class mmap:
@@ -103,9 +103,9 @@ class mmap:
     if sys.version_info < (3, 15) or sys.platform != "darwin":
         def resize(self, newsize: int, /) -> None
     if sys.platform != "win32":
-        def seek(self, pos: int, whence: Literal[0, 1, 2, 3, 4] = os.SEEK_SET, /) -> None
+        def seek(self, pos: int, whence: 0 | 1 | 2 | 3 | 4 = os.SEEK_SET, /) -> None
     else:
-        def seek(self, pos: int, whence: Literal[0, 1, 2] = os.SEEK_SET, /) -> None
+        def seek(self, pos: int, whence: 0 | 1 | 2 = os.SEEK_SET, /) -> None
 
     def size(self) -> int
     def tell(self) -> int
@@ -159,45 +159,45 @@ class mmap:
         """Release the buffer object that exposes the underlying memory of the object."""
 
     if sys.version_info >= (3, 13):
-        def seekable(self) -> Literal[True]
+        def seekable(self) -> True
 
 if sys.platform != "win32":
-    MADV_NORMAL: Final[int]
-    MADV_RANDOM: Final[int]
-    MADV_SEQUENTIAL: Final[int]
-    MADV_WILLNEED: Final[int]
-    MADV_DONTNEED: Final[int]
-    MADV_FREE: Final[int]
+    final MADV_NORMAL: int
+    final MADV_RANDOM: int
+    final MADV_SEQUENTIAL: int
+    final MADV_WILLNEED: int
+    final MADV_DONTNEED: int
+    final MADV_FREE: int
 
 if sys.platform == "linux":
-    MADV_REMOVE: Final[int]
-    MADV_DONTFORK: Final[int]
-    MADV_DOFORK: Final[int]
-    MADV_HWPOISON: Final[int]
-    MADV_MERGEABLE: Final[int]
-    MADV_UNMERGEABLE: Final[int]
+    final MADV_REMOVE: int
+    final MADV_DONTFORK: int
+    final MADV_DOFORK: int
+    final MADV_HWPOISON: int
+    final MADV_MERGEABLE: int
+    final MADV_UNMERGEABLE: int
     # Seems like this constant is not defined in glibc.
     # See https://github.com/python/typeshed/pull/5360 for details
     # MADV_SOFT_OFFLINE: Final[int]
-    MADV_HUGEPAGE: Final[int]
-    MADV_NOHUGEPAGE: Final[int]
-    MADV_DONTDUMP: Final[int]
-    MADV_DODUMP: Final[int]
+    final MADV_HUGEPAGE: int
+    final MADV_NOHUGEPAGE: int
+    final MADV_DONTDUMP: int
+    final MADV_DODUMP: int
 
 # This Values are defined for FreeBSD but type checkers do not support conditions for these
 if sys.platform != "linux" and sys.platform != "darwin" and sys.platform != "win32":
-    MADV_NOSYNC: Final[int]
-    MADV_AUTOSYNC: Final[int]
-    MADV_NOCORE: Final[int]
-    MADV_CORE: Final[int]
-    MADV_PROTECT: Final[int]
+    final MADV_NOSYNC: int
+    final MADV_AUTOSYNC: int
+    final MADV_NOCORE: int
+    final MADV_CORE: int
+    final MADV_PROTECT: int
 
 if sys.platform == "darwin":
-    MADV_FREE_REUSABLE: Final[int]
-    MADV_FREE_REUSE: Final[int]
+    final MADV_FREE_REUSABLE: int
+    final MADV_FREE_REUSE: int
 
 if sys.version_info >= (3, 13) and sys.platform != "win32":
-    MAP_32BIT: Final[int]
+    final MAP_32BIT: int
 
 if sys.version_info >= (3, 13) and sys.platform == "darwin":
     MAP_NORESERVE: Final = 64

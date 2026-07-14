@@ -29,7 +29,6 @@ The variable struct.error is an exception raised on errors.
 
 from _typeshed import ReadableBuffer, WriteableBuffer
 from collections.abc import Iterator
-from typing import Any
 from typing_extensions import disjoint_base
 
 def pack(fmt: str | bytes, /, *v: dynamic) -> bytes:
@@ -48,21 +47,21 @@ def pack_into(fmt: str | bytes, buffer: WriteableBuffer, offset: int, /, *v: dyn
     strings.
     """
 
-def unpack(format: str | bytes, buffer: ReadableBuffer, /) -> (*: Any):
+def unpack(format: str | bytes, buffer: ReadableBuffer, /) -> (*: dynamic):
     """Return a tuple containing values unpacked according to the format string.
 
     The buffer's size in bytes must be calcsize(format).  See help(struct)
     for more on format strings.
     """
 
-def unpack_from(format: str | bytes, /, buffer: ReadableBuffer, offset: int = 0) -> (*: Any):
+def unpack_from(format: str | bytes, /, buffer: ReadableBuffer, offset: int = 0) -> (*: dynamic):
     """Return a tuple containing values unpacked according to the format string.
 
     The buffer's size, minus offset, must be at least calcsize(format).  See
     help(struct) for more on format strings.
     """
 
-def iter_unpack(format: str | bytes, buffer: ReadableBuffer, /) -> Iterator[(*: Any)]:
+def iter_unpack(format: str | bytes, buffer: ReadableBuffer, /) -> Iterator[(*: dynamic)]:
     """Return an iterator yielding tuples unpacked from the given bytes.
 
     The bytes are unpacked according to the format string, like a repeated
@@ -81,15 +80,11 @@ class Struct:
     to the format string.  See help(struct) for more on format strings.
     """
 
-    @property
-    def format(self) -> str:
-        """struct format string"""
+    let format: str
 
-    @property
-    def size(self) -> int:
-        """struct size in bytes"""
+    let size: int
 
-    def __init__(self, format: str | bytes) -> None
+    init(self, format: str | bytes)
     def pack(self, *v: dynamic) -> bytes:
         """Pack values and return the packed bytes.
 
@@ -107,7 +102,7 @@ class Struct:
         help(struct) for more on format strings.
         """
 
-    def unpack(self, buffer: ReadableBuffer, /) -> (*: Any):
+    def unpack(self, buffer: ReadableBuffer, /) -> (*: dynamic):
         """Return a tuple containing unpacked values.
 
         Unpack according to the struct format string.  The buffer's
@@ -115,7 +110,7 @@ class Struct:
         format strings.
         """
 
-    def unpack_from(self, buffer: ReadableBuffer, offset: int = 0) -> (*: Any):
+    def unpack_from(self, buffer: ReadableBuffer, offset: int = 0) -> (*: dynamic):
         """Return a tuple containing unpacked values.
 
         Values are unpacked according to the struct format string.  The
@@ -124,7 +119,7 @@ class Struct:
         strings.
         """
 
-    def iter_unpack(self, buffer: ReadableBuffer, /) -> Iterator[(*: Any)]:
+    def iter_unpack(self, buffer: ReadableBuffer, /) -> Iterator[(*: dynamic)]:
         """Return an iterator yielding tuples.
 
         Tuples are unpacked from the given bytes source, like a repeated

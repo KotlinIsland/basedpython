@@ -12,21 +12,21 @@ from typing import ClassVar, Final, TypeVar, final
 from typing_extensions import Never, Self, deprecated
 
 if sys.platform != "win32":
-    PIPE_BUF: Final[int]
-    POLLERR: Final[int]
-    POLLHUP: Final[int]
-    POLLIN: Final[int]
+    final PIPE_BUF: int
+    final POLLERR: int
+    final POLLHUP: int
+    final POLLIN: int
     if sys.platform == "linux":
-        POLLMSG: Final[int]
-    POLLNVAL: Final[int]
-    POLLOUT: Final[int]
-    POLLPRI: Final[int]
-    POLLRDBAND: Final[int]
+        final POLLMSG: int
+    final POLLNVAL: int
+    final POLLOUT: int
+    final POLLPRI: int
+    final POLLRDBAND: int
     if sys.platform == "linux":
-        POLLRDHUP: Final[int]
-    POLLRDNORM: Final[int]
-    POLLWRBAND: Final[int]
-    POLLWRNORM: Final[int]
+        final POLLRDHUP: int
+    final POLLRDNORM: int
+    final POLLWRBAND: int
+    final POLLWRNORM: int
 
     # This is actually a function that returns an instance of a class.
     # The class is not accessible directly, and also calls itself select.poll.
@@ -99,10 +99,10 @@ if sys.platform != "linux" and sys.platform != "win32":
         flags: int
         ident: int
         udata: dynamic
-        def __init__(
+        init(
             self, ident: FileDescriptorLike, filter: int = ..., flags: int = ..., fflags: int = 0, data: dynamic = 0, udata: dynamic = 0
-        ) -> None
-        __hash__: ClassVar[None]  # type: ignore[assignment]
+        )
+        __hash__: ClassVar[None]
 
     # BSD only
     final class kqueue:
@@ -124,7 +124,7 @@ if sys.platform != "linux" and sys.platform != "win32":
         closed: bool
         """True if the kqueue handler is closed"""
 
-        def __init__(self) -> None
+        init(self)
         def close(self) -> None:
             """Close the kqueue control file descriptor.
 
@@ -150,45 +150,45 @@ if sys.platform != "linux" and sys.platform != "win32":
         class def fromfd(cls, fd: FileDescriptorLike, /) -> kqueue:
             """Create a kqueue object from a given control fd."""
 
-    KQ_EV_ADD: Final[int]
-    KQ_EV_CLEAR: Final[int]
-    KQ_EV_DELETE: Final[int]
-    KQ_EV_DISABLE: Final[int]
-    KQ_EV_ENABLE: Final[int]
-    KQ_EV_EOF: Final[int]
-    KQ_EV_ERROR: Final[int]
-    KQ_EV_FLAG1: Final[int]
-    KQ_EV_ONESHOT: Final[int]
-    KQ_EV_SYSFLAGS: Final[int]
-    KQ_FILTER_AIO: Final[int]
+    final KQ_EV_ADD: int
+    final KQ_EV_CLEAR: int
+    final KQ_EV_DELETE: int
+    final KQ_EV_DISABLE: int
+    final KQ_EV_ENABLE: int
+    final KQ_EV_EOF: int
+    final KQ_EV_ERROR: int
+    final KQ_EV_FLAG1: int
+    final KQ_EV_ONESHOT: int
+    final KQ_EV_SYSFLAGS: int
+    final KQ_FILTER_AIO: int
     if sys.platform != "darwin":
-        KQ_FILTER_NETDEV: Final[int]
-    KQ_FILTER_PROC: Final[int]
-    KQ_FILTER_READ: Final[int]
-    KQ_FILTER_SIGNAL: Final[int]
-    KQ_FILTER_TIMER: Final[int]
-    KQ_FILTER_VNODE: Final[int]
-    KQ_FILTER_WRITE: Final[int]
-    KQ_NOTE_ATTRIB: Final[int]
-    KQ_NOTE_CHILD: Final[int]
-    KQ_NOTE_DELETE: Final[int]
-    KQ_NOTE_EXEC: Final[int]
-    KQ_NOTE_EXIT: Final[int]
-    KQ_NOTE_EXTEND: Final[int]
-    KQ_NOTE_FORK: Final[int]
-    KQ_NOTE_LINK: Final[int]
+        final KQ_FILTER_NETDEV: int
+    final KQ_FILTER_PROC: int
+    final KQ_FILTER_READ: int
+    final KQ_FILTER_SIGNAL: int
+    final KQ_FILTER_TIMER: int
+    final KQ_FILTER_VNODE: int
+    final KQ_FILTER_WRITE: int
+    final KQ_NOTE_ATTRIB: int
+    final KQ_NOTE_CHILD: int
+    final KQ_NOTE_DELETE: int
+    final KQ_NOTE_EXEC: int
+    final KQ_NOTE_EXIT: int
+    final KQ_NOTE_EXTEND: int
+    final KQ_NOTE_FORK: int
+    final KQ_NOTE_LINK: int
     if sys.platform != "darwin":
-        KQ_NOTE_LINKDOWN: Final[int]
-        KQ_NOTE_LINKINV: Final[int]
-        KQ_NOTE_LINKUP: Final[int]
-    KQ_NOTE_LOWAT: Final[int]
-    KQ_NOTE_PCTRLMASK: Final[int]
-    KQ_NOTE_PDATAMASK: Final[int]
-    KQ_NOTE_RENAME: Final[int]
-    KQ_NOTE_REVOKE: Final[int]
-    KQ_NOTE_TRACK: Final[int]
-    KQ_NOTE_TRACKERR: Final[int]
-    KQ_NOTE_WRITE: Final[int]
+        final KQ_NOTE_LINKDOWN: int
+        final KQ_NOTE_LINKINV: int
+        final KQ_NOTE_LINKUP: int
+    final KQ_NOTE_LOWAT: int
+    final KQ_NOTE_PCTRLMASK: int
+    final KQ_NOTE_PDATAMASK: int
+    final KQ_NOTE_RENAME: int
+    final KQ_NOTE_REVOKE: int
+    final KQ_NOTE_TRACK: int
+    final KQ_NOTE_TRACKERR: int
+    final KQ_NOTE_WRITE: int
 
 if sys.platform == "linux":
     final class epoll:
@@ -271,23 +271,23 @@ if sys.platform == "linux":
         class def fromfd(cls, fd: FileDescriptorLike, /) -> epoll:
             """Create an epoll object from a given control fd."""
 
-    EPOLLERR: Final[int]
-    EPOLLEXCLUSIVE: Final[int]
-    EPOLLET: Final[int]
-    EPOLLHUP: Final[int]
-    EPOLLIN: Final[int]
-    EPOLLMSG: Final[int]
-    EPOLLONESHOT: Final[int]
-    EPOLLOUT: Final[int]
-    EPOLLPRI: Final[int]
-    EPOLLRDBAND: Final[int]
-    EPOLLRDHUP: Final[int]
-    EPOLLRDNORM: Final[int]
-    EPOLLWRBAND: Final[int]
-    EPOLLWRNORM: Final[int]
-    EPOLL_CLOEXEC: Final[int]
+    final EPOLLERR: int
+    final EPOLLEXCLUSIVE: int
+    final EPOLLET: int
+    final EPOLLHUP: int
+    final EPOLLIN: int
+    final EPOLLMSG: int
+    final EPOLLONESHOT: int
+    final EPOLLOUT: int
+    final EPOLLPRI: int
+    final EPOLLRDBAND: int
+    final EPOLLRDHUP: int
+    final EPOLLRDNORM: int
+    final EPOLLWRBAND: int
+    final EPOLLWRNORM: int
+    final EPOLL_CLOEXEC: int
     if sys.version_info >= (3, 14):
-        EPOLLWAKEUP: Final[int]
+        final EPOLLWAKEUP: int
 
 if sys.platform != "linux" and sys.platform != "darwin" and sys.platform != "win32":
     # Solaris only

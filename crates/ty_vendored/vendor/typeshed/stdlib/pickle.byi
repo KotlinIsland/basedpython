@@ -39,7 +39,7 @@ from _pickle import (
 )
 from _typeshed import ReadableBuffer, SupportsWrite
 from collections.abc import Callable, Iterable, Mapping
-from typing import Any, ClassVar, Final, SupportsBytes, SupportsIndex, final
+from typing import ClassVar, Final, final
 from typing_extensions import Self
 
 __all__ = [
@@ -133,7 +133,7 @@ if sys.version_info >= (3, 14):
 else:
     DEFAULT_PROTOCOL: Final = 4
 
-bytes_types: (*: type[Any])  # undocumented
+bytes_types: (*: type[dynamic])  # undocumented
 
 final class PickleBuffer:
     """Wrapper for potentially out-of-band buffers"""
@@ -277,17 +277,17 @@ def decode_long(data: Iterable[SupportsIndex] | SupportsBytes | ReadableBuffer) 
 # undocumented pure-Python implementations
 class _Pickler:
     fast: bool
-    dispatch_table: Mapping[type, Callable[[dynamic], _ReducedType]]
+    dispatch_table: Mapping[type, (dynamic) -> _ReducedType]
     bin: bool  # undocumented
-    dispatch: ClassVar[dict[type, Callable[[Unpickler, dynamic], None]]]  # undocumented, _Pickler only
-    def __init__(
+    dispatch: ClassVar[dict[type, (Unpickler, dynamic) -> None]]  # undocumented, _Pickler only
+    init(
         self,
         file: SupportsWrite[bytes],
         protocol: int | None = None,
         *,
         fix_imports: bool = True,
         buffer_callback: _BufferCallback = None,
-    ) -> None:
+    ):
         """This takes a binary file for writing a pickle data stream.
 
         The optional *protocol* argument tells the pickler to use the
@@ -341,8 +341,8 @@ class _Pickler:
     def reducer_override(self, obj: object, /) -> _ReducedType
 
 class _Unpickler:
-    dispatch: ClassVar[dict[int, Callable[[Unpickler], None]]]  # undocumented, _Unpickler only
-    def __init__(
+    dispatch: ClassVar[dict[int, (Unpickler) -> None]]  # undocumented, _Unpickler only
+    init(
         self,
         file: _ReadableFileobj,
         *,
@@ -350,7 +350,7 @@ class _Unpickler:
         encoding: str = "ASCII",
         errors: str = "strict",
         buffers: Iterable[dynamic] | None = None,
-    ) -> None:
+    ):
         """This takes a binary file for reading a pickle data stream.
 
         The protocol version of the pickle is detected automatically, so

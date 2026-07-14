@@ -2,13 +2,13 @@
 
 from collections.abc import Iterator
 from re import Pattern
-from typing import Any, Final
+from typing import Final
 
-ESCAPE: Final[Pattern[str]]  # undocumented
-ESCAPE_ASCII: Final[Pattern[str]]  # undocumented
-HAS_UTF8: Final[Pattern[bytes]]  # undocumented
-ESCAPE_DCT: Final[dict[str, str]]  # undocumented
-INFINITY: Final[float]  # undocumented
+final ESCAPE: Pattern[str]  # undocumented
+final ESCAPE_ASCII: Pattern[str]  # undocumented
+final HAS_UTF8: Pattern[bytes]  # undocumented
+final ESCAPE_DCT: dict[str, str]  # undocumented
+final INFINITY: float  # undocumented
 
 def py_encode_basestring(s: str) -> str:  # undocumented
     """Return a JSON representation of a Python string"""
@@ -61,7 +61,7 @@ class JSONEncoder:
     allow_nan: bool
     sort_keys: bool
     indent: int | str
-    def __init__(
+    init(
         self,
         *,
         skipkeys: bool = False,
@@ -71,8 +71,8 @@ class JSONEncoder:
         sort_keys: bool = False,
         indent: int | str | None = None,
         separators: (str, str) | None = None,
-        default: (...) -> Any | None = None,
-    ) -> None:
+        default: (...) -> dynamic | None = None,
+    ):
         """Constructor for JSONEncoder, with sensible defaults.
 
         If skipkeys is false, then it is a TypeError to attempt

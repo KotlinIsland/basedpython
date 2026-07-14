@@ -85,7 +85,7 @@ if sys.version_info >= (3, 15):
         """
 
         __slots__ = ("_known_paths", "_processed_sitedirs", "_path_entries", "_importexecs", "_entrypoints")
-        def __init__(self, known_paths: set[str] | None = None) -> None:
+        init(self, known_paths: set[str] | None = None):
             """Create an independent startup state.
 
             *known_paths* is a set of case-normalized paths already present

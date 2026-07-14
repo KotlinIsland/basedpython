@@ -14,14 +14,14 @@ from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from configparser import RawConfigParser
 from re import Pattern
 from threading import Thread
-from typing import IO, Any, Final, Literal, SupportsIndex, TypeAlias, TypedDict, type_check_only
+from typing import Final, Literal, TypeAlias, TypedDict, type_check_only
 from typing_extensions import Required, disjoint_base
 
 from . import Filter, Filterer, Formatter, Handler, Logger, _FilterType, _FormatStyle, _Level
 
 DEFAULT_LOGGING_CONFIG_PORT: Final = 9030
-RESET_ERROR: Final[int]  # undocumented
-IDENTIFIER: Final[Pattern[str]]  # undocumented
+final RESET_ERROR: int  # undocumented
+final IDENTIFIER: Pattern[str]  # undocumented
 
 if sys.version_info >= (3, 11):
     @type_check_only
@@ -52,14 +52,14 @@ class _FilterConfigurationTypedDict(TypedDict):
 # Formatter and filter configs can specify custom factories via the special `()` key.
 # If that is the case, the dictionary can contain any additional keys
 # https://docs.python.org/3/library/logging.config.html#user-defined-objects
-_FormatterConfiguration: TypeAlias = _FormatterConfigurationTypedDict | dict[str, Any]
-_FilterConfiguration: TypeAlias = _FilterConfigurationTypedDict | dict[str, Any]
+type _FormatterConfiguration = _FormatterConfigurationTypedDict | dict[str, dynamic]
+type _FilterConfiguration = _FilterConfigurationTypedDict | dict[str, dynamic]
 # Handler config can have additional keys even when not providing a custom factory so we just use `dict`.
-_HandlerConfiguration: TypeAlias = dict[str, Any]
+type _HandlerConfiguration = dict[str, dynamic]
 
 @type_check_only
 class _DictConfigArgs(TypedDict, total=False):
-    version: Required[Literal[1]]
+    version: Required[1]
     formatters: dict[str, _FormatterConfiguration]
     filters: dict[str, _FilterConfiguration]
     handlers: dict[str, _HandlerConfiguration]
@@ -91,8 +91,8 @@ def fileConfig(
     configuration).
     """
 
-def valid_ident(s: str) -> Literal[True]  # undocumented
-def listen(port: int = 9030, verify: Callable[[bytes], bytes | None] | None = None) -> Thread:
+def valid_ident(s: str) -> True  # undocumented
+def listen(port: int = 9030, verify: ((bytes) -> (bytes | None)) | None = None) -> Thread:
     """
     Start up a socket server on the specified port, and listen for new
     configurations.
@@ -123,14 +123,14 @@ class ConvertingMixin:  # undocumented
     def convert_with_key(self, key: dynamic, value: dynamic, replace: bool = True) -> dynamic
     def convert(self, value: dynamic) -> dynamic
 
-class ConvertingDict(dict[Hashable, Any], ConvertingMixin):  # undocumented
+class ConvertingDict(dict[Hashable, dynamic], ConvertingMixin):  # undocumented
     """A converting dictionary wrapper."""
 
     def __getitem__(self, key: Hashable) -> dynamic
     def get(self, key: Hashable, default: dynamic = None) -> dynamic
     def pop(self, key: Hashable, default: dynamic = None) -> dynamic
 
-class ConvertingList(list[Any], ConvertingMixin):  # undocumented
+class ConvertingList(list[dynamic], ConvertingMixin):  # undocumented
     """A converting list wrapper."""
 
     def __getitem__(self, key: SupportsIndex) -> dynamic
@@ -139,7 +139,7 @@ class ConvertingList(list[Any], ConvertingMixin):  # undocumented
     def pop(self, idx: SupportsIndex = -1) -> dynamic
 
 if sys.version_info >= (3, 12):
-    class ConvertingTuple(tuple[Any, ...], ConvertingMixin):  # undocumented
+    class ConvertingTuple((*: dynamic), ConvertingMixin):  # undocumented
         """A converting tuple wrapper."""
 
         def __getitem__(self, key: SupportsIndex) -> dynamic
@@ -147,7 +147,7 @@ if sys.version_info >= (3, 12):
 
 else:
     @disjoint_base
-    class ConvertingTuple(tuple[Any, ...], ConvertingMixin):  # undocumented
+    class ConvertingTuple((*: dynamic), ConvertingMixin):  # undocumented
         """A converting tuple wrapper."""
 
         def __getitem__(self, key: SupportsIndex) -> dynamic
@@ -164,11 +164,11 @@ class BaseConfigurator:
     INDEX_PATTERN: Pattern[str]
     DIGIT_PATTERN: Pattern[str]
     value_converters: dict[str, str]
-    importer: (...) -> Any
+    importer: (...) -> dynamic
 
     config: dict[str, dynamic]  # undocumented
 
-    def __init__(self, config: _DictConfigArgs | dict[str, dynamic]) -> None
+    init(self, config: _DictConfigArgs | dict[str, dynamic])
     def resolve(self, s: str) -> dynamic:
         """
         Resolve strings to objects using standard import and attribute
@@ -191,7 +191,7 @@ class BaseConfigurator:
     def configure_custom(self, config: dict[str, dynamic]) -> dynamic:
         """Configure an object with a user-supplied factory."""
 
-    def as_tuple(self, value: list[Any] | (*: Any)) -> (*: Any):
+    def as_tuple(self, value: list[dynamic] | (*: dynamic)) -> (*: dynamic):
         """Utility function which converts lists to tuples."""
 
 class DictConfigurator(BaseConfigurator):

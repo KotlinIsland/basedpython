@@ -9,7 +9,7 @@ ERROR: Final = 4
 FATAL: Final = 5
 
 class Log:
-    def __init__(self, threshold: int = 3) -> None
+    init(self, threshold: int = 3)
     # Arbitrary msg args' type depends on the format method
     def log(self, level: int, msg: str, *args: dynamic) -> None
     def debug(self, msg: str, *args: dynamic) -> None

@@ -21,7 +21,7 @@ from collections.abc import (
     ValuesView,
 )
 from importlib.machinery import ModuleSpec
-from typing import Any, ClassVar, Literal, ParamSpec, TypeVar, final
+from typing import ClassVar, Literal, ParamSpec, TypeVar, final
 from typing_extensions import Self, TypeAliasType, TypeVarTuple, deprecated, disjoint_base
 
 if sys.version_info >= (3, 14):
@@ -91,13 +91,11 @@ final class FunctionType:
       a dictionary that specifies the default keyword argument values
     """
 
-    @property
-    def __closure__(self) -> (*: CellType) | None
+    let __closure__: (*: CellType) | None
     __code__: CodeType
-    __defaults__: (*: Any) | None
+    __defaults__: (*: dynamic) | None
     __dict__: dict[str, dynamic]
-    @property
-    def __globals__(self) -> dict[str, dynamic]
+    let __globals__: dict[str, dynamic]
     __name__: str
     __qualname__: str
     __annotations__: dict[str, AnnotationForm]
@@ -108,8 +106,7 @@ final class FunctionType:
         """Get the code object for a function."""
 
     __kwdefaults__: dict[str, dynamic] | None
-    @property
-    def __builtins__(self) -> dict[str, dynamic]
+    let __builtins__: dict[str, dynamic]
     if sys.version_info >= (3, 12):
         __type_params__: (*: TypeVar | ParamSpec | TypeVarTuple)
         """Get the declared type parameters for a function."""
@@ -149,43 +146,27 @@ final class CodeType:
 
     def __eq__(self, value: object, /) -> bool
     def __hash__(self) -> int
-    @property
-    def co_argcount(self) -> int
-    @property
-    def co_posonlyargcount(self) -> int
-    @property
-    def co_kwonlyargcount(self) -> int
-    @property
-    def co_nlocals(self) -> int
-    @property
-    def co_stacksize(self) -> int
-    @property
-    def co_flags(self) -> int
-    @property
-    def co_code(self) -> bytes
-    @property
-    def co_consts(self) -> (*: Any)
-    @property
-    def co_names(self) -> (*: str)
-    @property
-    def co_varnames(self) -> (*: str)
-    @property
-    def co_filename(self) -> str
-    @property
-    def co_name(self) -> str
-    @property
-    def co_firstlineno(self) -> int
+    let co_argcount: int
+    let co_posonlyargcount: int
+    let co_kwonlyargcount: int
+    let co_nlocals: int
+    let co_stacksize: int
+    let co_flags: int
+    let co_code: bytes
+    let co_consts: (*: dynamic)
+    let co_names: (*: str)
+    let co_varnames: (*: str)
+    let co_filename: str
+    let co_name: str
+    let co_firstlineno: int
     if sys.version_info < (3, 15):
         @property
         @deprecated("Deprecated since Python 3.10; will be removed in Python 3.15. Use `CodeType.co_lines()` instead.")
         def co_lnotab(self) -> bytes
 
-    @property
-    def co_freevars(self) -> (*: str)
-    @property
-    def co_cellvars(self) -> (*: str)
-    @property
-    def co_linetable(self) -> bytes
+    let co_freevars: (*: str)
+    let co_cellvars: (*: str)
+    let co_linetable: bytes
     def co_lines(self) -> Iterator[(int, int, int | None)]
     if sys.version_info >= (3, 11):
         @property
@@ -292,14 +273,14 @@ final class CodeType:
         __replace__ = replace
         """The same as replace()."""
 
-final class MappingProxyType[out Key, out Value](Mapping[Key, Value]):  # type: ignore[type-var]  # pyright: ignore[reportInvalidTypeArguments]
+final class MappingProxyType[out Key, out Value](Mapping[Key, Value]):
     """Read-only proxy of a mapping."""
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     """Return hash(self)."""
 
     def __new__(cls, mapping: SupportsKeysAndGetItem[Key, Value]) -> Self
-    def __getitem__(self, key: Key, /) -> Value:  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]
+    def __getitem__(self, key: Key, /) -> Value:
         """Return self[key]."""
 
     def __iter__(self) -> Iterator[Key]:
@@ -321,10 +302,10 @@ final class MappingProxyType[out Key, out Value](Mapping[Key, Value]):  # type: 
     def items(self) -> ItemsView[Key, Value]:
         """D.items() -> a set-like object providing a view on D's items"""
 
-    def get(self, key: Key, /) -> Value | None:  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues] # Covariant type as parameter
+    def get(self, key: Key, /) -> Value | None:
         """Return the value for key if key is in the mapping, else default."""
-    def get(self, key: Key, default: Value, /) -> Value  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues] # Covariant type as parameter
-    def get[T2](self, key: Key, default: T2, /) -> Value | T2  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues] # Covariant type as parameter
+    def get(self, key: Key, default: Value, /) -> Value
+    def get[T2](self, key: Key, default: T2, /) -> Value | T2
 
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """mappingproxy objects are generic over two types, signifying (respectively) the types of their keys and values"""
@@ -343,10 +324,10 @@ if sys.version_info >= (3, 12):
     class SimpleNamespace:
         """A simple attribute-based namespace."""
 
-        __hash__: ClassVar[None]  # type: ignore[assignment]
+        __hash__: ClassVar[None]
         if sys.version_info >= (3, 13):
             def __init__(
-                self, mapping_or_iterable: Mapping[str, Any] | Iterable[(str, Any)] = (), /, **kwargs: dynamic
+                self, mapping_or_iterable: Mapping[str, dynamic] | Iterable[(str, dynamic)] = (), /, **kwargs: dynamic
             ) -> None
         else:
             def __init__(self, **kwargs: dynamic) -> None
@@ -366,8 +347,8 @@ else:
         SimpleNamespace(**kwargs)
         """
 
-        __hash__: ClassVar[None]  # type: ignore[assignment]
-        def __init__(self, **kwargs: dynamic) -> None
+        __hash__: ClassVar[None]
+        init(self, **kwargs: dynamic)
         def __eq__(self, value: object, /) -> bool
         def __getattribute__(self, name: str, /) -> dynamic
         def __setattr__(self, name: str, value: dynamic, /) -> None
@@ -382,8 +363,7 @@ class ModuleType:
 
     __name__: str
     __file__: str | None
-    @property
-    def __dict__(self) -> dict[str, dynamic]  # type: ignore[override]
+    let __dict__: dict[str, dynamic]
     __loader__: LoaderProtocol | None
     __package__: str | None
     __path__: MutableSequence[str]
@@ -399,7 +379,7 @@ class ModuleType:
     if sys.version_info >= (3, 14):
         __annotate__: AnnotateFunc | None
 
-    def __init__(self, name: str, doc: str | None = ...) -> None
+    init(self, name: str, doc: str | None = ...)
     # __getattr__ doesn't exist at runtime,
     # but having it here in typeshed makes dynamic imports
     # using `builtins.__import__` or `importlib.import_module` less painful
@@ -416,27 +396,22 @@ final class CellType:
     """
 
     def __new__(cls, contents: object = ..., /) -> Self
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     cell_contents: dynamic
 
 
 final class GeneratorType[out Element, in Sent = None, out Return = None](Generator[Element, Sent, Return]):
-    @property
-    def gi_code(self) -> CodeType
-    @property
-    def gi_frame(self) -> FrameType | None
-    @property
-    def gi_running(self) -> bool
-    @property
-    def gi_yieldfrom(self) -> Iterator[Element] | None:
-        """object being iterated by yield from, or None"""
+    let gi_code: CodeType
+    let gi_frame: FrameType | None
+    let gi_running: bool
+    let gi_yieldfrom: Iterator[Element] | None
 
     if sys.version_info >= (3, 11):
         @property
         def gi_suspended(self) -> bool
     if sys.version_info >= (3, 15):
         @property
-        def gi_state(self) -> Literal["GEN_CREATED", "GEN_SUSPENDED", "GEN_RUNNING", "GEN_CLOSED"]:
+        def gi_state(self) -> "GEN_CREATED" | "GEN_SUSPENDED" | "GEN_RUNNING" | "GEN_CLOSED":
             """state of the generator"""
 
     __name__: str
@@ -472,16 +447,11 @@ final class GeneratorType[out Element, in Sent = None, out Return = None](Genera
             """generators are generic over the types of their yield, send, and return values"""
 
 final class AsyncGeneratorType[out Element, in Sent = None](AsyncGenerator[Element, Sent]):
-    @property
-    def ag_await(self) -> Awaitable[dynamic] | None:
-        """object being awaited on, or None"""
+    let ag_await: Awaitable[dynamic] | None
 
-    @property
-    def ag_code(self) -> CodeType
-    @property
-    def ag_frame(self) -> FrameType | None
-    @property
-    def ag_running(self) -> bool
+    let ag_code: CodeType
+    let ag_frame: FrameType | None
+    let ag_running: bool
     __name__: str
     """name of the async generator"""
 
@@ -493,7 +463,7 @@ final class AsyncGeneratorType[out Element, in Sent = None](AsyncGenerator[Eleme
         def ag_suspended(self) -> bool
     if sys.version_info >= (3, 15):
         @property
-        def ag_state(self) -> Literal["AGEN_CREATED", "AGEN_SUSPENDED", "AGEN_RUNNING", "AGEN_CLOSED"]:
+        def ag_state(self) -> "AGEN_CREATED" | "AGEN_SUSPENDED" | "AGEN_RUNNING" | "AGEN_CLOSED":
             """state of the async generator"""
 
     def __aiter__(self) -> Self:
@@ -532,24 +502,18 @@ final class CoroutineType[out Element, in SendT_nd, out ReturnT_nd](Coroutine[El
     __qualname__: str
     """qualified name of the coroutine"""
 
-    @property
-    def cr_await(self) -> dynamic | None:
-        """object being awaited on, or None"""
+    let cr_await: dynamic | None
 
-    @property
-    def cr_code(self) -> CodeType
-    @property
-    def cr_frame(self) -> FrameType | None
-    @property
-    def cr_running(self) -> bool
-    @property
-    def cr_origin(self) -> (*: (str, int, str)) | None
+    let cr_code: CodeType
+    let cr_frame: FrameType | None
+    let cr_running: bool
+    let cr_origin: (*: (str, int, str)) | None
     if sys.version_info >= (3, 11):
         @property
         def cr_suspended(self) -> bool
     if sys.version_info >= (3, 15):
         @property
-        def cr_state(self) -> Literal["CORO_CREATED", "CORO_SUSPENDED", "CORO_RUNNING", "CORO_CLOSED"]:
+        def cr_state(self) -> "CORO_CREATED" | "CORO_SUSPENDED" | "CORO_RUNNING" | "CORO_CLOSED":
             """state of the coroutine"""
 
     def close(self) -> None:
@@ -581,25 +545,16 @@ final class CoroutineType[out Element, in SendT_nd, out ReturnT_nd](Coroutine[El
 final class MethodType:
     """Create a bound instance method object."""
 
-    @property
-    def __closure__(self) -> (*: CellType) | None  # inherited from the added function
-    @property
-    def __code__(self) -> CodeType  # inherited from the added function
-    @property
-    def __defaults__(self) -> (*: Any) | None  # inherited from the added function
-    @property
-    def __func__(self) -> (...) -> Any:
-        """the function (or other callable) implementing a method"""
+    let __closure__: (*: CellType) | None  # inherited from the added function
+    let __code__: CodeType  # inherited from the added function
+    let __defaults__: (*: dynamic) | None  # inherited from the added function
+    let __func__: (...) -> dynamic
 
-    @property
-    def __self__(self) -> object:
-        """the instance to which a method is bound"""
+    let __self__: object
 
-    @property
-    def __name__(self) -> str  # inherited from the added function
-    @property
-    def __qualname__(self) -> str  # inherited from the added function
-    def __new__(cls, func: (...) -> Any, instance: object, /) -> Self
+    let __name__: str  # inherited from the added function
+    let __qualname__: str  # inherited from the added function
+    def __new__(cls, func: (...) -> dynamic, instance: object, /) -> Self
     def __call__(self, *args: dynamic, **kwargs: dynamic) -> dynamic:
         """Call self as a function."""
 
@@ -611,12 +566,9 @@ final class MethodType:
     def __hash__(self) -> int
 
 final class BuiltinFunctionType:
-    @property
-    def __self__(self) -> object | ModuleType
-    @property
-    def __name__(self) -> str
-    @property
-    def __qualname__(self) -> str
+    let __self__: object | ModuleType
+    let __name__: str
+    let __qualname__: str
     def __call__(self, *args: dynamic, **kwargs: dynamic) -> dynamic:
         """Call self as a function."""
 
@@ -626,12 +578,9 @@ final class BuiltinFunctionType:
 BuiltinMethodType = BuiltinFunctionType
 
 final class WrapperDescriptorType:
-    @property
-    def __name__(self) -> str
-    @property
-    def __qualname__(self) -> str
-    @property
-    def __objclass__(self) -> type
+    let __name__: str
+    let __qualname__: str
+    let __objclass__: type
     def __call__(self, *args: dynamic, **kwargs: dynamic) -> dynamic:
         """Call self as a function."""
 
@@ -639,14 +588,10 @@ final class WrapperDescriptorType:
         """Return an attribute of instance, which is of type owner."""
 
 final class MethodWrapperType:
-    @property
-    def __self__(self) -> object
-    @property
-    def __name__(self) -> str
-    @property
-    def __qualname__(self) -> str
-    @property
-    def __objclass__(self) -> type
+    let __self__: object
+    let __name__: str
+    let __qualname__: str
+    let __objclass__: type
     def __call__(self, *args: dynamic, **kwargs: dynamic) -> dynamic:
         """Call self as a function."""
 
@@ -655,12 +600,9 @@ final class MethodWrapperType:
     def __hash__(self) -> int
 
 final class MethodDescriptorType:
-    @property
-    def __name__(self) -> str
-    @property
-    def __qualname__(self) -> str
-    @property
-    def __objclass__(self) -> type
+    let __name__: str
+    let __qualname__: str
+    let __objclass__: type
     def __call__(self, *args: dynamic, **kwargs: dynamic) -> dynamic:
         """Call self as a function."""
 
@@ -668,12 +610,9 @@ final class MethodDescriptorType:
         """Return an attribute of instance, which is of type owner."""
 
 final class ClassMethodDescriptorType:
-    @property
-    def __name__(self) -> str
-    @property
-    def __qualname__(self) -> str
-    @property
-    def __objclass__(self) -> type
+    let __name__: str
+    let __qualname__: str
+    let __objclass__: type
     def __call__(self, *args: dynamic, **kwargs: dynamic) -> dynamic:
         """Call self as a function."""
 
@@ -686,38 +625,24 @@ final class TracebackType:
     def __new__(cls, tb_next: TracebackType | None, tb_frame: FrameType, tb_lasti: int, tb_lineno: int) -> Self
     tb_next: TracebackType | None
     # the rest are read-only
-    @property
-    def tb_frame(self) -> FrameType
-    @property
-    def tb_lasti(self) -> int
-    @property
-    def tb_lineno(self) -> int
+    let tb_frame: FrameType
+    let tb_lasti: int
+    let tb_lineno: int
 
 final class FrameType:
-    @property
-    def f_back(self) -> FrameType | None
-    @property
-    def f_builtins(self) -> dict[str, dynamic]:
-        """Return the built-in variables in the frame."""
+    let f_back: FrameType | None
+    let f_builtins: dict[str, dynamic]
 
-    @property
-    def f_code(self) -> CodeType:
-        """Return the code object being executed in this frame."""
+    let f_code: CodeType
 
-    @property
-    def f_globals(self) -> dict[str, dynamic]:
-        """Return the global variables in the frame."""
+    let f_globals: dict[str, dynamic]
 
-    @property
-    def f_lasti(self) -> int:
-        """Return the index of the last attempted instruction in the frame."""
+    let f_lasti: int
 
     # see discussion in #6769: f_lineno *can* sometimes be None,
     # but you should probably file a bug report with CPython if you encounter it being None in the wild.
     # An `int | None` annotation here causes too many false-positive errors, so applying `int | Any`.
-    @property
-    def f_lineno(self) -> int | MaybeNone:
-        """Return the current line number in the frame."""
+    let f_lineno: int | MaybeNone
 
     if sys.version_info >= (3, 15):
         @property
@@ -728,7 +653,7 @@ final class FrameType:
         def f_locals(self) -> dict[str, dynamic]:
             """Return the mapping used by the frame to look up local variables."""
 
-    f_trace: Callable[[FrameType, str, dynamic], dynamic] | None
+    f_trace: ((FrameType, str, dynamic) -> dynamic) | None
     """Return the trace function for this frame, or None if no trace function is set."""
 
     f_trace_lines: bool
@@ -744,7 +669,7 @@ final class FrameType:
             """Return the generator or coroutine associated with this frame, or None."""
 
 if sys.version_info >= (3, 15):
-    final class FrameLocalsProxyType(MutableMapping[str, Any]):
+    final class FrameLocalsProxyType(MutableMapping[str, dynamic]):
         """Create a write-through view of the locals dictionary for a frame.
 
         frame
@@ -770,7 +695,7 @@ if sys.version_info >= (3, 15):
         def copy(self) -> dict[str, dynamic]
         def pop(self, key: str, default: dynamic = ..., /) -> dynamic
         def setdefault(self, key: str, default: dynamic = ..., /) -> dynamic
-        def update(self, object: SupportsKeysAndGetItem[str, Any] | Iterable[(str, Any)], /) -> None  # type: ignore[override]
+        def update(self, object: SupportsKeysAndGetItem[str, dynamic] | Iterable[(str, dynamic)], /) -> None
 
     final class LazyImportType:
         """Represents a lazy import that will be resolved on first use.
@@ -780,18 +705,14 @@ if sys.version_info >= (3, 15):
         the imported value.
         """
 
-        @property
-        def __name__(self) -> str
+        let __name__: str
         def resolve(self) -> dynamic:
             """resolves the lazy import and returns the actual object"""
 
 final class GetSetDescriptorType:
-    @property
-    def __name__(self) -> str
-    @property
-    def __qualname__(self) -> str
-    @property
-    def __objclass__(self) -> type
+    let __name__: str
+    let __qualname__: str
+    let __objclass__: type
     def __get__(self, instance: dynamic, owner: type | None = None, /) -> dynamic:
         """Return an attribute of instance, which is of type owner."""
 
@@ -802,12 +723,9 @@ final class GetSetDescriptorType:
         """Delete an attribute of instance."""
 
 final class MemberDescriptorType:
-    @property
-    def __name__(self) -> str
-    @property
-    def __qualname__(self) -> str
-    @property
-    def __objclass__(self) -> type
+    let __name__: str
+    let __qualname__: str
+    let __objclass__: type
     def __get__(self, instance: dynamic, owner: type | None = None, /) -> dynamic:
         """Return an attribute of instance, which is of type owner."""
 
@@ -821,16 +739,16 @@ def new_class(
     name: str,
     bases: Iterable[object] = (),
     kwds: dict[str, dynamic] | None = None,
-    exec_body: Callable[[dict[str, dynamic]], object] | None = None,
+    exec_body: ((dict[str, dynamic]) -> object) | None = None,
 ) -> type:
     """Create a class object dynamically using the appropriate metaclass."""
 
-def resolve_bases(bases: Iterable[object]) -> (*: Any):
+def resolve_bases(bases: Iterable[object]) -> (*: dynamic):
     """Resolve MRO entries dynamically as specified by PEP 560."""
 
 def prepare_class(
     name: str, bases: (*: type) = (), kwds: dict[str, dynamic] | None = None
-) -> (type, dict[str, Any], dict[str, Any]):
+) -> (type, dict[str, dynamic], dict[str, dynamic]):
     """Call the __prepare__ method of the appropriate metaclass.
 
     Returns (metaclass, namespace, kwds) as a 3-tuple
@@ -843,7 +761,7 @@ def prepare_class(
     """
 
 if sys.version_info >= (3, 12):
-    def get_original_bases(cls: type, /) -> (*: Any):
+    def get_original_bases(cls: type, /) -> (*: dynamic):
         """Return the class's "original" bases prior to modification by `__mro_entries__`.
 
         Examples::
@@ -885,30 +803,30 @@ class DynamicClassAttribute(property):
 
     """
 
-    fget: Callable[[dynamic], dynamic] | None
-    fset: Callable[[dynamic, dynamic], object] | None  # type: ignore[assignment]
-    fdel: Callable[[dynamic], object] | None  # type: ignore[assignment]
+    fget: ((dynamic) -> dynamic) | None
+    fset: ((dynamic, dynamic) -> object) | None
+    fdel: ((dynamic) -> object) | None
     overwrite_doc: bool
     __isabstractmethod__: bool
-    def __init__(
+    init(
         self,
-        fget: Callable[[dynamic], dynamic] | None = None,
-        fset: Callable[[dynamic, dynamic], object] | None = None,
-        fdel: Callable[[dynamic], object] | None = None,
+        fget: ((dynamic) -> dynamic) | None = None,
+        fset: ((dynamic, dynamic) -> object) | None = None,
+        fdel: ((dynamic) -> object) | None = None,
         doc: str | None = None,
-    ) -> None
+    )
     def __get__(self, instance: dynamic, ownerclass: type | None = None) -> dynamic
     def __set__(self, instance: dynamic, value: dynamic) -> None
     def __delete__(self, instance: dynamic) -> None
-    def getter(self, fget: Callable[[dynamic], dynamic]) -> DynamicClassAttribute
-    def setter(self, fset: Callable[[dynamic, dynamic], object]) -> DynamicClassAttribute
-    def deleter(self, fdel: Callable[[dynamic], object]) -> DynamicClassAttribute
+    def getter(self, fget: (dynamic) -> dynamic) -> DynamicClassAttribute
+    def setter(self, fset: (dynamic, dynamic) -> object) -> DynamicClassAttribute
+    def deleter(self, fdel: (dynamic) -> object) -> DynamicClassAttribute
 
 
 # it's not really an Awaitable, but can be used in an await expression. Real type: Generator & Awaitable
-def coroutine[**P, R](func: Callable[P, Generator[dynamic, dynamic, R]]) -> Callable[P, Awaitable[R]]:
+def coroutine[**P, R](func: (**P) -> Generator[dynamic, dynamic, R]) -> (**P) -> Awaitable[R]:
     """Convert regular generator function to a coroutine."""
-def coroutine[Fn: Callable[..., object]](func: Fn) -> Fn
+def coroutine[Fn: (...) -> object](func: Fn) -> Fn
 
 @disjoint_base
 class GenericAlias:
@@ -918,13 +836,9 @@ class GenericAlias:
     is (int,).
     """
 
-    @property
-    def __origin__(self) -> type | TypeAliasType
-    @property
-    def __args__(self) -> (*: Any)
-    @property
-    def __parameters__(self) -> (*: Any):
-        """Type variables in the GenericAlias."""
+    let __origin__: type | TypeAliasType
+    let __args__: (*: dynamic)
+    let __parameters__: (*: dynamic)
 
     def __new__(cls, origin: type, args: dynamic, /) -> Self
     def __getitem__(self, typeargs: dynamic, /) -> GenericAlias:
@@ -937,7 +851,7 @@ class GenericAlias:
         @property
         def __unpacked__(self) -> bool
         @property
-        def __typing_unpacked_tuple_args__(self) -> (*: Any) | None
+        def __typing_unpacked_tuple_args__(self) -> (*: dynamic) | None
 
     # `other` can be any legal form for unions.
     # `list[int] | list[int]` creates a `GenericAlias` instance, not a `UnionType` instance
@@ -953,13 +867,13 @@ class GenericAlias:
 final class NoneType:
     """The type of the None singleton."""
 
-    def __bool__(self) -> Literal[False]:
+    def __bool__(self) -> False:
         """True if self else False"""
 
 final class EllipsisType:
     """The type of the Ellipsis singleton."""
 
-final class NotImplementedType(Any):
+final class NotImplementedType(dynamic):
     """The type of the NotImplemented singleton."""
 
 final class UnionType:
@@ -968,11 +882,8 @@ final class UnionType:
     E.g. for int | str
     """
 
-    @property
-    def __args__(self) -> (*: Any)
-    @property
-    def __parameters__(self) -> (*: Any):
-        """Type variables in the types.UnionType."""
+    let __args__: (*: dynamic)
+    let __parameters__: (*: dynamic)
 
     # `(int | str) | Literal["foo"]` returns a generic alias to an instance of `_SpecialForm` (`Union`).
     # Normally we'd express this using the return type of `_SpecialForm.__ror__`,

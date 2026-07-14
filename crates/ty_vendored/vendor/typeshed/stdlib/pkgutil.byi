@@ -4,7 +4,7 @@ import sys
 from _typeshed import StrOrBytesPath, SupportsRead
 from _typeshed.importlib import LoaderProtocol, MetaPathFinderProtocol, PathEntryFinderProtocol
 from collections.abc import Callable, Iterable, Iterator
-from typing import IO, NamedTuple, TypeVar
+from typing import NamedTuple, TypeVar
 from typing_extensions import deprecated
 
 __all__ = [
@@ -76,13 +76,13 @@ if sys.version_info < (3, 12):
         on sys.meta_path.
         """
 
-        def __init__(self, path: StrOrBytesPath | None = None) -> None
+        init(self, path: StrOrBytesPath | None = None)
 
     @deprecated("Deprecated since Python 3.3; removed in Python 3.12. Use the `importlib` module instead.")
     class ImpLoader:
         """PEP 302 Loader that wraps Python's "classic" import algorithm"""
 
-        def __init__(self, fullname: str, file: IO[str], filename: StrOrBytesPath, etc: (str, str, int)) -> None
+        init(self, fullname: str, file: IO[str], filename: StrOrBytesPath, etc: (str, str, int))
 
 if sys.version_info < (3, 14):
     @deprecated("Deprecated since Python 3.12; removed in Python 3.14. Use `importlib.util.find_spec()` instead.")
@@ -139,7 +139,7 @@ def iter_modules(path: Iterable[StrOrBytesPath] | None = None, prefix: str = "")
 
 def read_code(stream: SupportsRead[bytes]) -> dynamic  # undocumented
 def walk_packages(
-    path: Iterable[StrOrBytesPath] | None = None, prefix: str = "", onerror: Callable[[str], object] | None = None
+    path: Iterable[StrOrBytesPath] | None = None, prefix: str = "", onerror: ((str) -> object) | None = None
 ) -> Iterator[ModuleInfo]:
     """Yields ModuleInfo for all modules recursively
     on path, or, if path is None, all accessible modules.

@@ -33,7 +33,7 @@ Notes:
 __all__ = ["Completer"]
 
 class Completer:
-    def __init__(self, namespace: dict[str, dynamic] | None = None) -> None:
+    init(self, namespace: dict[str, dynamic] | None = None):
         """Create a new completer for the command line.
 
         Completer([namespace]) -> completer instance.

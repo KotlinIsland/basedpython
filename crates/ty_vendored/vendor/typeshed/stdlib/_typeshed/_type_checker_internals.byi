@@ -8,7 +8,7 @@ from _collections_abc import dict_items, dict_keys, dict_values
 from _typeshed import AnnotationForm
 from abc import ABCMeta
 from collections.abc import Awaitable, Generator, Iterable, Mapping
-from typing import Any, ClassVar, Generic, TypeVar
+from typing import ClassVar, Generic, TypeVar
 from typing_extensions import Never
 
 
@@ -24,7 +24,7 @@ class TypedDictFallback(Mapping[str, object], metaclass=ABCMeta):
     # __orig_bases__ sometimes exists on <3.12, but not consistently,
     # so we only add it to the stub on 3.12+
     if sys.version_info >= (3, 12):
-        __orig_bases__: ClassVar[(*: Any)]
+        __orig_bases__: ClassVar[(*: dynamic)]
     if sys.version_info >= (3, 13):
         __readonly_keys__: ClassVar[frozenset[str]]
         __mutable_keys__: ClassVar[frozenset[str]]
@@ -38,7 +38,7 @@ class TypedDictFallback(Mapping[str, object], metaclass=ABCMeta):
     # can go through.
     def setdefault(self, k: Never, default: object) -> object
     # Mypy plugin hook for 'pop' expects that 'default' has a type variable type.
-    def pop[Element](self, k: Never, default: Element = ...) -> object  # pyright: ignore[reportInvalidTypeVarUse]
+    def pop[Element](self, k: Never, default: Element = ...) -> object
     def update(self, m: typing_extensions.Self, /) -> None
     def __delitem__(self, k: Never) -> None
     def items(self) -> dict_items[str, object]
@@ -52,19 +52,19 @@ class TypedDictFallback(Mapping[str, object], metaclass=ABCMeta):
     def __ror__(self, value: dict[str, dynamic], /) -> dict[str, object]
 
     # supposedly incompatible definitions of __or__ and __ior__
-    def __ior__(self, value: typing_extensions.Self, /) -> typing_extensions.Self  # type: ignore[misc]
+    def __ior__(self, value: typing_extensions.Self, /) -> typing_extensions.Self
 
 # Fallback type providing methods and attributes that appear on all `NamedTuple` types.
-class NamedTupleFallback(tuple[Any, ...]):
+class NamedTupleFallback((*: dynamic)):
     _field_defaults: ClassVar[dict[str, dynamic]]
     _fields: ClassVar[(*: str)]
     __match_args__: ClassVar[(*: str)] = ...
     # __orig_bases__ sometimes exists on <3.12, but not consistently
     # So we only add it to the stub on 3.12+.
     if sys.version_info >= (3, 12):
-        __orig_bases__: ClassVar[(*: Any)]
+        __orig_bases__: ClassVar[(*: dynamic)]
 
-    def __init__(self, typename: str, fields: Iterable[(str, Any)], /) -> None
+    init(self, typename: str, fields: Iterable[(str, dynamic)], /)
     @typing_extensions.deprecated(
         "Creating a typing.NamedTuple using keyword arguments is deprecated and support will be removed in Python 3.15"
     )

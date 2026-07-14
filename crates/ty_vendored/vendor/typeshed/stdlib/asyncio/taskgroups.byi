@@ -1,7 +1,7 @@
 import sys
 from contextvars import Context
 from types import TracebackType
-from typing import Any, TypeVar
+from typing import TypeVar
 from typing_extensions import Self
 
 from . import _CoroutineLike
@@ -33,7 +33,7 @@ class TaskGroup:
     """
 
     _loop: AbstractEventLoop | None
-    _tasks: set[Task[Any]]
+    _tasks: set[Task[dynamic]]
 
     async def __aenter__(self) -> Self
     async def __aexit__(self, et: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None) -> None

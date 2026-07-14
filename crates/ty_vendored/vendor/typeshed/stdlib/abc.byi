@@ -4,7 +4,7 @@ import _typeshed
 import sys
 from _typeshed import SupportsWrite
 from collections.abc import Callable
-from typing import Any, Concatenate, Literal, ParamSpec, TypeVar
+from typing import Literal, ParamSpec, TypeVar
 from typing_extensions import deprecated
 
 
@@ -48,7 +48,7 @@ class ABCMeta(type):
         Returns the subclass, to allow usage as a class decorator.
         """
 
-def abstractmethod[FuncT: Callable[..., Any]](funcobj: FuncT) -> FuncT:
+def abstractmethod[FuncT: (...) -> dynamic](funcobj: FuncT) -> FuncT:
     """A decorator indicating abstract methods.
 
     Requires that the metaclass is ABCMeta or derived from it.  A
@@ -80,8 +80,8 @@ class abstractclassmethod[in out Element, **P, out R](classmethod[Element, P, R]
 
     """
 
-    __isabstractmethod__: Literal[True]
-    def __init__(self, callable: Callable[Concatenate[type[Element], P], R]) -> None
+    __isabstractmethod__: True
+    init(self, callable: (type[Element], **P) -> R)
 
 @deprecated("Deprecated since Python 3.3. Use `@staticmethod` stacked on top of `@abstractmethod` instead.")
 class abstractstaticmethod[**P, out R](staticmethod[P, R]):
@@ -97,8 +97,8 @@ class abstractstaticmethod[**P, out R](staticmethod[P, R]):
 
     """
 
-    __isabstractmethod__: Literal[True]
-    def __init__(self, callable: Callable[P, R]) -> None
+    __isabstractmethod__: True
+    init(self, callable: (**P) -> R)
 
 @deprecated("Deprecated since Python 3.3. Use `@property` stacked on top of `@abstractmethod` instead.")
 class abstractproperty(property):
@@ -114,7 +114,7 @@ class abstractproperty(property):
 
     """
 
-    __isabstractmethod__: Literal[True]
+    __isabstractmethod__: True
 
 class ABC(metaclass=ABCMeta):
     """Helper class that provides a standard way to create an ABC using

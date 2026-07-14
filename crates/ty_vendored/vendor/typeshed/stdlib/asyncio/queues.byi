@@ -35,7 +35,7 @@ class Queue[in out Element](_LoopBoundMixin):
     interrupted between calling qsize() and doing an operation on the Queue.
     """
 
-    def __init__(self, maxsize: int = 0) -> None
+    init(self, maxsize: int = 0)
     def _init(self, maxsize: int) -> None
     def _get(self) -> Element
     def _put(self, item: Element) -> None
@@ -43,9 +43,7 @@ class Queue[in out Element](_LoopBoundMixin):
     def qsize(self) -> int:
         """Number of items in the queue."""
 
-    @property
-    def maxsize(self) -> int:
-        """Number of items allowed in the queue."""
+    let maxsize: int
 
     def empty(self) -> bool:
         """Return True if the queue is empty, False otherwise."""

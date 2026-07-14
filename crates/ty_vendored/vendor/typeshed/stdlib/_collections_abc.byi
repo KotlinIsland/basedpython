@@ -76,39 +76,33 @@ final class dict_keys[out Key, out Value](KeysView[Key]):  # undocumented
     def __reversed__(self) -> Iterator[Key]:
         """Return a reverse iterator over the dict keys."""
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     if sys.version_info >= (3, 13):
         def isdisjoint(self, other: object, /) -> bool:
             """Return True if the view and the given iterable have a null intersection."""
 
-    @property
-    def mapping(self) -> MappingProxyType[Key, Value]:
-        """dictionary that this view refers to"""
+    let mapping: MappingProxyType[Key, Value]
 
 final class dict_values[out Key, out Value](ValuesView[Value]):  # undocumented
     def __reversed__(self) -> Iterator[Value]:
         """Return a reverse iterator over the dict values."""
 
-    @property
-    def mapping(self) -> MappingProxyType[Key, Value]:
-        """dictionary that this view refers to"""
+    let mapping: MappingProxyType[Key, Value]
 
 final class dict_items[out Key, out Value](ItemsView[Key, Value]):  # undocumented
     def __eq__(self, value: object, /) -> bool
     def __reversed__(self) -> Iterator[(Key, Value)]:
         """Return a reverse iterator over the dict items."""
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     if sys.version_info >= (3, 13):
         def isdisjoint(self, other: object, /) -> bool:
             """Return True if the view and the given iterable have a null intersection."""
 
-    @property
-    def mapping(self) -> MappingProxyType[Key, Value]:
-        """dictionary that this view refers to"""
+    let mapping: MappingProxyType[Key, Value]
 
 if sys.version_info >= (3, 12):
     @runtime_checkable
-    class Buffer(Protocol):
+    protocol Buffer:
         __slots__ = ()
         abstract def __buffer__(self, flags: int, /) -> memoryview

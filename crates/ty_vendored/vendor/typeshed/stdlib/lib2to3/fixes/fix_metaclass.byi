@@ -48,6 +48,6 @@ def fixup_indent(suite) -> None:
     """
 
 class FixMetaclass(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[True]]
+    BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     def transform(self, node, results) -> None

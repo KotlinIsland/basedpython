@@ -10,7 +10,7 @@ from collections.abc import Container, Generator, Iterable, Mapping
 from logging import Logger, _ExcInfoType
 from multiprocessing import JoinableQueue
 from multiprocessing.synchronize import Lock
-from typing import ClassVar, Final, NoReturn
+from typing import ClassVar, Final
 
 from .btm_matcher import BottomMatcher
 from .fixer_base import BaseFix
@@ -48,9 +48,9 @@ class RefactoringTool:
     BM: BottomMatcher
     bmi_pre_order: list[BaseFix]
     bmi_post_order: list[BaseFix]
-    def __init__(
+    init(
         self, fixer_names: Iterable[str], options: Mapping[str, object] | None = None, explicit: Container[str] | None = None
-    ) -> None:
+    ):
         """Initializer.
 
         Args:

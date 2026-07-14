@@ -4,7 +4,7 @@ import sys
 from _typeshed import SupportsWrite, Unused
 from collections.abc import Generator, Iterable, Iterator, Mapping
 from types import FrameType, TracebackType
-from typing import Any, ClassVar, Literal, SupportsIndex, TypeAlias
+from typing import ClassVar, Literal, TypeAlias
 from typing_extensions import Self, deprecated
 
 __all__ = [
@@ -32,7 +32,7 @@ __all__ = [
 if sys.version_info >= (3, 14):
     __all__ += ["print_list"]
 
-_FrameSummaryTuple: TypeAlias = tuple[str, int, str, str | None]
+type _FrameSummaryTuple = tuple[str, int, str, str | None]
 
 def print_tb(tb: TracebackType | None, limit: int | None = None, file: SupportsWrite[str] | None = None) -> None:
     """Print up to 'limit' stack trace entries from the traceback 'tb'.
@@ -338,7 +338,7 @@ class TracebackException:
             """Create a TracebackException from an exception."""
 
     def __eq__(self, other: object) -> bool
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     if sys.version_info >= (3, 11):
         def format(self, *, chain: bool = True, _ctx: _ExceptionPrintContext | None = None) -> Generator[str]:
             """Format the exception.
@@ -494,20 +494,19 @@ class FrameSummary:
     lineno: int | None
     name: str
     locals: dict[str, str] | None
-    @property
-    def line(self) -> str | None
+    let line: str | None
 
-    def __getitem__(self, pos: Literal[0]) -> str
-    def __getitem__(self, pos: Literal[1]) -> int
-    def __getitem__(self, pos: Literal[2]) -> str
-    def __getitem__(self, pos: Literal[3]) -> str | None
+    def __getitem__(self, pos: 0) -> str
+    def __getitem__(self, pos: 1) -> int
+    def __getitem__(self, pos: 2) -> str
+    def __getitem__(self, pos: 3) -> str | None
     def __getitem__(self, pos: SupportsIndex) -> dynamic
-    def __getitem__(self, pos: slice[SupportsIndex | None]) -> (*: Any)
+    def __getitem__(self, pos: slice[SupportsIndex | None]) -> (*: dynamic)
 
     def __iter__(self) -> Iterator[dynamic]
     def __eq__(self, other: object) -> bool
-    def __len__(self) -> Literal[4]
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    def __len__(self) -> 4
+    __hash__: ClassVar[None]
 
 class StackSummary(list[FrameSummary]):
     """A list of FrameSummary objects, representing a stack of frames."""

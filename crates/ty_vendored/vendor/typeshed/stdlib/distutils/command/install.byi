@@ -5,14 +5,14 @@ Implements the Distutils 'install' command.
 
 from _typeshed import Incomplete
 from collections.abc import Callable
-from typing import Any, ClassVar, Final, Literal
+from typing import ClassVar, Final, Literal
 
 from ..cmd import Command
 
-HAS_USER_SITE: Final[bool]
+final HAS_USER_SITE: bool
 
-SCHEME_KEYS: Final[(Literal["purelib"], Literal["platlib"], Literal["headers"], Literal["scripts"], Literal["data"])]
-INSTALL_SCHEMES: Final[dict[str, dict[str, str]]]
+final SCHEME_KEYS: ("purelib", "platlib", "headers", "scripts", "data")
+final INSTALL_SCHEMES: dict[str, dict[str, str]]
 
 class install(Command):
     description: str
@@ -119,4 +119,4 @@ class install(Command):
         """
 
     # Any to work around variance issues
-    sub_commands: ClassVar[list[(str, Callable[[Any], bool] | None)]]
+    sub_commands: ClassVar[list[(str, ((dynamic) -> bool) | None)]]

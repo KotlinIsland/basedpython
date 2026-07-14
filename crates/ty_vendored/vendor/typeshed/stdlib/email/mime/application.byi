@@ -10,15 +10,15 @@ __all__ = ["MIMEApplication"]
 class MIMEApplication(MIMENonMultipart):
     """Class for generating application/* MIME documents."""
 
-    def __init__(
+    init(
         self,
         _data: str | bytes | bytearray,
         _subtype: str = "octet-stream",
-        _encoder: Callable[[MIMEApplication], object] = ...,
+        _encoder: (MIMEApplication) -> object = ...,
         *,
         policy: Policy | None = None,
         **_params: _ParamsType,
-    ) -> None:
+    ):
         """Create an application/* type MIME document.
 
         _data contains the bytes for the raw application data.

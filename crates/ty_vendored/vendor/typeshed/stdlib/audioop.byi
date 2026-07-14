@@ -1,8 +1,8 @@
 from typing import TypeAlias
 from typing_extensions import Buffer
 
-_AdpcmState: TypeAlias = tuple[int, int]
-_RatecvState: TypeAlias = tuple[int, tuple[tuple[int, int], ...]]
+type _AdpcmState = tuple[int, int]
+type _RatecvState = tuple[int, (*: tuple[int, int])]
 
 class error(Exception)
 

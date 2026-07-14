@@ -45,7 +45,7 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
 
         excinfo: types.SimpleNamespace
 
-        def __init__(self, excinfo: types.SimpleNamespace) -> None
+        init(self, excinfo: types.SimpleNamespace)
 
     def create() -> Interpreter:
         """Return a new (idle) Python interpreter."""
@@ -76,12 +76,8 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
         def __reduce__(self) -> (type[Self], int)
         def __hash__(self) -> int
         def __del__(self) -> None
-        @property
-        def id(self) -> int
-        @property
-        def whence(
-            self,
-        ) -> Literal["unknown", "runtime init", "legacy C-API", "C-API", "cross-interpreter C-API", "_interpreters module"]
+        let id: int
+        let whence: "unknown" | "runtime init" | "legacy C-API" | "C-API" | "cross-interpreter C-API" | "_interpreters module"
         def is_running(self) -> bool:
             """Return whether or not the identified interpreter is running."""
 
@@ -100,7 +96,7 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
             The values must be shareable.
             """
 
-        def exec(self, code: str | types.CodeType | Callable[[], object], /) -> None:
+        def exec(self, code: str | types.CodeType | (() -> object), /) -> None:
             """Run the given source code in the interpreter.
 
             This is essentially the same as calling the builtin "exec"
@@ -119,7 +115,7 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
             in other threads.
             """
 
-        def call[**P, R](self, callable: Callable[P, R], /, *args: P.args, **kwargs: P.kwargs) -> R:
+        def call[**P, R](self, callable: (**P) -> R, /, *args: P.args, **kwargs: P.kwargs) -> R:
             """Call the object in the interpreter with given args/kwargs.
 
             Nearly all callables, args, kwargs, and return values are
@@ -133,7 +129,7 @@ if sys.version_info >= (3, 14):  # needed to satisfy pyright checks for Python <
             happens with Interpreter.exec().
             """
 
-        def call_in_thread[**P](self, callable: Callable[P, object], /, *args: P.args, **kwargs: P.kwargs) -> threading.Thread:
+        def call_in_thread[**P](self, callable: (**P) -> object, /, *args: P.args, **kwargs: P.kwargs) -> threading.Thread:
             """Return a new thread that calls the object in the interpreter.
 
             The return value and any raised exception are discarded.

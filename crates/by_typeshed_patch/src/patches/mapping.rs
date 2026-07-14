@@ -18,7 +18,7 @@ use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk
 use ruff_python_ast::{Expr, ModModule, Stmt};
 use ruff_python_parser::Parsed;
 
-use crate::{Edit, Patch, module_qualname};
+use crate::{Edit, Patch};
 
 /// module that owns the canonical `Mapping` definition
 const MODULE: &str = "typing";
@@ -41,7 +41,7 @@ impl Patch for MappingKeyCovariance {
     }
 
     fn rewrite(&self, module_path: &Path, parsed: &Parsed<ModModule>, _source: &str) -> Vec<Edit> {
-        if module_qualname(module_path).as_deref() != Some(MODULE) {
+        if crate::module_qualname(module_path).as_deref() != Some(MODULE) {
             return Vec::new();
         }
 
@@ -162,15 +162,15 @@ class MutableMapping(Mapping[_KT, _VT]):
     #[test]
     fn module_qualname_handles_packages_and_init() {
         assert_eq!(
-            module_qualname(Path::new("typing.byi")).as_deref(),
+            crate::module_qualname(Path::new("typing.byi")).as_deref(),
             Some("typing")
         );
         assert_eq!(
-            module_qualname(Path::new("os/path.byi")).as_deref(),
+            crate::module_qualname(Path::new("os/path.byi")).as_deref(),
             Some("os.path")
         );
         assert_eq!(
-            module_qualname(Path::new("asyncio/__init__.byi")).as_deref(),
+            crate::module_qualname(Path::new("asyncio/__init__.byi")).as_deref(),
             Some("asyncio")
         );
     }

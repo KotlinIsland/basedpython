@@ -11,10 +11,10 @@ You have to be root to be able to use this module.
 
 import sys
 from _typeshed import structseq
-from typing import Any, Final, final
+from typing import Final, final
 
 if sys.platform != "win32":
-    final class struct_spwd(structseq[Any], tuple[str, str, int, int, int, int, int, int, int]):
+    final class struct_spwd(structseq[dynamic], tuple[str, str, int, int, int, int, int, int, int]):
         """spwd.struct_spwd: Results from getsp*() routines.
 
         This object may be accessed either as a 9-tuple of
@@ -34,50 +34,28 @@ if sys.platform != "win32":
             "sp_flag",
         )
 
-        @property
-        def sp_namp(self) -> str:
-            """login name"""
+        let sp_namp: str
 
-        @property
-        def sp_pwdp(self) -> str:
-            """encrypted password"""
+        let sp_pwdp: str
 
-        @property
-        def sp_lstchg(self) -> int:
-            """date of last change"""
+        let sp_lstchg: int
 
-        @property
-        def sp_min(self) -> int:
-            """min #days between changes"""
+        let sp_min: int
 
-        @property
-        def sp_max(self) -> int:
-            """max #days between changes"""
+        let sp_max: int
 
-        @property
-        def sp_warn(self) -> int:
-            """#days before pw expires to warn user about it"""
+        let sp_warn: int
 
-        @property
-        def sp_inact(self) -> int:
-            """#days after pw expires until account is disabled"""
+        let sp_inact: int
 
-        @property
-        def sp_expire(self) -> int:
-            """#days since 1970-01-01 when account expires"""
+        let sp_expire: int
 
-        @property
-        def sp_flag(self) -> int:
-            """reserved"""
+        let sp_flag: int
 
         # Deprecated aliases below.
-        @property
-        def sp_nam(self) -> str:
-            """login name; deprecated"""
+        let sp_nam: str
 
-        @property
-        def sp_pwd(self) -> str:
-            """encrypted password; deprecated"""
+        let sp_pwd: str
 
     def getspall() -> list[struct_spwd]:
         """Return a list of all available shadow password database entries, in arbitrary order.

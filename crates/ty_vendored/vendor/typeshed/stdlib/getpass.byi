@@ -12,7 +12,6 @@ On Windows, the msvcrt module will be used.
 """
 
 import sys
-from typing import TextIO
 
 __all__ = ["getpass", "getuser", "GetPassWarning"]
 

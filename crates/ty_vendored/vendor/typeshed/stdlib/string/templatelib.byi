@@ -2,7 +2,7 @@
 
 from collections.abc import Iterator
 from types import GenericAlias
-from typing import Any, Generic, Literal, TypeVar, final
+from typing import Generic, Literal, TypeVar, final
 
 
 final class Template:  # TODO: consider making `Template` generic on `TypeVarTuple`
@@ -11,7 +11,7 @@ final class Template:  # TODO: consider making `Template` generic on `TypeVarTup
     strings: (*: str)
     """Strings"""
 
-    interpolations: (*: Interpolation[Any])
+    interpolations: (*: Interpolation[dynamic])
     """Interpolations"""
 
     def __new__(cls, *args: str | Interpolation[dynamic]) -> Template
@@ -24,9 +24,7 @@ final class Template:  # TODO: consider making `Template` generic on `TypeVarTup
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Template supports [] for generic usage"""
 
-    @property
-    def values(self) -> (*: Any):  # Tuple of interpolation values, which can have any type
-        """Values of interpolations"""
+    let values: (*: dynamic)
 
 final class Interpolation[in out Element]:
     """Interpolation object"""
@@ -37,7 +35,7 @@ final class Interpolation[in out Element]:
     expression: str
     """Expression"""
 
-    conversion: Literal["a", "r", "s"] | None
+    conversion: "a" | "r" | "s" | None
     """Conversion"""
 
     format_spec: str
@@ -46,11 +44,11 @@ final class Interpolation[in out Element]:
     __match_args__ = ("value", "expression", "conversion", "format_spec")
 
     def __new__(
-        cls, value: Element, expression: str = "", conversion: Literal["a", "r", "s"] | None = None, format_spec: str = ""
+        cls, value: Element, expression: str = "", conversion: "a" | "r" | "s" | None = None, format_spec: str = ""
     ) -> Interpolation[Element]
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Interpolations are generic over the types of their values"""
 
 def convert[Element](obj: Element, /, conversion: None) -> Element:
     """Convert *obj* using formatted string literal semantics."""
-def convert(obj: object, /, conversion: Literal["r", "s", "a"]) -> str
+def convert(obj: object, /, conversion: "r" | "s" | "a") -> str

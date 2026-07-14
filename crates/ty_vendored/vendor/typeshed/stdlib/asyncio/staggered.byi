@@ -1,15 +1,14 @@
 """Support for running coroutines in parallel with staggered start times."""
 
 from collections.abc import Awaitable, Callable, Iterable
-from typing import Any
 
 from . import events
 
 __all__ = ("staggered_race",)
 
 async def staggered_race(
-    coro_fns: Iterable[Callable[[], Awaitable[dynamic]]], delay: float | None, *, loop: events.AbstractEventLoop | None = None
-) -> (Any, int | None, list[Exception | None]):
+    coro_fns: Iterable[() -> Awaitable[dynamic]], delay: float | None, *, loop: events.AbstractEventLoop | None = None
+) -> (dynamic, int | None, list[Exception | None]):
     """Run coroutines with staggered start times and take the first to finish.
 
     This method takes an iterable of coroutine functions. The first one is

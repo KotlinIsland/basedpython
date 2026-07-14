@@ -22,7 +22,7 @@ class Error(Exception):
     """
 
     msg: str
-    def __init__(self, msg: str) -> None
+    init(self, msg: str)
 
 class ConversionError(Error)
 
@@ -45,14 +45,14 @@ class Packer:
     def pack_string(self, s: bytes) -> None
     def pack_opaque(self, s: bytes) -> None
     def pack_bytes(self, s: bytes) -> None
-    def pack_list[Element](self, list: Sequence[Element], pack_item: Callable[[Element], object]) -> None
-    def pack_farray[Element](self, n: int, list: Sequence[Element], pack_item: Callable[[Element], object]) -> None
-    def pack_array[Element](self, list: Sequence[Element], pack_item: Callable[[Element], object]) -> None
+    def pack_list[Element](self, list: Sequence[Element], pack_item: (Element) -> object) -> None
+    def pack_farray[Element](self, n: int, list: Sequence[Element], pack_item: (Element) -> object) -> None
+    def pack_array[Element](self, list: Sequence[Element], pack_item: (Element) -> object) -> None
 
 class Unpacker:
     """Unpacks various data representations from the given buffer."""
 
-    def __init__(self, data: bytes) -> None
+    init(self, data: bytes)
     def reset(self, data: bytes) -> None
     def get_position(self) -> int
     def set_position(self, position: int) -> None
@@ -71,6 +71,6 @@ class Unpacker:
     def unpack_string(self) -> bytes
     def unpack_opaque(self) -> bytes
     def unpack_bytes(self) -> bytes
-    def unpack_list[Element](self, unpack_item: Callable[[], Element]) -> list[Element]
-    def unpack_farray[Element](self, n: int, unpack_item: Callable[[], Element]) -> list[Element]
-    def unpack_array[Element](self, unpack_item: Callable[[], Element]) -> list[Element]
+    def unpack_list[Element](self, unpack_item: () -> Element) -> list[Element]
+    def unpack_farray[Element](self, n: int, unpack_item: () -> Element) -> list[Element]
+    def unpack_array[Element](self, unpack_item: () -> Element) -> list[Element]

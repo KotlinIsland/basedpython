@@ -33,14 +33,14 @@ import sys
 from _typeshed import MaybeNone
 from collections.abc import Callable, Iterable, Iterator
 from types import GenericAlias
-from typing import Generic, Literal, SupportsComplex, SupportsFloat, SupportsIndex, SupportsInt, TypeAlias, TypeVar
+from typing import Generic, Literal, TypeAlias, TypeVar
 from typing_extensions import Self, disjoint_base
 
 _T = TypeVar("_T")
 
-_Step: TypeAlias = SupportsFloat | SupportsInt | SupportsIndex | SupportsComplex
+type _Step = SupportsFloat | SupportsInt | SupportsIndex | SupportsComplex
 
-_Predicate: TypeAlias = Callable[[_T], object]
+_Predicate: TypeAlias = (_T) -> object
 
 # Technically count can take anything that implements a number protocol and has an add method
 # but we can't enforce the add method
@@ -101,7 +101,7 @@ class accumulate[in out Element]:
     """Return series of accumulated sums (or other binary function results)."""
 
     def __new__(cls, iterable: Iterable[Element], func: None = None, *, initial: Element | None = None) -> Self
-    def __new__[Other](cls, iterable: Iterable[Other], func: Callable[[Element, Other], Element], *, initial: Element | None = None) -> Self
+    def __new__[Other](cls, iterable: Iterable[Other], func: (Element, Other) -> Element, *, initial: Element | None = None) -> Self
 
     def __iter__(self) -> Self:
         """Implement iter(self)."""
@@ -187,7 +187,7 @@ class groupby[out Element, out S]:
     """
 
     def __new__[T1](cls, iterable: Iterable[T1], key: None = None) -> groupby[T1, T1]
-    def __new__[T1, T2](cls, iterable: Iterable[T1], key: Callable[[T1], T2]) -> groupby[T2, T1]
+    def __new__[T1, T2](cls, iterable: Iterable[T1], key: (T1) -> T2) -> groupby[T2, T1]
 
     def __iter__(self) -> Self:
         """Implement iter(self)."""
@@ -420,10 +420,10 @@ class permutations[out Element]:
     permutations(range(3), 2) --> (0,1), (0,2), (1,0), (1,2), (2,0), (2,1)
     """
 
-    def __new__[T](cls, iterable: Iterable[T], r: Literal[2]) -> permutations[(T, T)]
-    def __new__[T](cls, iterable: Iterable[T], r: Literal[3]) -> permutations[(T, T, T)]
-    def __new__[T](cls, iterable: Iterable[T], r: Literal[4]) -> permutations[(T, T, T, T)]
-    def __new__[T](cls, iterable: Iterable[T], r: Literal[5]) -> permutations[(T, T, T, T, T)]
+    def __new__[T](cls, iterable: Iterable[T], r: 2) -> permutations[(T, T)]
+    def __new__[T](cls, iterable: Iterable[T], r: 3) -> permutations[(T, T, T)]
+    def __new__[T](cls, iterable: Iterable[T], r: 4) -> permutations[(T, T, T, T)]
+    def __new__[T](cls, iterable: Iterable[T], r: 5) -> permutations[(T, T, T, T, T)]
     def __new__[T](cls, iterable: Iterable[T], r: int | None = None) -> permutations[(*: T)]
 
     def __iter__(self) -> Self:
@@ -439,10 +439,10 @@ class combinations[out Element]:
     combinations(range(4), 3) --> (0,1,2), (0,1,3), (0,2,3), (1,2,3)
     """
 
-    def __new__[T](cls, iterable: Iterable[T], r: Literal[2]) -> combinations[(T, T)]
-    def __new__[T](cls, iterable: Iterable[T], r: Literal[3]) -> combinations[(T, T, T)]
-    def __new__[T](cls, iterable: Iterable[T], r: Literal[4]) -> combinations[(T, T, T, T)]
-    def __new__[T](cls, iterable: Iterable[T], r: Literal[5]) -> combinations[(T, T, T, T, T)]
+    def __new__[T](cls, iterable: Iterable[T], r: 2) -> combinations[(T, T)]
+    def __new__[T](cls, iterable: Iterable[T], r: 3) -> combinations[(T, T, T)]
+    def __new__[T](cls, iterable: Iterable[T], r: 4) -> combinations[(T, T, T, T)]
+    def __new__[T](cls, iterable: Iterable[T], r: 5) -> combinations[(T, T, T, T, T)]
     def __new__[T](cls, iterable: Iterable[T], r: int) -> combinations[(*: T)]
 
     def __iter__(self) -> Self:
@@ -458,10 +458,10 @@ class combinations_with_replacement[out Element]:
     combinations_with_replacement('ABC', 2) --> ('A','A'), ('A','B'), ('A','C'), ('B','B'), ('B','C'), ('C','C')
     """
 
-    def __new__[T](cls, iterable: Iterable[T], r: Literal[2]) -> combinations_with_replacement[(T, T)]
-    def __new__[T](cls, iterable: Iterable[T], r: Literal[3]) -> combinations_with_replacement[(T, T, T)]
-    def __new__[T](cls, iterable: Iterable[T], r: Literal[4]) -> combinations_with_replacement[(T, T, T, T)]
-    def __new__[T](cls, iterable: Iterable[T], r: Literal[5]) -> combinations_with_replacement[(T, T, T, T, T)]
+    def __new__[T](cls, iterable: Iterable[T], r: 2) -> combinations_with_replacement[(T, T)]
+    def __new__[T](cls, iterable: Iterable[T], r: 3) -> combinations_with_replacement[(T, T, T)]
+    def __new__[T](cls, iterable: Iterable[T], r: 4) -> combinations_with_replacement[(T, T, T, T)]
+    def __new__[T](cls, iterable: Iterable[T], r: 5) -> combinations_with_replacement[(T, T, T, T, T)]
     def __new__[T](cls, iterable: Iterable[T], r: int) -> combinations_with_replacement[(*: T)]
 
     def __iter__(self) -> Self:
@@ -506,14 +506,14 @@ if sys.version_info >= (3, 12):
         """
 
         if sys.version_info >= (3, 13):
-            def __new__[T](cls, iterable: Iterable[T], n: Literal[1], *, strict: Literal[True]) -> batched[(T,)]
-            def __new__[T](cls, iterable: Iterable[T], n: Literal[2], *, strict: Literal[True]) -> batched[(T, T)]
-            def __new__[T](cls, iterable: Iterable[T], n: Literal[3], *, strict: Literal[True]) -> batched[(T, T, T)]
+            def __new__[T](cls, iterable: Iterable[T], n: 1, *, strict: True) -> batched[(T,)]
+            def __new__[T](cls, iterable: Iterable[T], n: 2, *, strict: True) -> batched[(T, T)]
+            def __new__[T](cls, iterable: Iterable[T], n: 3, *, strict: True) -> batched[(T, T, T)]
             def __new__[T](
-                cls, iterable: Iterable[T], n: Literal[4], *, strict: Literal[True]
+                cls, iterable: Iterable[T], n: 4, *, strict: True
             ) -> batched[(T, T, T, T)]
             def __new__[T](
-                cls, iterable: Iterable[T], n: Literal[5], *, strict: Literal[True]
+                cls, iterable: Iterable[T], n: 5, *, strict: True
             ) -> batched[(T, T, T, T, T)]
             def __new__[T](cls, iterable: Iterable[T], n: int, *, strict: bool = False) -> batched[(*: T)]
         else:

@@ -10,15 +10,15 @@ __all__ = ["MIMEImage"]
 class MIMEImage(MIMENonMultipart):
     """Class for generating image/* type MIME documents."""
 
-    def __init__(
+    init(
         self,
         _imagedata: str | bytes | bytearray,
         _subtype: str | None = None,
-        _encoder: Callable[[MIMEImage], object] = ...,
+        _encoder: (MIMEImage) -> object = ...,
         *,
         policy: Policy | None = None,
         **_params: _ParamsType,
-    ) -> None:
+    ):
         """Create an image/* type MIME document.
 
         _imagedata contains the bytes for the raw image data.  If the data

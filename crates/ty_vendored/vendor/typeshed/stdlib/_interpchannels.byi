@@ -3,7 +3,7 @@ The 'interpreters' module provides a more convenient interface.
 """
 
 from _typeshed import structseq
-from typing import Any, Final, Literal, SupportsIndex, final
+from typing import Final, Literal, final
 from typing_extensions import Buffer, Self
 
 class ChannelError(RuntimeError)
@@ -16,17 +16,11 @@ class ChannelNotFoundError(ChannelError)
 final class ChannelID:
     """A channel ID identifies a channel and may be used as an int."""
 
-    @property
-    def end(self) -> Literal["send", "recv", "both"]:
-        """'send', 'recv', or 'both'"""
+    let end: "send" | "recv" | "both"
 
-    @property
-    def send(self) -> Self:
-        """the 'send' end of the channel"""
+    let send: Self
 
-    @property
-    def recv(self) -> Self:
-        """the 'recv' end of the channel"""
+    let recv: Self
 
     def __eq__(self, other: object, /) -> bool
     def __ge__(self, other: ChannelID, /) -> bool
@@ -58,71 +52,39 @@ final class ChannelInfo(structseq[int], tuple[bool, bool, bool, int, int, int, i
         "num_interp_recv",
         "num_interp_recv_released",
     )
-    @property
-    def open(self) -> bool:
-        """both ends are open"""
+    let open: bool
 
-    @property
-    def closing(self) -> bool:
-        """send is closed, recv is non-empty"""
+    let closing: bool
 
-    @property
-    def closed(self) -> bool:
-        """both ends are closed"""
+    let closed: bool
 
-    @property
-    def count(self) -> int:  # type: ignore[override]
-        """queued objects"""
+    let count: int
 
-    @property
-    def num_interp_send(self) -> int:
-        """interpreters bound to the send end"""
+    let num_interp_send: int
 
-    @property
-    def num_interp_send_released(self) -> int:
-        """interpreters bound to the send end and released"""
+    let num_interp_send_released: int
 
-    @property
-    def num_interp_recv(self) -> int:
-        """interpreters bound to the send end"""
+    let num_interp_recv: int
 
-    @property
-    def num_interp_recv_released(self) -> int:
-        """interpreters bound to the send end and released"""
+    let num_interp_recv_released: int
 
-    @property
-    def num_interp_both(self) -> int:
-        """interpreters bound to both ends"""
+    let num_interp_both: int
 
-    @property
-    def num_interp_both_recv_released(self) -> int:
-        """interpreters bound to both ends and released_from_the recv end"""
+    let num_interp_both_recv_released: int
 
-    @property
-    def num_interp_both_send_released(self) -> int:
-        """interpreters bound to both ends and released_from_the send end"""
+    let num_interp_both_send_released: int
 
-    @property
-    def num_interp_both_released(self) -> int:
-        """interpreters bound to both ends and released_from_both"""
+    let num_interp_both_released: int
 
-    @property
-    def recv_associated(self) -> bool:
-        """current interpreter is bound to the recv end"""
+    let recv_associated: bool
 
-    @property
-    def recv_released(self) -> bool:
-        """current interpreter *was* bound to the recv end"""
+    let recv_released: bool
 
-    @property
-    def send_associated(self) -> bool:
-        """current interpreter is bound to the send end"""
+    let send_associated: bool
 
-    @property
-    def send_released(self) -> bool:
-        """current interpreter *was* bound to the send end"""
+    let send_released: bool
 
-def create(unboundop: Literal[1, 2, 3]) -> ChannelID:
+def create(unboundop: 1 | 2 | 3) -> ChannelID:
     """channel_create(unboundop) -> cid
 
     Create a new cross-interpreter channel and return a unique generated ID.
@@ -164,7 +126,7 @@ def send_buffer(cid: SupportsIndex, obj: Buffer, *, blocking: bool = True, timeo
     By default this waits for the object to be received.
     """
 
-def recv(cid: SupportsIndex, default: object = ...) -> (Any, Literal[1, 2, 3]):
+def recv(cid: SupportsIndex, default: object = ...) -> (dynamic, 1 | 2 | 3):
     """channel_recv(cid, [default]) -> (obj, unboundop)
 
     Return a new object from the data at the front of the channel's queue.
@@ -213,7 +175,7 @@ def get_info(cid: SupportsIndex) -> ChannelInfo:
     Return details about the channel.
     """
 
-def get_channel_defaults(cid: SupportsIndex) -> Literal[1, 2, 3]:
+def get_channel_defaults(cid: SupportsIndex) -> 1 | 2 | 3:
     """get_channel_defaults(cid)
 
     Return the channel's default values, set when it was created.

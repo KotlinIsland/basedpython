@@ -17,7 +17,7 @@ class bdist(Command):
     description: str
     user_options: ClassVar[list[(str, str | None, str)]]
     boolean_options: ClassVar[list[str]]
-    help_options: ClassVar[list[(str, str | None, str, Callable[[], Unused])]]
+    help_options: ClassVar[list[(str, str | None, str, () -> Unused)]]
     no_format_option: ClassVar[(*: str)]
     default_format: ClassVar[dict[str, str]]
     format_commands: ClassVar[list[str]]

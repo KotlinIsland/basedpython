@@ -1,7 +1,7 @@
 import sys
 from _typeshed import ReadableBuffer
 from collections.abc import Sequence
-from typing import Any, Final, Literal, NoReturn, final
+from typing import Final, Literal, final
 
 if sys.platform == "win32":
     ABOVE_NORMAL_PRIORITY_CLASS: Final = 0x8000
@@ -135,21 +135,21 @@ if sys.platform == "win32":
     WAIT_OBJECT_0: Final = 0
     WAIT_TIMEOUT: Final = 258
 
-    LOCALE_NAME_INVARIANT: Final[str]
-    LOCALE_NAME_MAX_LENGTH: Final[int]
-    LOCALE_NAME_SYSTEM_DEFAULT: Final[str]
-    LOCALE_NAME_USER_DEFAULT: Final[str | None]
+    final LOCALE_NAME_INVARIANT: str
+    final LOCALE_NAME_MAX_LENGTH: int
+    final LOCALE_NAME_SYSTEM_DEFAULT: str
+    final LOCALE_NAME_USER_DEFAULT: str | None
 
-    LCMAP_FULLWIDTH: Final[int]
-    LCMAP_HALFWIDTH: Final[int]
-    LCMAP_HIRAGANA: Final[int]
-    LCMAP_KATAKANA: Final[int]
-    LCMAP_LINGUISTIC_CASING: Final[int]
-    LCMAP_LOWERCASE: Final[int]
-    LCMAP_SIMPLIFIED_CHINESE: Final[int]
-    LCMAP_TITLECASE: Final[int]
-    LCMAP_TRADITIONAL_CHINESE: Final[int]
-    LCMAP_UPPERCASE: Final[int]
+    final LCMAP_FULLWIDTH: int
+    final LCMAP_HALFWIDTH: int
+    final LCMAP_HIRAGANA: int
+    final LCMAP_KATAKANA: int
+    final LCMAP_LINGUISTIC_CASING: int
+    final LCMAP_LOWERCASE: int
+    final LCMAP_SIMPLIFIED_CHINESE: int
+    final LCMAP_TITLECASE: int
+    final LCMAP_TRADITIONAL_CHINESE: int
+    final LCMAP_UPPERCASE: int
 
     if sys.version_info >= (3, 12):
         COPYFILE2_CALLBACK_CHUNK_STARTED: Final = 1
@@ -185,8 +185,8 @@ if sys.platform == "win32":
     def CloseHandle(handle: int, /) -> None:
         """Close handle."""
 
-    def ConnectNamedPipe(handle: int, overlapped: Literal[True]) -> Overlapped
-    def ConnectNamedPipe(handle: int, overlapped: Literal[False] = False) -> None
+    def ConnectNamedPipe(handle: int, overlapped: True) -> Overlapped
+    def ConnectNamedPipe(handle: int, overlapped: False = False) -> None
     def ConnectNamedPipe(handle: int, overlapped: bool) -> Overlapped | None
 
     def CreateFile(
@@ -344,9 +344,9 @@ if sys.platform == "win32":
 
     def UnmapViewOfFile(address: int, /) -> None
 
-    def ReadFile(handle: int, size: int, overlapped: Literal[True]) -> (Overlapped, int)
-    def ReadFile(handle: int, size: int, overlapped: Literal[False] = False) -> (bytes, int)
-    def ReadFile(handle: int, size: int, overlapped: int | bool) -> (Any, int)
+    def ReadFile(handle: int, size: int, overlapped: True) -> (Overlapped, int)
+    def ReadFile(handle: int, size: int, overlapped: False = False) -> (bytes, int)
+    def ReadFile(handle: int, size: int, overlapped: int | bool) -> (dynamic, int)
 
     def SetNamedPipeHandleState(
         named_pipe: int, mode: int | None, max_collection_count: int | None, collect_data_timeout: int | None, /
@@ -366,9 +366,9 @@ if sys.platform == "win32":
 
     def WaitNamedPipe(name: str, timeout: int, /) -> None
 
-    def WriteFile(handle: int, buffer: ReadableBuffer, overlapped: Literal[True]) -> (Overlapped, int)
-    def WriteFile(handle: int, buffer: ReadableBuffer, overlapped: Literal[False] = False) -> (int, int)
-    def WriteFile(handle: int, buffer: ReadableBuffer, overlapped: int | bool) -> (Any, int)
+    def WriteFile(handle: int, buffer: ReadableBuffer, overlapped: True) -> (Overlapped, int)
+    def WriteFile(handle: int, buffer: ReadableBuffer, overlapped: False = False) -> (int, int)
+    def WriteFile(handle: int, buffer: ReadableBuffer, overlapped: int | bool) -> (dynamic, int)
 
     final class Overlapped:
         """OVERLAPPED structure wrapper"""

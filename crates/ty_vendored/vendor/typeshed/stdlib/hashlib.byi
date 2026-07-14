@@ -150,16 +150,16 @@ algorithms_available: AbstractSet[str]
 
 if sys.version_info >= (3, 11):
     @type_check_only
-    class _BytesIOLike(Protocol):
+    protocol _BytesIOLike:
         def getbuffer(self) -> ReadableBuffer
 
     @type_check_only
-    class _FileDigestFileObj(Protocol):
+    protocol _FileDigestFileObj:
         def readinto(self, buf: bytearray, /) -> int
         def readable(self) -> bool
 
     def file_digest(
-        fileobj: _BytesIOLike | _FileDigestFileObj, digest: str | Callable[[], _HashObject], /, *, _bufsize: int = 262144
+        fileobj: _BytesIOLike | _FileDigestFileObj, digest: str | (() -> _HashObject), /, *, _bufsize: int = 262144
     ) -> HASH:
         """Hash the contents of a file-like object. Returns a digest object.
 

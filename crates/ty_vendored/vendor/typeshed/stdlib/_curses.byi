@@ -7,272 +7,272 @@ from typing import Final, TypeAlias, final
 # package makes it available on Windows as well with the same contents.
 
 # Handled by PyCurses_ConvertToChtype in _cursesmodule.c.
-_ChType: TypeAlias = str | bytes | int
+type _ChType = str | bytes | int
 
 # ACS codes are only initialized after initscr is called
-ACS_BBSS: Final[int]
-ACS_BLOCK: Final[int]
-ACS_BOARD: Final[int]
-ACS_BSBS: Final[int]
-ACS_BSSB: Final[int]
-ACS_BSSS: Final[int]
-ACS_BTEE: Final[int]
-ACS_BULLET: Final[int]
-ACS_CKBOARD: Final[int]
-ACS_DARROW: Final[int]
-ACS_DEGREE: Final[int]
-ACS_DIAMOND: Final[int]
-ACS_GEQUAL: Final[int]
-ACS_HLINE: Final[int]
-ACS_LANTERN: Final[int]
-ACS_LARROW: Final[int]
-ACS_LEQUAL: Final[int]
-ACS_LLCORNER: Final[int]
-ACS_LRCORNER: Final[int]
-ACS_LTEE: Final[int]
-ACS_NEQUAL: Final[int]
-ACS_PI: Final[int]
-ACS_PLMINUS: Final[int]
-ACS_PLUS: Final[int]
-ACS_RARROW: Final[int]
-ACS_RTEE: Final[int]
-ACS_S1: Final[int]
-ACS_S3: Final[int]
-ACS_S7: Final[int]
-ACS_S9: Final[int]
-ACS_SBBS: Final[int]
-ACS_SBSB: Final[int]
-ACS_SBSS: Final[int]
-ACS_SSBB: Final[int]
-ACS_SSBS: Final[int]
-ACS_SSSB: Final[int]
-ACS_SSSS: Final[int]
-ACS_STERLING: Final[int]
-ACS_TTEE: Final[int]
-ACS_UARROW: Final[int]
-ACS_ULCORNER: Final[int]
-ACS_URCORNER: Final[int]
-ACS_VLINE: Final[int]
-ALL_MOUSE_EVENTS: Final[int]
-A_ALTCHARSET: Final[int]
-A_ATTRIBUTES: Final[int]
-A_BLINK: Final[int]
-A_BOLD: Final[int]
-A_CHARTEXT: Final[int]
-A_COLOR: Final[int]
-A_DIM: Final[int]
-A_HORIZONTAL: Final[int]
-A_INVIS: Final[int]
-A_ITALIC: Final[int]
-A_LEFT: Final[int]
-A_LOW: Final[int]
-A_NORMAL: Final[int]
-A_PROTECT: Final[int]
-A_REVERSE: Final[int]
-A_RIGHT: Final[int]
-A_STANDOUT: Final[int]
-A_TOP: Final[int]
-A_UNDERLINE: Final[int]
-A_VERTICAL: Final[int]
-BUTTON1_CLICKED: Final[int]
-BUTTON1_DOUBLE_CLICKED: Final[int]
-BUTTON1_PRESSED: Final[int]
-BUTTON1_RELEASED: Final[int]
-BUTTON1_TRIPLE_CLICKED: Final[int]
-BUTTON2_CLICKED: Final[int]
-BUTTON2_DOUBLE_CLICKED: Final[int]
-BUTTON2_PRESSED: Final[int]
-BUTTON2_RELEASED: Final[int]
-BUTTON2_TRIPLE_CLICKED: Final[int]
-BUTTON3_CLICKED: Final[int]
-BUTTON3_DOUBLE_CLICKED: Final[int]
-BUTTON3_PRESSED: Final[int]
-BUTTON3_RELEASED: Final[int]
-BUTTON3_TRIPLE_CLICKED: Final[int]
-BUTTON4_CLICKED: Final[int]
-BUTTON4_DOUBLE_CLICKED: Final[int]
-BUTTON4_PRESSED: Final[int]
-BUTTON4_RELEASED: Final[int]
-BUTTON4_TRIPLE_CLICKED: Final[int]
+final ACS_BBSS: int
+final ACS_BLOCK: int
+final ACS_BOARD: int
+final ACS_BSBS: int
+final ACS_BSSB: int
+final ACS_BSSS: int
+final ACS_BTEE: int
+final ACS_BULLET: int
+final ACS_CKBOARD: int
+final ACS_DARROW: int
+final ACS_DEGREE: int
+final ACS_DIAMOND: int
+final ACS_GEQUAL: int
+final ACS_HLINE: int
+final ACS_LANTERN: int
+final ACS_LARROW: int
+final ACS_LEQUAL: int
+final ACS_LLCORNER: int
+final ACS_LRCORNER: int
+final ACS_LTEE: int
+final ACS_NEQUAL: int
+final ACS_PI: int
+final ACS_PLMINUS: int
+final ACS_PLUS: int
+final ACS_RARROW: int
+final ACS_RTEE: int
+final ACS_S1: int
+final ACS_S3: int
+final ACS_S7: int
+final ACS_S9: int
+final ACS_SBBS: int
+final ACS_SBSB: int
+final ACS_SBSS: int
+final ACS_SSBB: int
+final ACS_SSBS: int
+final ACS_SSSB: int
+final ACS_SSSS: int
+final ACS_STERLING: int
+final ACS_TTEE: int
+final ACS_UARROW: int
+final ACS_ULCORNER: int
+final ACS_URCORNER: int
+final ACS_VLINE: int
+final ALL_MOUSE_EVENTS: int
+final A_ALTCHARSET: int
+final A_ATTRIBUTES: int
+final A_BLINK: int
+final A_BOLD: int
+final A_CHARTEXT: int
+final A_COLOR: int
+final A_DIM: int
+final A_HORIZONTAL: int
+final A_INVIS: int
+final A_ITALIC: int
+final A_LEFT: int
+final A_LOW: int
+final A_NORMAL: int
+final A_PROTECT: int
+final A_REVERSE: int
+final A_RIGHT: int
+final A_STANDOUT: int
+final A_TOP: int
+final A_UNDERLINE: int
+final A_VERTICAL: int
+final BUTTON1_CLICKED: int
+final BUTTON1_DOUBLE_CLICKED: int
+final BUTTON1_PRESSED: int
+final BUTTON1_RELEASED: int
+final BUTTON1_TRIPLE_CLICKED: int
+final BUTTON2_CLICKED: int
+final BUTTON2_DOUBLE_CLICKED: int
+final BUTTON2_PRESSED: int
+final BUTTON2_RELEASED: int
+final BUTTON2_TRIPLE_CLICKED: int
+final BUTTON3_CLICKED: int
+final BUTTON3_DOUBLE_CLICKED: int
+final BUTTON3_PRESSED: int
+final BUTTON3_RELEASED: int
+final BUTTON3_TRIPLE_CLICKED: int
+final BUTTON4_CLICKED: int
+final BUTTON4_DOUBLE_CLICKED: int
+final BUTTON4_PRESSED: int
+final BUTTON4_RELEASED: int
+final BUTTON4_TRIPLE_CLICKED: int
 # Darwin ncurses doesn't provide BUTTON5_* constants prior to 3.12.10 and 3.13.3
 if sys.version_info >= (3, 12) or sys.platform != "darwin":
-    BUTTON5_PRESSED: Final[int]
-    BUTTON5_RELEASED: Final[int]
-    BUTTON5_CLICKED: Final[int]
-    BUTTON5_DOUBLE_CLICKED: Final[int]
-    BUTTON5_TRIPLE_CLICKED: Final[int]
-BUTTON_ALT: Final[int]
-BUTTON_CTRL: Final[int]
-BUTTON_SHIFT: Final[int]
-COLOR_BLACK: Final[int]
-COLOR_BLUE: Final[int]
-COLOR_CYAN: Final[int]
-COLOR_GREEN: Final[int]
-COLOR_MAGENTA: Final[int]
-COLOR_RED: Final[int]
-COLOR_WHITE: Final[int]
-COLOR_YELLOW: Final[int]
-ERR: Final[int]
-KEY_A1: Final[int]
-KEY_A3: Final[int]
-KEY_B2: Final[int]
-KEY_BACKSPACE: Final[int]
-KEY_BEG: Final[int]
-KEY_BREAK: Final[int]
-KEY_BTAB: Final[int]
-KEY_C1: Final[int]
-KEY_C3: Final[int]
-KEY_CANCEL: Final[int]
-KEY_CATAB: Final[int]
-KEY_CLEAR: Final[int]
-KEY_CLOSE: Final[int]
-KEY_COMMAND: Final[int]
-KEY_COPY: Final[int]
-KEY_CREATE: Final[int]
-KEY_CTAB: Final[int]
-KEY_DC: Final[int]
-KEY_DL: Final[int]
-KEY_DOWN: Final[int]
-KEY_EIC: Final[int]
-KEY_END: Final[int]
-KEY_ENTER: Final[int]
-KEY_EOL: Final[int]
-KEY_EOS: Final[int]
-KEY_EXIT: Final[int]
-KEY_F0: Final[int]
-KEY_F1: Final[int]
-KEY_F10: Final[int]
-KEY_F11: Final[int]
-KEY_F12: Final[int]
-KEY_F13: Final[int]
-KEY_F14: Final[int]
-KEY_F15: Final[int]
-KEY_F16: Final[int]
-KEY_F17: Final[int]
-KEY_F18: Final[int]
-KEY_F19: Final[int]
-KEY_F2: Final[int]
-KEY_F20: Final[int]
-KEY_F21: Final[int]
-KEY_F22: Final[int]
-KEY_F23: Final[int]
-KEY_F24: Final[int]
-KEY_F25: Final[int]
-KEY_F26: Final[int]
-KEY_F27: Final[int]
-KEY_F28: Final[int]
-KEY_F29: Final[int]
-KEY_F3: Final[int]
-KEY_F30: Final[int]
-KEY_F31: Final[int]
-KEY_F32: Final[int]
-KEY_F33: Final[int]
-KEY_F34: Final[int]
-KEY_F35: Final[int]
-KEY_F36: Final[int]
-KEY_F37: Final[int]
-KEY_F38: Final[int]
-KEY_F39: Final[int]
-KEY_F4: Final[int]
-KEY_F40: Final[int]
-KEY_F41: Final[int]
-KEY_F42: Final[int]
-KEY_F43: Final[int]
-KEY_F44: Final[int]
-KEY_F45: Final[int]
-KEY_F46: Final[int]
-KEY_F47: Final[int]
-KEY_F48: Final[int]
-KEY_F49: Final[int]
-KEY_F5: Final[int]
-KEY_F50: Final[int]
-KEY_F51: Final[int]
-KEY_F52: Final[int]
-KEY_F53: Final[int]
-KEY_F54: Final[int]
-KEY_F55: Final[int]
-KEY_F56: Final[int]
-KEY_F57: Final[int]
-KEY_F58: Final[int]
-KEY_F59: Final[int]
-KEY_F6: Final[int]
-KEY_F60: Final[int]
-KEY_F61: Final[int]
-KEY_F62: Final[int]
-KEY_F63: Final[int]
-KEY_F7: Final[int]
-KEY_F8: Final[int]
-KEY_F9: Final[int]
-KEY_FIND: Final[int]
-KEY_HELP: Final[int]
-KEY_HOME: Final[int]
-KEY_IC: Final[int]
-KEY_IL: Final[int]
-KEY_LEFT: Final[int]
-KEY_LL: Final[int]
-KEY_MARK: Final[int]
-KEY_MAX: Final[int]
-KEY_MESSAGE: Final[int]
-KEY_MIN: Final[int]
-KEY_MOUSE: Final[int]
-KEY_MOVE: Final[int]
-KEY_NEXT: Final[int]
-KEY_NPAGE: Final[int]
-KEY_OPEN: Final[int]
-KEY_OPTIONS: Final[int]
-KEY_PPAGE: Final[int]
-KEY_PREVIOUS: Final[int]
-KEY_PRINT: Final[int]
-KEY_REDO: Final[int]
-KEY_REFERENCE: Final[int]
-KEY_REFRESH: Final[int]
-KEY_REPLACE: Final[int]
-KEY_RESET: Final[int]
-KEY_RESIZE: Final[int]
-KEY_RESTART: Final[int]
-KEY_RESUME: Final[int]
-KEY_RIGHT: Final[int]
-KEY_SAVE: Final[int]
-KEY_SBEG: Final[int]
-KEY_SCANCEL: Final[int]
-KEY_SCOMMAND: Final[int]
-KEY_SCOPY: Final[int]
-KEY_SCREATE: Final[int]
-KEY_SDC: Final[int]
-KEY_SDL: Final[int]
-KEY_SELECT: Final[int]
-KEY_SEND: Final[int]
-KEY_SEOL: Final[int]
-KEY_SEXIT: Final[int]
-KEY_SF: Final[int]
-KEY_SFIND: Final[int]
-KEY_SHELP: Final[int]
-KEY_SHOME: Final[int]
-KEY_SIC: Final[int]
-KEY_SLEFT: Final[int]
-KEY_SMESSAGE: Final[int]
-KEY_SMOVE: Final[int]
-KEY_SNEXT: Final[int]
-KEY_SOPTIONS: Final[int]
-KEY_SPREVIOUS: Final[int]
-KEY_SPRINT: Final[int]
-KEY_SR: Final[int]
-KEY_SREDO: Final[int]
-KEY_SREPLACE: Final[int]
-KEY_SRESET: Final[int]
-KEY_SRIGHT: Final[int]
-KEY_SRSUME: Final[int]
-KEY_SSAVE: Final[int]
-KEY_SSUSPEND: Final[int]
-KEY_STAB: Final[int]
-KEY_SUNDO: Final[int]
-KEY_SUSPEND: Final[int]
-KEY_UNDO: Final[int]
-KEY_UP: Final[int]
-OK: Final[int]
-REPORT_MOUSE_POSITION: Final[int]
+    final BUTTON5_PRESSED: int
+    final BUTTON5_RELEASED: int
+    final BUTTON5_CLICKED: int
+    final BUTTON5_DOUBLE_CLICKED: int
+    final BUTTON5_TRIPLE_CLICKED: int
+final BUTTON_ALT: int
+final BUTTON_CTRL: int
+final BUTTON_SHIFT: int
+final COLOR_BLACK: int
+final COLOR_BLUE: int
+final COLOR_CYAN: int
+final COLOR_GREEN: int
+final COLOR_MAGENTA: int
+final COLOR_RED: int
+final COLOR_WHITE: int
+final COLOR_YELLOW: int
+final ERR: int
+final KEY_A1: int
+final KEY_A3: int
+final KEY_B2: int
+final KEY_BACKSPACE: int
+final KEY_BEG: int
+final KEY_BREAK: int
+final KEY_BTAB: int
+final KEY_C1: int
+final KEY_C3: int
+final KEY_CANCEL: int
+final KEY_CATAB: int
+final KEY_CLEAR: int
+final KEY_CLOSE: int
+final KEY_COMMAND: int
+final KEY_COPY: int
+final KEY_CREATE: int
+final KEY_CTAB: int
+final KEY_DC: int
+final KEY_DL: int
+final KEY_DOWN: int
+final KEY_EIC: int
+final KEY_END: int
+final KEY_ENTER: int
+final KEY_EOL: int
+final KEY_EOS: int
+final KEY_EXIT: int
+final KEY_F0: int
+final KEY_F1: int
+final KEY_F10: int
+final KEY_F11: int
+final KEY_F12: int
+final KEY_F13: int
+final KEY_F14: int
+final KEY_F15: int
+final KEY_F16: int
+final KEY_F17: int
+final KEY_F18: int
+final KEY_F19: int
+final KEY_F2: int
+final KEY_F20: int
+final KEY_F21: int
+final KEY_F22: int
+final KEY_F23: int
+final KEY_F24: int
+final KEY_F25: int
+final KEY_F26: int
+final KEY_F27: int
+final KEY_F28: int
+final KEY_F29: int
+final KEY_F3: int
+final KEY_F30: int
+final KEY_F31: int
+final KEY_F32: int
+final KEY_F33: int
+final KEY_F34: int
+final KEY_F35: int
+final KEY_F36: int
+final KEY_F37: int
+final KEY_F38: int
+final KEY_F39: int
+final KEY_F4: int
+final KEY_F40: int
+final KEY_F41: int
+final KEY_F42: int
+final KEY_F43: int
+final KEY_F44: int
+final KEY_F45: int
+final KEY_F46: int
+final KEY_F47: int
+final KEY_F48: int
+final KEY_F49: int
+final KEY_F5: int
+final KEY_F50: int
+final KEY_F51: int
+final KEY_F52: int
+final KEY_F53: int
+final KEY_F54: int
+final KEY_F55: int
+final KEY_F56: int
+final KEY_F57: int
+final KEY_F58: int
+final KEY_F59: int
+final KEY_F6: int
+final KEY_F60: int
+final KEY_F61: int
+final KEY_F62: int
+final KEY_F63: int
+final KEY_F7: int
+final KEY_F8: int
+final KEY_F9: int
+final KEY_FIND: int
+final KEY_HELP: int
+final KEY_HOME: int
+final KEY_IC: int
+final KEY_IL: int
+final KEY_LEFT: int
+final KEY_LL: int
+final KEY_MARK: int
+final KEY_MAX: int
+final KEY_MESSAGE: int
+final KEY_MIN: int
+final KEY_MOUSE: int
+final KEY_MOVE: int
+final KEY_NEXT: int
+final KEY_NPAGE: int
+final KEY_OPEN: int
+final KEY_OPTIONS: int
+final KEY_PPAGE: int
+final KEY_PREVIOUS: int
+final KEY_PRINT: int
+final KEY_REDO: int
+final KEY_REFERENCE: int
+final KEY_REFRESH: int
+final KEY_REPLACE: int
+final KEY_RESET: int
+final KEY_RESIZE: int
+final KEY_RESTART: int
+final KEY_RESUME: int
+final KEY_RIGHT: int
+final KEY_SAVE: int
+final KEY_SBEG: int
+final KEY_SCANCEL: int
+final KEY_SCOMMAND: int
+final KEY_SCOPY: int
+final KEY_SCREATE: int
+final KEY_SDC: int
+final KEY_SDL: int
+final KEY_SELECT: int
+final KEY_SEND: int
+final KEY_SEOL: int
+final KEY_SEXIT: int
+final KEY_SF: int
+final KEY_SFIND: int
+final KEY_SHELP: int
+final KEY_SHOME: int
+final KEY_SIC: int
+final KEY_SLEFT: int
+final KEY_SMESSAGE: int
+final KEY_SMOVE: int
+final KEY_SNEXT: int
+final KEY_SOPTIONS: int
+final KEY_SPREVIOUS: int
+final KEY_SPRINT: int
+final KEY_SR: int
+final KEY_SREDO: int
+final KEY_SREPLACE: int
+final KEY_SRESET: int
+final KEY_SRIGHT: int
+final KEY_SRSUME: int
+final KEY_SSAVE: int
+final KEY_SSUSPEND: int
+final KEY_STAB: int
+final KEY_SUNDO: int
+final KEY_SUSPEND: int
+final KEY_UNDO: int
+final KEY_UP: int
+final OK: int
+final REPORT_MOUSE_POSITION: int
 _C_API: dynamic
-version: Final[bytes]
+final version: bytes
 
 def baudrate() -> int:
     """Return the output speed of the terminal in bits per second."""

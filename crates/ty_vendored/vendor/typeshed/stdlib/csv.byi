@@ -134,7 +134,7 @@ class Dialect:
     lineterminator: str
     quoting: _QuotingType
     strict: bool
-    def __init__(self) -> None
+    init(self)
 
 class excel(Dialect):
     """Describe the usual properties of Excel-generated CSV files."""
@@ -153,7 +153,7 @@ class DictReader[in out Element]:
     dialect: _DialectLike
     line_num: int
 
-    def __init__(
+    init(
         self,
         f: Iterable[str],
         fieldnames: Sequence[Element],
@@ -169,8 +169,8 @@ class DictReader[in out Element]:
         lineterminator: str = "\r\n",
         quoting: _QuotingType = 0,
         strict: bool = False,
-    ) -> None
-    def __init__(
+    )
+    init(
         self: DictReader[str],
         f: Iterable[str],
         fieldnames: Sequence[str] | None = None,
@@ -186,7 +186,7 @@ class DictReader[in out Element]:
         lineterminator: str = "\r\n",
         quoting: _QuotingType = 0,
         strict: bool = False,
-    ) -> None
+    )
 
     def __iter__(self) -> Self
     def __next__(self) -> dict[Element | dynamic, str | dynamic]
@@ -201,14 +201,14 @@ class DictReader[in out Element]:
 class DictWriter[in out Element]:
     fieldnames: Collection[Element]
     restval: dynamic | None
-    extrasaction: Literal["raise", "ignore"]
+    extrasaction: "raise" | "ignore"
     writer: Writer
-    def __init__(
+    init(
         self,
         f: SupportsWrite[str],
         fieldnames: Collection[Element],
         restval: dynamic | None = "",
-        extrasaction: Literal["raise", "ignore"] = "raise",
+        extrasaction: "raise" | "ignore" = "raise",
         dialect: _DialectLike = "excel",
         *,
         delimiter: str = ",",
@@ -219,7 +219,7 @@ class DictWriter[in out Element]:
         lineterminator: str = "\r\n",
         quoting: _QuotingType = 0,
         strict: bool = False,
-    ) -> None
+    )
     def writeheader(self) -> dynamic
     def writerow(self, rowdict: Mapping[Element, dynamic]) -> dynamic
     def writerows(self, rowdicts: Iterable[Mapping[Element, dynamic]]) -> None

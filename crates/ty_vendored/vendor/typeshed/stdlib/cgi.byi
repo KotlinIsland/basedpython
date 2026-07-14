@@ -15,7 +15,7 @@ from builtins import list as _list, type as _type
 from collections.abc import Iterable, Iterator, Mapping
 from email.message import Message
 from types import TracebackType
-from typing import IO, Protocol, type_check_only
+from typing import Protocol, type_check_only
 from typing_extensions import Self
 
 __all__ = [
@@ -80,7 +80,7 @@ def parse_multipart(
     """
 
 @type_check_only
-class _Environ(Protocol):
+protocol _Environ:
     def __getitem__(self, k: str, /) -> str
     def keys(self) -> Iterable[str]
 
@@ -125,7 +125,7 @@ class MiniFieldStorage:
     headers: dict[dynamic, dynamic]
     name: dynamic
     value: dynamic
-    def __init__(self, name: dynamic, value: dynamic) -> None:
+    init(self, name: dynamic, value: dynamic):
         """Constructor from field name and value."""
 
 class FieldStorage:
@@ -193,7 +193,7 @@ class FieldStorage:
     done: int
     list: _list[dynamic] | None
     value: None | bytes | _list[dynamic]
-    def __init__(
+    init(
         self,
         fp: IO[dynamic] | None = None,
         headers: Mapping[str, str] | Message | None = None,
@@ -206,7 +206,7 @@ class FieldStorage:
         errors: str = "replace",
         max_num_fields: int | None = None,
         separator: str = "&",
-    ) -> None:
+    ):
         """Constructor.  Read multipart/* until last part.
 
         Arguments, all optional:

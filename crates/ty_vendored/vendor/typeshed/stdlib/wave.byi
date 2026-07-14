@@ -74,7 +74,7 @@ is destroyed.
 
 import sys
 from _typeshed import ReadableBuffer, StrOrBytesPath, Unused
-from typing import IO, BinaryIO, Final, Literal, NamedTuple, NoReturn, TypeAlias
+from typing import Final, Literal, NamedTuple, TypeAlias
 from typing_extensions import Self, deprecated
 
 __all__ = ["open", "Error", "Wave_read", "Wave_write"]
@@ -82,9 +82,9 @@ if sys.version_info >= (3, 15):
     __all__ += ["WAVE_FORMAT_PCM", "WAVE_FORMAT_IEEE_FLOAT", "WAVE_FORMAT_EXTENSIBLE"]
 
 if sys.version_info >= (3, 15):
-    _File: TypeAlias = StrOrBytesPath | IO[bytes]
+    type _File = StrOrBytesPath | IO[bytes]
 else:
-    _File: TypeAlias = str | IO[bytes]
+    type _File = str | IO[bytes]
 
 class Error(Exception)
 
@@ -138,7 +138,7 @@ class Wave_read:
     _framesize -- size of one frame in the file
     """
 
-    def __init__(self, f: _File) -> None
+    init(self, f: _File)
     def __enter__(self) -> Self
     def __exit__(self, *args: Unused) -> None
     def __del__(self) -> None
@@ -193,7 +193,7 @@ class Wave_write:
     _datawritten -- the size of the audio samples actually written
     """
 
-    def __init__(self, f: _File) -> None
+    init(self, f: _File)
     def __enter__(self) -> Self
     def __exit__(self, *args: Unused) -> None
     def __del__(self) -> None
@@ -234,6 +234,6 @@ class Wave_write:
     def writeframes(self, data: ReadableBuffer) -> None
     def close(self) -> None
 
-def open(f: _File, mode: Literal["r", "rb"]) -> Wave_read
-def open(f: _File, mode: Literal["w", "wb"]) -> Wave_write
+def open(f: _File, mode: "r" | "rb") -> Wave_read
+def open(f: _File, mode: "w" | "wb") -> Wave_write
 def open(f: _File, mode: str | None = None) -> dynamic

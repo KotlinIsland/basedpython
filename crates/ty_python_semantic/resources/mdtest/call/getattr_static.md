@@ -61,7 +61,7 @@ reveal_type(inspect.getattr_static(sys, "dont_write_bytecode"))  # revealed: boo
 # revealed: def getattr_static(obj: object, attr: str, default: Any | None = ...) -> Any
 reveal_type(inspect.getattr_static(inspect, "getattr_static"))
 
-reveal_type(inspect.getattr_static(1, "real"))  # revealed: property
+reveal_type(inspect.getattr_static(1, "real"))  # revealed: int
 ```
 
 (Implicit) instance attributes can also be accessed through `inspect.getattr_static`:

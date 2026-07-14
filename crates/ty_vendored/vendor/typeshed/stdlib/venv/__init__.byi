@@ -14,7 +14,7 @@ from typing import Final
 
 logger: logging.Logger
 
-CORE_VENV_DEPS: Final[(*: str)]
+final CORE_VENV_DEPS: (*: str)
 
 class EnvBuilder:
     """

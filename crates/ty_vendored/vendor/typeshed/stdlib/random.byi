@@ -51,7 +51,7 @@ import sys
 from _typeshed import SupportsLenAndGetItem
 from collections.abc import Callable, Iterable, MutableSequence, Sequence, Set as AbstractSet
 from fractions import Fraction
-from typing import Any, ClassVar, NoReturn, TypeVar
+from typing import ClassVar, TypeVar
 from typing_extensions import deprecated
 
 __all__ = [
@@ -101,7 +101,7 @@ class Random(_random.Random):
     """
 
     VERSION: ClassVar[int]
-    def __init__(self, x: int | float | str | bytes | bytearray | None = None) -> None:  # noqa: Y041
+    init(self, x: int | float | str | bytes | bytearray | None = None):  # noqa: Y041
         """Initialize an instance.
 
         Optional argument x controls seeding, as for Random.seed().
@@ -111,7 +111,7 @@ class Random(_random.Random):
     # Ignore Y041, since random.seed doesn't treat int like a float subtype. Having an explicit
     # int better documents conventional usage of random.seed.
 
-    def seed(self, a: int | float | str | bytes | bytearray | None = None, version: int = 2) -> None:  # type: ignore[override]  # noqa: Y041
+    def seed(self, a: int | float | str | bytes | bytearray | None = None, version: int = 2) -> None:
         """Initialize internal state from a seed.
 
         The only supported seed types are None, int, float,
@@ -129,10 +129,10 @@ class Random(_random.Random):
 
         """
 
-    def getstate(self) -> (*: Any):
+    def getstate(self) -> (*: dynamic):
         """Return internal state; can be passed to setstate() later."""
 
-    def setstate(self, state: (*: Any)) -> None:
+    def setstate(self, state: (*: dynamic)) -> None:
         """Restore internal state from object returned by getstate()."""
 
     def randrange(self, start: int, stop: int | None = None, step: int = 1) -> int:
@@ -181,7 +181,7 @@ class Random(_random.Random):
 
             """
         @deprecated("The `random` parameter is deprecated since Python 3.9; removed in Python 3.11.")
-        def shuffle(self, x: MutableSequence[dynamic], random: Callable[[], float] | None = None) -> None
+        def shuffle(self, x: MutableSequence[dynamic], random: (() -> float) | None = None) -> None
 
     if sys.version_info >= (3, 11):
         def sample[Element](self, population: Sequence[Element], k: int, *, counts: Iterable[int] | None = None) -> list[Element]:

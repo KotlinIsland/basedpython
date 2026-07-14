@@ -72,24 +72,24 @@ from collections.abc import Iterable, Iterator
 from email.errors import HeaderParseError, MessageDefect
 from email.policy import Policy
 from re import Pattern
-from typing import Any, Final
+from typing import Final
 from typing_extensions import Self
 
-WSP: Final[set[str]]
-CFWS_LEADER: Final[set[str]]
-SPECIALS: Final[set[str]]
-ATOM_ENDS: Final[set[str]]
-DOT_ATOM_ENDS: Final[set[str]]
-PHRASE_ENDS: Final[set[str]]
-TSPECIALS: Final[set[str]]
-TOKEN_ENDS: Final[set[str]]
-ASPECIALS: Final[set[str]]
-ATTRIBUTE_ENDS: Final[set[str]]
-EXTENDED_ATTRIBUTE_ENDS: Final[set[str]]
+final WSP: set[str]
+final CFWS_LEADER: set[str]
+final SPECIALS: set[str]
+final ATOM_ENDS: set[str]
+final DOT_ATOM_ENDS: set[str]
+final PHRASE_ENDS: set[str]
+final TSPECIALS: set[str]
+final TOKEN_ENDS: set[str]
+final ASPECIALS: set[str]
+final ATTRIBUTE_ENDS: set[str]
+final EXTENDED_ATTRIBUTE_ENDS: set[str]
 # Added in Python 3.10.15, 3.11.10, 3.12.5
-NLSET: Final[set[str]]
+final NLSET: set[str]
 # Added in Python 3.10.15, 3.11.10, 3.12.5
-SPECIALSNL: Final[set[str]]
+final SPECIALSNL: set[str]
 
 # Added in Python 3.10.17, 3.11.12, 3.12.9, 3.13.2
 def make_quoted_pairs(value: dynamic) -> str:
@@ -101,25 +101,20 @@ def quote_string(value: dynamic) -> str
 def make_parenthesis_pairs(value: dynamic) -> str:
     """Escape parenthesis and backslash for use within a comment."""
 
-rfc2047_matcher: Final[Pattern[str]]
+final rfc2047_matcher: Pattern[str]
 
 class TokenList(list[TokenList | Terminal]):
     token_type: str | None
     syntactic_break: bool
     ew_combine_allowed: bool
     defects: list[MessageDefect]
-    def __init__(self, *args: dynamic, **kw: dynamic) -> None
-    @property
-    def value(self) -> str
-    @property
-    def all_defects(self) -> list[MessageDefect]
+    init(self, *args: dynamic, **kw: dynamic)
+    let value: str
+    let all_defects: list[MessageDefect]
     def startswith_fws(self) -> bool
-    @property
-    def as_ew_allowed(self) -> bool:
-        """True if all top level tokens of this part may be RFC2047 encoded."""
+    let as_ew_allowed: bool
 
-    @property
-    def comments(self) -> list[str]
+    let comments: list[str]
     def fold(self, *, policy: Policy) -> str
     def pprint(self, indent: str = "") -> None
     def ppstr(self, indent: str = "") -> str
@@ -153,12 +148,9 @@ class EncodedWord(TokenList):
 
 class QuotedString(TokenList):
     token_type: str
-    @property
-    def content(self) -> str
-    @property
-    def quoted_value(self) -> str
-    @property
-    def stripped_value(self) -> str
+    let content: str
+    let quoted_value: str
+    let stripped_value: str
 
 class BareQuotedString(QuotedString):
     token_type: str
@@ -166,110 +158,75 @@ class BareQuotedString(QuotedString):
 class Comment(WhiteSpaceTokenList):
     token_type: str
     def quote(self, value: dynamic) -> str
-    @property
-    def content(self) -> str
+    let content: str
 
 class AddressList(TokenList):
     token_type: str
-    @property
-    def addresses(self) -> list[Address]
-    @property
-    def mailboxes(self) -> list[Mailbox]
-    @property
-    def all_mailboxes(self) -> list[Mailbox]
+    let addresses: list[Address]
+    let mailboxes: list[Mailbox]
+    let all_mailboxes: list[Mailbox]
 
 class Address(TokenList):
     token_type: str
-    @property
-    def display_name(self) -> str
-    @property
-    def mailboxes(self) -> list[Mailbox]
-    @property
-    def all_mailboxes(self) -> list[Mailbox]
+    let display_name: str
+    let mailboxes: list[Mailbox]
+    let all_mailboxes: list[Mailbox]
 
 class MailboxList(TokenList):
     token_type: str
-    @property
-    def mailboxes(self) -> list[Mailbox]
-    @property
-    def all_mailboxes(self) -> list[Mailbox]
+    let mailboxes: list[Mailbox]
+    let all_mailboxes: list[Mailbox]
 
 class GroupList(TokenList):
     token_type: str
-    @property
-    def mailboxes(self) -> list[Mailbox]
-    @property
-    def all_mailboxes(self) -> list[Mailbox]
+    let mailboxes: list[Mailbox]
+    let all_mailboxes: list[Mailbox]
 
 class Group(TokenList):
     token_type: str
-    @property
-    def mailboxes(self) -> list[Mailbox]
-    @property
-    def all_mailboxes(self) -> list[Mailbox]
-    @property
-    def display_name(self) -> str
+    let mailboxes: list[Mailbox]
+    let all_mailboxes: list[Mailbox]
+    let display_name: str
 
 class NameAddr(TokenList):
     token_type: str
-    @property
-    def display_name(self) -> str
-    @property
-    def local_part(self) -> str
-    @property
-    def domain(self) -> str
-    @property
-    def route(self) -> list[Domain] | None
-    @property
-    def addr_spec(self) -> str
+    let display_name: str
+    let local_part: str
+    let domain: str
+    let route: list[Domain] | None
+    let addr_spec: str
 
 class AngleAddr(TokenList):
     token_type: str
-    @property
-    def local_part(self) -> str
-    @property
-    def domain(self) -> str
-    @property
-    def route(self) -> list[Domain] | None
-    @property
-    def addr_spec(self) -> str
+    let local_part: str
+    let domain: str
+    let route: list[Domain] | None
+    let addr_spec: str
 
 class ObsRoute(TokenList):
     token_type: str
-    @property
-    def domains(self) -> list[Domain]
+    let domains: list[Domain]
 
 class Mailbox(TokenList):
     token_type: str
-    @property
-    def display_name(self) -> str
-    @property
-    def local_part(self) -> str
-    @property
-    def domain(self) -> str
-    @property
-    def route(self) -> list[str]
-    @property
-    def addr_spec(self) -> str
+    let display_name: str
+    let local_part: str
+    let domain: str
+    let route: list[str]
+    let addr_spec: str
 
 class InvalidMailbox(TokenList):
     token_type: str
-    @property
-    def display_name(self) -> None
-    @property
-    def local_part(self) -> None
-    @property
-    def domain(self) -> None
-    @property
-    def route(self) -> None
-    @property
-    def addr_spec(self) -> None
+    let display_name: None
+    let local_part: None
+    let domain: None
+    let route: None
+    let addr_spec: None
 
 class Domain(TokenList):
     token_type: str
     as_ew_allowed: bool
-    @property
-    def domain(self) -> str
+    let domain: str
 
 class DotAtom(TokenList):
     token_type: str
@@ -285,12 +242,9 @@ class NoFoldLiteral(TokenList):
 class AddrSpec(TokenList):
     token_type: str
     as_ew_allowed: bool
-    @property
-    def local_part(self) -> str
-    @property
-    def domain(self) -> str
-    @property
-    def addr_spec(self) -> str
+    let local_part: str
+    let domain: str
+    let addr_spec: str
 
 class ObsLocalPart(TokenList):
     token_type: str
@@ -298,22 +252,18 @@ class ObsLocalPart(TokenList):
 
 class DisplayName(Phrase):
     token_type: str
-    @property
-    def display_name(self) -> str
+    let display_name: str
 
 class LocalPart(TokenList):
     token_type: str
     as_ew_allowed: bool
-    @property
-    def local_part(self) -> str
+    let local_part: str
 
 class DomainLiteral(TokenList):
     token_type: str
     as_ew_allowed: bool
-    @property
-    def domain(self) -> str
-    @property
-    def ip(self) -> str
+    let domain: str
+    let ip: str
 
 class MIMEVersion(TokenList):
     token_type: str
@@ -325,18 +275,15 @@ class Parameter(TokenList):
     sectioned: bool
     extended: bool
     charset: str
-    @property
-    def section_number(self) -> int
-    @property
-    def param_value(self) -> str
+    let section_number: int
+    let param_value: str
 
 class InvalidParameter(Parameter):
     token_type: str
 
 class Attribute(TokenList):
     token_type: str
-    @property
-    def stripped_value(self) -> str
+    let stripped_value: str
 
 class Section(TokenList):
     token_type: str
@@ -344,19 +291,16 @@ class Section(TokenList):
 
 class Value(TokenList):
     token_type: str
-    @property
-    def stripped_value(self) -> str
+    let stripped_value: str
 
 class MimeParameters(TokenList):
     token_type: str
     syntactic_break: bool
-    @property
-    def params(self) -> Iterator[(str, str)]
+    let params: Iterator[(str, str)]
 
 class ParameterizedHeaderValue(TokenList):
     syntactic_break: bool
-    @property
-    def params(self) -> Iterable[(str, str)]
+    let params: Iterable[(str, str)]
 
 class ContentType(ParameterizedHeaderValue):
     token_type: str
@@ -393,8 +337,7 @@ if sys.version_info >= (3, 13):
     # Added in Python 3.13.12, 3.14.3
     class MessageIDList(TokenList):
         token_type: str
-        @property
-        def message_ids(self) -> list[MsgID | Terminal]
+        let message_ids: list[MsgID | Terminal]
 
 class Header(TokenList):
     token_type: str
@@ -407,21 +350,17 @@ class Terminal(str):
     defects: list[MessageDefect]
     def __new__(cls, value: str, token_type: str) -> Self
     def pprint(self) -> None
-    @property
-    def all_defects(self) -> list[MessageDefect]
+    let all_defects: list[MessageDefect]
     def pop_trailing_ws(self) -> None
-    @property
-    def comments(self) -> list[str]
-    def __getnewargs__(self) -> (str, str)  # type: ignore[override]
+    let comments: list[str]
+    def __getnewargs__(self) -> (str, str)
 
 class WhiteSpaceTerminal(Terminal):
-    @property
-    def value(self) -> str
+    let value: str
     def startswith_fws(self) -> bool
 
 class ValueTerminal(Terminal):
-    @property
-    def value(self) -> ValueTerminal
+    let value: ValueTerminal
     def startswith_fws(self) -> bool
 
 class EWWhiteSpaceTerminal(WhiteSpaceTerminal)
@@ -429,9 +368,9 @@ class EWWhiteSpaceTerminal(WhiteSpaceTerminal)
 class _InvalidEwError(HeaderParseError):
     """Invalid encoded word found while parsing headers."""
 
-DOT: Final[ValueTerminal]
-ListSeparator: Final[ValueTerminal]
-RouteComponentMarker: Final[ValueTerminal]
+final DOT: ValueTerminal
+final ListSeparator: ValueTerminal
+final RouteComponentMarker: ValueTerminal
 
 def get_fws(value: str) -> (WhiteSpaceTerminal, str):
     """FWS = 1*WSP
@@ -538,7 +477,7 @@ def get_dot_atom(value: str) -> (DotAtom, str):
     word.
     """
 
-def get_word(value: str) -> (Any, str):
+def get_word(value: str) -> (dynamic, str):
     """word = atom / quoted-string
 
     Either atom or quoted-string may start with CFWS.  We have to peel off this

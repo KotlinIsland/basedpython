@@ -25,7 +25,7 @@ class Dialog(Toplevel):
     This class is intended as a base class for custom dialogs
     """
 
-    def __init__(self, parent: Misc | None, title: str | None = None) -> None:
+    init(self, parent: Misc | None, title: str | None = None):
         """Initialize a dialog.
 
         Arguments:
@@ -66,7 +66,7 @@ class Dialog(Toplevel):
         """
 
 class SimpleDialog:
-    def __init__(
+    init(
         self,
         master: Misc | None,
         text: str = "",
@@ -75,7 +75,7 @@ class SimpleDialog:
         cancel: int | None = None,
         title: str | None = None,
         class_: str | None = None,
-    ) -> None
+    )
     def go(self) -> int | None
     def return_event(self, event: Event[Misc]) -> None
     def wm_delete_window(self) -> None

@@ -3,13 +3,13 @@ import sys
 import traceback
 from collections.abc import Iterable
 from types import FrameType, FunctionType
-from typing import Any, TypeAlias, type_check_only
+from typing import TypeAlias, type_check_only
 
 @type_check_only
 class _HasWrapper:
     __wrapper__: _HasWrapper | FunctionType
 
-_FuncType: TypeAlias = FunctionType | _HasWrapper | functools.partial[Any] | functools.partialmethod[Any]
+type _FuncType = FunctionType | _HasWrapper | functools.partial[dynamic] | functools.partialmethod[dynamic]
 
 def _get_function_source(func: _FuncType) -> (str, int)
 def _get_function_source(func: object) -> (str, int) | None

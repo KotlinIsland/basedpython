@@ -75,7 +75,7 @@ from email.message import Message
 from http.client import HTTPConnection, HTTPMessage, HTTPResponse
 from http.cookiejar import CookieJar
 from re import Pattern
-from typing import IO, Any, ClassVar, Literal, NoReturn, Protocol, TypeAlias, TypeVar, type_check_only
+from typing import ClassVar, Literal, Protocol, TypeAlias, TypeVar, type_check_only
 from typing_extensions import deprecated
 from urllib.error import HTTPError as HTTPError
 from urllib.response import addclosehook, addinfourl
@@ -123,9 +123,9 @@ if sys.version_info < (3, 14):
 # See
 # - https://github.com/python/typeshed/pull/15042
 # - https://github.com/python/typing/issues/566
-_UrlopenRet: TypeAlias = Any
+type _UrlopenRet = dynamic
 
-_DataType: TypeAlias = ReadableBuffer | SupportsRead[bytes] | Iterable[bytes] | None
+type _DataType = ReadableBuffer | SupportsRead[bytes] | Iterable[bytes] | None
 
 if sys.version_info >= (3, 13):
     def urlopen(
@@ -180,7 +180,7 @@ else:
         *,
         cafile: None = None,
         capath: None = None,
-        cadefault: Literal[False] = False,
+        cadefault: False = False,
         context: ssl.SSLContext | None = None,
     ) -> _UrlopenRet:
         """Open the URL url, which can be either a string or a Request object.
@@ -248,7 +248,7 @@ else:
     ) -> _UrlopenRet
 
 def install_opener(opener: OpenerDirector | None) -> None
-def build_opener(*handlers: BaseHandler | Callable[[], BaseHandler]) -> OpenerDirector:
+def build_opener(*handlers: BaseHandler | (() -> BaseHandler)) -> OpenerDirector:
     """Create an opener object from a list of handlers.
 
     The opener will use several default handlers, including support
@@ -337,11 +337,11 @@ else:
 
 class Request:
     @property
-    def full_url(self) -> str: ...
+    def full_url(self) -> str
     @full_url.setter
-    def full_url(self, value: str) -> None: ...
+    def full_url(self, value: str) -> None
     @full_url.deleter
-    def full_url(self) -> None: ...
+    def full_url(self) -> None
 
     type: str
     host: str
@@ -353,7 +353,7 @@ class Request:
     unverifiable: bool
     method: str | None
     timeout: float | None  # Undocumented, only set after __init__() by OpenerDirector.open()
-    def __init__(
+    init(
         self,
         url: str,
         data: _DataType = None,
@@ -361,7 +361,7 @@ class Request:
         origin_req_host: str | None = None,
         unverifiable: bool = False,
         method: str | None = None,
-    ) -> None
+    )
     def get_method(self) -> str:
         """Return a string indicating the HTTP request method."""
 
@@ -425,14 +425,14 @@ class HTTPRedirectHandler(BaseHandler):
 
 class HTTPCookieProcessor(BaseHandler):
     cookiejar: CookieJar
-    def __init__(self, cookiejar: CookieJar | None = None) -> None
+    init(self, cookiejar: CookieJar | None = None)
     def http_request(self, request: Request) -> Request  # undocumented
     def http_response(self, request: Request, response: HTTPResponse) -> HTTPResponse  # undocumented
     def https_request(self, request: Request) -> Request  # undocumented
     def https_response(self, request: Request, response: HTTPResponse) -> HTTPResponse  # undocumented
 
 class ProxyHandler(BaseHandler):
-    def __init__(self, proxies: dict[str, str] | None = None) -> None
+    init(self, proxies: dict[str, str] | None = None)
     def proxy_open(self, req: Request, proxy: str, type: str) -> _UrlopenRet | None  # undocumented
     # TODO: add a method for every (common) proxy protocol
 
@@ -462,8 +462,8 @@ class HTTPPasswordMgrWithPriorAuth(HTTPPasswordMgrWithDefaultRealm):
 class AbstractBasicAuthHandler:
     rx: ClassVar[Pattern[str]]  # undocumented
     passwd: HTTPPasswordMgr
-    add_password: Callable[[str, str | Sequence[str], str, str], None]
-    def __init__(self, password_mgr: HTTPPasswordMgr | None = None) -> None
+    add_password: (str, str | Sequence[str], str, str) -> None
+    init(self, password_mgr: HTTPPasswordMgr | None = None)
     def http_error_auth_reqed(self, authreq: str, host: str, req: Request, headers: HTTPMessage) -> None
     def http_request(self, req: Request) -> Request  # undocumented
     def http_response(self, req: Request, response: HTTPResponse) -> HTTPResponse  # undocumented
@@ -480,13 +480,13 @@ class ProxyBasicAuthHandler(AbstractBasicAuthHandler, BaseHandler):
     def http_error_407(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> _UrlopenRet | None
 
 class AbstractDigestAuthHandler:
-    def __init__(self, passwd: HTTPPasswordMgr | None = None) -> None
+    init(self, passwd: HTTPPasswordMgr | None = None)
     def reset_retry_count(self) -> None
     def http_error_auth_reqed(self, auth_header: str, host: str, req: Request, headers: HTTPMessage) -> None
     def retry_http_digest_auth(self, req: Request, auth: str) -> _UrlopenRet | None
     def get_cnonce(self, nonce: str) -> str
     def get_authorization(self, req: Request, chal: Mapping[str, str]) -> str | None
-    def get_algorithm_impls(self, algorithm: str) -> (Callable[[str], str], Callable[[str, str], str])
+    def get_algorithm_impls(self, algorithm: str) -> ((str) -> str, (str, str) -> str)
     def get_entity_digest(self, data: ReadableBuffer | None, chal: Mapping[str, str]) -> str | None
 
 class HTTPDigestAuthHandler(BaseHandler, AbstractDigestAuthHandler):
@@ -504,7 +504,7 @@ class ProxyDigestAuthHandler(BaseHandler, AbstractDigestAuthHandler):
     def http_error_407(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> _UrlopenRet | None
 
 @type_check_only
-class _HTTPConnectionProtocol(Protocol):
+protocol _HTTPConnectionProtocol:
     def __call__(
         self,
         host: str,
@@ -559,9 +559,9 @@ class DataHandler(BaseHandler):
 class ftpwrapper:  # undocumented
     """Class used by open_ftp() for cache of open FTP connections."""
 
-    def __init__(
+    init(
         self, user: str, passwd: str, host: str, port: int, dirs: str, timeout: float | None = None, persistent: bool = True
-    ) -> None
+    )
     def close(self) -> None
     def endtransfer(self) -> None
     def file_close(self) -> None
@@ -593,7 +593,7 @@ class HTTPErrorProcessor(BaseHandler):
 def urlretrieve(
     url: str,
     filename: StrOrBytesPath | None = None,
-    reporthook: Callable[[int, int, int], object] | None = None,
+    reporthook: ((int, int, int) -> object) | None = None,
     data: _DataType = None,
 ) -> (str, HTTPMessage):
     """
@@ -627,7 +627,7 @@ if sys.version_info < (3, 14):
         """
 
         version: ClassVar[str]
-        def __init__(self, proxies: dict[str, str] | None = None, **x509: str) -> None
+        init(self, proxies: dict[str, str] | None = None, **x509: str)
         def open(self, fullurl: str, data: ReadableBuffer | None = None) -> _UrlopenRet:
             """Use URLopener().open(file) instead of open(file, 'r')."""
 
@@ -638,7 +638,7 @@ if sys.version_info < (3, 14):
             self,
             url: str,
             filename: str | None = None,
-            reporthook: Callable[[int, int, int], object] | None = None,
+            reporthook: ((int, int, int) -> object) | None = None,
             data: ReadableBuffer | None = None,
         ) -> (str, Message | None):
             """retrieve(url) returns (filename, headers) for a local object

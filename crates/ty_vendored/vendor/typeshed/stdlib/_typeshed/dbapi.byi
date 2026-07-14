@@ -2,25 +2,23 @@
 # https://www.python.org/dev/peps/pep-0249/
 
 from collections.abc import Mapping, Sequence
-from typing import Any, Protocol, TypeAlias
+from typing import Protocol, TypeAlias
 
-DBAPITypeCode: TypeAlias = Any | None
+type DBAPITypeCode = dynamic | None
 # Strictly speaking, this should be a Sequence, but the type system does
 # not support fixed-length sequences.
-DBAPIColumnDescription: TypeAlias = tuple[str, DBAPITypeCode, int | None, int | None, int | None, int | None, bool | None]
+type DBAPIColumnDescription = tuple[str, DBAPITypeCode, int | None, int | None, int | None, int | None, bool | None]
 
-class DBAPIConnection(Protocol):
+protocol DBAPIConnection:
     def close(self) -> object
     def commit(self) -> object
     # optional:
     # def rollback(self) -> Any: ...
     def cursor(self) -> DBAPICursor
 
-class DBAPICursor(Protocol):
-    @property
-    def description(self) -> Sequence[DBAPIColumnDescription] | None
-    @property
-    def rowcount(self) -> int
+protocol DBAPICursor:
+    let description: Sequence[DBAPIColumnDescription] | None
+    let rowcount: int
     # optional:
     # def callproc(self, procname: str, parameters: Sequence[Any] = ..., /) -> Sequence[Any]: ...
     def close(self) -> object

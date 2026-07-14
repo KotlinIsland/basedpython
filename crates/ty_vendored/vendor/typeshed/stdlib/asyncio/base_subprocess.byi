@@ -1,11 +1,11 @@
 import subprocess
 from collections import deque
 from collections.abc import Sequence
-from typing import IO, Any, TypeAlias
+from typing import TypeAlias
 
 from . import events, futures, protocols, transports
 
-_File: TypeAlias = int | IO[Any] | None
+type _File = int | IO[dynamic] | None
 
 class BaseSubprocessTransport(transports.SubprocessTransport):
     _closed: bool  # undocumented
@@ -14,11 +14,11 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
     _proc: subprocess.Popen[dynamic] | None  # undocumented
     _pid: int | None  # undocumented
     _returncode: int | None  # undocumented
-    _exit_waiters: list[futures.Future[Any]]  # undocumented
-    _pending_calls: deque[tuple[(...) -> Any, tuple[Any, ...]]]  # undocumented
+    _exit_waiters: list[futures.Future[dynamic]]  # undocumented
+    _pending_calls: deque[tuple[(...) -> dynamic, (*: dynamic)]]  # undocumented
     _pipes: dict[int, _File]  # undocumented
     _finished: bool  # undocumented
-    def __init__(
+    init(
         self,
         loop: events.AbstractEventLoop,
         protocol: protocols.SubprocessProtocol,
@@ -28,10 +28,10 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         stdout: _File,
         stderr: _File,
         bufsize: int,
-        waiter: futures.Future[Any] | None = None,
+        waiter: futures.Future[dynamic] | None = None,
         extra: dynamic | None = None,
         **kwargs: dynamic,
-    ) -> None
+    )
     def _start(
         self,
         args: str | bytes | Sequence[str | bytes],
@@ -42,11 +42,11 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
         bufsize: int,
         **kwargs: dynamic,
     ) -> None  # undocumented
-    def get_pid(self) -> int | None  # type: ignore[override]
-    def get_pipe_transport(self, fd: int) -> _File  # type: ignore[override]
+    def get_pid(self) -> int | None
+    def get_pipe_transport(self, fd: int) -> _File
     def _check_proc(self) -> None  # undocumented
     def send_signal(self, signal: int) -> None
-    async def _connect_pipes(self, waiter: futures.Future[Any] | None) -> None  # undocumented
+    async def _connect_pipes(self, waiter: futures.Future[dynamic] | None) -> None  # undocumented
     def _call(self, cb: (...) -> object, *data: dynamic) -> None  # undocumented
     def _pipe_connection_lost(self, fd: int, exc: BaseException | None) -> None  # undocumented
     def _pipe_data_received(self, fd: int, data: bytes) -> None  # undocumented
@@ -62,6 +62,6 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
     def __del__(self) -> None
 
 class WriteSubprocessPipeProto(protocols.BaseProtocol):  # undocumented
-    def __init__(self, proc: BaseSubprocessTransport, fd: int) -> None
+    init(self, proc: BaseSubprocessTransport, fd: int)
 
-class ReadSubprocessPipeProto(WriteSubprocessPipeProto, protocols.Protocol)  # undocumented
+protocol ReadSubprocessPipeProto(WriteSubprocessPipeProto)  # undocumented

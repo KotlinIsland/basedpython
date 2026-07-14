@@ -11,14 +11,14 @@ from _typeshed import SupportsRead, SupportsWrite
 # This codec is string to string.
 
 class Codec(codecs.Codec):
-    def encode(self, input: str, errors: str = "strict") -> (str, int)  # type: ignore[override]
-    def decode(self, input: str, errors: str = "strict") -> (str, int)  # type: ignore[override]
+    def encode(self, input: str, errors: str = "strict") -> (str, int)
+    def decode(self, input: str, errors: str = "strict") -> (str, int)
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
-    def encode(self, input: str, final: bool = False) -> str  # type: ignore[override]
+    def encode(self, input: str, final: bool = False) -> str
 
 class IncrementalDecoder(codecs.IncrementalDecoder):
-    def decode(self, input: str, final: bool = False) -> str  # type: ignore[override]
+    def decode(self, input: str, final: bool = False) -> str
 
 class StreamWriter(Codec, codecs.StreamWriter)
 class StreamReader(Codec, codecs.StreamReader)

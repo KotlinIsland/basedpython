@@ -5,7 +5,7 @@ Implements the Distutils 'build' command.
 
 from _typeshed import Incomplete, Unused
 from collections.abc import Callable
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from ..cmd import Command
 
@@ -15,7 +15,7 @@ class build(Command):
     description: str
     user_options: ClassVar[list[(str, str | None, str)]]
     boolean_options: ClassVar[list[str]]
-    help_options: ClassVar[list[(str, str | None, str, Callable[[], Unused])]]
+    help_options: ClassVar[list[(str, str | None, str, () -> Unused)]]
     build_base: str
     build_purelib: Incomplete
     build_platlib: Incomplete
@@ -36,4 +36,4 @@ class build(Command):
     def has_ext_modules(self)
     def has_scripts(self)
     # Any to work around variance issues
-    sub_commands: ClassVar[list[(str, Callable[[Any], bool] | None)]]
+    sub_commands: ClassVar[list[(str, ((dynamic) -> bool) | None)]]

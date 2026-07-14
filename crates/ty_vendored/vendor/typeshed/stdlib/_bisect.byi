@@ -42,13 +42,13 @@ def bisect_left[Element](
     lo: int = 0,
     hi: int | None = None,
     *,
-    key: Callable[[Element], SupportsRichComparisonT],
+    key: (Element) -> SupportsRichComparisonT,
 ) -> int
 def bisect_left[Element](
-    a: SupportsGetItem[int, Element], x: SupportsRichComparisonT, lo: int, hi: int, *, key: Callable[[Element], SupportsRichComparisonT]
+    a: SupportsGetItem[int, Element], x: SupportsRichComparisonT, lo: int, hi: int, *, key: (Element) -> SupportsRichComparisonT
 ) -> int
 def bisect_left[Element](
-    a: SupportsGetItem[int, Element], x: SupportsRichComparisonT, lo: int = 0, *, hi: int, key: Callable[[Element], SupportsRichComparisonT]
+    a: SupportsGetItem[int, Element], x: SupportsRichComparisonT, lo: int = 0, *, hi: int, key: (Element) -> SupportsRichComparisonT
 ) -> int
 
 def bisect_right(
@@ -82,13 +82,13 @@ def bisect_right[Element](
     lo: int = 0,
     hi: int | None = None,
     *,
-    key: Callable[[Element], SupportsRichComparisonT],
+    key: (Element) -> SupportsRichComparisonT,
 ) -> int
 def bisect_right[Element](
-    a: SupportsGetItem[int, Element], x: SupportsRichComparisonT, lo: int, hi: int, *, key: Callable[[Element], SupportsRichComparisonT]
+    a: SupportsGetItem[int, Element], x: SupportsRichComparisonT, lo: int, hi: int, *, key: (Element) -> SupportsRichComparisonT
 ) -> int
 def bisect_right[Element](
-    a: SupportsGetItem[int, Element], x: SupportsRichComparisonT, lo: int = 0, *, hi: int, key: Callable[[Element], SupportsRichComparisonT]
+    a: SupportsGetItem[int, Element], x: SupportsRichComparisonT, lo: int = 0, *, hi: int, key: (Element) -> SupportsRichComparisonT
 ) -> int
 
 def insort_left(
@@ -109,7 +109,7 @@ def insort_left(
     A custom key function can be supplied to customize the sort order.
     """
 def insort_left[Element](
-    a: MutableSequence[Element], x: Element, lo: int = 0, hi: int | None = None, *, key: Callable[[Element], SupportsRichComparisonT]
+    a: MutableSequence[Element], x: Element, lo: int = 0, hi: int | None = None, *, key: (Element) -> SupportsRichComparisonT
 ) -> None
 
 def insort_right(
@@ -130,5 +130,5 @@ def insort_right(
     A custom key function can be supplied to customize the sort order.
     """
 def insort_right[Element](
-    a: MutableSequence[Element], x: Element, lo: int = 0, hi: int | None = None, *, key: Callable[[Element], SupportsRichComparisonT]
+    a: MutableSequence[Element], x: Element, lo: int = 0, hi: int | None = None, *, key: (Element) -> SupportsRichComparisonT
 ) -> None

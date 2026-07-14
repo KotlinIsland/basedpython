@@ -11,7 +11,7 @@ __all__ = ["MIMEMultipart"]
 class MIMEMultipart(MIMEBase):
     """Base class for MIME multipart/* type messages."""
 
-    def __init__(
+    init(
         self,
         _subtype: str = "mixed",
         boundary: str | None = None,
@@ -19,7 +19,7 @@ class MIMEMultipart(MIMEBase):
         *,
         policy: Policy[_MessageT] | None = None,
         **_params: _ParamsType,
-    ) -> None:
+    ):
         """Creates a multipart/* type message.
 
         By default, creates a multipart/mixed message, with proper

@@ -12,8 +12,8 @@ if sys.version_info >= (3, 11):
 class TopologicalSorter[in out Element]:
     """Provides functionality to topologically sort a graph of hashable nodes"""
 
-    def __init__(self, graph: None = None) -> None
-    def __init__(self, graph: SupportsItems[Element, Iterable[Element]]) -> None
+    init(self, graph: None = None)
+    init(self, graph: SupportsItems[Element, Iterable[Element]])
 
     def add(self, node: Element, *predecessors: Element) -> None:
         """Add a new node and its predecessors to the graph.

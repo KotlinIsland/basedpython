@@ -3,7 +3,7 @@
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from types import GenericAlias, TracebackType
-from typing import Any, ClassVar, Generic, ParamSpec, TypeVar, final
+from typing import ClassVar, Generic, ParamSpec, TypeVar, final
 from typing_extensions import Self
 
 
@@ -12,8 +12,7 @@ final class ContextVar[in out Element]:
     def __new__(cls, name: str, *, default: Element) -> Self
 
     def __hash__(self) -> int
-    @property
-    def name(self) -> str
+    let name: str
 
     def get(self) -> Element:
         """Return a value for the context variable for the current context.
@@ -50,12 +49,10 @@ final class ContextVar[in out Element]:
         """ContextVars are generic over the type of their contained values"""
 
 final class Token[in out Element]:
-    @property
-    def var(self) -> ContextVar[Element]
-    @property
-    def old_value(self) -> dynamic  # returns either _T or MISSING, but that's hard to express
+    let var: ContextVar[Element]
+    let old_value: dynamic  # returns either _T or MISSING, but that's hard to express
     MISSING: ClassVar[object]
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Tokens are generic over the same type as the ContextVar which created them."""
 
@@ -72,8 +69,8 @@ def copy_context() -> Context
 
 # It doesn't make sense to make this generic, because for most Contexts each ContextVar will have
 # a different value.
-final class Context(Mapping[ContextVar[Any], Any]):
-    def __init__(self) -> None
+final class Context(Mapping[ContextVar[dynamic], dynamic]):
+    init(self)
 
     def get[Element](self, key: ContextVar[Element], default: None = None, /) -> Element | None:
         """Return the value for `key` if `key` has the value in the context object.
@@ -84,11 +81,11 @@ final class Context(Mapping[ContextVar[Any], Any]):
     def get[Element](self, key: ContextVar[Element], default: Element, /) -> Element
     def get[Element, D](self, key: ContextVar[Element], default: D, /) -> Element | D
 
-    def run[**P, Element](self, callable: Callable[P, Element], *args: P.args, **kwargs: P.kwargs) -> Element
+    def run[**P, Element](self, callable: (**P) -> Element, *args: P.args, **kwargs: P.kwargs) -> Element
     def copy(self) -> Context:
         """Return a shallow copy of the context object."""
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     def __getitem__[Element](self, key: ContextVar[Element], /) -> Element:
         """Return self[key]."""
 

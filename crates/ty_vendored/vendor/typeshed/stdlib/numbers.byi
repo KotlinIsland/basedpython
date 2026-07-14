@@ -28,7 +28,7 @@ __all__ = ["Number", "Complex", "Real", "Rational", "Integral"]
 # as we want `int` to be seen as a subtype of `_ComplexLike`,
 # and `int.__complex__` does not exist :(
 @type_check_only
-class _ComplexLike(Protocol):
+protocol _ComplexLike:
     def __neg__(self) -> _ComplexLike
     def __pos__(self) -> _ComplexLike
     def __abs__(self) -> _RealLike
@@ -36,7 +36,7 @@ class _ComplexLike(Protocol):
 # _RealLike is a structural-typing approximation
 # of the `Real` ABC, which is not (and cannot be) a protocol
 @type_check_only
-class _RealLike(_ComplexLike, Protocol):
+protocol _RealLike(_ComplexLike):
     def __trunc__(self) -> _IntegralLike
     def __floor__(self) -> _IntegralLike
     def __ceil__(self) -> _IntegralLike
@@ -49,7 +49,7 @@ class _RealLike(_ComplexLike, Protocol):
 # _IntegralLike is a structural-typing approximation
 # of the `Integral` ABC, which is not (and cannot be) a protocol
 @type_check_only
-class _IntegralLike(_RealLike, Protocol):
+protocol _IntegralLike(_RealLike):
     def __invert__(self) -> _IntegralLike
     def __int__(self) -> int
     def __index__(self) -> int
@@ -154,7 +154,7 @@ class Complex(Number, _ComplexLike):
     abstract def __eq__(self, other: object) -> bool:
         """self == other"""
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
 
 # See comment at the top of the file
 # for why some of these return types are purposefully vague
@@ -239,13 +239,9 @@ class Real(Complex, _RealLike):
     def __complex__(self) -> complex:
         """complex(self) == complex(float(self), 0)"""
 
-    @property
-    def real(self) -> _RealLike:
-        """Real numbers are their real component."""
+    let real: _RealLike
 
-    @property
-    def imag(self) -> Literal[0]:
-        """Real numbers have no imaginary component."""
+    let imag: 0
 
     def conjugate(self) -> _RealLike:
         """Conjugate is a no-op for Reals."""
@@ -349,13 +345,9 @@ class Integral(Rational, _IntegralLike):
     def __float__(self) -> float:
         """float(self) == float(int(self))"""
 
-    @property
-    def numerator(self) -> _IntegralLike:
-        """Integers are their own numerators."""
+    let numerator: _IntegralLike
 
-    @property
-    def denominator(self) -> Literal[1]:
-        """Integers have a denominator of 1."""
+    let denominator: 1
 
     # Not actually overridden at runtime,
     # but we override these in the stub to give them more precise return types:

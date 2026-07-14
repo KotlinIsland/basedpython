@@ -10,8 +10,8 @@ from typing_extensions import Self, deprecated
 __all__ = ["shlex", "split", "quote", "join"]
 
 @type_check_only
-class _ShlexInstream(Protocol):
-    def read(self, size: Literal[1], /) -> str
+protocol _ShlexInstream:
+    def read(self, size: 1, /) -> str
     def readline(self) -> object
     def close(self) -> object
 
@@ -50,15 +50,14 @@ class shlex:
     token: str
     filestack: deque[(str | None, _ShlexInstream, int)]
     eof: str | None
-    @property
-    def punctuation_chars(self) -> str
-    def __init__(
+    let punctuation_chars: str
+    init(
         self,
         instream: str | _ShlexInstream | None = None,
         infile: str | None = None,
         posix: bool = False,
         punctuation_chars: bool | str = False,
-    ) -> None
+    )
     def get_token(self) -> str | None:
         """Get a token from the input stream (or from stack if it's nonempty)"""
 

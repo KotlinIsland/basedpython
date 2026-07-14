@@ -46,11 +46,11 @@ to see what constants are used, and where.
 import sys
 from _typeshed import ReadableBuffer, Unused
 from types import TracebackType
-from typing import Any, Final, Literal, TypeAlias, final
+from typing import Final, Literal, TypeAlias, final
 from typing_extensions import Self
 
 if sys.platform == "win32":
-    _KeyType: TypeAlias = HKEYType | int
+    type _KeyType = HKEYType | int
     def CloseKey(hkey: _KeyType, /) -> None:
         """Closes a previously opened registry key.
 
@@ -190,7 +190,7 @@ if sys.platform == "win32":
         raised, indicating no more values are available.
         """
 
-    def EnumValue(key: _KeyType, index: int, /) -> (str, Any, int):
+    def EnumValue(key: _KeyType, index: int, /) -> (str, dynamic, int):
         """Enumerates values of an open registry key.
 
           key
@@ -323,7 +323,7 @@ if sys.platform == "win32":
         completeness.
         """
 
-    def QueryValueEx(key: _KeyType, name: str, /) -> (Any, int):
+    def QueryValueEx(key: _KeyType, name: str, /) -> (dynamic, int):
         """Retrieves the type and value of a specified sub-key.
 
           key
@@ -380,7 +380,7 @@ if sys.platform == "win32":
         KEY_SET_VALUE access.
         """
 
-    def SetValueEx(key: _KeyType, value_name: str | None, reserved: Unused, type: Literal[4, 5], value: int | None, /) -> None:
+    def SetValueEx(key: _KeyType, value_name: str | None, reserved: Unused, type: 4 | 5, value: int | None, /) -> None:
         """Stores data in the value field of an open registry key.
 
           key
@@ -421,16 +421,16 @@ if sys.platform == "win32":
         the configuration registry to help the registry perform efficiently.
         """
     def SetValueEx(
-        key: _KeyType, value_name: str | None, reserved: Unused, type: Literal[1, 2], value: str | None, /
+        key: _KeyType, value_name: str | None, reserved: Unused, type: 1 | 2, value: str | None, /
     ) -> None
     def SetValueEx(
-        key: _KeyType, value_name: str | None, reserved: Unused, type: Literal[7], value: list[str] | None, /
+        key: _KeyType, value_name: str | None, reserved: Unused, type: 7, value: list[str] | None, /
     ) -> None
     def SetValueEx(
         key: _KeyType,
         value_name: str | None,
         reserved: Unused,
-        type: Literal[0, 3, 8, 9, 10, 11],
+        type: 0 | 3 | 8 | 9 | 10 | 11,
         value: ReadableBuffer | None,
         /,
     ) -> None
@@ -476,13 +476,13 @@ if sys.platform == "win32":
         Will generally raise NotImplementedError if executed on a 32bit OS.
         """
 
-    HKEY_CLASSES_ROOT: Final[int]
-    HKEY_CURRENT_USER: Final[int]
-    HKEY_LOCAL_MACHINE: Final[int]
-    HKEY_USERS: Final[int]
-    HKEY_PERFORMANCE_DATA: Final[int]
-    HKEY_CURRENT_CONFIG: Final[int]
-    HKEY_DYN_DATA: Final[int]
+    final HKEY_CLASSES_ROOT: int
+    final HKEY_CURRENT_USER: int
+    final HKEY_LOCAL_MACHINE: int
+    final HKEY_USERS: int
+    final HKEY_PERFORMANCE_DATA: int
+    final HKEY_CURRENT_CONFIG: int
+    final HKEY_DYN_DATA: int
 
     KEY_ALL_ACCESS: Final = 983103
     KEY_WRITE: Final = 131078
@@ -588,5 +588,4 @@ if sys.platform == "win32":
             """
 
         def __hash__(self) -> int
-        @property
-        def handle(self) -> int
+        let handle: int

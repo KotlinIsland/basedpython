@@ -4,9 +4,9 @@ from typing import ClassVar, Final, Literal
 
 from .. import fixer_base
 
-MAP: Final[dict[str, str]]
+final MAP: dict[str, str]
 
 class FixMethodattrs(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[True]]
+    BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     def transform(self, node, results) -> None

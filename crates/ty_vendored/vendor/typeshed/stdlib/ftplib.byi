@@ -34,7 +34,7 @@ from collections.abc import Callable, Iterable, Iterator
 from socket import socket
 from ssl import SSLContext
 from types import TracebackType
-from typing import Final, Literal, TextIO
+from typing import Final, Literal
 from typing_extensions import Self, deprecated
 
 __all__ = ["FTP", "error_reply", "error_temp", "error_perm", "error_proto", "all_errors", "FTP_TLS"]
@@ -94,7 +94,7 @@ class FTP:
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
     ) -> None
     source_address: (str, int) | None
-    def __init__(
+    init(
         self,
         host: str = "",
         user: str = "",
@@ -104,7 +104,7 @@ class FTP:
         source_address: (str, int) | None = None,
         *,
         encoding: str = "utf-8",
-    ) -> None:
+    ):
         """Initialization method (called by class instantiation).
         Initialize host to localhost, port to standard ftp port.
         Optional arguments are host (for connect()),
@@ -141,7 +141,7 @@ class FTP:
         2: also print raw lines read and sent before stripping CR/LF
         """
 
-    def set_pasv(self, val: bool | Literal[0, 1]) -> None:
+    def set_pasv(self, val: bool | 0 | 1) -> None:
         """Use passive or active mode for data transfers.
         With a false argument, use the normal PORT mode,
         With a true argument, use the PASV command.
@@ -207,7 +207,7 @@ class FTP:
         """Like ntransfercmd() but returns only the socket."""
 
     def retrbinary(
-        self, cmd: str, callback: Callable[[bytes], object], blocksize: int = 8192, rest: int | str | None = None
+        self, cmd: str, callback: (bytes) -> object, blocksize: int = 8192, rest: int | str | None = None
     ) -> str:
         """Retrieve data in binary mode.  A new port is created for you.
 
@@ -228,7 +228,7 @@ class FTP:
         cmd: str,
         fp: SupportsRead[bytes],
         blocksize: int = 8192,
-        callback: Callable[[bytes], object] | None = None,
+        callback: ((bytes) -> object) | None = None,
         rest: int | str | None = None,
     ) -> str:
         """Store a file in binary mode.  A new port is created for you.
@@ -246,7 +246,7 @@ class FTP:
           The response code.
         """
 
-    def retrlines(self, cmd: str, callback: Callable[[str], object] | None = None) -> str:
+    def retrlines(self, cmd: str, callback: ((str) -> object) | None = None) -> str:
         """Retrieve data in line mode.  A new port is created for you.
 
         Args:
@@ -259,7 +259,7 @@ class FTP:
           The response code.
         """
 
-    def storlines(self, cmd: str, fp: SupportsReadline[bytes], callback: Callable[[bytes], object] | None = None) -> str:
+    def storlines(self, cmd: str, fp: SupportsReadline[bytes], callback: ((bytes) -> object) | None = None) -> str:
         """Store a file in line mode.  A new port is created for you.
 
         Args:
@@ -279,7 +279,7 @@ class FTP:
         """Return a list of files in a given directory (default the current)."""
 
     # Technically only the last arg can be a Callable but ...
-    def dir(self, *args: str | Callable[[str], object]) -> None:
+    def dir(self, *args: str | ((str) -> object)) -> None:
         """List a directory in long form.
         By default list current directory to stdout.
         Optional last argument is callback function; all
@@ -449,5 +449,5 @@ def parse257(resp: str) -> str:  # undocumented
     Returns the directoryname in the 257 reply.
     """
 
-def ftpcp(source: FTP, sourcename: str, target: FTP, targetname: str = "", type: Literal["A", "I"] = "I") -> None:  # undocumented
+def ftpcp(source: FTP, sourcename: str, target: FTP, targetname: str = "", type: "A" | "I" = "I") -> None:  # undocumented
     """Copy file from one FTP-instance to another."""

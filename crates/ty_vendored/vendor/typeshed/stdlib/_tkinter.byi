@@ -18,15 +18,11 @@ from typing_extensions import deprecated
 #    >>> text.tag_ranges('foo')
 #    (<textindex object: '1.0'>, <textindex object: '2.0'>)
 final class Tcl_Obj:
-    @property
-    def string(self) -> str:
-        """the string representation of this object, either as str or bytes"""
+    let string: str
 
-    @property
-    def typename(self) -> str:
-        """name of the Tcl type"""
+    let typename: str
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     def __eq__(self, value, /)
     def __ge__(self, value, /)
     def __gt__(self, value, /)
@@ -36,7 +32,7 @@ final class Tcl_Obj:
 
 class TclError(Exception)
 
-_TkinterTraceFunc: TypeAlias = Callable[[tuple[str, ...]], object]
+type _TkinterTraceFunc = (tuple[str, ...]) -> object
 
 # This class allows running Tcl code. Tkinter uses it internally a lot, and
 # it's often handy to drop a piece of Tcl code into a tkinter program. Example:
@@ -70,7 +66,7 @@ final class TkappType:
     def dooneevent(self, flags: int = 0, /) -> int
     def eval(self, script: str, /) -> str
     def evalfile(self, fileName: str, /) -> str
-    def exprboolean(self, s: str, /) -> Literal[0, 1]
+    def exprboolean(self, s: str, /) -> 0 | 1
     def exprdouble(self, s: str, /) -> float
     def exprlong(self, s: str, /) -> int
     def exprstring(self, s: str, /) -> str
@@ -95,11 +91,11 @@ final class TkappType:
     def unsetvar(self, *args, **kwargs)
 
     if sys.version_info >= (3, 14):
-        def wantobjects(self) -> Literal[0, 1]
+        def wantobjects(self) -> 0 | 1
     else:
         def wantobjects(self) -> bool
 
-    def wantobjects(self, wantobjects: Literal[0, 1] | bool, /) -> None
+    def wantobjects(self, wantobjects: 0 | 1 | bool, /) -> None
 
     def willdispatch(self) -> None
     if sys.version_info >= (3, 12):
@@ -121,8 +117,8 @@ EXCEPTION: Final = 8
 READABLE: Final = 2
 WRITABLE: Final = 4
 
-TCL_VERSION: Final[str]
-TK_VERSION: Final[str]
+final TCL_VERSION: str
+final TK_VERSION: str
 
 final class TkttType:
     def deletetimerhandler(self) -> None

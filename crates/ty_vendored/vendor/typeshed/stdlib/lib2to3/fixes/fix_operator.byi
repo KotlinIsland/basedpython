@@ -15,8 +15,8 @@ from typing import ClassVar, Literal
 def invocation(s)
 
 class FixOperator(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[True]]
-    order: ClassVar[Literal["pre"]]
+    BM_compatible: ClassVar[True]
+    order: ClassVar["pre"]
     methods: str
     obj: str
     PATTERN: ClassVar[str]

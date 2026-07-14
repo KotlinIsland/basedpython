@@ -5,7 +5,7 @@ import sys
 from collections.abc import Callable, Iterable, Mapping, Set as AbstractSet
 from threading import Lock, Semaphore, Thread
 from types import GenericAlias
-from typing import Any, Generic, Protocol, TypeAlias, TypeVar, type_check_only
+from typing import Generic, Protocol, TypeAlias, TypeVar, type_check_only
 from typing_extensions import Self, TypeVarTuple, Unpack
 from weakref import ref
 
@@ -19,12 +19,12 @@ _global_shutdown_lock: Lock
 def _python_exit() -> None
 
 
-_Task: TypeAlias = tuple[Callable[..., Any], tuple[Any, ...], dict[str, Any]]
+type _Task = tuple[(...) -> dynamic, (*: dynamic), dict[str, dynamic]]
 
 
 @type_check_only
-class _ResolveTaskFunc(Protocol):
-    def __call__[C: Callable[..., object], *Ts, Key: str, Value](
+protocol _ResolveTaskFunc:
+    def __call__[C: (...) -> object, *Ts, Key: str, Value](
         self, func: C, args: (Unpack[Ts],), kwargs: dict[Key, Value]
     ) -> (C, (Unpack[Ts],), dict[Key, Value])
 
@@ -32,13 +32,13 @@ if sys.version_info >= (3, 14):
     class WorkerContext:
         class def prepare[*Ts](
             cls, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)
-        ) -> (Callable[[], Self], _ResolveTaskFunc)
+        ) -> (() -> Self, _ResolveTaskFunc)
         class def prepare(
-            cls, initializer: Callable[[], object], initargs: tuple[()]
-        ) -> (Callable[[], Self], _ResolveTaskFunc)
+            cls, initializer: () -> object, initargs: tuple[()]
+        ) -> (() -> Self, _ResolveTaskFunc)
 
         def __init__[*Ts](self, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)) -> None
-        def __init__(self, initializer: Callable[[], object], initargs: tuple[()]) -> None
+        init(self, initializer: () -> object, initargs: tuple[()])
 
         def initialize(self) -> None
         def finalize(self) -> None
@@ -46,9 +46,9 @@ if sys.version_info >= (3, 14):
 
 if sys.version_info >= (3, 14):
     class _WorkItem[in out Other]:
-        future: Future[Any]
+        future: Future[dynamic]
         task: _Task
-        def __init__(self, future: Future[Any], task: _Task) -> None
+        init(self, future: Future[dynamic], task: _Task)
         def run(self, ctx: WorkerContext) -> None
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
             """Represent a PEP 585 generic type
@@ -65,7 +65,7 @@ else:
         fn: (...) -> Other
         args: Iterable[dynamic]
         kwargs: Mapping[str, dynamic]
-        def __init__(self, future: Future[Other], fn: (...) -> Other, args: Iterable[dynamic], kwargs: Mapping[str, dynamic]) -> None
+        init(self, future: Future[Other], fn: (...) -> Other, args: Iterable[dynamic], kwargs: Mapping[str, dynamic])
         def run(self) -> None
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
             """Represent a PEP 585 generic type
@@ -97,28 +97,28 @@ class ThreadPoolExecutor(Executor):
     _shutdown_lock: Lock
     _thread_name_prefix: str | None
     if sys.version_info >= (3, 14):
-        _create_worker_context: Callable[[], WorkerContext]
+        _create_worker_context: () -> WorkerContext
         _resolve_work_item_task: _ResolveTaskFunc
     else:
         _initializer: (...) -> None | None
-        _initargs: (*: Any)
+        _initargs: (*: dynamic)
     _work_queue: queue.SimpleQueue[_WorkItem[dynamic]]
 
     if sys.version_info >= (3, 14):
         class def prepare_context(
-            cls, initializer: Callable[[], object], initargs: tuple[()]
-        ) -> (Callable[[], WorkerContext], _ResolveTaskFunc)
+            cls, initializer: () -> object, initargs: tuple[()]
+        ) -> (() -> WorkerContext, _ResolveTaskFunc)
         class def prepare_context[*Ts](
             cls, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)
-        ) -> (Callable[[], WorkerContext], _ResolveTaskFunc)
+        ) -> (() -> WorkerContext, _ResolveTaskFunc)
 
-    def __init__(
+    init(
         self,
         max_workers: int | None = None,
         thread_name_prefix: str = "",
-        initializer: Callable[[], object] | None = None,
+        initializer: (() -> object) | None = None,
         initargs: tuple[()] = (),
-    ) -> None:
+    ):
         """Initializes a new ThreadPoolExecutor instance.
 
         Args:

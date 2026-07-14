@@ -5,9 +5,9 @@ from typing import ClassVar, TypeAlias
 
 from _remote_debugging import AwaitedInfo, FrameInfo, InterpreterInfo, LocationInfo
 
-_Location: TypeAlias = int | tuple[int, int, int, int] | LocationInfo | None
-_Frame: TypeAlias = FrameInfo | tuple[str, _Location, str, int | None]
-_Timestamps: TypeAlias = Sequence[int] | None
+type _Location = int | tuple[int, int, int, int] | LocationInfo | None
+type _Frame = FrameInfo | tuple[str, _Location, str, int | None]
+type _Timestamps = Sequence[int] | None
 
 def normalize_location(location: _Location) -> (int, int, int, int):
     """Normalize location to a 4-tuple format.

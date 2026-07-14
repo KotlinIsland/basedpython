@@ -59,15 +59,15 @@ __all__ = [
     "SMTPNotSupportedError",
 ]
 
-_Reply: TypeAlias = tuple[int, bytes]
-_SendErrs: TypeAlias = dict[str, _Reply]
+type _Reply = tuple[int, bytes]
+type _SendErrs = dict[str, _Reply]
 
 SMTP_PORT: Final = 25
 SMTP_SSL_PORT: Final = 465
-CRLF: Final[str]
-bCRLF: Final[bytes]
+final CRLF: str
+final bCRLF: bytes
 
-OLDSTYLE_AUTH: Final[Pattern[str]]
+final OLDSTYLE_AUTH: Pattern[str]
 
 class SMTPException(OSError):
     """Base class for all exceptions raised by this module."""
@@ -99,7 +99,7 @@ class SMTPResponseException(SMTPException):
     smtp_code: int
     smtp_error: bytes | str
     args: (int, bytes | str) | (int, bytes, str)
-    def __init__(self, code: int, msg: bytes | str) -> None
+    init(self, code: int, msg: bytes | str)
 
 class SMTPSenderRefused(SMTPResponseException):
     """Sender address refused.
@@ -111,7 +111,7 @@ class SMTPSenderRefused(SMTPResponseException):
     smtp_error: bytes
     sender: str
     args: (int, bytes, str)
-    def __init__(self, code: int, msg: bytes, sender: str) -> None
+    init(self, code: int, msg: bytes, sender: str)
 
 class SMTPRecipientsRefused(SMTPException):
     """All recipient addresses refused.
@@ -123,7 +123,7 @@ class SMTPRecipientsRefused(SMTPException):
 
     recipients: _SendErrs
     args: (_SendErrs,)
-    def __init__(self, recipients: _SendErrs) -> None
+    init(self, recipients: _SendErrs)
 
 class SMTPDataError(SMTPResponseException):
     """The SMTP server didn't accept the data."""
@@ -155,7 +155,7 @@ def quotedata(data: str) -> str:
     """
 
 @type_check_only
-class _AuthObject(Protocol):
+protocol _AuthObject:
     def __call__(self, challenge: None = None, /) -> str | None
     def __call__(self, challenge: bytes, /) -> str
 
@@ -203,14 +203,14 @@ class SMTP:
     command_encoding: str
     source_address: _SourceAddress | None
     local_hostname: str
-    def __init__(
+    init(
         self,
         host: str = "",
         port: int = 0,
         local_hostname: str | None = None,
         timeout: float = ...,
         source_address: _SourceAddress | None = None,
-    ) -> None:
+    ):
         """Initialize a new instance.
 
         If specified, `host` is the name of the remote host to which to
@@ -630,12 +630,12 @@ class LMTP(SMTP):
     authentication, but your mileage might vary.
     """
 
-    def __init__(
+    init(
         self,
         host: str = "",
         port: int = 2003,
         local_hostname: str | None = None,
         source_address: _SourceAddress | None = None,
         timeout: float = ...,
-    ) -> None:
+    ):
         """Initialize a new instance."""

@@ -16,10 +16,10 @@ complete membership information.)
 
 import sys
 from _typeshed import structseq
-from typing import Any, Final, final
+from typing import Final, final
 
 if sys.platform != "win32":
-    final class struct_group(structseq[Any], tuple[str, str | None, int, list[str]]):
+    final class struct_group(structseq[dynamic], tuple[str, str | None, int, list[str]]):
         """grp.struct_group: Results from getgr*() routines.
 
         This object may be accessed either as a tuple of
@@ -29,21 +29,13 @@ if sys.platform != "win32":
 
         __match_args__: Final = ("gr_name", "gr_passwd", "gr_gid", "gr_mem")
 
-        @property
-        def gr_name(self) -> str:
-            """group name"""
+        let gr_name: str
 
-        @property
-        def gr_passwd(self) -> str | None:
-            """password"""
+        let gr_passwd: str | None
 
-        @property
-        def gr_gid(self) -> int:
-            """group id"""
+        let gr_gid: int
 
-        @property
-        def gr_mem(self) -> list[str]:
-            """group members"""
+        let gr_mem: list[str]
 
     def getgrall() -> list[struct_group]:
         """Return a list of all available group entries, in arbitrary order.

@@ -18,16 +18,16 @@ from sqlite3 import (
     Warning as Warning,
     _IsolationLevel,
 )
-from typing import Any, Final, Literal, TypeAlias, TypeVar
+from typing import Final, Literal, TypeAlias, TypeVar
 from typing_extensions import deprecated
 
 if sys.version_info >= (3, 11):
     from sqlite3 import Blob as Blob
 
 _T = TypeVar("_T")
-_SqliteData: TypeAlias = str | ReadableBuffer | int | float | None
-_Adapter: TypeAlias = Callable[[_T], _SqliteData]
-_Converter: TypeAlias = Callable[[bytes], Any]
+type _SqliteData = str | ReadableBuffer | int | float | None
+_Adapter: TypeAlias = (_T) -> _SqliteData
+type _Converter = (bytes) -> dynamic
 
 PARSE_COLNAMES: Final = 2
 PARSE_DECLTYPES: Final = 1
@@ -70,7 +70,7 @@ SQLITE_TRANSACTION: Final = 22
 SQLITE_UPDATE: Final = 23
 if sys.version_info >= (3, 15):
     SQLITE_KEYWORDS: (*: str)
-adapters: dict[(type[Any], type[Any]), _Adapter[Any]]
+adapters: dict[(type[dynamic], type[dynamic]), _Adapter[dynamic]]
 converters: dict[str, _Converter]
 sqlite_version: str
 
@@ -212,7 +212,7 @@ if sys.version_info >= (3, 11):
     SQLITE_TOOBIG: Final = 18
     SQLITE_WARNING: Final = 28
     SQLITE_WARNING_AUTOINDEX: Final = 284
-    threadsafety: Literal[0, 1, 3]
+    threadsafety: 0 | 1 | 3
 
 # Can take or return anything depending on what's in the registry.
 def adapt(obj: dynamic, proto: dynamic, /) -> dynamic:

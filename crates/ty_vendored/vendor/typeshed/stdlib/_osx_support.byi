@@ -6,9 +6,9 @@ from typing import Final, TypeVar
 
 __all__ = ["compiler_fixup", "customize_config_vars", "customize_compiler", "get_platform_osx"]
 
-_UNIVERSAL_CONFIG_VARS: Final[(*: str)]  # undocumented
-_COMPILER_CONFIG_VARS: Final[(*: str)]  # undocumented
-_INITPRE: Final[str]  # undocumented
+final _UNIVERSAL_CONFIG_VARS: (*: str)  # undocumented
+final _COMPILER_CONFIG_VARS: (*: str)  # undocumented
+final _INITPRE: str  # undocumented
 
 def _find_executable(executable: str, path: str | None = None) -> str | None:  # undocumented
     """Tries to find 'executable' in the directories listed in 'path'.
@@ -23,7 +23,7 @@ def _read_output(commandstring: str, capture_stderr: bool = False) -> str | None
 def _find_build_tool(toolname: str) -> str:  # undocumented
     """Find a build tool on current path or using xcrun"""
 
-_SYSTEM_VERSION: Final[str | None]  # undocumented
+final _SYSTEM_VERSION: str | None  # undocumented
 
 def _get_system_version() -> str:  # undocumented
     """Return the OS X system version as a string"""

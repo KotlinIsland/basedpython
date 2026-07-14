@@ -107,37 +107,37 @@ import socketserver
 from _typeshed import ReadableBuffer
 from collections.abc import Callable, Iterable, Mapping
 from re import Pattern
-from typing import Any, ClassVar, Protocol, TypeAlias, type_check_only
+from typing import ClassVar, Protocol, TypeAlias, type_check_only
 from xmlrpc.client import Fault, _Marshallable
 
 # The dispatch accepts anywhere from 0 to N arguments, no easy way to allow this in mypy
 @type_check_only
-class _DispatchArity0(Protocol):
+protocol _DispatchArity0:
     def __call__(self) -> _Marshallable
 
 @type_check_only
-class _DispatchArity1(Protocol):
+protocol _DispatchArity1:
     def __call__(self, arg1: _Marshallable, /) -> _Marshallable
 
 @type_check_only
-class _DispatchArity2(Protocol):
+protocol _DispatchArity2:
     def __call__(self, arg1: _Marshallable, arg2: _Marshallable, /) -> _Marshallable
 
 @type_check_only
-class _DispatchArity3(Protocol):
+protocol _DispatchArity3:
     def __call__(self, arg1: _Marshallable, arg2: _Marshallable, arg3: _Marshallable, /) -> _Marshallable
 
 @type_check_only
-class _DispatchArity4(Protocol):
+protocol _DispatchArity4:
     def __call__(
         self, arg1: _Marshallable, arg2: _Marshallable, arg3: _Marshallable, arg4: _Marshallable, /
     ) -> _Marshallable
 
 @type_check_only
-class _DispatchArityN(Protocol):
+protocol _DispatchArityN:
     def __call__(self, *args: _Marshallable) -> _Marshallable
 
-_DispatchProtocol: TypeAlias = (
+type _DispatchProtocol = (
     _DispatchArity0 | _DispatchArity1 | _DispatchArity2 | _DispatchArity3 | _DispatchArity4 | _DispatchArityN
 )
 
@@ -170,7 +170,7 @@ class SimpleXMLRPCDispatcher:  # undocumented
     allow_none: bool
     encoding: str
     use_builtin_types: bool
-    def __init__(self, allow_none: bool = False, encoding: str | None = None, use_builtin_types: bool = False) -> None
+    init(self, allow_none: bool = False, encoding: str | None = None, use_builtin_types: bool = False)
     def register_instance(self, instance: dynamic, allow_dotted_names: bool = False) -> None:
         """Registers an instance to respond to XML-RPC requests.
 
@@ -204,7 +204,7 @@ class SimpleXMLRPCDispatcher:  # undocumented
 
         """
 
-    def register_function(self, function: _DispatchProtocol | None = None, name: str | None = None) -> (...) -> Any:
+    def register_function(self, function: _DispatchProtocol | None = None, name: str | None = None) -> (...) -> dynamic:
         """Registers a function to respond to XML-RPC requests.
 
         The optional name argument can be used to set a Unicode name
@@ -228,7 +228,7 @@ class SimpleXMLRPCDispatcher:  # undocumented
     def _marshaled_dispatch(
         self,
         data: str | ReadableBuffer,
-        dispatch_method: Callable[[str, tuple[_Marshallable, ...]], Fault | (*: _Marshallable)] | None = None,
+        dispatch_method: ((str, tuple[_Marshallable, ...]) -> (Fault | (*: _Marshallable))) | None = None,
         path: dynamic | None = None,
     ) -> str:  # undocumented
         """Dispatches an XML-RPC method from marshalled (XML) data.
@@ -327,7 +327,7 @@ class SimpleXMLRPCServer(socketserver.TCPServer, SimpleXMLRPCDispatcher):
     """
 
     _send_traceback_handler: bool
-    def __init__(
+    init(
         self,
         addr: (str, int),
         requestHandler: type[SimpleXMLRPCRequestHandler] = ...,
@@ -336,7 +336,7 @@ class SimpleXMLRPCServer(socketserver.TCPServer, SimpleXMLRPCDispatcher):
         encoding: str | None = None,
         bind_and_activate: bool = True,
         use_builtin_types: bool = False,
-    ) -> None
+    )
 
 class MultiPathXMLRPCServer(SimpleXMLRPCServer):  # undocumented
     """Multipath XML-RPC Server
@@ -348,7 +348,7 @@ class MultiPathXMLRPCServer(SimpleXMLRPCServer):  # undocumented
     """
 
     dispatchers: dict[str, SimpleXMLRPCDispatcher]
-    def __init__(
+    init(
         self,
         addr: (str, int),
         requestHandler: type[SimpleXMLRPCRequestHandler] = ...,
@@ -357,14 +357,14 @@ class MultiPathXMLRPCServer(SimpleXMLRPCServer):  # undocumented
         encoding: str | None = None,
         bind_and_activate: bool = True,
         use_builtin_types: bool = False,
-    ) -> None
+    )
     def add_dispatcher(self, path: str, dispatcher: SimpleXMLRPCDispatcher) -> SimpleXMLRPCDispatcher
     def get_dispatcher(self, path: str) -> SimpleXMLRPCDispatcher
 
 class CGIXMLRPCRequestHandler(SimpleXMLRPCDispatcher):
     """Simple handler for XML-RPC data passed through CGI."""
 
-    def __init__(self, allow_none: bool = False, encoding: str | None = None, use_builtin_types: bool = False) -> None
+    init(self, allow_none: bool = False, encoding: str | None = None, use_builtin_types: bool = False)
     def handle_xmlrpc(self, request_text: str) -> None:
         """Handle a single XML-RPC request"""
 
@@ -386,7 +386,7 @@ class CGIXMLRPCRequestHandler(SimpleXMLRPCDispatcher):
 class ServerHTMLDoc(pydoc.HTMLDoc):  # undocumented
     """Class used to generate pydoc HTML document for a server"""
 
-    def docroutine(  # type: ignore[override]
+    def docroutine(
         self,
         object: object,
         name: str,
@@ -456,7 +456,7 @@ class DocXMLRPCServer(SimpleXMLRPCServer, XMLRPCDocGenerator):
     of SimpleXMLRPCServer.
     """
 
-    def __init__(
+    init(
         self,
         addr: (str, int),
         requestHandler: type[SimpleXMLRPCRequestHandler] = ...,
@@ -465,11 +465,11 @@ class DocXMLRPCServer(SimpleXMLRPCServer, XMLRPCDocGenerator):
         encoding: str | None = None,
         bind_and_activate: bool = True,
         use_builtin_types: bool = False,
-    ) -> None
+    )
 
 class DocCGIXMLRPCRequestHandler(CGIXMLRPCRequestHandler, XMLRPCDocGenerator):
     """Handler for XML-RPC data and documentation requests passed through
     CGI
     """
 
-    def __init__(self) -> None
+    init(self)

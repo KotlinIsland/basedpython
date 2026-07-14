@@ -56,7 +56,7 @@ __all__ = ["Error", "copy", "deepcopy"]
 
 
 @type_check_only
-class _SupportsReplace[out RT](Protocol):
+protocol _SupportsReplace[out RT]:
     # In reality doesn't support args, but there's no great way to express this.
     def __replace__(self, /, *_: dynamic, **changes: dynamic) -> RT
 

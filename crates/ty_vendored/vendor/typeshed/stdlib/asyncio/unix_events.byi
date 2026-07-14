@@ -407,7 +407,7 @@ if sys.platform != "win32":
                 on amount of spawn processes.
                 """
 
-                def is_active(self) -> Literal[True]
+                def is_active(self) -> True
                 def close(self) -> None
                 def __enter__(self) -> Self
                 def __exit__(
@@ -483,7 +483,7 @@ if sys.platform != "win32":
                 on amount of spawn processes.
                 """
 
-                def is_active(self) -> Literal[True]
+                def is_active(self) -> True
                 def close(self) -> None
                 def __enter__(self) -> Self
                 def __exit__(

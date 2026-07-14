@@ -6,18 +6,18 @@ import unittest.result
 import unittest.suite
 from _typeshed import SupportsFlush, SupportsWrite
 from collections.abc import Callable, Iterable
-from typing import Any, Generic, Protocol, TypeAlias, TypeVar, type_check_only
+from typing import Generic, Protocol, TypeAlias, TypeVar, type_check_only
 from typing_extensions import Never
 from warnings import _ActionKind
 
-_ResultClassType: TypeAlias = Callable[[_TextTestStream, bool, int], TextTestResult[Any]]
+type _ResultClassType = (_TextTestStream, bool, int) -> TextTestResult[dynamic]
 
 @type_check_only
-class _SupportsWriteAndFlush(SupportsWrite[str], SupportsFlush, Protocol)
+protocol _SupportsWriteAndFlush(SupportsWrite[str], SupportsFlush)
 
 # All methods used by unittest.runner.TextTestResult's stream
 @type_check_only
-class _TextTestStream(_SupportsWriteAndFlush, Protocol):
+protocol _TextTestStream(_SupportsWriteAndFlush):
     def writeln(self, arg: str | None = None, /) -> None
 
 # _WritelnDecorator should have all the same attrs as its stream param.
@@ -26,7 +26,7 @@ class _TextTestStream(_SupportsWriteAndFlush, Protocol):
 class _WritelnDecorator:
     """Used to decorate file-like objects with a handy 'writeln' method"""
 
-    def __init__(self, stream: _SupportsWriteAndFlush) -> None
+    init(self, stream: _SupportsWriteAndFlush)
     def writeln(self, arg: str | None = None) -> None
     def __getattr__(self, attr: str) -> dynamic  # Any attribute from the stream type passed to __init__
     # These attributes are prevented by __getattr__

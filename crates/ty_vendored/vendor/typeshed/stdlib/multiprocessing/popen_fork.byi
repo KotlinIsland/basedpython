@@ -14,7 +14,7 @@ if sys.platform != "win32":
         returncode: int | None
         sentinel: int  # doesn't exist if os.fork in _launch returns 0
 
-        def __init__(self, process_obj: BaseProcess) -> None
+        init(self, process_obj: BaseProcess)
         def duplicate_for_child(self, fd: int) -> int
         def poll(self, flag: int = 1) -> int | None
         def wait(self, timeout: float | None = None) -> int | None

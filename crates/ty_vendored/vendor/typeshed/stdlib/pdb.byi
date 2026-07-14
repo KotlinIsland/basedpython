@@ -345,16 +345,16 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from linecache import _ModuleGlobals
 from rlcompleter import Completer
 from types import CodeType, FrameType, TracebackType
-from typing import IO, ClassVar, Final, Literal, ParamSpec, TypeAlias, TypeVar
+from typing import ClassVar, Final, Literal, ParamSpec, TypeAlias, TypeVar
 from typing_extensions import Self, deprecated
 
 __all__ = ["run", "pm", "Pdb", "runeval", "runctx", "runcall", "set_trace", "post_mortem", "help"]
 if sys.version_info >= (3, 14):
     __all__ += ["set_default_backend", "get_default_backend"]
 
-_Mode: TypeAlias = Literal["inline", "cli"]
+type _Mode = "inline" | "cli"
 
-line_prefix: Final[str]  # undocumented
+final line_prefix: str  # undocumented
 
 class Restart(Exception):
     """Causes a debugger to be restarted for the debugged python program."""
@@ -388,7 +388,7 @@ def runeval(  # matches `builtins.eval`
     Otherwise this function is similar to run().
     """
 
-def runcall[**P, Element](func: Callable[P, Element], *args: P.args, **kwds: P.kwargs) -> Element | None:
+def runcall[**P, Element](func: (**P) -> Element, *args: P.args, **kwds: P.kwargs) -> Element | None:
     """Call the function (a function or method object, not a string)
     with the given arguments.
 
@@ -471,12 +471,12 @@ class Pdb(Bdb, Cmd):
     if sys.version_info >= (3, 13):
         @property
         @deprecated("The frame locals reference is no longer cached. Use 'curframe.f_locals' instead.")
-        def curframe_locals(self) -> Mapping[str, dynamic]: ...
+        def curframe_locals(self) -> Mapping[str, dynamic]
         @curframe_locals.setter
         @deprecated(
             "Setting 'curframe_locals' no longer has any effect as of 3.14. Update the contents of 'curframe.f_locals' instead."
         )
-        def curframe_locals(self, value: Mapping[str, dynamic]) -> None: ...
+        def curframe_locals(self, value: Mapping[str, dynamic]) -> None
     else:
         curframe_locals: Mapping[str, dynamic]
     if sys.version_info >= (3, 14):
@@ -648,7 +648,7 @@ class Pdb(Bdb, Cmd):
             """
 
     else:
-        def do_break(self, arg: str, temporary: bool | Literal[0, 1] = 0) -> bool | None:
+        def do_break(self, arg: str, temporary: bool | 0 | 1 = 0) -> bool | None:
             """b(reak) [ ([filename:]lineno | function) [, condition] ]
 
             Without argument, list all breaks.
@@ -966,7 +966,7 @@ class Pdb(Bdb, Cmd):
 
     def error(self, msg: str) -> None
     if sys.version_info >= (3, 13):
-        def completenames(self, text: str, line: str, begidx: int, endidx: int) -> list[str]  # type: ignore[override]
+        def completenames(self, text: str, line: str, begidx: int, endidx: int) -> list[str]
     if sys.version_info >= (3, 12):
         def set_convenience_variable(self, frame: FrameType, name: str, value: dynamic) -> None
     if sys.version_info >= (3, 13):

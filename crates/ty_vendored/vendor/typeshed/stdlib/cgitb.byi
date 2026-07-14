@@ -25,9 +25,9 @@ The default handler displays output as HTML.
 from _typeshed import OptExcInfo, StrOrBytesPath
 from collections.abc import Callable
 from types import FrameType, TracebackType
-from typing import IO, Any, Final
+from typing import Final
 
-__UNDEF__: Final[object]  # undocumented sentinel
+final __UNDEF__: object  # undocumented sentinel
 
 def reset() -> str:  # undocumented
     """Return a string that resets the CGI and browser to a known state."""
@@ -35,12 +35,12 @@ def reset() -> str:  # undocumented
 def small(text: str) -> str  # undocumented
 def strong(text: str) -> str  # undocumented
 def grey(text: str) -> str  # undocumented
-def lookup(name: str, frame: FrameType, locals: dict[str, dynamic]) -> (str | None, Any):  # undocumented
+def lookup(name: str, frame: FrameType, locals: dict[str, dynamic]) -> (str | None, dynamic):  # undocumented
     """Find the value for a given name in the given environment."""
 
 def scanvars(
-    reader: Callable[[], bytes], frame: FrameType, locals: dict[str, dynamic]
-) -> list[(str, str | None, Any)]:  # undocumented
+    reader: () -> bytes, frame: FrameType, locals: dict[str, dynamic]
+) -> list[(str, str | None, dynamic)]:  # undocumented
     """Scan one logical line of Python and look up values of variables used."""
 
 def html(einfo: OptExcInfo, context: int = 5) -> str:
@@ -52,14 +52,14 @@ def text(einfo: OptExcInfo, context: int = 5) -> str:
 class Hook:  # undocumented
     """A hook to replace sys.excepthook that shows tracebacks in HTML."""
 
-    def __init__(
+    init(
         self,
         display: int = 1,
         logdir: StrOrBytesPath | None = None,
         context: int = 5,
         file: IO[str] | None = None,
         format: str = "html",
-    ) -> None
+    )
     def __call__(self, etype: type[BaseException] | None, evalue: BaseException | None, etb: TracebackType | None) -> None
     def handle(self, info: OptExcInfo | None = None) -> None
 

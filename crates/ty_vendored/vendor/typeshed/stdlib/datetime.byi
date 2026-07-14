@@ -6,7 +6,7 @@ time zone and DST data sources.
 
 import sys
 from time import struct_time
-from typing import ClassVar, Final, NoReturn, SupportsIndex, TypeAlias, final, type_check_only
+from typing import ClassVar, Final, TypeAlias, final, type_check_only
 from typing_extensions import CapsuleType, Self, deprecated, disjoint_base
 
 if sys.version_info >= (3, 11):
@@ -36,7 +36,7 @@ class tzinfo:
         """datetime in UTC -> datetime in local time."""
 
 # Alias required to avoid name conflicts with date(time).tzinfo.
-_TzInfo: TypeAlias = tzinfo
+type _TzInfo = tzinfo
 
 final class timezone(tzinfo):
     """Fixed offset from UTC implementation of tzinfo."""
@@ -62,15 +62,11 @@ if sys.version_info >= (3, 11):
 
 # This class calls itself datetime.IsoCalendarDate. It's neither
 # NamedTuple nor structseq.
-@final
 @type_check_only
-class _IsoCalendarDate(tuple[int, int, int]):
-    @property
-    def year(self) -> int
-    @property
-    def week(self) -> int
-    @property
-    def weekday(self) -> int
+final class _IsoCalendarDate(tuple[int, int, int]):
+    let year: int
+    let week: int
+    let weekday: int
 
 @disjoint_base
 class date:
@@ -113,12 +109,9 @@ class date:
         This is the inverse of the date.isocalendar() function.
         """
 
-    @property
-    def year(self) -> int
-    @property
-    def month(self) -> int
-    @property
-    def day(self) -> int
+    let year: int
+    let month: int
+    let day: int
     def ctime(self) -> str:
         """Return ctime() style string."""
 
@@ -221,18 +214,12 @@ class time:
         *,
         fold: int = 0,
     ) -> Self
-    @property
-    def hour(self) -> int
-    @property
-    def minute(self) -> int
-    @property
-    def second(self) -> int
-    @property
-    def microsecond(self) -> int
-    @property
-    def tzinfo(self) -> _TzInfo | None
-    @property
-    def fold(self) -> int
+    let hour: int
+    let minute: int
+    let second: int
+    let microsecond: int
+    let tzinfo: _TzInfo | None
+    let fold: int
     def __le__(self, value: time, /) -> bool
     def __lt__(self, value: time, /) -> bool
     def __ge__(self, value: time, /) -> bool
@@ -325,8 +312,8 @@ class time:
     ) -> Self:
         """Return time with new specified fields."""
 
-_Date: TypeAlias = date
-_Time: TypeAlias = time
+type _Date = date
+type _Time = time
 
 @disjoint_base
 class timedelta:
@@ -349,17 +336,11 @@ class timedelta:
         hours: float = 0,
         weeks: float = 0,
     ) -> Self
-    @property
-    def days(self) -> int:
-        """Number of days."""
+    let days: int
 
-    @property
-    def seconds(self) -> int:
-        """Number of seconds (>= 0 and less than 1 day)."""
+    let seconds: int
 
-    @property
-    def microseconds(self) -> int:
-        """Number of microseconds (>= 0 and less than 1 second)."""
+    let microseconds: int
 
     def total_seconds(self) -> float:
         """Total seconds in the duration."""
@@ -438,18 +419,12 @@ class datetime(date):
         *,
         fold: int = 0,
     ) -> Self
-    @property
-    def hour(self) -> int
-    @property
-    def minute(self) -> int
-    @property
-    def second(self) -> int
-    @property
-    def microsecond(self) -> int
-    @property
-    def tzinfo(self) -> _TzInfo | None
-    @property
-    def fold(self) -> int
+    let hour: int
+    let minute: int
+    let second: int
+    let microsecond: int
+    let tzinfo: _TzInfo | None
+    let fold: int
     # On <3.12, the name of the first parameter in the pure-Python implementation
     # didn't match the name in the C implementation,
     # meaning it is only *safe* to pass it as a keyword argument on 3.12+
@@ -577,10 +552,10 @@ class datetime(date):
     def dst(self) -> timedelta | None:
         """Return self.tzinfo.dst(self)."""
 
-    def __le__(self, value: datetime, /) -> bool  # type: ignore[override]
-    def __lt__(self, value: datetime, /) -> bool  # type: ignore[override]
-    def __ge__(self, value: datetime, /) -> bool  # type: ignore[override]
-    def __gt__(self, value: datetime, /) -> bool  # type: ignore[override]
+    def __le__(self, value: datetime, /) -> bool
+    def __lt__(self, value: datetime, /) -> bool
+    def __ge__(self, value: datetime, /) -> bool
+    def __gt__(self, value: datetime, /) -> bool
     def __eq__(self, value: object, /) -> bool
     def __hash__(self) -> int
 

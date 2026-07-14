@@ -10,7 +10,7 @@ __all__ = ["Error", "open", "open_new", "open_new_tab", "get", "register"]
 class Error(Exception)
 
 def register(
-    name: str, klass: Callable[[], BaseBrowser] | None, instance: BaseBrowser | None = None, *, preferred: bool = False
+    name: str, klass: (() -> BaseBrowser) | None, instance: BaseBrowser | None = None, *, preferred: bool = False
 ) -> None:
     """Register a browser connector."""
 
@@ -48,7 +48,7 @@ class BaseBrowser:
     args: list[str]
     name: str
     basename: str
-    def __init__(self, name: str = "") -> None
+    init(self, name: str = "")
     abstract def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
     def open_new(self, url: str) -> bool
     def open_new_tab(self, url: str) -> bool
@@ -58,7 +58,7 @@ class GenericBrowser(BaseBrowser):
     and without remote functionality.
     """
 
-    def __init__(self, name: str | Sequence[str]) -> None
+    init(self, name: str | Sequence[str])
     def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
 
 class BackgroundBrowser(GenericBrowser):
@@ -69,7 +69,7 @@ class BackgroundBrowser(GenericBrowser):
 class UnixBrowser(BaseBrowser):
     """Parent class for all Unix browsers with remote functionality."""
 
-    def open(self, url: str, new: Literal[0, 1, 2] = 0, autoraise: bool = True) -> bool  # type: ignore[override]
+    def open(self, url: str, new: 0 | 1 | 2 = 0, autoraise: bool = True) -> bool
     raise_opts: list[str] | None
     background: bool
     redirect_stdout: bool
@@ -126,7 +126,7 @@ if sys.platform == "darwin":
             Internet System Preferences panel, will be used.
             """
 
-            def __init__(self, name: str) -> None
+            init(self, name: str)
             def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
 
     class MacOSXOSAScript(BaseBrowser):  # In runtime this class does not have `name` and `basename`

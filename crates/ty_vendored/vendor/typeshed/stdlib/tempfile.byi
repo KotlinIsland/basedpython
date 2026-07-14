@@ -39,7 +39,7 @@ from _typeshed import (
 )
 from collections.abc import Iterable, Iterator
 from types import GenericAlias, TracebackType
-from typing import IO, AnyStr, Final, Generic, Literal
+from typing import Final, Generic, Literal
 from typing_extensions import Self, deprecated
 
 __all__ = [
@@ -59,7 +59,7 @@ __all__ = [
 ]
 
 # global variables
-TMP_MAX: Final[int]
+final TMP_MAX: int
 tempdir: str | None
 template: str
 
@@ -212,7 +212,7 @@ else:
         """
     def TemporaryFile(
         mode: OpenBinaryMode,
-        buffering: Literal[0],
+        buffering: 0,
         encoding: str | None = None,
         newline: str | None = None,
         suffix: AnyStr | None = None,
@@ -223,7 +223,7 @@ else:
     ) -> io.FileIO
     def TemporaryFile(
         *,
-        buffering: Literal[0],
+        buffering: 0,
         encoding: str | None = None,
         newline: str | None = None,
         suffix: AnyStr | None = None,
@@ -233,7 +233,7 @@ else:
     ) -> io.FileIO
     def TemporaryFile(
         mode: OpenBinaryModeWriting,
-        buffering: Literal[-1, 1] = -1,
+        buffering: -1 | 1 = -1,
         encoding: str | None = None,
         newline: str | None = None,
         suffix: AnyStr | None = None,
@@ -244,7 +244,7 @@ else:
     ) -> io.BufferedWriter
     def TemporaryFile(
         mode: OpenBinaryModeReading,
-        buffering: Literal[-1, 1] = -1,
+        buffering: -1 | 1 = -1,
         encoding: str | None = None,
         newline: str | None = None,
         suffix: AnyStr | None = None,
@@ -255,7 +255,7 @@ else:
     ) -> io.BufferedReader
     def TemporaryFile(
         mode: OpenBinaryModeUpdating = "w+b",
-        buffering: Literal[-1, 1] = -1,
+        buffering: -1 | 1 = -1,
         encoding: str | None = None,
         newline: str | None = None,
         suffix: AnyStr | None = None,
@@ -334,8 +334,7 @@ class _TemporaryFileWrapper(IO[AnyStr]):
     def writelines(self: _TemporaryFileWrapper[bytes], lines: Iterable[ReadableBuffer]) -> None
     def writelines(self, lines: Iterable[AnyStr]) -> None
 
-    @property
-    def closed(self) -> bool
+    let closed: bool
 
 if sys.version_info >= (3, 11):
     _SpooledTemporaryFileBase = io.IOBase
@@ -351,13 +350,11 @@ class SpooledTemporaryFile(IO[AnyStr], _SpooledTemporaryFileBase):
     """
 
     _file: IO[AnyStr]
-    @property
-    def encoding(self) -> str  # undocumented
-    @property
-    def newlines(self) -> str | (*: str) | None  # undocumented
+    let encoding: str  # undocumented
+    let newlines: str | (*: str) | None  # undocumented
 
     # bytes needs to go first, as default mode is to open as bytes
-    def __init__(
+    init(
         self: SpooledTemporaryFile[bytes],
         max_size: int = 0,
         mode: OpenBinaryMode = "w+b",
@@ -369,8 +366,8 @@ class SpooledTemporaryFile(IO[AnyStr], _SpooledTemporaryFileBase):
         dir: str | None = None,
         *,
         errors: str | None = None,
-    ) -> None
-    def __init__(
+    )
+    init(
         self: SpooledTemporaryFile[str],
         max_size: int,
         mode: OpenTextMode,
@@ -382,8 +379,8 @@ class SpooledTemporaryFile(IO[AnyStr], _SpooledTemporaryFileBase):
         dir: str | None = None,
         *,
         errors: str | None = None,
-    ) -> None
-    def __init__(
+    )
+    init(
         self: SpooledTemporaryFile[str],
         max_size: int = 0,
         *,
@@ -395,8 +392,8 @@ class SpooledTemporaryFile(IO[AnyStr], _SpooledTemporaryFileBase):
         prefix: str | None = None,
         dir: str | None = None,
         errors: str | None = None,
-    ) -> None
-    def __init__(
+    )
+    init(
         self,
         max_size: int,
         mode: str,
@@ -408,8 +405,8 @@ class SpooledTemporaryFile(IO[AnyStr], _SpooledTemporaryFileBase):
         dir: str | None = None,
         *,
         errors: str | None = None,
-    ) -> None
-    def __init__(
+    )
+    init(
         self,
         max_size: int = 0,
         *,
@@ -421,10 +418,9 @@ class SpooledTemporaryFile(IO[AnyStr], _SpooledTemporaryFileBase):
         prefix: str | None = None,
         dir: str | None = None,
         errors: str | None = None,
-    ) -> None
+    )
 
-    @property
-    def errors(self) -> str | None
+    let errors: str | None
     def rollover(self) -> None
     def __enter__(self) -> Self
     def __exit__(self, exc: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None) -> None
@@ -444,14 +440,14 @@ class SpooledTemporaryFile(IO[AnyStr], _SpooledTemporaryFileBase):
         def detach(self) -> io.RawIOBase
 
     def read(self, n: int = ..., /) -> AnyStr
-    def readline(self, limit: int | None = ..., /) -> AnyStr  # type: ignore[override]
-    def readlines(self, hint: int = ..., /) -> list[AnyStr]  # type: ignore[override]
+    def readline(self, limit: int | None = ..., /) -> AnyStr
+    def readlines(self, hint: int = ..., /) -> list[AnyStr]
     def seek(self, offset: int, whence: int = ...) -> int
     def tell(self) -> int
     if sys.version_info >= (3, 11):
         def truncate(self, size: int | None = None) -> int
     else:
-        def truncate(self, size: int | None = None) -> None  # type: ignore[override]
+        def truncate(self, size: int | None = None) -> None
 
     def write(self: SpooledTemporaryFile[str], s: str) -> int
     def write(self: SpooledTemporaryFile[bytes], s: ReadableBuffer) -> int
@@ -461,12 +457,12 @@ class SpooledTemporaryFile(IO[AnyStr], _SpooledTemporaryFileBase):
     def writelines(self: SpooledTemporaryFile[bytes], iterable: Iterable[ReadableBuffer]) -> None
     def writelines(self, iterable: Iterable[AnyStr]) -> None
 
-    def __iter__(self) -> Iterator[AnyStr]  # type: ignore[override]
+    def __iter__(self) -> Iterator[AnyStr]
     # These exist at runtime only on 3.11+.
     def readable(self) -> bool
     def seekable(self) -> bool
     def writable(self) -> bool
-    def __next__(self) -> AnyStr:  # type: ignore[override]
+    def __next__(self) -> AnyStr:
         """Implement next(self)."""
 
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:

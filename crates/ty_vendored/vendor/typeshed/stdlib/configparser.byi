@@ -147,7 +147,7 @@ import sys
 from _typeshed import BytesPath, GenericPath, MaybeNone, StrOrBytesPath, StrPath, SupportsWrite
 from collections.abc import Callable, ItemsView, Iterable, Iterator, Mapping, MutableMapping, Sequence
 from re import Pattern
-from typing import Any, AnyStr, ClassVar, Final, Literal, TypeAlias, TypeVar, type_check_only
+from typing import ClassVar, Final, Literal, TypeAlias, TypeVar, type_check_only
 from typing_extensions import deprecated
 
 if sys.version_info >= (3, 14):
@@ -254,19 +254,19 @@ if sys.version_info >= (3, 13):
 
     UNNAMED_SECTION: _UNNAMED_SECTION
 
-    _SectionName: TypeAlias = str | _UNNAMED_SECTION
+    type _SectionName = str | _UNNAMED_SECTION
     # A list of sections can only include an unnamed section if the parser was initialized with
     # allow_unnamed_section=True. Any prevents users from having to use explicit
     # type checks if allow_unnamed_section is False (the default).
-    _SectionNameList: TypeAlias = list[Any]
+    type _SectionNameList = list[dynamic]
 else:
-    _SectionName: TypeAlias = str
-    _SectionNameList: TypeAlias = list[str]
+    type _SectionName = str
+    type _SectionNameList = list[str]
 
-_Section: TypeAlias = Mapping[str, str]
+type _Section = Mapping[str, str]
 _Parser: TypeAlias = MutableMapping[str, _Section]
-_ConverterCallback: TypeAlias = Callable[[str], Any]
-_ConvertersMap: TypeAlias = dict[str, _ConverterCallback]
+type _ConverterCallback = (str) -> dynamic
+type _ConvertersMap = dict[str, _ConverterCallback]
 
 DEFAULTSECT: Final = "DEFAULT"
 MAX_INTERPOLATION_DEPTH: Final = 10
@@ -331,7 +331,7 @@ class RawConfigParser(_Parser):
             defaults: Mapping[str, str | None] | None = None,
             dict_type: type[Mapping[str, str]] = ...,
             *,
-            allow_no_value: Literal[True],
+            allow_no_value: True,
             delimiters: Sequence[str] = ("=", ":"),
             comment_prefixes: Sequence[str] = ("#", ";"),
             inline_comment_prefixes: Sequence[str] | None = None,
@@ -346,7 +346,7 @@ class RawConfigParser(_Parser):
             self,
             defaults: Mapping[str, str | None] | None,
             dict_type: type[Mapping[str, str]],
-            allow_no_value: Literal[True],
+            allow_no_value: True,
             *,
             delimiters: Sequence[str] = ("=", ":"),
             comment_prefixes: Sequence[str] = ("#", ";"),
@@ -380,7 +380,7 @@ class RawConfigParser(_Parser):
             defaults: Mapping[str, str | None] | None = None,
             dict_type: type[Mapping[str, str]] = ...,
             *,
-            allow_no_value: Literal[True],
+            allow_no_value: True,
             delimiters: Sequence[str] = ("=", ":"),
             comment_prefixes: Sequence[str] = ("#", ";"),
             inline_comment_prefixes: Sequence[str] | None = None,
@@ -394,7 +394,7 @@ class RawConfigParser(_Parser):
             self,
             defaults: Mapping[str, str | None] | None,
             dict_type: type[Mapping[str, str]],
-            allow_no_value: Literal[True],
+            allow_no_value: True,
             *,
             delimiters: Sequence[str] = ("=", ":"),
             comment_prefixes: Sequence[str] = ("#", ";"),
@@ -521,7 +521,7 @@ class RawConfigParser(_Parser):
         self,
         section: _SectionName,
         option: str,
-        conv: Callable[[str], Element],
+        conv: (str) -> Element,
         *,
         raw: bool = False,
         vars: _Section | None = None,
@@ -581,8 +581,7 @@ class RawConfigParser(_Parser):
         """Remove a file section."""
 
     def optionxform(self, optionstr: str) -> str
-    @property
-    def converters(self) -> ConverterMapping
+    let converters: ConverterMapping
 
 class ConfigParser(RawConfigParser):
     """ConfigParser implementing interpolation."""
@@ -615,7 +614,7 @@ if sys.version_info < (3, 12):
 class SectionProxy(MutableMapping[str, str]):
     """A proxy for a single section from a parser."""
 
-    def __init__(self, parser: RawConfigParser, name: str) -> None:
+    init(self, parser: RawConfigParser, name: str):
         """Creates a view on a section of the specified `name` in `parser`."""
 
     def __getitem__(self, key: str) -> str
@@ -624,10 +623,8 @@ class SectionProxy(MutableMapping[str, str]):
     def __contains__(self, key: object) -> bool
     def __len__(self) -> int
     def __iter__(self) -> Iterator[str]
-    @property
-    def parser(self) -> RawConfigParser
-    @property
-    def name(self) -> str
+    let parser: RawConfigParser
+    let name: str
 
     # This is incompatible with MutableMapping so we ignore the type
     def get(
@@ -669,7 +666,7 @@ class SectionProxy(MutableMapping[str, str]):
     def getboolean[Element](self, option: str, fallback: Element = ..., *, raw: bool = False, vars: _Section | None = None) -> bool | Element
 
     # SectionProxy can have arbitrary attributes when custom converters are used
-    def __getattr__(self, key: str) -> (...) -> Any
+    def __getattr__(self, key: str) -> (...) -> dynamic
 
 class ConverterMapping(MutableMapping[str, _ConverterCallback | None]):
     """Enables reuse of get*() methods between the parser and section proxies.
@@ -680,7 +677,7 @@ class ConverterMapping(MutableMapping[str, _ConverterCallback | None]):
     """
 
     GETTERCRE: ClassVar[Pattern[dynamic]]
-    def __init__(self, parser: RawConfigParser) -> None
+    init(self, parser: RawConfigParser)
     def __getitem__(self, key: str) -> _ConverterCallback
     def __setitem__(self, key: str, value: _ConverterCallback | None) -> None
     def __delitem__(self, key: str) -> None
@@ -691,13 +688,13 @@ class Error(Exception):
     """Base class for ConfigParser exceptions."""
 
     message: str
-    def __init__(self, msg: str = "") -> None
+    init(self, msg: str = "")
 
 class NoSectionError(Error):
     """Raised when no section matches a requested option."""
 
     section: _SectionName
-    def __init__(self, section: _SectionName) -> None
+    init(self, section: _SectionName)
 
 class DuplicateSectionError(Error):
     """Raised when a section is repeated in an input source.
@@ -710,7 +707,7 @@ class DuplicateSectionError(Error):
     section: _SectionName
     source: str | None
     lineno: int | None
-    def __init__(self, section: _SectionName, source: str | None = None, lineno: int | None = None) -> None
+    init(self, section: _SectionName, source: str | None = None, lineno: int | None = None)
 
 class DuplicateOptionError(Error):
     """Raised by strict parsers when an option is repeated in an input source.
@@ -723,32 +720,32 @@ class DuplicateOptionError(Error):
     option: str
     source: str | None
     lineno: int | None
-    def __init__(self, section: _SectionName, option: str, source: str | None = None, lineno: int | None = None) -> None
+    init(self, section: _SectionName, option: str, source: str | None = None, lineno: int | None = None)
 
 class NoOptionError(Error):
     """A requested option was not found."""
 
     section: _SectionName
     option: str
-    def __init__(self, option: str, section: _SectionName) -> None
+    init(self, option: str, section: _SectionName)
 
 class InterpolationError(Error):
     """Base class for interpolation-related exceptions."""
 
     section: _SectionName
     option: str
-    def __init__(self, option: str, section: _SectionName, msg: str) -> None
+    init(self, option: str, section: _SectionName, msg: str)
 
 class InterpolationDepthError(InterpolationError):
     """Raised when substitutions are nested too deeply."""
 
-    def __init__(self, option: str, section: _SectionName, rawval: object) -> None
+    init(self, option: str, section: _SectionName, rawval: object)
 
 class InterpolationMissingOptionError(InterpolationError):
     """A string substitution required a setting which was not available."""
 
     reference: str
-    def __init__(self, option: str, section: _SectionName, rawval: object, reference: str) -> None
+    init(self, option: str, section: _SectionName, rawval: object, reference: str)
 
 class InterpolationSyntaxError(InterpolationError):
     """Raised when the source text contains invalid syntax.
@@ -783,14 +780,14 @@ class ParsingError(Error):
             """Deprecated, use `source'."""
         @filename.setter
         @deprecated("Deprecated since Python 3.2; removed in Python 3.12. Use `source` instead.")
-        def filename(self, value: str) -> None: ...
+        def filename(self, value: str) -> None
 
 class MissingSectionHeaderError(ParsingError):
     """Raised when a key-value pair is found before any section header."""
 
     lineno: int
     line: str
-    def __init__(self, filename: str, lineno: int, line: str) -> None
+    init(self, filename: str, lineno: int, line: str)
 
 if sys.version_info >= (3, 13):
     class MultilineContinuationError(ParsingError):
@@ -798,7 +795,7 @@ if sys.version_info >= (3, 13):
 
         lineno: int
         line: str
-        def __init__(self, filename: str, lineno: int, line: str) -> None
+        init(self, filename: str, lineno: int, line: str)
 
 if sys.version_info >= (3, 14):
     class UnnamedSectionDisabledError(Error):
@@ -807,7 +804,7 @@ if sys.version_info >= (3, 14):
         """
 
         msg: Final = "Support for UNNAMED_SECTION is disabled."
-        def __init__(self) -> None
+        init(self)
 
     class InvalidWriteError(Error):
         """Raised when attempting to write data that the parser would read back differently.

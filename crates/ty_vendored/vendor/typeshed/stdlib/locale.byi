@@ -244,7 +244,7 @@ def delocalize(string: _str) -> _str:
 def localize(string: _str, grouping: bool = False, monetary: bool = False) -> _str:
     """Parses a string as locale number according to the locale settings."""
 
-def atof(string: _str, func: Callable[[_str], float] = ...) -> float:
+def atof(string: _str, func: (_str) -> float = ...) -> float:
     """Parses a string as a float according to the locale settings."""
 
 def atoi(string: _str) -> int:

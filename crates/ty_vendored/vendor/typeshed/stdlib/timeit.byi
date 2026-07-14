@@ -20,12 +20,12 @@ Functions:
 import sys
 import time
 from collections.abc import Callable, Sequence
-from typing import IO, TypeAlias
+from typing import TypeAlias
 
 __all__ = ["Timer", "timeit", "repeat", "default_timer"]
 
-_Timer: TypeAlias = Callable[[], float]
-_Stmt: TypeAlias = str | Callable[[], object]
+type _Timer = () -> float
+type _Stmt = str | (() -> object)
 
 default_timer: _Timer
 
@@ -47,13 +47,13 @@ class Timer:
     multi-line string literals.
     """
 
-    def __init__(
+    init(
         self,
         stmt: _Stmt = "pass",
         setup: _Stmt = "pass",
         timer: _Timer = time.perf_counter,
         globals: dict[str, dynamic] | None = None,
-    ) -> None:
+    ):
         """Constructor.  See class doc string."""
 
     def print_exc(self, file: IO[str] | None = None) -> None:
@@ -113,7 +113,7 @@ class Timer:
 
     if sys.version_info >= (3, 15):
         def autorange(
-            self, callback: Callable[[int, float], object] | None = None, target_time: float = 0.2
+            self, callback: ((int, float) -> object) | None = None, target_time: float = 0.2
         ) -> (int, float):
             """Return the number of loops and time taken so that
             total time >= target_time (default is 0.2 seconds).
@@ -127,7 +127,7 @@ class Timer:
             """
 
     else:
-        def autorange(self, callback: Callable[[int, float], object] | None = None) -> (int, float):
+        def autorange(self, callback: ((int, float) -> object) | None = None) -> (int, float):
             """Return the number of loops and time taken so that total time >= 0.2.
 
             Calls the timeit method with increasing numbers from the sequence
@@ -157,7 +157,7 @@ def repeat(
 ) -> list[float]:
     """Convenience function to create Timer object and call repeat method."""
 
-def main(args: Sequence[str] | None = None, *, _wrap_timer: Callable[[_Timer], _Timer] | None = None) -> None:
+def main(args: Sequence[str] | None = None, *, _wrap_timer: ((_Timer) -> _Timer) | None = None) -> None:
     """Main program, used when run as a script.
 
     The optional 'args' argument specifies the command line to be parsed,

@@ -8,7 +8,7 @@ from _typeshed import structseq
 from collections.abc import Callable
 from threading import Thread
 from types import TracebackType
-from typing import Any, Final, NoReturn, final
+from typing import Final, final
 from typing_extensions import TypeVarTuple, Unpack, deprecated, disjoint_base
 
 
@@ -74,7 +74,7 @@ if sys.version_info >= (3, 13):
         def _set_done(self) -> None
 
     def start_joinable_thread(
-        function: Callable[[], object], handle: _ThreadHandle | None = None, daemon: bool = True
+        function: () -> object, handle: _ThreadHandle | None = None, daemon: bool = True
     ) -> _ThreadHandle:
         """*For internal use only*: start a new thread.
 
@@ -249,13 +249,13 @@ def start_new_thread[*Ts](function: Callable[[Unpack[Ts]], object], args: (Unpac
     unhandled exception; a stack trace will be printed unless the exception
     is SystemExit.
     """
-def start_new_thread(function: (...) -> object, args: (*: Any), kwargs: dict[str, dynamic], /) -> int
+def start_new_thread(function: (...) -> object, args: (*: dynamic), kwargs: dict[str, dynamic], /) -> int
 
 @deprecated("Obsolete synonym. Use `start_new_thread()` instead.")
 def start_new[*Ts](function: Callable[[Unpack[Ts]], object], args: (Unpack[Ts],), /) -> int:  # undocumented
     """An obsolete synonym of start_new_thread()."""
 @deprecated("Obsolete synonym. Use `start_new_thread()` instead.")
-def start_new(function: (...) -> object, args: (*: Any), kwargs: dict[str, dynamic], /) -> int  # undocumented
+def start_new(function: (...) -> object, args: (*: dynamic), kwargs: dict[str, dynamic], /) -> int  # undocumented
 
 def interrupt_main(signum: signal.Signals = signal.SIGINT, /) -> None:
     """Simulate the arrival of the given signal in the main thread,
@@ -313,7 +313,7 @@ def stack_size(size: int = 0, /) -> int:
     the suggested approach in the absence of more specific information).
     """
 
-TIMEOUT_MAX: Final[float]
+final TIMEOUT_MAX: float
 
 def get_native_id() -> int:  # only available on some platforms
     """Return a non-negative integer identifying the thread as reported
@@ -321,7 +321,7 @@ def get_native_id() -> int:  # only available on some platforms
     particular thread within a system.
     """
 
-final class _ExceptHookArgs(structseq[Any], tuple[type[BaseException], BaseException | None, TracebackType | None, Thread | None]):
+final class _ExceptHookArgs(structseq[dynamic], tuple[type[BaseException], BaseException | None, TracebackType | None, Thread | None]):
     """ExceptHookArgs
 
     Type used to pass arguments to threading.excepthook.
@@ -329,23 +329,15 @@ final class _ExceptHookArgs(structseq[Any], tuple[type[BaseException], BaseExcep
 
     __match_args__: Final = ("exc_type", "exc_value", "exc_traceback", "thread")
 
-    @property
-    def exc_type(self) -> type[BaseException]:
-        """Exception type"""
+    let exc_type: type[BaseException]
 
-    @property
-    def exc_value(self) -> BaseException | None:
-        """Exception value"""
+    let exc_value: BaseException | None
 
-    @property
-    def exc_traceback(self) -> TracebackType | None:
-        """Exception traceback"""
+    let exc_traceback: TracebackType | None
 
-    @property
-    def thread(self) -> Thread | None:
-        """Thread"""
+    let thread: Thread | None
 
-_excepthook: Callable[[_ExceptHookArgs], dynamic]
+_excepthook: (_ExceptHookArgs) -> dynamic
 """Handle uncaught Thread.run() exception."""
 
 if sys.version_info >= (3, 12):

@@ -1,10 +1,10 @@
 import sys
 from _typeshed import ReadableBuffer
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, TypeAlias, final
+from typing import Final, TypeAlias, final
 from typing_extensions import Self
 
-_FilterChain: TypeAlias = Sequence[Mapping[str, Any]]
+type _FilterChain = Sequence[Mapping[str, dynamic]]
 
 FORMAT_AUTO: Final = 0
 FORMAT_XZ: Final = 1
@@ -16,7 +16,7 @@ CHECK_CRC64: Final = 4
 CHECK_SHA256: Final = 10
 CHECK_ID_MAX: Final = 15
 CHECK_UNKNOWN: Final = 16
-FILTER_LZMA1: Final[int]  # v big number
+final FILTER_LZMA1: int  # v big number
 FILTER_LZMA2: Final = 33
 FILTER_DELTA: Final = 3
 FILTER_X86: Final = 4
@@ -33,7 +33,7 @@ MF_BT4: Final = 20
 MODE_FAST: Final = 1
 MODE_NORMAL: Final = 2
 PRESET_DEFAULT: Final = 6
-PRESET_EXTREME: Final[int]  # v big number
+final PRESET_EXTREME: int  # v big number
 
 final class LZMADecompressor:
     """Create a decompressor object for decompressing data incrementally.
@@ -79,21 +79,13 @@ final class LZMADecompressor:
         ignored and saved in the unused_data attribute.
         """
 
-    @property
-    def check(self) -> int:
-        """ID of the integrity check used by the input stream."""
+    let check: int
 
-    @property
-    def eof(self) -> bool:
-        """True if the end-of-stream marker has been reached."""
+    let eof: bool
 
-    @property
-    def unused_data(self) -> bytes:
-        """Data found after the end of the compressed stream."""
+    let unused_data: bytes
 
-    @property
-    def needs_input(self) -> bool:
-        """True if more input is needed before more decompressed data can be produced."""
+    let needs_input: bool
 
 final class LZMACompressor:
     """LZMACompressor(format=FORMAT_XZ, check=-1, preset=None, filters=None)

@@ -8,7 +8,7 @@ if sys.platform != "win32":
     __all__ = ["Popen"]
 
     class _DupFd:
-        def __init__(self, ind: int) -> None
+        init(self, ind: int)
         def detach(self) -> int
 
     class Popen(popen_fork.Popen):

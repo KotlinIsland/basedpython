@@ -5,9 +5,8 @@ from typing import final, type_check_only
 from typing_extensions import disjoint_base
 
 # This class is not exposed. It calls itself _multibytecodec.MultibyteCodec.
-@final
 @type_check_only
-class _MultibyteCodec:
+final class _MultibyteCodec:
     def decode(self, input: ReadableBuffer, errors: str | None = None) -> str
     def encode(self, input: str, errors: str | None = None) -> bytes
 
@@ -16,7 +15,7 @@ class MultibyteIncrementalDecoder:
     errors: str
     """how to treat errors"""
 
-    def __init__(self, errors: str = "strict") -> None
+    init(self, errors: str = "strict")
     def decode(self, input: ReadableBuffer, final: bool = False) -> str
     def getstate(self) -> (bytes, int)
     def reset(self) -> None
@@ -27,7 +26,7 @@ class MultibyteIncrementalEncoder:
     errors: str
     """how to treat errors"""
 
-    def __init__(self, errors: str = "strict") -> None
+    init(self, errors: str = "strict")
     def encode(self, input: str, final: bool = False) -> bytes
     def getstate(self) -> int
     def reset(self) -> None
@@ -39,7 +38,7 @@ class MultibyteStreamReader:
     """how to treat errors"""
 
     stream: _ReadableStream
-    def __init__(self, stream: _ReadableStream, errors: str = "strict") -> None
+    init(self, stream: _ReadableStream, errors: str = "strict")
     def read(self, sizeobj: int | None = None, /) -> str
     def readline(self, sizeobj: int | None = None, /) -> str
     def readlines(self, sizehintobj: int | None = None, /) -> list[str]
@@ -51,7 +50,7 @@ class MultibyteStreamWriter:
     """how to treat errors"""
 
     stream: _WritableStream
-    def __init__(self, stream: _WritableStream, errors: str = "strict") -> None
+    init(self, stream: _WritableStream, errors: str = "strict")
     def reset(self) -> None
     def write(self, strobj: str, /) -> None
     def writelines(self, lines: Iterable[str], /) -> None

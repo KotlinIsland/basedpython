@@ -58,14 +58,8 @@ final class BZ2Decompressor:
         ignored and saved in the unused_data attribute.
         """
 
-    @property
-    def eof(self) -> bool:
-        """True if the end-of-stream marker has been reached."""
+    let eof: bool
 
-    @property
-    def needs_input(self) -> bool:
-        """True if more input is needed before more decompressed data can be produced."""
+    let needs_input: bool
 
-    @property
-    def unused_data(self) -> bytes:
-        """Data found after the end of the compressed stream."""
+    let unused_data: bytes

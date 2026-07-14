@@ -14,7 +14,7 @@ class Empty(Exception):
 class SimpleQueue[in out Element]:
     """Simple, unbounded, reentrant FIFO queue."""
 
-    def __init__(self) -> None
+    init(self)
     def empty(self) -> bool:
         """Return True if the queue is empty, False otherwise (not reliable!)."""
 

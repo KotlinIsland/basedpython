@@ -11,7 +11,6 @@ from _typeshed import ReadableBuffer
 from collections.abc import Iterable
 from email.message import Message
 from types import TracebackType
-from typing import IO, Any
 from typing_extensions import deprecated
 
 __all__ = ["addbase", "addclosehook", "addinfo", "addinfourl"]
@@ -20,7 +19,7 @@ class addbase(tempfile._TemporaryFileWrapper[bytes]):
     """Base class for addinfo and addclosehook. Is a good idea for garbage collection."""
 
     fp: IO[bytes]
-    def __init__(self, fp: IO[bytes]) -> None
+    init(self, fp: IO[bytes])
     def __exit__(
         self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
     ) -> None
@@ -35,14 +34,14 @@ class addclosehook(addbase):
     """Class to add a close hook to an open file."""
 
     closehook: (...) -> object
-    hookargs: (*: Any)
-    def __init__(self, fp: IO[bytes], closehook: (...) -> object, *hookargs: dynamic) -> None
+    hookargs: (*: dynamic)
+    init(self, fp: IO[bytes], closehook: (...) -> object, *hookargs: dynamic)
 
 class addinfo(addbase):
     """class to add an info() method to an open file."""
 
     headers: Message
-    def __init__(self, fp: IO[bytes], headers: Message) -> None
+    init(self, fp: IO[bytes], headers: Message)
     def info(self) -> Message
 
 class addinfourl(addinfo):
@@ -50,9 +49,8 @@ class addinfourl(addinfo):
 
     url: str
     code: int | None  # Deprecated since Python 3.9. Use `addinfourl.status` attribute instead.
-    @property
-    def status(self) -> int | None
-    def __init__(self, fp: IO[bytes], headers: Message, url: str, code: int | None = None) -> None
+    let status: int | None
+    init(self, fp: IO[bytes], headers: Message, url: str, code: int | None = None)
     @deprecated("Deprecated since Python 3.9. Use `addinfourl.url` attribute instead.")
     def geturl(self) -> str
     @deprecated("Deprecated since Python 3.9. Use `addinfourl.headers` attribute instead.")

@@ -41,7 +41,7 @@ if sys.version_info >= (3, 11):
 
         """
 
-        def __init__(self, *, debug: bool | None = None, loop_factory: Callable[[], AbstractEventLoop] | None = None) -> None
+        init(self, *, debug: bool | None = None, loop_factory: (() -> AbstractEventLoop) | None = None)
         def __enter__(self) -> Self
         def __exit__(self, exc_type: Unused, exc_val: Unused, exc_tb: Unused) -> None
         def close(self) -> None:
@@ -59,7 +59,7 @@ if sys.version_info >= (3, 11):
                 """Run a coroutine inside the embedded event loop."""
 
 if sys.version_info >= (3, 14):
-    def run[Element](main: Awaitable[Element], *, debug: bool | None = None, loop_factory: Callable[[], AbstractEventLoop] | None = None) -> Element:
+    def run[Element](main: Awaitable[Element], *, debug: bool | None = None, loop_factory: (() -> AbstractEventLoop) | None = None) -> Element:
         """Execute the coroutine and return the result.
 
         This function runs the passed coroutine, taking care of
@@ -91,7 +91,7 @@ if sys.version_info >= (3, 14):
 
 elif sys.version_info >= (3, 12):
     def run[Element](
-        main: Coroutine[dynamic, dynamic, Element], *, debug: bool | None = None, loop_factory: Callable[[], AbstractEventLoop] | None = None
+        main: Coroutine[dynamic, dynamic, Element], *, debug: bool | None = None, loop_factory: (() -> AbstractEventLoop) | None = None
     ) -> Element:
         """Execute the coroutine and return the result.
 

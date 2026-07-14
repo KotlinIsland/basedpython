@@ -27,7 +27,7 @@ from typing import ParamSpec, TypeAlias, TypeVar
 
 __all__ = ["Trace", "CoverageResults"]
 
-_FileModuleFunction: TypeAlias = tuple[str, str | None, str]
+type _FileModuleFunction = tuple[str, str | None, str]
 
 class CoverageResults:
     counts: dict[(str, int), int]
@@ -36,14 +36,14 @@ class CoverageResults:
     callers: dict[(_FileModuleFunction, _FileModuleFunction), int]
     inifile: StrPath | None
     outfile: StrPath | None
-    def __init__(
+    init(
         self,
         counts: dict[(str, int), int] | None = None,
         calledfuncs: dict[_FileModuleFunction, int] | None = None,
         infile: StrPath | None = None,
         callers: dict[(_FileModuleFunction, _FileModuleFunction), int] | None = None,
         outfile: StrPath | None = None,
-    ) -> None  # undocumented
+    )  # undocumented
     def update(self, other: CoverageResults) -> None:
         """Merge in the data from another CoverageResults"""
 
@@ -92,7 +92,7 @@ class CoverageResults:
         """
 
 class _Ignore:
-    def __init__(self, modules: Iterable[str] | None = None, dirs: Iterable[StrPath] | None = None) -> None
+    init(self, modules: Iterable[str] | None = None, dirs: Iterable[StrPath] | None = None)
     def names(self, filename: str, modulename: str) -> int
 
 class Trace:
@@ -106,7 +106,7 @@ class Trace:
     start_time: int | None
     globaltrace: TraceFunction
     localtrace: TraceFunction
-    def __init__(
+    init(
         self,
         count: int = 1,
         trace: int = 1,
@@ -117,7 +117,7 @@ class Trace:
         infile: StrPath | None = None,
         outfile: StrPath | None = None,
         timing: bool = False,
-    ) -> None:
+    ):
         """
         @param count true iff it should count number of times each
                      line is executed
@@ -140,7 +140,7 @@ class Trace:
     def runctx(
         self, cmd: str | types.CodeType, globals: Mapping[str, dynamic] | None = None, locals: Mapping[str, dynamic] | None = None
     ) -> None
-    def runfunc[**P, Element](self, func: Callable[P, Element], /, *args: P.args, **kw: P.kwargs) -> Element
+    def runfunc[**P, Element](self, func: (**P) -> Element, /, *args: P.args, **kw: P.kwargs) -> Element
     def file_module_function_of(self, frame: types.FrameType) -> _FileModuleFunction
     def globaltrace_trackcallers(self, frame: types.FrameType, why: str, arg: dynamic) -> None:
         """Handler for call events.

@@ -3674,13 +3674,13 @@ dynamic construction of enums using the functional syntax:
 from enum import Enum, IntEnum, StrEnum
 from ty_extensions._internal import into_regular_callable
 
-# revealed: Overload[[EnumMemberT](value: Any, names: None = None) -> EnumMemberT, (value: str, names: Iterable[Iterable[str | Any]], *, module: str | None = None, qualname: str | None = None, type: type | None = None, start: int = 1, boundary: FlagBoundary | None = None) -> type[Enum]]
+# revealed: Overload[[EnumMemberT](value: Any, names: None = None) -> EnumMemberT, (value: str, names: _EnumNames, *, module: str | None = None, qualname: str | None = None, type: type | None = None, start: int = 1, boundary: FlagBoundary | None = None) -> type[Enum]]
 reveal_type(into_regular_callable(Enum))
 
-# revealed: Overload[[EnumMemberT](value: Any, names: None = None) -> EnumMemberT, (value: str, names: Iterable[Iterable[str | Any]], *, module: str | None = None, qualname: str | None = None, type: type | None = None, start: int = 1, boundary: FlagBoundary | None = None) -> type[Enum]]
+# revealed: Overload[[EnumMemberT](value: Any, names: None = None) -> EnumMemberT, (value: str, names: _EnumNames, *, module: str | None = None, qualname: str | None = None, type: type | None = None, start: int = 1, boundary: FlagBoundary | None = None) -> type[Enum]]
 reveal_type(into_regular_callable(IntEnum))
 
-# revealed: Overload[[EnumMemberT](value: Any, names: None = None) -> EnumMemberT, (value: str, names: Iterable[Iterable[str | Any]], *, module: str | None = None, qualname: str | None = None, type: type | None = None, start: int = 1, boundary: FlagBoundary | None = None) -> type[Enum]]
+# revealed: Overload[[EnumMemberT](value: Any, names: None = None) -> EnumMemberT, (value: str, names: _EnumNames, *, module: str | None = None, qualname: str | None = None, type: type | None = None, start: int = 1, boundary: FlagBoundary | None = None) -> type[Enum]]
 reveal_type(into_regular_callable(StrEnum))
 ```
 

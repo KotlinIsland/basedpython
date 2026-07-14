@@ -8,19 +8,19 @@ import sys
 from _typeshed import ReadableBuffer, SupportsRead, SupportsWrite
 from collections.abc import Iterable, MutableSequence
 from types import GenericAlias
-from typing import ClassVar, Literal, SupportsIndex, TypeAlias, TypeVar
+from typing import ClassVar, Literal, TypeAlias, TypeVar
 from typing_extensions import Self, deprecated, disjoint_base
 
-_IntTypeCode: TypeAlias = Literal["b", "B", "h", "H", "i", "I", "l", "L", "q", "Q"]
+type _IntTypeCode = "b" | "B" | "h" | "H" | "i" | "I" | "l" | "L" | "q" | "Q"
 if sys.version_info >= (3, 15):
-    _FloatTypeCode: TypeAlias = Literal["f", "d", "e", "Zf", "Zd"]
+    type _FloatTypeCode = "f" | "d" | "e" | "Zf" | "Zd"
 else:
-    _FloatTypeCode: TypeAlias = Literal["f", "d"]
+    type _FloatTypeCode = "f" | "d"
 if sys.version_info >= (3, 13):
-    _UnicodeTypeCode: TypeAlias = Literal["u", "w"]
+    type _UnicodeTypeCode = "u" | "w"
 else:
-    _UnicodeTypeCode: TypeAlias = Literal["u"]
-_TypeCode: TypeAlias = _IntTypeCode | _FloatTypeCode | _UnicodeTypeCode
+    type _UnicodeTypeCode = "u"
+type _TypeCode = _IntTypeCode | _FloatTypeCode | _UnicodeTypeCode
 
 
 if sys.version_info >= (3, 15):
@@ -91,13 +91,9 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
     itemsize -- the length in bytes of one array item
     """
 
-    @property
-    def typecode(self) -> _TypeCode:
-        """the typecode character used to create the array"""
+    let typecode: _TypeCode
 
-    @property
-    def itemsize(self) -> int:
-        """the size, in bytes, of one array item"""
+    let itemsize: int
 
     def __new__(
         cls: type[array[int]], typecode: _IntTypeCode, initializer: bytes | bytearray | Iterable[int] = ..., /
@@ -107,16 +103,16 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
     ) -> array[float]
     if sys.version_info >= (3, 13):
         def __new__(
-            cls: type[array[str]], typecode: Literal["w"], initializer: bytes | bytearray | Iterable[str] = ..., /
+            cls: type[array[str]], typecode: "w", initializer: bytes | bytearray | Iterable[str] = ..., /
         ) -> array[str]
         @deprecated("Deprecated since Python 3.3; will be removed in Python 3.16. Use 'w' typecode instead.")
         def __new__(
-            cls: type[array[str]], typecode: Literal["u"], initializer: bytes | bytearray | Iterable[str] = ..., /
+            cls: type[array[str]], typecode: "u", initializer: bytes | bytearray | Iterable[str] = ..., /
         ) -> array[str]
     else:
         @deprecated("Deprecated since Python 3.3; will be removed in Python 3.16.")
         def __new__(
-            cls: type[array[str]], typecode: Literal["u"], initializer: bytes | bytearray | Iterable[str] = ..., /
+            cls: type[array[str]], typecode: "u", initializer: bytes | bytearray | Iterable[str] = ..., /
         ) -> array[str]
 
     def __new__(cls, typecode: str, initializer: Iterable[Element], /) -> Self
@@ -199,7 +195,7 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
         some other type.
         """
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
     def __contains__(self, value: object, /) -> bool:
         """Return bool(key in self)."""
 
@@ -223,7 +219,7 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
     def __eq__(self, value: object, /) -> bool
     def __ge__(self, value: array[Element], /) -> bool
     def __gt__(self, value: array[Element], /) -> bool
-    def __iadd__(self, value: array[Element], /) -> Self:  # type: ignore[override]
+    def __iadd__(self, value: array[Element], /) -> Self:
         """Implement self+=value."""
 
     def __imul__(self, value: int, /) -> Self:

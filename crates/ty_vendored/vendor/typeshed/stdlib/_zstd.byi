@@ -38,9 +38,9 @@ ZSTD_greedy: Final = 3
 ZSTD_lazy: Final = 4
 ZSTD_lazy2: Final = 5
 
-_ZstdCompressorContinue: TypeAlias = Literal[0]
-_ZstdCompressorFlushBlock: TypeAlias = Literal[1]
-_ZstdCompressorFlushFrame: TypeAlias = Literal[2]
+type _ZstdCompressorContinue = 0
+type _ZstdCompressorFlushBlock = 1
+type _ZstdCompressorFlushFrame = 2
 
 final class ZstdCompressor:
     """Create a compressor object for compressing data incrementally.
@@ -107,14 +107,7 @@ final class ZstdCompressor:
         may be corrupted and the final chunk written may be lost.
         """
 
-    @property
-    def last_mode(self) -> _ZstdCompressorContinue | _ZstdCompressorFlushBlock | _ZstdCompressorFlushFrame:
-        """The last mode used to this compressor object, its value can be .CONTINUE,
-        .FLUSH_BLOCK, .FLUSH_FRAME. Initialized to .FLUSH_FRAME.
-
-        It can be used to get the current state of a compressor, such as, data
-        flushed, or a frame ended.
-        """
+    let last_mode: _ZstdCompressorContinue | _ZstdCompressorFlushBlock | _ZstdCompressorFlushFrame
 
 final class ZstdDecompressor:
     """Create a decompressor object for decompressing data incrementally.
@@ -156,28 +149,11 @@ final class ZstdDecompressor:
         ignored and saved in the self.unused_data attribute.
         """
 
-    @property
-    def eof(self) -> bool:
-        """True means the end of the first frame has been reached. If decompress data
-        after that, an EOFError exception will be raised.
-        """
+    let eof: bool
 
-    @property
-    def needs_input(self) -> bool:
-        """If the max_length output limit in .decompress() method has been reached,
-        and the decompressor has (or may has) unconsumed input data, it will be set
-        to False. In this case, passing b'' to the .decompress() method may output
-        further data.
-        """
+    let needs_input: bool
 
-    @property
-    def unused_data(self) -> bytes:
-        """A bytes object of un-consumed input data.
-
-        When ZstdDecompressor object stops after a frame is
-        decompressed, unused input data after the frame.  Otherwise this
-        will be b''.
-        """
+    let unused_data: bytes
 
 final class ZstdDict:
     """Represents a Zstandard dictionary.
@@ -197,63 +173,15 @@ final class ZstdDict:
     def __len__(self, /) -> int:
         """Return len(self)."""
 
-    @property
-    def as_digested_dict(self) -> (Self, int):
-        """Load as a digested dictionary to compressor.
+    let as_digested_dict: (Self, int)
 
-        Pass this attribute as zstd_dict argument:
-        compress(dat, zstd_dict=zd.as_digested_dict)
+    let as_prefix: (Self, int)
 
-        1. Some advanced compression parameters of compressor may be
-           overridden by parameters of digested dictionary.
-        2. ZstdDict has a digested dictionaries cache for each compression
-           level.  It's faster when loading again a digested dictionary with
-           the same compression level.
-        3. No need to use this for decompression.
-        """
+    let as_undigested_dict: (Self, int)
 
-    @property
-    def as_prefix(self) -> (Self, int):
-        """Load as a prefix to compressor/decompressor.
+    let dict_content: bytes
 
-        Pass this attribute as zstd_dict argument:
-        compress(dat, zstd_dict=zd.as_prefix)
-
-        1. Prefix is compatible with long distance matching, while
-           dictionary is not.
-        2. It only works for the first frame, then the
-           compressor/decompressor will return to no prefix state.
-        3. When decompressing, must use the same prefix as when compressing.
-        """
-
-    @property
-    def as_undigested_dict(self) -> (Self, int):
-        """Load as an undigested dictionary to compressor.
-
-        Pass this attribute as zstd_dict argument:
-        compress(dat, zstd_dict=zd.as_undigested_dict)
-
-        1. The advanced compression parameters of compressor will not be
-           overridden.
-        2. Loading an undigested dictionary is costly. If load an undigested
-           dictionary multiple times, consider reusing a compressor object.
-        3. No need to use this for decompression.
-        """
-
-    @property
-    def dict_content(self) -> bytes:
-        """The content of a Zstandard dictionary, as a bytes object."""
-
-    @property
-    def dict_id(self) -> int:
-        """The Zstandard dictionary, an int between 0 and 2**32.
-
-        A non-zero value represents an ordinary Zstandard dictionary,
-        conforming to the standardised format.
-
-        A value of zero indicates a 'raw content' dictionary,
-        without any restrictions on format or content.
-        """
+    let dict_id: int
 
 class ZstdError(Exception):
     """An error occurred in the zstd library."""
@@ -319,5 +247,5 @@ def train_dict(samples_bytes: bytes, samples_sizes: (*: int), dict_size: int, /)
       The size of the dictionary.
     """
 
-zstd_version: Final[str]
-zstd_version_number: Final[int]
+final zstd_version: str
+final zstd_version_number: int

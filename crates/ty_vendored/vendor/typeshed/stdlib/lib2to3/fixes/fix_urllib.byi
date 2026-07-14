@@ -8,7 +8,7 @@ from typing import Final, Literal
 
 from .fix_imports import FixImports
 
-MAPPING: Final[dict[str, list[(Literal["urllib.request", "urllib.parse", "urllib.error"], list[str])]]]
+final MAPPING: dict[str, list[("urllib.request" | "urllib.parse" | "urllib.error", list[str])]]
 
 def build_pattern() -> Generator[str]
 

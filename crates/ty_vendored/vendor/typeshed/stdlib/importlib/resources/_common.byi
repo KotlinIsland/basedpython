@@ -10,14 +10,14 @@ if sys.version_info >= (3, 11):
     from typing import Literal, TypeAlias, overload
     from typing_extensions import deprecated
 
-    Package: TypeAlias = str | types.ModuleType
+    type Package = str | types.ModuleType
 
     if sys.version_info >= (3, 12):
-        Anchor: TypeAlias = Package
+        type Anchor = Package
 
         def package_to_anchor(
-            func: Callable[[Anchor | None], Traversable],
-        ) -> Callable[[Anchor | None, Anchor | None], Traversable]:
+            func: (Anchor | None) -> Traversable,
+        ) -> (Anchor | None, Anchor | None) -> Traversable:
             """
             Replace 'package' parameter as 'anchor' and warn about the change.
 
@@ -67,7 +67,7 @@ if sys.version_info >= (3, 11):
 
         """
 
-    def as_file(path: Traversable) -> AbstractContextManager[Path, Literal[False]]:
+    def as_file(path: Traversable) -> AbstractContextManager[Path, False]:
         """
         Given a Traversable object, return that object as a
         path on the local file system in a context manager.

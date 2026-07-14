@@ -3,7 +3,6 @@
 from _typeshed import OptExcInfo
 from _typeshed.wsgi import ErrorStream, InputStream, StartResponse, WSGIApplication, WSGIEnvironment
 from collections.abc import Callable, MutableMapping
-from typing import IO
 
 from .headers import Headers
 from .util import FileWrapper
@@ -64,7 +63,7 @@ class BaseHandler:
 
     def start_response(
         self, status: str, headers: list[(str, str)], exc_info: OptExcInfo | None = None
-    ) -> Callable[[bytes], None]:
+    ) -> (bytes) -> None:
         """'start_response()' callable as specified by PEP 3333"""
 
     def send_preamble(self) -> None:
@@ -175,7 +174,7 @@ class SimpleHandler(BaseHandler):
     stdout: IO[bytes]
     stderr: ErrorStream
     base_env: MutableMapping[str, str]
-    def __init__(
+    init(
         self,
         stdin: InputStream,
         stdout: IO[bytes],
@@ -183,7 +182,7 @@ class SimpleHandler(BaseHandler):
         environ: MutableMapping[str, str],
         multithread: bool = True,
         multiprocess: bool = False,
-    ) -> None
+    )
     def get_stdin(self) -> InputStream
     def get_stderr(self) -> ErrorStream
     def add_cgi_vars(self) -> None
@@ -226,7 +225,7 @@ class CGIHandler(BaseCGIHandler):
     instead.
     """
 
-    def __init__(self) -> None
+    init(self)
 
 class IISCGIHandler(BaseCGIHandler):
     """CGI-based invocation with workaround for IIS path bug
@@ -236,4 +235,4 @@ class IISCGIHandler(BaseCGIHandler):
     or metabase allowPathInfoForScriptMappings (IIS<7).
     """
 
-    def __init__(self) -> None
+    init(self)

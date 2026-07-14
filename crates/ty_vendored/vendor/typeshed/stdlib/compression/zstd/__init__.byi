@@ -33,7 +33,7 @@ __all__ = (
     "ZstdError",
 )
 
-zstd_version_info: Final[(int, int, int)]
+final zstd_version_info: (int, int, int)
 COMPRESSION_LEVEL_DEFAULT: Final = _zstd.ZSTD_CLEVEL_DEFAULT
 
 class FrameInfo:
@@ -42,7 +42,7 @@ class FrameInfo:
     __slots__ = ("decompressed_size", "dictionary_id")
     decompressed_size: int
     dictionary_id: int
-    def __init__(self, decompressed_size: int, dictionary_id: int) -> None
+    init(self, decompressed_size: int, dictionary_id: int)
 
 def get_frame_info(frame_buffer: ReadableBuffer) -> FrameInfo:
     """Get Zstandard frame information from a frame header.

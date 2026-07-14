@@ -10,7 +10,7 @@ from _weakref import getweakrefcount as getweakrefcount, getweakrefs as getweakr
 from _weakrefset import WeakSet as WeakSet
 from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping
 from types import GenericAlias
-from typing import Any, ClassVar, Generic, ParamSpec, TypeVar, final
+from typing import ClassVar, Generic, ParamSpec, TypeVar, final
 from typing_extensions import Self, disjoint_base
 
 __all__ = [
@@ -30,7 +30,7 @@ __all__ = [
 ]
 
 
-ProxyTypes: (*: type[Any])
+ProxyTypes: (*: type[dynamic])
 
 # These classes are implemented in C and imported from _weakref at runtime. However,
 # they consider themselves to live in the weakref module for sys.version_info >= (3, 11),
@@ -39,23 +39,23 @@ ProxyTypes: (*: type[Any])
 # came from the builtin module at runtime, which was just wrong, and we won't attempt to
 # duplicate that.
 
-final class CallableProxyType[in out CallableT: Callable[..., Any]]:  # "weakcallableproxy"
+final class CallableProxyType[in out CallableT: (...) -> dynamic]:  # "weakcallableproxy"
     def __eq__(self, value: object, /) -> bool
     def __getattr__(self, attr: str) -> dynamic
     __call__: CallableT
     """Call self as a function."""
 
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
 
 final class ProxyType[in out Element]:  # "weakproxy"
     def __eq__(self, value: object, /) -> bool
     def __getattr__(self, attr: str) -> dynamic
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
 
 @disjoint_base
 class ReferenceType[in out Element]:  # "weakref"
-    __callback__: Callable[[Self], dynamic]
-    def __new__(cls, o: Element, callback: Callable[[Self], dynamic] | None = ..., /) -> Self
+    __callback__: (Self) -> dynamic
+    def __new__(cls, o: Element, callback: ((Self) -> dynamic) | None = ..., /) -> Self
     def __call__(self) -> Element | None:
         """Call self as a function."""
 
@@ -68,14 +68,14 @@ ref = ReferenceType
 
 # everything below here is implemented in weakref.py
 
-class WeakMethod[in out CallableT: Callable[..., Any]](ref[CallableT]):
+class WeakMethod[in out CallableT: (...) -> dynamic](ref[CallableT]):
     """
     A custom `weakref.ref` subclass which simulates a weak reference to
     a bound method, working around the lifetime problem of bound methods.
     """
 
     __slots__ = ("_func_ref", "_meth_type", "_alive", "__weakref__")
-    def __new__(cls, meth: CallableT, callback: Callable[[Self], dynamic] | None = None) -> Self
+    def __new__(cls, meth: CallableT, callback: ((Self) -> dynamic) | None = None) -> Self
     def __call__(self) -> CallableT | None
     def __eq__(self, other: object) -> bool
     def __ne__(self, other: object) -> bool
@@ -88,18 +88,18 @@ class WeakValueDictionary[in out Key, in out Value](MutableMapping[Key, Value]):
     reference to the value exists anymore
     """
 
-    def __init__(self) -> None
-    def __init__(
-        self: WeakValueDictionary[Key, Value],  # pyright: ignore[reportInvalidTypeVarUse]  #11780
+    init(self)
+    init(
+        self: WeakValueDictionary[Key, Value],
         other: Mapping[Key, Value] | Iterable[(Key, Value)],
         /,
-    ) -> None
-    def __init__(
-        self: WeakValueDictionary[str, Value],  # pyright: ignore[reportInvalidTypeVarUse]  #11780
+    )
+    init(
+        self: WeakValueDictionary[str, Value],
         other: Mapping[str, Value] | Iterable[(str, Value)] = (),
         /,
         **kwargs: Value,
-    ) -> None
+    )
 
     def __len__(self) -> int
     def __getitem__(self, key: Key) -> Value
@@ -116,9 +116,9 @@ class WeakValueDictionary[in out Key, in out Value](MutableMapping[Key, Value]):
     def get[Element](self, key: Key, default: Element) -> Value | Element
 
     # These are incompatible with Mapping
-    def keys(self) -> Iterator[Key]  # type: ignore[override]
-    def values(self) -> Iterator[Value]  # type: ignore[override]
-    def items(self) -> Iterator[(Key, Value)]  # type: ignore[override]
+    def keys(self) -> Iterator[Key]
+    def values(self) -> Iterator[Value]
+    def items(self) -> Iterator[(Key, Value)]
     def itervaluerefs(self) -> Iterator[KeyedRef[Key, Value]]:
         """Return an iterator that yields the weak references to the values.
 
@@ -170,8 +170,8 @@ class KeyedRef[in out Key, in out Element](ref[Element]):
 
     __slots__ = ("key",)
     key: Key
-    def __new__(type, ob: Element, callback: Callable[[Self], dynamic], key: Key) -> Self
-    def __init__(self, ob: Element, callback: Callable[[Self], dynamic], key: Key) -> None
+    def __new__(type, ob: Element, callback: (Self) -> dynamic, key: Key) -> Self
+    init(self, ob: Element, callback: (Self) -> dynamic, key: Key)
 
 class WeakKeyDictionary[in out Key, in out Value](MutableMapping[Key, Value]):
     """Mapping class that references keys weakly.
@@ -184,8 +184,8 @@ class WeakKeyDictionary[in out Key, in out Value](MutableMapping[Key, Value]):
     accesses.
     """
 
-    def __init__(self, dict: None = None) -> None
-    def __init__(self, dict: Mapping[Key, Value] | Iterable[(Key, Value)]) -> None
+    init(self, dict: None = None)
+    init(self, dict: Mapping[Key, Value] | Iterable[(Key, Value)])
 
     def __len__(self) -> int
     def __getitem__(self, key: Key) -> Value
@@ -202,9 +202,9 @@ class WeakKeyDictionary[in out Key, in out Value](MutableMapping[Key, Value]):
     def get[Element](self, key: Key, default: Element) -> Value | Element
 
     # These are incompatible with Mapping
-    def keys(self) -> Iterator[Key]  # type: ignore[override]
-    def values(self) -> Iterator[Value]  # type: ignore[override]
-    def items(self) -> Iterator[(Key, Value)]  # type: ignore[override]
+    def keys(self) -> Iterator[Key]
+    def values(self) -> Iterator[Value]
+    def items(self) -> Iterator[(Key, Value)]
     def keyrefs(self) -> list[ref[Key]]:
         """Return a list of weak references to the keys.
 
@@ -250,25 +250,23 @@ class finalize[**P, in out Element]:
     """
 
     __slots__ = ()
-    def __init__(self, obj: Element, func: Callable[P, dynamic], /, *args: P.args, **kwargs: P.kwargs) -> None
+    init(self, obj: Element, func: (**P) -> dynamic, /, *args: P.args, **kwargs: P.kwargs)
     def __call__(self, _: dynamic = None) -> dynamic | None:
         """If alive then mark as dead and return func(*args, **kwargs);
         otherwise return None
         """
 
-    def detach(self) -> (Element, Callable[P, Any], (*: Any), dict[str, Any]) | None:
+    def detach(self) -> (Element, (**P) -> dynamic, (*: dynamic), dict[str, dynamic]) | None:
         """If alive then mark as dead and return (obj, func, args, kwargs);
         otherwise return None
         """
 
-    def peek(self) -> (Element, Callable[P, Any], (*: Any), dict[str, Any]) | None:
+    def peek(self) -> (Element, (**P) -> dynamic, (*: dynamic), dict[str, dynamic]) | None:
         """If alive then return (obj, func, args, kwargs);
         otherwise return None
         """
 
-    @property
-    def alive(self) -> bool:
-        """Whether finalizer is alive"""
+    let alive: bool
 
     atexit: bool
     """Whether finalizer should be called at exit"""

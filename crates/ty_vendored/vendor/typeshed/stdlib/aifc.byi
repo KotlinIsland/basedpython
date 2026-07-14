@@ -135,7 +135,7 @@ writeframesraw.
 """
 
 from types import TracebackType
-from typing import IO, Literal, NamedTuple, TypeAlias
+from typing import Literal, NamedTuple, TypeAlias
 from typing_extensions import Self
 
 __all__ = ["Error", "open"]
@@ -152,11 +152,11 @@ class _aifc_params(NamedTuple):
     comptype: bytes
     compname: bytes
 
-_File: TypeAlias = str | IO[bytes]
-_Marker: TypeAlias = tuple[int, int, bytes]
+type _File = str | IO[bytes]
+type _Marker = tuple[int, int, bytes]
 
 class Aifc_read:
-    def __init__(self, f: _File) -> None
+    init(self, f: _File)
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
@@ -179,7 +179,7 @@ class Aifc_read:
     def readframes(self, nframes: int) -> bytes
 
 class Aifc_write:
-    def __init__(self, f: _File) -> None
+    init(self, f: _File)
     def __del__(self) -> None
     def __enter__(self) -> Self
     def __exit__(
@@ -209,6 +209,6 @@ class Aifc_write:
     def writeframes(self, data: dynamic) -> None
     def close(self) -> None
 
-def open(f: _File, mode: Literal["r", "rb"]) -> Aifc_read
-def open(f: _File, mode: Literal["w", "wb"]) -> Aifc_write
+def open(f: _File, mode: "r" | "rb") -> Aifc_read
+def open(f: _File, mode: "w" | "wb") -> Aifc_write
 def open(f: _File, mode: str | None = None) -> dynamic

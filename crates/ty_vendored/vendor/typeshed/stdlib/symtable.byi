@@ -39,7 +39,7 @@ if sys.version_info >= (3, 13):
         TYPE_VARIABLE = "type variable"
 
 class SymbolTable:
-    def __init__(self, raw_table: dynamic, filename: str) -> None
+    init(self, raw_table: dynamic, filename: str)
     if sys.version_info >= (3, 13):
         def get_type(self) -> SymbolTableType:
             """Return the type of the symbol table.
@@ -128,9 +128,9 @@ class Class(SymbolTable):
         """Return a tuple of methods declared in the class."""
 
 class Symbol:
-    def __init__(
+    init(
         self, name: str, flags: int, namespaces: Sequence[SymbolTable] | None = None, *, module_scope: bool = False
-    ) -> None
+    )
     def is_nonlocal(self) -> bool:
         """Return *True* if the symbol is nonlocal."""
 

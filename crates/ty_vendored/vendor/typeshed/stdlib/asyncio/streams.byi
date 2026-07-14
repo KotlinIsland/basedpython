@@ -3,7 +3,7 @@ import sys
 from _typeshed import ReadableBuffer, StrPath
 from collections.abc import Awaitable, Callable, Iterable, Sequence, Sized
 from types import ModuleType
-from typing import Protocol, SupportsIndex, TypeAlias, type_check_only
+from typing import Protocol, TypeAlias, type_check_only
 from typing_extensions import Self
 
 from . import events, protocols, transports
@@ -23,10 +23,10 @@ else:
         "start_unix_server",
     )
 
-_ClientConnectedCallback: TypeAlias = Callable[[StreamReader, StreamWriter], Awaitable[None] | None]
+type _ClientConnectedCallback = (StreamReader, StreamWriter) -> (Awaitable[None] | None)
 
 @type_check_only
-class _ReaduntilBuffer(ReadableBuffer, Sized, Protocol)
+protocol _ReaduntilBuffer(ReadableBuffer, Sized)
 
 async def open_connection(
     host: str | None = None,
@@ -95,7 +95,7 @@ if sys.platform != "win32":
     ) -> Server:
         """Similar to `start_server` but works with UNIX Domain Sockets."""
 
-class FlowControlMixin(protocols.Protocol):
+protocol FlowControlMixin:
     """Reusable flow control logic for StreamWriter.drain().
 
     This implements the protocol methods pause_writing(),
@@ -105,9 +105,9 @@ class FlowControlMixin(protocols.Protocol):
     StreamWriter.drain() must wait for _drain_helper() coroutine.
     """
 
-    def __init__(self, loop: events.AbstractEventLoop | None = None) -> None
+    init(self, loop: events.AbstractEventLoop | None = None)
 
-class StreamReaderProtocol(FlowControlMixin, protocols.Protocol):
+protocol StreamReaderProtocol(FlowControlMixin):
     """Helper class to adapt between Protocol and StreamReader.
 
     (This is a helper class instead of making StreamReader itself a
@@ -116,12 +116,12 @@ class StreamReaderProtocol(FlowControlMixin, protocols.Protocol):
     call inappropriate methods of the protocol.)
     """
 
-    def __init__(
+    init(
         self,
         stream_reader: StreamReader,
         client_connected_cb: _ClientConnectedCallback | None = None,
         loop: events.AbstractEventLoop | None = None,
-    ) -> None
+    )
     def __del__(self) -> None
 
 class StreamWriter:
@@ -134,15 +134,14 @@ class StreamWriter:
     directly.
     """
 
-    def __init__(
+    init(
         self,
         transport: transports.WriteTransport,
         protocol: protocols.BaseProtocol,
         reader: StreamReader | None,
         loop: events.AbstractEventLoop,
-    ) -> None
-    @property
-    def transport(self) -> transports.WriteTransport
+    )
+    let transport: transports.WriteTransport
     def write(self, data: bytes | bytearray | memoryview) -> None
     def writelines(self, data: Iterable[bytes | bytearray | memoryview]) -> None
     def write_eof(self) -> None
@@ -183,7 +182,7 @@ class StreamWriter:
         def __del__(self) -> None
 
 class StreamReader:
-    def __init__(self, limit: int = 65536, loop: events.AbstractEventLoop | None = None) -> None
+    init(self, limit: int = 65536, loop: events.AbstractEventLoop | None = None)
     def exception(self) -> Exception | None
     def set_exception(self, exc: Exception) -> None
     def set_transport(self, transport: transports.BaseTransport) -> None

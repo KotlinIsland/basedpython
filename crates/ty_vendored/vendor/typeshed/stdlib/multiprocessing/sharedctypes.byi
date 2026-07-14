@@ -5,7 +5,7 @@ from ctypes import _SimpleCData, c_char
 from multiprocessing.context import BaseContext
 from multiprocessing.synchronize import _LockLike
 from types import TracebackType
-from typing import Any, Generic, Literal, Protocol, SupportsIndex, TypeVar, type_check_only
+from typing import Generic, Literal, Protocol, TypeVar, type_check_only
 
 __all__ = ["RawValue", "RawArray", "Value", "Array", "copy", "synchronized"]
 
@@ -22,22 +22,22 @@ def RawArray[CT: _CData](typecode_or_type: type[CT], size_or_initializer: int | 
     """
 def RawArray(typecode_or_type: str, size_or_initializer: int | Sequence[dynamic]) -> dynamic
 
-def Value[CT: _CData](typecode_or_type: type[CT], *args: dynamic, lock: Literal[False], ctx: BaseContext | None = None) -> CT:
+def Value[CT: _CData](typecode_or_type: type[CT], *args: dynamic, lock: False, ctx: BaseContext | None = None) -> CT:
     """
     Return a synchronization wrapper for a Value
     """
 def Value[CT: _CData](
-    typecode_or_type: type[CT], *args: dynamic, lock: Literal[True] | _LockLike = True, ctx: BaseContext | None = None
+    typecode_or_type: type[CT], *args: dynamic, lock: True | _LockLike = True, ctx: BaseContext | None = None
 ) -> SynchronizedBase[CT]
 def Value(
-    typecode_or_type: str, *args: dynamic, lock: Literal[True] | _LockLike = True, ctx: BaseContext | None = None
+    typecode_or_type: str, *args: dynamic, lock: True | _LockLike = True, ctx: BaseContext | None = None
 ) -> SynchronizedBase[dynamic]
 def Value(
     typecode_or_type: str | type[_CData], *args: dynamic, lock: bool | _LockLike = True, ctx: BaseContext | None = None
 ) -> dynamic
 
 def Array[CT: _CData](
-    typecode_or_type: type[CT], size_or_initializer: int | Sequence[dynamic], *, lock: Literal[False], ctx: BaseContext | None = None
+    typecode_or_type: type[CT], size_or_initializer: int | Sequence[dynamic], *, lock: False, ctx: BaseContext | None = None
 ) -> CT:
     """
     Return a synchronization wrapper for a RawArray
@@ -46,21 +46,21 @@ def Array(
     typecode_or_type: type[c_char],
     size_or_initializer: int | Sequence[dynamic],
     *,
-    lock: Literal[True] | _LockLike = True,
+    lock: True | _LockLike = True,
     ctx: BaseContext | None = None,
 ) -> SynchronizedString
 def Array[Element](
     typecode_or_type: type[_SimpleCData[Element]],
     size_or_initializer: int | Sequence[dynamic],
     *,
-    lock: Literal[True] | _LockLike = True,
+    lock: True | _LockLike = True,
     ctx: BaseContext | None = None,
 ) -> SynchronizedArray[Element]
 def Array(
     typecode_or_type: str,
     size_or_initializer: int | Sequence[dynamic],
     *,
-    lock: Literal[True] | _LockLike = True,
+    lock: True | _LockLike = True,
     ctx: BaseContext | None = None,
 ) -> SynchronizedArray[dynamic]
 def Array(
@@ -81,14 +81,14 @@ def synchronized[Element](
 def synchronized[CT: _CData](obj: CT, lock: _LockLike | None = None, ctx: dynamic | None = None) -> SynchronizedBase[CT]
 
 @type_check_only
-class _AcquireFunc(Protocol):
+protocol _AcquireFunc:
     def __call__(self, block: bool = ..., timeout: float | None = ..., /) -> bool
 
 class SynchronizedBase[in out CT: _CData]:
     acquire: _AcquireFunc
-    release: Callable[[], None]
-    def __init__(self, obj: dynamic, lock: _LockLike | None = None, ctx: dynamic | None = None) -> None
-    def __reduce__(self) -> (Callable[[Any, _LockLike], SynchronizedBase[Any]], (Any, _LockLike))
+    release: () -> None
+    init(self, obj: dynamic, lock: _LockLike | None = None, ctx: dynamic | None = None)
+    def __reduce__(self) -> ((dynamic, _LockLike) -> SynchronizedBase[dynamic], (dynamic, _LockLike))
     def get_obj(self) -> CT
     def get_lock(self) -> _LockLike
     def __enter__(self) -> bool
@@ -118,8 +118,8 @@ class SynchronizedString(SynchronizedArray[bytes]):
     def __setitem__(self, i: slice[SupportsIndex | None], value: bytes) -> None
     def __setitem__(self, i: SupportsIndex, value: bytes) -> None
 
-    def __getslice__(self, start: SupportsIndex, stop: SupportsIndex) -> bytes  # type: ignore[override]
-    def __setslice__(self, start: SupportsIndex, stop: SupportsIndex, values: bytes) -> None  # type: ignore[override]
+    def __getslice__(self, start: SupportsIndex, stop: SupportsIndex) -> bytes
+    def __setslice__(self, start: SupportsIndex, stop: SupportsIndex, values: bytes) -> None
 
     value: bytes
     raw: bytes

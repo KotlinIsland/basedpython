@@ -75,7 +75,7 @@ class TextWrapper:
     unicode_whitespace_trans: dict[int, int]
     uspace: int
     x: str  # leaked loop variable
-    def __init__(
+    init(
         self,
         width: int = 70,
         initial_indent: str = "",
@@ -90,7 +90,7 @@ class TextWrapper:
         *,
         max_lines: int | None = None,
         placeholder: str = " [...]",
-    ) -> None
+    )
     # Private methods *are* part of the documented API for subclasses.
     def _munge_whitespace(self, text: str) -> str:
         """_munge_whitespace(text : string) -> string
@@ -261,7 +261,7 @@ def dedent(text: str) -> str:
     Entirely blank lines are normalized to a newline character.
     """
 
-def indent(text: str, prefix: str, predicate: Callable[[str], bool] | None = None) -> str:
+def indent(text: str, prefix: str, predicate: ((str) -> bool) | None = None) -> str:
     """Adds 'prefix' to the beginning of selected lines in 'text'.
 
     If 'predicate' is provided, 'prefix' will only be added to the lines

@@ -3,7 +3,7 @@
 from _typeshed import structseq
 from collections.abc import Callable
 from types import CodeType
-from typing import Any, Final, final
+from typing import Final, final
 from typing_extensions import disjoint_base
 
 @disjoint_base
@@ -16,9 +16,9 @@ class Profiler:
     is, in seconds).
     """
 
-    def __init__(
-        self, timer: Callable[[], float] | None = None, timeunit: float = 0.0, subcalls: bool = True, builtins: bool = True
-    ) -> None
+    init(
+        self, timer: (() -> float) | None = None, timeunit: float = 0.0, subcalls: bool = True, builtins: bool = True
+    )
     def getstats(self) -> list[profiler_entry]:
         """list of profiler_entry objects.
 
@@ -62,7 +62,7 @@ class Profiler:
     def clear(self) -> None:
         """Clear all profiling information collected so far."""
 
-final class profiler_entry(structseq[Any], tuple[CodeType | str, int, int, float, float, list[profiler_subentry]]):
+final class profiler_entry(structseq[dynamic], tuple[CodeType | str, int, int, float, float, list[profiler_subentry]]):
     __match_args__: Final = ("code", "callcount", "reccallcount", "totaltime", "inlinetime", "calls")
     code: CodeType | str
     """code object or built-in function name"""
@@ -82,7 +82,7 @@ final class profiler_entry(structseq[Any], tuple[CodeType | str, int, int, float
     calls: list[profiler_subentry]
     """details of the calls"""
 
-final class profiler_subentry(structseq[Any], tuple[CodeType | str, int, int, float, float]):
+final class profiler_subentry(structseq[dynamic], tuple[CodeType | str, int, int, float, float]):
     __match_args__: Final = ("code", "callcount", "reccallcount", "totaltime", "inlinetime")
     code: CodeType | str
     """called code object or built-in function name"""

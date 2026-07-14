@@ -5,11 +5,11 @@ from asyncio.events import AbstractEventLoop
 from collections.abc import Awaitable, Callable, Coroutine, Generator
 from contextvars import Context
 from types import FrameType, GenericAlias
-from typing import Any, Literal, TextIO, TypeAlias, TypeVar
+from typing import Literal, TypeAlias, TypeVar
 from typing_extensions import Self, disjoint_base
 
 _T_co = TypeVar("_T_co", covariant=True)
-_TaskYieldType: TypeAlias = Future[object] | None
+type _TaskYieldType = Future[object] | None
 
 @disjoint_base
 class Future[in out Element](Awaitable[Element]):
@@ -28,26 +28,24 @@ class Future[in out Element](Awaitable[Element]):
     """
 
     _state: str
-    @property
-    def _exception(self) -> BaseException | None
+    let _exception: BaseException | None
     _blocking: bool
 
     @property
-    def _log_traceback(self) -> bool: ...
+    def _log_traceback(self) -> bool
     @_log_traceback.setter
-    def _log_traceback(self, val: Literal[False]) -> None: ...
+    def _log_traceback(self, val: False) -> None
 
     _asyncio_future_blocking: bool  # is a part of duck-typing contract for `Future`
-    def __init__(self, *, loop: AbstractEventLoop | None = None) -> None
+    init(self, *, loop: AbstractEventLoop | None = None)
     def __del__(self) -> None:
         """Called when the instance is about to be destroyed."""
 
     def get_loop(self) -> AbstractEventLoop:
         """Return the event loop the Future is bound to."""
 
-    @property
-    def _callbacks(self) -> list[(Callable[[Self], Any], Context)]
-    def add_done_callback(self, fn: Callable[[Self], object], /, *, context: Context | None = None) -> None:
+    let _callbacks: list[((Self) -> dynamic, Context)]
+    def add_done_callback(self, fn: (Self) -> object, /, *, context: Context | None = None) -> None:
         """Add a callback to be run when the future becomes done.
 
         The callback is called with a single argument - the future object.
@@ -91,7 +89,7 @@ class Future[in out Element](Awaitable[Element]):
         InvalidStateError.
         """
 
-    def remove_done_callback(self, fn: Callable[[Self], object], /) -> int:
+    def remove_done_callback(self, fn: (Self) -> object, /) -> int:
         """Remove all instances of a callback from the "call when done" list.
 
         Returns the number of callbacks removed.
@@ -117,22 +115,21 @@ class Future[in out Element](Awaitable[Element]):
     def __await__(self) -> Generator[dynamic, None, Element]:
         """Return an iterator to be used in await expression."""
 
-    @property
-    def _loop(self) -> AbstractEventLoop
+    let _loop: AbstractEventLoop
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Futures are generic over the type of their results"""
 
 if sys.version_info >= (3, 12):
-    _TaskCompatibleCoro: TypeAlias = Coroutine[Any, Any, _T_co]
+    _TaskCompatibleCoro: TypeAlias = Coroutine[dynamic, dynamic, _T_co]
 else:
-    _TaskCompatibleCoro: TypeAlias = Generator[_TaskYieldType, None, _T_co] | Coroutine[Any, Any, _T_co]
+    _TaskCompatibleCoro: TypeAlias = Generator[_TaskYieldType, None, _T_co] | Coroutine[dynamic, dynamic, _T_co]
 
 # mypy and pyright complain that a subclass of an invariant class shouldn't be covariant.
 # While this is true in general, here it's sort-of okay to have a covariant subclass,
 # since the only reason why `asyncio.Future` is invariant is the `set_result()` method,
 # and `asyncio.Task.set_result()` always raises.
 @disjoint_base
-class Task[out Element](Future[Element]):  # type: ignore[type-var]  # pyright: ignore[reportInvalidTypeArguments]
+class Task[out Element](Future[Element]):
     """A coroutine wrapped in a Future."""
 
     if sys.version_info >= (3, 12):

@@ -13,7 +13,7 @@ from distutils.dist import Distribution as Distribution
 from distutils.extension import Extension as Extension
 from typing import Final, Literal
 
-USAGE: Final[str]
+final USAGE: str
 
 def gen_usage(script_name: StrOrBytesPath) -> str
 
@@ -53,7 +53,7 @@ def setup(
     command_packages: list[str] = ...,
     command_options: Mapping[str, Mapping[str, (Incomplete, Incomplete)]] = ...,
     package_data: Mapping[str, list[str]] = ...,
-    include_package_data: bool | Literal[0, 1] = ...,
+    include_package_data: bool | 0 | 1 = ...,
     libraries: list[str] = ...,
     headers: list[str] = ...,
     ext_package: str = ...,

@@ -4,11 +4,11 @@ encode(in_file, out_file [,name, mode], *, backtick=False)
 decode(in_file [, out_file, mode, quiet])
 """
 
-from typing import BinaryIO, TypeAlias
+from typing import TypeAlias
 
 __all__ = ["Error", "encode", "decode"]
 
-_File: TypeAlias = str | BinaryIO
+type _File = str | BinaryIO
 
 class Error(Exception)
 

@@ -48,15 +48,15 @@ from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
 from io import BytesIO
 from types import TracebackType
-from typing import Any, ClassVar, Final, Literal, Protocol, TypeAlias, type_check_only
+from typing import ClassVar, Final, Literal, Protocol, TypeAlias, type_check_only
 from typing_extensions import Self
 
 @type_check_only
-class _SupportsTimeTuple(Protocol):
+protocol _SupportsTimeTuple:
     def timetuple(self) -> time.struct_time
 
-_DateTimeComparable: TypeAlias = DateTime | datetime | str | _SupportsTimeTuple
-_Marshallable: TypeAlias = (
+type _DateTimeComparable = DateTime | datetime | str | _SupportsTimeTuple
+type _Marshallable = (
     bool
     | int
     | float
@@ -64,35 +64,35 @@ _Marshallable: TypeAlias = (
     | bytes
     | bytearray
     | None
-    | tuple[_Marshallable, ...]
+    | (*: _Marshallable)
     # Ideally we'd use _Marshallable for list and dict, but invariance makes that impractical
-    | list[Any]
-    | dict[str, Any]
+    | list[dynamic]
+    | dict[str, dynamic]
     | datetime
     | DateTime
     | Binary
 )
-_XMLDate: TypeAlias = int | datetime | tuple[int, ...] | time.struct_time
-_HostType: TypeAlias = tuple[str, dict[str, str]] | str
+type _XMLDate = int | datetime | (*: int) | time.struct_time
+type _HostType = tuple[str, dict[str, str]] | str
 
 def escape(s: str) -> str  # undocumented
 
-MAXINT: Final[int]  # undocumented
-MININT: Final[int]  # undocumented
+final MAXINT: int  # undocumented
+final MININT: int  # undocumented
 
-PARSE_ERROR: Final[int]  # undocumented
-SERVER_ERROR: Final[int]  # undocumented
-APPLICATION_ERROR: Final[int]  # undocumented
-SYSTEM_ERROR: Final[int]  # undocumented
-TRANSPORT_ERROR: Final[int]  # undocumented
+final PARSE_ERROR: int  # undocumented
+final SERVER_ERROR: int  # undocumented
+final APPLICATION_ERROR: int  # undocumented
+final SYSTEM_ERROR: int  # undocumented
+final TRANSPORT_ERROR: int  # undocumented
 
-NOT_WELLFORMED_ERROR: Final[int]  # undocumented
-UNSUPPORTED_ENCODING: Final[int]  # undocumented
-INVALID_ENCODING_CHAR: Final[int]  # undocumented
-INVALID_XMLRPC: Final[int]  # undocumented
-METHOD_NOT_FOUND: Final[int]  # undocumented
-INVALID_METHOD_PARAMS: Final[int]  # undocumented
-INTERNAL_ERROR: Final[int]  # undocumented
+final NOT_WELLFORMED_ERROR: int  # undocumented
+final UNSUPPORTED_ENCODING: int  # undocumented
+final INVALID_ENCODING_CHAR: int  # undocumented
+final INVALID_XMLRPC: int  # undocumented
+final METHOD_NOT_FOUND: int  # undocumented
+final INVALID_METHOD_PARAMS: int  # undocumented
+final INTERNAL_ERROR: int  # undocumented
 
 class Error(Exception):
     """Base class for client errors."""
@@ -104,7 +104,7 @@ class ProtocolError(Error):
     errcode: int
     errmsg: str
     headers: dict[str, str]
-    def __init__(self, url: str, errcode: int, errmsg: str, headers: dict[str, str]) -> None
+    init(self, url: str, errcode: int, errmsg: str, headers: dict[str, str])
 
 class ResponseError(Error):
     """Indicates a broken response package."""
@@ -114,7 +114,7 @@ class Fault(Error):
 
     faultCode: int
     faultString: str
-    def __init__(self, faultCode: int, faultString: str, **extra: dynamic) -> None
+    init(self, faultCode: int, faultString: str, **extra: dynamic)
 
 boolean = bool
 Boolean = bool
@@ -129,13 +129,13 @@ class DateTime:
     """
 
     value: str  # undocumented
-    def __init__(self, value: int | str | datetime | time.struct_time | (*: int) = 0) -> None
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    init(self, value: int | str | datetime | time.struct_time | (*: int) = 0)
+    __hash__: ClassVar[None]
     def __lt__(self, other: _DateTimeComparable) -> bool
     def __le__(self, other: _DateTimeComparable) -> bool
     def __gt__(self, other: _DateTimeComparable) -> bool
     def __ge__(self, other: _DateTimeComparable) -> bool
-    def __eq__(self, other: _DateTimeComparable) -> bool  # type: ignore[override]
+    def __eq__(self, other: _DateTimeComparable) -> bool
     def make_comparable(self, other: _DateTimeComparable) -> (str, str)  # undocumented
     def timetuple(self) -> time.struct_time  # undocumented
     def decode(self, data: dynamic) -> None
@@ -148,22 +148,22 @@ class Binary:
     """Wrapper for binary data."""
 
     data: bytes
-    def __init__(self, data: bytes | bytearray | None = None) -> None
+    init(self, data: bytes | bytearray | None = None)
     def decode(self, data: ReadableBuffer) -> None
     def encode(self, out: SupportsWrite[str]) -> None
     def __eq__(self, other: object) -> bool
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
 
 def _binary(data: ReadableBuffer) -> Binary  # undocumented
 
-WRAPPERS: Final[(type[DateTime], type[Binary])]  # undocumented
+final WRAPPERS: (type[DateTime], type[Binary])  # undocumented
 
 class ExpatParser:  # undocumented
-    def __init__(self, target: Unmarshaller) -> None
+    init(self, target: Unmarshaller)
     def feed(self, data: str | ReadableBuffer) -> None
     def close(self) -> None
 
-_WriteCallback: TypeAlias = Callable[[str], object]
+type _WriteCallback = (str) -> object
 
 class Marshaller:
     """Generate an XML-RPC params chunk from a Python data structure.
@@ -175,12 +175,12 @@ class Marshaller:
     function for this purpose.
     """
 
-    dispatch: dict[type[_Marshallable] | Literal["_arbitrary_instance"], Callable[[Marshaller, dynamic, _WriteCallback], None]]
+    dispatch: dict[type[_Marshallable] | "_arbitrary_instance", (Marshaller, dynamic, _WriteCallback) -> None]
     memo: dict[dynamic, None]
     data: None
     encoding: str | None
     allow_none: bool
-    def __init__(self, encoding: str | None = None, allow_none: bool = False) -> None
+    init(self, encoding: str | None = None, allow_none: bool = False)
     def dumps(self, values: Fault | Iterable[_Marshallable]) -> str
     def __dump(self, value: _Marshallable, write: _WriteCallback) -> None  # undocumented
     def dump_nil(self, value: None, write: _WriteCallback) -> None
@@ -188,11 +188,11 @@ class Marshaller:
     def dump_long(self, value: int, write: _WriteCallback) -> None
     def dump_int(self, value: int, write: _WriteCallback) -> None
     def dump_double(self, value: float, write: _WriteCallback) -> None
-    def dump_unicode(self, value: str, write: _WriteCallback, escape: Callable[[str], str] = ...) -> None
+    def dump_unicode(self, value: str, write: _WriteCallback, escape: (str) -> str = ...) -> None
     def dump_bytes(self, value: ReadableBuffer, write: _WriteCallback) -> None
     def dump_array(self, value: Iterable[_Marshallable], write: _WriteCallback) -> None
     def dump_struct(
-        self, value: Mapping[str, _Marshallable], write: _WriteCallback, escape: Callable[[str], str] = ...
+        self, value: Mapping[str, _Marshallable], write: _WriteCallback, escape: (str) -> str = ...
     ) -> None
     def dump_datetime(self, value: _XMLDate, write: _WriteCallback) -> None
     def dump_instance(self, value: object, write: _WriteCallback) -> None
@@ -206,7 +206,7 @@ class Unmarshaller:
     XML-RPC data without complaining (but not bogus XML).
     """
 
-    dispatch: dict[str, Callable[[Unmarshaller, str], None]]
+    dispatch: dict[str, (Unmarshaller, str) -> None]
 
     _type: str | None
     _stack: list[_Marshallable]
@@ -215,10 +215,10 @@ class Unmarshaller:
     _value: bool
     _methodname: str | None
     _encoding: str
-    append: Callable[[dynamic], None]
+    append: (dynamic) -> None
     _use_datetime: bool
     _use_builtin_types: bool
-    def __init__(self, use_datetime: bool = False, use_builtin_types: bool = False) -> None
+    init(self, use_datetime: bool = False, use_builtin_types: bool = False)
     def close(self) -> (*: _Marshallable)
     def getmethodname(self) -> str | None
     def xml(self, encoding: str, standalone: dynamic) -> None  # Standalone is ignored
@@ -244,7 +244,7 @@ class Unmarshaller:
 class _MultiCallMethod:  # undocumented
     __call_list: list[(str, (*: _Marshallable))]
     __name: str
-    def __init__(self, call_list: list[(str, _Marshallable)], name: str) -> None
+    init(self, call_list: list[(str, _Marshallable)], name: str)
     def __getattr__(self, name: str) -> _MultiCallMethod
     def __call__(self, *args: _Marshallable) -> None
 
@@ -254,7 +254,7 @@ class MultiCallIterator:  # undocumented
     """
 
     results: list[list[_Marshallable]]
-    def __init__(self, results: list[list[_Marshallable]]) -> None
+    init(self, results: list[list[_Marshallable]])
     def __getitem__(self, i: int) -> _Marshallable
 
 class MultiCall:
@@ -276,7 +276,7 @@ class MultiCall:
 
     __server: ServerProxy
     __call_list: list[(str, (*: _Marshallable))]
-    def __init__(self, server: ServerProxy) -> None
+    init(self, server: ServerProxy)
     def __getattr__(self, name: str) -> _MultiCallMethod
     def __call__(self) -> MultiCallIterator
 
@@ -350,12 +350,12 @@ class GzipDecodedResponse(gzip.GzipFile):  # undocumented
     """
 
     io: BytesIO
-    def __init__(self, response: SupportsRead[ReadableBuffer]) -> None
+    init(self, response: SupportsRead[ReadableBuffer])
 
 class _Method:  # undocumented
-    __send: Callable[[str, tuple[_Marshallable, ...]], _Marshallable]
+    __send: (str, tuple[_Marshallable, ...]) -> _Marshallable
     __name: str
-    def __init__(self, send: Callable[[str, tuple[_Marshallable, ...]], _Marshallable], name: str) -> None
+    init(self, send: (str, tuple[_Marshallable, ...]) -> _Marshallable, name: str)
     def __getattr__(self, name: str) -> _Method
     def __call__(self, *args: _Marshallable) -> _Marshallable
 
@@ -372,9 +372,9 @@ class Transport:
     _headers: list[(str, str)]
     _extra_headers: list[(str, str)]
 
-    def __init__(
+    init(
         self, use_datetime: bool = False, use_builtin_types: bool = False, *, headers: Iterable[(str, str)] = ()
-    ) -> None
+    )
     def request(
         self, host: _HostType, handler: str, request_body: SizedBuffer, verbose: bool = False
     ) -> (*: _Marshallable)
@@ -395,14 +395,14 @@ class Transport:
 class SafeTransport(Transport):
     """Handles an HTTPS transaction to an XML-RPC server."""
 
-    def __init__(
+    init(
         self,
         use_datetime: bool = False,
         use_builtin_types: bool = False,
         *,
         headers: Iterable[(str, str)] = (),
         context: dynamic | None = None,
-    ) -> None
+    )
     def make_connection(self, host: _HostType) -> http.client.HTTPSConnection
 
 class ServerProxy:
@@ -434,7 +434,7 @@ class ServerProxy:
     __verbose: bool
     __allow_none: bool
 
-    def __init__(
+    init(
         self,
         uri: str,
         transport: Transport | None = None,
@@ -446,15 +446,15 @@ class ServerProxy:
         *,
         headers: Iterable[(str, str)] = (),
         context: dynamic | None = None,
-    ) -> None
+    )
     def __getattr__(self, name: str) -> _Method
 
-    def __call__(self, attr: Literal["close"]) -> Callable[[], None]:
+    def __call__(self, attr: "close") -> () -> None:
         """A workaround to get special attributes on the ServerProxy
         without interfering with the magic __getattr__
         """
-    def __call__(self, attr: Literal["transport"]) -> Transport
-    def __call__(self, attr: str) -> Callable[[], None] | Transport
+    def __call__(self, attr: "transport") -> Transport
+    def __call__(self, attr: str) -> (() -> None) | Transport
 
     def __enter__(self) -> Self
     def __exit__(

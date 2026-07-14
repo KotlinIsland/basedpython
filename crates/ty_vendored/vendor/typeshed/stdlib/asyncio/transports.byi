@@ -12,7 +12,7 @@ class BaseTransport:
     """Base class for transports."""
 
     __slots__ = ("_extra",)
-    def __init__(self, extra: Mapping[str, dynamic] | None = None) -> None
+    init(self, extra: Mapping[str, dynamic] | None = None)
     def get_extra_info(self, name: str, default: dynamic = None) -> dynamic:
         """Get optional transport information."""
 
@@ -230,4 +230,4 @@ class _FlowControlMixin(Transport):
     """
 
     __slots__ = ("_loop", "_protocol_paused", "_high_water", "_low_water")
-    def __init__(self, extra: Mapping[str, dynamic] | None = None, loop: AbstractEventLoop | None = None) -> None
+    init(self, extra: Mapping[str, dynamic] | None = None, loop: AbstractEventLoop | None = None)

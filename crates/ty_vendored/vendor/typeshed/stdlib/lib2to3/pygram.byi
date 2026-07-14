@@ -3,7 +3,7 @@
 from .pgen2.grammar import Grammar
 
 class Symbols:
-    def __init__(self, grammar: Grammar) -> None:
+    init(self, grammar: Grammar):
         """Initializer.
 
         Creates an attribute for each grammar symbol (nonterminal),

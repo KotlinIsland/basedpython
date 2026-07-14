@@ -7,7 +7,7 @@ from _typeshed import ReadableBuffer, StrOrBytesPath, WriteableBuffer
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from ctypes import CDLL, ArgumentError as ArgumentError, c_void_p
 from types import GenericAlias
-from typing import Any, ClassVar, Final, Generic, Literal, SupportsIndex, TypeAlias, TypeVar, final, type_check_only
+from typing import ClassVar, Final, Generic, Literal, TypeAlias, TypeVar, final, type_check_only
 from typing_extensions import Self
 
 
@@ -15,18 +15,18 @@ FUNCFLAG_CDECL: Final = 0x1
 FUNCFLAG_PYTHONAPI: Final = 0x4
 FUNCFLAG_USE_ERRNO: Final = 0x8
 FUNCFLAG_USE_LASTERROR: Final = 0x10
-RTLD_GLOBAL: Final[int]
-RTLD_LOCAL: Final[int]
+final RTLD_GLOBAL: int
+final RTLD_LOCAL: int
 
 if sys.version_info >= (3, 11):
-    CTYPES_MAX_ARGCOUNT: Final[int]
+    final CTYPES_MAX_ARGCOUNT: int
 
 if sys.version_info >= (3, 12):
-    SIZEOF_TIME_T: Final[int]
+    final SIZEOF_TIME_T: int
 
 if sys.platform == "win32":
     # Description, Source, HelpFile, HelpContext, scode
-    _COMError_Details: TypeAlias = tuple[str | None, str | None, str | None, int | None, int | None]
+    type _COMError_Details = tuple[str | None, str | None, str | None, int | None, int | None]
 
     class COMError(Exception):
         """Raised when a COM method call failed."""
@@ -35,7 +35,7 @@ if sys.platform == "win32":
         text: str | None
         details: _COMError_Details
 
-        def __init__(self, hresult: int, text: str | None, details: _COMError_Details) -> None
+        init(self, hresult: int, text: str | None, details: _COMError_Details)
 
     def CopyComPointer(src: _PointerLike, dst: _PointerLike | _CArgObject) -> int:
         """CopyComPointer(src, dst) -> HRESULT value"""
@@ -85,8 +85,8 @@ if sys.version_info >= (3, 13):
         # By default mypy complains about the following two methods, because strictly speaking cls
         # might not be a Type[_CT]. However this doesn't happen because this is only a
         # metaclass for subclasses of _CData.
-        def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
-        def __rmul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
+        def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
+        def __rmul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
 
     _CTypeBaseType = _CType_Type
 
@@ -107,7 +107,7 @@ class _CData:
 # this is a union of all the subclasses of _CData, which is useful because of
 # the methods that are present on each of those subclasses which are not present
 # on _CData itself.
-_CDataType: TypeAlias = _SimpleCData[Any] | _Pointer[Any] | CFuncPtr | Union | Structure | Array[Any]
+type _CDataType = _SimpleCData[dynamic] | _Pointer[dynamic] | CFuncPtr | Union | Structure | Array[dynamic]
 
 # This class is not exposed. It calls itself _ctypes.PyCSimpleType.
 @type_check_only
@@ -119,8 +119,8 @@ class _PyCSimpleType(_CTypeBaseType):
     def in_dll(self: type[_typeshed.Self], dll: CDLL, name: str, /) -> _typeshed.Self
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
-        def __mul__[CT: _CData](self: type[CT], value: int, /) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
-        def __rmul__[CT: _CData](self: type[CT], value: int, /) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
+        def __mul__[CT: _CData](self: type[CT], value: int, /) -> type[Array[CT]]
+        def __rmul__[CT: _CData](self: type[CT], value: int, /) -> type[Array[CT]]
 
 class _SimpleCData[in out Element](_CData, metaclass=_PyCSimpleType):
     """XXX to be provided"""
@@ -130,8 +130,8 @@ class _SimpleCData[in out Element](_CData, metaclass=_PyCSimpleType):
 
     # The TypeVar can be unsolved here,
     # but we can't use overloads without creating many, many mypy false-positive errors
-    def __init__(self, value: Element = ...) -> None  # pyright: ignore[reportInvalidTypeVarUse]
-    def __ctypes_from_outparam__(self, /) -> Element  # type: ignore[override]
+    init(self, value: Element = ...)
+    def __ctypes_from_outparam__(self, /) -> Element
 
 @type_check_only
 class _CanCastTo(_CData)
@@ -150,8 +150,8 @@ class _PyCPointerType(_CTypeBaseType):
     def set_type(self, type: _CTypeBaseType, /) -> None
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
-        def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
-        def __rmul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
+        def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
+        def __rmul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
 
 class _Pointer[in out CT: _CData](_PointerLike, _CData, metaclass=_PyCPointerType):
     """XXX to be provided"""
@@ -160,8 +160,8 @@ class _Pointer[in out CT: _CData](_PointerLike, _CData, metaclass=_PyCPointerTyp
     contents: CT
     """the object this pointer points to (read-write)"""
 
-    def __init__(self) -> None
-    def __init__(self, arg: CT) -> None
+    init(self)
+    init(self, arg: CT)
 
     def __getitem__(self, key: int, /) -> dynamic:
         """Return self[key]."""
@@ -191,9 +191,8 @@ if sys.version_info < (3, 14):
         """
 
 # This class is not exposed. It calls itself _ctypes.CArgObject.
-@final
 @type_check_only
-class _CArgObject
+final class _CArgObject
 
 if sys.version_info >= (3, 14):
     def byref(obj: _CData | _CDataType, offset: int = 0, /) -> _CArgObject:
@@ -206,8 +205,8 @@ else:
         as function argument
         """
 
-_ECT: TypeAlias = Callable[[_CData | _CDataType | None, CFuncPtr, tuple[_CData | _CDataType, ...]], _CDataType]
-_PF: TypeAlias = tuple[int] | tuple[int, str | None] | tuple[int, str | None, Any]
+type _ECT = (_CData | _CDataType | None, CFuncPtr, tuple[_CData | _CDataType, ...]) -> _CDataType
+type _PF = tuple[int] | tuple[int, str | None] | tuple[int, str | None, dynamic]
 
 # This class is not exposed. It calls itself _ctypes.PyCFuncPtrType.
 @type_check_only
@@ -219,13 +218,13 @@ class _PyCFuncPtrType(_CTypeBaseType):
     def in_dll(self: type[_typeshed.Self], dll: CDLL, name: str, /) -> _typeshed.Self
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
-        def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
-        def __rmul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
+        def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
+        def __rmul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
 
 class CFuncPtr(_PointerLike, _CData, metaclass=_PyCFuncPtrType):
     """Function Pointer"""
 
-    restype: type[_CDataType] | Callable[[int], dynamic] | None
+    restype: type[_CDataType] | ((int) -> dynamic) | None
     """specify the result type"""
 
     argtypes: Sequence[type[_CDataType]]
@@ -239,7 +238,7 @@ class CFuncPtr(_PointerLike, _CData, metaclass=_PyCFuncPtrType):
 
     def __new__(cls) -> Self
     def __new__(cls, address: int, /) -> Self
-    def __new__(cls, callable: (...) -> Any, /) -> Self
+    def __new__(cls, callable: (...) -> dynamic, /) -> Self
     def __new__(cls, func_spec: (str | int, CDLL), paramflags: (*: _PF) | None = ..., /) -> Self
     if sys.platform == "win32":
         def __new__(
@@ -294,9 +293,8 @@ if sys.version_info >= (3, 14):
     _CField = CField
 
 else:
-    @final
     @type_check_only
-    class _CField[in out CT: _CData, in out GetT, in out SetT]:
+    final class _CField[in out CT: _CData, in out GetT, in out SetT]:
         offset: int
         size: int
 
@@ -319,8 +317,8 @@ class _UnionType(_CTypeBaseType):
     def __getattr__(self, name: str) -> _CField[dynamic, dynamic, dynamic]
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
-        def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
-        def __rmul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
+        def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
+        def __rmul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
 
 class Union(_CData, metaclass=_UnionType):
     """Union base class"""
@@ -331,7 +329,7 @@ class Union(_CData, metaclass=_UnionType):
     if sys.version_info >= (3, 13):
         _align_: ClassVar[int]
 
-    def __init__(self, *args: dynamic, **kw: dynamic) -> None
+    init(self, *args: dynamic, **kw: dynamic)
     def __getattr__(self, name: str) -> dynamic
     def __setattr__(self, name: str, value: dynamic) -> None
 
@@ -349,8 +347,8 @@ class _PyCStructType(_CTypeBaseType):
     def __getattr__(self, name: str) -> _CField[dynamic, dynamic, dynamic]
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
-        def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
-        def __rmul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
+        def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
+        def __rmul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
 
 class Structure(_CData, metaclass=_PyCStructType):
     """Structure base class"""
@@ -363,9 +361,9 @@ class Structure(_CData, metaclass=_PyCStructType):
 
     if sys.version_info >= (3, 14):
         # _layout_ can be defined by the user, but is not always present.
-        _layout_: ClassVar[Literal["ms", "gcc-sysv"]]
+        _layout_: ClassVar["ms" | "gcc-sysv"]
 
-    def __init__(self, *args: dynamic, **kw: dynamic) -> None
+    init(self, *args: dynamic, **kw: dynamic)
     def __getattr__(self, name: str) -> dynamic
     def __setattr__(self, name: str, value: dynamic) -> None
 
@@ -379,8 +377,8 @@ class _PyCArrayType(_CTypeBaseType):
     def in_dll(self: type[_typeshed.Self], dll: CDLL, name: str, /) -> _typeshed.Self
     if sys.version_info < (3, 13):
         # Inherited from CType_Type starting on 3.13
-        def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
-        def __rmul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]  # type: ignore[misc] # pyright: ignore[reportGeneralTypeIssues]
+        def __mul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
+        def __rmul__[CT: _CData](cls: type[CT], other: int) -> type[Array[CT]]
 
 class Array[in out CT: _CData](_CData, metaclass=_PyCArrayType):
     """Abstract base class for arrays.
@@ -393,20 +391,20 @@ class Array[in out CT: _CData](_CData, metaclass=_PyCArrayType):
     """
 
     @property
-    abstract def _length_(self) -> int: ...
+    abstract def _length_(self) -> int
     @_length_.setter
-    def _length_(self, value: int) -> None: ...
+    def _length_(self, value: int) -> None
 
     @property
-    abstract def _type_(self) -> type[CT]: ...
+    abstract def _type_(self) -> type[CT]
     @_type_.setter
-    def _type_(self, value: type[CT]) -> None: ...
+    def _type_(self, value: type[CT]) -> None
 
     # Note: only available if _CT == c_char
     @property
-    def raw(self) -> bytes: ...
+    def raw(self) -> bytes
     @raw.setter
-    def raw(self, value: ReadableBuffer) -> None: ...
+    def raw(self, value: ReadableBuffer) -> None
 
     value: dynamic  # Note: bytes if _CT == c_char, str if _CT == c_wchar, unavailable otherwise
     # TODO: These methods cannot be annotated correctly at the moment.
@@ -421,7 +419,7 @@ class Array[in out CT: _CData](_CData, metaclass=_PyCArrayType):
     # a MyInt, not an int.
     # This special behavior is not easy to model in a stub, so for now all places where
     # the array element type would belong are annotated with Any instead.
-    def __init__(self, *args: dynamic) -> None
+    init(self, *args: dynamic)
 
     def __getitem__(self, key: int, /) -> dynamic:
         """Return self[key]."""
@@ -463,5 +461,5 @@ def Py_INCREF[Element](o: Element, /) -> Element
 def buffer_info(o: _CData | _CDataType | type[_CData | _CDataType], /) -> (str, int, (*: int)):
     """Return buffer interface information"""
 
-def call_cdeclfunction(address: int, arguments: (*: Any), /) -> dynamic
-def call_function(address: int, arguments: (*: Any), /) -> dynamic
+def call_cdeclfunction(address: int, arguments: (*: dynamic), /) -> dynamic
+def call_function(address: int, arguments: (*: dynamic), /) -> dynamic

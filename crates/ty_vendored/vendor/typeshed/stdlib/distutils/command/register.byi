@@ -4,14 +4,14 @@ Implements the Distutils 'register' command (register with the repository).
 """
 
 from collections.abc import Callable
-from typing import Any, ClassVar
+from typing import ClassVar
 
 from ..config import PyPIRCCommand
 
 class register(PyPIRCCommand):
     description: str
     # Any to work around variance issues
-    sub_commands: ClassVar[list[(str, Callable[[Any], bool] | None)]]
+    sub_commands: ClassVar[list[(str, ((dynamic) -> bool) | None)]]
     list_classifiers: int
     strict: int
     def initialize_options(self) -> None

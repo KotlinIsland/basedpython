@@ -207,7 +207,7 @@ __all__ = [
 ]
 
 _T = _TypeVar("_T")
-_F = _TypeVar("_F", bound=Callable[..., Any])
+_F = _TypeVar("_F", bound=Callable[..., dynamic])
 _TC = _TypeVar("_TC", bound=type[object])
 _T_co = _TypeVar("_T_co", covariant=True)  # Any type covariant containers.
 _T_contra = _TypeVar("_T_contra", contravariant=True)
@@ -428,7 +428,7 @@ class _TypedDict(Mapping[str, object], metaclass=abc.ABCMeta):
     __required_keys__: ClassVar[frozenset[str]]
     __optional_keys__: ClassVar[frozenset[str]]
     __total__: ClassVar[bool]
-    __orig_bases__: ClassVar[(*: Any)]
+    __orig_bases__: ClassVar[(*: dynamic)]
     # PEP 705
     __readonly_keys__: ClassVar[frozenset[str]]
     __mutable_keys__: ClassVar[frozenset[str]]
@@ -440,7 +440,7 @@ class _TypedDict(Mapping[str, object], metaclass=abc.ABCMeta):
     # can go through.
     def setdefault(self, k: Never, default: object) -> object
     # Mypy plugin hook for 'pop' expects that 'default' has a type variable type.
-    def pop(self, k: Never, default: _T = ...) -> object  # pyright: ignore[reportInvalidTypeVarUse]
+    def pop(self, k: Never, default: _T = ...) -> object
     def update(self, m: Self, /) -> None
     def items(self) -> dict_items[str, object]
     def keys(self) -> dict_keys[str, object]
@@ -457,7 +457,7 @@ class _TypedDict(Mapping[str, object], metaclass=abc.ABCMeta):
 
     # supposedly incompatible definitions of `__ior__` and `__or__`:
     # Since this module defines "Self" it is not recognized by Ruff as typing_extensions.Self
-    def __ior__(self, value: Self, /) -> Self  # type: ignore[misc]
+    def __ior__(self, value: Self, /) -> Self
 
 OrderedDict = _Alias()
 """Deprecated alias to collections.OrderedDict."""
@@ -796,7 +796,7 @@ else:
         order_default: bool = False,
         kw_only_default: bool = False,
         frozen_default: bool = False,
-        field_specifiers: tuple[type[Any] | (...) -> Any, ...] = (),
+        field_specifiers: (*: type[dynamic] | (...) -> dynamic) = (),
         **kwargs: object,
     ) -> IdentityFunction:
         """Decorator that marks a function, class, or metaclass as providing
@@ -861,7 +861,7 @@ else:
 
         """
 
-    class NamedTuple(tuple[Any, ...]):
+    class NamedTuple((*: dynamic)):
         """Typed version of namedtuple.
 
         Usage::
@@ -884,10 +884,10 @@ else:
 
         _field_defaults: ClassVar[dict[str, dynamic]]
         _fields: ClassVar[(*: str)]
-        __orig_bases__: ClassVar[(*: Any)]
+        __orig_bases__: ClassVar[(*: dynamic)]
 
-        def __init__(self, typename: str, fields: Iterable[(str, Any)] = ...) -> None
-        def __init__(self, typename: str, fields: None = None, **kwargs: dynamic) -> None
+        init(self, typename: str, fields: Iterable[(str, dynamic)] = ...)
+        init(self, typename: str, fields: None = None, **kwargs: dynamic)
 
         class def _make(cls, iterable: Iterable[dynamic]) -> Self
         def _asdict(self) -> dict[str, dynamic]
@@ -907,7 +907,7 @@ else:
             num = UserId(5) + 1     # type: int
         """
 
-        def __init__(self, name: str, tp: AnnotationForm) -> None
+        init(self, name: str, tp: AnnotationForm)
         def __call__(self, obj: _T, /) -> _T
         def __or__(self, other: dynamic) -> _SpecialForm
         def __ror__(self, other: dynamic) -> _SpecialForm
@@ -955,7 +955,7 @@ else:
 
         """
 
-    def get_original_bases(cls: type, /) -> (*: Any):
+    def get_original_bases(cls: type, /) -> (*: dynamic):
         """Return the class's "original" bases prior to modification by `__mro_entries__`.
 
         Examples::
@@ -981,7 +981,7 @@ else:
     # At runtime it inherits from ABC and is not a Protocol, but it is on the
     # allowlist for use as a Protocol.
     @runtime_checkable
-    class Buffer(Protocol, abc.ABC):  # type: ignore[misc]  # pyright: ignore[reportGeneralTypeIssues]
+    protocol Buffer(abc.ABC):
         """Base class for classes that implement the buffer protocol.
 
         The buffer protocol allows Python objects to expose a low-level
@@ -1006,7 +1006,7 @@ else:
         def __buffer__(self, flags: int, /) -> memoryview
 
     @runtime_checkable
-    class SupportsInt(Protocol, metaclass=abc.ABCMeta):
+    protocol SupportsInt(metaclass=abc.ABCMeta):
         """An ABC with one abstract method __int__."""
 
         __slots__ = ()
@@ -1014,7 +1014,7 @@ else:
         def __int__(self) -> int
 
     @runtime_checkable
-    class SupportsFloat(Protocol, metaclass=abc.ABCMeta):
+    protocol SupportsFloat(metaclass=abc.ABCMeta):
         """An ABC with one abstract method __float__."""
 
         __slots__ = ()
@@ -1022,7 +1022,7 @@ else:
         def __float__(self) -> float
 
     @runtime_checkable
-    class SupportsComplex(Protocol, metaclass=abc.ABCMeta):
+    protocol SupportsComplex(metaclass=abc.ABCMeta):
         """An ABC with one abstract method __complex__."""
 
         __slots__ = ()
@@ -1030,7 +1030,7 @@ else:
         def __complex__(self) -> complex
 
     @runtime_checkable
-    class SupportsBytes(Protocol, metaclass=abc.ABCMeta):
+    protocol SupportsBytes(metaclass=abc.ABCMeta):
         """An ABC with one abstract method __bytes__."""
 
         __slots__ = ()
@@ -1038,7 +1038,7 @@ else:
         def __bytes__(self) -> bytes
 
     @runtime_checkable
-    class SupportsIndex(Protocol, metaclass=abc.ABCMeta):
+    protocol SupportsIndex(metaclass=abc.ABCMeta):
         __slots__ = ()
         @abc.abstractmethod
         def __index__(self) -> int
@@ -1140,9 +1140,8 @@ else:
         Raise a TypeError for arguments that are not Protocols.
         """
 
-    @final
     @type_check_only
-    class _NoDefaultType
+    final class _NoDefaultType
 
     NoDefault: _NoDefaultType
     final class CapsuleType:
@@ -1202,27 +1201,20 @@ else:
         message: LiteralString
         category: type[Warning] | None
         stacklevel: int
-        def __init__(self, message: LiteralString, /, *, category: type[Warning] | None = ..., stacklevel: int = 1) -> None
+        init(self, message: LiteralString, /, *, category: type[Warning] | None = ..., stacklevel: int = 1)
         def __call__(self, arg: _T, /) -> _T
 
     final class TypeVar:
         """Type variable."""
 
-        @property
-        def __name__(self) -> str
-        @property
-        def __bound__(self) -> AnnotationForm | None
-        @property
-        def __constraints__(self) -> (*: AnnotationForm)
-        @property
-        def __covariant__(self) -> bool
-        @property
-        def __contravariant__(self) -> bool
-        @property
-        def __infer_variance__(self) -> bool
-        @property
-        def __default__(self) -> AnnotationForm
-        def __init__(
+        let __name__: str
+        let __bound__: AnnotationForm | None
+        let __constraints__: (*: AnnotationForm)
+        let __covariant__: bool
+        let __contravariant__: bool
+        let __infer_variance__: bool
+        let __default__: AnnotationForm
+        init(
             self,
             name: str,
             *constraints: AnnotationForm,
@@ -1231,9 +1223,9 @@ else:
             contravariant: bool = False,
             default: AnnotationForm = ...,
             infer_variance: bool = False,
-        ) -> None
+        )
         def has_default(self) -> bool
-        def __typing_prepare_subst__(self, alias: dynamic, args: dynamic) -> (*: Any)
+        def __typing_prepare_subst__(self, alias: dynamic, args: dynamic) -> (*: dynamic)
         def __or__(self, right: dynamic) -> _SpecialForm:
             """Return self|value."""
 
@@ -1246,19 +1238,13 @@ else:
     final class ParamSpec:
         """Parameter specification."""
 
-        @property
-        def __name__(self) -> str
-        @property
-        def __bound__(self) -> AnnotationForm | None
-        @property
-        def __covariant__(self) -> bool
-        @property
-        def __contravariant__(self) -> bool
-        @property
-        def __infer_variance__(self) -> bool
-        @property
-        def __default__(self) -> AnnotationForm
-        def __init__(
+        let __name__: str
+        let __bound__: AnnotationForm | None
+        let __covariant__: bool
+        let __contravariant__: bool
+        let __infer_variance__: bool
+        let __default__: AnnotationForm
+        init(
             self,
             name: str,
             *,
@@ -1266,19 +1252,21 @@ else:
             contravariant: bool = False,
             covariant: bool = False,
             default: AnnotationForm = ...,
-        ) -> None
+        )
         def __or__(self, right: dynamic) -> _SpecialForm:
             """Return self|value."""
 
         def __ror__(self, left: dynamic) -> _SpecialForm:
             """Return value|self."""
 
+        # kept as a property: a data descriptor, not a read-only value — ty relies on the descriptor
         @property
         def args(self) -> ParamSpecArgs
+        # kept as a property: a data descriptor, not a read-only value — ty relies on the descriptor
         @property
         def kwargs(self) -> ParamSpecKwargs
         def has_default(self) -> bool
-        def __typing_prepare_subst__(self, alias: dynamic, args: dynamic) -> (*: Any)
+        def __typing_prepare_subst__(self, alias: dynamic, args: dynamic) -> (*: dynamic)
 
     ReadOnly: _SpecialForm
     """A special typing construct to mark an item of a TypedDict as read-only.
@@ -1340,18 +1328,12 @@ else:
     final class TypeVarTuple:
         """Type variable tuple."""
 
-        @property
-        def __name__(self) -> str
-        @property
-        def __bound__(self) -> AnnotationForm | None
-        @property
-        def __covariant__(self) -> bool
-        @property
-        def __contravariant__(self) -> bool
-        @property
-        def __infer_variance__(self) -> bool
-        @property
-        def __default__(self) -> AnnotationForm
+        let __name__: str
+        let __bound__: AnnotationForm | None
+        let __covariant__: bool
+        let __contravariant__: bool
+        let __infer_variance__: bool
+        let __default__: AnnotationForm
         if sys.version_info >= (3, 11):
             def __new__(
                 cls,
@@ -1380,7 +1362,7 @@ else:
         if sys.version_info >= (3, 11):
             def __typing_subst__(self, arg: Never, /) -> Never
 
-        def __typing_prepare_subst__(self, alias: dynamic, args: dynamic, /) -> (*: Any)
+        def __typing_prepare_subst__(self, alias: dynamic, args: dynamic, /) -> (*: dynamic)
         if sys.version_info >= (3, 14):
             @property
             def evaluate_default(self) -> EvaluateFunc | None
@@ -1417,22 +1399,15 @@ else:
 
         """
 
-        def __init__(
+        init(
             self, name: str, value: AnnotationForm, *, type_params: (*: TypeVar | ParamSpec | TypeVarTuple) = ()
-        ) -> None
-        @property
-        def __value__(self) -> AnnotationForm
-        @property
-        def __type_params__(self) -> (*: TypeVar | ParamSpec | TypeVarTuple)
-        @property
-        # `__parameters__` can include special forms if a `TypeVarTuple` was
-        # passed as a `type_params` element to the constructor method.
-        def __parameters__(self) -> (*: TypeVar | ParamSpec | AnnotationForm)
-        @property
-        def __name__(self) -> str
+        )
+        let __value__: AnnotationForm
+        let __type_params__: (*: TypeVar | ParamSpec | TypeVarTuple)
+        let __parameters__: (*: TypeVar | ParamSpec | AnnotationForm)
+        let __name__: str
         # It's writable on types, but not on instances of TypeAliasType.
-        @property
-        def __module__(self) -> str | None  # type: ignore[override]
+        let __module__: str | None
         # Returns typing._GenericAlias, which isn't stubbed.
         def __getitem__(self, parameters: Incomplete | (*: Incomplete)) -> AnnotationForm
         def __init_subclass__(cls, *args: Unused, **kwargs: Unused) -> NoReturn
@@ -1459,7 +1434,7 @@ class Doc:
     """
 
     documentation: str
-    def __init__(self, documentation: str, /) -> None
+    init(self, documentation: str, /)
     def __hash__(self) -> int
     def __eq__(self, other: object) -> bool
 
@@ -1511,7 +1486,7 @@ else:
         globals: Mapping[str, dynamic] | None = None,  # value types depend on the key
         locals: Mapping[str, dynamic] | None = None,  # value types depend on the key
         eval_str: bool = False,
-        format: Literal[Format.STRING],
+        format: Format.STRING,
     ) -> dict[str, str]:
         """Compute the annotations dict for an object.
 
@@ -1554,7 +1529,7 @@ else:
         globals: Mapping[str, dynamic] | None = None,  # value types depend on the key
         locals: Mapping[str, dynamic] | None = None,  # value types depend on the key
         eval_str: bool = False,
-        format: Literal[Format.FORWARDREF],
+        format: Format.FORWARDREF,
     ) -> dict[str, AnnotationForm | ForwardRef]
     def get_annotations(
         obj: dynamic,  # any object with __annotations__ or __annotate__
@@ -1572,7 +1547,7 @@ else:
         globals: Mapping[str, dynamic] | None = None,  # value types depend on the key
         locals: Mapping[str, dynamic] | None = None,  # value types depend on the key
         type_params: Iterable[TypeVar | ParamSpec | TypeVarTuple] | None = None,
-        format: Literal[Format.STRING],
+        format: Format.STRING,
         _recursive_guard: Container[str] = ...,
     ) -> str:
         """Evaluate a forward reference as a type hint.
@@ -1604,7 +1579,7 @@ else:
         globals: Mapping[str, dynamic] | None = None,  # value types depend on the key
         locals: Mapping[str, dynamic] | None = None,  # value types depend on the key
         type_params: Iterable[TypeVar | ParamSpec | TypeVarTuple] | None = None,
-        format: Literal[Format.FORWARDREF],
+        format: Format.FORWARDREF,
         _recursive_guard: Container[str] = ...,
     ) -> AnnotationForm | ForwardRef
     def evaluate_forward_ref(
@@ -1638,7 +1613,7 @@ else:
         shall be assigned.
         """
 
-        def __init__(self, name: str, /, *, repr: str | None = None) -> None
+        init(self, name: str, /, *, repr: str | None = None)
         __name__: str
         __module__: str
         if sys.version_info >= (3, 14):

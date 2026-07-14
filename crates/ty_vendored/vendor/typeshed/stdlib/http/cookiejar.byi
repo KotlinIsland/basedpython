@@ -59,7 +59,7 @@ class CookieJar:
     domain_re: ClassVar[Pattern[str]]  # undocumented
     dots_re: ClassVar[Pattern[str]]  # undocumented
     magic_re: ClassVar[Pattern[str]]  # undocumented
-    def __init__(self, policy: CookiePolicy | None = None) -> None
+    init(self, policy: CookiePolicy | None = None)
     def add_cookie_header(self, request: Request) -> None:
         """Add correct Cookie: header to request (urllib.request.Request object).
 
@@ -121,7 +121,7 @@ class FileCookieJar(CookieJar):
 
     filename: str | None
     delayload: bool
-    def __init__(self, filename: StrPath | None = None, delayload: bool = False, policy: CookiePolicy | None = None) -> None:
+    init(self, filename: StrPath | None = None, delayload: bool = False, policy: CookiePolicy | None = None):
         """
         Cookies are NOT loaded from the named file until either the .load() or
         .revert() method is called.
@@ -239,7 +239,7 @@ class DefaultCookiePolicy(CookiePolicy):
     DomainRFC2965Match: ClassVar[int]
     DomainLiberal: ClassVar[int]
     DomainStrict: ClassVar[int]
-    def __init__(
+    init(
         self,
         blocked_domains: Sequence[str] | None = None,
         allowed_domains: Sequence[str] | None = None,
@@ -254,7 +254,7 @@ class DefaultCookiePolicy(CookiePolicy):
         strict_ns_set_initial_dollar: bool = False,
         strict_ns_set_path: bool = False,
         secure_protocols: Sequence[str] = ("https", "wss"),
-    ) -> None:
+    ):
         """Constructor arguments should be passed as keyword arguments only."""
 
     def blocked_domains(self) -> (*: str):
@@ -318,7 +318,7 @@ class Cookie:
     domain: str  # undocumented
     domain_specified: bool
     domain_initial_dot: bool
-    def __init__(
+    init(
         self,
         version: int | None,
         name: str,
@@ -337,7 +337,7 @@ class Cookie:
         comment_url: str | None,
         rest: dict[str, str],
         rfc2109: bool = False,
-    ) -> None
+    )
     def has_nonstandard_attr(self, name: str) -> bool
 
     def get_nonstandard_attr(self, name: str) -> str | None

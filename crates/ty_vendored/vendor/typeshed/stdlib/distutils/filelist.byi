@@ -26,7 +26,7 @@ class FileList:
 
     allfiles: Iterable[str] | None
     files: list[str]
-    def __init__(self, warn: None = None, debug_print: None = None) -> None
+    init(self, warn: None = None, debug_print: None = None)
     def set_allfiles(self, allfiles: Iterable[str]) -> None
     def findall(self, dir: str = ".") -> None
     def debug_print(self, msg: str) -> None:
@@ -41,7 +41,7 @@ class FileList:
     def process_template_line(self, line: str) -> None
 
     def include_pattern(
-        self, pattern: str, anchor: bool | Literal[0, 1] = 1, prefix: str | None = None, is_regex: Literal[0, False] = 0
+        self, pattern: str, anchor: bool | 0 | 1 = 1, prefix: str | None = None, is_regex: 0 | False = 0
     ) -> bool:
         """Select strings (presumably filenames) from 'self.files' that
         match 'pattern', a Unix-style wildcard (glob) pattern.  Patterns
@@ -67,17 +67,17 @@ class FileList:
 
         Return True if files are found, False otherwise.
         """
-    def include_pattern(self, pattern: str | Pattern[str], *, is_regex: Literal[True, 1]) -> bool
+    def include_pattern(self, pattern: str | Pattern[str], *, is_regex: True | 1) -> bool
     def include_pattern(
         self,
         pattern: str | Pattern[str],
-        anchor: bool | Literal[0, 1] = 1,
+        anchor: bool | 0 | 1 = 1,
         prefix: str | None = None,
-        is_regex: bool | Literal[0, 1] = 0,
+        is_regex: bool | 0 | 1 = 0,
     ) -> bool
 
     def exclude_pattern(
-        self, pattern: str, anchor: bool | Literal[0, 1] = 1, prefix: str | None = None, is_regex: Literal[0, False] = 0
+        self, pattern: str, anchor: bool | 0 | 1 = 1, prefix: str | None = None, is_regex: 0 | False = 0
     ) -> bool:
         """Remove strings (presumably filenames) from 'files' that match
         'pattern'.  Other parameters are the same as for
@@ -85,13 +85,13 @@ class FileList:
         The list 'self.files' is modified in place.
         Return True if files are found, False otherwise.
         """
-    def exclude_pattern(self, pattern: str | Pattern[str], *, is_regex: Literal[True, 1]) -> bool
+    def exclude_pattern(self, pattern: str | Pattern[str], *, is_regex: True | 1) -> bool
     def exclude_pattern(
         self,
         pattern: str | Pattern[str],
-        anchor: bool | Literal[0, 1] = 1,
+        anchor: bool | 0 | 1 = 1,
         prefix: str | None = None,
-        is_regex: bool | Literal[0, 1] = 0,
+        is_regex: bool | 0 | 1 = 0,
     ) -> bool
 
 def findall(dir: str = ".") -> list[str]:
@@ -108,14 +108,14 @@ def glob_to_re(pattern: str) -> str:
     """
 
 def translate_pattern(
-    pattern: str, anchor: bool | Literal[0, 1] = 1, prefix: str | None = None, is_regex: Literal[False, 0] = 0
+    pattern: str, anchor: bool | 0 | 1 = 1, prefix: str | None = None, is_regex: False | 0 = 0
 ) -> Pattern[str]:
     """Translate a shell-like wildcard pattern to a compiled regular
     expression.  Return the compiled regex.  If 'is_regex' true,
     then 'pattern' is directly compiled to a regex (if it's a string)
     or just returned as-is (assumes it's a regex object).
     """
-def translate_pattern(pattern: str | Pattern[str], *, is_regex: Literal[True, 1]) -> Pattern[str]
+def translate_pattern(pattern: str | Pattern[str], *, is_regex: True | 1) -> Pattern[str]
 def translate_pattern(
-    pattern: str | Pattern[str], anchor: bool | Literal[0, 1] = 1, prefix: str | None = None, is_regex: bool | Literal[0, 1] = 0
+    pattern: str | Pattern[str], anchor: bool | 0 | 1 = 1, prefix: str | None = None, is_regex: bool | 0 | 1 = 0
 ) -> Pattern[str]

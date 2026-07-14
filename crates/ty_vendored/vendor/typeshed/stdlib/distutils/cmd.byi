@@ -28,7 +28,7 @@ from distutils.command.sdist import sdist
 from distutils.command.upload import upload
 from distutils.dist import Distribution
 from distutils.file_util import _BytesPathT, _StrPathT
-from typing import Any, ClassVar, Literal, TypeVar
+from typing import ClassVar, Literal, TypeVar
 from typing_extensions import TypeVarTuple, Unpack
 
 
@@ -48,11 +48,11 @@ class Command:
     command class.
     """
 
-    dry_run: bool | Literal[0, 1]  # Exposed from __getattr_. Same as Distribution.dry_run
+    dry_run: bool | 0 | 1  # Exposed from __getattr_. Same as Distribution.dry_run
     distribution: Distribution
     # Any to work around variance issues
-    sub_commands: ClassVar[list[(str, Callable[[Any], bool] | None)]]
-    def __init__(self, dist: Distribution) -> None:
+    sub_commands: ClassVar[list[(str, ((dynamic) -> bool) | None)]]
+    init(self, dist: Distribution):
         """Create and initialize a new Command object.  Most importantly,
         invokes the 'initialize_options()' method, which is the real
         initializer and depends on the actual command being
@@ -136,73 +136,73 @@ class Command:
         """
 
     # NOTE: This list comes directly from the distutils/command folder. Minus bdist_msi and bdist_wininst.
-    def get_finalized_command(self, command: Literal["bdist"], create: bool | Literal[0, 1] = 1) -> bdist:
+    def get_finalized_command(self, command: "bdist", create: bool | 0 | 1 = 1) -> bdist:
         """Wrapper around Distribution's 'get_command_obj()' method: find
         (create if necessary and 'create' is true) the command object for
         'command', call its 'ensure_finalized()' method, and return the
         finalized command object.
         """
-    def get_finalized_command(self, command: Literal["bdist_dumb"], create: bool | Literal[0, 1] = 1) -> bdist_dumb
-    def get_finalized_command(self, command: Literal["bdist_rpm"], create: bool | Literal[0, 1] = 1) -> bdist_rpm
-    def get_finalized_command(self, command: Literal["build"], create: bool | Literal[0, 1] = 1) -> build
-    def get_finalized_command(self, command: Literal["build_clib"], create: bool | Literal[0, 1] = 1) -> build_clib
-    def get_finalized_command(self, command: Literal["build_ext"], create: bool | Literal[0, 1] = 1) -> build_ext
-    def get_finalized_command(self, command: Literal["build_py"], create: bool | Literal[0, 1] = 1) -> build_py
-    def get_finalized_command(self, command: Literal["build_scripts"], create: bool | Literal[0, 1] = 1) -> build_scripts
-    def get_finalized_command(self, command: Literal["check"], create: bool | Literal[0, 1] = 1) -> check
-    def get_finalized_command(self, command: Literal["clean"], create: bool | Literal[0, 1] = 1) -> clean
-    def get_finalized_command(self, command: Literal["config"], create: bool | Literal[0, 1] = 1) -> config
-    def get_finalized_command(self, command: Literal["install"], create: bool | Literal[0, 1] = 1) -> install
-    def get_finalized_command(self, command: Literal["install_data"], create: bool | Literal[0, 1] = 1) -> install_data
+    def get_finalized_command(self, command: "bdist_dumb", create: bool | 0 | 1 = 1) -> bdist_dumb
+    def get_finalized_command(self, command: "bdist_rpm", create: bool | 0 | 1 = 1) -> bdist_rpm
+    def get_finalized_command(self, command: "build", create: bool | 0 | 1 = 1) -> build
+    def get_finalized_command(self, command: "build_clib", create: bool | 0 | 1 = 1) -> build_clib
+    def get_finalized_command(self, command: "build_ext", create: bool | 0 | 1 = 1) -> build_ext
+    def get_finalized_command(self, command: "build_py", create: bool | 0 | 1 = 1) -> build_py
+    def get_finalized_command(self, command: "build_scripts", create: bool | 0 | 1 = 1) -> build_scripts
+    def get_finalized_command(self, command: "check", create: bool | 0 | 1 = 1) -> check
+    def get_finalized_command(self, command: "clean", create: bool | 0 | 1 = 1) -> clean
+    def get_finalized_command(self, command: "config", create: bool | 0 | 1 = 1) -> config
+    def get_finalized_command(self, command: "install", create: bool | 0 | 1 = 1) -> install
+    def get_finalized_command(self, command: "install_data", create: bool | 0 | 1 = 1) -> install_data
     def get_finalized_command(
-        self, command: Literal["install_egg_info"], create: bool | Literal[0, 1] = 1
+        self, command: "install_egg_info", create: bool | 0 | 1 = 1
     ) -> install_egg_info
-    def get_finalized_command(self, command: Literal["install_headers"], create: bool | Literal[0, 1] = 1) -> install_headers
-    def get_finalized_command(self, command: Literal["install_lib"], create: bool | Literal[0, 1] = 1) -> install_lib
-    def get_finalized_command(self, command: Literal["install_scripts"], create: bool | Literal[0, 1] = 1) -> install_scripts
-    def get_finalized_command(self, command: Literal["register"], create: bool | Literal[0, 1] = 1) -> register
-    def get_finalized_command(self, command: Literal["sdist"], create: bool | Literal[0, 1] = 1) -> sdist
-    def get_finalized_command(self, command: Literal["upload"], create: bool | Literal[0, 1] = 1) -> upload
-    def get_finalized_command(self, command: str, create: bool | Literal[0, 1] = 1) -> Command
+    def get_finalized_command(self, command: "install_headers", create: bool | 0 | 1 = 1) -> install_headers
+    def get_finalized_command(self, command: "install_lib", create: bool | 0 | 1 = 1) -> install_lib
+    def get_finalized_command(self, command: "install_scripts", create: bool | 0 | 1 = 1) -> install_scripts
+    def get_finalized_command(self, command: "register", create: bool | 0 | 1 = 1) -> register
+    def get_finalized_command(self, command: "sdist", create: bool | 0 | 1 = 1) -> sdist
+    def get_finalized_command(self, command: "upload", create: bool | 0 | 1 = 1) -> upload
+    def get_finalized_command(self, command: str, create: bool | 0 | 1 = 1) -> Command
 
-    def reinitialize_command(self, command: Literal["bdist"], reinit_subcommands: bool | Literal[0, 1] = 0) -> bdist
+    def reinitialize_command(self, command: "bdist", reinit_subcommands: bool | 0 | 1 = 0) -> bdist
     def reinitialize_command(
-        self, command: Literal["bdist_dumb"], reinit_subcommands: bool | Literal[0, 1] = 0
+        self, command: "bdist_dumb", reinit_subcommands: bool | 0 | 1 = 0
     ) -> bdist_dumb
-    def reinitialize_command(self, command: Literal["bdist_rpm"], reinit_subcommands: bool | Literal[0, 1] = 0) -> bdist_rpm
-    def reinitialize_command(self, command: Literal["build"], reinit_subcommands: bool | Literal[0, 1] = 0) -> build
+    def reinitialize_command(self, command: "bdist_rpm", reinit_subcommands: bool | 0 | 1 = 0) -> bdist_rpm
+    def reinitialize_command(self, command: "build", reinit_subcommands: bool | 0 | 1 = 0) -> build
     def reinitialize_command(
-        self, command: Literal["build_clib"], reinit_subcommands: bool | Literal[0, 1] = 0
+        self, command: "build_clib", reinit_subcommands: bool | 0 | 1 = 0
     ) -> build_clib
-    def reinitialize_command(self, command: Literal["build_ext"], reinit_subcommands: bool | Literal[0, 1] = 0) -> build_ext
-    def reinitialize_command(self, command: Literal["build_py"], reinit_subcommands: bool | Literal[0, 1] = 0) -> build_py
+    def reinitialize_command(self, command: "build_ext", reinit_subcommands: bool | 0 | 1 = 0) -> build_ext
+    def reinitialize_command(self, command: "build_py", reinit_subcommands: bool | 0 | 1 = 0) -> build_py
     def reinitialize_command(
-        self, command: Literal["build_scripts"], reinit_subcommands: bool | Literal[0, 1] = 0
+        self, command: "build_scripts", reinit_subcommands: bool | 0 | 1 = 0
     ) -> build_scripts
-    def reinitialize_command(self, command: Literal["check"], reinit_subcommands: bool | Literal[0, 1] = 0) -> check
-    def reinitialize_command(self, command: Literal["clean"], reinit_subcommands: bool | Literal[0, 1] = 0) -> clean
-    def reinitialize_command(self, command: Literal["config"], reinit_subcommands: bool | Literal[0, 1] = 0) -> config
-    def reinitialize_command(self, command: Literal["install"], reinit_subcommands: bool | Literal[0, 1] = 0) -> install
+    def reinitialize_command(self, command: "check", reinit_subcommands: bool | 0 | 1 = 0) -> check
+    def reinitialize_command(self, command: "clean", reinit_subcommands: bool | 0 | 1 = 0) -> clean
+    def reinitialize_command(self, command: "config", reinit_subcommands: bool | 0 | 1 = 0) -> config
+    def reinitialize_command(self, command: "install", reinit_subcommands: bool | 0 | 1 = 0) -> install
     def reinitialize_command(
-        self, command: Literal["install_data"], reinit_subcommands: bool | Literal[0, 1] = 0
+        self, command: "install_data", reinit_subcommands: bool | 0 | 1 = 0
     ) -> install_data
     def reinitialize_command(
-        self, command: Literal["install_egg_info"], reinit_subcommands: bool | Literal[0, 1] = 0
+        self, command: "install_egg_info", reinit_subcommands: bool | 0 | 1 = 0
     ) -> install_egg_info
     def reinitialize_command(
-        self, command: Literal["install_headers"], reinit_subcommands: bool | Literal[0, 1] = 0
+        self, command: "install_headers", reinit_subcommands: bool | 0 | 1 = 0
     ) -> install_headers
     def reinitialize_command(
-        self, command: Literal["install_lib"], reinit_subcommands: bool | Literal[0, 1] = 0
+        self, command: "install_lib", reinit_subcommands: bool | 0 | 1 = 0
     ) -> install_lib
     def reinitialize_command(
-        self, command: Literal["install_scripts"], reinit_subcommands: bool | Literal[0, 1] = 0
+        self, command: "install_scripts", reinit_subcommands: bool | 0 | 1 = 0
     ) -> install_scripts
-    def reinitialize_command(self, command: Literal["register"], reinit_subcommands: bool | Literal[0, 1] = 0) -> register
-    def reinitialize_command(self, command: Literal["sdist"], reinit_subcommands: bool | Literal[0, 1] = 0) -> sdist
-    def reinitialize_command(self, command: Literal["upload"], reinit_subcommands: bool | Literal[0, 1] = 0) -> upload
-    def reinitialize_command(self, command: str, reinit_subcommands: bool | Literal[0, 1] = 0) -> Command
-    def reinitialize_command[CommandT: Command](self, command: CommandT, reinit_subcommands: bool | Literal[0, 1] = 0) -> CommandT
+    def reinitialize_command(self, command: "register", reinit_subcommands: bool | 0 | 1 = 0) -> register
+    def reinitialize_command(self, command: "sdist", reinit_subcommands: bool | 0 | 1 = 0) -> sdist
+    def reinitialize_command(self, command: "upload", reinit_subcommands: bool | 0 | 1 = 0) -> upload
+    def reinitialize_command(self, command: str, reinit_subcommands: bool | 0 | 1 = 0) -> Command
+    def reinitialize_command[CommandT: Command](self, command: CommandT, reinit_subcommands: bool | 0 | 1 = 0) -> CommandT
 
     def run_command(self, command: str) -> None:
         """Run some other command: uses the 'run_command()' method of
@@ -228,8 +228,8 @@ class Command:
         self,
         infile: StrPath,
         outfile: _StrPathT,
-        preserve_mode: bool | Literal[0, 1] = 1,
-        preserve_times: bool | Literal[0, 1] = 1,
+        preserve_mode: bool | 0 | 1 = 1,
+        preserve_times: bool | 0 | 1 = 1,
         link: str | None = None,
         level: Unused = 1,
     ) -> (_StrPathT | str, bool):
@@ -241,8 +241,8 @@ class Command:
         self,
         infile: BytesPath,
         outfile: _BytesPathT,
-        preserve_mode: bool | Literal[0, 1] = 1,
-        preserve_times: bool | Literal[0, 1] = 1,
+        preserve_mode: bool | 0 | 1 = 1,
+        preserve_times: bool | 0 | 1 = 1,
         link: str | None = None,
         level: Unused = 1,
     ) -> (_BytesPathT | bytes, bool)
@@ -251,9 +251,9 @@ class Command:
         self,
         infile: StrPath,
         outfile: str,
-        preserve_mode: bool | Literal[0, 1] = 1,
-        preserve_times: bool | Literal[0, 1] = 1,
-        preserve_symlinks: bool | Literal[0, 1] = 0,
+        preserve_mode: bool | 0 | 1 = 1,
+        preserve_times: bool | 0 | 1 = 1,
+        preserve_symlinks: bool | 0 | 1 = 0,
         level: Unused = 1,
     ) -> list[str]:
         """Copy an entire directory tree respecting verbose, dry-run,
@@ -264,7 +264,7 @@ class Command:
         """Move a file respecting dry-run flag."""
     def move_file(self, src: BytesPath, dst: _BytesPathT, level: Unused = 1) -> _BytesPathT | bytes
 
-    def spawn(self, cmd: Iterable[str], search_path: bool | Literal[0, 1] = 1, level: Unused = 1) -> None:
+    def spawn(self, cmd: Iterable[str], search_path: bool | 0 | 1 = 1, level: Unused = 1) -> None:
         """Spawn an external command respecting dry-run flag."""
 
     def make_archive(

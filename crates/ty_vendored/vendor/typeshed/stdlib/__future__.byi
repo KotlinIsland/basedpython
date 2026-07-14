@@ -49,10 +49,10 @@ No feature line is ever to be deleted from this file.
 
 from typing import TypeAlias
 
-_VersionInfo: TypeAlias = tuple[int, int, int, str, int]
+type _VersionInfo = tuple[int, int, int, str, int]
 
 class _Feature:
-    def __init__(self, optionalRelease: _VersionInfo, mandatoryRelease: _VersionInfo | None, compiler_flag: int) -> None
+    init(self, optionalRelease: _VersionInfo, mandatoryRelease: _VersionInfo | None, compiler_flag: int)
     def getOptionalRelease(self) -> _VersionInfo:
         """Return first release in which this feature was recognized.
 

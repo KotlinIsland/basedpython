@@ -32,7 +32,7 @@ import sys
 from _typeshed import SupportsRichComparisonT as _T  # All type variable use in this module requires comparability.
 from typing import Final
 
-__about__: Final[str]
+final __about__: str
 
 def heapify(heap: list[_T], /) -> None:  # To work around the fact that list is invariant
     """Transform list into a heap, in-place, in O(len(heap)) time."""

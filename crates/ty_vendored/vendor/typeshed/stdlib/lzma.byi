@@ -46,7 +46,7 @@ from _lzma import (
 )
 from _typeshed import ReadableBuffer, StrOrBytesPath
 from io import TextIOWrapper
-from typing import IO, Literal, TypeAlias
+from typing import Literal, TypeAlias
 from typing_extensions import Self
 
 if sys.version_info >= (3, 14):
@@ -93,12 +93,12 @@ __all__ = [
     "is_check_supported",
 ]
 
-_OpenBinaryWritingMode: TypeAlias = Literal["w", "wb", "x", "xb", "a", "ab"]
-_OpenTextWritingMode: TypeAlias = Literal["wt", "xt", "at"]
+type _OpenBinaryWritingMode = "w" | "wb" | "x" | "xb" | "a" | "ab"
+type _OpenTextWritingMode = "wt" | "xt" | "at"
 
-_PathOrFile: TypeAlias = StrOrBytesPath | IO[bytes]
+type _PathOrFile = StrOrBytesPath | IO[bytes]
 
-class LZMAFile(BaseStream, IO[bytes]):  # type: ignore[misc]  # incompatible definitions of writelines in the base classes
+class LZMAFile(BaseStream, IO[bytes]):
     """A file object providing transparent LZMA (de)compression.
 
     An LZMAFile can act as a wrapper for an existing file object, or
@@ -108,7 +108,7 @@ class LZMAFile(BaseStream, IO[bytes]):  # type: ignore[misc]  # incompatible def
     is returned as bytes, and data to be written must be given as bytes.
     """
 
-    def __init__(
+    init(
         self,
         filename: _PathOrFile | None = None,
         mode: str = "r",
@@ -117,7 +117,7 @@ class LZMAFile(BaseStream, IO[bytes]):  # type: ignore[misc]  # incompatible def
         check: int = -1,
         preset: int | None = None,
         filters: _FilterChain | None = None,
-    ) -> None:
+    ):
         """Open an LZMA-compressed file in binary mode.
 
         filename can be either an actual file name (given as a str,
@@ -219,10 +219,10 @@ class LZMAFile(BaseStream, IO[bytes]):  # type: ignore[misc]  # incompatible def
 
 def open(
     filename: _PathOrFile,
-    mode: Literal["r", "rb"] = "rb",
+    mode: "r" | "rb" = "rb",
     *,
     format: int | None = None,
-    check: Literal[-1] = -1,
+    check: -1 = -1,
     preset: None = None,
     filters: _FilterChain | None = None,
     encoding: None = None,
@@ -266,10 +266,10 @@ def open(
 ) -> LZMAFile
 def open(
     filename: StrOrBytesPath,
-    mode: Literal["rt"],
+    mode: "rt",
     *,
     format: int | None = None,
-    check: Literal[-1] = -1,
+    check: -1 = -1,
     preset: None = None,
     filters: _FilterChain | None = None,
     encoding: str | None = None,

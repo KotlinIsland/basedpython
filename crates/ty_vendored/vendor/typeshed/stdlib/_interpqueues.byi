@@ -3,9 +3,9 @@ The 'interpreters' module provides a more convenient interface.
 """
 
 import sys
-from typing import Any, Literal, SupportsIndex, TypeAlias
+from typing import Literal, TypeAlias
 
-_UnboundOp: TypeAlias = Literal[1, 2, 3]
+type _UnboundOp = 1 | 2 | 3
 
 class QueueError(RuntimeError):
     """Indicates that a queue-related error happened."""
@@ -45,7 +45,7 @@ def destroy(qid: SupportsIndex) -> None:
     existed.
     """
 
-def get(qid: SupportsIndex) -> (Any, int, _UnboundOp | None):
+def get(qid: SupportsIndex) -> (dynamic, int, _UnboundOp | None):
     """Return the (object, unbound op) from the front of the queue.
 
     If there is nothing to receive then raise QueueEmpty.

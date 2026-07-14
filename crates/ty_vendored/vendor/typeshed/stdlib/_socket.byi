@@ -7,44 +7,44 @@ import sys
 from _typeshed import ReadableBuffer, WriteableBuffer
 from collections.abc import Iterable
 from socket import error as error, gaierror as gaierror, herror as herror, timeout as timeout
-from typing import Any, Final, SupportsIndex, TypeAlias
+from typing import Final, TypeAlias
 from typing_extensions import CapsuleType, disjoint_base
 
-_CMSG: TypeAlias = tuple[int, int, bytes]
-_CMSGArg: TypeAlias = tuple[int, int, ReadableBuffer]
+type _CMSG = tuple[int, int, bytes]
+type _CMSGArg = tuple[int, int, ReadableBuffer]
 
 # Addresses can be either tuples of varying lengths (AF_INET, AF_INET6,
 # AF_NETLINK, AF_TIPC) or strings/buffers (AF_UNIX).
 # See getsockaddrarg() in socketmodule.c.
 if sys.version_info >= (3, 14):
     # A bare int is accepted for Bluetooth HCI device IDs.
-    _Address: TypeAlias = tuple[Any, ...] | str | ReadableBuffer | int
+    type _Address = (*: dynamic) | str | ReadableBuffer | int
 else:
-    _Address: TypeAlias = tuple[Any, ...] | str | ReadableBuffer
-_RetAddress: TypeAlias = Any
+    type _Address = (*: dynamic) | str | ReadableBuffer
+type _RetAddress = dynamic
 
 # ===== Constants =====
 # This matches the order in the CPython documentation
 # https://docs.python.org/3/library/socket.html#constants
 
 if sys.platform != "win32":
-    AF_UNIX: Final[int]
+    final AF_UNIX: int
 
-AF_INET: Final[int]
-AF_INET6: Final[int]
+final AF_INET: int
+final AF_INET6: int
 
-AF_UNSPEC: Final[int]
+final AF_UNSPEC: int
 
-SOCK_STREAM: Final[int]
-SOCK_DGRAM: Final[int]
-SOCK_RAW: Final[int]
-SOCK_RDM: Final[int]
-SOCK_SEQPACKET: Final[int]
+final SOCK_STREAM: int
+final SOCK_DGRAM: int
+final SOCK_RAW: int
+final SOCK_RDM: int
+final SOCK_SEQPACKET: int
 
 if sys.platform == "linux":
     # Availability: Linux >= 2.6.27
-    SOCK_CLOEXEC: Final[int]
-    SOCK_NONBLOCK: Final[int]
+    final SOCK_CLOEXEC: int
+    final SOCK_NONBLOCK: int
 
 # --------------------
 # Many constants of these forms, documented in the Unix documentation on
@@ -65,398 +65,398 @@ if sys.platform == "linux":
 # TCP_*
 # --------------------
 
-SO_ACCEPTCONN: Final[int]
-SO_BROADCAST: Final[int]
-SO_DEBUG: Final[int]
-SO_DONTROUTE: Final[int]
-SO_ERROR: Final[int]
-SO_KEEPALIVE: Final[int]
-SO_LINGER: Final[int]
-SO_OOBINLINE: Final[int]
-SO_RCVBUF: Final[int]
-SO_RCVLOWAT: Final[int]
-SO_RCVTIMEO: Final[int]
-SO_REUSEADDR: Final[int]
-SO_SNDBUF: Final[int]
-SO_SNDLOWAT: Final[int]
-SO_SNDTIMEO: Final[int]
-SO_TYPE: Final[int]
+final SO_ACCEPTCONN: int
+final SO_BROADCAST: int
+final SO_DEBUG: int
+final SO_DONTROUTE: int
+final SO_ERROR: int
+final SO_KEEPALIVE: int
+final SO_LINGER: int
+final SO_OOBINLINE: int
+final SO_RCVBUF: int
+final SO_RCVLOWAT: int
+final SO_RCVTIMEO: int
+final SO_REUSEADDR: int
+final SO_SNDBUF: int
+final SO_SNDLOWAT: int
+final SO_SNDTIMEO: int
+final SO_TYPE: int
 if sys.platform != "linux":
-    SO_USELOOPBACK: Final[int]
+    final SO_USELOOPBACK: int
 if sys.platform == "win32":
-    SO_EXCLUSIVEADDRUSE: Final[int]
+    final SO_EXCLUSIVEADDRUSE: int
 if sys.platform != "win32":
-    SO_REUSEPORT: Final[int]
+    final SO_REUSEPORT: int
     if sys.platform != "darwin" or sys.version_info >= (3, 13):
-        SO_BINDTODEVICE: Final[int]
+        final SO_BINDTODEVICE: int
 
 if sys.platform != "win32" and sys.platform != "darwin":
-    SO_DOMAIN: Final[int]
-    SO_MARK: Final[int]
-    SO_PASSCRED: Final[int]
-    SO_PASSSEC: Final[int]
-    SO_PEERCRED: Final[int]
-    SO_PEERSEC: Final[int]
-    SO_PRIORITY: Final[int]
-    SO_PROTOCOL: Final[int]
+    final SO_DOMAIN: int
+    final SO_MARK: int
+    final SO_PASSCRED: int
+    final SO_PASSSEC: int
+    final SO_PEERCRED: int
+    final SO_PEERSEC: int
+    final SO_PRIORITY: int
+    final SO_PROTOCOL: int
 if sys.platform != "win32" and sys.platform != "darwin" and sys.platform != "linux":
-    SO_SETFIB: Final[int]
+    final SO_SETFIB: int
 if sys.platform == "linux" and sys.version_info >= (3, 13):
-    SO_BINDTOIFINDEX: Final[int]
+    final SO_BINDTOIFINDEX: int
 
-SOMAXCONN: Final[int]
+final SOMAXCONN: int
 
-MSG_CTRUNC: Final[int]
-MSG_DONTROUTE: Final[int]
-MSG_OOB: Final[int]
-MSG_PEEK: Final[int]
-MSG_TRUNC: Final[int]
-MSG_WAITALL: Final[int]
+final MSG_CTRUNC: int
+final MSG_DONTROUTE: int
+final MSG_OOB: int
+final MSG_PEEK: int
+final MSG_TRUNC: int
+final MSG_WAITALL: int
 if sys.platform != "win32":
-    MSG_DONTWAIT: Final[int]
-    MSG_EOR: Final[int]
-    MSG_NOSIGNAL: Final[int]  # Sometimes this exists on darwin, sometimes not
+    final MSG_DONTWAIT: int
+    final MSG_EOR: int
+    final MSG_NOSIGNAL: int  # Sometimes this exists on darwin, sometimes not
 if sys.platform != "darwin":
-    MSG_ERRQUEUE: Final[int]
+    final MSG_ERRQUEUE: int
 if sys.platform == "win32":
-    MSG_BCAST: Final[int]
-    MSG_MCAST: Final[int]
+    final MSG_BCAST: int
+    final MSG_MCAST: int
 if sys.platform != "win32" and sys.platform != "darwin":
-    MSG_CMSG_CLOEXEC: Final[int]
-    MSG_CONFIRM: Final[int]
-    MSG_FASTOPEN: Final[int]
-    MSG_MORE: Final[int]
+    final MSG_CMSG_CLOEXEC: int
+    final MSG_CONFIRM: int
+    final MSG_FASTOPEN: int
+    final MSG_MORE: int
 if sys.platform != "win32" and sys.platform != "linux":
-    MSG_EOF: Final[int]
+    final MSG_EOF: int
 if sys.platform != "win32" and sys.platform != "linux" and sys.platform != "darwin":
-    MSG_NOTIFICATION: Final[int]
-    MSG_BTAG: Final[int]  # Not FreeBSD either
-    MSG_ETAG: Final[int]  # Not FreeBSD either
+    final MSG_NOTIFICATION: int
+    final MSG_BTAG: int  # Not FreeBSD either
+    final MSG_ETAG: int  # Not FreeBSD either
 
-SOL_IP: Final[int]
-SOL_SOCKET: Final[int]
-SOL_TCP: Final[int]
-SOL_UDP: Final[int]
+final SOL_IP: int
+final SOL_SOCKET: int
+final SOL_TCP: int
+final SOL_UDP: int
 if sys.platform != "win32" and sys.platform != "darwin":
     # Defined in socket.h for Linux, but these aren't always present for
     # some reason.
-    SOL_ATALK: Final[int]
-    SOL_AX25: Final[int]
-    SOL_HCI: Final[int]
-    SOL_IPX: Final[int]
-    SOL_NETROM: Final[int]
-    SOL_ROSE: Final[int]
+    final SOL_ATALK: int
+    final SOL_AX25: int
+    final SOL_HCI: int
+    final SOL_IPX: int
+    final SOL_NETROM: int
+    final SOL_ROSE: int
 
 if sys.platform != "win32":
-    SCM_RIGHTS: Final[int]
+    final SCM_RIGHTS: int
 if sys.platform != "win32" and sys.platform != "darwin":
-    SCM_CREDENTIALS: Final[int]
+    final SCM_CREDENTIALS: int
 if sys.platform != "win32" and sys.platform != "linux":
-    SCM_CREDS: Final[int]
+    final SCM_CREDS: int
 
-IPPROTO_ICMP: Final[int]
-IPPROTO_IP: Final[int]
-IPPROTO_RAW: Final[int]
-IPPROTO_TCP: Final[int]
-IPPROTO_UDP: Final[int]
-IPPROTO_AH: Final[int]
-IPPROTO_DSTOPTS: Final[int]
-IPPROTO_EGP: Final[int]
-IPPROTO_ESP: Final[int]
-IPPROTO_FRAGMENT: Final[int]
-IPPROTO_HOPOPTS: Final[int]
-IPPROTO_ICMPV6: Final[int]
-IPPROTO_IDP: Final[int]
-IPPROTO_IGMP: Final[int]
-IPPROTO_IPV6: Final[int]
-IPPROTO_NONE: Final[int]
-IPPROTO_PIM: Final[int]
-IPPROTO_PUP: Final[int]
-IPPROTO_ROUTING: Final[int]
-IPPROTO_SCTP: Final[int]
+final IPPROTO_ICMP: int
+final IPPROTO_IP: int
+final IPPROTO_RAW: int
+final IPPROTO_TCP: int
+final IPPROTO_UDP: int
+final IPPROTO_AH: int
+final IPPROTO_DSTOPTS: int
+final IPPROTO_EGP: int
+final IPPROTO_ESP: int
+final IPPROTO_FRAGMENT: int
+final IPPROTO_HOPOPTS: int
+final IPPROTO_ICMPV6: int
+final IPPROTO_IDP: int
+final IPPROTO_IGMP: int
+final IPPROTO_IPV6: int
+final IPPROTO_NONE: int
+final IPPROTO_PIM: int
+final IPPROTO_PUP: int
+final IPPROTO_ROUTING: int
+final IPPROTO_SCTP: int
 if sys.platform != "linux":
-    IPPROTO_GGP: Final[int]
-    IPPROTO_IPV4: Final[int]
-    IPPROTO_MAX: Final[int]
-    IPPROTO_ND: Final[int]
+    final IPPROTO_GGP: int
+    final IPPROTO_IPV4: int
+    final IPPROTO_MAX: int
+    final IPPROTO_ND: int
 if sys.platform == "win32":
-    IPPROTO_CBT: Final[int]
-    IPPROTO_ICLFXBM: Final[int]
-    IPPROTO_IGP: Final[int]
-    IPPROTO_L2TP: Final[int]
-    IPPROTO_PGM: Final[int]
-    IPPROTO_RDP: Final[int]
-    IPPROTO_ST: Final[int]
+    final IPPROTO_CBT: int
+    final IPPROTO_ICLFXBM: int
+    final IPPROTO_IGP: int
+    final IPPROTO_L2TP: int
+    final IPPROTO_PGM: int
+    final IPPROTO_RDP: int
+    final IPPROTO_ST: int
 if sys.platform != "win32":
-    IPPROTO_GRE: Final[int]
-    IPPROTO_IPIP: Final[int]
-    IPPROTO_RSVP: Final[int]
-    IPPROTO_TP: Final[int]
+    final IPPROTO_GRE: int
+    final IPPROTO_IPIP: int
+    final IPPROTO_RSVP: int
+    final IPPROTO_TP: int
 if sys.platform != "win32" and sys.platform != "linux":
-    IPPROTO_EON: Final[int]
-    IPPROTO_HELLO: Final[int]
-    IPPROTO_IPCOMP: Final[int]
-    IPPROTO_XTP: Final[int]
+    final IPPROTO_EON: int
+    final IPPROTO_HELLO: int
+    final IPPROTO_IPCOMP: int
+    final IPPROTO_XTP: int
 if sys.platform != "win32" and sys.platform != "darwin" and sys.platform != "linux":
-    IPPROTO_BIP: Final[int]  # Not FreeBSD either
-    IPPROTO_MOBILE: Final[int]  # Not FreeBSD either
-    IPPROTO_VRRP: Final[int]  # Not FreeBSD either
+    final IPPROTO_BIP: int  # Not FreeBSD either
+    final IPPROTO_MOBILE: int  # Not FreeBSD either
+    final IPPROTO_VRRP: int  # Not FreeBSD either
 if sys.platform == "linux":
     # Availability: Linux >= 2.6.20, FreeBSD >= 10.1
-    IPPROTO_UDPLITE: Final[int]
+    final IPPROTO_UDPLITE: int
 if sys.platform == "linux":
-    IPPROTO_MPTCP: Final[int]
+    final IPPROTO_MPTCP: int
 
-IPPORT_RESERVED: Final[int]
-IPPORT_USERRESERVED: Final[int]
+final IPPORT_RESERVED: int
+final IPPORT_USERRESERVED: int
 
-INADDR_ALLHOSTS_GROUP: Final[int]
-INADDR_ANY: Final[int]
-INADDR_BROADCAST: Final[int]
-INADDR_LOOPBACK: Final[int]
-INADDR_MAX_LOCAL_GROUP: Final[int]
-INADDR_NONE: Final[int]
-INADDR_UNSPEC_GROUP: Final[int]
+final INADDR_ALLHOSTS_GROUP: int
+final INADDR_ANY: int
+final INADDR_BROADCAST: int
+final INADDR_LOOPBACK: int
+final INADDR_MAX_LOCAL_GROUP: int
+final INADDR_NONE: int
+final INADDR_UNSPEC_GROUP: int
 
-IP_ADD_MEMBERSHIP: Final[int]
-IP_DROP_MEMBERSHIP: Final[int]
-IP_HDRINCL: Final[int]
-IP_MULTICAST_IF: Final[int]
-IP_MULTICAST_LOOP: Final[int]
-IP_MULTICAST_TTL: Final[int]
-IP_OPTIONS: Final[int]
+final IP_ADD_MEMBERSHIP: int
+final IP_DROP_MEMBERSHIP: int
+final IP_HDRINCL: int
+final IP_MULTICAST_IF: int
+final IP_MULTICAST_LOOP: int
+final IP_MULTICAST_TTL: int
+final IP_OPTIONS: int
 if sys.platform != "linux":
-    IP_RECVDSTADDR: Final[int]
-IP_RECVTOS: Final[int]
-IP_TOS: Final[int]
-IP_TTL: Final[int]
+    final IP_RECVDSTADDR: int
+final IP_RECVTOS: int
+final IP_TOS: int
+final IP_TTL: int
 if sys.platform != "win32":
-    IP_DEFAULT_MULTICAST_LOOP: Final[int]
-    IP_DEFAULT_MULTICAST_TTL: Final[int]
-    IP_MAX_MEMBERSHIPS: Final[int]
-    IP_RECVOPTS: Final[int]
-    IP_RECVRETOPTS: Final[int]
-    IP_RETOPTS: Final[int]
+    final IP_DEFAULT_MULTICAST_LOOP: int
+    final IP_DEFAULT_MULTICAST_TTL: int
+    final IP_MAX_MEMBERSHIPS: int
+    final IP_RECVOPTS: int
+    final IP_RECVRETOPTS: int
+    final IP_RETOPTS: int
 if sys.version_info >= (3, 13) and sys.platform == "linux":
-    CAN_RAW_ERR_FILTER: Final[int]
+    final CAN_RAW_ERR_FILTER: int
 if sys.version_info >= (3, 15):
     if sys.platform == "win32" or sys.platform == "linux":
-        IPV6_HDRINCL: Final[int]
+        final IPV6_HDRINCL: int
 if sys.version_info >= (3, 14):
-    IP_RECVTTL: Final[int]
+    final IP_RECVTTL: int
 
     if sys.platform == "win32" or sys.platform == "linux":
-        IPV6_RECVERR: Final[int]
-        IP_RECVERR: Final[int]
-        SO_ORIGINAL_DST: Final[int]
+        final IPV6_RECVERR: int
+        final IP_RECVERR: int
+        final SO_ORIGINAL_DST: int
 
     if sys.platform == "win32":
-        SOL_RFCOMM: Final[int]
-        SO_BTH_ENCRYPT: Final[int]
-        SO_BTH_MTU: Final[int]
-        SO_BTH_MTU_MAX: Final[int]
-        SO_BTH_MTU_MIN: Final[int]
-        TCP_QUICKACK: Final[int]
+        final SOL_RFCOMM: int
+        final SO_BTH_ENCRYPT: int
+        final SO_BTH_MTU: int
+        final SO_BTH_MTU_MAX: int
+        final SO_BTH_MTU_MIN: int
+        final TCP_QUICKACK: int
 
     if sys.platform == "linux":
-        BDADDR_BREDR: Final[int]
-        BDADDR_LE_PUBLIC: Final[int]
-        BDADDR_LE_RANDOM: Final[int]
-        BT_CHANNEL_POLICY: Final[int]
-        BT_CHANNEL_POLICY_BREDR_ONLY: Final[int]
-        BT_CHANNEL_POLICY_BREDR_PREFERRED: Final[int]
-        BT_CODEC: Final[int]
-        BT_DEFER_SETUP: Final[int]
-        BT_FLUSHABLE: Final[int]
-        BT_FLUSHABLE_OFF: Final[int]
-        BT_FLUSHABLE_ON: Final[int]
-        BT_ISO_QOS: Final[int]
-        BT_MODE: Final[int]
-        BT_MODE_BASIC: Final[int]
-        BT_MODE_ERTM: Final[int]
-        BT_MODE_EXT_FLOWCTL: Final[int]
-        BT_MODE_LE_FLOWCTL: Final[int]
-        BT_MODE_STREAMING: Final[int]
-        BT_PHY: Final[int]
-        BT_PHY_BR_1M_1SLOT: Final[int]
-        BT_PHY_BR_1M_3SLOT: Final[int]
-        BT_PHY_BR_1M_5SLOT: Final[int]
-        BT_PHY_EDR_2M_1SLOT: Final[int]
-        BT_PHY_EDR_2M_3SLOT: Final[int]
-        BT_PHY_EDR_2M_5SLOT: Final[int]
-        BT_PHY_EDR_3M_1SLOT: Final[int]
-        BT_PHY_EDR_3M_3SLOT: Final[int]
-        BT_PHY_EDR_3M_5SLOT: Final[int]
-        BT_PHY_LE_1M_RX: Final[int]
-        BT_PHY_LE_1M_TX: Final[int]
-        BT_PHY_LE_2M_RX: Final[int]
-        BT_PHY_LE_2M_TX: Final[int]
-        BT_PHY_LE_CODED_RX: Final[int]
-        BT_PHY_LE_CODED_TX: Final[int]
-        BT_PKT_STATUS: Final[int]
-        BT_POWER: Final[int]
-        BT_POWER_FORCE_ACTIVE_OFF: Final[int]
-        BT_POWER_FORCE_ACTIVE_ON: Final[int]
-        BT_RCVMTU: Final[int]
-        BT_SECURITY: Final[int]
-        BT_SECURITY_FIPS: Final[int]
-        BT_SECURITY_HIGH: Final[int]
-        BT_SECURITY_LOW: Final[int]
-        BT_SECURITY_MEDIUM: Final[int]
-        BT_SECURITY_SDP: Final[int]
-        BT_SNDMTU: Final[int]
-        BT_VOICE: Final[int]
-        BT_VOICE_CVSD_16BIT: Final[int]
-        BT_VOICE_TRANSPARENT: Final[int]
-        BT_VOICE_TRANSPARENT_16BIT: Final[int]
-        HCI_CHANNEL_CONTROL: Final[int]
-        HCI_CHANNEL_LOGGING: Final[int]
-        HCI_CHANNEL_MONITOR: Final[int]
-        HCI_CHANNEL_RAW: Final[int]
-        HCI_CHANNEL_USER: Final[int]
-        HCI_DEV_NONE: Final[int]
-        IP_FREEBIND: Final[int]
-        IP_RECVORIGDSTADDR: Final[int]
-        L2CAP_LM: Final[int]
-        L2CAP_LM_AUTH: Final[int]
-        L2CAP_LM_ENCRYPT: Final[int]
-        L2CAP_LM_MASTER: Final[int]
-        L2CAP_LM_RELIABLE: Final[int]
-        L2CAP_LM_SECURE: Final[int]
-        L2CAP_LM_TRUSTED: Final[int]
-        SOL_BLUETOOTH: Final[int]
-        SOL_L2CAP: Final[int]
-        SOL_RFCOMM: Final[int]
-        SOL_SCO: Final[int]
-        VMADDR_CID_LOCAL: Final[int]
+        final BDADDR_BREDR: int
+        final BDADDR_LE_PUBLIC: int
+        final BDADDR_LE_RANDOM: int
+        final BT_CHANNEL_POLICY: int
+        final BT_CHANNEL_POLICY_BREDR_ONLY: int
+        final BT_CHANNEL_POLICY_BREDR_PREFERRED: int
+        final BT_CODEC: int
+        final BT_DEFER_SETUP: int
+        final BT_FLUSHABLE: int
+        final BT_FLUSHABLE_OFF: int
+        final BT_FLUSHABLE_ON: int
+        final BT_ISO_QOS: int
+        final BT_MODE: int
+        final BT_MODE_BASIC: int
+        final BT_MODE_ERTM: int
+        final BT_MODE_EXT_FLOWCTL: int
+        final BT_MODE_LE_FLOWCTL: int
+        final BT_MODE_STREAMING: int
+        final BT_PHY: int
+        final BT_PHY_BR_1M_1SLOT: int
+        final BT_PHY_BR_1M_3SLOT: int
+        final BT_PHY_BR_1M_5SLOT: int
+        final BT_PHY_EDR_2M_1SLOT: int
+        final BT_PHY_EDR_2M_3SLOT: int
+        final BT_PHY_EDR_2M_5SLOT: int
+        final BT_PHY_EDR_3M_1SLOT: int
+        final BT_PHY_EDR_3M_3SLOT: int
+        final BT_PHY_EDR_3M_5SLOT: int
+        final BT_PHY_LE_1M_RX: int
+        final BT_PHY_LE_1M_TX: int
+        final BT_PHY_LE_2M_RX: int
+        final BT_PHY_LE_2M_TX: int
+        final BT_PHY_LE_CODED_RX: int
+        final BT_PHY_LE_CODED_TX: int
+        final BT_PKT_STATUS: int
+        final BT_POWER: int
+        final BT_POWER_FORCE_ACTIVE_OFF: int
+        final BT_POWER_FORCE_ACTIVE_ON: int
+        final BT_RCVMTU: int
+        final BT_SECURITY: int
+        final BT_SECURITY_FIPS: int
+        final BT_SECURITY_HIGH: int
+        final BT_SECURITY_LOW: int
+        final BT_SECURITY_MEDIUM: int
+        final BT_SECURITY_SDP: int
+        final BT_SNDMTU: int
+        final BT_VOICE: int
+        final BT_VOICE_CVSD_16BIT: int
+        final BT_VOICE_TRANSPARENT: int
+        final BT_VOICE_TRANSPARENT_16BIT: int
+        final HCI_CHANNEL_CONTROL: int
+        final HCI_CHANNEL_LOGGING: int
+        final HCI_CHANNEL_MONITOR: int
+        final HCI_CHANNEL_RAW: int
+        final HCI_CHANNEL_USER: int
+        final HCI_DEV_NONE: int
+        final IP_FREEBIND: int
+        final IP_RECVORIGDSTADDR: int
+        final L2CAP_LM: int
+        final L2CAP_LM_AUTH: int
+        final L2CAP_LM_ENCRYPT: int
+        final L2CAP_LM_MASTER: int
+        final L2CAP_LM_RELIABLE: int
+        final L2CAP_LM_SECURE: int
+        final L2CAP_LM_TRUSTED: int
+        final SOL_BLUETOOTH: int
+        final SOL_L2CAP: int
+        final SOL_RFCOMM: int
+        final SOL_SCO: int
+        final VMADDR_CID_LOCAL: int
 
 if sys.platform != "win32" and sys.platform != "darwin":
-    IP_TRANSPARENT: Final[int]
+    final IP_TRANSPARENT: int
 if sys.platform != "win32" and sys.platform != "darwin" and sys.version_info >= (3, 11):
-    IP_BIND_ADDRESS_NO_PORT: Final[int]
+    final IP_BIND_ADDRESS_NO_PORT: int
 if sys.version_info >= (3, 12):
-    IP_ADD_SOURCE_MEMBERSHIP: Final[int]
-    IP_BLOCK_SOURCE: Final[int]
-    IP_DROP_SOURCE_MEMBERSHIP: Final[int]
-    IP_PKTINFO: Final[int]
-    IP_UNBLOCK_SOURCE: Final[int]
+    final IP_ADD_SOURCE_MEMBERSHIP: int
+    final IP_BLOCK_SOURCE: int
+    final IP_DROP_SOURCE_MEMBERSHIP: int
+    final IP_PKTINFO: int
+    final IP_UNBLOCK_SOURCE: int
 
-IPV6_CHECKSUM: Final[int]
-IPV6_JOIN_GROUP: Final[int]
-IPV6_LEAVE_GROUP: Final[int]
-IPV6_MULTICAST_HOPS: Final[int]
-IPV6_MULTICAST_IF: Final[int]
-IPV6_MULTICAST_LOOP: Final[int]
-IPV6_RECVTCLASS: Final[int]
-IPV6_TCLASS: Final[int]
-IPV6_UNICAST_HOPS: Final[int]
-IPV6_V6ONLY: Final[int]
-IPV6_DONTFRAG: Final[int]
-IPV6_HOPLIMIT: Final[int]
-IPV6_HOPOPTS: Final[int]
-IPV6_PKTINFO: Final[int]
-IPV6_RECVRTHDR: Final[int]
-IPV6_RTHDR: Final[int]
+final IPV6_CHECKSUM: int
+final IPV6_JOIN_GROUP: int
+final IPV6_LEAVE_GROUP: int
+final IPV6_MULTICAST_HOPS: int
+final IPV6_MULTICAST_IF: int
+final IPV6_MULTICAST_LOOP: int
+final IPV6_RECVTCLASS: int
+final IPV6_TCLASS: int
+final IPV6_UNICAST_HOPS: int
+final IPV6_V6ONLY: int
+final IPV6_DONTFRAG: int
+final IPV6_HOPLIMIT: int
+final IPV6_HOPOPTS: int
+final IPV6_PKTINFO: int
+final IPV6_RECVRTHDR: int
+final IPV6_RTHDR: int
 if sys.platform != "win32":
-    IPV6_RTHDR_TYPE_0: Final[int]
-    IPV6_DSTOPTS: Final[int]
-    IPV6_NEXTHOP: Final[int]
-    IPV6_PATHMTU: Final[int]
-    IPV6_RECVDSTOPTS: Final[int]
-    IPV6_RECVHOPLIMIT: Final[int]
-    IPV6_RECVHOPOPTS: Final[int]
-    IPV6_RECVPATHMTU: Final[int]
-    IPV6_RECVPKTINFO: Final[int]
-    IPV6_RTHDRDSTOPTS: Final[int]
+    final IPV6_RTHDR_TYPE_0: int
+    final IPV6_DSTOPTS: int
+    final IPV6_NEXTHOP: int
+    final IPV6_PATHMTU: int
+    final IPV6_RECVDSTOPTS: int
+    final IPV6_RECVHOPLIMIT: int
+    final IPV6_RECVHOPOPTS: int
+    final IPV6_RECVPATHMTU: int
+    final IPV6_RECVPKTINFO: int
+    final IPV6_RTHDRDSTOPTS: int
 
 if sys.platform != "win32" and sys.platform != "linux":
-    IPV6_USE_MIN_MTU: Final[int]
+    final IPV6_USE_MIN_MTU: int
 
-EAI_AGAIN: Final[int]
-EAI_BADFLAGS: Final[int]
-EAI_FAIL: Final[int]
-EAI_FAMILY: Final[int]
-EAI_MEMORY: Final[int]
-EAI_NODATA: Final[int]
-EAI_NONAME: Final[int]
-EAI_SERVICE: Final[int]
-EAI_SOCKTYPE: Final[int]
+final EAI_AGAIN: int
+final EAI_BADFLAGS: int
+final EAI_FAIL: int
+final EAI_FAMILY: int
+final EAI_MEMORY: int
+final EAI_NODATA: int
+final EAI_NONAME: int
+final EAI_SERVICE: int
+final EAI_SOCKTYPE: int
 if sys.platform != "win32":
-    EAI_ADDRFAMILY: Final[int]
-    EAI_OVERFLOW: Final[int]
-    EAI_SYSTEM: Final[int]
+    final EAI_ADDRFAMILY: int
+    final EAI_OVERFLOW: int
+    final EAI_SYSTEM: int
 if sys.platform != "win32" and sys.platform != "linux":
-    EAI_BADHINTS: Final[int]
-    EAI_MAX: Final[int]
-    EAI_PROTOCOL: Final[int]
+    final EAI_BADHINTS: int
+    final EAI_MAX: int
+    final EAI_PROTOCOL: int
 
-AI_ADDRCONFIG: Final[int]
-AI_ALL: Final[int]
-AI_CANONNAME: Final[int]
-AI_NUMERICHOST: Final[int]
-AI_NUMERICSERV: Final[int]
-AI_PASSIVE: Final[int]
-AI_V4MAPPED: Final[int]
+final AI_ADDRCONFIG: int
+final AI_ALL: int
+final AI_CANONNAME: int
+final AI_NUMERICHOST: int
+final AI_NUMERICSERV: int
+final AI_PASSIVE: int
+final AI_V4MAPPED: int
 if sys.platform != "win32" and sys.platform != "linux":
-    AI_DEFAULT: Final[int]
-    AI_MASK: Final[int]
-    AI_V4MAPPED_CFG: Final[int]
+    final AI_DEFAULT: int
+    final AI_MASK: int
+    final AI_V4MAPPED_CFG: int
 
-NI_DGRAM: Final[int]
-NI_MAXHOST: Final[int]
-NI_MAXSERV: Final[int]
-NI_NAMEREQD: Final[int]
-NI_NOFQDN: Final[int]
-NI_NUMERICHOST: Final[int]
-NI_NUMERICSERV: Final[int]
+final NI_DGRAM: int
+final NI_MAXHOST: int
+final NI_MAXSERV: int
+final NI_NAMEREQD: int
+final NI_NOFQDN: int
+final NI_NUMERICHOST: int
+final NI_NUMERICSERV: int
 if sys.platform == "linux" and sys.version_info >= (3, 13):
-    NI_IDN: Final[int]
+    final NI_IDN: int
 
-TCP_FASTOPEN: Final[int]
-TCP_KEEPCNT: Final[int]
-TCP_KEEPINTVL: Final[int]
-TCP_MAXSEG: Final[int]
-TCP_NODELAY: Final[int]
+final TCP_FASTOPEN: int
+final TCP_KEEPCNT: int
+final TCP_KEEPINTVL: int
+final TCP_MAXSEG: int
+final TCP_NODELAY: int
 if sys.platform != "win32":
-    TCP_NOTSENT_LOWAT: Final[int]
+    final TCP_NOTSENT_LOWAT: int
 if sys.platform != "darwin":
-    TCP_KEEPIDLE: Final[int]
+    final TCP_KEEPIDLE: int
 if sys.platform == "darwin":
-    TCP_KEEPALIVE: Final[int]
+    final TCP_KEEPALIVE: int
 if sys.version_info >= (3, 11) and sys.platform == "darwin":
-    TCP_CONNECTION_INFO: Final[int]
+    final TCP_CONNECTION_INFO: int
 
 if sys.platform != "win32" and sys.platform != "darwin":
-    TCP_CONGESTION: Final[int]
-    TCP_CORK: Final[int]
-    TCP_DEFER_ACCEPT: Final[int]
-    TCP_INFO: Final[int]
-    TCP_LINGER2: Final[int]
-    TCP_QUICKACK: Final[int]
-    TCP_SYNCNT: Final[int]
-    TCP_USER_TIMEOUT: Final[int]
-    TCP_WINDOW_CLAMP: Final[int]
+    final TCP_CONGESTION: int
+    final TCP_CORK: int
+    final TCP_DEFER_ACCEPT: int
+    final TCP_INFO: int
+    final TCP_LINGER2: int
+    final TCP_QUICKACK: int
+    final TCP_SYNCNT: int
+    final TCP_USER_TIMEOUT: int
+    final TCP_WINDOW_CLAMP: int
 if sys.platform == "linux" and sys.version_info >= (3, 12):
-    TCP_CC_INFO: Final[int]
-    TCP_FASTOPEN_CONNECT: Final[int]
-    TCP_FASTOPEN_KEY: Final[int]
-    TCP_FASTOPEN_NO_COOKIE: Final[int]
-    TCP_INQ: Final[int]
-    TCP_MD5SIG: Final[int]
-    TCP_MD5SIG_EXT: Final[int]
-    TCP_QUEUE_SEQ: Final[int]
-    TCP_REPAIR: Final[int]
-    TCP_REPAIR_OPTIONS: Final[int]
-    TCP_REPAIR_QUEUE: Final[int]
-    TCP_REPAIR_WINDOW: Final[int]
-    TCP_SAVED_SYN: Final[int]
-    TCP_SAVE_SYN: Final[int]
-    TCP_THIN_DUPACK: Final[int]
-    TCP_THIN_LINEAR_TIMEOUTS: Final[int]
-    TCP_TIMESTAMP: Final[int]
-    TCP_TX_DELAY: Final[int]
-    TCP_ULP: Final[int]
-    TCP_ZEROCOPY_RECEIVE: Final[int]
+    final TCP_CC_INFO: int
+    final TCP_FASTOPEN_CONNECT: int
+    final TCP_FASTOPEN_KEY: int
+    final TCP_FASTOPEN_NO_COOKIE: int
+    final TCP_INQ: int
+    final TCP_MD5SIG: int
+    final TCP_MD5SIG_EXT: int
+    final TCP_QUEUE_SEQ: int
+    final TCP_REPAIR: int
+    final TCP_REPAIR_OPTIONS: int
+    final TCP_REPAIR_QUEUE: int
+    final TCP_REPAIR_WINDOW: int
+    final TCP_SAVED_SYN: int
+    final TCP_SAVE_SYN: int
+    final TCP_THIN_DUPACK: int
+    final TCP_THIN_LINEAR_TIMEOUTS: int
+    final TCP_TIMESTAMP: int
+    final TCP_TX_DELAY: int
+    final TCP_ULP: int
+    final TCP_ZEROCOPY_RECEIVE: int
 
 # --------------------
 # Specifically documented constants
@@ -464,220 +464,220 @@ if sys.platform == "linux" and sys.version_info >= (3, 12):
 
 if sys.platform == "linux":
     # Availability: Linux >= 2.6.25, NetBSD >= 8
-    AF_CAN: Final[int]
-    PF_CAN: Final[int]
-    SOL_CAN_BASE: Final[int]
-    SOL_CAN_RAW: Final[int]
-    CAN_EFF_FLAG: Final[int]
-    CAN_EFF_MASK: Final[int]
-    CAN_ERR_FLAG: Final[int]
-    CAN_ERR_MASK: Final[int]
-    CAN_RAW: Final[int]
-    CAN_RAW_FILTER: Final[int]
-    CAN_RAW_LOOPBACK: Final[int]
-    CAN_RAW_RECV_OWN_MSGS: Final[int]
-    CAN_RTR_FLAG: Final[int]
-    CAN_SFF_MASK: Final[int]
+    final AF_CAN: int
+    final PF_CAN: int
+    final SOL_CAN_BASE: int
+    final SOL_CAN_RAW: int
+    final CAN_EFF_FLAG: int
+    final CAN_EFF_MASK: int
+    final CAN_ERR_FLAG: int
+    final CAN_ERR_MASK: int
+    final CAN_RAW: int
+    final CAN_RAW_FILTER: int
+    final CAN_RAW_LOOPBACK: int
+    final CAN_RAW_RECV_OWN_MSGS: int
+    final CAN_RTR_FLAG: int
+    final CAN_SFF_MASK: int
     if sys.version_info < (3, 11):
-        CAN_RAW_ERR_FILTER: Final[int]
+        final CAN_RAW_ERR_FILTER: int
 
 if sys.platform == "linux":
     # Availability: Linux >= 2.6.25
-    CAN_BCM: Final[int]
-    CAN_BCM_TX_SETUP: Final[int]
-    CAN_BCM_TX_DELETE: Final[int]
-    CAN_BCM_TX_READ: Final[int]
-    CAN_BCM_TX_SEND: Final[int]
-    CAN_BCM_RX_SETUP: Final[int]
-    CAN_BCM_RX_DELETE: Final[int]
-    CAN_BCM_RX_READ: Final[int]
-    CAN_BCM_TX_STATUS: Final[int]
-    CAN_BCM_TX_EXPIRED: Final[int]
-    CAN_BCM_RX_STATUS: Final[int]
-    CAN_BCM_RX_TIMEOUT: Final[int]
-    CAN_BCM_RX_CHANGED: Final[int]
-    CAN_BCM_SETTIMER: Final[int]
-    CAN_BCM_STARTTIMER: Final[int]
-    CAN_BCM_TX_COUNTEVT: Final[int]
-    CAN_BCM_TX_ANNOUNCE: Final[int]
-    CAN_BCM_TX_CP_CAN_ID: Final[int]
-    CAN_BCM_RX_FILTER_ID: Final[int]
-    CAN_BCM_RX_CHECK_DLC: Final[int]
-    CAN_BCM_RX_NO_AUTOTIMER: Final[int]
-    CAN_BCM_RX_ANNOUNCE_RESUME: Final[int]
-    CAN_BCM_TX_RESET_MULTI_IDX: Final[int]
-    CAN_BCM_RX_RTR_FRAME: Final[int]
-    CAN_BCM_CAN_FD_FRAME: Final[int]
+    final CAN_BCM: int
+    final CAN_BCM_TX_SETUP: int
+    final CAN_BCM_TX_DELETE: int
+    final CAN_BCM_TX_READ: int
+    final CAN_BCM_TX_SEND: int
+    final CAN_BCM_RX_SETUP: int
+    final CAN_BCM_RX_DELETE: int
+    final CAN_BCM_RX_READ: int
+    final CAN_BCM_TX_STATUS: int
+    final CAN_BCM_TX_EXPIRED: int
+    final CAN_BCM_RX_STATUS: int
+    final CAN_BCM_RX_TIMEOUT: int
+    final CAN_BCM_RX_CHANGED: int
+    final CAN_BCM_SETTIMER: int
+    final CAN_BCM_STARTTIMER: int
+    final CAN_BCM_TX_COUNTEVT: int
+    final CAN_BCM_TX_ANNOUNCE: int
+    final CAN_BCM_TX_CP_CAN_ID: int
+    final CAN_BCM_RX_FILTER_ID: int
+    final CAN_BCM_RX_CHECK_DLC: int
+    final CAN_BCM_RX_NO_AUTOTIMER: int
+    final CAN_BCM_RX_ANNOUNCE_RESUME: int
+    final CAN_BCM_TX_RESET_MULTI_IDX: int
+    final CAN_BCM_RX_RTR_FRAME: int
+    final CAN_BCM_CAN_FD_FRAME: int
 
 if sys.platform == "linux":
     # Availability: Linux >= 3.6
-    CAN_RAW_FD_FRAMES: Final[int]
+    final CAN_RAW_FD_FRAMES: int
     # Availability: Linux >= 4.1
-    CAN_RAW_JOIN_FILTERS: Final[int]
+    final CAN_RAW_JOIN_FILTERS: int
     # Availability: Linux >= 2.6.25
-    CAN_ISOTP: Final[int]
+    final CAN_ISOTP: int
     if sys.version_info >= (3, 15):
-        CAN_ISOTP_CHK_PAD_DATA: Final[int]
-        CAN_ISOTP_CHK_PAD_LEN: Final[int]
-        CAN_ISOTP_DEFAULT_EXT_ADDRESS: Final[int]
-        CAN_ISOTP_DEFAULT_FLAGS: Final[int]
-        CAN_ISOTP_DEFAULT_FRAME_TXTIME: Final[int]
-        CAN_ISOTP_DEFAULT_LL_MTU: Final[int]
-        CAN_ISOTP_DEFAULT_LL_TX_DL: Final[int]
-        CAN_ISOTP_DEFAULT_LL_TX_FLAGS: Final[int]
-        CAN_ISOTP_DEFAULT_PAD_CONTENT: Final[int]
-        CAN_ISOTP_DEFAULT_RECV_BS: Final[int]
-        CAN_ISOTP_DEFAULT_RECV_STMIN: Final[int]
-        CAN_ISOTP_DEFAULT_RECV_WFTMAX: Final[int]
-        CAN_ISOTP_EXTEND_ADDR: Final[int]
-        CAN_ISOTP_FORCE_RXSTMIN: Final[int]
-        CAN_ISOTP_FORCE_TXSTMIN: Final[int]
-        CAN_ISOTP_HALF_DUPLEX: Final[int]
-        CAN_ISOTP_LL_OPTS: Final[int]
-        CAN_ISOTP_LISTEN_MODE: Final[int]
-        CAN_ISOTP_OPTS: Final[int]
-        CAN_ISOTP_RECV_FC: Final[int]
-        CAN_ISOTP_RX_EXT_ADDR: Final[int]
-        CAN_ISOTP_RX_PADDING: Final[int]
-        CAN_ISOTP_RX_STMIN: Final[int]
-        CAN_ISOTP_SF_BROADCAST: Final[int]
-        CAN_ISOTP_TX_PADDING: Final[int]
-        CAN_ISOTP_TX_STMIN: Final[int]
-        CAN_ISOTP_WAIT_TX_DONE: Final[int]
-        SOL_CAN_ISOTP: Final[int]
+        final CAN_ISOTP_CHK_PAD_DATA: int
+        final CAN_ISOTP_CHK_PAD_LEN: int
+        final CAN_ISOTP_DEFAULT_EXT_ADDRESS: int
+        final CAN_ISOTP_DEFAULT_FLAGS: int
+        final CAN_ISOTP_DEFAULT_FRAME_TXTIME: int
+        final CAN_ISOTP_DEFAULT_LL_MTU: int
+        final CAN_ISOTP_DEFAULT_LL_TX_DL: int
+        final CAN_ISOTP_DEFAULT_LL_TX_FLAGS: int
+        final CAN_ISOTP_DEFAULT_PAD_CONTENT: int
+        final CAN_ISOTP_DEFAULT_RECV_BS: int
+        final CAN_ISOTP_DEFAULT_RECV_STMIN: int
+        final CAN_ISOTP_DEFAULT_RECV_WFTMAX: int
+        final CAN_ISOTP_EXTEND_ADDR: int
+        final CAN_ISOTP_FORCE_RXSTMIN: int
+        final CAN_ISOTP_FORCE_TXSTMIN: int
+        final CAN_ISOTP_HALF_DUPLEX: int
+        final CAN_ISOTP_LL_OPTS: int
+        final CAN_ISOTP_LISTEN_MODE: int
+        final CAN_ISOTP_OPTS: int
+        final CAN_ISOTP_RECV_FC: int
+        final CAN_ISOTP_RX_EXT_ADDR: int
+        final CAN_ISOTP_RX_PADDING: int
+        final CAN_ISOTP_RX_STMIN: int
+        final CAN_ISOTP_SF_BROADCAST: int
+        final CAN_ISOTP_TX_PADDING: int
+        final CAN_ISOTP_TX_STMIN: int
+        final CAN_ISOTP_WAIT_TX_DONE: int
+        final SOL_CAN_ISOTP: int
     # Availability: Linux >= 5.4
-    CAN_J1939: Final[int]
+    final CAN_J1939: int
 
-    J1939_MAX_UNICAST_ADDR: Final[int]
-    J1939_IDLE_ADDR: Final[int]
-    J1939_NO_ADDR: Final[int]
-    J1939_NO_NAME: Final[int]
-    J1939_PGN_REQUEST: Final[int]
-    J1939_PGN_ADDRESS_CLAIMED: Final[int]
-    J1939_PGN_ADDRESS_COMMANDED: Final[int]
-    J1939_PGN_PDU1_MAX: Final[int]
-    J1939_PGN_MAX: Final[int]
-    J1939_NO_PGN: Final[int]
+    final J1939_MAX_UNICAST_ADDR: int
+    final J1939_IDLE_ADDR: int
+    final J1939_NO_ADDR: int
+    final J1939_NO_NAME: int
+    final J1939_PGN_REQUEST: int
+    final J1939_PGN_ADDRESS_CLAIMED: int
+    final J1939_PGN_ADDRESS_COMMANDED: int
+    final J1939_PGN_PDU1_MAX: int
+    final J1939_PGN_MAX: int
+    final J1939_NO_PGN: int
 
-    SO_J1939_FILTER: Final[int]
-    SO_J1939_PROMISC: Final[int]
-    SO_J1939_SEND_PRIO: Final[int]
-    SO_J1939_ERRQUEUE: Final[int]
+    final SO_J1939_FILTER: int
+    final SO_J1939_PROMISC: int
+    final SO_J1939_SEND_PRIO: int
+    final SO_J1939_ERRQUEUE: int
 
-    SCM_J1939_DEST_ADDR: Final[int]
-    SCM_J1939_DEST_NAME: Final[int]
-    SCM_J1939_PRIO: Final[int]
-    SCM_J1939_ERRQUEUE: Final[int]
+    final SCM_J1939_DEST_ADDR: int
+    final SCM_J1939_DEST_NAME: int
+    final SCM_J1939_PRIO: int
+    final SCM_J1939_ERRQUEUE: int
 
-    J1939_NLA_PAD: Final[int]
-    J1939_NLA_BYTES_ACKED: Final[int]
-    J1939_EE_INFO_NONE: Final[int]
-    J1939_EE_INFO_TX_ABORT: Final[int]
-    J1939_FILTER_MAX: Final[int]
+    final J1939_NLA_PAD: int
+    final J1939_NLA_BYTES_ACKED: int
+    final J1939_EE_INFO_NONE: int
+    final J1939_EE_INFO_TX_ABORT: int
+    final J1939_FILTER_MAX: int
 
 if sys.version_info >= (3, 12) and sys.platform != "linux" and sys.platform != "win32" and sys.platform != "darwin":
     # Availability: FreeBSD >= 14.0
-    AF_DIVERT: Final[int]
-    PF_DIVERT: Final[int]
+    final AF_DIVERT: int
+    final PF_DIVERT: int
 
 if sys.platform == "linux":
     # Availability: Linux >= 2.2
-    AF_PACKET: Final[int]
-    PF_PACKET: Final[int]
-    PACKET_BROADCAST: Final[int]
-    PACKET_FASTROUTE: Final[int]
-    PACKET_HOST: Final[int]
-    PACKET_LOOPBACK: Final[int]
-    PACKET_MULTICAST: Final[int]
-    PACKET_OTHERHOST: Final[int]
-    PACKET_OUTGOING: Final[int]
+    final AF_PACKET: int
+    final PF_PACKET: int
+    final PACKET_BROADCAST: int
+    final PACKET_FASTROUTE: int
+    final PACKET_HOST: int
+    final PACKET_LOOPBACK: int
+    final PACKET_MULTICAST: int
+    final PACKET_OTHERHOST: int
+    final PACKET_OUTGOING: int
 
 if sys.version_info >= (3, 12) and sys.platform == "linux":
-    ETH_P_ALL: Final[int]
+    final ETH_P_ALL: int
 
 if sys.platform == "linux":
     # Availability: Linux >= 2.6.30
-    AF_RDS: Final[int]
-    PF_RDS: Final[int]
-    SOL_RDS: Final[int]
+    final AF_RDS: int
+    final PF_RDS: int
+    final SOL_RDS: int
     # These are present in include/linux/rds.h but don't always show up
     # here.
-    RDS_CANCEL_SENT_TO: Final[int]
-    RDS_CMSG_RDMA_ARGS: Final[int]
-    RDS_CMSG_RDMA_DEST: Final[int]
-    RDS_CMSG_RDMA_MAP: Final[int]
-    RDS_CMSG_RDMA_STATUS: Final[int]
-    RDS_CONG_MONITOR: Final[int]
-    RDS_FREE_MR: Final[int]
-    RDS_GET_MR: Final[int]
-    RDS_GET_MR_FOR_DEST: Final[int]
-    RDS_RDMA_DONTWAIT: Final[int]
-    RDS_RDMA_FENCE: Final[int]
-    RDS_RDMA_INVALIDATE: Final[int]
-    RDS_RDMA_NOTIFY_ME: Final[int]
-    RDS_RDMA_READWRITE: Final[int]
-    RDS_RDMA_SILENT: Final[int]
-    RDS_RDMA_USE_ONCE: Final[int]
-    RDS_RECVERR: Final[int]
+    final RDS_CANCEL_SENT_TO: int
+    final RDS_CMSG_RDMA_ARGS: int
+    final RDS_CMSG_RDMA_DEST: int
+    final RDS_CMSG_RDMA_MAP: int
+    final RDS_CMSG_RDMA_STATUS: int
+    final RDS_CONG_MONITOR: int
+    final RDS_FREE_MR: int
+    final RDS_GET_MR: int
+    final RDS_GET_MR_FOR_DEST: int
+    final RDS_RDMA_DONTWAIT: int
+    final RDS_RDMA_FENCE: int
+    final RDS_RDMA_INVALIDATE: int
+    final RDS_RDMA_NOTIFY_ME: int
+    final RDS_RDMA_READWRITE: int
+    final RDS_RDMA_SILENT: int
+    final RDS_RDMA_USE_ONCE: int
+    final RDS_RECVERR: int
 
     # This is supported by CPython but doesn't seem to be a real thing.
     # The closest existing constant in rds.h is RDS_CMSG_CONG_UPDATE
     # RDS_CMSG_RDMA_UPDATE: Final[int]
 
 if sys.platform == "win32":
-    SIO_RCVALL: Final[int]
-    SIO_KEEPALIVE_VALS: Final[int]
-    SIO_LOOPBACK_FAST_PATH: Final[int]
-    RCVALL_MAX: Final[int]
-    RCVALL_OFF: Final[int]
-    RCVALL_ON: Final[int]
-    RCVALL_SOCKETLEVELONLY: Final[int]
+    final SIO_RCVALL: int
+    final SIO_KEEPALIVE_VALS: int
+    final SIO_LOOPBACK_FAST_PATH: int
+    final RCVALL_MAX: int
+    final RCVALL_OFF: int
+    final RCVALL_ON: int
+    final RCVALL_SOCKETLEVELONLY: int
 
 if sys.platform == "linux":
-    AF_TIPC: Final[int]
-    SOL_TIPC: Final[int]
-    TIPC_ADDR_ID: Final[int]
-    TIPC_ADDR_NAME: Final[int]
-    TIPC_ADDR_NAMESEQ: Final[int]
-    TIPC_CFG_SRV: Final[int]
-    TIPC_CLUSTER_SCOPE: Final[int]
-    TIPC_CONN_TIMEOUT: Final[int]
-    TIPC_CRITICAL_IMPORTANCE: Final[int]
-    TIPC_DEST_DROPPABLE: Final[int]
-    TIPC_HIGH_IMPORTANCE: Final[int]
-    TIPC_IMPORTANCE: Final[int]
-    TIPC_LOW_IMPORTANCE: Final[int]
-    TIPC_MEDIUM_IMPORTANCE: Final[int]
-    TIPC_NODE_SCOPE: Final[int]
-    TIPC_PUBLISHED: Final[int]
-    TIPC_SRC_DROPPABLE: Final[int]
-    TIPC_SUBSCR_TIMEOUT: Final[int]
-    TIPC_SUB_CANCEL: Final[int]
-    TIPC_SUB_PORTS: Final[int]
-    TIPC_SUB_SERVICE: Final[int]
-    TIPC_TOP_SRV: Final[int]
-    TIPC_WAIT_FOREVER: Final[int]
-    TIPC_WITHDRAWN: Final[int]
-    TIPC_ZONE_SCOPE: Final[int]
+    final AF_TIPC: int
+    final SOL_TIPC: int
+    final TIPC_ADDR_ID: int
+    final TIPC_ADDR_NAME: int
+    final TIPC_ADDR_NAMESEQ: int
+    final TIPC_CFG_SRV: int
+    final TIPC_CLUSTER_SCOPE: int
+    final TIPC_CONN_TIMEOUT: int
+    final TIPC_CRITICAL_IMPORTANCE: int
+    final TIPC_DEST_DROPPABLE: int
+    final TIPC_HIGH_IMPORTANCE: int
+    final TIPC_IMPORTANCE: int
+    final TIPC_LOW_IMPORTANCE: int
+    final TIPC_MEDIUM_IMPORTANCE: int
+    final TIPC_NODE_SCOPE: int
+    final TIPC_PUBLISHED: int
+    final TIPC_SRC_DROPPABLE: int
+    final TIPC_SUBSCR_TIMEOUT: int
+    final TIPC_SUB_CANCEL: int
+    final TIPC_SUB_PORTS: int
+    final TIPC_SUB_SERVICE: int
+    final TIPC_TOP_SRV: int
+    final TIPC_WAIT_FOREVER: int
+    final TIPC_WITHDRAWN: int
+    final TIPC_ZONE_SCOPE: int
 
 if sys.platform == "linux":
     # Availability: Linux >= 2.6.38
-    AF_ALG: Final[int]
-    SOL_ALG: Final[int]
-    ALG_OP_DECRYPT: Final[int]
-    ALG_OP_ENCRYPT: Final[int]
-    ALG_OP_SIGN: Final[int]
-    ALG_OP_VERIFY: Final[int]
-    ALG_SET_AEAD_ASSOCLEN: Final[int]
-    ALG_SET_AEAD_AUTHSIZE: Final[int]
-    ALG_SET_IV: Final[int]
-    ALG_SET_KEY: Final[int]
-    ALG_SET_OP: Final[int]
-    ALG_SET_PUBKEY: Final[int]
+    final AF_ALG: int
+    final SOL_ALG: int
+    final ALG_OP_DECRYPT: int
+    final ALG_OP_ENCRYPT: int
+    final ALG_OP_SIGN: int
+    final ALG_OP_VERIFY: int
+    final ALG_SET_AEAD_ASSOCLEN: int
+    final ALG_SET_AEAD_AUTHSIZE: int
+    final ALG_SET_IV: int
+    final ALG_SET_KEY: int
+    final ALG_SET_OP: int
+    final ALG_SET_PUBKEY: int
 
 if sys.platform == "linux":
     # Availability: Linux >= 4.8 (or maybe 3.9, CPython docs are confusing)
-    AF_VSOCK: Final[int]
+    final AF_VSOCK: int
     IOCTL_VM_SOCKETS_GET_LOCAL_CID: Final = 0x7B9
     VMADDR_CID_ANY: Final = 0xFFFFFFFF
     VMADDR_CID_HOST: Final = 2
@@ -690,7 +690,7 @@ if sys.platform == "linux":
 # Documented as only available on BSD, macOS, but empirically sometimes
 # available on Windows
 if sys.platform != "linux":
-    AF_LINK: Final[int]
+    final AF_LINK: int
 
 has_ipv6: bool
 
@@ -699,30 +699,30 @@ if sys.platform != "darwin":
     BDADDR_LOCAL: Final = "00:00:00:FF:FF:FF"
 
 if sys.platform != "win32" and sys.platform != "darwin" and sys.platform != "linux":
-    HCI_FILTER: Final[int]  # not in NetBSD or DragonFlyBSD
-    HCI_TIME_STAMP: Final[int]  # not in FreeBSD, NetBSD, or DragonFlyBSD
-    HCI_DATA_DIR: Final[int]  # not in FreeBSD, NetBSD, or DragonFlyBSD
+    final HCI_FILTER: int  # not in NetBSD or DragonFlyBSD
+    final HCI_TIME_STAMP: int  # not in FreeBSD, NetBSD, or DragonFlyBSD
+    final HCI_DATA_DIR: int  # not in FreeBSD, NetBSD, or DragonFlyBSD
 
 if sys.platform == "linux":
-    AF_QIPCRTR: Final[int]  # Availability: Linux >= 4.7
+    final AF_QIPCRTR: int  # Availability: Linux >= 4.7
 
 if sys.version_info >= (3, 11) and sys.platform != "linux" and sys.platform != "win32" and sys.platform != "darwin":
     # FreeBSD
-    SCM_CREDS2: Final[int]
-    LOCAL_CREDS: Final[int]
-    LOCAL_CREDS_PERSISTENT: Final[int]
+    final SCM_CREDS2: int
+    final LOCAL_CREDS: int
+    final LOCAL_CREDS_PERSISTENT: int
 
 if sys.version_info >= (3, 11) and sys.platform == "linux":
-    SO_INCOMING_CPU: Final[int]  # Availability: Linux >= 3.9
+    final SO_INCOMING_CPU: int  # Availability: Linux >= 3.9
 
 if sys.version_info >= (3, 12) and sys.platform == "win32":
     # Availability: Windows
-    AF_HYPERV: Final[int]
-    HV_PROTOCOL_RAW: Final[int]
-    HVSOCKET_CONNECT_TIMEOUT: Final[int]
-    HVSOCKET_CONNECT_TIMEOUT_MAX: Final[int]
-    HVSOCKET_CONNECTED_SUSPEND: Final[int]
-    HVSOCKET_ADDRESS_FLAG_PASSTHRU: Final[int]
+    final AF_HYPERV: int
+    final HV_PROTOCOL_RAW: int
+    final HVSOCKET_CONNECT_TIMEOUT: int
+    final HVSOCKET_CONNECT_TIMEOUT_MAX: int
+    final HVSOCKET_CONNECTED_SUSPEND: int
+    final HVSOCKET_ADDRESS_FLAG_PASSTHRU: int
     HV_GUID_ZERO: Final = "00000000-0000-0000-0000-000000000000"
     HV_GUID_WILDCARD: Final = "00000000-0000-0000-0000-000000000000"
     HV_GUID_BROADCAST: Final = "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"
@@ -733,10 +733,10 @@ if sys.version_info >= (3, 12) and sys.platform == "win32":
 if sys.version_info >= (3, 12):
     if sys.platform != "win32":
         # Availability: Linux, FreeBSD, macOS
-        ETHERTYPE_ARP: Final[int]
-        ETHERTYPE_IP: Final[int]
-        ETHERTYPE_IPV6: Final[int]
-        ETHERTYPE_VLAN: Final[int]
+        final ETHERTYPE_ARP: int
+        final ETHERTYPE_IP: int
+        final ETHERTYPE_IPV6: int
+        final ETHERTYPE_VLAN: int
 
 # --------------------
 # Semi-documented constants
@@ -746,15 +746,15 @@ if sys.version_info >= (3, 12):
 
 if sys.platform == "linux":
     # Netlink is defined by Linux
-    AF_NETLINK: Final[int]
-    NETLINK_CRYPTO: Final[int]
-    NETLINK_DNRTMSG: Final[int]
-    NETLINK_FIREWALL: Final[int]
-    NETLINK_IP6_FW: Final[int]
-    NETLINK_NFLOG: Final[int]
-    NETLINK_ROUTE: Final[int]
-    NETLINK_USERSOCK: Final[int]
-    NETLINK_XFRM: Final[int]
+    final AF_NETLINK: int
+    final NETLINK_CRYPTO: int
+    final NETLINK_DNRTMSG: int
+    final NETLINK_FIREWALL: int
+    final NETLINK_IP6_FW: int
+    final NETLINK_NFLOG: int
+    final NETLINK_ROUTE: int
+    final NETLINK_USERSOCK: int
+    final NETLINK_XFRM: int
     # Technically still supported by CPython
     # NETLINK_ARPD: Final[int]  # linux 2.0 to 2.6.12 (EOL August 2005)
     # NETLINK_ROUTE6: Final[int]  # linux 2.2 to 2.6.12 (EOL August 2005)
@@ -764,77 +764,77 @@ if sys.platform == "linux":
     # NETLINK_W1: Final[int]  # linux 2.6.13 to 2.6.17 (EOL October 2006)
 
 if sys.platform == "darwin":
-    PF_SYSTEM: Final[int]
-    SYSPROTO_CONTROL: Final[int]
+    final PF_SYSTEM: int
+    final SYSPROTO_CONTROL: int
 
 if sys.platform != "darwin":
-    AF_BLUETOOTH: Final[int]
+    final AF_BLUETOOTH: int
 
 if sys.platform != "win32" and sys.platform != "darwin":
     # Linux and some BSD support is explicit in the docs
     # Windows and macOS do not support in practice
-    BTPROTO_HCI: Final[int]
-    BTPROTO_L2CAP: Final[int]
-    BTPROTO_SCO: Final[int]  # not in FreeBSD
+    final BTPROTO_HCI: int
+    final BTPROTO_L2CAP: int
+    final BTPROTO_SCO: int  # not in FreeBSD
 if sys.platform != "darwin":
-    BTPROTO_RFCOMM: Final[int]
+    final BTPROTO_RFCOMM: int
 
 if sys.platform == "linux":
-    UDPLITE_RECV_CSCOV: Final[int]
-    UDPLITE_SEND_CSCOV: Final[int]
+    final UDPLITE_RECV_CSCOV: int
+    final UDPLITE_SEND_CSCOV: int
 
 # --------------------
 # Documented under socket.shutdown
 # --------------------
-SHUT_RD: Final[int]
-SHUT_RDWR: Final[int]
-SHUT_WR: Final[int]
+final SHUT_RD: int
+final SHUT_RDWR: int
+final SHUT_WR: int
 
 # --------------------
 # Undocumented constants
 # --------------------
 
 # Undocumented address families
-AF_APPLETALK: Final[int]
-AF_DECnet: Final[int]
-AF_IPX: Final[int]
-AF_SNA: Final[int]
+final AF_APPLETALK: int
+final AF_DECnet: int
+final AF_IPX: int
+final AF_SNA: int
 
 if sys.platform != "win32":
-    AF_ROUTE: Final[int]
+    final AF_ROUTE: int
 
 if sys.platform == "darwin":
-    AF_SYSTEM: Final[int]
+    final AF_SYSTEM: int
 
 if sys.platform != "darwin":
-    AF_IRDA: Final[int]
+    final AF_IRDA: int
 
 if sys.platform != "win32" and sys.platform != "darwin":
-    AF_ASH: Final[int]
-    AF_ATMPVC: Final[int]
-    AF_ATMSVC: Final[int]
-    AF_AX25: Final[int]
-    AF_BRIDGE: Final[int]
-    AF_ECONET: Final[int]
-    AF_KEY: Final[int]
-    AF_LLC: Final[int]
-    AF_NETBEUI: Final[int]
-    AF_NETROM: Final[int]
-    AF_PPPOX: Final[int]
-    AF_ROSE: Final[int]
-    AF_SECURITY: Final[int]
-    AF_WANPIPE: Final[int]
-    AF_X25: Final[int]
+    final AF_ASH: int
+    final AF_ATMPVC: int
+    final AF_ATMSVC: int
+    final AF_AX25: int
+    final AF_BRIDGE: int
+    final AF_ECONET: int
+    final AF_KEY: int
+    final AF_LLC: int
+    final AF_NETBEUI: int
+    final AF_NETROM: int
+    final AF_PPPOX: int
+    final AF_ROSE: int
+    final AF_SECURITY: int
+    final AF_WANPIPE: int
+    final AF_X25: int
 
 # Miscellaneous undocumented
 
 if sys.platform != "win32" and sys.platform != "linux":
-    LOCAL_PEERCRED: Final[int]
+    final LOCAL_PEERCRED: int
 
 if sys.platform != "win32" and sys.platform != "darwin":
     # Defined in linux socket.h, but this isn't always present for
     # some reason.
-    IPX_TYPE: Final[int]
+    final IPX_TYPE: int
 
 # ===== Classes =====
 
@@ -886,22 +886,14 @@ class socket:
      [*] not available on all platforms!
     """
 
-    @property
-    def family(self) -> int:
-        """the socket family"""
+    let family: int
 
-    @property
-    def type(self) -> int:
-        """the socket type"""
+    let type: int
 
-    @property
-    def proto(self) -> int:
-        """the socket protocol"""
+    let proto: int
 
     # F811: "Redefinition of unused `timeout`"
-    @property
-    def timeout(self) -> float | None:
-        """the socket timeout"""
+    let timeout: float | None
 
     if sys.platform == "win32":
         def __init__(
@@ -1027,7 +1019,7 @@ class socket:
         """
 
     if sys.platform != "win32":
-        def recvmsg(self, bufsize: int, ancbufsize: int = 0, flags: int = 0, /) -> (bytes, list[_CMSG], int, Any):
+        def recvmsg(self, bufsize: int, ancbufsize: int = 0, flags: int = 0, /) -> (bytes, list[_CMSG], int, dynamic):
             """recvmsg(bufsize[, ancbufsize[, flags]]) -> (data, ancdata, msg_flags, address)
 
             Receive normal data (up to bufsize bytes) and ancillary data from the
@@ -1059,7 +1051,7 @@ class socket:
 
         def recvmsg_into(
             self, buffers: Iterable[WriteableBuffer], ancbufsize: int = 0, flags: int = 0, /
-        ) -> (int, list[_CMSG], int, Any):
+        ) -> (int, list[_CMSG], int, dynamic):
             """recvmsg_into(buffers[, ancbufsize[, flags]]) -> (nbytes, ancdata, msg_flags, address)
 
             Receive normal data and ancillary data from the socket, scattering the

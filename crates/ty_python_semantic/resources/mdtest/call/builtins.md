@@ -186,9 +186,11 @@ isinstance("", t.Callable | t.Deque)
 issubclass(list, t.Any)
 issubclass(list, t.Any | t.Dict)
 
-# The same works in tuples
-isinstance("", (int, t.Dict))
-isinstance("", (int, t.Callable))
+# Inside a tuple, special forms are rejected: the recursive `_ClassInfo` alias
+# checks each element, and a special form is not a class. `Any` still works in
+# `issubclass` via its dedicated allowance
+isinstance("", (int, t.Dict))  # error: [invalid-argument-type]
+isinstance("", (int, t.Callable))  # error: [invalid-argument-type]
 issubclass(list, (int, t.Any))
 ```
 

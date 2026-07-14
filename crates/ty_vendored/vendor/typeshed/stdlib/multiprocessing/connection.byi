@@ -3,29 +3,23 @@ import sys
 from _typeshed import Incomplete, ReadableBuffer
 from collections.abc import Iterable
 from types import TracebackType
-from typing import Any, Generic, SupportsIndex, TypeAlias, TypeVar
+from typing import Generic, TypeAlias, TypeVar
 from typing_extensions import Self
 
 __all__ = ["Client", "Listener", "Pipe", "wait"]
 
 # https://docs.python.org/3/library/multiprocessing.html#address-formats
-_Address: TypeAlias = str | tuple[str, int]
+type _Address = str | tuple[str, int]
 
 # Defaulting to Any to avoid forcing generics on a lot of pre-existing code
 
-class _ConnectionBase[in Sent = Any, out RecvT = Any]:
-    def __init__(self, handle: SupportsIndex, readable: bool = True, writable: bool = True) -> None
-    @property
-    def closed(self) -> bool:  # undocumented
-        """True if the connection is closed"""
+class _ConnectionBase[in Sent = dynamic, out RecvT = dynamic]:
+    init(self, handle: SupportsIndex, readable: bool = True, writable: bool = True)
+    let closed: bool
 
-    @property
-    def readable(self) -> bool:  # undocumented
-        """True if the connection is readable"""
+    let readable: bool
 
-    @property
-    def writable(self) -> bool:  # undocumented
-        """True if the connection is writable"""
+    let writable: bool
 
     def fileno(self) -> int:
         """File descriptor or handle of the connection"""
@@ -62,14 +56,14 @@ class _ConnectionBase[in Sent = Any, out RecvT = Any]:
     ) -> None
     def __del__(self) -> None
 
-class Connection[in Sent = Any, out RecvT = Any](_ConnectionBase[Sent, RecvT]):
+class Connection[in Sent = dynamic, out RecvT = dynamic](_ConnectionBase[Sent, RecvT]):
     """
     Connection class based on an arbitrary file descriptor (Unix only), or
     a socket handle (Windows).
     """
 
 if sys.platform == "win32":
-    class PipeConnection[in Sent = Any, out RecvT = Any](_ConnectionBase[Sent, RecvT]):
+    class PipeConnection[in Sent = dynamic, out RecvT = dynamic](_ConnectionBase[Sent, RecvT]):
         """
         Connection class based on a Windows named pipe.
         Overlapped I/O is used, so the handles must have been created
@@ -84,9 +78,9 @@ class Listener:
     connections, or for a Windows named pipe.
     """
 
-    def __init__(
+    init(
         self, address: _Address | None = None, family: str | None = None, backlog: int = 1, authkey: bytes | None = None
-    ) -> None
+    )
     if sys.platform != "win32":
         def accept(self) -> Connection[Incomplete, Incomplete]:
             """
@@ -108,10 +102,8 @@ class Listener:
         Close the bound socket or named pipe of `self`.
         """
 
-    @property
-    def address(self) -> _Address
-    @property
-    def last_accepted(self) -> _Address | None
+    let address: _Address
+    let last_accepted: _Address | None
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None
@@ -125,7 +117,7 @@ else:
     def deliver_challenge(connection: _ConnectionBase[dynamic, dynamic], authkey: bytes) -> None
 
 def answer_challenge(connection: _ConnectionBase[dynamic, dynamic], authkey: bytes) -> None
-def wait[Sent = Any, RecvT = Any](
+def wait[Sent = dynamic, RecvT = dynamic](
     object_list: Iterable[_ConnectionBase[Sent, RecvT] | socket.socket | int], timeout: float | None = None
 ) -> list[_ConnectionBase[Sent, RecvT] | socket.socket | int]:
     """
@@ -143,7 +135,7 @@ if sys.platform != "win32":
 else:
     def Client(
         address: _Address, family: str | None = None, authkey: bytes | None = None
-    ) -> Connection[dynamic, dynamic] | PipeConnection[Any, Any]:
+    ) -> Connection[dynamic, dynamic] | PipeConnection[dynamic, dynamic]:
         """
         Returns a connection to the address of a `Listener`
         """
@@ -155,13 +147,13 @@ else:
 # The two connections should have the same generic types but inverted (Connection[_T1, _T2], Connection[_T2, _T1]).
 # However, TypeVars scoped entirely within a return annotation is unspecified in the spec.
 if sys.platform != "win32":
-    def Pipe(duplex: bool = True) -> (Connection[Any, Any], Connection[Any, Any]):
+    def Pipe(duplex: bool = True) -> (Connection[dynamic, dynamic], Connection[dynamic, dynamic]):
         """
         Returns pair of connection objects at either end of a pipe
         """
 
 else:
-    def Pipe(duplex: bool = True) -> (PipeConnection[Any, Any], PipeConnection[Any, Any]):
+    def Pipe(duplex: bool = True) -> (PipeConnection[dynamic, dynamic], PipeConnection[dynamic, dynamic]):
         """
         Returns pair of connection objects at either end of a pipe
         """

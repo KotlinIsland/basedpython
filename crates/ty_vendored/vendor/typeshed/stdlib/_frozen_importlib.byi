@@ -84,7 +84,7 @@ class ModuleSpec:
 
     """
 
-    def __init__(
+    init(
         self,
         name: str,
         loader: importlib.abc.Loader | None,
@@ -92,20 +92,18 @@ class ModuleSpec:
         origin: str | None = None,
         loader_state: dynamic = None,
         is_package: bool | None = None,
-    ) -> None
+    )
     name: str
     loader: importlib.abc.Loader | None
     origin: str | None
     submodule_search_locations: list[str] | None
     loader_state: dynamic
     cached: str | None
-    @property
-    def parent(self) -> str | None:
-        """The name of the module's parent."""
+    let parent: str | None
 
     has_location: bool
     def __eq__(self, other: object) -> bool
-    __hash__: ClassVar[None]  # type: ignore[assignment]
+    __hash__: ClassVar[None]
 
 class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
     """Meta path import for built-in modules.

@@ -26,7 +26,7 @@ __all__ = ["FeedParser", "BytesFeedParser"]
 class FeedParser(Generic[_MessageT]):
     """A feed-style parser of email."""
 
-    def __init__(self: FeedParser[Message], _factory: None = None, *, policy: Policy[Message] = ...) -> None:
+    init(self: FeedParser[Message], _factory: None = None, *, policy: Policy[Message] = ...):
         """_factory is called with no arguments to create a new message obj
 
         The policy keyword specifies a policy object that controls a number of
@@ -34,7 +34,7 @@ class FeedParser(Generic[_MessageT]):
         backward compatibility.
 
         """
-    def __init__(self, _factory: Callable[[], _MessageT], *, policy: Policy[_MessageT] = ...) -> None
+    init(self, _factory: () -> _MessageT, *, policy: Policy[_MessageT] = ...)
 
     def feed(self, data: str) -> None:
         """Push more data into the parser."""
@@ -45,7 +45,7 @@ class FeedParser(Generic[_MessageT]):
 class BytesFeedParser(FeedParser[_MessageT]):
     """Like FeedParser, but feed accepts bytes."""
 
-    def __init__(self: BytesFeedParser[Message], _factory: None = None, *, policy: Policy[Message] = ...) -> None:
+    init(self: BytesFeedParser[Message], _factory: None = None, *, policy: Policy[Message] = ...):
         """_factory is called with no arguments to create a new message obj
 
         The policy keyword specifies a policy object that controls a number of
@@ -53,6 +53,6 @@ class BytesFeedParser(FeedParser[_MessageT]):
         backward compatibility.
 
         """
-    def __init__(self, _factory: Callable[[], _MessageT], *, policy: Policy[_MessageT] = ...) -> None
+    init(self, _factory: () -> _MessageT, *, policy: Policy[_MessageT] = ...)
 
-    def feed(self, data: bytes | bytearray) -> None  # type: ignore[override]
+    def feed(self, data: bytes | bytearray) -> None

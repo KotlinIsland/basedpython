@@ -10,295 +10,295 @@ sys.stdin.fileno(), or a file object, such as sys.stdin itself.
 
 import sys
 from _typeshed import FileDescriptorLike
-from typing import Any, Final, TypeAlias
+from typing import Final, TypeAlias
 
 # Must be a list of length 7, containing 6 ints and a list of NCCS 1-character bytes or ints.
-_Attr: TypeAlias = list[int | list[bytes | int]] | list[int | list[bytes]] | list[int | list[int]]
+type _Attr = list[int | list[bytes | int]] | list[int | list[bytes]] | list[int | list[int]]
 # Same as _Attr for return types; we use Any to avoid a union.
-_AttrReturn: TypeAlias = list[Any]
+type _AttrReturn = list[dynamic]
 
 if sys.platform != "win32":
     # Values depends on the platform
-    B0: Final[int]
-    B110: Final[int]
-    B115200: Final[int]
-    B1200: Final[int]
-    B134: Final[int]
-    B150: Final[int]
-    B1800: Final[int]
-    B19200: Final[int]
-    B200: Final[int]
-    B230400: Final[int]
-    B2400: Final[int]
-    B300: Final[int]
-    B38400: Final[int]
-    B4800: Final[int]
-    B50: Final[int]
-    B57600: Final[int]
-    B600: Final[int]
-    B75: Final[int]
-    B9600: Final[int]
-    BRKINT: Final[int]
-    BS0: Final[int]
-    BS1: Final[int]
-    BSDLY: Final[int]
-    CDSUSP: Final[int]
-    CEOF: Final[int]
-    CEOL: Final[int]
-    CEOT: Final[int]
-    CERASE: Final[int]
-    CFLUSH: Final[int]
-    CINTR: Final[int]
-    CKILL: Final[int]
-    CLNEXT: Final[int]
-    CLOCAL: Final[int]
-    CQUIT: Final[int]
-    CR0: Final[int]
-    CR1: Final[int]
-    CR2: Final[int]
-    CR3: Final[int]
-    CRDLY: Final[int]
-    CREAD: Final[int]
-    CRPRNT: Final[int]
-    CRTSCTS: Final[int]
-    CS5: Final[int]
-    CS6: Final[int]
-    CS7: Final[int]
-    CS8: Final[int]
-    CSIZE: Final[int]
-    CSTART: Final[int]
-    CSTOP: Final[int]
-    CSTOPB: Final[int]
-    CSUSP: Final[int]
-    CWERASE: Final[int]
-    ECHO: Final[int]
-    ECHOCTL: Final[int]
-    ECHOE: Final[int]
-    ECHOK: Final[int]
-    ECHOKE: Final[int]
-    ECHONL: Final[int]
-    ECHOPRT: Final[int]
-    EXTA: Final[int]
-    EXTB: Final[int]
-    FF0: Final[int]
-    FF1: Final[int]
-    FFDLY: Final[int]
-    FIOASYNC: Final[int]
-    FIOCLEX: Final[int]
-    FIONBIO: Final[int]
-    FIONCLEX: Final[int]
-    FIONREAD: Final[int]
-    FLUSHO: Final[int]
-    HUPCL: Final[int]
-    ICANON: Final[int]
-    ICRNL: Final[int]
-    IEXTEN: Final[int]
-    IGNBRK: Final[int]
-    IGNCR: Final[int]
-    IGNPAR: Final[int]
-    IMAXBEL: Final[int]
-    INLCR: Final[int]
-    INPCK: Final[int]
-    ISIG: Final[int]
-    ISTRIP: Final[int]
-    IXANY: Final[int]
-    IXOFF: Final[int]
-    IXON: Final[int]
-    NCCS: Final[int]
-    NL0: Final[int]
-    NL1: Final[int]
-    NLDLY: Final[int]
-    NOFLSH: Final[int]
-    OCRNL: Final[int]
-    OFDEL: Final[int]
-    OFILL: Final[int]
-    ONLCR: Final[int]
-    ONLRET: Final[int]
-    ONOCR: Final[int]
-    OPOST: Final[int]
-    PARENB: Final[int]
-    PARMRK: Final[int]
-    PARODD: Final[int]
-    PENDIN: Final[int]
-    TAB0: Final[int]
-    TAB1: Final[int]
-    TAB2: Final[int]
-    TAB3: Final[int]
-    TABDLY: Final[int]
-    TCIFLUSH: Final[int]
-    TCIOFF: Final[int]
-    TCIOFLUSH: Final[int]
-    TCION: Final[int]
-    TCOFLUSH: Final[int]
-    TCOOFF: Final[int]
-    TCOON: Final[int]
-    TCSADRAIN: Final[int]
-    TCSAFLUSH: Final[int]
-    TCSANOW: Final[int]
-    TIOCCONS: Final[int]
-    TIOCEXCL: Final[int]
-    TIOCGETD: Final[int]
-    TIOCGPGRP: Final[int]
-    TIOCGWINSZ: Final[int]
-    TIOCM_CAR: Final[int]
-    TIOCM_CD: Final[int]
-    TIOCM_CTS: Final[int]
-    TIOCM_DSR: Final[int]
-    TIOCM_DTR: Final[int]
-    TIOCM_LE: Final[int]
-    TIOCM_RI: Final[int]
-    TIOCM_RNG: Final[int]
-    TIOCM_RTS: Final[int]
-    TIOCM_SR: Final[int]
-    TIOCM_ST: Final[int]
-    TIOCMBIC: Final[int]
-    TIOCMBIS: Final[int]
-    TIOCMGET: Final[int]
-    TIOCMSET: Final[int]
-    TIOCNOTTY: Final[int]
-    TIOCNXCL: Final[int]
-    TIOCOUTQ: Final[int]
-    TIOCPKT_DATA: Final[int]
-    TIOCPKT_DOSTOP: Final[int]
-    TIOCPKT_FLUSHREAD: Final[int]
-    TIOCPKT_FLUSHWRITE: Final[int]
-    TIOCPKT_NOSTOP: Final[int]
-    TIOCPKT_START: Final[int]
-    TIOCPKT_STOP: Final[int]
-    TIOCPKT: Final[int]
-    TIOCSCTTY: Final[int]
-    TIOCSETD: Final[int]
-    TIOCSPGRP: Final[int]
-    TIOCSTI: Final[int]
-    TIOCSWINSZ: Final[int]
-    TOSTOP: Final[int]
-    VDISCARD: Final[int]
-    VEOF: Final[int]
-    VEOL: Final[int]
-    VEOL2: Final[int]
-    VERASE: Final[int]
-    VINTR: Final[int]
-    VKILL: Final[int]
-    VLNEXT: Final[int]
-    VMIN: Final[int]
-    VQUIT: Final[int]
-    VREPRINT: Final[int]
-    VSTART: Final[int]
-    VSTOP: Final[int]
-    VSUSP: Final[int]
-    VT0: Final[int]
-    VT1: Final[int]
-    VTDLY: Final[int]
-    VTIME: Final[int]
-    VWERASE: Final[int]
+    final B0: int
+    final B110: int
+    final B115200: int
+    final B1200: int
+    final B134: int
+    final B150: int
+    final B1800: int
+    final B19200: int
+    final B200: int
+    final B230400: int
+    final B2400: int
+    final B300: int
+    final B38400: int
+    final B4800: int
+    final B50: int
+    final B57600: int
+    final B600: int
+    final B75: int
+    final B9600: int
+    final BRKINT: int
+    final BS0: int
+    final BS1: int
+    final BSDLY: int
+    final CDSUSP: int
+    final CEOF: int
+    final CEOL: int
+    final CEOT: int
+    final CERASE: int
+    final CFLUSH: int
+    final CINTR: int
+    final CKILL: int
+    final CLNEXT: int
+    final CLOCAL: int
+    final CQUIT: int
+    final CR0: int
+    final CR1: int
+    final CR2: int
+    final CR3: int
+    final CRDLY: int
+    final CREAD: int
+    final CRPRNT: int
+    final CRTSCTS: int
+    final CS5: int
+    final CS6: int
+    final CS7: int
+    final CS8: int
+    final CSIZE: int
+    final CSTART: int
+    final CSTOP: int
+    final CSTOPB: int
+    final CSUSP: int
+    final CWERASE: int
+    final ECHO: int
+    final ECHOCTL: int
+    final ECHOE: int
+    final ECHOK: int
+    final ECHOKE: int
+    final ECHONL: int
+    final ECHOPRT: int
+    final EXTA: int
+    final EXTB: int
+    final FF0: int
+    final FF1: int
+    final FFDLY: int
+    final FIOASYNC: int
+    final FIOCLEX: int
+    final FIONBIO: int
+    final FIONCLEX: int
+    final FIONREAD: int
+    final FLUSHO: int
+    final HUPCL: int
+    final ICANON: int
+    final ICRNL: int
+    final IEXTEN: int
+    final IGNBRK: int
+    final IGNCR: int
+    final IGNPAR: int
+    final IMAXBEL: int
+    final INLCR: int
+    final INPCK: int
+    final ISIG: int
+    final ISTRIP: int
+    final IXANY: int
+    final IXOFF: int
+    final IXON: int
+    final NCCS: int
+    final NL0: int
+    final NL1: int
+    final NLDLY: int
+    final NOFLSH: int
+    final OCRNL: int
+    final OFDEL: int
+    final OFILL: int
+    final ONLCR: int
+    final ONLRET: int
+    final ONOCR: int
+    final OPOST: int
+    final PARENB: int
+    final PARMRK: int
+    final PARODD: int
+    final PENDIN: int
+    final TAB0: int
+    final TAB1: int
+    final TAB2: int
+    final TAB3: int
+    final TABDLY: int
+    final TCIFLUSH: int
+    final TCIOFF: int
+    final TCIOFLUSH: int
+    final TCION: int
+    final TCOFLUSH: int
+    final TCOOFF: int
+    final TCOON: int
+    final TCSADRAIN: int
+    final TCSAFLUSH: int
+    final TCSANOW: int
+    final TIOCCONS: int
+    final TIOCEXCL: int
+    final TIOCGETD: int
+    final TIOCGPGRP: int
+    final TIOCGWINSZ: int
+    final TIOCM_CAR: int
+    final TIOCM_CD: int
+    final TIOCM_CTS: int
+    final TIOCM_DSR: int
+    final TIOCM_DTR: int
+    final TIOCM_LE: int
+    final TIOCM_RI: int
+    final TIOCM_RNG: int
+    final TIOCM_RTS: int
+    final TIOCM_SR: int
+    final TIOCM_ST: int
+    final TIOCMBIC: int
+    final TIOCMBIS: int
+    final TIOCMGET: int
+    final TIOCMSET: int
+    final TIOCNOTTY: int
+    final TIOCNXCL: int
+    final TIOCOUTQ: int
+    final TIOCPKT_DATA: int
+    final TIOCPKT_DOSTOP: int
+    final TIOCPKT_FLUSHREAD: int
+    final TIOCPKT_FLUSHWRITE: int
+    final TIOCPKT_NOSTOP: int
+    final TIOCPKT_START: int
+    final TIOCPKT_STOP: int
+    final TIOCPKT: int
+    final TIOCSCTTY: int
+    final TIOCSETD: int
+    final TIOCSPGRP: int
+    final TIOCSTI: int
+    final TIOCSWINSZ: int
+    final TOSTOP: int
+    final VDISCARD: int
+    final VEOF: int
+    final VEOL: int
+    final VEOL2: int
+    final VERASE: int
+    final VINTR: int
+    final VKILL: int
+    final VLNEXT: int
+    final VMIN: int
+    final VQUIT: int
+    final VREPRINT: int
+    final VSTART: int
+    final VSTOP: int
+    final VSUSP: int
+    final VT0: int
+    final VT1: int
+    final VTDLY: int
+    final VTIME: int
+    final VWERASE: int
 
     if sys.version_info >= (3, 13):
-        EXTPROC: Final[int]
-        IUTF8: Final[int]
+        final EXTPROC: int
+        final IUTF8: int
 
     if sys.platform == "darwin" and sys.version_info >= (3, 13):
-        ALTWERASE: Final[int]
-        B14400: Final[int]
-        B28800: Final[int]
-        B7200: Final[int]
-        B76800: Final[int]
-        CCAR_OFLOW: Final[int]
-        CCTS_OFLOW: Final[int]
-        CDSR_OFLOW: Final[int]
-        CDTR_IFLOW: Final[int]
-        CIGNORE: Final[int]
-        CRTS_IFLOW: Final[int]
-        MDMBUF: Final[int]
-        NL2: Final[int]
-        NL3: Final[int]
-        NOKERNINFO: Final[int]
-        ONOEOT: Final[int]
-        OXTABS: Final[int]
-        VDSUSP: Final[int]
-        VSTATUS: Final[int]
+        final ALTWERASE: int
+        final B14400: int
+        final B28800: int
+        final B7200: int
+        final B76800: int
+        final CCAR_OFLOW: int
+        final CCTS_OFLOW: int
+        final CDSR_OFLOW: int
+        final CDTR_IFLOW: int
+        final CIGNORE: int
+        final CRTS_IFLOW: int
+        final MDMBUF: int
+        final NL2: int
+        final NL3: int
+        final NOKERNINFO: int
+        final ONOEOT: int
+        final OXTABS: int
+        final VDSUSP: int
+        final VSTATUS: int
 
     if sys.platform == "darwin" and sys.version_info >= (3, 11):
-        TIOCGSIZE: Final[int]
-        TIOCSSIZE: Final[int]
+        final TIOCGSIZE: int
+        final TIOCSSIZE: int
 
     if sys.platform == "linux":
-        B1152000: Final[int]
-        B576000: Final[int]
-        CBAUD: Final[int]
-        CBAUDEX: Final[int]
-        CIBAUD: Final[int]
-        IOCSIZE_MASK: Final[int]
-        IOCSIZE_SHIFT: Final[int]
-        IUCLC: Final[int]
-        N_MOUSE: Final[int]
-        N_PPP: Final[int]
-        N_SLIP: Final[int]
-        N_STRIP: Final[int]
-        N_TTY: Final[int]
-        NCC: Final[int]
-        OLCUC: Final[int]
-        TCFLSH: Final[int]
-        TCGETA: Final[int]
-        TCGETS: Final[int]
-        TCSBRK: Final[int]
-        TCSBRKP: Final[int]
-        TCSETA: Final[int]
-        TCSETAF: Final[int]
-        TCSETAW: Final[int]
-        TCSETS: Final[int]
-        TCSETSF: Final[int]
-        TCSETSW: Final[int]
-        TCXONC: Final[int]
-        TIOCGICOUNT: Final[int]
-        TIOCGLCKTRMIOS: Final[int]
-        TIOCGSERIAL: Final[int]
-        TIOCGSOFTCAR: Final[int]
-        TIOCINQ: Final[int]
-        TIOCLINUX: Final[int]
-        TIOCMIWAIT: Final[int]
-        TIOCTTYGSTRUCT: Final[int]
-        TIOCSER_TEMT: Final[int]
-        TIOCSERCONFIG: Final[int]
-        TIOCSERGETLSR: Final[int]
-        TIOCSERGETMULTI: Final[int]
-        TIOCSERGSTRUCT: Final[int]
-        TIOCSERGWILD: Final[int]
-        TIOCSERSETMULTI: Final[int]
-        TIOCSERSWILD: Final[int]
-        TIOCSLCKTRMIOS: Final[int]
-        TIOCSSERIAL: Final[int]
-        TIOCSSOFTCAR: Final[int]
-        VSWTC: Final[int]
-        VSWTCH: Final[int]
-        XCASE: Final[int]
-        XTABS: Final[int]
+        final B1152000: int
+        final B576000: int
+        final CBAUD: int
+        final CBAUDEX: int
+        final CIBAUD: int
+        final IOCSIZE_MASK: int
+        final IOCSIZE_SHIFT: int
+        final IUCLC: int
+        final N_MOUSE: int
+        final N_PPP: int
+        final N_SLIP: int
+        final N_STRIP: int
+        final N_TTY: int
+        final NCC: int
+        final OLCUC: int
+        final TCFLSH: int
+        final TCGETA: int
+        final TCGETS: int
+        final TCSBRK: int
+        final TCSBRKP: int
+        final TCSETA: int
+        final TCSETAF: int
+        final TCSETAW: int
+        final TCSETS: int
+        final TCSETSF: int
+        final TCSETSW: int
+        final TCXONC: int
+        final TIOCGICOUNT: int
+        final TIOCGLCKTRMIOS: int
+        final TIOCGSERIAL: int
+        final TIOCGSOFTCAR: int
+        final TIOCINQ: int
+        final TIOCLINUX: int
+        final TIOCMIWAIT: int
+        final TIOCTTYGSTRUCT: int
+        final TIOCSER_TEMT: int
+        final TIOCSERCONFIG: int
+        final TIOCSERGETLSR: int
+        final TIOCSERGETMULTI: int
+        final TIOCSERGSTRUCT: int
+        final TIOCSERGWILD: int
+        final TIOCSERSETMULTI: int
+        final TIOCSERSWILD: int
+        final TIOCSLCKTRMIOS: int
+        final TIOCSSERIAL: int
+        final TIOCSSOFTCAR: int
+        final VSWTC: int
+        final VSWTCH: int
+        final XCASE: int
+        final XTABS: int
 
     if sys.platform != "darwin":
-        B1000000: Final[int]
-        B1500000: Final[int]
-        B2000000: Final[int]
-        B2500000: Final[int]
-        B3000000: Final[int]
-        B3500000: Final[int]
-        B4000000: Final[int]
-        B460800: Final[int]
-        B500000: Final[int]
-        B921600: Final[int]
+        final B1000000: int
+        final B1500000: int
+        final B2000000: int
+        final B2500000: int
+        final B3000000: int
+        final B3500000: int
+        final B4000000: int
+        final B460800: int
+        final B500000: int
+        final B921600: int
 
     if sys.platform != "linux":
-        TCSASOFT: Final[int]
+        final TCSASOFT: int
 
     if sys.platform != "darwin" and sys.platform != "linux":
         # not available on FreeBSD either.
-        CDEL: Final[int]
-        CEOL2: Final[int]
-        CESC: Final[int]
-        CNUL: Final[int]
-        COMMON: Final[int]
-        CSWTCH: Final[int]
-        IBSHIFT: Final[int]
-        INIT_C_CC: Final[int]
-        NSWTCH: Final[int]
+        final CDEL: int
+        final CEOL2: int
+        final CESC: int
+        final CNUL: int
+        final COMMON: int
+        final CSWTCH: int
+        final IBSHIFT: int
+        final INIT_C_CC: int
+        final NSWTCH: int
 
     def tcgetattr(fd: FileDescriptorLike, /) -> _AttrReturn:
         """Get the tty attributes for file descriptor fd.

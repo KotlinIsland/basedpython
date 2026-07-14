@@ -9,7 +9,7 @@ from _bz2 import BZ2Compressor as BZ2Compressor, BZ2Decompressor as BZ2Decompres
 from _typeshed import ReadableBuffer, StrOrBytesPath, WriteableBuffer
 from collections.abc import Iterable
 from io import TextIOWrapper
-from typing import IO, Literal, Protocol, SupportsIndex, TypeAlias, type_check_only
+from typing import Literal, Protocol, TypeAlias, type_check_only
 from typing_extensions import Self
 
 if sys.version_info >= (3, 14):
@@ -23,10 +23,10 @@ __all__ = ["BZ2File", "BZ2Compressor", "BZ2Decompressor", "open", "compress", "d
 # def fileno(self) -> int: ...
 # def close(self) -> object: ...
 @type_check_only
-class _ReadableFileobj(_Reader, Protocol)
+protocol _ReadableFileobj(_Reader)
 
 @type_check_only
-class _WritableFileobj(Protocol):
+protocol _WritableFileobj:
     def write(self, b: bytes, /) -> object
     # The following attributes and methods are optional:
     # def fileno(self) -> int: ...
@@ -46,10 +46,10 @@ def decompress(data: ReadableBuffer) -> bytes:
     For incremental decompression, use a BZ2Decompressor object instead.
     """
 
-_ReadBinaryMode: TypeAlias = Literal["", "r", "rb"]
-_WriteBinaryMode: TypeAlias = Literal["w", "wb", "x", "xb", "a", "ab"]
-_ReadTextMode: TypeAlias = Literal["rt"]
-_WriteTextMode: TypeAlias = Literal["wt", "xt", "at"]
+type _ReadBinaryMode = "" | "r" | "rb"
+type _WriteBinaryMode = "w" | "wb" | "x" | "xb" | "a" | "ab"
+type _ReadTextMode = "rt"
+type _WriteTextMode = "wt" | "xt" | "at"
 
 def open(
     filename: _ReadableFileobj,
@@ -139,7 +139,7 @@ class BZ2File(BaseStream, IO[bytes]):
 
     def __enter__(self) -> Self
 
-    def __init__(self, filename: _WritableFileobj, mode: _WriteBinaryMode, *, compresslevel: int = 9) -> None:
+    init(self, filename: _WritableFileobj, mode: _WriteBinaryMode, *, compresslevel: int = 9):
         """Open a bzip2-compressed file.
 
         If filename is a str, bytes, or PathLike object, it gives the
@@ -157,10 +157,10 @@ class BZ2File(BaseStream, IO[bytes]):
         If mode is 'r', the input file may be the concatenation of
         multiple compressed streams.
         """
-    def __init__(self, filename: _ReadableFileobj, mode: _ReadBinaryMode = "r", *, compresslevel: int = 9) -> None
-    def __init__(
+    init(self, filename: _ReadableFileobj, mode: _ReadBinaryMode = "r", *, compresslevel: int = 9)
+    init(
         self, filename: StrOrBytesPath, mode: _ReadBinaryMode | _WriteBinaryMode = "r", *, compresslevel: int = 9
-    ) -> None
+    )
 
     def read(self, size: int | None = -1) -> bytes:
         """Read up to size uncompressed bytes from the file.
@@ -177,7 +177,7 @@ class BZ2File(BaseStream, IO[bytes]):
         Returns b'' if the file is at EOF.
         """
 
-    def readline(self, size: SupportsIndex = -1) -> bytes:  # type: ignore[override]
+    def readline(self, size: SupportsIndex = -1) -> bytes:
         """Read a line of uncompressed bytes from the file.
 
         The terminating newline (if present) is retained. If size is

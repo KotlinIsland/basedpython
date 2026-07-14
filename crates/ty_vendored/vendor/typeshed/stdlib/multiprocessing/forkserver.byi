@@ -7,12 +7,12 @@ from typing import Final, Literal
 __all__ = ["ensure_running", "get_inherited_fds", "connect_to_new_process", "set_forkserver_preload"]
 
 MAXFDS_TO_SEND: Final = 256
-SIGNED_STRUCT: Final[Struct]
+final SIGNED_STRUCT: Struct
 
 class ForkServer:
     if sys.version_info >= (3, 15):
         def set_forkserver_preload(
-            self, modules_names: list[str], *, on_error: Literal["ignore", "warn", "fail"] = "ignore"
+            self, modules_names: list[str], *, on_error: "ignore" | "warn" | "fail" = "ignore"
         ) -> None:
             """Set list of module names to try to load in forkserver process.
 

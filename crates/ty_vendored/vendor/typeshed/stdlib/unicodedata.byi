@@ -13,10 +13,10 @@ from collections.abc import Iterator
 from typing import Final, Literal, TypeAlias, TypeVar, final
 
 ucd_3_2_0: UCD
-unidata_version: Final[str]
+final unidata_version: str
 
 
-_NormalizationForm: TypeAlias = Literal["NFC", "NFD", "NFKC", "NFKD"]
+type _NormalizationForm = "NFC" | "NFD" | "NFKC" | "NFKD"
 
 def bidirectional(chr: str, /) -> str:
     """Returns the bidirectional class assigned to the character chr as string.
@@ -57,7 +57,7 @@ def digit(chr: str, /) -> int:
     """
 def digit[Element](chr: str, default: Element, /) -> int | Element
 
-_EastAsianWidth: TypeAlias = Literal["F", "H", "W", "Na", "A", "N"]
+type _EastAsianWidth = "F" | "H" | "W" | "Na" | "A" | "N"
 
 def east_asian_width(chr: str, /) -> _EastAsianWidth:
     """Returns the east asian width assigned to the character chr as string."""

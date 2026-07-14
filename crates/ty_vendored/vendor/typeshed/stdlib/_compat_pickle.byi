@@ -1,10 +1,10 @@
 from typing import Final
 
-IMPORT_MAPPING: Final[dict[str, str]]
-NAME_MAPPING: Final[dict[(str, str), (str, str)]]
-PYTHON2_EXCEPTIONS: Final[(*: str)]
-MULTIPROCESSING_EXCEPTIONS: Final[(*: str)]
-REVERSE_IMPORT_MAPPING: Final[dict[str, str]]
-REVERSE_NAME_MAPPING: Final[dict[(str, str), (str, str)]]
-PYTHON3_OSERROR_EXCEPTIONS: Final[(*: str)]
-PYTHON3_IMPORTERROR_EXCEPTIONS: Final[(*: str)]
+final IMPORT_MAPPING: dict[str, str]
+final NAME_MAPPING: dict[(str, str), (str, str)]
+final PYTHON2_EXCEPTIONS: (*: str)
+final MULTIPROCESSING_EXCEPTIONS: (*: str)
+final REVERSE_IMPORT_MAPPING: dict[str, str]
+final REVERSE_NAME_MAPPING: dict[(str, str), (str, str)]
+final PYTHON3_OSERROR_EXCEPTIONS: (*: str)
+final PYTHON3_IMPORTERROR_EXCEPTIONS: (*: str)

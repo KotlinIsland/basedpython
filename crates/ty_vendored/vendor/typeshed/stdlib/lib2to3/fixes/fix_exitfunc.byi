@@ -9,9 +9,9 @@ from typing import ClassVar, Literal
 from ..pytree import Node
 
 class FixExitfunc(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[True]]
+    BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
-    def __init__(self, *args) -> None
+    init(self, *args)
     sys_import: Incomplete | None
     def start_tree(self, tree: Node, filename: StrPath) -> None
     def transform(self, node, results) -> None

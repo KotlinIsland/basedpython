@@ -24,14 +24,14 @@ class BaseFix:
     filename: Incomplete | None
     numbers: Incomplete
     used_names: Incomplete
-    order: ClassVar[Literal["post", "pre"]]
+    order: ClassVar["post" | "pre"]
     explicit: ClassVar[bool]
     run_order: ClassVar[int]
     keep_line_order: ClassVar[bool]
     BM_compatible: ClassVar[bool]
     syms: Incomplete
     log: Incomplete
-    def __init__(self, options: MutableMapping[str, Incomplete], log: list[str]) -> None:
+    init(self, options: MutableMapping[str, Incomplete], log: list[str]):
         """Initializer.  Subclass may override.
 
         Args:
@@ -53,7 +53,7 @@ class BaseFix:
         The main refactoring tool should call this.
         """
 
-    def match[N: Base](self, node: N) -> Literal[False] | dict[str, N]:
+    def match[N: Base](self, node: N) -> False | dict[str, N]:
         """Returns match for a given parse tree node.
 
         Should return a true or false object (not necessarily a bool).

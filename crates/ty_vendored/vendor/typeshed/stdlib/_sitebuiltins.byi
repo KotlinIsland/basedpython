@@ -4,12 +4,12 @@ The objects used by the site module to add custom builtins.
 
 import sys
 from collections.abc import Iterable
-from typing import ClassVar, Literal, NoReturn
+from typing import ClassVar, Literal
 
 class Quitter:
     name: str
     eof: str
-    def __init__(self, name: str, eof: str) -> None
+    init(self, name: str, eof: str)
     def __call__(self, code: sys._ExitCode = None) -> NoReturn
 
 class _Printer:
@@ -17,8 +17,8 @@ class _Printer:
     contributors and the copyright notice.
     """
 
-    MAXLINES: ClassVar[Literal[23]]
-    def __init__(self, name: str, data: str, files: Iterable[str] = (), dirs: Iterable[str] = ()) -> None
+    MAXLINES: ClassVar[23]
+    init(self, name: str, data: str, files: Iterable[str] = (), dirs: Iterable[str] = ())
     def __call__(self) -> None
 
 class _Helper:

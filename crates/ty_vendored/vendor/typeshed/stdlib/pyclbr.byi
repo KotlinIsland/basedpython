@@ -59,9 +59,9 @@ class _Object:
     # avoid variance issues in the subclasses
     children: Mapping[str, _Object]
 
-    def __init__(
+    init(
         self, module: str, name: str, file: str, lineno: int, end_lineno: int | None, parent: _Object | None
-    ) -> None
+    )
 
 class Function(_Object):
     """Information about a Python function, including methods."""
@@ -70,7 +70,7 @@ class Function(_Object):
     parent: Function | Class | None
     children: dict[str, Class | Function]
 
-    def __init__(
+    init(
         self,
         module: str,
         name: str,
@@ -80,7 +80,7 @@ class Function(_Object):
         is_async: bool = False,
         *,
         end_lineno: int | None = None,
-    ) -> None
+    )
 
 class Class(_Object):
     """Information about a Python class."""
@@ -90,7 +90,7 @@ class Class(_Object):
     parent: Class | None
     children: dict[str, Class | Function]
 
-    def __init__(
+    init(
         self,
         module: str,
         name: str,
@@ -100,7 +100,7 @@ class Class(_Object):
         parent: Class | None = None,
         *,
         end_lineno: int | None = None,
-    ) -> None
+    )
 
 def readmodule(module: str, path: Sequence[str] | None = None) -> dict[str, Class]:
     """Return Class objects for the top-level classes in module.

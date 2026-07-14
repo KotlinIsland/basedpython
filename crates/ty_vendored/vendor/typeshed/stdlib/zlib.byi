@@ -21,11 +21,11 @@ from typing import Final, final, type_check_only
 from typing_extensions import Self
 
 DEFLATED: Final = 8
-DEF_MEM_LEVEL: Final[int]
+final DEF_MEM_LEVEL: int
 DEF_BUF_SIZE: Final = 16384
-MAX_WBITS: Final[int]
-ZLIB_VERSION: Final[str]
-ZLIB_RUNTIME_VERSION: Final[str]
+final MAX_WBITS: int
+final ZLIB_VERSION: str
+final ZLIB_RUNTIME_VERSION: str
 Z_NO_COMPRESSION: Final = 0
 Z_PARTIAL_FLUSH: Final = 1
 Z_BEST_COMPRESSION: Final = 9
@@ -45,14 +45,13 @@ Z_TREES: Final = 6
 
 if sys.version_info >= (3, 14):
     # Available when zlib was built with zlib-ng
-    ZLIBNG_VERSION: Final[str]
+    final ZLIBNG_VERSION: str
 
 class error(Exception)
 
 # This class is not exposed at runtime. It calls itself zlib.Compress.
-@final
 @type_check_only
-class _Compress:
+final class _Compress:
     def __copy__(self) -> Self
     def __deepcopy__(self, memo: dynamic, /) -> Self
     def compress(self, data: ReadableBuffer, /) -> bytes
@@ -60,15 +59,11 @@ class _Compress:
     def copy(self) -> _Compress
 
 # This class is not exposed at runtime. It calls itself zlib.Decompress.
-@final
 @type_check_only
-class _Decompress:
-    @property
-    def unused_data(self) -> bytes
-    @property
-    def unconsumed_tail(self) -> bytes
-    @property
-    def eof(self) -> bool
+final class _Decompress:
+    let unused_data: bytes
+    let unconsumed_tail: bytes
+    let eof: bool
     def __copy__(self) -> Self
     def __deepcopy__(self, memo: dynamic, /) -> Self
     def decompress(self, data: ReadableBuffer, /, max_length: int = 0) -> bytes

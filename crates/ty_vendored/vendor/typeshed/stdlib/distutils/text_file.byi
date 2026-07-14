@@ -5,7 +5,7 @@ that (optionally) takes care of stripping comments, ignoring blank
 lines, and joining lines with backslashes.
 """
 
-from typing import IO, Literal
+from typing import Literal
 
 class TextFile:
     """Provides a file-like object that takes care of all the things you
@@ -67,18 +67,18 @@ class TextFile:
     not.
     """
 
-    def __init__(
+    init(
         self,
         filename: str | None = None,
         file: IO[str] | None = None,
         *,
-        strip_comments: bool | Literal[0, 1] = ...,
-        lstrip_ws: bool | Literal[0, 1] = ...,
-        rstrip_ws: bool | Literal[0, 1] = ...,
-        skip_blanks: bool | Literal[0, 1] = ...,
-        join_lines: bool | Literal[0, 1] = ...,
-        collapse_join: bool | Literal[0, 1] = ...,
-    ) -> None:
+        strip_comments: bool | 0 | 1 = ...,
+        lstrip_ws: bool | 0 | 1 = ...,
+        rstrip_ws: bool | 0 | 1 = ...,
+        skip_blanks: bool | 0 | 1 = ...,
+        join_lines: bool | 0 | 1 = ...,
+        collapse_join: bool | 0 | 1 = ...,
+    ):
         """Construct a new TextFile object.  At least one of 'filename'
         (a string) and 'file' (a file-like object) must be supplied.
         They keyword argument options are described above and affect

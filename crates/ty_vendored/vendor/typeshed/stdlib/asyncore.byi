@@ -22,11 +22,11 @@ sophisticated high-performance network servers and clients a snap.
 import sys
 from _typeshed import FileDescriptorLike, ReadableBuffer
 from socket import socket
-from typing import Any, TypeAlias
+from typing import TypeAlias
 
 # cyclic dependence with asynchat
-_MapType: TypeAlias = dict[int, Any]
-_Socket: TypeAlias = socket
+type _MapType = dict[int, dynamic]
+type _Socket = socket
 
 socket_map: _MapType  # undocumented
 
@@ -52,7 +52,7 @@ class dispatcher:
     closing: bool
     ignore_log_types: frozenset[str]
     socket: _Socket | None
-    def __init__(self, sock: _Socket | None = None, map: _MapType | None = None) -> None
+    init(self, sock: _Socket | None = None, map: _MapType | None = None)
     def add_channel(self, map: _MapType | None = None) -> None
     def del_channel(self, map: _MapType | None = None) -> None
     def create_socket(self, family: int = ..., type: int = ...) -> None
@@ -61,9 +61,9 @@ class dispatcher:
     def readable(self) -> bool
     def writable(self) -> bool
     def listen(self, num: int) -> None
-    def bind(self, addr: (*: Any) | str) -> None
-    def connect(self, address: (*: Any) | str) -> None
-    def accept(self) -> (_Socket, Any) | None
+    def bind(self, addr: (*: dynamic) | str) -> None
+    def connect(self, address: (*: dynamic) | str) -> None
+    def accept(self) -> (_Socket, dynamic) | None
     def send(self, data: ReadableBuffer) -> int
     def recv(self, buffer_size: int) -> bytes
     def close(self) -> None
@@ -92,7 +92,7 @@ def close_all(map: _MapType | None = None, ignore_all: bool = False) -> None
 if sys.platform != "win32":
     class file_wrapper:
         fd: int
-        def __init__(self, fd: int) -> None
+        init(self, fd: int)
         def recv(self, bufsize: int, flags: int = ...) -> bytes
         def send(self, data: bytes, flags: int = ...) -> int
 
@@ -106,5 +106,5 @@ if sys.platform != "win32":
         def __del__(self) -> None
 
     class file_dispatcher(dispatcher):
-        def __init__(self, fd: FileDescriptorLike, map: _MapType | None = None) -> None
+        init(self, fd: FileDescriptorLike, map: _MapType | None = None)
         def set_file(self, fd: int) -> None

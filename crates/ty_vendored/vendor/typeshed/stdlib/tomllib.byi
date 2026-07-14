@@ -23,7 +23,7 @@ if sys.version_info >= (3, 14):
         lineno: int
         colno: int
 
-        def __init__(self, msg: str, doc: str, pos: int) -> None
+        init(self, msg: str, doc: str, pos: int)
         @deprecated("Deprecated since Python 3.14. Set the 'msg', 'doc' and 'pos' arguments only.")
         def __init__(self, msg: str | type = ..., doc: str | type = ..., pos: int | type = ..., *args: dynamic) -> None
 
@@ -31,8 +31,8 @@ else:
     class TOMLDecodeError(ValueError):
         """An error raised if a document is not valid TOML."""
 
-def load(fp: SupportsRead[bytes], /, *, parse_float: Callable[[str], dynamic] = ...) -> dict[str, dynamic]:
+def load(fp: SupportsRead[bytes], /, *, parse_float: (str) -> dynamic = ...) -> dict[str, dynamic]:
     """Parse TOML from a binary file object."""
 
-def loads(s: str, /, *, parse_float: Callable[[str], dynamic] = ...) -> dict[str, dynamic]:
+def loads(s: str, /, *, parse_float: (str) -> dynamic = ...) -> dict[str, dynamic]:
     """Parse TOML from a string."""

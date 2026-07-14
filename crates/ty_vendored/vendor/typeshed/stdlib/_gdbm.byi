@@ -17,8 +17,8 @@ from typing import TypeAlias, TypeVar, type_check_only
 from typing_extensions import Self
 
 if sys.platform != "win32":
-    _KeyType: TypeAlias = str | ReadOnlyBuffer
-    _ValueType: TypeAlias = str | ReadOnlyBuffer
+    type _KeyType = str | ReadOnlyBuffer
+    type _ValueType = str | ReadOnlyBuffer
 
     open_flags: str
 
@@ -50,8 +50,8 @@ if sys.platform != "win32":
         def keys(self) -> list[bytes]
         def setdefault(self, k: _KeyType, default: _ValueType = ...) -> bytes
         # Don't exist at runtime
-        __new__: None  # type: ignore[assignment]
-        __init__: None  # type: ignore[assignment]
+        __new__: None
+        __init__: None
 
     if sys.version_info >= (3, 11):
         def open(filename: StrOrBytesPath, flags: str = "r", mode: int = 0o666, /) -> _gdbm:

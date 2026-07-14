@@ -9,7 +9,7 @@ import sys
 from _typeshed import BytesPath, ExcInfo, FileDescriptorOrPath, MaybeNone, StrOrBytesPath, StrPath, SupportsRead, SupportsWrite
 from collections.abc import Callable, Iterable, Sequence
 from tarfile import _TarfileFilter
-from typing import Any, AnyStr, NamedTuple, NoReturn, Protocol, TypeAlias, TypeVar, type_check_only
+from typing import NamedTuple, Protocol, TypeAlias, TypeVar, type_check_only
 from typing_extensions import deprecated
 
 __all__ = [
@@ -128,7 +128,7 @@ def copy2[StrPathT: StrPath](src: StrPath, dst: StrPathT, *, follow_symlinks: bo
     """
 def copy2[BytesPathT: BytesPath](src: BytesPath, dst: BytesPathT, *, follow_symlinks: bool = True) -> BytesPathT | bytes
 
-def ignore_patterns(*patterns: StrPath) -> Callable[[dynamic, list[str]], set[str]]:
+def ignore_patterns(*patterns: StrPath) -> (dynamic, list[str]) -> set[str]:
     """Function that can be used as copytree() ignore parameter.
 
     Patterns is a sequence of glob-style patterns
@@ -139,8 +139,8 @@ def copytree[StrPathT: StrPath](
     src: StrPath,
     dst: StrPathT,
     symlinks: bool = False,
-    ignore: None | Callable[[str, list[str]], Iterable[str]] | Callable[[StrPath, list[str]], Iterable[str]] = None,
-    copy_function: Callable[[str, str], object] = ...,
+    ignore: None | ((str, list[str]) -> Iterable[str]) | ((StrPath, list[str]) -> Iterable[str]) = None,
+    copy_function: (str, str) -> object = ...,
     ignore_dangling_symlinks: bool = False,
     dirs_exist_ok: bool = False,
 ) -> StrPathT:
@@ -183,11 +183,11 @@ def copytree[StrPathT: StrPath](
     `src` tree.
     """
 
-_OnErrorCallback: TypeAlias = Callable[[Callable[..., Any], str, ExcInfo], object]
-_OnExcCallback: TypeAlias = Callable[[Callable[..., Any], str, BaseException], object]
+type _OnErrorCallback = ((...) -> dynamic, str, ExcInfo) -> object
+type _OnExcCallback = ((...) -> dynamic, str, BaseException) -> object
 
 @type_check_only
-class _RmtreeType(Protocol):
+protocol _RmtreeType:
     avoids_symlink_attacks: bool
     if sys.version_info >= (3, 12):
         @deprecated("The `onerror` parameter is deprecated. Use `onexc` instead.")
@@ -254,7 +254,7 @@ onerror is deprecated and only remains for backwards compatibility.
 If both onerror and onexc are set, onerror is ignored and onexc is used.
 """
 
-_CopyFn: TypeAlias = Callable[[str, str], object] | Callable[[StrPath, StrPath], object]
+type _CopyFn = ((str, str) -> object) | ((StrPath, StrPath) -> object)
 
 # N.B. shutil.move appears to take bytes arguments, however,
 # this does not work when dst is (or is within) an existing directory.
@@ -413,7 +413,7 @@ def get_archive_formats() -> list[(str, str)]:
     """
 
 def register_archive_format(
-    name: str, function: (...) -> object, extra_args: Sequence[(str, Any) | list[Any]], description: str = ""
+    name: str, function: (...) -> object, extra_args: Sequence[(str, dynamic) | list[dynamic]], description: str = ""
 ) -> None:
     """Registers an archive format.
 
@@ -424,7 +424,7 @@ def register_archive_format(
     by the get_archive_formats() function.
     """
 def register_archive_format(
-    name: str, function: Callable[[str, str], object], extra_args: None = None, description: str = ""
+    name: str, function: (str, str) -> object, extra_args: None = None, description: str = ""
 ) -> None
 
 def unregister_archive_format(name: str) -> None
@@ -453,7 +453,7 @@ def register_unpack_format(
     name: str,
     extensions: list[str],
     function: (...) -> object,
-    extra_args: Sequence[(str, Any)],
+    extra_args: Sequence[(str, dynamic)],
     description: str = "",
 ) -> None:
     """Registers an unpack format.
@@ -472,7 +472,7 @@ def register_unpack_format(
     by the get_unpack_formats() function.
     """
 def register_unpack_format(
-    name: str, extensions: list[str], function: Callable[[str, str], object], extra_args: None = None, description: str = ""
+    name: str, extensions: list[str], function: (str, str) -> object, extra_args: None = None, description: str = ""
 ) -> None
 
 def unregister_unpack_format(name: str) -> None:

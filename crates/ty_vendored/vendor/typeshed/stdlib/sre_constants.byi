@@ -5,9 +5,9 @@ from re import error as error
 from typing import Final
 from typing_extensions import Self, disjoint_base
 
-MAXGROUPS: Final[int]
+final MAXGROUPS: int
 
-MAGIC: Final[int]
+final MAGIC: int
 
 if sys.version_info >= (3, 12):
     class _NamedIntConstant(int):
@@ -20,7 +20,7 @@ else:
         name: str
         def __new__(cls, value: int, name: str) -> Self
 
-MAXREPEAT: Final[_NamedIntConstant]
+final MAXREPEAT: _NamedIntConstant
 OPCODES: list[_NamedIntConstant]
 ATCODES: list[_NamedIntConstant]
 CHCODES: list[_NamedIntConstant]
@@ -53,85 +53,85 @@ SRE_INFO_CHARSET: Final = 4
 # Stubgen above; manually defined constants below (dynamic at runtime)
 
 # from OPCODES
-FAILURE: Final[_NamedIntConstant]
-SUCCESS: Final[_NamedIntConstant]
-ANY: Final[_NamedIntConstant]
-ANY_ALL: Final[_NamedIntConstant]
-ASSERT: Final[_NamedIntConstant]
-ASSERT_NOT: Final[_NamedIntConstant]
-AT: Final[_NamedIntConstant]
-BRANCH: Final[_NamedIntConstant]
+final FAILURE: _NamedIntConstant
+final SUCCESS: _NamedIntConstant
+final ANY: _NamedIntConstant
+final ANY_ALL: _NamedIntConstant
+final ASSERT: _NamedIntConstant
+final ASSERT_NOT: _NamedIntConstant
+final AT: _NamedIntConstant
+final BRANCH: _NamedIntConstant
 if sys.version_info < (3, 11):
-    CALL: Final[_NamedIntConstant]
-CATEGORY: Final[_NamedIntConstant]
-CHARSET: Final[_NamedIntConstant]
-BIGCHARSET: Final[_NamedIntConstant]
-GROUPREF: Final[_NamedIntConstant]
-GROUPREF_EXISTS: Final[_NamedIntConstant]
-GROUPREF_IGNORE: Final[_NamedIntConstant]
-IN: Final[_NamedIntConstant]
-IN_IGNORE: Final[_NamedIntConstant]
-INFO: Final[_NamedIntConstant]
-JUMP: Final[_NamedIntConstant]
-LITERAL: Final[_NamedIntConstant]
-LITERAL_IGNORE: Final[_NamedIntConstant]
-MARK: Final[_NamedIntConstant]
-MAX_UNTIL: Final[_NamedIntConstant]
-MIN_UNTIL: Final[_NamedIntConstant]
-NOT_LITERAL: Final[_NamedIntConstant]
-NOT_LITERAL_IGNORE: Final[_NamedIntConstant]
-NEGATE: Final[_NamedIntConstant]
-RANGE: Final[_NamedIntConstant]
-REPEAT: Final[_NamedIntConstant]
-REPEAT_ONE: Final[_NamedIntConstant]
-SUBPATTERN: Final[_NamedIntConstant]
-MIN_REPEAT_ONE: Final[_NamedIntConstant]
+    final CALL: _NamedIntConstant
+final CATEGORY: _NamedIntConstant
+final CHARSET: _NamedIntConstant
+final BIGCHARSET: _NamedIntConstant
+final GROUPREF: _NamedIntConstant
+final GROUPREF_EXISTS: _NamedIntConstant
+final GROUPREF_IGNORE: _NamedIntConstant
+final IN: _NamedIntConstant
+final IN_IGNORE: _NamedIntConstant
+final INFO: _NamedIntConstant
+final JUMP: _NamedIntConstant
+final LITERAL: _NamedIntConstant
+final LITERAL_IGNORE: _NamedIntConstant
+final MARK: _NamedIntConstant
+final MAX_UNTIL: _NamedIntConstant
+final MIN_UNTIL: _NamedIntConstant
+final NOT_LITERAL: _NamedIntConstant
+final NOT_LITERAL_IGNORE: _NamedIntConstant
+final NEGATE: _NamedIntConstant
+final RANGE: _NamedIntConstant
+final REPEAT: _NamedIntConstant
+final REPEAT_ONE: _NamedIntConstant
+final SUBPATTERN: _NamedIntConstant
+final MIN_REPEAT_ONE: _NamedIntConstant
 if sys.version_info >= (3, 11):
-    ATOMIC_GROUP: Final[_NamedIntConstant]
-    POSSESSIVE_REPEAT: Final[_NamedIntConstant]
-    POSSESSIVE_REPEAT_ONE: Final[_NamedIntConstant]
-RANGE_UNI_IGNORE: Final[_NamedIntConstant]
-GROUPREF_LOC_IGNORE: Final[_NamedIntConstant]
-GROUPREF_UNI_IGNORE: Final[_NamedIntConstant]
-IN_LOC_IGNORE: Final[_NamedIntConstant]
-IN_UNI_IGNORE: Final[_NamedIntConstant]
-LITERAL_LOC_IGNORE: Final[_NamedIntConstant]
-LITERAL_UNI_IGNORE: Final[_NamedIntConstant]
-NOT_LITERAL_LOC_IGNORE: Final[_NamedIntConstant]
-NOT_LITERAL_UNI_IGNORE: Final[_NamedIntConstant]
-MIN_REPEAT: Final[_NamedIntConstant]
-MAX_REPEAT: Final[_NamedIntConstant]
+    final ATOMIC_GROUP: _NamedIntConstant
+    final POSSESSIVE_REPEAT: _NamedIntConstant
+    final POSSESSIVE_REPEAT_ONE: _NamedIntConstant
+final RANGE_UNI_IGNORE: _NamedIntConstant
+final GROUPREF_LOC_IGNORE: _NamedIntConstant
+final GROUPREF_UNI_IGNORE: _NamedIntConstant
+final IN_LOC_IGNORE: _NamedIntConstant
+final IN_UNI_IGNORE: _NamedIntConstant
+final LITERAL_LOC_IGNORE: _NamedIntConstant
+final LITERAL_UNI_IGNORE: _NamedIntConstant
+final NOT_LITERAL_LOC_IGNORE: _NamedIntConstant
+final NOT_LITERAL_UNI_IGNORE: _NamedIntConstant
+final MIN_REPEAT: _NamedIntConstant
+final MAX_REPEAT: _NamedIntConstant
 
 # from ATCODES
-AT_BEGINNING: Final[_NamedIntConstant]
-AT_BEGINNING_LINE: Final[_NamedIntConstant]
-AT_BEGINNING_STRING: Final[_NamedIntConstant]
-AT_BOUNDARY: Final[_NamedIntConstant]
-AT_NON_BOUNDARY: Final[_NamedIntConstant]
-AT_END: Final[_NamedIntConstant]
-AT_END_LINE: Final[_NamedIntConstant]
-AT_END_STRING: Final[_NamedIntConstant]
-AT_LOC_BOUNDARY: Final[_NamedIntConstant]
-AT_LOC_NON_BOUNDARY: Final[_NamedIntConstant]
-AT_UNI_BOUNDARY: Final[_NamedIntConstant]
-AT_UNI_NON_BOUNDARY: Final[_NamedIntConstant]
+final AT_BEGINNING: _NamedIntConstant
+final AT_BEGINNING_LINE: _NamedIntConstant
+final AT_BEGINNING_STRING: _NamedIntConstant
+final AT_BOUNDARY: _NamedIntConstant
+final AT_NON_BOUNDARY: _NamedIntConstant
+final AT_END: _NamedIntConstant
+final AT_END_LINE: _NamedIntConstant
+final AT_END_STRING: _NamedIntConstant
+final AT_LOC_BOUNDARY: _NamedIntConstant
+final AT_LOC_NON_BOUNDARY: _NamedIntConstant
+final AT_UNI_BOUNDARY: _NamedIntConstant
+final AT_UNI_NON_BOUNDARY: _NamedIntConstant
 
 # from CHCODES
-CATEGORY_DIGIT: Final[_NamedIntConstant]
-CATEGORY_NOT_DIGIT: Final[_NamedIntConstant]
-CATEGORY_SPACE: Final[_NamedIntConstant]
-CATEGORY_NOT_SPACE: Final[_NamedIntConstant]
-CATEGORY_WORD: Final[_NamedIntConstant]
-CATEGORY_NOT_WORD: Final[_NamedIntConstant]
-CATEGORY_LINEBREAK: Final[_NamedIntConstant]
-CATEGORY_NOT_LINEBREAK: Final[_NamedIntConstant]
-CATEGORY_LOC_WORD: Final[_NamedIntConstant]
-CATEGORY_LOC_NOT_WORD: Final[_NamedIntConstant]
-CATEGORY_UNI_DIGIT: Final[_NamedIntConstant]
-CATEGORY_UNI_NOT_DIGIT: Final[_NamedIntConstant]
-CATEGORY_UNI_SPACE: Final[_NamedIntConstant]
-CATEGORY_UNI_NOT_SPACE: Final[_NamedIntConstant]
-CATEGORY_UNI_WORD: Final[_NamedIntConstant]
-CATEGORY_UNI_NOT_WORD: Final[_NamedIntConstant]
-CATEGORY_UNI_LINEBREAK: Final[_NamedIntConstant]
-CATEGORY_UNI_NOT_LINEBREAK: Final[_NamedIntConstant]
+final CATEGORY_DIGIT: _NamedIntConstant
+final CATEGORY_NOT_DIGIT: _NamedIntConstant
+final CATEGORY_SPACE: _NamedIntConstant
+final CATEGORY_NOT_SPACE: _NamedIntConstant
+final CATEGORY_WORD: _NamedIntConstant
+final CATEGORY_NOT_WORD: _NamedIntConstant
+final CATEGORY_LINEBREAK: _NamedIntConstant
+final CATEGORY_NOT_LINEBREAK: _NamedIntConstant
+final CATEGORY_LOC_WORD: _NamedIntConstant
+final CATEGORY_LOC_NOT_WORD: _NamedIntConstant
+final CATEGORY_UNI_DIGIT: _NamedIntConstant
+final CATEGORY_UNI_NOT_DIGIT: _NamedIntConstant
+final CATEGORY_UNI_SPACE: _NamedIntConstant
+final CATEGORY_UNI_NOT_SPACE: _NamedIntConstant
+final CATEGORY_UNI_WORD: _NamedIntConstant
+final CATEGORY_UNI_NOT_WORD: _NamedIntConstant
+final CATEGORY_UNI_LINEBREAK: _NamedIntConstant
+final CATEGORY_UNI_NOT_LINEBREAK: _NamedIntConstant

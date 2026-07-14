@@ -2,7 +2,7 @@ import sys
 from _typeshed import MaybeNone
 from collections.abc import Container, Iterable
 from types import ModuleType
-from typing import Any, Final
+from typing import Final
 
 if sys.platform == "win32":
     from _msi import *
@@ -10,8 +10,8 @@ if sys.platform == "win32":
 
     from .sequence import _SequenceType
 
-    AMD64: Final[bool]
-    Win64: Final[bool]
+    final AMD64: bool
+    final Win64: bool
 
     datasizemask: Final = 0x00FF
     type_valid: Final = 0x0100
@@ -28,7 +28,7 @@ if sys.platform == "win32":
     class Table:
         name: str
         fields: list[(int, str, int)]
-        def __init__(self, name: str) -> None
+        init(self, name: str)
         def add_field(self, index: int, name: str, type: int) -> None
         def sql(self) -> str
         def create(self, db: _Database) -> None
@@ -40,7 +40,7 @@ if sys.platform == "win32":
     ) -> None:
         """Change the sequence number of an action in a sequence list"""
 
-    def add_data(db: _Database, table: str, values: Iterable[(*: Any)]) -> None
+    def add_data(db: _Database, table: str, values: Iterable[(*: dynamic)]) -> None
     def add_stream(db: _Database, name: str, path: str) -> None
     def init_database(
         name: str, schema: ModuleType, ProductName: str, ProductCode: str, ProductVersion: str, Manufacturer: str
@@ -54,7 +54,7 @@ if sys.platform == "win32":
         files: list[(str, str)]
         filenames: set[str]
         index: int
-        def __init__(self, name: str) -> None
+        init(self, name: str)
         def gen_id(self, file: str) -> str
         def append(self, full: str, file: str, logical: str | None) -> (int, str) | MaybeNone
         def commit(self, db: _Database) -> None
@@ -73,7 +73,7 @@ if sys.platform == "win32":
         keyfiles: dict[str, str]
         componentflags: int | None
         absolute: str
-        def __init__(
+        init(
             self,
             db: _Database,
             cab: CAB,
@@ -82,7 +82,7 @@ if sys.platform == "win32":
             _logical: str,
             default: str,
             componentflags: int | None = None,
-        ) -> None:
+        ):
             """Create a new directory in the Directory table. There is a current component
             at each point in time for the directory, which is either explicitly created
             through start_component, or implicitly when files are added for the first
@@ -127,11 +127,11 @@ if sys.platform == "win32":
 
     class Binary:
         name: str
-        def __init__(self, fname: str) -> None
+        init(self, fname: str)
 
     class Feature:
         id: str
-        def __init__(
+        init(
             self,
             db: _Database,
             id: str,
@@ -142,13 +142,13 @@ if sys.platform == "win32":
             parent: Feature | None = None,
             directory: str | None = None,
             attributes: int = 0,
-        ) -> None
+        )
         def set_current(self) -> None
 
     class Control:
         dlg: Dialog
         name: str
-        def __init__(self, dlg: Dialog, name: str) -> None
+        init(self, dlg: Dialog, name: str)
         def event(self, event: str, argument: str, condition: str = "1", ordering: int | None = None) -> None
         def mapping(self, event: str, attribute: str) -> None
         def condition(self, action: str, condition: str) -> None
@@ -156,7 +156,7 @@ if sys.platform == "win32":
     class RadioButtonGroup(Control):
         property: str
         index: int
-        def __init__(self, dlg: Dialog, name: str, property: str) -> None
+        init(self, dlg: Dialog, name: str, property: str)
         def add(self, name: str, x: int, y: int, w: int, h: int, text: str, value: str | None = None) -> None
 
     class Dialog:
@@ -166,7 +166,7 @@ if sys.platform == "win32":
         y: int
         w: int
         h: int
-        def __init__(
+        init(
             self,
             db: _Database,
             name: str,
@@ -179,7 +179,7 @@ if sys.platform == "win32":
             first: str,
             default: str | None,
             cancel: str | None,
-        ) -> None
+        )
         def control(
             self,
             name: str,

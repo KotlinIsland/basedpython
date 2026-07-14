@@ -13,7 +13,6 @@ corresponding to PATTERN.  (It does not compile it.)
 import sys
 from collections.abc import Iterable
 from os import PathLike
-from typing import AnyStr
 
 __all__ = ["filter", "fnmatch", "fnmatchcase", "translate"]
 if sys.version_info >= (3, 14):

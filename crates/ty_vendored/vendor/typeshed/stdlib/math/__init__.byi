@@ -5,16 +5,16 @@ defined by the C standard.
 import sys
 from _typeshed import SupportsMul, SupportsRMul
 from collections.abc import Iterable
-from typing import Any, Final, Literal, Protocol, SupportsFloat, SupportsIndex, TypeAlias, TypeVar, type_check_only
+from typing import Final, Literal, Protocol, TypeAlias, TypeVar, type_check_only
 
 
-_SupportsFloatOrIndex: TypeAlias = SupportsFloat | SupportsIndex
+type _SupportsFloatOrIndex = SupportsFloat | SupportsIndex
 
-e: Final[float]
-pi: Final[float]
-inf: Final[float]
-nan: Final[float]
-tau: Final[float]
+final e: float
+final pi: float
+final inf: float
+final nan: float
+final tau: float
 
 def acos(x: _SupportsFloatOrIndex, /) -> float:
     """Return the arc cosine (measured in radians) of x.
@@ -54,7 +54,7 @@ if sys.version_info >= (3, 11):
         """Return the cube root of x."""
 
 @type_check_only
-class _SupportsCeil[out Element](Protocol):
+protocol _SupportsCeil[out Element]:
     def __ceil__(self) -> Element
 
 def ceil[Element](x: _SupportsCeil[Element], /) -> Element:
@@ -129,7 +129,7 @@ def factorial(x: SupportsIndex, /) -> int:
     """Find n!."""
 
 @type_check_only
-class _SupportsFloor[out Element](Protocol):
+protocol _SupportsFloor[out Element]:
     def __floor__(self) -> Element
 
 def floor[Element](x: _SupportsFloor[Element], /) -> Element:
@@ -298,13 +298,13 @@ def perm(n: SupportsIndex, k: SupportsIndex | None = None, /) -> int:
 def pow(x: _SupportsFloatOrIndex, y: _SupportsFloatOrIndex, /) -> float:
     """Return x**y (x to the power of y)."""
 
-_PositiveInteger: TypeAlias = Literal[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25]
-_NegativeInteger: TypeAlias = Literal[-1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12, -13, -14, -15, -16, -17, -18, -19, -20]
-_LiteralInteger = _PositiveInteger | _NegativeInteger | Literal[0]  # noqa: Y026  # TODO: Use TypeAlias once mypy bugs are fixed
+type _PositiveInteger = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25
+type _NegativeInteger = -1 | -2 | -3 | -4 | -5 | -6 | -7 | -8 | -9 | -10 | -11 | -12 | -13 | -14 | -15 | -16 | -17 | -18 | -19 | -20
+type _LiteralInteger = _PositiveInteger | _NegativeInteger | 0
 
 
 @type_check_only
-class _SupportsProdWithNoDefaultGiven(SupportsMul[Any, Any], SupportsRMul[int, Any], Protocol)
+protocol _SupportsProdWithNoDefaultGiven(SupportsMul[dynamic, dynamic], SupportsRMul[int, dynamic])
 
 
 # This stub is based on the type stub for `builtins.sum`.
@@ -312,7 +312,7 @@ class _SupportsProdWithNoDefaultGiven(SupportsMul[Any, Any], SupportsRMul[int, A
 # without introducing many false positives.
 # For more details on its limitations and false positives, see #13572.
 # Instead, just like `builtins.sum`, we explicitly handle several useful cases.
-def prod(iterable: Iterable[bool | _LiteralInteger], /, *, start: int = 1) -> int:  # type: ignore[overload-overlap]
+def prod(iterable: Iterable[bool | _LiteralInteger], /, *, start: int = 1) -> int:
     """Calculate the product of all the elements in the input iterable.
 
     The default start value for the product is 1.
@@ -321,8 +321,8 @@ def prod(iterable: Iterable[bool | _LiteralInteger], /, *, start: int = 1) -> in
     intended specifically for use with numeric values and may reject
     non-numeric types.
     """
-def prod[SupportsProdNoDefaultT: _SupportsProdWithNoDefaultGiven](iterable: Iterable[SupportsProdNoDefaultT], /) -> SupportsProdNoDefaultT | Literal[1]
-def prod[MultiplicableT1: SupportsMul[Any, Any], MultiplicableT2: SupportsMul[Any, Any]](iterable: Iterable[MultiplicableT1], /, *, start: MultiplicableT2) -> MultiplicableT1 | MultiplicableT2
+def prod[SupportsProdNoDefaultT: _SupportsProdWithNoDefaultGiven](iterable: Iterable[SupportsProdNoDefaultT], /) -> SupportsProdNoDefaultT | 1
+def prod[MultiplicableT1: SupportsMul[dynamic, dynamic], MultiplicableT2: SupportsMul[dynamic, dynamic]](iterable: Iterable[MultiplicableT1], /, *, start: MultiplicableT2) -> MultiplicableT1 | MultiplicableT2
 
 def radians(x: _SupportsFloatOrIndex, /) -> float:
     """Convert angle x from degrees to radians."""
@@ -368,7 +368,7 @@ def tanh(x: _SupportsFloatOrIndex, /) -> float:
 
 # Is different from `_typeshed.SupportsTrunc`, which is not generic
 @type_check_only
-class _SupportsTrunc[out Element](Protocol):
+protocol _SupportsTrunc[out Element]:
     def __trunc__(self) -> Element
 
 def trunc[Element](x: _SupportsTrunc[Element], /) -> Element:

@@ -28,7 +28,7 @@ def runctx(
     statement and filename have the same semantics as profile.run
     """
 
-_Label: TypeAlias = tuple[str, int, str]
+type _Label = tuple[str, int, str]
 
 class Profile:
     """Profiler class.
@@ -71,7 +71,7 @@ class Profile:
 
     bias: int
     stats: dict[_Label, (int, int, int, int, dict[_Label, (int, int, int, int)])]  # undocumented
-    def __init__(self, timer: Callable[[], float] | None = None, bias: int | None = None) -> None
+    init(self, timer: (() -> float) | None = None, bias: int | None = None)
     def set_cmd(self, cmd: str) -> None
     def simulate_call(self, name: str) -> None
     def simulate_cmd_complete(self) -> None
@@ -81,5 +81,5 @@ class Profile:
     def snapshot_stats(self) -> None
     def run(self, cmd: str) -> Self
     def runctx(self, cmd: str, globals: dict[str, dynamic], locals: Mapping[str, dynamic]) -> Self
-    def runcall[**P, Element](self, func: Callable[P, Element], /, *args: P.args, **kw: P.kwargs) -> Element
+    def runcall[**P, Element](self, func: (**P) -> Element, /, *args: P.args, **kw: P.kwargs) -> Element
     def calibrate(self, m: int, verbose: int = 0) -> float

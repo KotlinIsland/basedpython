@@ -24,7 +24,7 @@ class NannyNag(Exception):
     Captured and handled in check().
     """
 
-    def __init__(self, lineno: int, msg: str, line: str) -> None
+    init(self, lineno: int, msg: str, line: str)
     def get_lineno(self) -> int
     def get_msg(self) -> str
     def get_line(self) -> str

@@ -9,17 +9,17 @@ from collections.abc import Callable, Container, Iterable, Mapping, Sequence, Se
 from contextlib import AbstractContextManager
 from re import Pattern
 from types import GenericAlias, TracebackType
-from typing import Any, AnyStr, Final, Generic, NoReturn, ParamSpec, Protocol, SupportsAbs, SupportsRound, TypeVar, type_check_only
+from typing import Final, Generic, ParamSpec, Protocol, TypeVar, type_check_only
 from typing_extensions import Never, Self
 from unittest._log import _AssertLogsContext, _LoggingWatcher
 from warnings import WarningMessage
 
 
-DIFF_OMITTED: Final[str]
+final DIFF_OMITTED: str
 
 class _BaseTestCaseContext:
     test_case: TestCase
-    def __init__(self, test_case: TestCase) -> None
+    init(self, test_case: TestCase)
 
 class _AssertRaisesBaseContext(_BaseTestCaseContext):
     expected: type[BaseException] | (*: type[BaseException])
@@ -27,12 +27,12 @@ class _AssertRaisesBaseContext(_BaseTestCaseContext):
     obj_name: str | None
     msg: str | None
 
-    def __init__(
+    init(
         self,
         expected: type[BaseException] | (*: type[BaseException]),
         test_case: TestCase,
         expected_regex: str | Pattern[str] | None = None,
-    ) -> None
+    )
 
     # This returns Self if args is the empty list, and None otherwise.
     # but it's not possible to construct an overload which expresses that
@@ -44,7 +44,7 @@ class _AssertRaisesBaseContext(_BaseTestCaseContext):
         arguments.
         """
 
-def addModuleCleanup[**P](function: Callable[P, object], /, *args: P.args, **kwargs: P.kwargs) -> None:
+def addModuleCleanup[**P](function: (**P) -> object, /, *args: P.args, **kwargs: P.kwargs) -> None:
     """Same as addCleanup, except the cleanup items are called even if
     setUpModule fails (unlike tearDownModule).
     """
@@ -58,18 +58,18 @@ if sys.version_info >= (3, 11):
     def enterModuleContext[Element](cm: AbstractContextManager[Element]) -> Element:
         """Same as enterContext, but module-wide."""
 
-def expectedFailure[FT: Callable[..., Any]](test_item: FT) -> FT
-def skip[FT: Callable[..., Any]](reason: str) -> Callable[[FT], FT]:
+def expectedFailure[FT: (...) -> dynamic](test_item: FT) -> FT
+def skip[FT: (...) -> dynamic](reason: str) -> (FT) -> FT:
     """
     Unconditionally skip a test.
     """
 
-def skipIf[FT: Callable[..., Any]](condition: object, reason: str) -> Callable[[FT], FT]:
+def skipIf[FT: (...) -> dynamic](condition: object, reason: str) -> (FT) -> FT:
     """
     Skip a test if the condition is true.
     """
 
-def skipUnless[FT: Callable[..., Any]](condition: object, reason: str) -> Callable[[FT], FT]:
+def skipUnless[FT: (...) -> dynamic](condition: object, reason: str) -> (FT) -> FT:
     """
     Skip a test unless the condition is true.
     """
@@ -82,10 +82,10 @@ class SkipTest(Exception):
     instead of raising this directly.
     """
 
-    def __init__(self, reason: str, /) -> None
+    init(self, reason: str, /)
 
 @type_check_only
-class _SupportsAbsAndDunderGE(SupportsDunderGE[Any], SupportsAbs[Any], Protocol)
+protocol _SupportsAbsAndDunderGE(SupportsDunderGE[dynamic], SupportsAbs[dynamic])
 
 class TestCase:
     """A class whose instances are single test cases.
@@ -127,7 +127,7 @@ class TestCase:
     _testMethodName: str
     # undocumented
     _testMethodDoc: str
-    def __init__(self, methodName: str = "runTest") -> None:
+    init(self, methodName: str = "runTest"):
         """Create an instance of the class that will use the named test
         method when executed. Raises a ValueError if the instance does
         not have a method with the specified name.
@@ -289,7 +289,7 @@ class TestCase:
     def assertWarns[**P](
         self,
         expected_warning: type[Warning] | (*: type[Warning]),
-        callable: Callable[P, object],
+        callable: (**P) -> object,
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> None:
@@ -328,7 +328,7 @@ class TestCase:
         self,
         expected_warning: type[Warning] | (*: type[Warning]),
         expected_regex: str | Pattern[str],
-        callable: Callable[P, object],
+        callable: (**P) -> object,
         *args: P.args,
         **kwargs: P.kwargs,
     ) -> None:
@@ -412,7 +412,7 @@ class TestCase:
         This method must be used as a context manager.
         """
 
-    def assertAlmostEqual[Other: SupportsSub[Any, Any]](self, first: Other, second: Other, places: None, msg: dynamic, delta: _SupportsAbsAndDunderGE) -> None:
+    def assertAlmostEqual[Other: SupportsSub[dynamic, dynamic]](self, first: Other, second: Other, places: None, msg: dynamic, delta: _SupportsAbsAndDunderGE) -> None:
         """Fail if the two objects are unequal as determined by their
         difference rounded to the given number of decimal places
         (default 7) and comparing to zero, or by comparing that the
@@ -425,7 +425,7 @@ class TestCase:
         If the two objects compare equal then they will automatically
         compare almost equal.
         """
-    def assertAlmostEqual[Other: SupportsSub[Any, Any]](
+    def assertAlmostEqual[Other: SupportsSub[dynamic, dynamic]](
         self, first: Other, second: Other, places: None = None, msg: dynamic = None, *, delta: _SupportsAbsAndDunderGE
     ) -> None
     def assertAlmostEqual[Element](
@@ -445,7 +445,7 @@ class TestCase:
         delta: None = None,
     ) -> None
 
-    def assertNotAlmostEqual[Other: SupportsSub[Any, Any]](self, first: Other, second: Other, places: None, msg: dynamic, delta: _SupportsAbsAndDunderGE) -> None:
+    def assertNotAlmostEqual[Other: SupportsSub[dynamic, dynamic]](self, first: Other, second: Other, places: None, msg: dynamic, delta: _SupportsAbsAndDunderGE) -> None:
         """Fail if the two objects are equal as determined by their
         difference rounded to the given number of decimal places
         (default 7) and comparing to zero, or by comparing that the
@@ -456,7 +456,7 @@ class TestCase:
 
         Objects that are equal automatically fail.
         """
-    def assertNotAlmostEqual[Other: SupportsSub[Any, Any]](
+    def assertNotAlmostEqual[Other: SupportsSub[dynamic, dynamic]](
         self, first: Other, second: Other, places: None = None, msg: dynamic = None, *, delta: _SupportsAbsAndDunderGE
     ) -> None
     def assertNotAlmostEqual[Element](
@@ -540,7 +540,7 @@ class TestCase:
 
         """
 
-    def assertTupleEqual(self, tuple1: (*: Any), tuple2: (*: Any), msg: dynamic = None) -> None:
+    def assertTupleEqual(self, tuple1: (*: dynamic), tuple2: (*: dynamic), msg: dynamic = None) -> None:
         """A tuple-specific equality assertion.
 
         Args:
@@ -581,7 +581,7 @@ class TestCase:
         the specified test method's docstring.
         """
 
-    def addCleanup[**P](self, function: Callable[P, object], /, *args: P.args, **kwargs: P.kwargs) -> None:
+    def addCleanup[**P](self, function: (**P) -> object, /, *args: P.args, **kwargs: P.kwargs) -> None:
         """Add a function, with arguments, to be called when the test is
         completed. Functions added are called on a LIFO basis and are
         called after tearDown on test failure or success.
@@ -602,7 +602,7 @@ class TestCase:
         tearDown.
         """
 
-    class def addClassCleanup[**P](cls, function: Callable[P, object], /, *args: P.args, **kwargs: P.kwargs) -> None:
+    class def addClassCleanup[**P](cls, function: (**P) -> object, /, *args: P.args, **kwargs: P.kwargs) -> None:
         """Same as addCleanup, except the cleanup items are called even if
         setUpClass fails (unlike tearDownClass).
         """
@@ -676,13 +676,13 @@ class FunctionTestCase(TestCase):
     always be called if the set-up ('setUp') function ran successfully.
     """
 
-    def __init__(
+    init(
         self,
-        testFunc: Callable[[], object],
-        setUp: Callable[[], object] | None = None,
-        tearDown: Callable[[], object] | None = None,
+        testFunc: () -> object,
+        setUp: (() -> object) | None = None,
+        tearDown: (() -> object) | None = None,
         description: str | None = None,
-    ) -> None
+    )
     def runTest(self) -> None
     def __hash__(self) -> int
     def __eq__(self, other: object) -> bool

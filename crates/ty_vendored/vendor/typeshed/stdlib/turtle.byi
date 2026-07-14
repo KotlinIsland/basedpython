@@ -80,7 +80,7 @@ from _typeshed import StrPath
 from collections.abc import Callable, Generator, Sequence
 from contextlib import contextmanager
 from tkinter import Canvas, Frame, Misc, PhotoImage, Scrollbar
-from typing import Any, ClassVar, Literal, TypeAlias, TypedDict, type_check_only
+from typing import ClassVar, Literal, TypeAlias, TypedDict, type_check_only
 from typing_extensions import Self, deprecated, disjoint_base
 
 __all__ = [
@@ -220,8 +220,8 @@ if sys.version_info < (3, 13):
 # alias we use for return types. Really, these two aliases should be the
 # same, but as per the "no union returns" typeshed policy, we'll return
 # Any instead.
-_Color: TypeAlias = str | tuple[float, float, float]
-_AnyColor: TypeAlias = Any
+type _Color = str | tuple[float, float, float]
+type _AnyColor = dynamic
 
 @type_check_only
 class _PenState(TypedDict):
@@ -231,14 +231,14 @@ class _PenState(TypedDict):
     fillcolor: _Color
     pensize: int
     speed: int
-    resizemode: Literal["auto", "user", "noresize"]
+    resizemode: "auto" | "user" | "noresize"
     stretchfactor: (float, float)
     shearfactor: float
     outline: int
     tilt: float
 
-_Speed: TypeAlias = str | float
-_PolygonCoords: TypeAlias = Sequence[tuple[float, float]]
+type _Speed = str | float
+type _PolygonCoords = Sequence[tuple[float, float]]
 
 if sys.version_info >= (3, 12):
     class Vec2D(tuple[float, float]):
@@ -257,12 +257,12 @@ if sys.version_info >= (3, 12):
         """
 
         def __new__(cls, x: float, y: float) -> Self
-        def __add__(self, other: (float, float)) -> Vec2D  # type: ignore[override]
+        def __add__(self, other: (float, float)) -> Vec2D
 
         def __mul__(self, other: Vec2D) -> float
         def __mul__(self, other: float) -> Vec2D
 
-        def __rmul__(self, other: float) -> Vec2D  # type: ignore[override]
+        def __rmul__(self, other: float) -> Vec2D
         def __sub__(self, other: (float, float)) -> Vec2D
         def __neg__(self) -> Vec2D
         def __abs__(self) -> float
@@ -287,12 +287,12 @@ else:
         """
 
         def __new__(cls, x: float, y: float) -> Self
-        def __add__(self, other: (float, float)) -> Vec2D  # type: ignore[override]
+        def __add__(self, other: (float, float)) -> Vec2D
 
         def __mul__(self, other: Vec2D) -> float
         def __mul__(self, other: float) -> Vec2D
 
-        def __rmul__(self, other: float) -> Vec2D  # type: ignore[override]
+        def __rmul__(self, other: float) -> Vec2D
         def __sub__(self, other: (float, float)) -> Vec2D
         def __neg__(self) -> Vec2D
         def __abs__(self) -> float
@@ -300,7 +300,7 @@ else:
             """rotate self counterclockwise by angle"""
 
 # Does not actually inherit from Canvas, but dynamically gets all methods of Canvas
-class ScrolledCanvas(Canvas, Frame):  # type: ignore[misc]
+class ScrolledCanvas(Canvas, Frame):
     """Modeled after the scrolled canvas class from Grayons's Tkinter book.
 
     Used as the default canvas, which pops up automatically when
@@ -310,9 +310,9 @@ class ScrolledCanvas(Canvas, Frame):  # type: ignore[misc]
     bg: str
     hscroll: Scrollbar
     vscroll: Scrollbar
-    def __init__(
+    init(
         self, master: Misc | None, width: int = 500, height: int = 350, canvwidth: int = 600, canvheight: int = 500
-    ) -> None
+    )
     canvwidth: int
     canvheight: int
     def reset(self, canvwidth: int | None = None, canvheight: int | None = None, bg: str | None = None) -> None:
@@ -331,7 +331,7 @@ class TurtleScreenBase:
     canvheight: int
     xscale: float
     yscale: float
-    def __init__(self, cv: Canvas) -> None
+    init(self, cv: Canvas)
     def mainloop(self) -> None:
         """Starts event loop - calling Tkinter's mainloop function.
 
@@ -399,9 +399,9 @@ class Shape:
     an image or a list constructed using the addcomponent method.
     """
 
-    def __init__(
-        self, type_: Literal["polygon", "image", "compound"], data: _PolygonCoords | PhotoImage | None = None
-    ) -> None
+    init(
+        self, type_: "polygon" | "image" | "compound", data: _PolygonCoords | PhotoImage | None = None
+    )
     def addcomponent(self, poly: _PolygonCoords, fill: _Color, outline: _Color | None = None) -> None:
         """Add component to a shape of type compound.
 
@@ -427,9 +427,9 @@ class TurtleScreen(TurtleScreenBase):
     which is Tkinter in this case.
     """
 
-    def __init__(
-        self, cv: Canvas, mode: Literal["standard", "logo", "world"] = "standard", colormode: float = 1.0, delay: int = 10
-    ) -> None
+    init(
+        self, cv: Canvas, mode: "standard" | "logo" | "world" = "standard", colormode: float = 1.0, delay: int = 10
+    )
     def clear(self) -> None:
         """Delete all drawings and all turtles from the TurtleScreen.
 
@@ -466,7 +466,7 @@ class TurtleScreen(TurtleScreenBase):
         >>> mode()
         'logo'
         """
-    def mode(self, mode: Literal["standard", "logo", "world"]) -> None
+    def mode(self, mode: "standard" | "logo" | "world") -> None
 
     def setworldcoordinates(self, llx: float, lly: float, urx: float, ury: float) -> None:
         """Set up a user defined coordinate-system.
@@ -674,7 +674,7 @@ class TurtleScreen(TurtleScreenBase):
         ['arrow', 'blank', 'circle', ... , 'turtle']
         """
 
-    def onclick(self, fun: Callable[[float, float], object], btn: int = 1, add: bool | None = None) -> None:
+    def onclick(self, fun: (float, float) -> object, btn: int = 1, add: bool | None = None) -> None:
         """Bind fun to mouse-click event on canvas.
 
         Arguments:
@@ -690,7 +690,7 @@ class TurtleScreen(TurtleScreenBase):
         >>> screen.onclick(None)
         """
 
-    def onkey(self, fun: Callable[[], object], key: str) -> None:
+    def onkey(self, fun: () -> object, key: str) -> None:
         """Bind fun to key-release event of key.
 
         Arguments:
@@ -725,7 +725,7 @@ class TurtleScreen(TurtleScreenBase):
         >>> screen.listen()
         """
 
-    def ontimer(self, fun: Callable[[], object], t: int = 0) -> None:
+    def ontimer(self, fun: () -> object, t: int = 0) -> None:
         """Install a timer, which calls fun after t milliseconds.
 
         Arguments:
@@ -803,7 +803,7 @@ class TurtleScreen(TurtleScreenBase):
     resetscreen = reset
     clearscreen = clear
     addshape = register_shape
-    def onkeypress(self, fun: Callable[[], object], key: str | None = None) -> None:
+    def onkeypress(self, fun: () -> object, key: str | None = None) -> None:
         """Bind fun to key-press event of key if key is given,
         or to any key-press-event if no key is given.
 
@@ -840,7 +840,7 @@ class TNavigator:
     DEFAULT_MODE: str
     DEFAULT_ANGLEOFFSET: int
     DEFAULT_ANGLEORIENT: int
-    def __init__(self, mode: Literal["standard", "logo", "world"] = "standard") -> None
+    init(self, mode: "standard" | "logo" | "world" = "standard")
     def reset(self) -> None:
         """reset turtle to its initial values
 
@@ -1218,7 +1218,7 @@ class TPen:
     Implements drawing properties.
     """
 
-    def __init__(self, resizemode: Literal["auto", "user", "noresize"] = "noresize") -> None
+    init(self, resizemode: "auto" | "user" | "noresize" = "noresize")
 
     def resizemode(self, rmode: None = None) -> str:
         """Set resizemode to one of the values: "auto", "user", "noresize".
@@ -1242,7 +1242,7 @@ class TPen:
         >>> turtle.resizemode()
         'noresize'
         """
-    def resizemode(self, rmode: Literal["auto", "user", "noresize"]) -> None
+    def resizemode(self, rmode: "auto" | "user" | "noresize") -> None
 
     def pensize(self, width: None = None) -> int:
         """Set or return the line thickness.
@@ -1537,7 +1537,7 @@ class TPen:
         fillcolor: _Color = ...,
         pensize: int = ...,
         speed: int = ...,
-        resizemode: Literal["auto", "user", "noresize"] = ...,
+        resizemode: "auto" | "user" | "noresize" = ...,
         stretchfactor: (float, float) = ...,
         outline: int = ...,
         tilt: float = ...,
@@ -1551,7 +1551,7 @@ class TPen:
     st = showturtle
     ht = hideturtle
 
-class RawTurtle(TPen, TNavigator):  # type: ignore[misc]  # Conflicting methods in base classes
+class RawTurtle(TPen, TNavigator):
     """Animation part of the RawTurtle.
     Puts RawTurtle upon a TurtleScreen and provides tools for
     its animation.
@@ -1559,13 +1559,13 @@ class RawTurtle(TPen, TNavigator):  # type: ignore[misc]  # Conflicting methods 
 
     screen: TurtleScreen
     screens: ClassVar[list[TurtleScreen]]
-    def __init__(
+    init(
         self,
         canvas: Canvas | TurtleScreen | None = None,
         shape: str = "classic",
         undobuffersize: int = 1000,
         visible: bool = True,
-    ) -> None
+    )
     def reset(self) -> None:
         """Delete the turtle's drawings and restore its default values.
 
@@ -2040,7 +2040,7 @@ class RawTurtle(TPen, TNavigator):  # type: ignore[misc]  # Conflicting methods 
         """
 
     getpen = getturtle
-    def onclick(self, fun: Callable[[float, float], object], btn: int = 1, add: bool | None = None) -> None:
+    def onclick(self, fun: (float, float) -> object, btn: int = 1, add: bool | None = None) -> None:
         """Bind fun to mouse-click event on this turtle on canvas.
 
         Arguments:
@@ -2059,7 +2059,7 @@ class RawTurtle(TPen, TNavigator):  # type: ignore[misc]  # Conflicting methods 
         >>> onclick(None)  # event-binding will be removed
         """
 
-    def onrelease(self, fun: Callable[[float, float], object], btn: int = 1, add: bool | None = None) -> None:
+    def onrelease(self, fun: (float, float) -> object, btn: int = 1, add: bool | None = None) -> None:
         """Bind fun to mouse-button-release event on this turtle on canvas.
 
         Arguments:
@@ -2082,7 +2082,7 @@ class RawTurtle(TPen, TNavigator):  # type: ignore[misc]  # Conflicting methods 
         transparent.
         """
 
-    def ondrag(self, fun: Callable[[float, float], object], btn: int = 1, add: bool | None = None) -> None:
+    def ondrag(self, fun: (float, float) -> object, btn: int = 1, add: bool | None = None) -> None:
         """Bind fun to mouse-move event on this turtle on canvas.
 
         Arguments:
@@ -2122,7 +2122,7 @@ class RawTurtle(TPen, TNavigator):  # type: ignore[misc]  # Conflicting methods 
     turtlesize = shapesize
 
 class _Screen(TurtleScreen):
-    def __init__(self) -> None
+    init(self)
     # Note int and float are interpreted differently, hence the Union instead of just float
     def setup(
         self,
@@ -2203,7 +2203,7 @@ class Turtle(RawTurtle):
     Turtle method is called a TurtleScreen object is automatically created.
     """
 
-    def __init__(self, shape: str = "classic", undobuffersize: int = 1000, visible: bool = True) -> None
+    init(self, shape: str = "classic", undobuffersize: int = 1000, visible: bool = True)
 
 RawPen = RawTurtle
 Pen = Turtle
@@ -2309,7 +2309,7 @@ def mode(mode: None = None) -> str:
     >>> mode()
     'logo'
     """
-def mode(mode: Literal["standard", "logo", "world"]) -> None
+def mode(mode: "standard" | "logo" | "world") -> None
 
 def setworldcoordinates(llx: float, lly: float, urx: float, ury: float) -> None:
     """Set up a user defined coordinate-system.
@@ -2528,7 +2528,7 @@ def getshapes() -> list[str]:
     ['arrow', 'blank', 'circle', ... , 'turtle']
     """
 
-def onclick(fun: Callable[[float, float], object], btn: int = 1, add: bool | None = None) -> None:
+def onclick(fun: (float, float) -> object, btn: int = 1, add: bool | None = None) -> None:
     """Bind fun to mouse-click event on this turtle on canvas.
 
     Arguments:
@@ -2547,7 +2547,7 @@ def onclick(fun: Callable[[float, float], object], btn: int = 1, add: bool | Non
     >>> onclick(None)  # event-binding will be removed
     """
 
-def onkey(fun: Callable[[], object], key: str) -> None:
+def onkey(fun: () -> object, key: str) -> None:
     """Bind fun to key-release event of key.
 
     Arguments:
@@ -2582,7 +2582,7 @@ def listen(xdummy: float | None = None, ydummy: float | None = None) -> None:
     >>> listen()
     """
 
-def ontimer(fun: Callable[[], object], t: int = 0) -> None:
+def ontimer(fun: () -> object, t: int = 0) -> None:
     """Install a timer, which calls fun after t milliseconds.
 
     Arguments:
@@ -2660,7 +2660,7 @@ resetscreen = reset
 clearscreen = clear
 addshape = register_shape
 
-def onkeypress(fun: Callable[[], object], key: str | None = None) -> None:
+def onkeypress(fun: () -> object, key: str | None = None) -> None:
     """Bind fun to key-press event of key if key is given,
     or to any key-press-event if no key is given.
 
@@ -3144,7 +3144,7 @@ def resizemode(rmode: None = None) -> str:
     >>> resizemode()
     'noresize'
     """
-def resizemode(rmode: Literal["auto", "user", "noresize"]) -> None
+def resizemode(rmode: "auto" | "user" | "noresize") -> None
 
 def pensize(width: None = None) -> int:
     """Set or return the line thickness.
@@ -3432,7 +3432,7 @@ def pen(
     fillcolor: _Color = ...,
     pensize: int = ...,
     speed: int = ...,
-    resizemode: Literal["auto", "user", "noresize"] = ...,
+    resizemode: "auto" | "user" | "noresize" = ...,
     stretchfactor: (float, float) = ...,
     outline: int = ...,
     tilt: float = ...,
@@ -3910,7 +3910,7 @@ def getturtle() -> Turtle:
 
 getpen = getturtle
 
-def onrelease(fun: Callable[[float, float], object], btn: int = 1, add: bool | None = None) -> None:
+def onrelease(fun: (float, float) -> object, btn: int = 1, add: bool | None = None) -> None:
     """Bind fun to mouse-button-release event on this turtle on canvas.
 
     Arguments:
@@ -3933,7 +3933,7 @@ def onrelease(fun: Callable[[float, float], object], btn: int = 1, add: bool | N
     transparent.
     """
 
-def ondrag(fun: Callable[[float, float], object], btn: int = 1, add: bool | None = None) -> None:
+def ondrag(fun: (float, float) -> object, btn: int = 1, add: bool | None = None) -> None:
     """Bind fun to mouse-move event on this turtle on canvas.
 
     Arguments:

@@ -6823,10 +6823,10 @@ Source with applied edits:
           |
 
         info[inlay-hint-location]: Inlay Hint Target
-          --> stdlib/typing.byi:LL:24
+          --> stdlib/typing.byi:LL:16
            |
-        LL |     def __init__(self, name: str, tp: Any) -> None  # AnnotationForm
-           |                        ^^^^
+        LL |     init(self, name: str, tp: dynamic)  # AnnotationForm
+           |                ^^^^
            |
         info: Source
           --> main2.py:LL:44
@@ -6836,10 +6836,10 @@ Source with applied edits:
            |
 
         info[inlay-hint-location]: Inlay Hint Target
-          --> stdlib/typing.byi:LL:35
+          --> stdlib/typing.byi:LL:27
            |
-        LL |     def __init__(self, name: str, tp: Any) -> None  # AnnotationForm
-           |                                   ^^
+        LL |     init(self, name: str, tp: dynamic)  # AnnotationForm
+           |                           ^^
            |
         info: Source
           --> main2.py:LL:56
@@ -7046,7 +7046,7 @@ Source with applied edits:
         info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/typing.byi:LL:26
            |
-        LL |         def __new__(cls, name: str, value: Any, *, type_params: (*: _TypeParameter) = ()) -> Self
+        LL |         def __new__(cls, name: str, value: dynamic, *, type_params: (*: _TypeParameter) = ()) -> Self
            |                          ^^^^
            |
         info: Source
@@ -7059,7 +7059,7 @@ Source with applied edits:
         info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/typing.byi:LL:37
            |
-        LL |         def __new__(cls, name: str, value: Any, *, type_params: (*: _TypeParameter) = ()) -> Self
+        LL |         def __new__(cls, name: str, value: dynamic, *, type_params: (*: _TypeParameter) = ()) -> Self
            |                                     ^^^^^
            |
         info: Source

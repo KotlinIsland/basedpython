@@ -99,9 +99,9 @@ S_IFDIR: Final = 0o040000
 
 # These are 0 on systems that don't support the specific kind of file.
 # Example: Linux doesn't support door files, so S_IFDOOR is 0 on linux.
-S_IFDOOR: Final[int]
-S_IFPORT: Final[int]
-S_IFWHT: Final[int]
+final S_IFDOOR: int
+final S_IFPORT: int
+final S_IFWHT: int
 
 S_ISUID: Final = 0o4000
 S_ISGID: Final = 0o2000
@@ -230,7 +230,7 @@ if sys.platform == "win32":
 
 if sys.version_info >= (3, 13):
     # Varies by platform.
-    SF_SETTABLE: Final[int]
+    final SF_SETTABLE: int
     # https://github.com/python/cpython/issues/114081#issuecomment-2119017790
     # SF_RESTRICTED: Literal[0x00080000]
     SF_FIRMLINK: Final = 0x00800000

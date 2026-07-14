@@ -28,18 +28,18 @@ from distutils.command.register import register
 from distutils.command.sdist import sdist
 from distutils.command.upload import upload
 from re import Pattern
-from typing import IO, ClassVar, Literal, TypeAlias, TypeVar
+from typing import ClassVar, Literal, TypeAlias, TypeVar
 
 command_re: Pattern[str]
 
-_OptionsList: TypeAlias = list[tuple[str, str | None, str, int] | tuple[str, str | None, str]]
+type _OptionsList = list[tuple[str, str | None, str, int] | tuple[str, str | None, str]]
 
 class DistributionMetadata:
     """Dummy class to hold the distribution meta-data: name, version,
     author, and so forth.
     """
 
-    def __init__(self, path: StrOrBytesPath | None = None) -> None
+    init(self, path: StrOrBytesPath | None = None)
     name: str | None
     version: str | None
     author: str | None
@@ -107,7 +107,7 @@ class Distribution:
 
     cmdclass: dict[str, type[Command]]
     metadata: DistributionMetadata
-    def __init__(self, attrs: MutableMapping[str, Incomplete] | None = None) -> None:
+    init(self, attrs: MutableMapping[str, Incomplete] | None = None):
         """Construct a new Distribution instance: initialize all the
         attributes of a Distribution, and then use 'attrs' (a dictionary
         mapping attribute names to values) to assign some of those
@@ -131,9 +131,9 @@ class Distribution:
     display_options: ClassVar[_OptionsList]
     display_option_names: ClassVar[list[str]]
     negative_opt: ClassVar[dict[str, str]]
-    verbose: bool | Literal[0, 1]
-    dry_run: bool | Literal[0, 1]
-    help: bool | Literal[0, 1]
+    verbose: bool | 0 | 1
+    dry_run: bool | 0 | 1
+    help: bool | 0 | 1
     command_packages: list[str] | None
     script_name: str | None
     script_args: list[str] | None
@@ -232,36 +232,36 @@ class Distribution:
         """Return a list of packages from which commands are loaded."""
 
     # NOTE: This list comes directly from the distutils/command folder. Minus bdist_msi and bdist_wininst.
-    def get_command_obj(self, command: Literal["bdist"], create: Literal[1, True] = 1) -> bdist:
+    def get_command_obj(self, command: "bdist", create: 1 | True = 1) -> bdist:
         """Return the command object for 'command'.  Normally this object
         is cached on a previous call to 'get_command_obj()'; if no command
         object for 'command' is in the cache, then we either create and
         return it (if 'create' is true) or return None.
         """
-    def get_command_obj(self, command: Literal["bdist_dumb"], create: Literal[1, True] = 1) -> bdist_dumb
-    def get_command_obj(self, command: Literal["bdist_rpm"], create: Literal[1, True] = 1) -> bdist_rpm
-    def get_command_obj(self, command: Literal["build"], create: Literal[1, True] = 1) -> build
-    def get_command_obj(self, command: Literal["build_clib"], create: Literal[1, True] = 1) -> build_clib
-    def get_command_obj(self, command: Literal["build_ext"], create: Literal[1, True] = 1) -> build_ext
-    def get_command_obj(self, command: Literal["build_py"], create: Literal[1, True] = 1) -> build_py
-    def get_command_obj(self, command: Literal["build_scripts"], create: Literal[1, True] = 1) -> build_scripts
-    def get_command_obj(self, command: Literal["check"], create: Literal[1, True] = 1) -> check
-    def get_command_obj(self, command: Literal["clean"], create: Literal[1, True] = 1) -> clean
-    def get_command_obj(self, command: Literal["config"], create: Literal[1, True] = 1) -> config
-    def get_command_obj(self, command: Literal["install"], create: Literal[1, True] = 1) -> install
-    def get_command_obj(self, command: Literal["install_data"], create: Literal[1, True] = 1) -> install_data
-    def get_command_obj(self, command: Literal["install_egg_info"], create: Literal[1, True] = 1) -> install_egg_info
-    def get_command_obj(self, command: Literal["install_headers"], create: Literal[1, True] = 1) -> install_headers
-    def get_command_obj(self, command: Literal["install_lib"], create: Literal[1, True] = 1) -> install_lib
-    def get_command_obj(self, command: Literal["install_scripts"], create: Literal[1, True] = 1) -> install_scripts
-    def get_command_obj(self, command: Literal["register"], create: Literal[1, True] = 1) -> register
-    def get_command_obj(self, command: Literal["sdist"], create: Literal[1, True] = 1) -> sdist
-    def get_command_obj(self, command: Literal["upload"], create: Literal[1, True] = 1) -> upload
-    def get_command_obj(self, command: str, create: Literal[1, True] = 1) -> Command
+    def get_command_obj(self, command: "bdist_dumb", create: 1 | True = 1) -> bdist_dumb
+    def get_command_obj(self, command: "bdist_rpm", create: 1 | True = 1) -> bdist_rpm
+    def get_command_obj(self, command: "build", create: 1 | True = 1) -> build
+    def get_command_obj(self, command: "build_clib", create: 1 | True = 1) -> build_clib
+    def get_command_obj(self, command: "build_ext", create: 1 | True = 1) -> build_ext
+    def get_command_obj(self, command: "build_py", create: 1 | True = 1) -> build_py
+    def get_command_obj(self, command: "build_scripts", create: 1 | True = 1) -> build_scripts
+    def get_command_obj(self, command: "check", create: 1 | True = 1) -> check
+    def get_command_obj(self, command: "clean", create: 1 | True = 1) -> clean
+    def get_command_obj(self, command: "config", create: 1 | True = 1) -> config
+    def get_command_obj(self, command: "install", create: 1 | True = 1) -> install
+    def get_command_obj(self, command: "install_data", create: 1 | True = 1) -> install_data
+    def get_command_obj(self, command: "install_egg_info", create: 1 | True = 1) -> install_egg_info
+    def get_command_obj(self, command: "install_headers", create: 1 | True = 1) -> install_headers
+    def get_command_obj(self, command: "install_lib", create: 1 | True = 1) -> install_lib
+    def get_command_obj(self, command: "install_scripts", create: 1 | True = 1) -> install_scripts
+    def get_command_obj(self, command: "register", create: 1 | True = 1) -> register
+    def get_command_obj(self, command: "sdist", create: 1 | True = 1) -> sdist
+    def get_command_obj(self, command: "upload", create: 1 | True = 1) -> upload
+    def get_command_obj(self, command: str, create: 1 | True = 1) -> Command
     # Not replicating the overloads for "Command | None", user may use "isinstance"
-    def get_command_obj(self, command: str, create: Literal[0, False]) -> Command | None
+    def get_command_obj(self, command: str, create: 0 | False) -> Command | None
 
-    def get_command_class(self, command: Literal["bdist"]) -> type[bdist]:
+    def get_command_class(self, command: "bdist") -> type[bdist]:
         """Return the class that implements the Distutils command named by
         'command'.  First we check the 'cmdclass' dictionary; if the
         command is mentioned there, we fetch the class object from the
@@ -273,28 +273,28 @@ class Distribution:
         Raises DistutilsModuleError if the expected module could not be
         found, or if that module does not define the expected class.
         """
-    def get_command_class(self, command: Literal["bdist_dumb"]) -> type[bdist_dumb]
-    def get_command_class(self, command: Literal["bdist_rpm"]) -> type[bdist_rpm]
-    def get_command_class(self, command: Literal["build"]) -> type[build]
-    def get_command_class(self, command: Literal["build_clib"]) -> type[build_clib]
-    def get_command_class(self, command: Literal["build_ext"]) -> type[build_ext]
-    def get_command_class(self, command: Literal["build_py"]) -> type[build_py]
-    def get_command_class(self, command: Literal["build_scripts"]) -> type[build_scripts]
-    def get_command_class(self, command: Literal["check"]) -> type[check]
-    def get_command_class(self, command: Literal["clean"]) -> type[clean]
-    def get_command_class(self, command: Literal["config"]) -> type[config]
-    def get_command_class(self, command: Literal["install"]) -> type[install]
-    def get_command_class(self, command: Literal["install_data"]) -> type[install_data]
-    def get_command_class(self, command: Literal["install_egg_info"]) -> type[install_egg_info]
-    def get_command_class(self, command: Literal["install_headers"]) -> type[install_headers]
-    def get_command_class(self, command: Literal["install_lib"]) -> type[install_lib]
-    def get_command_class(self, command: Literal["install_scripts"]) -> type[install_scripts]
-    def get_command_class(self, command: Literal["register"]) -> type[register]
-    def get_command_class(self, command: Literal["sdist"]) -> type[sdist]
-    def get_command_class(self, command: Literal["upload"]) -> type[upload]
+    def get_command_class(self, command: "bdist_dumb") -> type[bdist_dumb]
+    def get_command_class(self, command: "bdist_rpm") -> type[bdist_rpm]
+    def get_command_class(self, command: "build") -> type[build]
+    def get_command_class(self, command: "build_clib") -> type[build_clib]
+    def get_command_class(self, command: "build_ext") -> type[build_ext]
+    def get_command_class(self, command: "build_py") -> type[build_py]
+    def get_command_class(self, command: "build_scripts") -> type[build_scripts]
+    def get_command_class(self, command: "check") -> type[check]
+    def get_command_class(self, command: "clean") -> type[clean]
+    def get_command_class(self, command: "config") -> type[config]
+    def get_command_class(self, command: "install") -> type[install]
+    def get_command_class(self, command: "install_data") -> type[install_data]
+    def get_command_class(self, command: "install_egg_info") -> type[install_egg_info]
+    def get_command_class(self, command: "install_headers") -> type[install_headers]
+    def get_command_class(self, command: "install_lib") -> type[install_lib]
+    def get_command_class(self, command: "install_scripts") -> type[install_scripts]
+    def get_command_class(self, command: "register") -> type[register]
+    def get_command_class(self, command: "sdist") -> type[sdist]
+    def get_command_class(self, command: "upload") -> type[upload]
     def get_command_class(self, command: str) -> type[Command]
 
-    def reinitialize_command(self, command: Literal["bdist"], reinit_subcommands: bool = False) -> bdist:
+    def reinitialize_command(self, command: "bdist", reinit_subcommands: bool = False) -> bdist:
         """Reinitializes a command to the state it was in when first
         returned by 'get_command_obj()': ie., initialized but not yet
         finalized.  This provides the opportunity to sneak option
@@ -313,27 +313,27 @@ class Distribution:
 
         Returns the reinitialized command object.
         """
-    def reinitialize_command(self, command: Literal["bdist_dumb"], reinit_subcommands: bool = False) -> bdist_dumb
-    def reinitialize_command(self, command: Literal["bdist_rpm"], reinit_subcommands: bool = False) -> bdist_rpm
-    def reinitialize_command(self, command: Literal["build"], reinit_subcommands: bool = False) -> build
-    def reinitialize_command(self, command: Literal["build_clib"], reinit_subcommands: bool = False) -> build_clib
-    def reinitialize_command(self, command: Literal["build_ext"], reinit_subcommands: bool = False) -> build_ext
-    def reinitialize_command(self, command: Literal["build_py"], reinit_subcommands: bool = False) -> build_py
-    def reinitialize_command(self, command: Literal["build_scripts"], reinit_subcommands: bool = False) -> build_scripts
-    def reinitialize_command(self, command: Literal["check"], reinit_subcommands: bool = False) -> check
-    def reinitialize_command(self, command: Literal["clean"], reinit_subcommands: bool = False) -> clean
-    def reinitialize_command(self, command: Literal["config"], reinit_subcommands: bool = False) -> config
-    def reinitialize_command(self, command: Literal["install"], reinit_subcommands: bool = False) -> install
-    def reinitialize_command(self, command: Literal["install_data"], reinit_subcommands: bool = False) -> install_data
+    def reinitialize_command(self, command: "bdist_dumb", reinit_subcommands: bool = False) -> bdist_dumb
+    def reinitialize_command(self, command: "bdist_rpm", reinit_subcommands: bool = False) -> bdist_rpm
+    def reinitialize_command(self, command: "build", reinit_subcommands: bool = False) -> build
+    def reinitialize_command(self, command: "build_clib", reinit_subcommands: bool = False) -> build_clib
+    def reinitialize_command(self, command: "build_ext", reinit_subcommands: bool = False) -> build_ext
+    def reinitialize_command(self, command: "build_py", reinit_subcommands: bool = False) -> build_py
+    def reinitialize_command(self, command: "build_scripts", reinit_subcommands: bool = False) -> build_scripts
+    def reinitialize_command(self, command: "check", reinit_subcommands: bool = False) -> check
+    def reinitialize_command(self, command: "clean", reinit_subcommands: bool = False) -> clean
+    def reinitialize_command(self, command: "config", reinit_subcommands: bool = False) -> config
+    def reinitialize_command(self, command: "install", reinit_subcommands: bool = False) -> install
+    def reinitialize_command(self, command: "install_data", reinit_subcommands: bool = False) -> install_data
     def reinitialize_command(
-        self, command: Literal["install_egg_info"], reinit_subcommands: bool = False
+        self, command: "install_egg_info", reinit_subcommands: bool = False
     ) -> install_egg_info
-    def reinitialize_command(self, command: Literal["install_headers"], reinit_subcommands: bool = False) -> install_headers
-    def reinitialize_command(self, command: Literal["install_lib"], reinit_subcommands: bool = False) -> install_lib
-    def reinitialize_command(self, command: Literal["install_scripts"], reinit_subcommands: bool = False) -> install_scripts
-    def reinitialize_command(self, command: Literal["register"], reinit_subcommands: bool = False) -> register
-    def reinitialize_command(self, command: Literal["sdist"], reinit_subcommands: bool = False) -> sdist
-    def reinitialize_command(self, command: Literal["upload"], reinit_subcommands: bool = False) -> upload
+    def reinitialize_command(self, command: "install_headers", reinit_subcommands: bool = False) -> install_headers
+    def reinitialize_command(self, command: "install_lib", reinit_subcommands: bool = False) -> install_lib
+    def reinitialize_command(self, command: "install_scripts", reinit_subcommands: bool = False) -> install_scripts
+    def reinitialize_command(self, command: "register", reinit_subcommands: bool = False) -> register
+    def reinitialize_command(self, command: "sdist", reinit_subcommands: bool = False) -> sdist
+    def reinitialize_command(self, command: "upload", reinit_subcommands: bool = False) -> upload
     def reinitialize_command(self, command: str, reinit_subcommands: bool = False) -> Command
     def reinitialize_command[CommandT: Command](self, command: CommandT, reinit_subcommands: bool = False) -> CommandT
 
@@ -386,24 +386,24 @@ class Distribution:
     def get_obsoletes(self) -> list[str]
 
     # Default attributes generated in __init__ from self.display_option_names
-    help_commands: bool | Literal[0]
-    name: str | Literal[0]
-    version: str | Literal[0]
-    fullname: str | Literal[0]
-    author: str | Literal[0]
-    author_email: str | Literal[0]
-    maintainer: str | Literal[0]
-    maintainer_email: str | Literal[0]
-    contact: str | Literal[0]
-    contact_email: str | Literal[0]
-    url: str | Literal[0]
-    license: str | Literal[0]
-    licence: str | Literal[0]
-    description: str | Literal[0]
-    long_description: str | Literal[0]
-    platforms: str | list[str] | Literal[0]
-    classifiers: str | list[str] | Literal[0]
-    keywords: str | list[str] | Literal[0]
-    provides: list[str] | Literal[0]
-    requires: list[str] | Literal[0]
-    obsoletes: list[str] | Literal[0]
+    help_commands: bool | 0
+    name: str | 0
+    version: str | 0
+    fullname: str | 0
+    author: str | 0
+    author_email: str | 0
+    maintainer: str | 0
+    maintainer_email: str | 0
+    contact: str | 0
+    contact_email: str | 0
+    url: str | 0
+    license: str | 0
+    licence: str | 0
+    description: str | 0
+    long_description: str | 0
+    platforms: str | list[str] | 0
+    classifiers: str | list[str] | 0
+    keywords: str | list[str] | 0
+    provides: list[str] | 0
+    requires: list[str] | 0
+    obsoletes: list[str] | 0

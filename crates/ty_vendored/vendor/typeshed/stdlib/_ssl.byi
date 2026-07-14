@@ -19,10 +19,10 @@ from ssl import (
 from typing import ClassVar, Final, Literal, TypeAlias, TypedDict, final, type_check_only
 from typing_extensions import NotRequired, Self, deprecated, disjoint_base
 
-_PasswordType: TypeAlias = Callable[[], str | bytes | bytearray] | str | bytes | bytearray
-_PCTRTT: TypeAlias = tuple[tuple[str, str], ...]
-_PCTRTTT: TypeAlias = tuple[_PCTRTT, ...]
-_PeerCertRetDictType: TypeAlias = dict[str, str | _PCTRTTT | _PCTRTT]
+type _PasswordType = (() -> (str | bytes | bytearray)) | str | bytes | bytearray
+type _PCTRTT = (*: tuple[str, str])
+type _PCTRTTT = (*: _PCTRTT)
+type _PeerCertRetDictType = dict[str, str | _PCTRTTT | _PCTRTT]
 
 @type_check_only
 class _Cipher(TypedDict):
@@ -87,7 +87,7 @@ if sys.version_info >= (3, 15):
     def get_sigalgs() -> list[str]
 
 if sys.platform == "win32":
-    _EnumRetType: TypeAlias = list[tuple[bytes, str, set[str] | bool]]
+    type _EnumRetType = list[tuple[bytes, str, set[str] | bool]]
     def enum_certificates(store_name: str) -> _EnumRetType:
         """Retrieve certificates from Windows' cert store.
 
@@ -132,7 +132,7 @@ class _SSLContext:
     security_level: int
     """The current security level."""
 
-    sni_callback: Callable[[SSLObject, str, SSLContext], None | int] | None
+    sni_callback: ((SSLObject, str, SSLContext) -> (None | int)) | None
     """Set a callback that will be called when a server name is provided by the SSL/TLS client in the SNI extension.
 
     If the argument is None then the callback is disabled.  The method
@@ -155,7 +155,7 @@ class _SSLContext:
         have been used at least once.
         """
 
-    def get_ca_certs(self, binary_form: Literal[False] = False) -> list[_PeerCertRetDictType]:
+    def get_ca_certs(self, binary_form: False = False) -> list[_PeerCertRetDictType]:
         """Returns a list of dicts with information of loaded CA certs.
 
         If the optional argument is True, returns a DER-encoded copy of the
@@ -164,7 +164,7 @@ class _SSLContext:
         NOTE: Certificates in a capath directory aren't loaded unless they
         have been used at least once.
         """
-    def get_ca_certs(self, binary_form: Literal[True]) -> list[bytes]
+    def get_ca_certs(self, binary_form: True) -> list[bytes]
     def get_ca_certs(self, binary_form: bool = False) -> dynamic
 
     def get_ciphers(self) -> list[_Cipher]
@@ -189,9 +189,9 @@ class _SSLContext:
         def set_groups(self, grouplist: str, /) -> None
         def set_server_sigalgs(self, sigalgslist: str, /) -> None
     if sys.version_info >= (3, 13):
-        def set_psk_client_callback(self, callback: Callable[[str | None], (str | None, bytes)] | None) -> None
+        def set_psk_client_callback(self, callback: ((str | None) -> (str | None, bytes)) | None) -> None
         def set_psk_server_callback(
-            self, callback: Callable[[str | None], bytes] | None, identity_hint: str | None = None
+            self, callback: ((str | None) -> bytes) | None, identity_hint: str | None = None
         ) -> None
 
 final class MemoryBIO:
@@ -224,26 +224,16 @@ final class MemoryBIO:
         """
 
 final class SSLSession:
-    __hash__: ClassVar[None]  # type: ignore[assignment]
-    @property
-    def has_ticket(self) -> bool:
-        """Does the session contain a ticket?"""
+    __hash__: ClassVar[None]
+    let has_ticket: bool
 
-    @property
-    def id(self) -> bytes:
-        """Session ID."""
+    let id: bytes
 
-    @property
-    def ticket_lifetime_hint(self) -> int:
-        """Ticket life time hint."""
+    let ticket_lifetime_hint: int
 
-    @property
-    def time(self) -> int:
-        """Session creation time (seconds since epoch)."""
+    let time: int
 
-    @property
-    def timeout(self) -> int:
-        """Session timeout (delta in seconds)."""
+    let timeout: int
 
 # _ssl.Certificate is weird: it can't be instantiated or subclassed.
 # Instances can only be created via methods of the private _ssl._SSLSocket class,
@@ -259,8 +249,8 @@ final class Certificate:
     def get_info(self) -> _CertInfo
 
     def public_bytes(self) -> str
-    def public_bytes(self, format: Literal[1] = 1, /) -> str  # ENCODING_PEM
-    def public_bytes(self, format: Literal[2], /) -> bytes  # ENCODING_DER
+    def public_bytes(self, format: 1 = 1, /) -> str  # ENCODING_PEM
+    def public_bytes(self, format: 2, /) -> bytes  # ENCODING_DER
     def public_bytes(self, format: int, /) -> str | bytes
 
 if sys.version_info < (3, 12):
@@ -268,7 +258,7 @@ if sys.version_info < (3, 12):
     err_names_to_codes: dict[str, (int, int)]
     lib_codes_to_names: dict[int, str]
 
-_DEFAULT_CIPHERS: Final[str]
+final _DEFAULT_CIPHERS: str
 
 # SSL error numbers
 SSL_ERROR_ZERO_RETURN: Final = 6
@@ -334,7 +324,7 @@ PROTOCOL_TLSv1_1: Final = 4
 PROTOCOL_TLSv1_2: Final = 5
 
 # protocol options
-OP_ALL: Final[int]
+final OP_ALL: int
 OP_NO_SSLv2: Final = 0x0
 OP_NO_SSLv3: Final = 0x2000000
 OP_NO_TLSv1: Final = 0x4000000
@@ -369,33 +359,33 @@ ENCODING_DER: Final = 2
 # protocol versions
 PROTO_MINIMUM_SUPPORTED: Final = -2
 PROTO_MAXIMUM_SUPPORTED: Final = -1
-PROTO_SSLv3: Final[int]
-PROTO_TLSv1: Final[int]
-PROTO_TLSv1_1: Final[int]
-PROTO_TLSv1_2: Final[int]
-PROTO_TLSv1_3: Final[int]
+final PROTO_SSLv3: int
+final PROTO_TLSv1: int
+final PROTO_TLSv1_1: int
+final PROTO_TLSv1_2: int
+final PROTO_TLSv1_3: int
 
 # feature support
-HAS_SNI: Final[bool]
-HAS_TLS_UNIQUE: Final[bool]
-HAS_ECDH: Final[bool]
-HAS_NPN: Final[bool]
+final HAS_SNI: bool
+final HAS_TLS_UNIQUE: bool
+final HAS_ECDH: bool
+final HAS_NPN: bool
 if sys.version_info >= (3, 13):
-    HAS_PSK: Final[bool]
+    final HAS_PSK: bool
 if sys.version_info >= (3, 15):
-    HAS_PSK_TLS13: Final[bool]
-HAS_ALPN: Final[bool]
-HAS_SSLv2: Final[bool]
-HAS_SSLv3: Final[bool]
-HAS_TLSv1: Final[bool]
-HAS_TLSv1_1: Final[bool]
-HAS_TLSv1_2: Final[bool]
-HAS_TLSv1_3: Final[bool]
+    final HAS_PSK_TLS13: bool
+final HAS_ALPN: bool
+final HAS_SSLv2: bool
+final HAS_SSLv3: bool
+final HAS_TLSv1: bool
+final HAS_TLSv1_1: bool
+final HAS_TLSv1_2: bool
+final HAS_TLSv1_3: bool
 if sys.version_info >= (3, 14):
-    HAS_PHA: Final[bool]
+    final HAS_PHA: bool
 
 # version info
-OPENSSL_VERSION_NUMBER: Final[int]
-OPENSSL_VERSION_INFO: Final[(int, int, int, int, int)]
-OPENSSL_VERSION: Final[str]
-_OPENSSL_API_VERSION: Final[(int, int, int, int, int)]
+final OPENSSL_VERSION_NUMBER: int
+final OPENSSL_VERSION_INFO: (int, int, int, int, int)
+final OPENSSL_VERSION: str
+final _OPENSSL_API_VERSION: (int, int, int, int, int)

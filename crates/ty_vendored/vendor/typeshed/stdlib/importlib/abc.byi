@@ -10,7 +10,7 @@ from importlib import _bootstrap_external
 from importlib._abc import Loader as Loader
 from importlib.machinery import ModuleSpec
 from io import BufferedReader
-from typing import IO, Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 from typing_extensions import deprecated
 
 if sys.version_info >= (3, 11):
@@ -116,7 +116,7 @@ class ExecutionLoader(InspectLoader):
         Raises ImportError if the module cannot be found.
         """
 
-class SourceLoader(_bootstrap_external.SourceLoader, ResourceLoader, ExecutionLoader, metaclass=ABCMeta):  # type: ignore[misc]  # incompatible definitions of source_to_code in the base classes
+class SourceLoader(_bootstrap_external.SourceLoader, ResourceLoader, ExecutionLoader, metaclass=ABCMeta):
     """Abstract base class for loading source code (and optionally any
     corresponding bytecode).
 
@@ -230,7 +230,7 @@ class FileLoader(_bootstrap_external.FileLoader, ResourceLoader, ExecutionLoader
 
     name: str
     path: str
-    def __init__(self, fullname: str, path: str) -> None:
+    init(self, fullname: str, path: str):
         """Cache the module name and the path to the file found by the
         finder.
         """
@@ -277,7 +277,7 @@ if sys.version_info < (3, 11):
             """Return an iterable of entries in `package`."""
 
     @runtime_checkable
-    class Traversable(Protocol):
+    protocol Traversable:
         """
         An object with a subset of pathlib.Path methods suitable for
         traversing directories and opening files.
@@ -309,7 +309,7 @@ if sys.version_info < (3, 11):
         # The documentation and runtime protocol allows *args, **kwargs arguments,
         # but this would mean that all implementers would have to support them,
         # which is not the case.
-        abstract def open(self, mode: Literal["r"] = "r", *, encoding: str | None = None, errors: str | None = None) -> IO[str]:
+        abstract def open(self, mode: "r" = "r", *, encoding: str | None = None, errors: str | None = None) -> IO[str]:
             """
             mode may be 'r' or 'rb' to open as text or binary. Return a handle
             suitable for reading (same as pathlib.Path.open).
@@ -317,7 +317,7 @@ if sys.version_info < (3, 11):
             When opening as text, accepts encoding parameters such as those
             accepted by io.TextIOWrapper.
             """
-        abstract def open(self, mode: Literal["rb"]) -> IO[bytes]
+        abstract def open(self, mode: "rb") -> IO[bytes]
 
         @property
         abstract def name(self) -> str:

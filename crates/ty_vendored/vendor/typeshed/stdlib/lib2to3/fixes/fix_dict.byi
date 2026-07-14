@@ -32,7 +32,7 @@ from .. import fixer_base
 iter_exempt: set[str]
 
 class FixDict(fixer_base.BaseFix):
-    BM_compatible: ClassVar[Literal[True]]
+    BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     def transform(self, node, results)
     P1: ClassVar[str]

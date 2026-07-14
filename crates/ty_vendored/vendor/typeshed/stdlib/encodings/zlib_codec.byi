@@ -15,14 +15,14 @@ def zlib_encode(input: ReadableBuffer, errors: str = "strict") -> (bytes, int)
 def zlib_decode(input: ReadableBuffer, errors: str = "strict") -> (bytes, int)
 
 class Codec(codecs.Codec):
-    def encode(self, input: ReadableBuffer, errors: str = "strict") -> (bytes, int)  # type: ignore[override]
-    def decode(self, input: ReadableBuffer, errors: str = "strict") -> (bytes, int)  # type: ignore[override]
+    def encode(self, input: ReadableBuffer, errors: str = "strict") -> (bytes, int)
+    def decode(self, input: ReadableBuffer, errors: str = "strict") -> (bytes, int)
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
-    def encode(self, input: ReadableBuffer, final: bool = False) -> bytes  # type: ignore[override]
+    def encode(self, input: ReadableBuffer, final: bool = False) -> bytes
 
 class IncrementalDecoder(codecs.IncrementalDecoder):
-    def decode(self, input: ReadableBuffer, final: bool = False) -> bytes  # type: ignore[override]
+    def decode(self, input: ReadableBuffer, final: bool = False) -> bytes
 
 class StreamWriter(Codec, codecs.StreamWriter):
     charbuffertype: ClassVar[type] = ...

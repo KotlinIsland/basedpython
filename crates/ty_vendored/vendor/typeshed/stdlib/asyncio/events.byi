@@ -14,7 +14,7 @@ from collections.abc import Callable, Sequence
 from concurrent.futures import Executor
 from contextvars import Context
 from socket import AddressFamily, AddressInfo, SocketKind, _Address, _RetAddress, socket
-from typing import IO, Any, Literal, Protocol, TypeAlias, TypeVar, type_check_only
+from typing import Literal, Protocol, TypeAlias, TypeVar, type_check_only
 from typing_extensions import Self, TypeVarTuple, Unpack, deprecated
 
 from . import _AwaitableLike, _CoroutineLike
@@ -62,13 +62,13 @@ else:
         "_get_running_loop",
     )
 
-_Context: TypeAlias = dict[str, Any]
-_ExceptionHandler: TypeAlias = Callable[[AbstractEventLoop, _Context], object]
-_ProtocolFactory: TypeAlias = Callable[[], BaseProtocol]
-_SSLContext: TypeAlias = bool | None | ssl.SSLContext
+type _Context = dict[str, dynamic]
+type _ExceptionHandler = (AbstractEventLoop, _Context) -> object
+type _ProtocolFactory = () -> BaseProtocol
+type _SSLContext = bool | None | ssl.SSLContext
 
 @type_check_only
-class _TaskFactory(Protocol):
+protocol _TaskFactory:
     def __call__[Element](self, loop: AbstractEventLoop, factory: _CoroutineLike[Element], /) -> Future[Element]
 
 class Handle:
@@ -77,9 +77,9 @@ class Handle:
     __slots__ = ("_callback", "_args", "_cancelled", "_loop", "_source_traceback", "_repr", "__weakref__", "_context")
     _cancelled: bool
     _args: Sequence[dynamic]
-    def __init__(
+    init(
         self, callback: (...) -> object, args: Sequence[dynamic], loop: AbstractEventLoop, context: Context | None = None
-    ) -> None
+    )
     def cancel(self) -> None
     def _run(self) -> None
     def cancelled(self) -> bool
@@ -90,14 +90,14 @@ class TimerHandle(Handle):
     """Object returned by timed callback registration methods."""
 
     __slots__ = ["_scheduled", "_when"]
-    def __init__(
+    init(
         self,
         when: float,
         callback: (...) -> object,
         args: Sequence[dynamic],
         loop: AbstractEventLoop,
         context: Context | None = None,
-    ) -> None
+    )
     def __hash__(self) -> int
     def when(self) -> float:
         """Return a scheduled callback time.
@@ -201,7 +201,7 @@ class AbstractEventLoop:
     ) -> TimerHandle
     abstract def time(self) -> float
     # Future methods
-    abstract def create_future(self) -> Future[Any]
+    abstract def create_future(self) -> Future[dynamic]
     # Tasks methods
     if sys.version_info >= (3, 14):
         abstract def create_task[Element](
@@ -244,7 +244,7 @@ class AbstractEventLoop:
     if sys.version_info >= (3, 11):
         abstract async def create_connection[ProtocolT: BaseProtocol](
             self,
-            protocol_factory: Callable[[], ProtocolT],
+            protocol_factory: () -> ProtocolT,
             host: str = ...,
             port: int = ...,
             *,
@@ -262,7 +262,7 @@ class AbstractEventLoop:
         ) -> (Transport, ProtocolT)
         abstract async def create_connection[ProtocolT: BaseProtocol](
             self,
-            protocol_factory: Callable[[], ProtocolT],
+            protocol_factory: () -> ProtocolT,
             host: None = None,
             port: None = None,
             *,
@@ -281,7 +281,7 @@ class AbstractEventLoop:
     else:
         abstract async def create_connection[ProtocolT: BaseProtocol](
             self,
-            protocol_factory: Callable[[], ProtocolT],
+            protocol_factory: () -> ProtocolT,
             host: str = ...,
             port: int = ...,
             *,
@@ -298,7 +298,7 @@ class AbstractEventLoop:
         ) -> (Transport, ProtocolT)
         abstract async def create_connection[ProtocolT: BaseProtocol](
             self,
-            protocol_factory: Callable[[], ProtocolT],
+            protocol_factory: () -> ProtocolT,
             host: None = None,
             port: None = None,
             *,
@@ -681,7 +681,7 @@ class AbstractEventLoop:
     if sys.version_info >= (3, 11):
         async def connect_accepted_socket[ProtocolT: BaseProtocol](
             self,
-            protocol_factory: Callable[[], ProtocolT],
+            protocol_factory: () -> ProtocolT,
             sock: socket,
             *,
             ssl: _SSLContext = None,
@@ -700,7 +700,7 @@ class AbstractEventLoop:
     else:
         async def connect_accepted_socket[ProtocolT: BaseProtocol](
             self,
-            protocol_factory: Callable[[], ProtocolT],
+            protocol_factory: () -> ProtocolT,
             sock: socket,
             *,
             ssl: _SSLContext = None,
@@ -718,7 +718,7 @@ class AbstractEventLoop:
     if sys.version_info >= (3, 11):
         async def create_unix_connection[ProtocolT: BaseProtocol](
             self,
-            protocol_factory: Callable[[], ProtocolT],
+            protocol_factory: () -> ProtocolT,
             path: str | None = None,
             *,
             ssl: _SSLContext = None,
@@ -730,7 +730,7 @@ class AbstractEventLoop:
     else:
         async def create_unix_connection[ProtocolT: BaseProtocol](
             self,
-            protocol_factory: Callable[[], ProtocolT],
+            protocol_factory: () -> ProtocolT,
             path: str | None = None,
             *,
             ssl: _SSLContext = None,
@@ -752,7 +752,7 @@ class AbstractEventLoop:
 
     abstract async def create_datagram_endpoint[ProtocolT: BaseProtocol](
         self,
-        protocol_factory: Callable[[], ProtocolT],
+        protocol_factory: () -> ProtocolT,
         local_addr: (str, int) | str | None = None,
         remote_addr: (str, int) | str | None = None,
         *,
@@ -794,7 +794,7 @@ class AbstractEventLoop:
         """
 
     # Pipes and subprocesses.
-    abstract async def connect_read_pipe[ProtocolT: BaseProtocol](self, protocol_factory: Callable[[], ProtocolT], pipe: dynamic) -> (ReadTransport, ProtocolT):
+    abstract async def connect_read_pipe[ProtocolT: BaseProtocol](self, protocol_factory: () -> ProtocolT, pipe: dynamic) -> (ReadTransport, ProtocolT):
         """Register read pipe in event loop. Set the pipe to non-blocking mode.
 
         protocol_factory should instantiate object with Protocol interface.
@@ -804,7 +804,7 @@ class AbstractEventLoop:
         """
 
     abstract async def connect_write_pipe[ProtocolT: BaseProtocol](
-        self, protocol_factory: Callable[[], ProtocolT], pipe: dynamic
+        self, protocol_factory: () -> ProtocolT, pipe: dynamic
     ) -> (WriteTransport, ProtocolT):
         """Register write pipe in event loop.
 
@@ -817,31 +817,31 @@ class AbstractEventLoop:
 
     abstract async def subprocess_shell[ProtocolT: BaseProtocol](
         self,
-        protocol_factory: Callable[[], ProtocolT],
+        protocol_factory: () -> ProtocolT,
         cmd: bytes | str,
         *,
         stdin: int | IO[dynamic] | None = -1,
         stdout: int | IO[dynamic] | None = -1,
         stderr: int | IO[dynamic] | None = -1,
-        universal_newlines: Literal[False] = False,
-        shell: Literal[True] = True,
-        bufsize: Literal[0] = 0,
+        universal_newlines: False = False,
+        shell: True = True,
+        bufsize: 0 = 0,
         encoding: None = None,
         errors: None = None,
-        text: Literal[False] | None = None,
+        text: False | None = None,
         **kwargs: dynamic,
     ) -> (SubprocessTransport, ProtocolT)
     abstract async def subprocess_exec[ProtocolT: BaseProtocol](
         self,
-        protocol_factory: Callable[[], ProtocolT],
+        protocol_factory: () -> ProtocolT,
         program: dynamic,
         *args: dynamic,
         stdin: int | IO[dynamic] | None = -1,
         stdout: int | IO[dynamic] | None = -1,
         stderr: int | IO[dynamic] | None = -1,
-        universal_newlines: Literal[False] = False,
-        shell: Literal[False] = False,
-        bufsize: Literal[0] = 0,
+        universal_newlines: False = False,
+        shell: False = False,
+        bufsize: 0 = 0,
         encoding: None = None,
         errors: None = None,
         **kwargs: dynamic,
