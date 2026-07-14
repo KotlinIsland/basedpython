@@ -697,8 +697,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     ///
     /// Disabled via `analysis.disable-fluid-specializations`; when disabled, inferred generic
     /// specializations are not widened flow-sensitively by later uses of a binding.
+    ///
+    /// Also disabled by the `TY_DISABLE_FLUID_SPECIALIZATIONS` environment variable. This exists
+    /// because a config option can't be used to disable the feature in the ecosystem-analyzer
+    /// workflow: that workflow feeds one config to both the base and PR binaries, and the base
+    /// binary (which predates the option) hard-errors on the unknown field. An environment
+    /// variable is ignored by binaries that don't know it, so it can be set for both.
+    ///
+    /// TODO(perf): remove this once the residual superlinear fluid re-solve cost is fixed (it
+    /// still times out several large ecosystem projects); see the fluid-specialization
+    /// performance investigation.
     fn fluid_specializations_enabled(&self) -> bool {
-        !self.settings().disable_fluid_specializations
+        static DISABLED_BY_ENV: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| {
+            std::env::var_os("TY_DISABLE_FLUID_SPECIALIZATIONS").is_some()
+        });
+        !*DISABLED_BY_ENV && !self.settings().disable_fluid_specializations
     }
 
     fn is_in_type_checking_block(&self, scope: ScopeId<'db>, node: impl Ranged) -> bool {
