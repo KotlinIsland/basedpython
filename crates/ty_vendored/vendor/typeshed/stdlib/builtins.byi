@@ -52,7 +52,7 @@ from types import CellType, CodeType, EllipsisType, GenericAlias, NotImplemented
 from typing import IO, Any, BinaryIO, ClassVar, Concatenate, Final, Generic, Mapping, MutableMapping, MutableSequence, ParamSpec, Protocol, Sequence, SupportsAbs, SupportsBytes, SupportsComplex, SupportsFloat, SupportsIndex, TypeAlias, TypeGuard, TypeVar, final, type_check_only
 
 # we can't import `Literal` from typing or mypy crashes: see #11247
-from typing_extensions import Literal, LiteralString, Self, TypeIs, TypeVarTuple, deprecated, disjoint_base  # noqa: Y023, UP035
+from typing_extensions import Never, Literal, LiteralString, Self, TypeIs, TypeVarTuple, deprecated, disjoint_base  # noqa: Y023, UP035
 
 if sys.version_info >= (3, 14):
     from _typeshed import AnnotateFunc
@@ -2769,7 +2769,7 @@ class list[in out Element](MutableSequence[Element]):
     def __init__(self) -> None
     def __init__(self, iterable: Iterable[Element], /) -> None
 
-    def copy(self) -> list[Element]:
+    def copy[WidenElement = Never](self) -> list[Element | WidenElement]:
         """Return a shallow copy of the list."""
 
     def append(self, object: Element, /) -> None:
@@ -2909,7 +2909,7 @@ class dict[in out Key, in out Value](MutableMapping[Key, Value]):
     def __init__(self: dict[bytes, bytes], iterable: Iterable[list[bytes]], /) -> None
 
     def __new__(cls, /, *args: dynamic, **kwargs: dynamic) -> Self
-    def copy(self) -> dict[Key, Value]:
+    def copy[WidenKey = Never, WidenValue = Never](self) -> dict[Key | WidenKey, Value | WidenValue]:
         """Return a shallow copy of the dict."""
 
     def keys(self) -> dict_keys[Key, Value]:
@@ -3071,10 +3071,10 @@ class set[in out Element](MutableSet[Element]):
         This has no effect if the element is already present.
         """
 
-    def copy(self) -> set[Element]:
+    def copy[WidenElement = Never](self) -> set[Element | WidenElement]:
         """Return a shallow copy of a set."""
 
-    def difference(self, *s: Iterable[object]) -> set[Element]:
+    def difference[WidenElement = Never](self, *s: Iterable[object]) -> set[Element | WidenElement]:
         """Return a new set with elements in the set that are not in the others."""
 
     def difference_update(self, *s: Iterable[object]) -> None:
@@ -3087,7 +3087,7 @@ class set[in out Element](MutableSet[Element]):
         an exception when an element is missing from the set.
         """
 
-    def intersection(self, *s: Iterable[object]) -> set[Element]:
+    def intersection[WidenElement = Never](self, *s: Iterable[object]) -> set[Element | WidenElement]:
         """Return a new set with elements common to the set and all others."""
 
     def intersection_update(self, *s: Iterable[object]) -> None:
@@ -3108,13 +3108,13 @@ class set[in out Element](MutableSet[Element]):
         If the element is not a member, raise a KeyError.
         """
 
-    def symmetric_difference[Other](self, s: Iterable[Other], /) -> set[Element | Other]:
+    def symmetric_difference[Other, WidenElement = Never](self, s: Iterable[Other], /) -> set[Element | Other | WidenElement]:
         """Return a new set with elements in either the set or other but not both."""
 
     def symmetric_difference_update(self, s: Iterable[Element], /) -> None:
         """Update the set, keeping only elements found in either set, but not in both."""
 
-    def union[Other](self, *s: Iterable[Other]) -> set[Element | Other]:
+    def union[Other, WidenElement = Never](self, *s: Iterable[Other]) -> set[Element | Other | WidenElement]:
         """Return a new set with elements from the set and all others."""
 
     def update(self, *s: Iterable[Element]) -> None:

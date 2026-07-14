@@ -18,7 +18,7 @@ use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk
 use ruff_python_ast::{Expr, ModModule, Stmt};
 use ruff_python_parser::Parsed;
 
-use crate::{Edit, Patch};
+use crate::{Edit, Patch, module_qualname};
 
 /// module that owns the canonical `Mapping` definition
 const MODULE: &str = "typing";
@@ -95,23 +95,6 @@ impl<'a> SourceOrderVisitor<'a> for MappingKeyReferences {
         }
         walk_expr(self, expr);
     }
-}
-
-/// dotted module name for a typeshed file path relative to `stdlib/`, e.g.
-/// `typing.byi` -> `typing`, `os/path.byi` -> `os.path`,
-/// `asyncio/__init__.byi` -> `asyncio`
-fn module_qualname(path: &Path) -> Option<String> {
-    let stem = path.file_stem()?.to_str()?;
-    let mut parts: Vec<&str> = path
-        .parent()
-        .into_iter()
-        .flat_map(Path::components)
-        .filter_map(|component| component.as_os_str().to_str())
-        .collect();
-    if stem != "__init__" {
-        parts.push(stem);
-    }
-    Some(parts.join("."))
 }
 
 #[cfg(test)]
