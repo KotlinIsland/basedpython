@@ -257,6 +257,19 @@ jobs:
 
           cat diff-statistics.md >> comment.md
 
+          # Lead the job summary with a clear regression headline when a project newly
+          # fails, so a timeout/crash isn't buried under the (informational) diagnostic
+          # -count tables that always change on this fork.
+          if [ "$DIFF_STATISTICS_EXIT_CODE" != "0" ]; then
+            {
+              echo "## ❌ New ecosystem project failures"
+              echo
+              echo "One or more projects newly **crash or time out** on this PR — a correctness or"
+              echo "performance regression, distinct from the informational diagnostic-count changes below."
+              echo
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
           cat diff-statistics.md >> "$GITHUB_STEP_SUMMARY"
 
           echo "diff_statistics_exit_code=$DIFF_STATISTICS_EXIT_CODE" >> "$GITHUB_OUTPUT"
@@ -280,4 +293,25 @@ jobs:
 
       - name: Fail on new abnormal exits
         if: steps.generate-reports.outputs.diff_statistics_exit_code != '0'
-        run: exit 1
+        run: |
+          # Surface exactly which projects newly failed (and how) as check annotations,
+          # so the regression is visible inline on the PR without opening the report
+          # artifact. Rows in `diff-statistics.md` look like:
+          #   | `xarray` | ❌ newly failing | success | timeout | `exit 1` | `timeout` |
+          new_failures="$(awk -F'|' '/newly failing/ {
+            proj = $2; gsub(/[` ]/, "", proj)
+            old  = $4; gsub(/^ +| +$/, "", old)
+            new  = $5; gsub(/^ +| +$/, "", new)
+            print proj "\t" old "\t" new
+          }' diff-statistics.md)"
+
+          if [ -n "$new_failures" ]; then
+            while IFS=$'\t' read -r proj old new; do
+              [ -z "$proj" ] && continue
+              echo "::error title=Ecosystem regression (${proj})::\`${proj}\` newly failing: ${old} -> ${new}"
+            done <<< "$new_failures"
+          else
+            echo "::error title=Ecosystem regression::New abnormal exits detected; see the diagnostic diff report."
+          fi
+
+          exit 1
