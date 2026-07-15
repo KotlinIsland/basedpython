@@ -308,9 +308,14 @@ fn run_lazy_import_phase(source: String, config: &Config) -> String {
     let needs_module = lazy.needs_module_helper;
     let needs_attr = lazy.needs_attr_helper;
     let needs_ty_ext = lazy.needs_ty_ext_marker;
+    let needs_character_class = lazy.needs_character_class;
 
-    let preamble =
-        transforms::lazy_import::polyfill_preamble(needs_module, needs_attr, needs_ty_ext);
+    let preamble = transforms::lazy_import::polyfill_preamble(
+        needs_module,
+        needs_attr,
+        needs_ty_ext,
+        needs_character_class,
+    );
     if lazy.edits.is_empty() && preamble.is_empty() {
         return source;
     }

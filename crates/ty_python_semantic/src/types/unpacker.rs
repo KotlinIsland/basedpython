@@ -9,7 +9,10 @@ use ruff_python_ast::{self as ast, AnyNodeRef};
 use crate::Db;
 use crate::types::infer::{ExpressionInference, FrozenMap};
 use crate::types::tuple::{ResizeTupleError, Tuple, TupleLength, TupleSpec, TupleUnpacker};
-use crate::types::{Type, TypeCheckDiagnostics, TypeContext, infer_expression_types};
+use crate::types::{
+    Type, TypeCheckDiagnostics, TypeContext, infer_expression_types,
+    report_iteration_over_character,
+};
 use ty_python_core::ExpressionNodeKey;
 use ty_python_core::scope::ScopeId;
 use ty_python_core::unpack::{UnpackKind, UnpackValue};
@@ -82,17 +85,24 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
                     value_type
                 }
             }
-            UnpackKind::Iterable { mode } => value_type
-                .try_iterate_with_mode(self.db(), mode)
-                .map(|tuple| tuple.homogeneous_element_type(self.db()))
-                .unwrap_or_else(|err| {
-                    err.report_diagnostic(
-                        &self.context,
-                        value_type,
-                        value.as_any_node_ref(self.db(), self.module()),
-                    );
-                    err.fallback_element_type(self.db())
-                }),
+            UnpackKind::Iterable { mode } => {
+                report_iteration_over_character(
+                    &self.context,
+                    value_type,
+                    value.as_any_node_ref(self.db(), self.module()),
+                );
+                value_type
+                    .try_iterate_with_mode(self.db(), mode)
+                    .map(|tuple| tuple.homogeneous_element_type(self.db()))
+                    .unwrap_or_else(|err| {
+                        err.report_diagnostic(
+                            &self.context,
+                            value_type,
+                            value.as_any_node_ref(self.db(), self.module()),
+                        );
+                        err.fallback_element_type(self.db())
+                    })
+            }
             UnpackKind::ContextManager { mode } => value_type
                 .try_enter_with_mode(self.db(), mode)
                 .unwrap_or_else(|err| {
@@ -215,6 +225,7 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
                 };
 
                 for ty in unpack_types.iter().copied() {
+                    report_iteration_over_character(&self.context, ty, value_expr);
                     let tuple = ty.try_iterate(self.db()).unwrap_or_else(|err| {
                         err.report_diagnostic(&self.context, ty, value_expr);
                         Cow::Owned(TupleSpec::homogeneous(err.fallback_element_type(self.db())))

@@ -1167,6 +1167,16 @@
             }
           ]
         },
+        "iteration-over-character": {
+          "title": "detects iteration over a single-character string (`Character`)",
+          "description": "## What it does\nChecks for iteration over a basedpython `Character` (a single-character string).\n\n## Why is this bad?\nA `Character` always has a length of exactly 1, so iterating over it yields a\nsingle element — the `Character` itself. Code that does this almost always\nmeant to iterate over the enclosing string instead, or believed the value\nwas a longer string.\n\n## Example\n\n```by\ndef f(s: str):\n    first = s[0]\n    for c in first:  # warning: iterating over a `Character`\n        ...\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "mismatched-type-name": {
           "title": "detects functional typing definitions whose declared name does not match the assigned variable",
           "description": "## What it does\n\nChecks for functional typing definitions whose declared name does not match\nthe variable they are assigned to.\n\n## Why is this bad?\n\nConstructors like `TypeVar`, `ParamSpec`, `NewType`, `NamedTuple`,\n`TypedDict`, and `TypeAliasType` all take a name argument that is\nnormally expected to match the assigned variable. A mismatch is usually a\ntypo and makes later diagnostics harder to understand.\n\n## Default level\n\nThis rule is a warning by default because ty can usually recover and\ncontinue understanding the resulting type.\n\n## Examples\n\n```python\nfrom typing import NewType, ParamSpec, TypeVar\nfrom typing_extensions import TypedDict\n\nT = TypeVar(\"U\")  # error: [mismatched-type-name]\nP = ParamSpec(\"Q\")  # error: [mismatched-type-name]\nUserId = NewType(\"Id\", int)  # error: [mismatched-type-name]\nMovie = TypedDict(\"Film\", {\"title\": str})  # error: [mismatched-type-name]\n```",

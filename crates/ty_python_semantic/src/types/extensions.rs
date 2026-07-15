@@ -25,7 +25,7 @@
 
 use ruff_db::files::File;
 use ruff_python_ast as ast;
-use ty_module_resolver::resolve_module;
+use ty_module_resolver::{ModuleName, resolve_module};
 use ty_python_core::{global_scope, place_table, semantic_index};
 
 use crate::Db;
@@ -40,6 +40,31 @@ use crate::types::typevar::{BoundTypeVarInstance, TypeVarBoundOrConstraints};
 
 /// the symbol-name prefix the semantic index gives extension declarations
 pub(crate) const EXTENSION_SYMBOL_PREFIX: &str = "<extension:";
+
+/// the vendored basedpython prelude — a `.byi` stub of builtin `extension`
+/// declarations (the grapheme string surface) every basedpython file sees without
+/// importing. its members are type-only: the transpiler lowers each access to a
+/// plain python expression, so the extension-call rewrite skips them (see
+/// [`is_prelude_extension`])
+const PRELUDE_MODULE: &str = "ty_extensions._prelude";
+
+/// the prelude module's file, resolved from `from_file`'s search paths. `None`
+/// when the vendored stub is unavailable
+pub(crate) fn prelude_file(db: &dyn Db, from_file: File) -> Option<File> {
+    let name = ModuleName::new_static(PRELUDE_MODULE)?;
+    resolve_module(db, from_file, &name)?.file(db)
+}
+
+/// whether `extension` is declared in the basedpython prelude. the transpiler
+/// asks so it can leave a prelude member's access to the dedicated lowering
+/// (`grapheme_string`) rather than emitting a backing-function call
+pub(crate) fn is_prelude_extension(
+    db: &dyn Db,
+    from_file: File,
+    extension: StaticClassLiteral<'_>,
+) -> bool {
+    prelude_file(db, from_file).is_some_and(|prelude| prelude == extension.file(db))
+}
 
 /// all extension declarations in a module, in source order
 #[salsa::tracked(returns(deref), heap_size = ruff_memory_usage::heap_size)]
@@ -87,6 +112,17 @@ pub(crate) fn applicable_extensions(db: &dyn Db, file: File) -> Box<[StaticClass
             continue;
         }
         extensions.extend_from_slice(extensions_in_module(db, module_file));
+    }
+    // the builtin prelude applies everywhere without an import, so it is folded
+    // in last — a same-module or imported extension of the same member wins
+    if let Some(prelude) = prelude_file(db, file)
+        && prelude != file
+    {
+        for &extension in extensions_in_module(db, prelude) {
+            if !extensions.contains(&extension) {
+                extensions.push(extension);
+            }
+        }
     }
     extensions.into_boxed_slice()
 }

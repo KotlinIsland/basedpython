@@ -32,7 +32,9 @@ pub(crate) use self::infer::{
     infer_definition_types, infer_expression_type, infer_expression_types,
     infer_same_file_expression_type, infer_scope_types, is_discarded_dict_key_assignment,
 };
-pub(crate) use self::iteration::extract_fixed_length_iterable_element_types;
+pub(crate) use self::iteration::{
+    extract_fixed_length_iterable_element_types, report_iteration_over_character,
+};
 pub use self::known_instance::KnownInstanceType;
 pub(crate) use self::match_pattern::{
     ClassPatternPositionalSource, callable_pattern_type, class_pattern_positional_sources,
@@ -125,6 +127,7 @@ mod bool;
 mod bound_super;
 mod call;
 mod callable;
+pub mod character;
 mod class;
 mod class_base;
 mod constraints;

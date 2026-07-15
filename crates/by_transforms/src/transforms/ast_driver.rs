@@ -34,14 +34,15 @@ use ruff_source_file::LineEnding;
 use ruff_text_size::{Ranged, TextRange};
 
 use super::{
-    annotation, anon_named_tuple, auto_quote, callable, checked_cast, coalesce, coalesce_chain,
-    compat, context_params, decl_site_variance, decorator_keyword, dedent_string, dynamic_keyword,
-    empty_declarations, extension, float_const, force_unwrap, generic_call, generics,
-    identity_swap, implicit_typing, init_method, just_float, kw_subscript, literal_types,
-    main_function, modifiers, mutable_defaults, none_chain, optional_type, overload, parametric_is,
-    postfix_await, propagate, reified_generic, repeated_underscore, sentinel, some_ctor, soundness,
-    string_tag, super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_is,
-    type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
+    annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
+    coalesce_chain, compat, context_params, decl_site_variance, decorator_keyword, dedent_string,
+    dynamic_keyword, empty_declarations, extension, float_const, force_unwrap, generic_call,
+    generics, grapheme_string, identity_swap, implicit_typing, init_method, just_float,
+    kw_subscript, literal_types, main_function, modifiers, mutable_defaults, none_chain,
+    optional_type, overload, parametric_is, postfix_await, propagate, reified_generic,
+    repeated_underscore, sentinel, some_ctor, soundness, string_tag, super_keyword,
+    symbolic_type_op, top_star, trailing_lambda, tuple_index, type_is, type_reification,
+    typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -434,6 +435,8 @@ pub(crate) fn run_against_source<'a>(
     };
 
     let dynamic_keyword_pass = dynamic_keyword::DynamicKeywordPass::new();
+    let character_type_pass = character_type::CharacterTypePass::new();
+    let grapheme_string_pass = grapheme_string::GraphemeStringPass::new();
     let type_is_pass = type_is::TypeIs::new();
     let top_star_pass = top_star::TopStar::new();
     let identity_swap_pass = identity_swap::IdentitySwap::new(source_ref);
@@ -566,6 +569,9 @@ pub(crate) fn run_against_source<'a>(
         // extension members (`xs.second()` → `__by_ext__list__second(xs)`)
         &extension_call_pass,
         &dynamic_keyword_pass,
+        // import-only companion to the ty-side implicit `Character` resolution;
+        // emits no text edits, so ordering among the type passes is free
+        &character_type_pass,
         &just_float_pass,
         &float_const_pass,
         &kw_subscript_pass,
@@ -601,6 +607,10 @@ pub(crate) fn run_against_source<'a>(
         &force_unwrap_pass,
         // `expr.N` → `expr[N]`; a narrow replacement of the `.N` bytes only
         &tuple_index_pass,
+        // grapheme string surface (`s.character_count` → `len(_by_graphemes(s))`,
+        // …); receiver spans pass through as `Src` fragments, so sibling
+        // lowerings inside compose
+        &grapheme_string_pass,
         // mutable defaults → `_MISSING` sentinel swap + body-prologue guard;
         // narrow edits, so the function body's own lowerings still apply
         &mutable_defaults_pass,

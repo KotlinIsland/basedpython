@@ -120,7 +120,7 @@ use crate::types::{
     TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, TypedDictModule,
     TypedDictType, UnionAccumulator, UnionBuilder, UnionType, any_over_type, binding_type,
     extract_fixed_length_iterable_element_types, infer_complete_scope_types, infer_scope_types,
-    is_discarded_dict_key_assignment, todo_type,
+    is_discarded_dict_key_assignment, report_iteration_over_character, todo_type,
 };
 use crate::{AnalysisSettings, Db, FxIndexSet, Program};
 use fluid::FluidTimeline;
@@ -4777,6 +4777,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let iterable_type =
                     self.infer_standalone_expression(iterable, TypeContext::default());
 
+                report_iteration_over_character(&self.context, iterable_type, iterable.into());
+
                 if !for_stmt.is_async()
                     && let Some(element_type) = self
                         .fixed_length_iterable_element_type(iterable, |expr| {
@@ -7956,6 +7958,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             TargetKind::Single => {
                 let (iterable_type, element_type) = infer_iterable_type();
 
+                report_iteration_over_character(&self.context, iterable_type, iterable.into());
+
                 if let Some(element_type) = element_type {
                     element_type
                 } else {
@@ -8381,6 +8385,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         for arg in &arguments.args {
             if let ast::Expr::Starred(ast::ExprStarred { value, .. }) = arg {
                 let iterable_type = self.expression_type(value);
+                report_iteration_over_character(
+                    &self.context,
+                    iterable_type,
+                    value.as_ref().into(),
+                );
                 if let Err(err) = iterable_type.try_iterate(self.db()) {
                     err.report_diagnostic(&self.context, iterable_type, value.as_ref().into());
                 }
@@ -9452,6 +9461,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let db = self.db();
         let iterable_type = self.infer_expression(value, tcx);
+        report_iteration_over_character(&self.context, iterable_type, value.as_ref().into());
         iterable_type
             .try_iterate(db)
             .map(|spec| Type::tuple(TupleType::new(db, &spec)))
@@ -9541,6 +9551,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             KnownClass::Iterable.to_specialized_instance(self.db(), &[yielded_ty])
         }));
         let iterable_type = self.infer_expression(value, tcx);
+
+        report_iteration_over_character(&self.context, iterable_type, value.as_ref().into());
 
         let inner_yield_ty = iterable_type
             .try_iterate(self.db())
@@ -9835,6 +9847,23 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         .contains(InferenceFlags::IN_TYPE_EXPRESSION)
                 {
                     known_module_symbol(db, KnownModule::TyExtensions, "Overlapping")
+                } else {
+                    Place::Undefined.into()
+                }
+            })
+            // basedpython only: `Character` (the single-character string type) is
+            // implicitly available in type expressions; the transpiler emits
+            // the matching `from ty_extensions import Character`. gated on
+            // type-expression position and only reached when otherwise
+            // unbound, so a local `Character = …` binding still shadows it
+            .or_fall_back_to(db, || {
+                if self.is_basedpython_file()
+                    && symbol_name == "Character"
+                    && self
+                        .inference_flags()
+                        .contains(InferenceFlags::IN_TYPE_EXPRESSION)
+                {
+                    known_module_symbol(db, KnownModule::TyExtensions, "Character")
                 } else {
                     Place::Undefined.into()
                 }

@@ -1,7 +1,13 @@
 # ruff: noqa: PYI021
 import collections.abc
 import sys
-from typing import Any, ClassVar, Protocol, _SpecialForm
+from typing import (
+    Any,
+    ClassVar,
+    Literal,
+    Protocol,
+    _SpecialForm,
+)
 
 from typing_extensions import LiteralString, Self  # noqa: UP035
 
@@ -168,6 +174,32 @@ since their boolean evaluation may be uncertain or depend on runtime state.
 # [1]: https://typing.readthedocs.io/en/latest/spec/special-types.html#special-cases-for-float-and-complex
 type JustFloat = _TypeOf[1.0]
 type JustComplex = _TypeOf[1.0j]
+
+class Character(str):
+    """a single extended grapheme cluster — one user-perceived character
+
+    `Character` is the element type of `str`: it is one user-perceived character
+    (an extended grapheme cluster, per unicode UAX #29), which may span several
+    unicode code points. for example the US flag `"\\U0001F1FA\\U0001F1F8"` is a
+    single `Character` even though `len()` (a code-point count) is 2.
+
+    a `Character` therefore always has a `character_count` (grapheme count) of
+    exactly 1 and is never empty, but its `len()` may be greater than 1. like
+    every `str`, raw indexing and iteration operate on its code points; use the
+    grapheme accessors (`first` / `last` / `characters` / `character_at`) for
+    graphemes.
+
+    `Character` is a concrete `str` subclass: the transpiler emits a real
+    `class Character(str)` at runtime and the grapheme accessors construct
+    genuine instances, so `isinstance(x, Character)` works.
+    """
+
+    @property
+    def character_count(self) -> Literal[1]: ...
+    @property
+    def first(self) -> Character: ...
+    @property
+    def last(self) -> Character: ...
 
 class NamedTupleLike(Protocol):
     """

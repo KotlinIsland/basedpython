@@ -83,6 +83,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_RETURN_TYPE);
     registry.register_lint(&INVALID_YIELD);
     registry.register_lint(&INVALID_ASSIGNMENT);
+    registry.register_lint(&ITERATION_OVER_CHARACTER);
     registry.register_lint(&INVALID_AWAIT);
     registry.register_lint(&INVALID_BASE);
     registry.register_lint(&INVALID_CONTEXT_MANAGER);
@@ -1236,6 +1237,31 @@ declare_lint! {
         summary: "detects parametric type tests against a runtime-erased builtin",
         status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for iteration over a basedpython `Character` (a single-character string).
+    ///
+    /// ## Why is this bad?
+    /// A `Character` always has a length of exactly 1, so iterating over it yields a
+    /// single element — the `Character` itself. Code that does this almost always
+    /// meant to iterate over the enclosing string instead, or believed the value
+    /// was a longer string.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def f(s: str):
+    ///     first = s[0]
+    ///     for c in first:  # warning: iterating over a `Character`
+    ///         ...
+    /// ```
+    pub(crate) static ITERATION_OVER_CHARACTER = {
+        summary: "detects iteration over a single-character string (`Character`)",
+        status: LintStatus::stable("0.0.1-alpha.36"),
+        default_level: Level::Warn,
     }
 }
 
