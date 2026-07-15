@@ -28,6 +28,10 @@ const TY_EXTENSIONS_STUBS: &[(&str, &str)] = &[
         "ty_extensions/pydantic.pyi",
         "stdlib/ty_extensions/pydantic.pyi",
     ),
+    (
+        "ty_extensions/_prelude.byi",
+        "stdlib/ty_extensions/_prelude.byi",
+    ),
 ];
 const TYPESHED_ZIP_LOCATION: &str = "/zipped_typeshed.zip";
 

@@ -3,6 +3,16 @@ use std::borrow::Cow;
 use itertools::Itertools;
 use ruff_python_ast::name::Name;
 use rustc_hash::FxHashSet;
+use unicode_segmentation::UnicodeSegmentation;
+
+/// basedpython: whether `value` is a single `Character` — exactly
+/// one extended grapheme cluster (UAX #29). counts graphemes, not code points,
+/// so a multi-scalar cluster like the US flag `"\u{1F1FA}\u{1F1F8}"` (two code
+/// points) is one `Character`
+fn is_single_grapheme(value: &str) -> bool {
+    let mut graphemes = value.graphemes(true);
+    graphemes.next().is_some() && graphemes.next().is_none()
+}
 
 use crate::place::{DefinedPlace, Place};
 use crate::types::callable::CallableTypeKind;
@@ -1978,6 +1988,16 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                     return self.always();
                 }
 
+                // basedpython: `Character` is the set of single-grapheme-cluster
+                // strings, so a string literal inhabits it exactly when it is one
+                // extended grapheme cluster (which may span multiple code points)
+                if target_class.is_known(db, KnownClass::Character) {
+                    return ConstraintSet::from_bool(
+                        self.constraints,
+                        is_single_grapheme(value.value(db)),
+                    );
+                }
+
                 if let Some(sequence_class) = KnownClass::Sequence.try_to_class_literal(db)
                     && !sequence_class
                         .iter_mro(db, None)
@@ -3060,8 +3080,21 @@ impl<'a, 'c, 'db> DisjointnessChecker<'a, 'c, 'db> {
                     LiteralValueTypeKind::Bool(_) => {
                         KnownClass::Bool.when_subclass_of(db, instance.class(db), self.constraints)
                     }
-                    LiteralValueTypeKind::LiteralString | LiteralValueTypeKind::String(_) => {
-                        KnownClass::Str.when_subclass_of(db, instance.class(db), self.constraints)
+                    // basedpython: single-grapheme literals (and `LiteralString`,
+                    // which includes them) also inhabit `Character`, a proper subclass
+                    // of `str`
+                    LiteralValueTypeKind::LiteralString => KnownClass::Character.when_subclass_of(
+                        db,
+                        instance.class(db),
+                        self.constraints,
+                    ),
+                    LiteralValueTypeKind::String(value) => {
+                        let literal_class = if is_single_grapheme(value.value(db)) {
+                            KnownClass::Character
+                        } else {
+                            KnownClass::Str
+                        };
+                        literal_class.when_subclass_of(db, instance.class(db), self.constraints)
                     }
                     LiteralValueTypeKind::Bytes(_) => {
                         KnownClass::Bytes.when_subclass_of(db, instance.class(db), self.constraints)

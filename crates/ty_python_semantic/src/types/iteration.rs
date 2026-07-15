@@ -6,7 +6,7 @@ use crate::{
         TypeVarBoundOrConstraints, UnionType,
         call::CallErrorKind,
         context::InferContext,
-        diagnostic::NOT_ITERABLE,
+        diagnostic::{ITERATION_OVER_CHARACTER, NOT_ITERABLE},
         todo_type,
         tuple::{TupleSpec, TupleSpecBuilder},
     },
@@ -63,6 +63,33 @@ pub(crate) fn extract_fixed_length_iterable_element_types<'db>(
     let mut element_types = Vec::new();
     extend_fixed_length_iterable(db, iterable, &mut expression_type, &mut element_types)?;
     Some(element_types.into_boxed_slice())
+}
+
+/// basedpython: report [`ITERATION_OVER_CHARACTER`] if the iterated type is a `Character`.
+///
+/// A `Character` always has a length of exactly 1, so iterating over it yields a
+/// single element — the `Character` itself — which almost always indicates a logic
+/// error. Called from every syntactic iteration site (`for` statements,
+/// comprehensions, unpacking, splats, `yield from`); iteration succeeds, so
+/// this is reported alongside — not instead of — normal inference.
+pub(crate) fn report_iteration_over_character<'db>(
+    context: &InferContext<'db, '_>,
+    iterable_type: Type<'db>,
+    iterable_node: ast::AnyNodeRef,
+) {
+    let db = context.db();
+    let Type::NominalInstance(instance) = iterable_type else {
+        return;
+    };
+    if !instance.class(db).is_known(db, KnownClass::Character) {
+        return;
+    }
+    if let Some(builder) = context.report_lint(&ITERATION_OVER_CHARACTER, iterable_node) {
+        let mut diag = builder.into_diagnostic("Iteration over a `Character`");
+        diag.info(
+            "A `Character` is a single-character string, so this yields exactly one element: the `Character` itself",
+        );
+    }
 }
 
 impl<'db> Type<'db> {

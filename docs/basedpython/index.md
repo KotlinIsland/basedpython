@@ -47,6 +47,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [strict `float` and `complex`](features/no-number-promotions.md)
 - [infinity and nan float literals](features/float-literals.md)
 - [literal type promotion](features/literal-types.md)
+- [grapheme strings (`Character`, `.character_count`)](features/character.md)
 - [symbolic operations in types](features/symbolic-type-ops.md)
 - [typed dict literals](features/typed-dict-literal.md)
 - [anonymous named tuple types](features/anonymous-named-tuple.md)
@@ -103,3 +104,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [reverse transforms](development/reverse-transforms.md)
 - [sourcemaps](development/sourcemaps.md)
 - [typeshed patches](development/typeshed-patches.md)
+
+## acknowledgements
+
+- [third-party work basedpython relies on](acknowledgements.md)

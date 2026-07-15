@@ -2,7 +2,7 @@
 
 use ruff_python_ast::{Expr, ExprCall, ExprName};
 use ty_python_core::{global_scope, place_table, semantic_index};
-use ty_python_semantic::types::{DynamicType, KnownClass, KnownInstanceType, Type};
+use ty_python_semantic::types::{DynamicType, KnownClass, KnownInstanceType, Type, character};
 use ty_python_semantic::{HasType, SemanticModel};
 
 /// How the postfix `^` / `!` operators test the "absent" arm of an operand's
@@ -189,6 +189,25 @@ pub(crate) trait TypeInfo {
     /// declarations in scope at the call site. empty when the callee has no
     /// context parameters or nothing resolves
     fn implicit_context_arguments(&self, call: &ExprCall) -> Vec<(String, String)>;
+
+    /// whether `expr`'s inferred type is a string — a `str` / `Character` /
+    /// `LiteralString` / string-literal / `str`-subclass instance. dynamic
+    /// types (`Any`, `Unknown`) are excluded. used by the grapheme string-surface
+    /// lowerings, which must only fire on string receivers
+    fn is_string_like(&self, expr: &Expr) -> bool;
+
+    /// whether the type expression `annotation` denotes exactly the
+    /// `Character` type (an annotation `x: Character`). a union / optional /
+    /// subclass or a shadowed local `Character` does not qualify. used by the
+    /// annotated-assignment lowering, which materialises a real `Character`
+    /// instance for the annotated value
+    fn annotation_is_character(&self, annotation: &Expr) -> bool;
+
+    /// whether `expr`'s inferred type is already a `Character` instance — its
+    /// class is `Character`. such values are left alone by the annotated-
+    /// assignment lowering (they are already the right runtime type, so
+    /// wrapping them in `Character(...)` again would be redundant)
+    fn is_character_instance(&self, expr: &Expr) -> bool;
 }
 
 /// re-export of the ty-side check plan so transforms name a single type
@@ -446,6 +465,25 @@ impl TypeInfo for SemanticModel<'_> {
         .into_iter()
         .map(|(parameter, variable)| (parameter.to_string(), variable.to_string()))
         .collect()
+    }
+
+    fn is_string_like(&self, expr: &Expr) -> bool {
+        let Some(ty) = expr.inferred_type(self) else {
+            return false;
+        };
+        let db = self.db();
+        !ty.is_dynamic() && ty.is_assignable_to(db, KnownClass::Str.to_instance(db))
+    }
+
+    fn annotation_is_character(&self, annotation: &Expr) -> bool {
+        annotation
+            .inferred_type(self)
+            .is_some_and(|ty| character::denotes_character(self.db(), ty))
+    }
+
+    fn is_character_instance(&self, expr: &Expr) -> bool {
+        expr.inferred_type(self)
+            .is_some_and(|ty| character::is_character_instance(self.db(), ty))
     }
 }
 

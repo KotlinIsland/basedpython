@@ -129,7 +129,7 @@ impl NoneCoalesce<'_> {
 /// Expressions whose evaluation has no side effects and whose value is
 /// stable across two reads — safe to re-emit in both branches of the
 /// rewrite without changing program semantics
-fn is_trivially_pure(expr: &Expr) -> bool {
+pub(crate) fn is_trivially_pure(expr: &Expr) -> bool {
     match expr {
         Expr::Name(_)
         | Expr::NumberLiteral(_)
