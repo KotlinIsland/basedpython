@@ -84,6 +84,11 @@ impl<'db> Type<'db> {
         match self {
             Type::Callable(callable) => Some(CallableTypes::one(callable)),
 
+            // parameter-only marker; behaves as the type a body sees (bound of `Key`)
+            Type::Overlapping(overlapping) => overlapping
+                .value_type(db)
+                .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+
             Type::Dynamic(_) => Some(CallableTypes::one(CallableType::function_like(
                 db,
                 Signature::dynamic(self),

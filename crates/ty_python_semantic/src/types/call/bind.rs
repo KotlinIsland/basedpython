@@ -5211,12 +5211,34 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
         // building them in an earlier separate step.
         //
         // TODO: handle starred annotations, e.g. `*args: *Ts` or `*args: *tuple[int, *tuple[str, ...]]`
-        if !self.constraint_set_errors[argument_index]
-            && !parameter.has_starred_annotation()
-            && argument_type
-                .when_assignable_to(self.db, expected_ty, constraints, self.inferable_typevars)
-                .is_never_satisfied(self.db)
-        {
+        let type_error =
+            if self.constraint_set_errors[argument_index] || parameter.has_starred_annotation() {
+                false
+            } else if let Type::Overlapping(overlapping) = expected_ty {
+                // `Overlapping[Key]` accepts an argument that is assignable to `Key`
+                // (the ordinary check, which still infers typevars in `Key` — so a
+                // generic or `isinstance`-narrowed `dict` keeps working) OR that
+                // merely overlaps `Key` (is not disjoint from it). only a value
+                // that is neither — a provably-impossible key like `"a"` for a
+                // `Mapping[int, ...]` — is rejected. dynamic arguments and dynamic
+                // keys are assignable, so they are always admitted here.
+                //
+                // a `Never` key admits anything: it is not a real key domain but a
+                // materialization artifact (e.g. `isinstance(x, dict)` narrows to
+                // `Top[dict[Unknown, Unknown]]`, whose key projects to `Never`),
+                // where every key must remain admissible
+                let key = overlapping.type_argument(self.db);
+                !key.is_never()
+                    && argument_type
+                        .when_assignable_to(self.db, key, constraints, self.inferable_typevars)
+                        .is_never_satisfied(self.db)
+                    && key.is_disjoint_from(self.db, argument_type)
+            } else {
+                argument_type
+                    .when_assignable_to(self.db, expected_ty, constraints, self.inferable_typevars)
+                    .is_never_satisfied(self.db)
+            };
+        if type_error {
             let positional = matches!(argument, Argument::Positional | Argument::Synthetic)
                 && !parameter.is_variadic();
             self.errors.push(BindingError::InvalidArgumentType {

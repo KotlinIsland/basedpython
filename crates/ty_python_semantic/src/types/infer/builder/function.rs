@@ -887,7 +887,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let default_expr = default.as_ref();
         if let Some(annotation) = parameter.annotation.as_ref() {
-            let declared_ty = self.file_expression_type(annotation);
+            // `Overlapping[Key]` is a call-binder-only marker; inside the body the
+            // parameter is seen as `Key`'s upper bound so it can never be written
+            // back into `Key`-typed covariant storage
+            let declared_ty = self.file_expression_type(annotation).erase_overlapping(db);
 
             // P.args and P.kwargs are only valid as annotations on *args and **kwargs,
             // not on regular parameters.

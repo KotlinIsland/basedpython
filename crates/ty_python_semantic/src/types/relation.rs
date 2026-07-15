@@ -299,6 +299,7 @@ impl<'db> Type<'db> {
             | Type::TypeIs(_)
             | Type::TypeGuard(_)
             | Type::TypeForm(_)
+            | Type::Overlapping(_)
             | Type::TypedDict(_)
             | Type::TypeAlias(_)
             | Type::NewTypeInstance(_) => false,
@@ -1142,6 +1143,20 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
             (_, Type::TypeAlias(target_alias)) => self.with_recursion_guard(source, target, || {
                 self.check_type_pair(db, source, target_alias.value_type(db))
             }),
+
+            // `Overlapping[Key]` is a parameter-only marker; for general relations
+            // (subtyping, assignability, override compatibility) it behaves as its
+            // wrapped type `Key`. this is what lets a subclass override a method
+            // typed `Overlapping[Key]` with `key: Key` (or the bare upper bound):
+            // the special overlap admissibility is applied only at the call site,
+            // not in the type relation
+            (Type::Overlapping(source_overlapping), _) => {
+                self.check_type_pair(db, source_overlapping.type_argument(db), target)
+            }
+
+            (_, Type::Overlapping(target_overlapping)) => {
+                self.check_type_pair(db, source, target_overlapping.type_argument(db))
+            }
 
             // Annotation unions retain type aliases so recursive aliases can be represented.
             // Normalize direct alias elements together before checking the union so reductions
@@ -2600,6 +2615,14 @@ impl<'a, 'c, 'db> DisjointnessChecker<'a, 'c, 'db> {
                 self.with_recursion_guard(left, right, || {
                     self.check_type_pair(db, left, right_alias_ty)
                 })
+            }
+
+            (Type::Overlapping(overlapping), _) => {
+                self.check_type_pair(db, overlapping.type_argument(db), right)
+            }
+
+            (_, Type::Overlapping(overlapping)) => {
+                self.check_type_pair(db, left, overlapping.type_argument(db))
             }
 
             (Type::EnumComplement(complement), other) => {

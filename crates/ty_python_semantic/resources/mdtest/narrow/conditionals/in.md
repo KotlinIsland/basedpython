@@ -28,6 +28,7 @@ def _(x: Literal[1, 2, "a", "b", False, b"abc"]):
         reveal_type(x)  # revealed: Literal[2, "a"]
     elif x in (b"abc",):
         reveal_type(x)  # revealed: Literal[b"abc"]
+    # error: [unsupported-operator]
     elif x not in (3,):
         reveal_type(x)  # revealed: Literal["b", False]
     else:
@@ -773,6 +774,7 @@ def mixed_constraints(
     value: Token | Literal[1],
     values: MixedContainers,
 ) -> None:
+    # error: [unsupported-operator]
     if value in values:
         reveal_type(value)  # revealed: Token | Literal[1]
 ```

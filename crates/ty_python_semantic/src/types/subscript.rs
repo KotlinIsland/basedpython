@@ -543,6 +543,10 @@ impl<'db> Type<'db> {
         let inferred = match (value_ty, slice_ty) {
             (Type::Dynamic(_) | Type::Divergent(_) | Type::Never, _) => Some(Ok(value_ty)),
 
+            (Type::Overlapping(overlapping), _) => {
+                Some(overlapping.value_type(db).subscript(db, slice_ty, expr_context, tcx))
+            }
+
             (Type::TypeAlias(alias), _) => {
                 Some(alias.value_type(db).subscript(db, slice_ty, expr_context, tcx))
             }

@@ -108,6 +108,7 @@ impl<'db> Type<'db> {
             match ty {
                 Type::NominalInstance(nominal) => nominal.tuple_spec(db),
                 Type::NewTypeInstance(newtype) => non_async_special_case(db, newtype.concrete_base_type(db)),
+                Type::Overlapping(overlapping) => non_async_special_case(db, overlapping.value_type(db)),
                 Type::GenericAlias(alias) if alias.origin(db).is_tuple(db) => {
                     Some(Cow::Owned(TupleSpec::homogeneous(todo_type!(
                         "*tuple[] annotations"

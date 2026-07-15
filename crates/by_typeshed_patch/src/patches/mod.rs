@@ -6,6 +6,7 @@ pub mod any_to_dynamic;
 pub mod arrow_callable;
 pub mod builtins_tweaks;
 pub mod cleanup;
+pub mod container_overlapping;
 pub mod dead_symbols;
 pub mod dead_typevars;
 pub mod final_annotation;

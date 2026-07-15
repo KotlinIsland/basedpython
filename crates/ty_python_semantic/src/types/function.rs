@@ -1959,6 +1959,10 @@ fn is_instance_truthiness<'db>(
     };
 
     match ty {
+        // parameter-only marker; behaves as the type a body sees (bound of `Key`)
+        Type::Overlapping(overlapping) => {
+            is_instance_truthiness(db, overlapping.value_type(db), class)
+        }
         Type::Union(..) => {
             // We do not handle unions specifically here, because something like `A | SubclassOfA` would
             // have been simplified to `A` anyway

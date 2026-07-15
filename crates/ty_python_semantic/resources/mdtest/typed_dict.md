@@ -5098,6 +5098,7 @@ static_assert(is_assignable_to(FooBar, Foo))
 static_assert(is_assignable_to(FooBar, Bar))
 
 def dictionary_union(u: Foo | dict[Literal["a", "b"], int]):
+    # error: [unsupported-operator]
     if "c" in u:
         # TODO: This should stop erroring if we prove that the `dict` arm cannot contain `"c"`.
         # error: [invalid-argument-type]

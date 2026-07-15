@@ -214,7 +214,9 @@ impl<'db> Type<'db> {
             | Type::Callable(_)
             | Type::TypeIs(_)
             | Type::TypeGuard(_)
-            | Type::TypeForm(_) => Truthiness::Ambiguous,
+            | Type::TypeForm(_)
+            // parameter-only marker; a value never actually has this type
+            | Type::Overlapping(_) => Truthiness::Ambiguous,
 
             Type::TypedDict(td) => {
                 if td.items(db).values().any(TypedDictField::is_required) {

@@ -89,6 +89,8 @@ pub enum SpecialFormType {
     Not,
     /// The symbol `ty_extensions.Intersection`
     Intersection,
+    /// The symbol `ty_extensions.Overlapping`
+    Overlapping,
     /// The symbol `ty_extensions._internal.TypeOf`
     TypeOf,
     /// The symbol `ty_extensions._internal.CallableTypeOf`
@@ -202,6 +204,7 @@ impl SpecialFormType {
             | Self::Top
             | Self::Bottom
             | Self::Intersection
+            | Self::Overlapping
             | Self::CallableTypeOf
             | Self::RegularCallableTypeOf
             | Self::Unknown
@@ -327,6 +330,7 @@ impl SpecialFormType {
             AlwaysFalsy,
             Not,
             Intersection,
+            Overlapping,
             TypeOf,
             CallableTypeOf,
             RegularCallableTypeOf,
@@ -375,6 +379,7 @@ impl SpecialFormType {
                     SpecialFormType::RegularCallableTypeOf => Self::RegularCallableTypeOf,
                     SpecialFormType::Concatenate => Self::Concatenate,
                     SpecialFormType::Intersection => Self::Intersection,
+                    SpecialFormType::Overlapping => Self::Overlapping,
                     SpecialFormType::Literal => Self::Literal,
                     SpecialFormType::LiteralString => Self::LiteralString,
                     SpecialFormType::Never => Self::Never,
@@ -436,6 +441,7 @@ impl SpecialFormType {
                     SpecialFormTypeBuilder::RegularCallableTypeOf => &[Self::RegularCallableTypeOf],
                     SpecialFormTypeBuilder::Concatenate => &[Self::Concatenate],
                     SpecialFormTypeBuilder::Intersection => &[Self::Intersection],
+                    SpecialFormTypeBuilder::Overlapping => &[Self::Overlapping],
                     SpecialFormTypeBuilder::Literal => &[Self::Literal],
                     SpecialFormTypeBuilder::LiteralString => &[Self::LiteralString],
                     SpecialFormTypeBuilder::Never => &[Self::Never],
@@ -553,7 +559,8 @@ impl SpecialFormType {
             | Self::Not
             | Self::Top
             | Self::Bottom
-            | Self::Intersection => module.is_ty_extensions(),
+            | Self::Intersection
+            | Self::Overlapping => module.is_ty_extensions(),
 
             Self::Divergent
             | Self::Todo
@@ -624,6 +631,7 @@ impl SpecialFormType {
             | Self::Top
             | Self::Bottom
             | Self::Intersection
+            | Self::Overlapping
             | Self::TypeOf
             | Self::CallableTypeOf
             | Self::RegularCallableTypeOf
@@ -668,6 +676,7 @@ impl SpecialFormType {
             | Self::Never
             | Self::NoReturn
             | Self::Not
+            | Self::Overlapping
             | Self::TypeAlias
             | Self::TypeGuard
             | Self::NamedTuple
@@ -726,6 +735,7 @@ impl SpecialFormType {
             SpecialFormType::AlwaysFalsy => "AlwaysFalsy",
             SpecialFormType::Not => "Not",
             SpecialFormType::Intersection => "Intersection",
+            SpecialFormType::Overlapping => "Overlapping",
             SpecialFormType::TypeOf => "TypeOf",
             SpecialFormType::CallableTypeOf => "CallableTypeOf",
             SpecialFormType::RegularCallableTypeOf => "RegularCallableTypeOf",
@@ -779,6 +789,7 @@ impl SpecialFormType {
             | SpecialFormType::AlwaysFalsy
             | SpecialFormType::Not
             | SpecialFormType::Intersection
+            | SpecialFormType::Overlapping
             | SpecialFormType::Top
             | SpecialFormType::Bottom => &[KnownModule::TyExtensions],
 
@@ -917,6 +928,7 @@ impl SpecialFormType {
 
             Self::Optional
             | Self::Not
+            | Self::Overlapping
             | Self::Top
             | Self::Bottom
             | Self::TypeOf

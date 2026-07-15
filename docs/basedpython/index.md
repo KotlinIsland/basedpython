@@ -44,6 +44,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [explicit typevar constraints](features/constraints.md)
 - [typevar variance keywords](features/variance.md)
 - [safe variance](features/safe-variance.md)
+- [overlapping](features/overlapping.md)
 - [explicit generic call sites](features/generic-calls.md)
 - [reified type parameters](features/reified-generics.md)
 - [type reification](features/type-reification.md)
