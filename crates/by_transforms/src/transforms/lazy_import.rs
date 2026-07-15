@@ -42,6 +42,11 @@ pub(crate) struct LazyImport<'src> {
     /// True when at least one `from ty_extensions import X` was rewritten to
     /// a `_TyExtMarker` assignment; the preamble must define the marker
     pub(crate) needs_ty_ext_marker: bool,
+    /// True when `Character` was imported from `ty_extensions`. unlike the
+    /// other type-only names, `Character` is a *concrete* runtime class
+    /// (`class Character(str)`) that the grapheme accessors construct, so the
+    /// preamble must define the real class rather than the marker
+    pub(crate) needs_character_class: bool,
 }
 
 impl<'src> LazyImport<'src> {
@@ -53,6 +58,7 @@ impl<'src> LazyImport<'src> {
             needs_module_helper: false,
             needs_attr_helper: false,
             needs_ty_ext_marker: false,
+            needs_character_class: false,
         }
     }
 
@@ -195,10 +201,27 @@ impl<'src> LazyImport<'src> {
         // with a stub class that supports `X[T]`, `X | Y`, and use-as-base
         let is_ty_ext = !is_relative && module_part == "ty_extensions";
         let mut lines: Vec<String> = Vec::new();
+        // whether the statement imported a bare `Character` that contributed no
+        // binding line — the import must still be *removed* (the preamble class
+        // defines `Character`), so force an empty replacement below
+        let mut character_only = false;
         for alias in &node.names {
             let name = alias.name.id.as_str();
             let bind = alias.asname.as_ref().map(|a| a.id.as_str()).unwrap_or(name);
             if is_ty_ext {
+                // `Character` is a concrete runtime class, not a type-only
+                // marker — the preamble defines `class Character(str)`. a bare
+                // `Character` import needs no binding line (the class *is* the
+                // binding); an aliased one binds the alias to the class
+                if name == "Character" {
+                    self.needs_character_class = true;
+                    if bind != "Character" {
+                        lines.push(format!("{bind} = Character"));
+                    } else {
+                        character_only = true;
+                    }
+                    continue;
+                }
                 self.needs_ty_ext_marker = true;
                 lines.push(format!("{bind} = _TyExtMarker"));
                 continue;
@@ -226,7 +249,16 @@ impl<'src> LazyImport<'src> {
                 ));
             }
         }
+        // `character_only` means a bare `Character` import produced no lines but
+        // must still be dropped (the preamble class defines `Character`) so it
+        // doesn't survive as a runtime `from ty_extensions import Character`
         if lines.is_empty() {
+            if character_only {
+                self.edits.push(Fix::safe_edit(Edit::deletion(
+                    node.range().start(),
+                    node.range().end(),
+                )));
+            }
             return;
         }
         let indent = self.line_indent(node.range());
@@ -248,14 +280,120 @@ impl<'ast> Visitor<'ast> for LazyImport<'_> {
     }
 }
 
+/// `from x import y` proxy for the polyfill mode (python < 3.15, which has no
+/// PEP 810 `lazy` keyword). deferring the *attribute read* is what needs a
+/// proxy at all: `_lazy_module` already defers the module's execution, but
+/// reading `y` off it would force that execution immediately.
+///
+/// the proxy must be *transparent*: python looks special methods up on the
+/// type, never through `__getattr__`, so a dunder that isn't forwarded here
+/// silently falls back to `object`'s version. that is not a missing feature
+/// but a correctness bug — an unforwarded `__eq__` makes `a == b` compare
+/// proxy identity and answer `False` for equal values. the forwarding table
+/// below is generated in a loop rather than hand-written so the set stays
+/// auditable, and each operator is applied to the *resolved* value so
+/// python's full binary-op protocol (reflected operands, `NotImplemented`)
+/// still runs.
+///
+/// `__class__` makes `isinstance(proxy, C)` work, and `__instancecheck__`
+/// makes `isinstance(x, proxy)` work for a lazily-imported class (`isinstance`
+/// looks `__instancecheck__` up on `type(classinfo)`, which is `_LazyAttr`).
+/// `type(proxy)` and `proxy is x` cannot be fixed by any proxy — that is
+/// exactly why PEP 810 is a language feature — and are documented limits of
+/// this polyfill
+const LAZY_ATTR_PROXY: &str = r#"class _LazyAttr:
+    __slots__ = ("_by_mod", "_by_attr", "_by_val", "_by_has")
+    def __init__(self, mod, attr):
+        object.__setattr__(self, "_by_mod", mod)
+        object.__setattr__(self, "_by_attr", attr)
+        object.__setattr__(self, "_by_val", None)
+        object.__setattr__(self, "_by_has", False)
+    def _by_resolve(self):
+        if not self._by_has:
+            object.__setattr__(self, "_by_val", getattr(_lazy_module(self._by_mod), self._by_attr))
+            object.__setattr__(self, "_by_has", True)
+        return self._by_val
+    @property
+    def __class__(self): return self._by_resolve().__class__
+    def __getattr__(self, k): return getattr(self._by_resolve(), k)
+    def __setattr__(self, k, v): setattr(self._by_resolve(), k, v)
+    def __delattr__(self, k): delattr(self._by_resolve(), k)
+    def __call__(self, *a, **k): return self._by_resolve()(*a, **k)
+    def __class_getitem__(cls, k): return cls
+    def __instancecheck__(self, o): return isinstance(o, self._by_resolve())
+    def __subclasscheck__(self, o): return issubclass(o, self._by_resolve())
+    def __mro_entries__(self, bases):
+        r = self._by_resolve()
+        m = getattr(r, "__mro_entries__", None)
+        if m is None: return (r,)
+        return m(tuple(r if b is self else b for b in bases))
+def _by_lazy_forward():
+    import operator as op
+    def one(f): return lambda s: f(s._by_resolve())
+    def two(f): return lambda s, o: f(s._by_resolve(), o)
+    def rtwo(f): return lambda s, o: f(o, s._by_resolve())
+    for n, f in (("add", op.add), ("sub", op.sub), ("mul", op.mul), ("matmul", op.matmul),
+                 ("truediv", op.truediv), ("floordiv", op.floordiv), ("mod", op.mod),
+                 ("divmod", divmod), ("pow", op.pow), ("lshift", op.lshift),
+                 ("rshift", op.rshift), ("and", op.and_), ("xor", op.xor), ("or", op.or_)):
+        setattr(_LazyAttr, "__" + n + "__", two(f))
+        setattr(_LazyAttr, "__r" + n + "__", rtwo(f))
+    for n in ("lt", "le", "eq", "ne", "gt", "ge"):
+        setattr(_LazyAttr, "__" + n + "__", two(getattr(op, n)))
+    for n, f in (("neg", op.neg), ("pos", op.pos), ("abs", abs), ("invert", op.inv),
+                 ("len", len), ("iter", iter), ("next", next), ("bool", bool),
+                 ("str", str), ("repr", repr), ("bytes", bytes), ("int", int),
+                 ("float", float), ("complex", complex), ("index", op.index),
+                 ("hash", hash), ("reversed", reversed)):
+        setattr(_LazyAttr, "__" + n + "__", one(f))
+    setattr(_LazyAttr, "__getitem__", two(op.getitem))
+    setattr(_LazyAttr, "__contains__", two(op.contains))
+    setattr(_LazyAttr, "__delitem__", two(op.delitem))
+    setattr(_LazyAttr, "__setitem__", lambda s, k, v: op.setitem(s._by_resolve(), k, v))
+    setattr(_LazyAttr, "__format__", lambda s, f: format(s._by_resolve(), f))
+    setattr(_LazyAttr, "__round__", lambda s, *a: round(s._by_resolve(), *a))
+    setattr(_LazyAttr, "__enter__", lambda s: s._by_resolve().__enter__())
+    setattr(_LazyAttr, "__exit__", lambda s, *a: s._by_resolve().__exit__(*a))
+_by_lazy_forward()
+def _lazy_attr(mod, attr): return _LazyAttr(mod, attr)
+"#;
+
+/// `Character` — a concrete `str` subclass, so the grapheme accessors can
+/// construct genuine instances and `isinstance(x, Character)` works.
+///
+/// it is interned in a `sys.modules` registry rather than defined per file
+/// because class *identity* is what `isinstance` tests: a plain
+/// `class Character(str)` in each transpiled module would make every module's
+/// `Character` a distinct class object, so a value built in one module would
+/// fail `isinstance(v, Character)` in another. the registry gives every module
+/// in a process the one class — first definer wins, the rest reuse it.
+///
+/// this keeps transpiled output self-contained, which a shared import would
+/// not: `x: Character = "a"` currently needs nothing installed. if `Character`
+/// ever moves into a shipped `basedpython.by`, it becomes an ordinary import
+/// from that module and this registry goes away
+const CHARACTER_CLASS: &str = r#"import types as _by_types
+_by_rt = _by_sys.modules.setdefault("_by_runtime", _by_types.ModuleType("_by_runtime"))
+if not hasattr(_by_rt, "Character"):
+    class Character(str):
+        __slots__ = ()
+    _by_rt.Character = Character
+Character = _by_rt.Character
+"#;
+
 /// Preamble snippet defining the runtime helpers used by polyfill-mode
 /// lazified imports. Emitted once per file when any lazification fires
+#[expect(
+    clippy::fn_params_excessive_bools,
+    reason = "independent which-helpers-to-emit flags, not a state machine"
+)]
 pub(crate) fn polyfill_preamble(
     needs_module: bool,
     needs_attr: bool,
     needs_ty_ext: bool,
+    needs_character_class: bool,
 ) -> String {
-    if !needs_module && !needs_attr && !needs_ty_ext {
+    if !needs_module && !needs_attr && !needs_ty_ext && !needs_character_class {
         return String::new();
     }
     let needs_module = needs_module || needs_attr;
@@ -277,35 +415,13 @@ pub(crate) fn polyfill_preamble(
         out.push_str("    _by_sys.modules[name] = mod\n");
         out.push_str("    spec.loader.exec_module(mod)\n");
         out.push_str("    return mod\n");
+    } else if needs_character_class {
+        // the `Character` registry reads `sys.modules`, so `sys` must be bound
+        // even when no import was lazified
+        out.push_str("import sys as _by_sys\n");
     }
     if needs_attr {
-        out.push_str("class _LazyAttr:\n");
-        out.push_str("    __slots__ = (\"_by_mod\", \"_by_attr\", \"_by_val\", \"_by_has\")\n");
-        out.push_str("    def __init__(self, mod, attr):\n");
-        out.push_str("        object.__setattr__(self, \"_by_mod\", mod)\n");
-        out.push_str("        object.__setattr__(self, \"_by_attr\", attr)\n");
-        out.push_str("        object.__setattr__(self, \"_by_val\", None)\n");
-        out.push_str("        object.__setattr__(self, \"_by_has\", False)\n");
-        out.push_str("    def _by_resolve(self):\n");
-        out.push_str("        if not self._by_has:\n");
-        out.push_str(
-            "            object.__setattr__(self, \"_by_val\", getattr(_lazy_module(self._by_mod), self._by_attr))\n",
-        );
-        out.push_str("            object.__setattr__(self, \"_by_has\", True)\n");
-        out.push_str("        return self._by_val\n");
-        out.push_str("    def __getattr__(self, k): return getattr(self._by_resolve(), k)\n");
-        out.push_str("    def __call__(self, *a, **k): return self._by_resolve()(*a, **k)\n");
-        out.push_str("    def __getitem__(self, k): return self._by_resolve()[k]\n");
-        out.push_str("    def __class_getitem__(cls, k): return cls\n");
-        out.push_str("    def __or__(self, o): return self._by_resolve() | o\n");
-        out.push_str("    def __ror__(self, o): return o | self._by_resolve()\n");
-        out.push_str("    def __mro_entries__(self, bases):\n");
-        out.push_str("        r = self._by_resolve()\n");
-        out.push_str("        m = getattr(r, \"__mro_entries__\", None)\n");
-        out.push_str("        if m is None: return (r,)\n");
-        out.push_str("        return m(tuple(r if b is self else b for b in bases))\n");
-        out.push_str("    def __repr__(self): return repr(self._by_resolve())\n");
-        out.push_str("def _lazy_attr(mod, attr): return _LazyAttr(mod, attr)\n");
+        out.push_str(LAZY_ATTR_PROXY);
     }
     if needs_ty_ext {
         // type-only marker for `ty_extensions` imports. Supports the type
@@ -313,6 +429,9 @@ pub(crate) fn polyfill_preamble(
         // attempting a (non-existent) runtime import
         out.push_str("class _TyExtMarker:\n");
         out.push_str("    def __class_getitem__(cls, k): return cls\n");
+    }
+    if needs_character_class {
+        out.push_str(CHARACTER_CLASS);
     }
     out
 }

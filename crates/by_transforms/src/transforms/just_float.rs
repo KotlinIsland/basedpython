@@ -184,8 +184,21 @@ pub(crate) fn rewrite_type_expr_with_imports(
         all_edits.extend(fix.into_edits());
     }
 
+    // `Character` needs its `ty_extensions` import but no text change — the name
+    // passes through as-is
+    let mut ct = crate::transforms::character_type::CharacterType::new(types);
+    ct.emit_in_type_expr(expr);
+    if ct.needs_character_import {
+        imports.push(crate::transforms::character_type::CHARACTER_IMPORT.to_owned());
+    }
+
     if all_edits.is_empty() {
-        return None;
+        if imports.is_empty() {
+            return None;
+        }
+        // imports-only contribution: the caller re-emits the original text but
+        // must still record the imports
+        return Some((source[expr.range()].to_owned(), imports));
     }
     all_edits.sort_by_key(Edit::start);
 

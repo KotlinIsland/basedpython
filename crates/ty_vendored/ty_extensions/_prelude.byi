@@ -1,0 +1,34 @@
+# the basedpython prelude: builtin `extension` declarations that every
+# basedpython file sees without importing anything. `applicable_extensions`
+# folds these in for every basedpython source file.
+#
+# these members are type-only: the transpiler lowers each access to a plain
+# python expression (see `by_transforms::transforms::grapheme_string`), so no
+# backing function is emitted and the extension-call rewrite skips them.
+
+from collections.abc import Iterator, Sequence
+from typing import SupportsIndex
+
+# grapheme string surface. `str`'s user-perceived character is
+# an extended grapheme cluster (unicode UAX #29), which may span several code
+# points — raw indexing / iteration stay code-point operations, while these
+# accessors work in graphemes
+extension str:
+    @property
+    def character_count(self) -> int:
+      """the number of extended grapheme clusters"""
+    @property
+    def first(self) -> Character?
+    @property
+    def last(self) -> Character?
+    @property
+    def characters(self) -> Sequence[Character]
+    @property
+    def reversed(self) -> str
+    @property
+    def unicode_scalars(self) -> Iterator[str]
+    def character_at(self, index: SupportsIndex, /) -> Character
+    def drop_first(self) -> str
+    def drop_last(self) -> str
+    def prefix(self, count: SupportsIndex, /) -> str
+    def suffix(self, count: SupportsIndex, /) -> str

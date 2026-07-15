@@ -41,3 +41,7 @@ def main():
 - [reverse transforms](development/reverse-transforms.md)
 - [sourcemaps](development/sourcemaps.md)
 - [typeshed patches](development/typeshed-patches.md)
+
+## acknowledgements
+
+- [third-party work basedpython relies on](acknowledgements.md)

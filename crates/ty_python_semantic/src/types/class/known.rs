@@ -146,6 +146,7 @@ pub enum KnownClass {
     // functools
     FunctoolsPartial,
     // ty_extensions
+    Character,
     ConstraintSet,
     GenericContext,
     Specialization,
@@ -278,6 +279,7 @@ impl KnownClass {
             | Self::KwOnly
             | Self::NamedTupleFallback
             | Self::NamedTupleLike
+            | Self::Character
             | Self::ConstraintSet
             | Self::GenericContext
             | Self::Specialization
@@ -387,6 +389,7 @@ impl KnownClass {
             | KnownClass::KwOnly
             | KnownClass::NamedTupleFallback
             | KnownClass::NamedTupleLike
+            | KnownClass::Character
             | KnownClass::ConstraintSet
             | KnownClass::GenericContext
             | KnownClass::Specialization
@@ -496,6 +499,7 @@ impl KnownClass {
             | KnownClass::KwOnly
             | KnownClass::NamedTupleFallback
             | KnownClass::NamedTupleLike
+            | KnownClass::Character
             | KnownClass::ConstraintSet
             | KnownClass::GenericContext
             | KnownClass::Specialization
@@ -607,6 +611,7 @@ impl KnownClass {
             | KnownClass::ExtensionTypedDictFallback
             | KnownClass::NamedTupleLike
             | KnownClass::NamedTupleFallback
+            | KnownClass::Character
             | KnownClass::ConstraintSet
             | KnownClass::GenericContext
             | KnownClass::Specialization
@@ -724,6 +729,7 @@ impl KnownClass {
             | Self::Field
             | Self::KwOnly
             | Self::NamedTupleFallback
+            | Self::Character
             | Self::ConstraintSet
             | Self::GenericContext
             | Self::Specialization
@@ -843,6 +849,7 @@ impl KnownClass {
             | KnownClass::Template
             | KnownClass::Path
             | KnownClass::FunctoolsPartial
+            | KnownClass::Character
             | KnownClass::ConstraintSet
             | KnownClass::GenericContext
             | KnownClass::Specialization
@@ -960,6 +967,7 @@ impl KnownClass {
             Self::KwOnly => "KW_ONLY",
             Self::NamedTupleFallback => "NamedTupleFallback",
             Self::NamedTupleLike => "NamedTupleLike",
+            Self::Character => "Character",
             Self::ConstraintSet => "ConstraintSet",
             Self::GenericContext => "GenericContext",
             Self::Specialization => "Specialization",
@@ -1344,7 +1352,7 @@ impl KnownClass {
             | Self::OrderedDict => KnownModule::Collections,
             Self::Field | Self::KwOnly => KnownModule::Dataclasses,
             Self::NamedTupleFallback | Self::TypedDictFallback => KnownModule::TypeCheckerInternals,
-            Self::NamedTupleLike => KnownModule::TyExtensions,
+            Self::NamedTupleLike | Self::Character => KnownModule::TyExtensions,
             Self::ConstraintSet
             | Self::GenericContext
             | Self::Specialization
@@ -1455,6 +1463,7 @@ impl KnownClass {
             | Self::Mapping
             | Self::NamedTupleFallback
             | Self::NamedTupleLike
+            | Self::Character
             | Self::ConstraintSet
             | Self::GenericContext
             | Self::Specialization
@@ -1570,6 +1579,7 @@ impl KnownClass {
             | Self::Mapping
             | Self::NamedTupleFallback
             | Self::NamedTupleLike
+            | Self::Character
             | Self::ConstraintSet
             | Self::GenericContext
             | Self::Specialization
@@ -1684,6 +1694,7 @@ impl KnownClass {
             "KW_ONLY" => &[Self::KwOnly],
             "NamedTupleFallback" => &[Self::NamedTupleFallback],
             "NamedTupleLike" => &[Self::NamedTupleLike],
+            "Character" => &[Self::Character],
             "ConstraintSet" => &[Self::ConstraintSet],
             "GenericContext" => &[Self::GenericContext],
             "Specialization" => &[Self::Specialization],
@@ -1780,6 +1791,7 @@ impl KnownClass {
             | Self::ExtensionsParamSpec
             | Self::Sentinel
             | Self::NamedTupleLike
+            | Self::Character
             | Self::ConstraintSet
             | Self::GenericContext
             | Self::Specialization

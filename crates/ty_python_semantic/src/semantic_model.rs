@@ -123,6 +123,17 @@ impl<'db> SemanticModel<'db> {
             receiver_ty,
             attribute.attr.as_str(),
         )?;
+        // prelude members (the grapheme string surface) have no backing function —
+        // the dedicated `grapheme_string` lowering handles them, so the extension
+        // rewrite must leave the access alone. skip when either the resolved
+        // extension or an ambiguous peer is the prelude
+        if crate::types::extensions::is_prelude_extension(db, self.file, resolution.extension)
+            || resolution.ambiguous_with.is_some_and(|other| {
+                crate::types::extensions::is_prelude_extension(db, self.file, other)
+            })
+        {
+            return None;
+        }
         let extension_file = resolution.extension.file(db);
         let import_from = if extension_file == self.file {
             None
