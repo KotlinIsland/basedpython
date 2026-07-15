@@ -1460,6 +1460,16 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                     .fmt_detailed(f)?;
                 f.write_char(']')
             }
+            Type::Overlapping(overlapping) => {
+                f.with_type(Type::SpecialForm(SpecialFormType::Overlapping))
+                    .write_str("Overlapping")?;
+                f.write_char('[')?;
+                overlapping
+                    .type_argument(self.db)
+                    .display_with(self.db, self.settings.clone())
+                    .fmt_detailed(f)?;
+                f.write_char(']')
+            }
             Type::TypedDict(TypedDictType::Class(defining_class)) => match defining_class {
                 ClassType::NonGeneric(class) => class
                     .display_with(self.db, self.settings.clone())

@@ -2590,7 +2590,7 @@ class tuple[out Element](Sequence[Element]):
     def __len__(self) -> int:
         """Return len(self)."""
 
-    def __contains__(self, key: object, /) -> bool:
+    def __contains__(self, key: Overlapping[Element], /) -> bool:
         """Return bool(key in self)."""
 
     def __getitem__(self, key: SupportsIndex, /) -> Element:
@@ -2737,7 +2737,7 @@ class list[in out Element](MutableSequence[Element]):
     def __imul__(self, value: SupportsIndex, /) -> Self:
         """Implement self*=value."""
 
-    def __contains__(self, key: object, /) -> bool:
+    def __contains__(self, key: Overlapping[Element], /) -> bool:
         """Return bool(key in self)."""
 
     def __reversed__(self) -> Iterator[Element]:
@@ -2811,10 +2811,10 @@ class dict[in out Key, in out Value](MutableMapping[Key, Value]):
     def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other, /) -> dict[Element, Other]
 
     # Positional-only in dict, but not in MutableMapping
-    def get(self, key: object, default: None = None, /) -> Value | None:
+    def get(self, key: Overlapping[Key], default: None = None, /) -> Value | None:
         """Return the value for key if key is in the dictionary, else default."""
-    def get(self, key: object, default: Value, /) -> Value
-    def get[Element](self, key: object, default: Element, /) -> Value | Element
+    def get(self, key: Overlapping[Key], default: Value, /) -> Value
+    def get[Element](self, key: Overlapping[Key], default: Element, /) -> Value | Element
 
     def pop(self, key: Key, /) -> Value:
         """D.pop(k[,d]) -> v, remove specified key and return the corresponding value.
@@ -2828,7 +2828,7 @@ class dict[in out Key, in out Value](MutableMapping[Key, Value]):
     def __len__(self) -> int:
         """Return len(self)."""
 
-    def __getitem__(self, key: Key, /) -> Value:
+    def __getitem__(self, key: Overlapping[Key], /) -> Value:
         """Return self[key]."""
 
     def __setitem__(self, key: Key, value: Value, /) -> None:
@@ -2900,10 +2900,10 @@ if sys.version_info >= (3, 15):
             """Create a new dictionary with keys from iterable and values set to value."""
         class def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other, /) -> frozendict[Element, Other]
 
-        def get(self, key: Key, default: None = None, /) -> Value | None:
+        def get(self, key: Overlapping[Key], default: None = None, /) -> Value | None:
             """Return the value for key if key is in the dictionary, else default."""
-        def get(self, key: Key, default: Value, /) -> Value
-        def get[Element](self, key: Key, default: Element, /) -> Value | Element
+        def get(self, key: Overlapping[Key], default: Value, /) -> Value
+        def get[Element](self, key: Overlapping[Key], default: Element, /) -> Value | Element
 
         def keys(self) -> dict_keys[Key, Value]:
             """Return a set-like object providing a view on the dict's keys."""
@@ -2917,7 +2917,7 @@ if sys.version_info >= (3, 15):
         def __len__(self) -> int:
             """Return len(self)."""
 
-        def __getitem__(self, key: Key, /) -> Value:
+        def __getitem__(self, key: Overlapping[Key], /) -> Value:
             """Return self[key]."""
 
         def __reversed__(self) -> Iterator[Key]:
@@ -3002,7 +3002,7 @@ class set[in out Element](MutableSet[Element]):
     def __len__(self) -> int:
         """Return len(self)."""
 
-    def __contains__(self, o: object, /) -> bool:
+    def __contains__(self, o: Overlapping[Element], /) -> bool:
         """x.__contains__(y) <==> y in x."""
 
     def __iter__(self) -> Iterator[Element]:
@@ -3075,7 +3075,7 @@ class frozenset[out Element](AbstractSet[Element]):
     def __len__(self) -> int:
         """Return len(self)."""
 
-    def __contains__(self, o: object, /) -> bool:
+    def __contains__(self, o: Overlapping[Element], /) -> bool:
         """x.__contains__(y) <==> y in x."""
 
     def __iter__(self) -> Iterator[Element]:

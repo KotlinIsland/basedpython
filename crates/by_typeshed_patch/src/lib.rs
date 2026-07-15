@@ -48,7 +48,10 @@ pub struct Edit {
 pub fn all_patches() -> Vec<Box<dyn Patch>> {
     // patches are added here as upstream syncs surface concrete drift. each
     // entry must have a corresponding module in `src/patches/` with tests
-    vec![Box::new(patches::mapping::MappingKeyCovariance)]
+    vec![
+        Box::new(patches::mapping::MappingKeyCovariance),
+        Box::new(patches::container_overlapping::ContainerMembershipOverlapping),
+    ]
 }
 
 /// registry of every post-conversion patch, applied in pass 3 after the pep 695

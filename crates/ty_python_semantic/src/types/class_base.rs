@@ -137,6 +137,10 @@ impl<'db> ClassBase<'db> {
         subclass: Option<ClassLiteral<'db>>,
     ) -> Option<Self> {
         match ty {
+            // parameter-only marker; behaves as the type a body sees (bound of `Key`)
+            Type::Overlapping(overlapping) => {
+                Self::try_from_type(db, overlapping.value_type(db), subclass)
+            }
             Type::Dynamic(dynamic) => Some(Self::Dynamic(dynamic)),
             Type::Divergent(divergent) => Some(Self::Divergent(divergent)),
             Type::ClassLiteral(literal) => Some(Self::Class(literal.default_specialization(db))),
@@ -280,6 +284,7 @@ impl<'db> ClassBase<'db> {
                 | SpecialFormType::TypeAlias
                 | SpecialFormType::Optional
                 | SpecialFormType::Not
+                | SpecialFormType::Overlapping
                 | SpecialFormType::Top
                 | SpecialFormType::Bottom
                 | SpecialFormType::Intersection

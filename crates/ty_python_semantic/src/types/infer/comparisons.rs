@@ -198,6 +198,27 @@ pub(super) fn infer_binary_type_comparison<'db>(
             visitor,
         )),
 
+        // A membership test checks overlap against the *whole* left type: a union
+        // that only partially overlaps the container's element type still
+        // overlaps it, so it must not be split into per-member `__contains__`
+        // calls (which would reject a member that is disjoint from the element,
+        // e.g. `"a"` in `x: Literal[1, "a"]` tested against a `tuple[Literal[1]]`)
+        (Type::Union(_), other)
+            if matches!(op, ast::CmpOp::In | ast::CmpOp::NotIn) =>
+        {
+            let membership_op = match op {
+                ast::CmpOp::NotIn => MembershipTestCompareOperator::NotIn,
+                _ => MembershipTestCompareOperator::In,
+            };
+            Some(infer_membership_test_comparison(
+                context,
+                left,
+                other,
+                membership_op,
+                range,
+            ))
+        }
+
         (Type::Union(union), other) => {
             let mut builder = UnionBuilder::new(db);
             for element in union.elements(db) {

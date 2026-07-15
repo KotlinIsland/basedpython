@@ -20,6 +20,21 @@ def static_assert(condition: object, msg: LiteralString | None = None) -> None: 
 Not: _SpecialForm
 """`Not[T]` represents the set of all objects that do not inhabit the type `T`."""
 
+Overlapping: _SpecialForm
+"""
+`Overlapping[T]` is a "safe variance" escape hatch for input positions: it lets a covariant
+(`out T`) class declare a method parameter that *consumes* `T` without giving up covariance.
+
+At the call site, an argument is accepted iff it is *not disjoint from* `T` (its type overlaps
+`T`). At the upper bound `object`, that means only a provably-unrelated argument is rejected. For a
+`Mapping[int, V]`, both `1 in m` and `object() in m` are accepted, while `"a" in m` is rejected
+because `str` and `int` can never overlap.
+
+Inside the method body the parameter is seen as the upper bound of `T` (so `Overlapping[T]` reveals
+as `object` for an unbounded `T`), which prevents the consumed value from being written back into
+`T`-typed covariant storage. `Overlapping[T]` is only meaningful as a parameter annotation.
+"""
+
 Intersection: _SpecialForm
 """
 `Intersection[T1, T2, ..., Tn]` represents an intersection type: the set of all objects that inhabit

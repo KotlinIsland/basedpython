@@ -163,6 +163,10 @@ impl<'db> AllMembers<'db> {
 
     fn extend_with_type(&mut self, db: &'db dyn Db, ty: Type<'db>) {
         match ty {
+            // parameter-only marker; behaves as the type a body sees (bound of `Key`)
+            Type::Overlapping(overlapping) => {
+                self.extend_with_type(db, overlapping.value_type(db));
+            }
             Type::Union(union) => {
                 fn is_dynamic(db: &dyn Db, ty: Type<'_>) -> bool {
                     // We don't need to use recursion here because

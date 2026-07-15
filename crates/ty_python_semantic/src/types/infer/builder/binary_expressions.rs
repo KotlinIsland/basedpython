@@ -353,6 +353,33 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         }
 
         match (left_ty, right_ty, op) {
+            // parameter-only marker; behaves as the type a body sees (bound of `Key`)
+            (Type::Overlapping(overlapping), _, _) => {
+                visitor.visit((left_ty, op, right_ty), || {
+                    self.infer_binary_expression_type_impl(
+                        node,
+                        emitted_division_by_zero_diagnostic,
+                        overlapping.value_type(db),
+                        right_ty,
+                        op,
+                        visitor,
+                        tcx,
+                    )
+                })
+            }
+            (_, Type::Overlapping(overlapping), _) => {
+                visitor.visit((left_ty, op, right_ty), || {
+                    self.infer_binary_expression_type_impl(
+                        node,
+                        emitted_division_by_zero_diagnostic,
+                        left_ty,
+                        overlapping.value_type(db),
+                        op,
+                        visitor,
+                        tcx,
+                    )
+                })
+            }
             (Type::Union(lhs_union), rhs, _) => lhs_union.try_map(db, |lhs_element| {
                 self.infer_binary_expression_type_impl(
                     node,

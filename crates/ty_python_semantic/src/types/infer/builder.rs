@@ -18,7 +18,7 @@ use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use strum::IntoEnumIterator;
-use ty_module_resolver::{ModuleName, resolve_module};
+use ty_module_resolver::{KnownModule, ModuleName, resolve_module};
 use ty_python_core::ast_ids::HasScopedUseId;
 use ty_python_core::statement::StatementInner;
 
@@ -34,7 +34,7 @@ use crate::place::{
     ConsideredDefinitions, DefinedPlace, Definedness, LookupError, Place, PlaceAndQualifiers,
     RequiresExplicitReExport, TypeOrigin, builtins_module_scope, builtins_symbol,
     class_body_implicit_symbol, explicit_global_symbol, is_basedpython_implicit_typing_name,
-    loop_header_reachability, module_type_implicit_global_declaration,
+    known_module_symbol, loop_header_reachability, module_type_implicit_global_declaration,
     module_type_implicit_global_symbol, place_by_id, place_from_bindings_with_reachability_cache,
     place_from_declarations_with_reachability_cache, typing_extensions_symbol, typing_symbol,
 };
@@ -2777,6 +2777,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let db = self.db();
 
         match object_ty {
+            // parameter-only marker; behaves as the type a body sees (bound of `Key`)
+            Type::Overlapping(overlapping) => self.validate_attribute_deletion(
+                target,
+                overlapping.value_type(db),
+                attribute,
+                emit_diagnostics,
+            ),
             Type::Union(union) => {
                 for element_ty in union.elements(db) {
                     if !self.validate_attribute_deletion(
@@ -4874,6 +4881,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             provenance: CallableFunctionProvenance,
         ) -> Option<Type<'d>> {
             match ty {
+                // parameter-only marker; behaves as the type a body sees (bound of `Key`)
+                Type::Overlapping(overlapping) => {
+                    propagate_callable_kind(db, overlapping.value_type(db), kind, provenance)
+                }
                 Type::Callable(callable) => Some(Type::Callable(CallableType::new(
                     db,
                     callable.signatures(db),
@@ -9491,6 +9502,23 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     Place::Undefined.into()
                 }
             })
+            // basedpython only: `Overlapping` is a `ty_extensions` special form
+            // used unqualified in the vendored typeshed (`Container.__contains__`
+            // and friends). resolve the bare name in a type expression so it
+            // doesn't require an import there. gated on type-expression position
+            // so a value-position `Overlapping` stays an ordinary identifier
+            .or_fall_back_to(db, || {
+                if self.is_basedpython_file()
+                    && symbol_name == "Overlapping"
+                    && self
+                        .inference_flags()
+                        .contains(InferenceFlags::IN_TYPE_EXPRESSION)
+                {
+                    known_module_symbol(db, KnownModule::TyExtensions, "Overlapping")
+                } else {
+                    Place::Undefined.into()
+                }
+            })
             // basedpython only: `Some` is the present-case optional constructor.
             // It has no runtime definition in real Python — the transpiler lowers
             // `Some(x)` to the injected `Optional(x)` wrapper — so it's resolved
@@ -10671,6 +10699,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
 
         match (op, operand_type) {
+            // parameter-only marker; behaves as the type a body sees (bound of `Key`)
+            (_, Type::Overlapping(overlapping)) => overlapping.value_type(self.db()),
             (ast::UnaryOp::Invert | ast::UnaryOp::UAdd | ast::UnaryOp::USub, Type::Dynamic(_))
             | (_, Type::Divergent(_)) => operand_type,
             (_, Type::Never) => Type::Never,

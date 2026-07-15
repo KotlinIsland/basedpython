@@ -34,7 +34,7 @@ def _(
     reveal_type(one_or_two != 3)  # revealed: Literal[True]
     reveal_type(one_or_two != 1)  # revealed: bool
 
-    reveal_type(a_or_ab in "ab")  # revealed: Literal[True]
+    reveal_type(a_or_ab in "ab")  # revealed: bool
     reveal_type("a" in a_or_ab)  # revealed: Literal[True]
 
     reveal_type("c" not in a_or_ab)  # revealed: Literal[True]
@@ -110,7 +110,6 @@ error[unsupported-operator]: Unsupported `in` operation
    |               |
    |               Both operands have type `list[int] | Literal[1]`
    |
-info: Operation fails because operator `in` is not supported between objects of type `list[int]` and `Literal[1]`
 ```
 
 ```py

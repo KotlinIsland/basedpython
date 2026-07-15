@@ -3110,7 +3110,12 @@ fn completion_kind_from_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Comp
             | Type::NewTypeInstance(_)
             | Type::EnumComplement(_) => CompletionKind::Struct,
             Type::LiteralValue(literal) if literal.is_enum() => CompletionKind::Enum,
-            Type::LiteralValue(_) | Type::TypeIs(_) | Type::TypeGuard(_) | Type::TypeForm(_) => {
+            Type::LiteralValue(_)
+            | Type::TypeIs(_)
+            | Type::TypeGuard(_)
+            | Type::TypeForm(_)
+            // parameter-only marker; never actually a completion target
+            | Type::Overlapping(_) => {
                 CompletionKind::Value
             }
             Type::ProtocolInstance(_) => CompletionKind::Interface,
@@ -5039,7 +5044,7 @@ quux.<CURSOR>
         __annotations__ :: dict[str, Any]
         __class__ :: type[Quux]
         __class_getitem__ :: bound method type[Quux].__class_getitem__(item: Any, /) -> GenericAlias
-        __contains__ :: bound method Quux.__contains__(key: object, /) -> bool
+        __contains__ :: bound method Quux.__contains__(key: Overlapping[int | str], /) -> bool
         __delattr__ :: bound method Quux.__delattr__(name: str, /) -> None
         __dict__ :: dict[str, Any]
         __dir__ :: bound method Quux.__dir__() -> Iterable[str]

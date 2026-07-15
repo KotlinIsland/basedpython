@@ -1532,12 +1532,11 @@ protocol AsyncGenerator[out Element, in Sent = None](AsyncIterator[Element]):
 
 
 @runtime_checkable
-protocol Container[in ContainerT = dynamic]:
-    abstract def __contains__(self, x: ContainerT, /) -> bool
+protocol Container[out Element]:
+    abstract def __contains__(self, x: Overlapping[Element], /) -> bool
 
 @runtime_checkable
-protocol Collection[out Element](Iterable[Element], Container[dynamic]):
-    # Implement Sized (but don't have it as a base class).
+protocol Collection[out Element](Iterable[Element], Container[Element]):
     abstract def __len__(self) -> int
 
 class Sequence[out Element](Reversible[Element], Collection[Element]):
@@ -1562,7 +1561,7 @@ class Sequence[out Element](Reversible[Element], Collection[Element]):
     def count(self, value: dynamic, /) -> int:
         """S.count(value) -> integer -- return number of occurrences of value"""
 
-    def __contains__(self, value: object, /) -> bool
+    def __contains__(self, value: Overlapping[Element], /) -> bool
     def __iter__(self) -> Iterator[Element]
     def __reversed__(self) -> Iterator[Element]
 
@@ -1623,7 +1622,7 @@ class AbstractSet[out Element](Collection[Element]):
     then the other operations will automatically follow suit.
     """
 
-    abstract def __contains__(self, x: object, /) -> bool
+    abstract def __contains__(self, x: Overlapping[Element], /) -> bool
     def _hash(self) -> int:
         """Compute the hash value of a set.
 
@@ -1703,7 +1702,7 @@ class ItemsView[out Key, out Value](MappingView, AbstractSet[tuple[Key, Value]])
     class def _from_iterable[Other](cls, it: Iterable[Other], /) -> set[Other]
     def __and__(self, other: Iterable[dynamic], /) -> set[(Key, Value)]
     def __rand__[Element](self, other: Iterable[Element], /) -> set[Element]
-    def __contains__(self, item: (object, object), /) -> bool
+    def __contains__(self, item: Overlapping[tuple[Key, Value]], /) -> bool
     def __iter__(self) -> Iterator[(Key, Value)]
     def __or__[Element](self, other: Iterable[Element], /) -> set[(Key, Value) | Element]
     def __ror__[Element](self, other: Iterable[Element], /) -> set[(Key, Value) | Element]
@@ -1717,7 +1716,7 @@ class KeysView[out Key](MappingView, AbstractSet[Key]):
     class def _from_iterable[Other](cls, it: Iterable[Other], /) -> set[Other]
     def __and__(self, other: Iterable[dynamic], /) -> set[Key]
     def __rand__[Element](self, other: Iterable[Element], /) -> set[Element]
-    def __contains__(self, key: object, /) -> bool
+    def __contains__(self, key: Overlapping[Key], /) -> bool
     def __iter__(self) -> Iterator[Key]
     def __or__[Element](self, other: Iterable[Element], /) -> set[Key | Element]
     def __ror__[Element](self, other: Iterable[Element], /) -> set[Key | Element]
@@ -1728,7 +1727,7 @@ class KeysView[out Key](MappingView, AbstractSet[Key]):
 
 class ValuesView[out Value](MappingView, Collection[Value]):
     init(self, mapping: SupportsGetItemViewable[dynamic, Value])  # undocumented
-    def __contains__(self, value: object, /) -> bool
+    def __contains__(self, value: Overlapping[Value], /) -> bool
     def __iter__(self) -> Iterator[Value]
 
 # note for Mapping.get and MutableMapping.pop and MutableMapping.setdefault
@@ -1746,13 +1745,13 @@ class Mapping[out Key, out Value](Collection[Key]):
 
     # TODO: We wish the key type could also be covariant, but that doesn't work,
     # see discussion in https://github.com/python/typing/pull/273.
-    abstract def __getitem__(self, key: Key, /) -> Value
+    abstract def __getitem__(self, key: Overlapping[Key], /) -> Value
 
     # Mixin methods
-    def get(self, key: object, /) -> Value | None:
+    def get(self, key: Overlapping[Key], /) -> Value | None:
         """D.get(k[,d]) -> D[k] if k in D, else d.  d defaults to None."""
-    def get(self, key: object, default: Value, /) -> Value
-    def get[Element](self, key: object, default: Element, /) -> Value | Element
+    def get(self, key: Overlapping[Key], default: Value, /) -> Value
+    def get[Element](self, key: Overlapping[Key], default: Element, /) -> Value | Element
 
     def items(self) -> ItemsView[Key, Value]:
         """D.items() -> a set-like object providing a view on D's items"""
@@ -1763,7 +1762,7 @@ class Mapping[out Key, out Value](Collection[Key]):
     def values(self) -> ValuesView[Value]:
         """D.values() -> an object providing a view on D's values"""
 
-    def __contains__(self, key: object, /) -> bool
+    def __contains__(self, key: Overlapping[Key], /) -> bool
     def __eq__(self, other: object, /) -> bool
 
 class MutableMapping[in out Key, in out Value](Mapping[Key, Value]):

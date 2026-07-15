@@ -449,6 +449,9 @@ impl ClassInfoConstraintFunction {
             Type::TypeAlias(alias) => {
                 self.generate_constraint(db, alias.value_type(db), is_positive)
             }
+            Type::Overlapping(overlapping) => {
+                self.generate_constraint(db, overlapping.value_type(db), is_positive)
+            }
             Type::ClassLiteral(class_literal) => Some(constraint_from_class_literal(class_literal)),
             Type::SubclassOf(subclass_of_ty) => {
                 // We can't narrow negatively from a `SubclassOf` type. `if !isinstance(x, y)`
@@ -2069,6 +2072,15 @@ impl<'db> PatternSuccessAnalyzer<'db> {
         let Some((_, mapping_value_ty)) = subject_ty.unpack_keys_and_items(self.db) else {
             return Some(Type::unknown());
         };
+        // For a standard `dict`/`Mapping` `get`, the captured value is simply the
+        // mapping's value type. Routing it through an actual `get` call would
+        // additionally apply `dict.get`'s `Overlapping[Key]` call-site check,
+        // which rejects a key literal disjoint from the declared key type — but a
+        // match pattern must stay permissive (the annotation doesn't prove the
+        // key absent; a subclass may accept it).
+        if self.mapping_pattern_uses_standard_get(subject_ty) {
+            return Some(mapping_value_ty);
+        }
         let Some(get_method) = subject_ty
             .member(self.db, "get")
             .place
@@ -2076,14 +2088,12 @@ impl<'db> PatternSuccessAnalyzer<'db> {
         else {
             return Some(Type::unknown());
         };
-        let default_ty = if self.mapping_pattern_uses_standard_get(subject_ty) {
-            mapping_value_ty
-        } else {
-            Type::object()
-        };
         Some(
             get_method
-                .try_call(self.db, &CallArguments::positional([key_ty, default_ty]))
+                .try_call(
+                    self.db,
+                    &CallArguments::positional([key_ty, Type::object()]),
+                )
                 .map(|bindings| bindings.return_type(self.db))
                 .unwrap_or_else(|error| error.return_type(self.db)),
         )
@@ -4208,6 +4218,7 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
 // one `TypedDict` (even if other types are also present), or a type alias to such a type.
 fn is_or_contains_typeddict<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
     match ty {
+        Type::Overlapping(overlapping) => is_or_contains_typeddict(db, overlapping.value_type(db)),
         Type::TypedDict(_) => true,
         Type::Intersection(intersection) => intersection
             .positive(db)
@@ -4383,6 +4394,11 @@ fn all_matching_typeddict_fields_have_literal_types<'db>(
                     field_name,
                 )
         }),
+        Type::Overlapping(overlapping) => all_matching_typeddict_fields_have_literal_types(
+            db,
+            overlapping.value_type(db),
+            field_name,
+        ),
         Type::TypeAlias(alias) => {
             all_matching_typeddict_fields_have_literal_types(db, alias.value_type(db), field_name)
         }

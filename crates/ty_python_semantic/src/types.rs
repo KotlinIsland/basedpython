@@ -86,6 +86,7 @@ pub use crate::types::method::{BoundMethodType, KnownBoundMethodType, WrapperDes
 use crate::types::mro::{MroIterator, StaticMroError};
 pub(crate) use crate::types::narrow::{NarrowingConstraint, infer_narrowing_constraints};
 use crate::types::newtype::NewType;
+pub use crate::types::overlapping::OverlappingType;
 use crate::types::signatures::{ConcatenateTail, walk_signature};
 pub(crate) use crate::types::signatures::{Parameter, Parameters};
 use crate::types::special_form::TypeQualifier;
@@ -149,6 +150,7 @@ mod method;
 mod mro;
 pub(crate) mod narrow;
 mod newtype;
+mod overlapping;
 mod overrides;
 mod protocol_class;
 pub(crate) mod reified_infer;
@@ -998,6 +1000,11 @@ pub enum Type<'db> {
     TypeGuard(TypeGuardType<'db>),
     /// The set of type-form objects that represent a type assignable to the argument.
     TypeForm(TypeFormType<'db>),
+    /// `ty_extensions.Overlapping[Key]`: a parameter-only marker whose argument is
+    /// accepted iff it is not disjoint from `Key`. Only meaningful as a parameter
+    /// annotation; inside a body it is erased to `Key`'s upper bound (see
+    /// [`OverlappingType`]).
+    Overlapping(OverlappingType<'db>),
     /// A type that represents an inhabitant of a `TypedDict`.
     TypedDict(TypedDictType<'db>),
     /// An aliased type (lazily not-yet-unpacked to its value type).
@@ -1904,6 +1911,7 @@ impl<'db> Type<'db> {
         // `IntersectionBuilder::new(db).add_negative(*self).build()` via the
         // property test `all_negated_types_identical_to_intersection_with_single_negated_element`
         match self {
+            Type::Overlapping(overlapping) => overlapping.value_type(db).negate(db),
             Type::Never => Type::object(),
 
             Type::Dynamic(_) => *self,
@@ -1961,6 +1969,7 @@ impl<'db> Type<'db> {
     /// in user annotations without nonstandard extensions to the type system
     pub(crate) fn is_spellable(&self, db: &'db dyn Db) -> bool {
         match self {
+            Type::Overlapping(overlapping) => overlapping.value_type(db).is_spellable(db),
             Type::LiteralValue(_)
             | Type::Never
             | Type::NewTypeInstance(_)
@@ -2007,6 +2016,7 @@ impl<'db> Type<'db> {
     /// in a "Did you mean...?" hint message in diagnostics
     fn is_hintable(&self, db: &'db dyn Db) -> bool {
         match self {
+            Type::Overlapping(overlapping) => overlapping.value_type(db).is_hintable(db),
             Type::NominalInstance(_)
             | Type::NewTypeInstance(_)
             | Type::LiteralValue(_)
@@ -2286,6 +2296,10 @@ impl<'db> Type<'db> {
                 .type_argument(db)
                 .recursive_type_normalized_impl(db, div, true)
                 .map(|ty| TypeFormType::from_type_expression(db, ty)),
+            Type::Overlapping(overlapping) => overlapping
+                .type_argument(db)
+                .recursive_type_normalized_impl(db, div, true)
+                .map(|ty| OverlappingType::from_type_expression(db, ty)),
             Type::Divergent(_) => Some(self),
             Type::Dynamic(dynamic) => Some(Type::Dynamic(dynamic.recursive_type_normalized())),
             Type::TypedDict(_) => {
@@ -2395,6 +2409,7 @@ impl<'db> Type<'db> {
     /// for more complicated types that are actually singletons.
     pub(crate) fn is_singleton(self, db: &'db dyn Db) -> bool {
         match self {
+            Type::Overlapping(overlapping) => overlapping.value_type(db).is_singleton(db),
             Type::Dynamic(_) | Type::Divergent(_) | Type::Never => false,
 
             Type::LiteralValue(literal) => match literal.kind() {
@@ -2516,6 +2531,7 @@ impl<'db> Type<'db> {
     /// Return true if this type is non-empty and all inhabitants of this type compare equal.
     pub(crate) fn is_single_valued(self, db: &'db dyn Db) -> bool {
         match self {
+            Type::Overlapping(overlapping) => overlapping.value_type(db).is_single_valued(db),
             // All empty ranges compare equal, but non-empty ranges can contain different values.
             Type::KnownInstance(KnownInstanceType::Range { is_non_empty }) => !is_non_empty,
 
@@ -2633,6 +2649,9 @@ impl<'db> Type<'db> {
         }
 
         match self {
+            Type::Overlapping(overlapping) => overlapping
+                .value_type(db)
+                .find_name_in_mro_with_policy(db, name, policy),
             Type::Union(union) => Some(union.map_with_boundness_and_qualifiers(db, |elem| {
                 elem.find_name_in_mro_with_policy(db, name, policy)
                     // If some elements are classes, and some are not, we simply fall back to `Unbound` for the non-class
@@ -3131,6 +3150,7 @@ impl<'db> Type<'db> {
     /// ```
     fn instance_member(&self, db: &'db dyn Db, name: &str) -> PlaceAndQualifiers<'db> {
         match self {
+            Type::Overlapping(overlapping) => overlapping.value_type(db).instance_member(db, name),
             Type::Union(union) => {
                 union.map_with_boundness_and_qualifiers(db, |elem| elem.instance_member(db, name))
             }
@@ -3884,6 +3904,9 @@ impl<'db> Type<'db> {
             let name_str = name.as_str();
 
             match this {
+                Type::Overlapping(overlapping) => overlapping
+                    .value_type(db)
+                    .member_lookup_with_policy_and_receiver(db, name_str.into(), policy, receiver),
                 Type::Union(union) => union.map_with_boundness_and_qualifiers(db, |elem| {
                     elem.member_lookup_with_policy_and_receiver(
                         db,
@@ -4590,6 +4613,7 @@ impl<'db> Type<'db> {
         }
 
         match self {
+            Type::Overlapping(overlapping) => overlapping.value_type(db).bindings(db),
             Type::Callable(callable) => {
                 CallableBinding::from_overloads(self, callable.signatures(db).iter().cloned())
                     .into()
@@ -5961,6 +5985,7 @@ impl<'db> Type<'db> {
     #[must_use]
     pub(crate) fn to_instance(self, db: &'db dyn Db) -> Option<Type<'db>> {
         match self {
+            Type::Overlapping(overlapping) => overlapping.value_type(db).to_instance(db),
             Type::Dynamic(_) | Type::Divergent(_) | Type::Never => Some(self),
             Type::ClassLiteral(class) => Some(Type::instance(db, class.default_specialization(db))),
             Type::GenericAlias(alias) => Some(Type::instance(db, ClassType::from(alias))),
@@ -6029,6 +6054,12 @@ impl<'db> Type<'db> {
         inference_flags: InferenceFlags,
     ) -> Result<Type<'db>, InvalidTypeExpressionError<'db>> {
         match self {
+            Type::Overlapping(overlapping) => overlapping.value_type(db).in_type_expression(
+                db,
+                scope_id,
+                typevar_binding_context,
+                inference_flags,
+            ),
             // Special cases for `float` and `complex`
             // https://typing.python.org/en/latest/spec/special-types.html#special-cases-for-float-and-complex
             //
@@ -6294,6 +6325,7 @@ impl<'db> Type<'db> {
     #[must_use]
     pub(crate) fn to_meta_type(self, db: &'db dyn Db) -> Type<'db> {
         match self {
+            Type::Overlapping(overlapping) => overlapping.value_type(db).to_meta_type(db),
             Type::Never => Type::Never,
             Type::NominalInstance(instance) => instance.to_meta_type(db),
             Type::KnownInstance(known_instance) => known_instance.to_meta_type(db),
@@ -6722,6 +6754,15 @@ impl<'db> Type<'db> {
                 )
             }),
 
+            Type::Overlapping(overlapping) => visitor.visit(db, self, type_mapping, || {
+                OverlappingType::from_type_expression(
+                    db,
+                    overlapping
+                        .type_argument(db)
+                        .apply_type_mapping_impl(db, type_mapping, tcx, visitor),
+                )
+            }),
+
             Type::TypeForm(typeform) => visitor.visit(db, self, type_mapping, || {
                 TypeFormType::from_type_expression(
                     db,
@@ -7034,6 +7075,15 @@ impl<'db> Type<'db> {
                 );
             }
 
+            Type::Overlapping(overlapping) => {
+                overlapping.type_argument(db).find_legacy_typevars_impl(
+                    db,
+                    binding_context,
+                    typevars,
+                    visitor,
+                );
+            }
+
             Type::TypeAlias(alias) => {
                 visitor.visit(self, || {
                     alias.value_type(db).find_legacy_typevars_impl(
@@ -7249,6 +7299,7 @@ impl<'db> Type<'db> {
     /// their only alternative, since there is no ambiguity to preserve there.
     pub fn definition(&self, db: &'db dyn Db) -> Option<TypeDefinition<'db>> {
         match self {
+            Self::Overlapping(overlapping) => overlapping.value_type(db).definition(db),
             Self::BoundMethod(method) => {
                 Some(TypeDefinition::Function(method.function(db).definition(db)))
             }
@@ -7707,6 +7758,7 @@ impl<'db> VarianceInferable<'db> for Type<'db> {
             Type::TypeIs(type_is_type) => type_is_type.variance_of(db, typevar),
             Type::TypeGuard(type_guard_type) => type_guard_type.variance_of(db, typevar),
             Type::TypeForm(typeform_type) => typeform_type.variance_of(db, typevar),
+            Type::Overlapping(overlapping_type) => overlapping_type.variance_of(db, typevar),
             Type::KnownInstance(known_instance) => known_instance.variance_of(db, typevar),
             Type::TypeAlias(alias) => alias.variance_of(db, typevar),
             Type::Dynamic(_)
