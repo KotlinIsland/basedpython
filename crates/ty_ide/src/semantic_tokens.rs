@@ -30,6 +30,7 @@ use crate::Db;
 use bitflags::bitflags;
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
+use ruff_db::source::source_text;
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, TraversalSignal, walk_arguments, walk_expr,
     walk_interpolated_string_element, walk_stmt,
@@ -186,18 +187,59 @@ impl Deref for SemanticTokens {
 pub fn semantic_tokens(db: &dyn Db, file: File, range: Option<TextRange>) -> SemanticTokens {
     let parsed = parsed_module(db, file).load(db);
     let model = SemanticModel::new(db, file);
+    let source = source_text(db, file);
 
-    let mut visitor = SemanticTokenVisitor::new(&model, range);
+    let mut visitor = SemanticTokenVisitor::new(&model, &source, range);
     visitor.expecting_docstring = true;
     visitor.visit_body(parsed.suite());
 
     SemanticTokens::new(visitor.tokens)
 }
 
+/// True when `func` came from basedpython's `init(...)` shorthand, which the
+/// parser expands to a `__init__` function named over the `init` keyword itself.
+fn is_init_method(func: &ast::StmtFunctionDef) -> bool {
+    func.decorator_list.iter().any(|decorator| {
+        matches!(&decorator.expression, Expr::Name(name) if name.id.as_str() == "__init_method__")
+    })
+}
+
+/// Splits a basedpython declaration's annotation into the range of the keyword
+/// it was written with and the type the user actually spelled, if any.
+///
+/// The parser models `sentinel A`, `let x = 5`, `newtype Foo = int` and the
+/// modifier declarations as an annotated assignment whose annotation is a
+/// synthetic marker spanning the keyword text. A declaration that also carries a
+/// type keeps it under the marker — `let x: T = v` parses as `x: __let__[T] = v`
+/// — so the marker is the subscripted value there rather than the annotation
+/// itself. Synthetic markers are the only `Name`s with an
+/// [`Invalid`](ast::ExprContext::Invalid) context, since they name a keyword
+/// rather than anything at runtime.
+fn declaration_keyword(annotation: &Expr) -> Option<(TextRange, Option<&Expr>)> {
+    match annotation {
+        Expr::Name(marker) if marker.ctx.is_invalid() => Some((marker.range(), None)),
+        Expr::Subscript(subscript) => match subscript.value.as_ref() {
+            Expr::Name(marker) if marker.ctx.is_invalid() => {
+                Some((marker.range(), Some(subscript.slice.as_ref())))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// AST visitor that collects semantic tokens.
 #[expect(clippy::struct_excessive_bools)]
 struct SemanticTokenVisitor<'db> {
     model: &'db SemanticModel<'db>,
+    /// Source text the visited ranges index into. Empty when the visited AST is
+    /// not backed by the file's own text (a string annotation's sub-AST), in
+    /// which case [`Self::keyword_range`] leaves ranges untrimmed.
+    source: &'db str,
+    /// basedpython keyword sugar that reuses ordinary identifiers (`super`,
+    /// `dynamic`, `constraints`) is only keyword-highlighted in basedpython
+    /// files, mirroring how ty only resolves it there.
+    is_basedpython: bool,
     tokens: Vec<SemanticToken>,
     in_class_scope: bool,
     in_type_form: bool,
@@ -208,9 +250,15 @@ struct SemanticTokenVisitor<'db> {
 }
 
 impl<'db> SemanticTokenVisitor<'db> {
-    fn new(model: &'db SemanticModel<'db>, range_filter: Option<TextRange>) -> Self {
+    fn new(
+        model: &'db SemanticModel<'db>,
+        source: &'db str,
+        range_filter: Option<TextRange>,
+    ) -> Self {
         Self {
             model,
+            source,
+            is_basedpython: model.file().source_type(model.db()).is_basedpython(),
             tokens: Vec::new(),
             in_class_scope: false,
             in_target_creating_definition: false,
@@ -218,6 +266,43 @@ impl<'db> SemanticTokenVisitor<'db> {
             in_docstring: false,
             range_filter,
             expecting_docstring: false,
+        }
+    }
+
+    /// Narrows a synthetic node's range to the surface keyword text it stands
+    /// for. The parser gives a basedpython modifier's synthetic decorator a
+    /// range spanning the keyword *plus* the whitespace up to the `def`/`class`
+    /// it modifies, which must not be highlighted.
+    fn keyword_range(&self, range: TextRange) -> TextRange {
+        let Some(text) = self.source.get(range.start().into()..range.end().into()) else {
+            return range;
+        };
+        TextRange::at(range.start(), text.trim_end().text_len())
+    }
+
+    /// True when `name` resolves to no binding, i.e. it is a bare keyword rather
+    /// than a user-defined symbol shadowing one.
+    fn is_unbound(&self, name: &ast::ExprName) -> bool {
+        definition_for_name(self.model, name, ImportAliasResolution::ResolveAliases).is_none()
+    }
+
+    /// True when this identifier is a basedpython keyword rather than a
+    /// reference, matching the conditions under which the language gives it
+    /// keyword meaning.
+    fn is_keyword_name(&self, name: &ast::ExprName) -> bool {
+        if !self.is_basedpython {
+            return false;
+        }
+
+        match name.id.as_str() {
+            // every load of a bare `super` is the keyword — `super.f` and
+            // `super[T].f` alike lower through it, and a `super` that is read
+            // rather than bound can never be anything else
+            "super" => name.ctx.is_load(),
+            // only the unshadowed keyword denotes the dynamic type, and only in
+            // a type expression; elsewhere `dynamic` is an ordinary identifier
+            "dynamic" => self.in_type_form && self.is_unbound(name),
+            _ => false,
         }
     }
 
@@ -573,10 +658,17 @@ impl<'db> SemanticTokenVisitor<'db> {
 
     fn classify_parameter(
         &self,
-        _param: &ast::Parameter,
+        param: &ast::Parameter,
         is_first: bool,
         func: &ast::StmtFunctionDef,
     ) -> SemanticTokenType {
+        // `init(...)` takes its receiver implicitly: the lowering injects `self`
+        // unless the first parameter is literally named `self`, so any other
+        // first parameter is an ordinary one.
+        if is_first && is_init_method(func) && param.name.as_str() != "self" {
+            return SemanticTokenType::Parameter;
+        }
+
         if is_first && self.in_class_scope {
             let method_decorator = func
                 .inferred_type(self.model)
@@ -743,16 +835,21 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     self.visit_decorator(decorator);
                 }
 
-                // Function name
-                self.add_token(
-                    func.name.range(),
-                    self.classify_function_definition(func),
-                    if func.is_async {
-                        SemanticTokenModifier::DEFINITION | SemanticTokenModifier::ASYNC
-                    } else {
-                        SemanticTokenModifier::DEFINITION
-                    },
-                );
+                // basedpython `init(...)` is parsed as a `__init__` function whose
+                // name range *is* the `init` keyword, already emitted as a keyword
+                // token by the synthetic `__init_method__` decorator above.
+                if !is_init_method(func) {
+                    // Function name
+                    self.add_token(
+                        func.name.range(),
+                        self.classify_function_definition(func),
+                        if func.is_async {
+                            SemanticTokenModifier::DEFINITION | SemanticTokenModifier::ASYNC
+                        } else {
+                            SemanticTokenModifier::DEFINITION
+                        },
+                    );
+                }
 
                 // Type parameters (Python 3.12+ syntax)
                 if let Some(type_params) = &func.type_params {
@@ -903,11 +1000,32 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 self.expecting_docstring = true;
             }
             ast::Stmt::AnnAssign(assignment) => {
+                // A basedpython declaration keyword is written ahead of its
+                // target, so it is emitted before it rather than in annotation
+                // position, where the marker standing in for it sits.
+                let declaration = declaration_keyword(&assignment.annotation);
+                if let Some((keyword, _)) = declaration {
+                    self.add_token(
+                        self.keyword_range(keyword),
+                        SemanticTokenType::Keyword,
+                        SemanticTokenModifier::empty(),
+                    );
+                }
+
                 self.in_target_creating_definition = true;
                 self.visit_expr(&assignment.target);
                 self.in_target_creating_definition = false;
 
-                self.visit_annotation(&assignment.annotation);
+                match declaration {
+                    // only the type the user actually spelled is an annotation;
+                    // the marker itself is keyword text
+                    Some((_, annotation)) => {
+                        if let Some(annotation) = annotation {
+                            self.visit_annotation(annotation);
+                        }
+                    }
+                    None => self.visit_annotation(&assignment.annotation),
+                }
 
                 if let Some(value) = &assignment.value {
                     // PEP 613 alias values are type forms even though they appear as annotated
@@ -984,6 +1102,13 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
 
     fn visit_expr(&mut self, expr: &Expr) {
         match expr {
+            ast::Expr::Name(name) if self.is_keyword_name(name) => {
+                self.add_token(
+                    name,
+                    SemanticTokenType::Keyword,
+                    SemanticTokenModifier::empty(),
+                );
+            }
             ast::Expr::Name(name) => {
                 if let Some((token_type, mut modifiers)) = self.classify_name(name) {
                     if self.in_target_creating_definition && name.ctx.is_store() {
@@ -992,6 +1117,17 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     self.add_token(name, token_type, modifiers);
                 }
                 walk_expr(self, expr);
+            }
+            // basedpython `typeof X`: a subscript whose synthetic `value` node
+            // spans the `typeof` keyword. The operand is a value expression —
+            // `typeof` yields *its* type — so it is not a type form itself.
+            ast::Expr::Subscript(subscript) if subscript.is_typeof => {
+                self.add_token(
+                    subscript.value.range(),
+                    SemanticTokenType::Keyword,
+                    SemanticTokenModifier::empty(),
+                );
+                self.visit_value_expression(&subscript.slice);
             }
             ast::Expr::Attribute(attr) => {
                 // Visit the base expression first (e.g., 'os' in 'os.path')
@@ -1056,7 +1192,10 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 // Highlight the sub-AST of a string annotation
                 if let Some((sub_ast, sub_model)) = self.model.enter_string_annotation(string_expr)
                 {
-                    let mut sub_visitor = SemanticTokenVisitor::new(&sub_model, self.range_filter);
+                    // the sub-AST's ranges index into the string's contents, not
+                    // this file's text, so it gets no source to trim against
+                    let mut sub_visitor =
+                        SemanticTokenVisitor::new(&sub_model, "", self.range_filter);
                     sub_visitor.visit_expr(sub_ast.expr());
                     self.tokens.extend(sub_visitor.tokens);
                 } else {
@@ -1157,6 +1296,21 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
 
     /// Visit decorators, handling simple name decorators vs complex expressions
     fn visit_decorator(&mut self, decorator: &ast::Decorator) {
+        // The parser models every basedpython modifier keyword (`final`, `static`,
+        // `decorator`, `init`, …) as a synthetic decorator over the keyword text.
+        // These carry an `Invalid` context because they are keywords, not
+        // references to a runtime name — so highlight them as such.
+        if let ast::Expr::Name(name) = &decorator.expression
+            && name.ctx.is_invalid()
+        {
+            self.add_token(
+                self.keyword_range(name.range()),
+                SemanticTokenType::Keyword,
+                SemanticTokenModifier::empty(),
+            );
+            return;
+        }
+
         match &decorator.expression {
             ast::Expr::Name(name) => {
                 // Simple decorator like @staticmethod - use Decorator token type
@@ -1188,7 +1342,27 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
         match type_param {
             TypeParam::TypeVar(type_var) => {
                 if let Some(bound) = &type_var.bound {
-                    self.visit_annotation(bound);
+                    // basedpython spells constrained type vars `T: constraints (int, str)`,
+                    // which parses as a call. The callee is the keyword; the
+                    // arguments are the constraint types.
+                    if self.is_basedpython
+                        && let Expr::Call(call) = bound.as_ref()
+                        && call
+                            .func
+                            .as_name_expr()
+                            .is_some_and(|name| name.id.as_str() == "constraints")
+                    {
+                        self.add_token(
+                            call.func.range(),
+                            SemanticTokenType::Keyword,
+                            SemanticTokenModifier::empty(),
+                        );
+                        for constraint in &call.arguments.args {
+                            self.visit_annotation(constraint);
+                        }
+                    } else {
+                        self.visit_annotation(bound);
+                    }
                 }
                 if let Some(default) = &type_var.default {
                     self.visit_annotation(default);
@@ -4723,6 +4897,318 @@ from pathlib import Missing as Alias
         assert_snapshot!(test.to_snapshot(&tokens), @r#""pathlib" @ 6..13: Namespace"#);
     }
 
+    #[test]
+    fn semantic_tokens_init_shorthand() {
+        let test = SemanticTokenTest::new_by(
+            "
+class A:
+    init(a: int)
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "A" @ 7..8: Class [definition]
+        "init" @ 14..18: Keyword
+        "a" @ 19..20: Parameter [definition]
+        "int" @ 22..25: Class
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_init_let_parameter() {
+        // a `let` parameter is promoted to a `self.a` assignment synthesised
+        // into the body; the synthetic nodes carry the parameter's ranges and
+        // must not produce a second, overlapping set of tokens
+        let test = SemanticTokenTest::new_by(
+            "
+class A:
+    init(self, let a: int)
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "A" @ 7..8: Class [definition]
+        "init" @ 14..18: Keyword
+        "self" @ 19..23: SelfParameter [definition]
+        "a" @ 29..30: Parameter [definition]
+        "int" @ 32..35: Class
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_super_keyword() {
+        let test = SemanticTokenTest::new_by(
+            "
+class B:
+    def foo(self): ...
+
+class A(B):
+    def foo(self):
+        super.foo
+        super[B].foo
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "B" @ 7..8: Class [definition]
+        "foo" @ 18..21: Method [definition]
+        "self" @ 22..26: SelfParameter [definition]
+        "A" @ 40..41: Class [definition]
+        "B" @ 42..43: Class
+        "foo" @ 54..57: Method [definition]
+        "self" @ 58..62: SelfParameter [definition]
+        "super" @ 73..78: Keyword
+        "foo" @ 79..82: Method
+        "super" @ 91..96: Keyword
+        "B" @ 97..98: Class
+        "foo" @ 100..103: Method
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_super_shadowed_is_not_a_keyword() {
+        // `super` bound as a parameter is a reference, not the keyword — only a
+        // *load* of an unbound `super` lowers through the keyword
+        let test = SemanticTokenTest::new_by(
+            "
+class A:
+    def foo(self, super: int):
+        self.super
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "A" @ 7..8: Class [definition]
+        "foo" @ 18..21: Method [definition]
+        "self" @ 22..26: SelfParameter [definition]
+        "super" @ 28..33: Parameter [definition]
+        "int" @ 35..38: Class
+        "self" @ 49..53: SelfParameter
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_constraints_keyword() {
+        let test = SemanticTokenTest::new_by("def f[T: constraints (int, str)](): ...\n");
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 4..5: Function [definition]
+        "T" @ 6..7: TypeParameter [definition]
+        "constraints" @ 9..20: Keyword
+        "int" @ 22..25: Class
+        "str" @ 27..30: Class
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_decorator_modifier() {
+        let test = SemanticTokenTest::new_by("decorator def foo(fn: object): ...\n");
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "decorator" @ 0..9: Keyword
+        "foo" @ 14..17: Function [definition]
+        "fn" @ 18..20: Parameter [definition]
+        "object" @ 22..28: Class
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_modifier_keywords() {
+        // every modifier keyword reaches the visitor as a synthetic decorator,
+        // so they all highlight as keywords without being enumerated
+        let test = SemanticTokenTest::new_by(
+            "
+final class A:
+    static def foo(): ...
+
+abstract class B:
+    abstract def bar(self): ...
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "final" @ 1..6: Keyword
+        "A" @ 13..14: Class [definition]
+        "static" @ 20..26: Keyword
+        "foo" @ 31..34: Method [definition]
+        "abstract" @ 43..51: Keyword
+        "B" @ 58..59: Class [definition]
+        "abstract" @ 65..73: Keyword
+        "bar" @ 78..81: Method [definition]
+        "self" @ 82..86: SelfParameter [definition]
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_dynamic_keyword() {
+        let test = SemanticTokenTest::new_by(
+            "
+a: dynamic
+b: list[dynamic]
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "a" @ 1..2: Variable [definition]
+        "dynamic" @ 4..11: Keyword
+        "b" @ 12..13: Variable [definition]
+        "list" @ 15..19: Class
+        "dynamic" @ 20..27: Keyword
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_dynamic_only_in_type_form() {
+        // `dynamic` denotes the dynamic type only in a type expression; in value
+        // position it is an ordinary (here unresolved) identifier
+        let test = SemanticTokenTest::new_by(
+            "
+a: dynamic
+print(dynamic)
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "a" @ 1..2: Variable [definition]
+        "dynamic" @ 4..11: Keyword
+        "print" @ 12..17: Function
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_dynamic_shadowed_is_not_a_keyword() {
+        // a binding named `dynamic` keeps its own identity, mirroring the
+        // lowering, which leaves a shadowed `dynamic` annotation alone
+        let test = SemanticTokenTest::new_by(
+            "
+dynamic = int
+a: dynamic
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "dynamic" @ 1..8: Class [definition]
+        "int" @ 11..14: Class
+        "a" @ 15..16: Variable [definition]
+        "dynamic" @ 18..25: Class
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_sentinel_keyword() {
+        let test = SemanticTokenTest::new_by("sentinel A\n");
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "sentinel" @ 0..8: Keyword
+        "A" @ 9..10: Variable [definition]
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_declaration_keywords() {
+        // `sentinel` is one of a family of declaration keywords the parser models
+        // as an annotation marker; they all highlight through the same rule
+        let test = SemanticTokenTest::new_by(
+            "
+let a = 5
+let b: int = 5
+newtype Foo = int
+final c: str = \"x\"
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "let" @ 1..4: Keyword
+        "a" @ 5..6: Variable [definition]
+        "5" @ 9..10: Number
+        "let" @ 11..14: Keyword
+        "b" @ 15..16: Variable [definition]
+        "int" @ 18..21: Class
+        "5" @ 24..25: Number
+        "newtype" @ 26..33: Keyword
+        "Foo" @ 34..37: Variable [definition]
+        "int" @ 40..43: Class
+        "final" @ 44..49: Keyword
+        "c" @ 50..51: Variable [definition]
+        "str" @ 53..56: Class
+        "\"x\"" @ 59..62: String
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_typeof_keyword() {
+        let test = SemanticTokenTest::new_by(
+            "
+b: int = 1
+a: typeof b
+c: typeof b.real
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "b" @ 1..2: Variable [definition]
+        "int" @ 4..7: Class
+        "1" @ 10..11: Number
+        "a" @ 12..13: Variable [definition]
+        "typeof" @ 15..21: Keyword
+        "b" @ 22..23: Variable
+        "c" @ 24..25: Variable [definition]
+        "typeof" @ 27..33: Keyword
+        "b" @ 34..35: Variable
+        "real" @ 36..40: Variable
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_keywords_are_plain_python_in_py_files() {
+        // the keyword sugar that reuses ordinary identifiers has no meaning in a
+        // `.py` file, and must keep resolving as plain Python there
+        let test = SemanticTokenTest::new(
+            "
+a: dynamic
+class A:
+    def foo(self):
+        super.foo
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "a" @ 1..2: Variable [definition]
+        "A" @ 18..19: Class [definition]
+        "foo" @ 29..32: Method [definition]
+        "self" @ 33..37: SelfParameter [definition]
+        "super" @ 48..53: Class
+        "#);
+    }
+
     /// A `let` parameter makes `init(...)` synthesize a `self.<name> = <name>`
     /// body statement anchored back on the parameter's own text. The parameter
     /// walk already covers that text, so the synthesized statement must not be
@@ -4748,17 +5234,18 @@ class C(B):
         );
         assert_snapshot!(test.to_snapshot(&tokens), @r#"
         "B" @ 7..8: Class [definition]
-        "init" @ 14..18: Decorator
-        "init" @ 14..18: Method [definition]
+        "init" @ 14..18: Keyword
         "self" @ 19..23: SelfParameter [definition]
         "a" @ 29..30: Parameter [definition]
         "int" @ 32..35: Class
         "1" @ 38..39: Number
+        "let" @ 46..49: Keyword
         "x" @ 50..51: Variable [definition]
         "int" @ 53..56: Class
         "1" @ 59..60: Number
         "C" @ 68..69: Class [definition]
         "B" @ 70..71: Class
+        "override" @ 78..86: Keyword
         "x" @ 87..88: Variable [definition]
         "2" @ 96..97: Number
         "#);
