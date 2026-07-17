@@ -23,6 +23,10 @@
 //!   no element-witness heuristic: an empty `list[int]` has no element, and a
 //!   builtin's element type is erased, so "check the first item" is unsound
 //!
+//! a union rhs (`x is A[int] | object`) is the disjunction of its arms — each
+//! arm lowered by its own kind — never a runtime `isinstance(x, A[int] |
+//! object)`, which a parameterized arm makes a `TypeError`
+//!
 //! a subscripted rhs that is *not* a generic class (`x is candidates[0]`)
 //! falls back to the ordinary `isinstance` lowering that
 //! [`identity_swap`](super::identity_swap) applies to every other rhs
@@ -33,7 +37,7 @@ use ruff_text_size::{Ranged, TextRange};
 use ty_python_semantic::reified::is_keyword_comparison;
 use ty_python_semantic::{ArgVariance, ParametricIsPlan};
 
-use super::ast_driver::{PassContext, TypeAwarePass};
+use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
 
 /// probes a value's `__orig_class__` against a target alias — the runtime
@@ -62,6 +66,7 @@ pub(crate) fn variance_tuple(variances: &[u8]) -> String {
 
 pub(crate) const PARAMETRIC_IS_RUNTIME: &str = "\
 def _parametric_is(value, alias, variances):
+    alias = getattr(alias, \"__value__\", alias)
     origin = getattr(alias, \"__origin__\", alias)
     if not isinstance(value, origin):
         return False
@@ -98,15 +103,11 @@ def _parametric_is_sub(a, b):
 struct ParametricIs<'src, 'ti> {
     source: &'src str,
     types: &'ti dyn TypeInfo,
-    edits: Vec<(TextRange, String)>,
+    edits: Vec<(TextRange, Vec<Fragment>)>,
     needs_probe: bool,
 }
 
 impl ParametricIs<'_, '_> {
-    fn src(&self, range: TextRange) -> &str {
-        &self.source[usize::from(range.start())..usize::from(range.end())]
-    }
-
     /// whether replacing the pair may drop the lhs without losing effects
     fn effect_free(lhs: &Expr) -> bool {
         matches!(lhs, Expr::Name(_)) || lhs.is_literal_expr()
@@ -114,51 +115,57 @@ impl ParametricIs<'_, '_> {
 
     /// the folded / token result expression, with the lhs kept alive when it
     /// may have effects (`(g(), True)[1]` evaluates then discards it)
-    fn with_lhs_effects(&self, lhs: &Expr, result: String) -> String {
+    fn with_lhs_effects(lhs: &Expr, result: Vec<Fragment>) -> Vec<Fragment> {
         if Self::effect_free(lhs) {
-            result
-        } else {
-            format!("({}, {result})[1]", self.src(lhs.range()))
+            return result;
         }
+        let mut frags = vec![Fragment::Lit("(".to_owned()), Fragment::Src(lhs.range())];
+        frags.push(Fragment::Lit(", ".to_owned()));
+        frags.extend(result);
+        frags.push(Fragment::Lit(")[1]".to_owned()));
+        frags
     }
 
-    fn lower_pair(&mut self, lhs: &Expr, rhs: &ast::ExprSubscript, negate: bool) -> String {
+    fn lower_pair(&mut self, lhs: &Expr, rhs: &Expr, negate: bool) -> Vec<Fragment> {
         let Some(plan) = self.types.parametric_is_plan(lhs, rhs) else {
-            // not a generic-class rhs — the ordinary isinstance lowering
-            // identity_swap applies everywhere else
-            let call = format!(
-                "isinstance({}, {})",
-                self.src(lhs.range()),
-                self.src(rhs.range())
-            );
-            return if negate { format!("not {call}") } else { call };
+            // rhs is a bare class or a plain value, not a specialization — the
+            // ordinary isinstance lowering that identity_swap used to emit
+            let open = if negate {
+                "not isinstance("
+            } else {
+                "isinstance("
+            };
+            return vec![
+                Fragment::Lit(open.to_owned()),
+                Fragment::Src(lhs.range()),
+                Fragment::Lit(", ".to_owned()),
+                Fragment::Src(rhs.range()),
+                Fragment::Lit(")".to_owned()),
+            ];
         };
         match plan {
-            // a builtin-target probe can never be true (ty reports the
-            // error); lower it to the constant it always is
-            ParametricIsPlan::Fold(false) | ParametricIsPlan::ErasedTarget => {
+            // an erased-target probe (builtin or protocol) can never be true
+            // (ty reports the error); lower it to the constant it always is
+            ParametricIsPlan::Fold(false) | ParametricIsPlan::ErasedTarget(_) => {
                 let value = if negate { "True" } else { "False" };
-                self.with_lhs_effects(lhs, value.to_owned())
+                Self::with_lhs_effects(lhs, vec![Fragment::Lit(value.to_owned())])
             }
             ParametricIsPlan::Fold(true) => {
                 let value = if negate { "False" } else { "True" };
-                self.with_lhs_effects(lhs, value.to_owned())
+                Self::with_lhs_effects(lhs, vec![Fragment::Lit(value.to_owned())])
             }
             ParametricIsPlan::TokenEq(tokens) => {
-                let comparisons = tokens
-                    .iter()
-                    .map(|(name, target)| format!("{name} == {}", self.src(*target)))
-                    .collect::<Vec<_>>()
-                    .join(" and ");
-                let check = if negate {
-                    format!("not ({comparisons})")
-                } else {
-                    format!("({comparisons})")
-                };
-                self.with_lhs_effects(lhs, check)
+                let mut frags = vec![Fragment::Lit(if negate { "not (" } else { "(" }.to_owned())];
+                for (index, (name, target)) in tokens.iter().enumerate() {
+                    let lead = if index == 0 { "" } else { " and " };
+                    frags.push(Fragment::Lit(format!("{lead}{name} == ")));
+                    frags.push(Fragment::Src(*target));
+                }
+                frags.push(Fragment::Lit(")".to_owned()));
+                Self::with_lhs_effects(lhs, frags)
             }
             // a user-defined generic target carries `__orig_class__`; probe it,
-            // matching each type argument by the target's declared variance
+            // matching each type argument by the target's effective variance
             ParametricIsPlan::Probe(variances) => {
                 self.needs_probe = true;
                 let codes = variances
@@ -175,29 +182,172 @@ impl ParametricIs<'_, '_> {
                     [single] => format!("({single},)"),
                     _ => format!("({})", codes.join(", ")),
                 };
-                let call = format!(
-                    "_parametric_is({}, {}, {tuple})",
-                    self.src(lhs.range()),
-                    self.src(rhs.range())
-                );
-                if negate { format!("not {call}") } else { call }
+                let open = if negate {
+                    "not _parametric_is("
+                } else {
+                    "_parametric_is("
+                };
+                vec![
+                    Fragment::Lit(open.to_owned()),
+                    Fragment::Src(lhs.range()),
+                    Fragment::Lit(", ".to_owned()),
+                    Fragment::Src(rhs.range()),
+                    Fragment::Lit(format!(", {tuple})")),
+                ]
             }
         }
+    }
+
+    /// one arm of a union `is`-target: its bare (non-negated) test, referencing
+    /// the value through `value` rather than the lhs directly so the caller can
+    /// bind the lhs once and share it across arms. no lhs-effect wrapping here —
+    /// the union combiner evaluates the lhs exactly once for the whole test
+    fn lower_arm(&mut self, value: &dyn Fn() -> Fragment, lhs: &Expr, arm: &Expr) -> Vec<Fragment> {
+        // a `None` arm (an `X | None` optional) is an identity check, not
+        // `isinstance(_, None)` — `None` is a value, not a class
+        if matches!(arm, Expr::NoneLiteral(_)) {
+            return vec![value(), Fragment::Lit(" is None".to_owned())];
+        }
+        let Some(plan) = self.types.parametric_is_plan(lhs, arm) else {
+            return vec![
+                Fragment::Lit("isinstance(".to_owned()),
+                value(),
+                Fragment::Lit(", ".to_owned()),
+                Fragment::Src(arm.range()),
+                Fragment::Lit(")".to_owned()),
+            ];
+        };
+        match plan {
+            // an erased arm can't be checked at runtime; ty reports the error
+            // (a union arm may not silently fold to `False` — that would be
+            // unsound — so the checker rejects it), and the lowering is the
+            // constant the standalone form uses
+            ParametricIsPlan::Fold(false) | ParametricIsPlan::ErasedTarget(_) => {
+                vec![Fragment::Lit("False".to_owned())]
+            }
+            ParametricIsPlan::Fold(true) => vec![Fragment::Lit("True".to_owned())],
+            ParametricIsPlan::TokenEq(tokens) => {
+                let mut frags = vec![Fragment::Lit("(".to_owned())];
+                for (index, (name, target)) in tokens.iter().enumerate() {
+                    let lead = if index == 0 { "" } else { " and " };
+                    frags.push(Fragment::Lit(format!("{lead}{name} == ")));
+                    frags.push(Fragment::Src(*target));
+                }
+                frags.push(Fragment::Lit(")".to_owned()));
+                frags
+            }
+            ParametricIsPlan::Probe(variances) => {
+                self.needs_probe = true;
+                let codes: Vec<u8> = variances
+                    .iter()
+                    .map(|variance| match variance {
+                        ArgVariance::Invariant => 0,
+                        ArgVariance::Covariant => 1,
+                        ArgVariance::Contravariant => 2,
+                        ArgVariance::Bivariant => 3,
+                    })
+                    .collect();
+                vec![
+                    Fragment::Lit("_parametric_is(".to_owned()),
+                    value(),
+                    Fragment::Lit(", ".to_owned()),
+                    Fragment::Src(arm.range()),
+                    Fragment::Lit(format!(", {})", variance_tuple(&codes))),
+                ]
+            }
+        }
+    }
+
+    /// `lhs is (T1 | T2 | …)` — a test against a union type — is the disjunction
+    /// of the per-arm tests (`type(lhs) <: Ti` for any arm). the lhs is bound
+    /// once: referenced directly when it has no effects, else through a lambda
+    /// parameter so the arms share a single evaluation
+    fn lower_union(&mut self, lhs: &Expr, arms: &[&Expr], negate: bool) -> Vec<Fragment> {
+        let via_lambda = !Self::effect_free(lhs);
+        let value = || {
+            if via_lambda {
+                Fragment::Lit(UNION_VALUE_PARAM.to_owned())
+            } else {
+                Fragment::Src(lhs.range())
+            }
+        };
+        let mut inner: Vec<Fragment> = Vec::new();
+        for (index, arm) in arms.iter().enumerate() {
+            if index > 0 {
+                inner.push(Fragment::Lit(" or ".to_owned()));
+            }
+            inner.extend(self.lower_arm(&value, lhs, arm));
+        }
+        let mut frags = Vec::new();
+        if via_lambda {
+            frags.push(Fragment::Lit(format!(
+                "{}(lambda {UNION_VALUE_PARAM}: ",
+                if negate { "not " } else { "" }
+            )));
+            frags.extend(inner);
+            frags.push(Fragment::Lit(")(".to_owned()));
+            frags.push(Fragment::Src(lhs.range()));
+            frags.push(Fragment::Lit(")".to_owned()));
+        } else {
+            frags.push(Fragment::Lit(if negate { "not (" } else { "(" }.to_owned()));
+            frags.extend(inner);
+            frags.push(Fragment::Lit(")".to_owned()));
+        }
+        frags
     }
 
     fn process_compare(&mut self, compare: &ast::ExprCompare) {
         let mut lhs: &Expr = &compare.left;
         for (op, rhs) in compare.ops.iter().zip(&compare.comparators) {
+            // identity_swap defers every non-literal name/attribute/subscript
+            // and union `is`-rhs to this pass, which owns the
+            // isinstance-vs-parametric decision (a bare class → isinstance, a
+            // specialization or an alias to one → a parametric test, a union →
+            // the disjunction of the arms)
             if matches!(op, CmpOp::Is | CmpOp::IsNot)
-                && let Expr::Subscript(subscript) = rhs
                 && is_keyword_comparison(self.source, *op, lhs, rhs)
             {
-                let replacement = self.lower_pair(lhs, subscript, matches!(op, CmpOp::IsNot));
-                let pair_range = TextRange::new(lhs.range().start(), rhs.range().end());
-                self.edits.push((pair_range, replacement));
+                let negate = matches!(op, CmpOp::IsNot);
+                let replacement =
+                    if matches!(rhs, Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_)) {
+                        Some(self.lower_pair(lhs, rhs, negate))
+                    } else {
+                        union_arms(rhs).map(|arms| self.lower_union(lhs, &arms, negate))
+                    };
+                if let Some(replacement) = replacement {
+                    let pair_range = TextRange::new(lhs.range().start(), rhs.range().end());
+                    self.edits.push((pair_range, replacement));
+                }
             }
             lhs = rhs;
         }
+    }
+}
+
+/// the lambda parameter that binds an effectful union-test lhs for its arms.
+/// unlikely to collide: an `is`-target arm is a type expression, and this name
+/// would have to appear free inside one
+const UNION_VALUE_PARAM: &str = "_by_is_value";
+
+/// the flat arms of a union type expression (`A | B | C` → `[A, B, C]`), or
+/// `None` when `expr` is not a `|` union
+fn union_arms(expr: &Expr) -> Option<Vec<&Expr>> {
+    if !matches!(expr, Expr::BinOp(binop) if binop.op == ast::Operator::BitOr) {
+        return None;
+    }
+    let mut arms = Vec::new();
+    collect_union_arms(expr, &mut arms);
+    Some(arms)
+}
+
+fn collect_union_arms<'a>(expr: &'a Expr, arms: &mut Vec<&'a Expr>) {
+    if let Expr::BinOp(binop) = expr
+        && binop.op == ast::Operator::BitOr
+    {
+        collect_union_arms(&binop.left, arms);
+        collect_union_arms(&binop.right, arms);
+    } else {
+        arms.push(expr);
     }
 }
 
@@ -243,7 +393,7 @@ impl TypeAwarePass for ParametricIsPass<'_> {
         if inner.needs_probe {
             ctx.required_imports.push(PARAMETRIC_IS_RUNTIME.to_owned());
         }
-        ctx.text_edits.extend(inner.edits);
+        ctx.template_edits.extend(inner.edits);
     }
 }
 
@@ -323,6 +473,333 @@ mod tests {
         assert!(
             out.contains("return _parametric_is(a, A[object], (1,))"),
             "covariant probe carries variance code 1: {out}"
+        );
+    }
+
+    #[test]
+    fn use_site_covariant_target_probes_covariantly() {
+        // `A[out int]` projects an invariant `T` covariantly for this one
+        // test, so the probe matches with code 1 — and the target renders as
+        // plain `A[int]`, the keyword having no runtime spelling
+        let out = out(indoc! {"
+            class A[in out T]:
+                def __init__(self): ...
+            def f(a: A[*]) -> bool:
+                return a is A[out int]
+        "});
+        assert!(
+            out.contains("return _parametric_is(a, A[int], (1,))"),
+            "use-site `out` probes covariantly: {out}"
+        );
+    }
+
+    #[test]
+    fn use_site_contravariant_target_probes_contravariantly() {
+        let out = out(indoc! {"
+            class S[in out T]:
+                def __init__(self): ...
+            def f(s: S[*]) -> bool:
+                return s is S[in bool]
+        "});
+        assert!(
+            out.contains("return _parametric_is(s, S[bool], (2,))"),
+            "use-site `in` probes contravariantly: {out}"
+        );
+    }
+
+    #[test]
+    fn unprojected_invariant_target_probes_invariantly() {
+        // the counterpart to the two above: without a projection an invariant
+        // `T` keeps demanding an exact match
+        let out = out(indoc! {"
+            class A[in out T]:
+                def __init__(self): ...
+            def f(a: A[*]) -> bool:
+                return a is A[int]
+        "});
+        assert!(
+            out.contains("return _parametric_is(a, A[int], (0,))"),
+            "no projection stays invariant: {out}"
+        );
+    }
+
+    #[test]
+    fn use_site_covariant_target_folds_true() {
+        // `A[bool]` is an `A[out int]` statically, so this folds rather than
+        // probing — the fold must agree with assignability, not contradict it
+        let out = out(indoc! {"
+            class A[in out T]:
+                def __init__(self): ...
+            def f(a: A[bool]) -> bool:
+                return a is A[out int]
+        "});
+        assert!(
+            out.contains("return True"),
+            "A[bool] is an A[out int]: {out}"
+        );
+    }
+
+    #[test]
+    fn use_site_variance_on_declared_covariant_target_is_a_no_op() {
+        // a declared `out T` already covers what the projection could give
+        let out = out(indoc! {"
+            class A[out T]:
+                def __init__(self): ...
+            def f(a: object) -> bool:
+                return a is A[out object]
+        "});
+        assert!(
+            out.contains("return _parametric_is(a, A[object], (1,))"),
+            "declared variance wins: {out}"
+        );
+    }
+
+    #[test]
+    fn reified_tuple_target_compares_each_cell() {
+        // a `tuple[T, U]` value unifies against the tuple target position by
+        // position — the `Tuple::Fixed` unify branch
+        let out = out(indoc! {"
+            def f[T, U](x: tuple[T, U]) -> bool:
+                return x is tuple[int, str]
+        "});
+        assert!(
+            out.contains("return (T == int and U == str)"),
+            "tuple target compares each cell: {out}"
+        );
+    }
+
+    #[test]
+    fn nested_generic_value_unifies_recursively() {
+        // `A[list[T]]` reaches `T` through two levels; the unify descends the
+        // target structure to the cell
+        let out = out(indoc! {"
+            class A[T]:
+                def __init__(self): ...
+            def f[T](x: A[list[T]]) -> bool:
+                return x is A[list[int]]
+        "});
+        assert!(
+            out.contains("return (T == int)"),
+            "nested value unifies to the inner cell: {out}"
+        );
+    }
+
+    #[test]
+    fn multi_param_probe_carries_a_variance_per_param() {
+        // two invariant parameters → a two-entry variance tuple, exercising the
+        // plural branch of the tuple spelling and the polyfill's per-arg loop
+        let out = out(indoc! {"
+            class Pair[K, V]:
+                def __init__(self, k: K, v: V):
+                    self.k: K = k
+                    self.v: V = v
+            def f(x: object) -> bool:
+                return x is Pair[int, str]
+        "});
+        assert!(
+            out.contains("return _parametric_is(x, Pair[int, str], (0, 0))"),
+            "one variance code per parameter: {out}"
+        );
+    }
+
+    #[test]
+    fn bivariant_typevar_probes_with_code_three() {
+        // a parameter unused in the class body is bivariant; the probe matches
+        // either way (code 3)
+        let out = out(indoc! {"
+            class Box[T]:
+                def __init__(self): ...
+            def f(x: object) -> bool:
+                return x is Box[int]
+        "});
+        assert!(
+            out.contains("return _parametric_is(x, Box[int], (3,))"),
+            "bivariant parameter probes with code 3: {out}"
+        );
+    }
+
+    #[test]
+    fn declared_contravariant_dynamic_probes_with_code_two() {
+        // the counterpart to `covariant_dynamic_probes_with_variance` for a
+        // declared `in T` — the probe carries variance code 2
+        let out = out(indoc! {"
+            class Sink[in T]:
+                def __init__(self): ...
+                def put(self, x: T) -> None: ...
+            def f(x: object) -> bool:
+                return x is Sink[int]
+        "});
+        assert!(
+            out.contains("return _parametric_is(x, Sink[int], (2,))"),
+            "declared contravariant probes with code 2: {out}"
+        );
+    }
+
+    #[test]
+    fn protocol_target_probe_becomes_false() {
+        // a protocol target can't be probed (its instances never carry a
+        // matching `__orig_class__`); ty reports the error and the lowering is
+        // the constant it always is, with no polyfill
+        let out = out(indoc! {"
+            from typing import Protocol
+            class P[T](Protocol):
+                def get(self) -> T: ...
+            def f(x: object) -> bool:
+                return x is P[int]
+        "});
+        assert!(out.contains("return False"), "protocol target folds: {out}");
+        assert!(!out.contains("_parametric_is"), "no probe emitted: {out}");
+    }
+
+    #[test]
+    fn implicit_alias_target_probes_like_the_specialization() {
+        // `X = A[int]` binds `X` to the specialization itself, so `y is X`
+        // resolves exactly as `y is A[int]` would — a probe here
+        let out = out(indoc! {"
+            class A[T]:
+                def __init__(self, v: T):
+                    self.v: list[T] = [v]
+            X = A[int]
+            def f(y: object) -> bool:
+                return y is X
+        "});
+        assert!(
+            out.contains("return _parametric_is(y, X, (0,))"),
+            "alias name probes through `X`: {out}"
+        );
+    }
+
+    #[test]
+    fn implicit_alias_builtin_target_is_erased() {
+        // an alias to a builtin specialization is erased just like the direct
+        // form — a constant, and ty reports the error
+        let out = out(indoc! {"
+            X = list[int]
+            def f(y: object) -> bool:
+                return y is X
+        "});
+        assert!(out.contains("return False"), "erased alias target: {out}");
+        assert!(!out.contains("_parametric_is"), "no probe: {out}");
+    }
+
+    #[test]
+    fn pep695_type_alias_target_probes_through_value() {
+        // `type W = A[int]` is a `TypeAliasType`; the probe unwraps `.__value__`
+        // at runtime, so `y is W` still resolves against `A[int]`
+        let out = out(indoc! {"
+            class A[T]:
+                def __init__(self, v: T):
+                    self.v: list[T] = [v]
+            type W = A[int]
+            def f(y: object) -> bool:
+                return y is W
+        "});
+        assert!(
+            out.contains("return _parametric_is(y, W, (0,))"),
+            "type alias probes through `W`: {out}"
+        );
+    }
+
+    #[test]
+    fn bare_class_name_still_lowers_to_isinstance() {
+        // a non-generic name target is not a specialization; it keeps the
+        // ordinary isinstance lowering that identity_swap used to own
+        let out = out(indoc! {"
+            def f(y: object) -> bool:
+                return y is int
+        "});
+        assert!(
+            out.contains("return isinstance(y, int)"),
+            "bare class → isinstance: {out}"
+        );
+    }
+
+    #[test]
+    fn union_of_plain_classes_ors_isinstance() {
+        // a union target is the disjunction of its arms — never a runtime
+        // `isinstance(a, X | Y)`, which fails on a parameterized arm and even on
+        // plain classes before python 3.10
+        let out = out(indoc! {"
+            def f(a: object) -> bool:
+                return a is int | str
+        "});
+        assert!(
+            out.contains("return (isinstance(a, int) or isinstance(a, str))"),
+            "plain union ORs isinstance per arm: {out}"
+        );
+    }
+
+    #[test]
+    fn union_mixes_probe_and_isinstance_per_arm() {
+        let out = out(indoc! {"
+            class A[T]:
+                def __init__(self, v: T):
+                    self.v: list[T] = [v]
+            def f(a: object) -> bool:
+                return a is A[int] | object
+        "});
+        assert!(
+            out.contains("return (_parametric_is(a, A[int], (0,)) or isinstance(a, object))"),
+            "each arm lowered by its own kind: {out}"
+        );
+    }
+
+    #[test]
+    fn union_negation_wraps_the_disjunction() {
+        let out = out(indoc! {"
+            def f(a: object) -> bool:
+                return a is not int | str
+        "});
+        assert!(
+            out.contains("return not (isinstance(a, int) or isinstance(a, str))"),
+            "`is not` negates the whole disjunction: {out}"
+        );
+    }
+
+    #[test]
+    fn union_three_arms() {
+        let out = out(indoc! {"
+            def f(a: object) -> bool:
+                return a is int | str | bytes
+        "});
+        assert!(
+            out.contains(
+                "return (isinstance(a, int) or isinstance(a, str) or isinstance(a, bytes))"
+            ),
+            "a flat chain of arms: {out}"
+        );
+    }
+
+    #[test]
+    fn union_none_arm_is_an_identity_check() {
+        // `X | None` (an optional) tests the `None` arm by identity — `None` is
+        // a value, so `isinstance(a, None)` would be a runtime `TypeError`
+        let out = out(indoc! {"
+            def f(a: object) -> bool:
+                return a is int | None
+        "});
+        assert!(
+            out.contains("return (isinstance(a, int) or a is None)"),
+            "None arm is an identity check: {out}"
+        );
+    }
+
+    #[test]
+    fn union_effectful_lhs_binds_once_via_lambda() {
+        // an effectful lhs must be evaluated exactly once across the arms, so it
+        // is bound to a lambda parameter rather than referenced per arm
+        let out = out(indoc! {"
+            def g() -> object:
+                return 1
+            def f() -> bool:
+                return g() is int | str
+        "});
+        assert!(
+            out.contains(
+                "return (lambda _by_is_value: isinstance(_by_is_value, int) or \
+                 isinstance(_by_is_value, str))(g())"
+            ),
+            "effectful lhs bound once: {out}"
         );
     }
 

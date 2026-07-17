@@ -1957,7 +1957,7 @@ fn specialization_variance<'db>(
 ///   (`in out`). A non-`None` projection on the *source* side without a
 ///   matching projection on the target side means the source describes a
 ///   wider set of types than the target can hold, so the relation fails.
-fn combine_use_site_projections(
+pub(crate) fn combine_use_site_projections(
     declared: TypeVarVariance,
     source: Option<ruff_python_ast::helpers::UseSiteVariance>,
     target: Option<ruff_python_ast::helpers::UseSiteVariance>,

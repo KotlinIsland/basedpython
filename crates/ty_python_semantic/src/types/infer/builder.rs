@@ -96,7 +96,7 @@ use crate::types::match_pattern::{ClassPatternPositionalResult, class_pattern_po
 use crate::types::narrow::NarrowingEvaluatorExtension;
 use crate::types::narrow::pattern_success_types;
 use crate::types::newtype::NewType;
-use crate::types::reified_infer::{self, ReifiedInferenceError};
+use crate::types::reified_infer::{self, ErasedTargetReason, ReifiedInferenceError};
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope};
 use crate::types::soundness::{erases_type_arguments, runtime_check_target};
@@ -11285,46 +11285,92 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         if !matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot) || !self.is_basedpython_file() {
             return None;
         }
-        let ast::Expr::Subscript(subscript) = right else {
-            return None;
-        };
-        let Type::GenericAlias(alias) = right_ty else {
-            return None;
-        };
         let source = ruff_db::source::source_text(self.db(), self.file());
         if !crate::reified::is_keyword_comparison(source.as_str(), op, left, right) {
             return None;
         }
-        let plan = crate::types::reified_infer::classify_parametric_is(
-            self.db(),
-            left_ty,
-            alias,
-            subscript,
-        );
         let bool_ty = KnownClass::Bool.to_instance(self.db());
-        // only a probe against a runtime-erased builtin is an error; every
-        // other plan (fold, reified-cell equality, witness, or a probe of a
-        // user generic that carries `__orig_class__`) is a valid test
-        if plan != crate::types::reified_infer::ParametricIsPlan::ErasedTarget {
+
+        // a union target `a is T1 | T2` tests each arm (`type(a) <: Ti` for any
+        // arm). an erased arm can't be checked at runtime and, unlike a
+        // standalone erased target, may not fold to a constant inside the
+        // disjunction — that would be unsound — so it is rejected per arm
+        if let Some(arms) = union_target_arms(right) {
+            for arm in arms {
+                let Some(alias) = crate::types::reified_infer::parametric_is_target(
+                    self.db(),
+                    self.expression_type(arm),
+                ) else {
+                    continue;
+                };
+                if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) =
+                    crate::types::reified_infer::classify_parametric_is(
+                        self.db(),
+                        left_ty,
+                        alias,
+                        arm,
+                    )
+                {
+                    self.report_erased_type_check(arm.range(), &source[arm.range()], reason);
+                }
+            }
             return Some(bool_ty);
         }
-        let range = TextRange::new(left.start(), right.end());
-        let Some(builder) = self.context.report_lint(&ERASED_TYPE_CHECK, range) else {
-            return Some(bool_ty);
-        };
-        let target = &source[subscript.range()];
-        let mut diagnostic = builder.into_diagnostic(format_args!(
-            "`is {target}` cannot be checked at runtime: builtin collections erase their type arguments"
-        ));
-        diagnostic.info(format_args!(
-            "a `list` / `dict` / `set` / `tuple` built at runtime carries no record of \
-             its type arguments, so no runtime check can confirm the specialization"
-        ));
-        diagnostic.info(format_args!(
-            "reify the type parameter (`def f[T](x: T)`), or test against a user-defined \
-             generic whose instances carry `__orig_class__`"
-        ));
+
+        let alias = crate::types::reified_infer::parametric_is_target(self.db(), right_ty)?;
+        let plan =
+            crate::types::reified_infer::classify_parametric_is(self.db(), left_ty, alias, right);
+        // only a probe against a runtime-erased target is an error; every
+        // other plan (fold, reified-cell equality, witness, or a probe of a
+        // user generic that carries `__orig_class__`) is a valid test
+        if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) = plan {
+            self.report_erased_type_check(
+                TextRange::new(left.start(), right.end()),
+                &source[right.range()],
+                reason,
+            );
+        }
         Some(bool_ty)
+    }
+
+    /// report an `erased-type-check` for a parametric `is`-target (or one arm
+    /// of a union target) whose specialization cannot be probed at runtime
+    fn report_erased_type_check(
+        &self,
+        primary: TextRange,
+        target: &str,
+        reason: ErasedTargetReason,
+    ) {
+        let Some(builder) = self.context.report_lint(&ERASED_TYPE_CHECK, primary) else {
+            return;
+        };
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "`is {target}` cannot be checked at runtime: {}",
+            match reason {
+                ErasedTargetReason::BuiltinCollection =>
+                    "builtin collections erase their type arguments",
+                ErasedTargetReason::Protocol =>
+                    "a protocol's instances don't record which specialization they satisfy",
+            }
+        ));
+        match reason {
+            ErasedTargetReason::BuiltinCollection => {
+                diagnostic.info(format_args!(
+                    "a `list` / `dict` / `set` / `tuple` built at runtime carries no record of \
+                     its type arguments, so no runtime check can confirm the specialization"
+                ));
+            }
+            ErasedTargetReason::Protocol => {
+                diagnostic.info(format_args!(
+                    "an instance's `__orig_class__` names its concrete class, never the protocol, \
+                     and a structural `isinstance` check can't see type arguments"
+                ));
+            }
+        }
+        diagnostic.info(format_args!(
+            "reify the type parameter (`def f[T](x: T)`), or test against a concrete generic \
+             class whose instances carry `__orig_class__`"
+        ));
     }
 
     fn infer_type_parameters(&mut self, type_parameters: &ast::TypeParams) {
@@ -12056,6 +12102,28 @@ fn is_collection_literal(expression: &ast::Expr) -> bool {
         expression,
         ast::Expr::List(_) | ast::Expr::Set(_) | ast::Expr::Dict(_)
     )
+}
+
+/// the flat arms of a `|` union type expression (`A | B | C` → `[A, B, C]`), or
+/// `None` when `expr` is not a union — used to test each arm of a parametric
+/// `is`-target union independently
+fn union_target_arms(expr: &ast::Expr) -> Option<Vec<&ast::Expr>> {
+    fn collect<'a>(expr: &'a ast::Expr, arms: &mut Vec<&'a ast::Expr>) {
+        if let ast::Expr::BinOp(binop) = expr
+            && binop.op == ast::Operator::BitOr
+        {
+            collect(&binop.left, arms);
+            collect(&binop.right, arms);
+        } else {
+            arms.push(expr);
+        }
+    }
+    if !matches!(expr, ast::Expr::BinOp(binop) if binop.op == ast::Operator::BitOr) {
+        return None;
+    }
+    let mut arms = Vec::new();
+    collect(expr, &mut arms);
+    Some(arms)
 }
 
 /// Returns `true` if `expression` is a link of a basedpython optional chain: a `?.` access, or a

@@ -16,9 +16,9 @@
 //!   particular original statement — e.g. anon-NT class synthesis)
 //! - declare required imports (full `import …` / `from … import …` lines
 //!   that the driver prepends to the source)
-//! - declare pre-source text deletions for pure-deletion rewrites that
-//!   would otherwise leak when an outer transform copies operand source
-//!   verbatim (variance keyword stripping)
+//! - declare sub-statement text edits, for rewrites that would otherwise leak
+//!   when an outer transform copies operand source verbatim (variance keyword
+//!   blanking)
 //!
 //! AST passes always engage — there is no gate. The text-edit pipeline
 //! is intentionally not invoked for any construct an AST pass handles.
@@ -309,30 +309,29 @@ fn merge_from_imports(lines: Vec<String>) -> Vec<String> {
 ///
 /// `project`, when `Some`, supplies the real project db + file so type-aware
 /// passes resolve cross-module imports (e.g. an imported generic function for
-/// `generic_call`). It is used only when use-site variance stripping is a
-/// no-op — a variance rewrite shifts byte positions, so the project parse
-/// would no longer align with `source_ref` and we fall back to a single-file
-/// db. The chosen db owns the parse the type-aware passes query: `inferred_type`
-/// does AST node-identity lookups, so the model and the walked suite must come
-/// from one db
+/// `generic_call`). The chosen db owns the parse the type-aware passes query:
+/// `inferred_type` does AST node-identity lookups, so the model and the walked
+/// suite must come from one db
 pub(crate) fn run_against_source<'a>(
     source: &'a str,
     config: &Config,
     project: Option<(&dyn ty_python_semantic::Db, ruff_db::files::File)>,
 ) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>) {
-    // strip use-site variance up front; downstream passes (callable,
+    // blank use-site variance out up front; downstream passes (callable,
     // intersection) copy operand source verbatim and would leak `out`/`in`
-    // keywords otherwise
-    let stripped = use_site_variance::strip(source);
-    let source_ref: &str = stripped.as_ref();
+    // keywords otherwise. blanking is length-preserving, so every range below
+    // is valid in both the original and the blanked source
+    let blanked = use_site_variance::blank(source);
+    let source_ref: &str = blanked.source.as_ref();
 
-    // pick the db backing the type-aware passes: the project db when present
-    // and the source is byte-identical after stripping (so cross-module
-    // imports resolve), otherwise a single-file in-memory db
+    // the db keeps the *original* source, markers and all, so ty can answer
+    // questions that depend on a use-site projection (`x is A[out int]`).
+    // that's sound precisely because blanking preserves byte positions: the
+    // db's parse and the blanked parse below agree on every node's range
     let sem = match project {
-        Some((pdb, pfile)) if matches!(stripped, Cow::Borrowed(_)) => SemDb::Project(pdb, pfile),
-        _ => {
-            let (db, file) = crate::make_in_memory_db(source_ref);
+        Some((pdb, pfile)) => SemDb::Project(pdb, pfile),
+        None => {
+            let (db, file) = crate::make_in_memory_db(source);
             SemDb::Local(db, file)
         }
     };
@@ -346,19 +345,13 @@ pub(crate) fn run_against_source<'a>(
     // identity line table for the no-change early returns: stripping variance
     // is within-line, so every line still maps to itself
     if !parsed_handle.errors().is_empty() {
-        let cow = match stripped {
-            Cow::Borrowed(_) => Cow::Borrowed(source),
-            Cow::Owned(s) => Cow::Owned(s),
-        };
+        let cow = blanked.stripped(source);
         let table = crate::source_map::line_table(cow.as_ref(), &[]);
         return (cow, Vec::new(), table);
     }
     let parsed = parse_unchecked_source(source_ref, PySourceType::BasedPython);
     if !parsed.errors().is_empty() {
-        let cow = match stripped {
-            Cow::Borrowed(_) => Cow::Borrowed(source),
-            Cow::Owned(s) => Cow::Owned(s),
-        };
+        let cow = blanked.stripped(source);
         let table = crate::source_map::line_table(cow.as_ref(), &[]);
         return (cow, Vec::new(), table);
     }
@@ -633,6 +626,16 @@ pub(crate) fn run_against_source<'a>(
             .push("from typing_extensions import Sentinel".to_owned());
     }
 
+    // collapse the padding `blank` left behind. these are ordinary edits, so a
+    // statement an AST pass re-rendered (which never had the marker in its
+    // AST) and a wider template edit (which materializes them inside its `Src`
+    // spans) both come out clean; only a wider *plain* text edit keeps the
+    // padding, which is valid Python either way
+    for range in &blanked.ranges {
+        ctx.text_edits
+            .push((*range, use_site_variance::collapsed_to(source_ref, *range)));
+    }
+
     ctx.required_imports.sort();
     ctx.required_imports.dedup();
     ctx.required_imports = merge_from_imports(std::mem::take(&mut ctx.required_imports));
@@ -646,10 +649,7 @@ pub(crate) fn run_against_source<'a>(
         && ctx.template_edits.is_empty()
         && ctx.epilogue.is_empty()
     {
-        let cow = match stripped {
-            Cow::Borrowed(_) => Cow::Borrowed(source),
-            Cow::Owned(s) => Cow::Owned(s),
-        };
+        let cow = blanked.stripped(source);
         let table = crate::source_map::line_table(cow.as_ref(), &[]);
         return (cow, ctx.errors, table);
     }

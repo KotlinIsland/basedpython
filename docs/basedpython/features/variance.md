@@ -10,12 +10,15 @@ class Both[in out T]: ...
 ```
 
 `out T` declares `T` covariant, `in T` contravariant, and `in out T`
-bivariant. variance affects subtyping in the obvious way:
+invariant — read-write, which is what a bare `T` already means, so `in out`
+is only ever worth writing to say so explicitly. variance affects subtyping
+in the obvious way:
 
 - `Source[Dog]` is assignable to `Source[Animal]` (covariant — `T` is
     produced)
 - `Sink[Animal]` is assignable to `Sink[Dog]` (contravariant — `T` is
     consumed)
+- `Both[Dog]` and `Both[Animal]` are assignable to neither (invariant)
 
 ## transpilation
 
@@ -73,9 +76,23 @@ def both(data: list[in out int]):
     data[0] = 1    # ok
 ```
 
-the outer container's nominal identity is dropped on purpose — only the
-variance-restricted view that the surface form promises survives. that
-makes `list[out int]` and `set[out int]` evaluate to the same view type.
+the container keeps its nominal identity — the projection rides along as a
+per-parameter tag, so `list[out int]` and `set[out int]` stay unrelated
+types. each argument of a multi-argument subscript is tagged independently,
+and an unmarked argument is simply untagged:
 
-only single-argument subscripts are supported; multi-argument variance
-(e.g. `dict[K, out V]`) reports a transpile error.
+```by
+def f(m: dict[str, out int]):
+    m["a"]         # int
+    m["a"] = 1     # error — write rejected through the `out` view
+```
+
+a projection only ever *adds* to what the declaration allows. against a
+declared-invariant parameter, `out` relaxes the position to covariant and
+`in` to contravariant; against a parameter already declared `out T` or
+`in T`, the declared variance covers everything the projection could give
+and the projection is a no-op.
+
+the projection is part of the type, so it also decides a
+[parametric type test](parametric-type-tests.md) — `a is A[out int]` matches
+covariantly even when `A`'s `T` is invariant.

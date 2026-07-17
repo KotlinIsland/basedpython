@@ -1,35 +1,91 @@
-//! Pre-source text-edit that strips use-site variance markers (`out T`,
-//! `in T`, `in out T`) from the source string before the main lowering
+//! Pre-source text-edit that blanks use-site variance markers (`out T`,
+//! `in T`, `in out T`) out of the source string before the main lowering
 //! pipeline begins.
 //!
 //! Unlike the other passes in `ast_pass`, this one does NOT mutate the AST
 //! and re-render through [`Generator`]; it scans the AST for variance
-//! markers, gathers their source ranges, and deletes them from the source
+//! markers, gathers their source ranges, and overwrites them in the source
 //! string directly. The result is a basedpython source file with no
 //! variance keywords — downstream transforms (callable arrow lowering,
 //! intersection lowering) can then copy operand source verbatim without
-//! capturing variance keywords that would later leak
+//! capturing variance keywords that would later leak, and AST passes can
+//! re-render a statement without the [`Generator`] meeting a marker node it
+//! has no spelling for
 //!
-//! Pure-deletion edits like this don't have an overlap problem with other
-//! transforms' edits, because we apply them to the source upstream of the
-//! whole text-edit pipeline. They also preserve every other byte of
-//! formatting — the only change to the source is the variance keyword
-//! (and one trailing space) being removed at each marker site.
+//! The keyword bytes are replaced with spaces rather than deleted, which is
+//! what lets the *type checker* keep reading the markers: blanking preserves
+//! every byte position, so the db can hold the original source — markers
+//! intact — while every pass reads and splices the blanked copy at exactly
+//! the same ranges. A pass that asks ty about `x is A[out int]` therefore
+//! sees the projection, and still renders `A[int]`. Deleting the bytes
+//! instead would shift every following position out of alignment and hide
+//! the projection from ty entirely
+//!
+//! The padding this leaves behind (`A[    int]`) is valid Python but ugly, so
+//! the driver also emits each blanked range as a deletion edit. Those apply
+//! wherever no wider edit claims the region, which is the common case; inside
+//! a wider *plain* text edit the padding survives, harmlessly.
 
 use ruff_python_ast::PySourceType;
 use ruff_python_ast::helpers::use_site_variance_marker;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt};
 use ruff_python_parser::parse_unchecked_source;
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
 
-/// Strip every use-site variance marker (`out T`, `in T`, `in out T`)
-/// from `source` and return the cleaned source. If parsing fails or no
-/// markers are present, returns `source` unchanged.
-pub(crate) fn strip(source: &str) -> std::borrow::Cow<'_, str> {
+/// A source with every use-site variance marker blanked out, plus the ranges
+/// that were blanked.
+pub(crate) struct Blanked<'a> {
+    pub(crate) source: std::borrow::Cow<'a, str>,
+    /// the blanked ranges, ascending. Positions are valid in both the
+    /// original and the blanked source — blanking is length-preserving
+    pub(crate) ranges: Vec<TextRange>,
+}
+
+/// What a blanked range should collapse to: nothing, except any newlines it
+/// spanned. Keeping those means the marker never costs a line, so output line
+/// numbers still match the input's — which the driver's identity line table
+/// relies on. A marker written on one line, the overwhelmingly common case,
+/// collapses to the empty string
+pub(crate) fn collapsed_to(source: &str, range: TextRange) -> String {
+    source[usize::from(range.start())..usize::from(range.end())]
+        .matches('\n')
+        .collect()
+}
+
+impl Blanked<'_> {
+    /// `original` with the marker keywords collapsed away, rather than blanked
+    /// to spaces. This is what the driver's edits produce for an unclaimed
+    /// range; the early-return paths, where no pass ran to emit them, use it to
+    /// get the same output directly
+    pub(crate) fn stripped<'s>(&self, original: &'s str) -> std::borrow::Cow<'s, str> {
+        if self.ranges.is_empty() {
+            return std::borrow::Cow::Borrowed(original);
+        }
+        let mut out = original.to_owned();
+        for range in self.ranges.iter().rev() {
+            out.replace_range(
+                usize::from(range.start())..usize::from(range.end()),
+                &collapsed_to(original, *range),
+            );
+        }
+        std::borrow::Cow::Owned(out)
+    }
+}
+
+/// Blank every use-site variance marker (`out T`, `in T`, `in out T`) out of
+/// `source`, replacing the keyword bytes with spaces so byte positions are
+/// preserved. Newlines are kept as-is, so line structure survives a marker
+/// that spans a line break. If parsing fails or no markers are present,
+/// returns `source` unchanged with no ranges.
+pub(crate) fn blank(source: &str) -> Blanked<'_> {
+    let unchanged = || Blanked {
+        source: std::borrow::Cow::Borrowed(source),
+        ranges: Vec::new(),
+    };
     let parsed = parse_unchecked_source(source, PySourceType::BasedPython);
     if !parsed.errors().is_empty() {
-        return std::borrow::Cow::Borrowed(source);
+        return unchanged();
     }
     let module = parsed.into_syntax();
 
@@ -38,20 +94,35 @@ pub(crate) fn strip(source: &str) -> std::borrow::Cow<'_, str> {
         collector.visit_stmt(stmt);
     }
     if collector.ranges.is_empty() {
-        return std::borrow::Cow::Borrowed(source);
+        return unchanged();
     }
     let mut ranges = collector.ranges;
-    // sort descending by start so position-based edits stay valid
-    ranges.sort_by_key(|r| std::cmp::Reverse(r.0));
+    ranges.sort_by_key(Ranged::start);
+
     let mut out = source.to_owned();
-    for (start, end) in ranges {
-        out.replace_range(start..end, "");
+    for range in &ranges {
+        let span = &source[usize::from(range.start())..usize::from(range.end())];
+        // keep newlines so the blanked copy has the same line structure; every
+        // other byte becomes a space. mapping *bytes* (not chars) is what
+        // makes this length-preserving even if the span holds a comment with
+        // multi-byte text, and the all-ASCII result is still valid UTF-8
+        let blanked: String = span
+            .bytes()
+            .map(|b| if b == b'\n' { '\n' } else { ' ' })
+            .collect();
+        out.replace_range(
+            usize::from(range.start())..usize::from(range.end()),
+            &blanked,
+        );
     }
-    std::borrow::Cow::Owned(out)
+    Blanked {
+        source: std::borrow::Cow::Owned(out),
+        ranges,
+    }
 }
 
 struct MarkerCollector {
-    ranges: Vec<(usize, usize)>,
+    ranges: Vec<TextRange>,
 }
 
 impl<'ast> Visitor<'ast> for MarkerCollector {
@@ -61,12 +132,12 @@ impl<'ast> Visitor<'ast> for MarkerCollector {
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
         if let Some((_, inner)) = use_site_variance_marker(expr) {
-            // delete the variance keyword bytes between the outer marker
+            // blank the variance keyword bytes between the outer marker
             // range and the inner expression's start
-            let start = usize::from(expr.range().start());
-            let inner_start = usize::from(inner.range().start());
+            let start = expr.range().start();
+            let inner_start = inner.range().start();
             if start < inner_start {
-                self.ranges.push((start, inner_start));
+                self.ranges.push(TextRange::new(start, inner_start));
             }
         }
         walk_expr(self, expr);
@@ -178,28 +249,92 @@ mod tests {
     }
 
     #[test]
-    fn strips_use_site_variance() {
-        let out = strip("def f(x: list[out int]) -> None: ...\n");
-        assert_eq!(out, "def f(x: list[int]) -> None: ...\n");
+    fn blanks_use_site_variance() {
+        let out = blank("def f(x: list[out int]) -> None: ...\n");
+        assert_eq!(out.source, "def f(x: list[    int]) -> None: ...\n");
     }
 
     #[test]
-    fn strips_inside_callable_arrow() {
-        let out = strip("fn: (list[out int]) -> None\n");
-        assert_eq!(out, "fn: (list[int]) -> None\n");
+    fn blanks_inside_callable_arrow() {
+        let out = blank("fn: (list[out int]) -> None\n");
+        assert_eq!(out.source, "fn: (list[    int]) -> None\n");
     }
 
     #[test]
-    fn strips_inside_intersection() {
-        let out = strip("def h(x: list[out int] & list[out str]) -> None: pass\n");
-        assert_eq!(out, "def h(x: list[int] & list[str]) -> None: pass\n");
+    fn blanks_inside_intersection() {
+        let out = blank("def h(x: list[out int] & list[out str]) -> None: pass\n");
+        assert_eq!(
+            out.source,
+            "def h(x: list[    int] & list[    str]) -> None: pass\n"
+        );
+    }
+
+    /// blanking must not move a single byte: the driver relies on this to hold
+    /// the original source (markers intact) in the db while every pass reads
+    /// and splices the blanked copy at the same ranges
+    #[test]
+    fn blanking_preserves_every_byte_position() {
+        let src = "def f(x: dict[str, out int], y: list[in out str]) -> None: ...\n";
+        let out = blank(src);
+        assert_eq!(out.source.len(), src.len());
+        for range in &out.ranges {
+            assert!(
+                out.source[usize::from(range.start())..usize::from(range.end())]
+                    .bytes()
+                    .all(|b| b == b' '),
+                "blanked range should be all spaces"
+            );
+        }
+    }
+
+    /// a marker spanning a line break keeps its newline, so line numbers in
+    /// the blanked copy still match the original
+    #[test]
+    fn blanking_preserves_line_structure() {
+        let src = "x: list[out\n    int]\n";
+        let out = blank(src);
+        assert_eq!(out.source, "x: list[   \n    int]\n");
+        assert_eq!(
+            out.source.lines().count(),
+            src.lines().count(),
+            "line count must survive"
+        );
+    }
+
+    #[test]
+    fn stripped_collapses_what_blank_padded() {
+        let src = "def f(x: list[out int]) -> None: ...\n";
+        assert_eq!(
+            blank(src).stripped(src),
+            "def f(x: list[int]) -> None: ...\n"
+        );
+    }
+
+    /// a marker spanning a line break keeps its newline through the collapse
+    /// too, so output line numbers still match the input's — the driver's
+    /// identity line table depends on it. the run of indentation up to the
+    /// inner expression is part of the marker's range and goes with it
+    #[test]
+    fn collapsing_a_multiline_marker_costs_no_line() {
+        let src = "x: list[out\n    int]\ny = 1\n";
+        let stripped = blank(src).stripped(src);
+        assert_eq!(stripped, "x: list[\nint]\ny = 1\n");
+        assert_eq!(stripped.lines().count(), src.lines().count());
+    }
+
+    /// the whole point of the multi-line case: it still transpiles, and `y`
+    /// stays on the line it started on
+    #[test]
+    fn multiline_marker_transpiles_without_shifting_lines() {
+        check("x: list[out\n    int]\ny = 1\n", "x: list[\nint]\ny = 1\n");
     }
 
     #[test]
     fn no_markers_borrows_input() {
         let src = "def f(x: list[int]) -> None: ...\n";
-        let out = strip(src);
-        assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
-        assert_eq!(out, src);
+        let out = blank(src);
+        assert!(matches!(out.source, std::borrow::Cow::Borrowed(_)));
+        assert!(out.ranges.is_empty());
+        assert_eq!(out.source, src);
     }
 }

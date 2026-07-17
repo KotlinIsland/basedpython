@@ -59,13 +59,14 @@ pub(crate) trait TypeInfo {
 
     /// how the keyword-form parametric type test `lhs is rhs` resolves
     /// (rust-style: statically folded, reified-cell token equality, witness
-    /// probe, or an unchecked runtime probe). `None` when `rhs` is not a
-    /// subscripted generic class — the pair is then an ordinary isinstance
-    /// lowering
+    /// probe, or an unchecked runtime probe). `rhs` may spell the target
+    /// specialization directly (`list[int]`) or through an alias (`X =
+    /// list[int]`, `type X = list[int]`). `None` when `rhs` does not resolve to
+    /// a specialization — the pair is then an ordinary isinstance lowering
     fn parametric_is_plan(
         &self,
         lhs: &Expr,
-        rhs: &ruff_python_ast::ExprSubscript,
+        rhs: &Expr,
     ) -> Option<ty_python_semantic::ParametricIsPlan>;
 
     /// whether `expr` resolves to `typing.Any` (the explicitly-annotated
@@ -210,7 +211,7 @@ impl TypeInfo for SemanticModel<'_> {
     fn parametric_is_plan(
         &self,
         lhs: &Expr,
-        rhs: &ruff_python_ast::ExprSubscript,
+        rhs: &Expr,
     ) -> Option<ty_python_semantic::ParametricIsPlan> {
         SemanticModel::parametric_is_plan(self, lhs, rhs)
     }

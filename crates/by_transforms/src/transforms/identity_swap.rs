@@ -6,11 +6,19 @@
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{
     Arguments, AtomicNodeIndex, CmpOp, Expr, ExprCall, ExprContext, ExprName, ExprUnaryOp,
-    ModModule, Stmt, UnaryOp, name::Name,
+    ModModule, Operator, Stmt, UnaryOp, name::Name,
 };
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext, render_expr};
+
+/// whether the type-aware `parametric_is` pass owns lowering this `is`-rhs, so
+/// `identity_swap` must leave it alone. it owns a name / attribute / subscript
+/// target (may name a specialization or alias) and a `|` union of them
+fn owned_by_parametric_is(rhs: &Expr) -> bool {
+    matches!(rhs, Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_))
+        || matches!(rhs, Expr::BinOp(binop) if binop.op == Operator::BitOr)
+}
 
 pub(crate) struct IdentitySwap<'src> {
     source: &'src str,
@@ -59,11 +67,7 @@ impl State<'_> {
                         }
                     } else if trimmed == "is"
                         && !rhs.is_literal_expr()
-                        // a subscripted rhs may be a parametric type test
-                        // (`x is list[int]`); the type-aware parametric_is
-                        // pass lowers those (and falls back to isinstance
-                        // for value subscripts)
-                        && !matches!(rhs, Expr::Subscript(_))
+                        && !owned_by_parametric_is(rhs)
                     {
                         let call = isinstance_call(lhs.clone(), rhs.clone(), false);
                         let pair_range = TextRange::new(lhs.range().start(), rhs.range().end());
@@ -78,7 +82,7 @@ impl State<'_> {
                                 TextRange::new(op_start, op_start + TextSize::from(3u32));
                             self.edits.push((op_range, "is not".to_owned()));
                         }
-                    } else if !rhs.is_literal_expr() && !matches!(rhs, Expr::Subscript(_)) {
+                    } else if !rhs.is_literal_expr() && !owned_by_parametric_is(rhs) {
                         let call = isinstance_call(lhs.clone(), rhs.clone(), true);
                         let pair_range = TextRange::new(lhs.range().start(), rhs.range().end());
                         self.edits.push((pair_range, render_expr(&call)));
