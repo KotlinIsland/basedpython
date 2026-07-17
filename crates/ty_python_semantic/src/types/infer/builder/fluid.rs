@@ -44,6 +44,7 @@ use ty_python_core::definition::{Definition, DefinitionNodeKey};
 use ty_python_core::fluid::FluidUseRole;
 
 use super::TypeInferenceBuilder;
+use crate::Db;
 use crate::types::any_over_type;
 use crate::types::binding_type;
 use crate::types::constraints::ConstraintSetBuilder;
@@ -70,6 +71,190 @@ impl FluidConstraints<'_> {
     /// specialization, with literals retained
     pub(super) fn is_creation(&self) -> bool {
         self.constraints.is_empty() && !self.locked
+    }
+}
+
+/// the resolved event timeline of a fluid candidate binding, in flow order,
+/// with cumulative solutions
+///
+/// resolving an event (reading its statement's inference, filtering and
+/// promoting its constraints) and solving the fold are the expensive parts of
+/// a fluid specialization. both are pure functions of the events, not of the
+/// use observing them, so they are computed once — during the inference of the
+/// candidate's assigned value — and stored here. a use then only re-applies
+/// the per-use visibility rules to the recorded events: when the events it
+/// includes form a prefix of the timeline (any use in straight-line code), its
+/// type is a stored cumulative solution and no solving happens at all
+#[derive(Debug, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+pub(crate) struct FluidTimeline<'db> {
+    /// the creation-time type as a constraint, if it binds the class typevars
+    creation_constraint: Option<Type<'db>>,
+    /// the resolved events, in flow order, ending at the first locking event
+    events: Box<[FluidEvent<'db>]>,
+}
+
+#[derive(Debug, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+struct FluidEvent<'db> {
+    /// the use expression this event is anchored at: the use whose processing
+    /// produced the event (for statement constraints, the first
+    /// constraint-bearing use of the statement)
+    anchor: ExpressionNodeKey,
+    kind: FluidEventKind,
+    /// the resolved constraint instance this event folds (`None` for an escape)
+    constraint: Option<Type<'db>>,
+    /// solution of the creation-time constraint plus the constraints of every
+    /// event up to and including this one, literals retained. `None` once the
+    /// fold failed
+    solution: Option<Type<'db>>,
+    /// the same solution with literal types promoted
+    solution_promoted: Option<Type<'db>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+enum FluidEventKind {
+    /// a widening constraint
+    Constrain,
+    /// a type-contextual use whose context adopts and locks the specialization
+    AdoptLock,
+    /// an escape to an unknown observer, locking the specialization
+    EscapeLock,
+}
+
+impl<'db> FluidTimeline<'db> {
+    fn solution(&self, index: usize, promote: bool) -> Option<Type<'db>> {
+        let event = &self.events[index];
+        if promote {
+            event.solution_promoted
+        } else {
+            event.solution
+        }
+    }
+
+    /// the lock state at the end of the timeline: `(locked, promote_on_lock)`
+    fn lock_state(&self) -> (bool, bool) {
+        match self.events.last().map(|event| event.kind) {
+            Some(FluidEventKind::EscapeLock) => (true, true),
+            Some(FluidEventKind::AdoptLock) => (true, false),
+            Some(FluidEventKind::Constrain) | None => (false, false),
+        }
+    }
+
+    /// normalize the timeline's types during cycle recovery. only types that
+    /// actually contain divergent parts are normalized: normalization is lossy
+    /// (e.g. it drops materializations)
+    pub(crate) fn cycle_normalized(
+        mut self,
+        db: &'db dyn Db,
+        previous: Option<&FluidTimeline<'db>>,
+        cycle: &salsa::Cycle,
+    ) -> Self {
+        let matching_events = previous
+            .filter(|previous| previous.events.len() == self.events.len())
+            .map(|previous| &previous.events);
+
+        let normalize = |ty: &mut Type<'db>, previous_ty: Option<Type<'db>>| {
+            if !any_over_type(db, *ty, false, |inner| inner.is_divergent()) {
+                return;
+            }
+            *ty = match previous_ty {
+                Some(previous_ty) => ty.cycle_normalized(db, previous_ty, cycle),
+                None => ty.recursive_type_normalized(db, cycle),
+            };
+        };
+
+        if let Some(creation_constraint) = &mut self.creation_constraint {
+            normalize(
+                creation_constraint,
+                previous.and_then(|previous| previous.creation_constraint),
+            );
+        }
+        for (index, event) in self.events.iter_mut().enumerate() {
+            let previous_event = matching_events.map(|events| &events[index]);
+            if let Some(constraint) = &mut event.constraint {
+                normalize(
+                    constraint,
+                    previous_event.and_then(|event| event.constraint),
+                );
+            }
+            if let Some(solution) = &mut event.solution {
+                normalize(solution, previous_event.and_then(|event| event.solution));
+            }
+            if let Some(solution_promoted) = &mut event.solution_promoted {
+                normalize(
+                    solution_promoted,
+                    previous_event.and_then(|event| event.solution_promoted),
+                );
+            }
+        }
+
+        self
+    }
+}
+
+/// the view a particular use has of a fluid candidate's timeline
+struct FluidView<'db> {
+    gathered: FluidConstraints<'db>,
+    /// when the events included in this view are exactly the timeline prefix
+    /// `[0..=i]`, the index `i`: the stored cumulative solution applies and no
+    /// re-solving is needed
+    snapshot: Option<usize>,
+}
+
+/// incrementally folds resolved constraint instances into one specialization,
+/// snapshotting the cumulative solution after each event
+struct FluidFold<'db, 'c> {
+    builder: SpecializationBuilder<'db, 'c>,
+    identity_instance: Type<'db>,
+    generic_context: GenericContext<'db>,
+    /// whether an earlier constraint failed to fold: every solution from that
+    /// point on is `None`, as it would be for a from-scratch solve
+    poisoned: bool,
+    events: Vec<FluidEvent<'db>>,
+}
+
+impl<'db> FluidFold<'db, '_> {
+    fn record(
+        &mut self,
+        db: &'db dyn Db,
+        anchor: ExpressionNodeKey,
+        kind: FluidEventKind,
+        constraint: Option<Type<'db>>,
+    ) {
+        if let Some(constraint) = constraint
+            && !self.poisoned
+        {
+            self.poisoned = self
+                .builder
+                .infer(self.identity_instance, constraint)
+                .is_err();
+        }
+        let (solution, solution_promoted) = if self.poisoned {
+            (None, None)
+        } else {
+            (Some(self.build(db, false)), Some(self.build(db, true)))
+        };
+        self.events.push(FluidEvent {
+            anchor,
+            kind,
+            constraint,
+            solution,
+            solution_promoted,
+        });
+    }
+
+    /// build the cumulative solution, matching the promotion policy of
+    /// [`TypeInferenceBuilder::solve_fluid_specialization`]
+    fn build(&mut self, db: &'db dyn Db, promote: bool) -> Type<'db> {
+        let specialization = self.builder.build_with(self.generic_context, |_, bounds| {
+            let lower = bounds?.lower?;
+            Some(if promote {
+                lower.promote(db).promote_singletons_recursively(db)
+            } else {
+                lower
+            })
+        });
+        self.identity_instance
+            .apply_specialization(db, specialization)
     }
 }
 
@@ -308,21 +493,24 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     }
 
     /// gather the constraining and locking events of a fluid candidate that can have
-    /// executed before the given use, or before the end of the scope if `upto` is `None`
+    /// executed before the given use, resolving them from statement inference
     ///
     /// constraints learned after the first locking event are not included: the
     /// specialization can no longer change once unknown observers exist
+    ///
+    /// this is the fallback for the rare views that [`Self::fluid_view_at`]
+    /// cannot resolve from the recorded timeline
     pub(super) fn gather_fluid_constraints(
         &self,
         candidate_def: Definition<'db>,
         identity_instance: Type<'db>,
         generic_context: GenericContext<'db>,
-        upto: Option<ExpressionNodeKey>,
+        upto: ExpressionNodeKey,
     ) -> FluidConstraints<'db> {
         let db = self.db();
         let uses = self.index.fluid_uses(candidate_def);
 
-        let upto = upto.and_then(|key| uses.iter().find(|use_| use_.use_expression == key));
+        let upto = uses.iter().find(|use_| use_.use_expression == upto);
 
         let mut constraints = Vec::new();
         let mut locked = false;
@@ -466,6 +654,264 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         }
     }
 
+    /// resolve the constraining and locking events of a fluid candidate — up to
+    /// the first locking event — into a [`FluidTimeline`], folding each
+    /// constraint into cumulative solutions as it goes
+    ///
+    /// this mirrors [`Self::gather_fluid_constraints`] with no `upto`, doing the
+    /// expensive per-event work (statement inference reads, typevar-binding
+    /// checks, solving) exactly once per event instead of once per use
+    pub(super) fn build_fluid_timeline(
+        &self,
+        candidate_def: Definition<'db>,
+        identity_instance: Type<'db>,
+        generic_context: GenericContext<'db>,
+        creation: Type<'db>,
+    ) -> FluidTimeline<'db> {
+        let db = self.db();
+        let uses = self.index.fluid_uses(candidate_def);
+
+        let creation_constraint =
+            self.fluid_creation_constraint(identity_instance, generic_context, creation);
+
+        let constraint_sets = ConstraintSetBuilder::new();
+        let inferable = generic_context.inferable_typevars(db);
+        let mut fold = FluidFold {
+            builder: SpecializationBuilder::new(db, &constraint_sets, inferable),
+            identity_instance,
+            generic_context,
+            poisoned: false,
+            events: Vec::new(),
+        };
+        if let Some(creation_constraint) = creation_constraint {
+            fold.poisoned = fold
+                .builder
+                .infer(identity_instance, creation_constraint)
+                .is_err();
+        }
+
+        // Constraints are tracked per statement; only read each statement once.
+        let mut seen_statements: FxHashSet<Statement<'db>> = FxHashSet::default();
+
+        for use_ in uses {
+            match use_.role {
+                FluidUseRole::Read => {}
+
+                FluidUseRole::Escape => {
+                    fold.record(db, use_.use_expression, FluidEventKind::EscapeLock, None);
+                    break;
+                }
+
+                FluidUseRole::MethodReceiver
+                | FluidUseRole::SubscriptStore
+                | FluidUseRole::TypeContextual => {
+                    let Some(statement) = use_.statement else {
+                        // Constraint-bearing roles always carry a statement; be
+                        // conservative if one is somehow missing.
+                        fold.record(db, use_.use_expression, FluidEventKind::EscapeLock, None);
+                        break;
+                    };
+
+                    let statement_use_types = infer_statement_types(db, statement);
+
+                    if let Some(divergent) = statement_use_types
+                        .expression_type(use_.use_expression)
+                        .as_divergent()
+                    {
+                        // Infer `C[Divergent]` for the initial cycle result.
+                        let divergent_specialization =
+                            generic_context.repeat_specialization(db, Type::Divergent(divergent));
+                        fold.record(
+                            db,
+                            use_.use_expression,
+                            FluidEventKind::Constrain,
+                            Some(
+                                identity_instance
+                                    .apply_specialization(db, divergent_specialization),
+                            ),
+                        );
+                        continue;
+                    }
+
+                    // A type-contextual use whose bidirectional context constrains the
+                    // class typevars hands the value to an observer that relies on
+                    // that specialization: adopt it and lock. A context blind to the
+                    // typevars (e.g. `print(a)`, `len(a)`) leaves the binding fluid.
+                    if use_.role == FluidUseRole::TypeContextual {
+                        if let Some(adoption) =
+                            statement_use_types.fluid_adoption(use_.use_expression)
+                            && !adoption.has_unspecialized_type_var(db)
+                            && self.fluid_constraint_binds_typevars(
+                                identity_instance,
+                                generic_context,
+                                adoption,
+                            )
+                        {
+                            fold.record(
+                                db,
+                                use_.use_expression,
+                                FluidEventKind::AdoptLock,
+                                Some(adoption),
+                            );
+                            break;
+                        }
+                        continue;
+                    }
+
+                    let Some(use_constraints) =
+                        statement_use_types.collection_use_constraints(candidate_def)
+                    else {
+                        // No constraints were learned at this use (e.g. a read-only
+                        // method call); the binding stays fluid.
+                        continue;
+                    };
+
+                    // A constraint is only a widening event if it actually binds the
+                    // class typevars: a read-only method call (`a.pop()`) records an
+                    // all-dynamic constraint, which must not promote the creation-time
+                    // literals.
+                    if seen_statements.insert(statement) {
+                        for constraint in use_constraints.iter().copied() {
+                            if constraint.has_unspecialized_type_var(db)
+                                || !self.fluid_constraint_binds_typevars(
+                                    identity_instance,
+                                    generic_context,
+                                    constraint,
+                                )
+                            {
+                                continue;
+                            }
+                            // Widening events promote their literal types; see
+                            // `gather_fluid_constraints` for why.
+                            let resolved = self
+                                .solve_fluid_specialization(
+                                    identity_instance,
+                                    generic_context,
+                                    std::iter::once(constraint),
+                                    true,
+                                )
+                                .unwrap_or(constraint);
+                            fold.record(
+                                db,
+                                use_.use_expression,
+                                FluidEventKind::Constrain,
+                                Some(resolved),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        FluidTimeline {
+            creation_constraint,
+            events: fold.events.into_boxed_slice(),
+        }
+    }
+
+    /// re-apply the per-use visibility rules to the recorded timeline,
+    /// determining which events can have executed before the given use — and,
+    /// when those events form a timeline prefix, the index of the stored
+    /// cumulative solution that already answers this view
+    ///
+    /// the visibility rules mirror [`Self::gather_fluid_constraints`]; unlike
+    /// it, this reads no statement inference and solves nothing
+    ///
+    /// returns `None` when the view cannot be resolved from the timeline: the
+    /// timeline ends at its first locking event, so a use that skips that lock
+    /// (an argument-position use in the lock's own statement) may see later
+    /// events that were never recorded
+    fn fluid_view_at(
+        &self,
+        timeline: &FluidTimeline<'db>,
+        candidate_def: Definition<'db>,
+        upto: ExpressionNodeKey,
+    ) -> Option<FluidView<'db>> {
+        let uses = self.index.fluid_uses(candidate_def);
+        let upto = uses.iter().find(|use_| use_.use_expression == upto);
+
+        let events = &timeline.events;
+        let mut cursor = 0;
+        let mut constraints = Vec::new();
+        let mut locked = false;
+        let mut promote_on_lock = false;
+        // the timeline index of the last included event, valid while the
+        // included events are still exactly the timeline prefix ending there
+        let mut chain = None;
+        let mut excluded_any = false;
+        let mut chain_broken = false;
+
+        'uses: for use_ in uses {
+            // consume this use's events whether or not the use is included
+            let first_event = cursor;
+            while cursor < events.len() && events[cursor].anchor == use_.use_expression {
+                cursor += 1;
+            }
+            let use_events = &events[first_event..cursor];
+
+            let visible = upto.is_none_or(|upto| upto.may_follow(use_));
+
+            // Arguments are evaluated before a call mutates its receiver, so only
+            // receiver-position uses observe the constraints recorded by their own
+            // statement; every other use sees the pre-statement state. This also
+            // breaks the self-reference of uses like `x.append(x)`, where the
+            // argument's prefix would otherwise include the constraint formed from
+            // the argument itself.
+            let own_statement_skip = upto.is_some_and(|upto| {
+                !matches!(
+                    upto.role,
+                    FluidUseRole::MethodReceiver | FluidUseRole::SubscriptStore
+                ) && use_.statement_range == upto.statement_range
+                    && use_.role.contributes_constraints()
+            });
+
+            if !visible || own_statement_skip {
+                if !use_events.is_empty() {
+                    excluded_any = true;
+                    if own_statement_skip
+                        && use_events
+                            .iter()
+                            .any(|event| event.kind != FluidEventKind::Constrain)
+                    {
+                        return None;
+                    }
+                }
+                continue;
+            }
+
+            for (offset, event) in use_events.iter().enumerate() {
+                if excluded_any {
+                    chain_broken = true;
+                }
+                if !chain_broken {
+                    chain = Some(first_event + offset);
+                }
+                constraints.extend(event.constraint);
+                match event.kind {
+                    FluidEventKind::Constrain => {}
+                    FluidEventKind::AdoptLock => {
+                        locked = true;
+                        break 'uses;
+                    }
+                    FluidEventKind::EscapeLock => {
+                        locked = true;
+                        promote_on_lock = true;
+                        break 'uses;
+                    }
+                }
+            }
+        }
+
+        Some(FluidView {
+            gathered: FluidConstraints {
+                constraints,
+                locked,
+                promote_on_lock,
+            },
+            snapshot: if chain_broken { None } else { chain },
+        })
+    }
+
     /// whether solving the candidate's identity specialization against this
     /// constraint binds any of the class typevars to a static type. contexts
     /// that are blind to the class typevars (e.g. `object`, `Sized`) place no
@@ -532,8 +978,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
     /// the public ("eventual") type of a fluid candidate: the solution of the
     /// creation-time constraints plus every constraining event up to the first
-    /// lock. also records the creation-time type so later uses can re-solve
-    /// their own prefix of the events
+    /// lock. also records the creation-time type and the resolved event
+    /// timeline so later uses can look up their own prefix of the events
     pub(super) fn fluid_eventual_type(
         &mut self,
         candidate_def: Definition<'db>,
@@ -543,13 +989,26 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     ) -> Type<'db> {
         self.fluid_creation = Some(creation);
 
-        let gathered =
-            self.gather_fluid_constraints(candidate_def, identity_instance, generic_context, None);
+        let timeline =
+            self.build_fluid_timeline(candidate_def, identity_instance, generic_context, creation);
+        let (locked, promote_on_lock) = timeline.lock_state();
+        let creation_constraint = timeline.creation_constraint;
+        // The eventual type is the binding's public type: it is what nested scopes,
+        // other modules, and uses with non-unique bindings observe. Those observers
+        // are not flow-sensitively tracked, so the public type is promoted — unless
+        // an adopting lock pinned the observer's exact view.
+        let promote = !locked || promote_on_lock;
+        let eventual = timeline
+            .events
+            .len()
+            .checked_sub(1)
+            .map(|last| timeline.solution(last, promote));
+        self.fluid_timeline = Some(timeline);
 
         // With no events and nothing to promote, keep the creation type as-is: a
         // re-solve can lose structure that the constructor inference produced (e.g.
         // the `Top[...]` materialization of a ParamSpec specialization).
-        if gathered.is_creation()
+        if eventual.is_none()
             && !any_over_type(self.db(), creation, false, |ty| {
                 ty.as_literal_value().is_some() || ty.is_singleton(self.db())
             })
@@ -561,20 +1020,17 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             return self.promote_empty_specialization(identity_instance, generic_context, creation);
         }
 
-        // The eventual type is the binding's public type: it is what nested scopes,
-        // other modules, and uses with non-unique bindings observe. Those observers
-        // are not flow-sensitively tracked, so the public type is promoted — unless
-        // an adopting lock pinned the observer's exact view.
-        let promote = !gathered.locked || gathered.promote_on_lock;
-        self.solve_fluid_specialization(
-            identity_instance,
-            generic_context,
-            self.fluid_creation_constraint(identity_instance, generic_context, creation)
-                .into_iter()
-                .chain(gathered.constraints),
-            promote,
-        )
-        .unwrap_or(creation)
+        match eventual {
+            Some(solution) => solution.unwrap_or(creation),
+            None => self
+                .solve_fluid_specialization(
+                    identity_instance,
+                    generic_context,
+                    creation_constraint,
+                    promote,
+                )
+                .unwrap_or(creation),
+        }
     }
 
     /// If `creation` is an empty collection — every element typevar solved to `Never`,
@@ -636,13 +1092,15 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         };
         let value = assignment.value(self.module());
 
-        // Collection-literal candidates store their creation type on the standalone
-        // inference of the assigned value; constructor-call candidates store it on the
-        // definition inference of the assignment.
-        let creation = if let Some(expression) = self.index.try_expression(value) {
-            infer_expression_types(db, expression, TypeContext::default()).fluid_creation()
+        // Collection-literal candidates store their creation type and event timeline
+        // on the standalone inference of the assigned value; constructor-call
+        // candidates store them on the definition inference of the assignment.
+        let (creation, timeline) = if let Some(expression) = self.index.try_expression(value) {
+            let inference = infer_expression_types(db, expression, TypeContext::default());
+            (inference.fluid_creation(), inference.fluid_timeline())
         } else {
-            infer_definition_types(db, candidate_def).fluid_creation()
+            let inference = infer_definition_types(db, candidate_def);
+            (inference.fluid_creation(), inference.fluid_timeline())
         };
         let Some(creation) = creation else {
             return fallback;
@@ -658,12 +1116,27 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         };
         let identity_instance = Type::instance(db, class_literal.identity_specialization(db));
 
-        let mut gathered = self.gather_fluid_constraints(
-            candidate_def,
-            identity_instance,
-            generic_context,
-            Some(ExpressionNodeKey::from(use_expr)),
-        );
+        let use_key = ExpressionNodeKey::from(use_expr);
+        let view =
+            timeline.and_then(|timeline| self.fluid_view_at(timeline, candidate_def, use_key));
+        let (mut gathered, mut snapshot) = match view {
+            Some(FluidView { gathered, snapshot }) => (gathered, snapshot),
+            // The view extends past the recorded timeline (or the timeline is a
+            // cycle-recovery placeholder): resolve it from statement inference.
+            None => (
+                self.gather_fluid_constraints(
+                    candidate_def,
+                    identity_instance,
+                    generic_context,
+                    use_key,
+                ),
+                None,
+            ),
+        };
+        let creation_constraint = match timeline {
+            Some(timeline) => timeline.creation_constraint,
+            None => self.fluid_creation_constraint(identity_instance, generic_context, creation),
+        };
 
         // A use with a bidirectional type context that constrains the specialization
         // adopts that context: this use is itself the locking event, and it observes
@@ -683,17 +1156,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             if annotation.has_unspecialized_type_var(db)
                 && annotation.class_specialization(db).is_some()
             {
+                if let (Some(timeline), Some(index)) = (timeline, snapshot) {
+                    return timeline.solution(index, true).unwrap_or(fallback);
+                }
                 return self
                     .solve_fluid_specialization(
                         identity_instance,
                         generic_context,
-                        self.fluid_creation_constraint(
-                            identity_instance,
-                            generic_context,
-                            creation,
-                        )
-                        .into_iter()
-                        .chain(gathered.constraints),
+                        creation_constraint.into_iter().chain(gathered.constraints),
                         true,
                     )
                     .unwrap_or(fallback);
@@ -703,6 +1173,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             {
                 gathered.constraints.push(annotation);
                 gathered.locked = true;
+                snapshot = None;
             }
         }
 
@@ -710,16 +1181,18 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             return creation;
         }
 
+        // Literal types accumulate through widening events and are promoted once
+        // the specialization escapes; an adopting lock uses the observer's exact
+        // view instead.
+        let promote = gathered.locked && gathered.promote_on_lock;
+        if let (Some(timeline), Some(index)) = (timeline, snapshot) {
+            return timeline.solution(index, promote).unwrap_or(fallback);
+        }
         self.solve_fluid_specialization(
             identity_instance,
             generic_context,
-            self.fluid_creation_constraint(identity_instance, generic_context, creation)
-                .into_iter()
-                .chain(gathered.constraints),
-            // Literal types accumulate through widening events and are promoted once
-            // the specialization escapes; an adopting lock uses the observer's exact
-            // view instead.
-            gathered.locked && gathered.promote_on_lock,
+            creation_constraint.into_iter().chain(gathered.constraints),
+            promote,
         )
         .unwrap_or(fallback)
     }

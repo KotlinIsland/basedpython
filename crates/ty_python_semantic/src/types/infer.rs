@@ -77,6 +77,8 @@ mod comparisons;
 #[cfg(test)]
 mod tests;
 
+use builder::fluid::FluidTimeline;
+
 bitflags::bitflags! {
     /// Metadata for expressions inferred as type expressions.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, salsa::Update)]
@@ -1204,6 +1206,10 @@ struct OtherDefinitionInferenceExtra<'db> {
     /// region, with literal types retained.
     fluid_creation: Option<Type<'db>>,
 
+    /// The resolved event timeline of a fluid specialization candidate defined by
+    /// this region, with cumulative solutions.
+    fluid_timeline: Option<FluidTimeline<'db>>,
+
     /// The fallback type for missing expressions/bindings/declarations or recursive type inference.
     cycle_recovery: Option<Type<'db>>,
 
@@ -1295,6 +1301,13 @@ impl<'db> DefinitionInferenceExtra<'db> {
             _ => None,
         }
     }
+
+    fn fluid_timeline(&self) -> Option<&FluidTimeline<'db>> {
+        match self {
+            Self::Other(extra) => extra.fluid_timeline.as_ref(),
+            _ => None,
+        }
+    }
 }
 
 impl<'db> DefinitionInference<'db> {
@@ -1382,17 +1395,26 @@ impl<'db> DefinitionInference<'db> {
 
         if let Some(extra) = self.extra.as_mut()
             && let DefinitionInferenceExtra::Other(extra) = extra.as_mut()
-            && let Some(fluid_creation) = &mut extra.fluid_creation
-            // Only normalize a creation type that actually contains divergent parts:
-            // normalization is lossy (e.g. it drops materializations).
-            && any_over_type(db, *fluid_creation, false, |ty| ty.is_divergent())
         {
-            *fluid_creation = match previous_inference.fluid_creation() {
-                Some(previous_creation) => {
-                    fluid_creation.cycle_normalized(db, previous_creation, cycle)
-                }
-                None => fluid_creation.recursive_type_normalized(db, cycle),
-            };
+            if let Some(fluid_creation) = &mut extra.fluid_creation
+                // Only normalize a creation type that actually contains divergent parts:
+                // normalization is lossy (e.g. it drops materializations).
+                && any_over_type(db, *fluid_creation, false, |ty| ty.is_divergent())
+            {
+                *fluid_creation = match previous_inference.fluid_creation() {
+                    Some(previous_creation) => {
+                        fluid_creation.cycle_normalized(db, previous_creation, cycle)
+                    }
+                    None => fluid_creation.recursive_type_normalized(db, cycle),
+                };
+            }
+            if let Some(fluid_timeline) = extra.fluid_timeline.take() {
+                extra.fluid_timeline = Some(fluid_timeline.cycle_normalized(
+                    db,
+                    previous_inference.fluid_timeline(),
+                    cycle,
+                ));
+            }
         }
 
         self
@@ -1437,6 +1459,14 @@ impl<'db> DefinitionInference<'db> {
         self.extra
             .as_deref()
             .and_then(DefinitionInferenceExtra::fluid_creation)
+    }
+
+    /// The resolved event timeline of the fluid specialization candidate defined by
+    /// this region, with cumulative solutions.
+    pub(crate) fn fluid_timeline(&self) -> Option<&FluidTimeline<'db>> {
+        self.extra
+            .as_deref()
+            .and_then(DefinitionInferenceExtra::fluid_timeline)
     }
 
     /// Get qualifiers for an annotation expression
@@ -1599,6 +1629,10 @@ struct ExpressionInferenceExtra<'db> {
     /// is this region, with literal types retained.
     fluid_creation: Option<Type<'db>>,
 
+    /// The resolved event timeline of a fluid specialization candidate whose assigned
+    /// value is this region, with cumulative solutions.
+    fluid_timeline: Option<FluidTimeline<'db>>,
+
     /// The types of every binding in this expression region.
     ///
     /// Only very few expression regions have bindings (around 0.1%).
@@ -1654,6 +1688,10 @@ impl<'db> ExpressionInference<'db> {
                     }
                     None => fluid_creation.recursive_type_normalized(db, cycle),
                 };
+            }
+            if let Some(fluid_timeline) = extra.fluid_timeline.take() {
+                extra.fluid_timeline =
+                    Some(fluid_timeline.cycle_normalized(db, previous.fluid_timeline(), cycle));
             }
         }
 
@@ -1713,6 +1751,14 @@ impl<'db> ExpressionInference<'db> {
     /// value is this region, with literal types retained.
     pub(crate) fn fluid_creation(&self) -> Option<Type<'db>> {
         self.extra.as_ref().and_then(|extra| extra.fluid_creation)
+    }
+
+    /// The resolved event timeline of the fluid specialization candidate whose
+    /// assigned value is this region, with cumulative solutions.
+    pub(crate) fn fluid_timeline(&self) -> Option<&FluidTimeline<'db>> {
+        self.extra
+            .as_ref()
+            .and_then(|extra| extra.fluid_timeline.as_ref())
     }
 
     fn fallback_type(&self) -> Option<Type<'db>> {

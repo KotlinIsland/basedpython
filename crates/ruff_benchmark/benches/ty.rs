@@ -1645,6 +1645,39 @@ consume(ALIASES.items())
     });
 }
 
+fn benchmark_fluid_many_widenings(criterion: &mut Criterion) {
+    const NUM_WIDENINGS: usize = 40;
+
+    setup_rayon();
+
+    // A fluid specialization candidate (`a = [1]`, an unannotated binding whose specialization is
+    // inferred rather than declared) with many widening uses and many reads. Every use of such a
+    // binding needs a flow-sensitive type: the specialization solved from the creation-time
+    // constraints plus the events that can have executed before that use. Resolving and solving
+    // each use's events independently is quadratic in the number of uses, so this benchmark tracks
+    // that the per-event work stays shared across uses (see `FluidTimeline`).
+    let mut code = "def f() -> None:\n    a = [1]\n".to_string();
+    for i in 0..NUM_WIDENINGS {
+        // The widening event promotes its literal, so the element type stays `int | str` rather
+        // than growing a union per use: this measures the per-use solve cost, not union blowup.
+        writeln!(&mut code, "    a.append('s{i}')").ok();
+        // A read is still a use, so it needs its own flow-sensitive type.
+        writeln!(&mut code, "    print(a[{i}])").ok();
+    }
+
+    criterion.bench_function("ty_micro[fluid_many_widenings]", |b| {
+        b.iter_batched_ref(
+            || setup_micro_case(&code),
+            |case| {
+                let Case { db, .. } = case;
+                let result = db.check();
+                assert_eq!(result.len(), 0);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
+
 fn benchmark_pydantic_core_schema_dict(criterion: &mut Criterion) {
     const NUM_CORE_SCHEMA_VARIANTS: usize = 24;
 
@@ -1902,6 +1935,7 @@ criterion_group!(
     benchmark_invariant_generic_return_union,
     benchmark_invariant_generic_union_bound,
     benchmark_pydantic_core_schema_dict,
+    benchmark_fluid_many_widenings,
 );
 criterion_group!(project, anyio, attrs, hydra, datetype);
 criterion_main!(check_file, micro, project);
