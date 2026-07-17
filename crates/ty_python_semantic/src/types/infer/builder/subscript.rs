@@ -18,6 +18,9 @@ use crate::types::diagnostic::{
 };
 use crate::types::generics::{GenericContext, InferableTypeVars, bind_typevar};
 use crate::types::infer::builder::annotation_expression::PEP613Policy;
+use crate::types::infer::builder::type_expression::{
+    resolve_use_site_variance_class, use_site_variance_slice_elements,
+};
 use crate::types::infer::builder::{ArgExpr, ArgumentsIter, MultiInferenceGuard};
 use crate::types::infer::{InferenceFlags, TypeExpressionFlags};
 use crate::types::special_form::AliasSpec;
@@ -274,6 +277,22 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         match value_ty {
             Type::ClassLiteral(class) => {
+                // basedpython use-site variance in *value* position — the
+                // `is` target of a parametric type test (`x is A[out int]`).
+                // Produce the same projected specialization the annotation
+                // form does, as a class object rather than an instance, so
+                // the test resolves against the projection instead of losing
+                // it to ordinary subscript inference
+                if self.is_basedpython_file()
+                    && let Some(elements) = use_site_variance_slice_elements(slice)
+                {
+                    let class_type =
+                        resolve_use_site_variance_class(db, value_ty, &elements, |elt| {
+                            self.infer_type_expression(elt)
+                        });
+                    return class_type.map_or_else(Type::unknown, Type::from);
+                }
+
                 // HACK ALERT: If we are subscripting a generic class, short-circuit the rest of the
                 // subscript inference logic and treat this as an explicit specialization.
                 // TODO: Move this logic into a custom callable, and update `find_name_in_mro` to return

@@ -118,17 +118,18 @@ impl<'db> SemanticModel<'db> {
     }
 
     /// basedpython: how the parametric type test `lhs is rhs` (keyword form)
-    /// resolves, from the operands' inferred types. `None` when `rhs` does
-    /// not evaluate to a subscripted generic class — the test is then an
-    /// ordinary isinstance lowering
+    /// resolves, from the operands' inferred types. `rhs` may name the target
+    /// specialization directly (`list[int]`) or through an alias — an implicit
+    /// alias whose value is a specialization (`X = list[int]`) or a PEP 695
+    /// `type` alias. `None` when `rhs` does not resolve to a specialization —
+    /// the test is then an ordinary isinstance lowering
     pub fn parametric_is_plan(
         &self,
         lhs: &ast::Expr,
-        rhs: &ast::ExprSubscript,
+        rhs: &ast::Expr,
     ) -> Option<crate::types::reified_infer::ParametricIsPlan> {
-        let Type::GenericAlias(alias) = rhs.inferred_type(self)? else {
-            return None;
-        };
+        let alias =
+            crate::types::reified_infer::parametric_is_target(self.db, rhs.inferred_type(self)?)?;
         let lhs_ty = lhs.inferred_type(self)?;
         Some(crate::types::reified_infer::classify_parametric_is(
             self.db, lhs_ty, alias, rhs,

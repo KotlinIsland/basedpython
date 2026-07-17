@@ -7,6 +7,7 @@ use ruff_python_ast::{self as ast, PythonVersion};
 use ruff_text_size::Ranged;
 
 use super::{DeferredExpressionState, TypeInferenceBuilder};
+use crate::types::ClassType;
 use crate::types::call::CallArguments;
 use crate::types::diagnostic::{
     self, EXPERIMENTAL_SYNTAX, INVALID_TYPE_FORM, NOT_SUBSCRIPTABLE, UNBOUND_TYPE_VARIABLE,
@@ -3819,7 +3820,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
 /// One element of a subscript slice that may or may not carry a variance
 /// marker.
-struct VarianceSliceElement<'ast> {
+pub(super) struct VarianceSliceElement<'ast> {
     variance: Option<UseSiteVariance>,
     /// inner expression — for marker elements this is the unwrapped
     /// expression inside the marker; for non-marker elements the element
@@ -3840,7 +3841,9 @@ fn basedpython_float_constant(attr: &ast::Identifier) -> Option<f64> {
 /// If `slice` contains at least one use-site variance marker, return the
 /// flat list of slice elements with their variance and inner expression.
 /// Returns `None` if no element is variance-marked.
-fn use_site_variance_slice_elements(slice: &ast::Expr) -> Option<Vec<VarianceSliceElement<'_>>> {
+pub(super) fn use_site_variance_slice_elements(
+    slice: &ast::Expr,
+) -> Option<Vec<VarianceSliceElement<'_>>> {
     let elements: Vec<&ast::Expr> = match slice {
         ast::Expr::Tuple(t)
             if !t.parenthesized && !t.is_anon_named_tuple && !t.is_anon_named_tuple_value =>
@@ -3870,24 +3873,24 @@ fn use_site_variance_slice_elements(slice: &ast::Expr) -> Option<Vec<VarianceSli
     if any_marker { Some(mapped) } else { None }
 }
 
-/// Build an instance type for `value_ty[slice...]` where at least one slice
-/// element carries a use-site variance marker. Returns an instance of the
-/// outer class specialized with the slice's types and tagged with per-typevar
-/// projections so downstream member access can apply kotlin-style variance
-/// restrictions. Falls back to `Unknown` if the outer is not a class.
-fn resolve_use_site_variance<'db, 'ast>(
+/// Build the projected class type for `value_ty[slice...]` where at least one
+/// slice element carries a use-site variance marker. Returns the outer class
+/// specialized with the slice's types and tagged with per-typevar projections
+/// so downstream member access can apply kotlin-style variance restrictions.
+/// `None` if the outer is not a class.
+pub(super) fn resolve_use_site_variance_class<'db, 'ast>(
     db: &'db dyn crate::Db,
     value_ty: Type<'db>,
     elements: &[VarianceSliceElement<'ast>],
     mut infer_inner: impl FnMut(&'ast ast::Expr) -> Type<'db>,
-) -> Type<'db> {
+) -> Option<ClassType<'db>> {
     let Type::ClassLiteral(class_literal) = value_ty else {
         // variance keywords on a non-class outer — infer inners for
         // diagnostics and bail.
         for element in elements {
             let _ = infer_inner(element.inner);
         }
-        return Type::unknown();
+        return None;
     };
     let arg_types: Vec<Type<'db>> = elements.iter().map(|elt| infer_inner(elt.inner)).collect();
     let projections: Vec<Option<UseSiteVariance>> =
@@ -3901,5 +3904,19 @@ fn resolve_use_site_variance<'db, 'ast>(
             generic_context.specialize(db, vec![Type::unknown(); n].as_slice())
         }
     });
-    Type::instance(db, class_type)
+    Some(class_type)
+}
+
+/// The instance type a variance-marked subscript denotes in a type expression.
+/// Falls back to `Unknown` if the outer is not a class.
+fn resolve_use_site_variance<'db, 'ast>(
+    db: &'db dyn crate::Db,
+    value_ty: Type<'db>,
+    elements: &[VarianceSliceElement<'ast>],
+    infer_inner: impl FnMut(&'ast ast::Expr) -> Type<'db>,
+) -> Type<'db> {
+    match resolve_use_site_variance_class(db, value_ty, elements, infer_inner) {
+        Some(class_type) => Type::instance(db, class_type),
+        None => Type::unknown(),
+    }
 }

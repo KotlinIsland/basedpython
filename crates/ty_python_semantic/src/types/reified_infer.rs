@@ -26,9 +26,9 @@ use rustc_hash::FxHashMap;
 use crate::Db;
 use crate::place::{builtins_symbol, global_symbol};
 use crate::types::call::{Argument, CallArguments};
-use crate::types::class::{ClassLiteral, ClassType};
+use crate::types::class::{ClassLiteral, ClassType, GenericAlias};
 use crate::types::function::FunctionType;
-use crate::types::generics::Specialization;
+use crate::types::generics::{Specialization, combine_use_site_projections};
 use crate::types::tuple::Tuple;
 use crate::types::typevar::TypeVarBoundOrConstraints;
 use crate::types::variance::TypeVarVariance;
@@ -312,13 +312,27 @@ pub enum ParametricIsPlan {
     TokenEq(Vec<(Name, TextRange)>),
     /// not decidable from static types, but the target is a user-defined
     /// generic whose instances carry `__orig_class__` — probe it at runtime,
-    /// matching each argument by the target's declared variance (one entry
+    /// matching each argument by the target's effective variance (one entry
     /// per type parameter). a legitimate, unwarned runtime test
     Probe(Box<[ArgVariance]>),
-    /// not decidable from static types, and the target is a builtin
-    /// collection whose instances never carry `__orig_class__`, so no sound
-    /// runtime probe exists — the test is an error
-    ErasedTarget,
+    /// not decidable from static types, and the target's instances never carry
+    /// a usable `__orig_class__`, so no sound runtime probe exists — the test
+    /// is an error. the reason picks the diagnostic wording
+    ErasedTarget(ErasedTargetReason),
+}
+
+/// why a parametric test's target cannot be probed at runtime
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErasedTargetReason {
+    /// a builtin collection (`list` / `dict` / `set` / `frozenset` / `tuple`)
+    /// erases its type arguments — its C-level instances reject
+    /// `__orig_class__` entirely
+    BuiltinCollection,
+    /// a protocol's instances record their own concrete class in
+    /// `__orig_class__`, never the protocol, so a probe could never match it;
+    /// and a structural `isinstance` check sees no type arguments (and raises
+    /// outright unless the protocol is `@runtime_checkable`)
+    Protocol,
 }
 
 /// how the runtime probe matches one type argument of the reified
@@ -335,12 +349,17 @@ pub enum ArgVariance {
     Bivariant,
 }
 
-/// whether specialized instances of `origin` carry `__orig_class__` at
-/// runtime. the builtin collections are C types that erase their type
-/// arguments and reject the attribute; a user-defined generic carries it
-/// (set by `types.GenericAlias.__call__` after construction)
-fn target_carries_orig_class<'db>(db: &'db dyn Db, origin: ClassLiteral<'db>) -> bool {
-    !matches!(
+/// why the target class can't back a runtime `__orig_class__` probe, or
+/// `None` when it can. the builtin collections are C types that erase their
+/// type arguments and reject the attribute; a protocol's instances record
+/// their concrete class rather than the protocol; every other user-defined
+/// generic carries a matching `__orig_class__` (set by
+/// `types.GenericAlias.__call__` after construction)
+fn erased_target_reason<'db>(
+    db: &'db dyn Db,
+    origin: ClassLiteral<'db>,
+) -> Option<ErasedTargetReason> {
+    if matches!(
         origin.known(db),
         Some(
             KnownClass::List
@@ -349,22 +368,63 @@ fn target_carries_orig_class<'db>(db: &'db dyn Db, origin: ClassLiteral<'db>) ->
                 | KnownClass::FrozenSet
                 | KnownClass::Tuple
         )
-    )
+    ) {
+        return Some(ErasedTargetReason::BuiltinCollection);
+    }
+    if origin.is_protocol(db) {
+        return Some(ErasedTargetReason::Protocol);
+    }
+    None
 }
 
-/// Classify how `lhs is rhs` (keyword form, `rhs` a subscripted generic
-/// class evaluating to `rhs_alias`) resolves, from the already-inferred
-/// static type of the lhs.
+/// The target specialization a parametric `is` test is checking against, drawn
+/// from the inferred type of the rhs. It is a `GenericAlias` when the rhs is a
+/// subscripted generic (`list[int]`) or an implicit alias bound to one
+/// (`X = list[int]`); a PEP 695 `type` alias is unwrapped to the same. `None`
+/// when the rhs is not a specialization — a bare class or value — so the caller
+/// keeps the ordinary `isinstance` lowering.
+pub(crate) fn parametric_is_target<'db>(
+    db: &'db dyn Db,
+    rhs_ty: Type<'db>,
+) -> Option<GenericAlias<'db>> {
+    match rhs_ty {
+        Type::GenericAlias(alias) => Some(alias),
+        _ => {
+            let value = rhs_ty.as_type_alias()?.value_type(db);
+            match value {
+                Type::GenericAlias(alias) => Some(alias),
+                Type::NominalInstance(instance) => match instance.class(db) {
+                    ClassType::Generic(alias) => Some(alias),
+                    ClassType::NonGeneric(_) => None,
+                },
+                _ => None,
+            }
+        }
+    }
+}
+
+/// Classify how `lhs is rhs` (keyword form) resolves, from the already-inferred
+/// static type of the lhs. `rhs` evaluates to `rhs_alias` — it may be spelled
+/// directly (`list[int]`), through an alias name whose value is that
+/// specialization (`X = list[int]; … is X`), or through a PEP 695 alias.
+///
+/// Only a directly-subscripted target exposes its type arguments as syntax, so
+/// the reified-cell token-equality path (which spells `T == <arg>`) is
+/// available for a subscript rhs but not for an alias name; an alias name falls
+/// back to the static fold or the runtime probe.
 pub(crate) fn classify_parametric_is<'db>(
     db: &'db dyn Db,
     lhs_ty: Type<'db>,
     rhs_alias: crate::types::class::GenericAlias<'db>,
-    rhs_node: &ast::ExprSubscript,
+    rhs_node: &ast::Expr,
 ) -> ParametricIsPlan {
     let target_origin = ClassLiteral::Static(rhs_alias.origin(db));
-    let target_args_ast: Vec<&ast::Expr> = match rhs_node.slice.as_ref() {
-        ast::Expr::Tuple(tuple) => tuple.elts.iter().collect(),
-        single => vec![single],
+    let target_args_ast: Vec<&ast::Expr> = match rhs_node {
+        ast::Expr::Subscript(subscript) => match subscript.slice.as_ref() {
+            ast::Expr::Tuple(tuple) => tuple.elts.iter().collect(),
+            single => vec![single],
+        },
+        _ => Vec::new(),
     };
     let plan = classify_value(
         db,
@@ -375,14 +435,15 @@ pub(crate) fn classify_parametric_is<'db>(
         rhs_node,
     );
     // a runtime `__orig_class__` probe is the last resort. it only works when
-    // the target's instances carry that attribute — a builtin collection
-    // never does, so the test cannot be checked at runtime and becomes an error
-    match plan {
-        ParametricIsPlan::Probe(_) if !target_carries_orig_class(db, target_origin) => {
-            ParametricIsPlan::ErasedTarget
-        }
-        other => other,
+    // the target's instances carry a matching attribute — a builtin collection
+    // or a protocol never does, so the test cannot be checked at runtime and
+    // becomes an error
+    if let ParametricIsPlan::Probe(_) = plan
+        && let Some(reason) = erased_target_reason(db, target_origin)
+    {
+        return ParametricIsPlan::ErasedTarget(reason);
     }
+    plan
 }
 
 fn classify_value<'db>(
@@ -391,7 +452,7 @@ fn classify_value<'db>(
     target_origin: ClassLiteral<'db>,
     rhs_alias: crate::types::class::GenericAlias<'db>,
     target_args_ast: &[&ast::Expr],
-    rhs_node: &ast::ExprSubscript,
+    rhs_node: &ast::Expr,
 ) -> ParametricIsPlan {
     // when the value's type is carried by a reified type parameter, the answer
     // lives in a runtime cell rather than the static type — extract the cell
@@ -419,7 +480,7 @@ fn classify_value<'db>(
     } else {
         // undecidable statically; `classify_parametric_is` turns this into a
         // runtime probe (user generic) or an erased-target error (builtin)
-        ParametricIsPlan::Probe(target_variances(db, target_origin))
+        ParametricIsPlan::Probe(target_variances(db, rhs_alias))
     }
 }
 
@@ -433,12 +494,23 @@ fn try_token_eq<'db>(
     target_origin: ClassLiteral<'db>,
     rhs_alias: crate::types::class::GenericAlias<'db>,
     target_args_ast: &[&ast::Expr],
-    rhs_node: &ast::ExprSubscript,
+    rhs_node: &ast::Expr,
 ) -> Option<ParametricIsPlan> {
     match value_ty {
-        Type::TypeVar(bound_typevar) if is_reified_function_typevar(db, bound_typevar) => Some(
-            ParametricIsPlan::TokenEq(vec![(bound_typevar.name(db).clone(), rhs_node.range())]),
-        ),
+        // `x: T is <target>` compares the reified `T` cell against the target
+        // *as spelled*. that is only sound when the source evaluates to the
+        // specialization itself — a direct subscript. an alias name would
+        // compare against the alias object (or, for a PEP 695 alias, a
+        // `TypeAliasType` wrapper), so it falls through to the static resolution
+        Type::TypeVar(bound_typevar)
+            if is_reified_function_typevar(db, bound_typevar)
+                && matches!(rhs_node, ast::Expr::Subscript(_)) =>
+        {
+            Some(ParametricIsPlan::TokenEq(vec![(
+                bound_typevar.name(db).clone(),
+                rhs_node.range(),
+            )]))
+        }
         Type::NominalInstance(instance) => {
             let ClassType::Generic(alias) = instance.class(db) else {
                 return None;
@@ -486,32 +558,52 @@ pub(crate) fn parametric_soundness_spelling<'db>(
         return None;
     };
     let origin = ClassLiteral::Static(alias.origin(db));
-    // builtin collections erase their type arguments at runtime, so there is
-    // nothing to probe — the base `isinstance` check is all that's sound
-    if !target_carries_orig_class(db, origin) {
+    // a target whose instances don't carry a usable `__orig_class__` — a
+    // builtin collection (erased arguments) or a protocol — has nothing to
+    // probe, so the base `isinstance` check is all that's sound
+    if erased_target_reason(db, origin).is_some() {
         return None;
     }
     let spelling = spell_class(db, file, ClassType::Generic(alias))?;
-    let variances = target_variances(db, origin);
+    let variances = target_variances(db, alias);
     if variances.is_empty() {
         return None;
     }
     Some((spelling, variances))
 }
 
-/// the declared variance of each of the target class's type parameters — how
-/// the runtime probe matches each argument
-fn target_variances<'db>(db: &'db dyn Db, origin: ClassLiteral<'db>) -> Box<[ArgVariance]> {
+/// the effective variance of each of the target's type parameters — how the
+/// runtime probe matches each argument. this is the declared variance combined
+/// with any use-site projection the target spells (`A[out int]` matches
+/// covariantly even when `A`'s `T` is declared invariant), using the same
+/// combiner that decides subtyping, so the probe agrees with `is_subtype_of`
+///
+/// the probe reads the value's `__orig_class__`, which records a concrete
+/// construction (`A[bool](…)`) and never a projected view, so the source side
+/// of the combination carries no projection
+fn target_variances<'db>(db: &'db dyn Db, alias: GenericAlias<'db>) -> Box<[ArgVariance]> {
+    let origin = ClassLiteral::Static(alias.origin(db));
     let Some(generic_context) = origin.generic_context(db) else {
         return Box::default();
     };
+    let specialization = alias.specialization(db);
     generic_context
         .variables(db)
-        .map(|bound_typevar| match bound_typevar.variance(db) {
-            TypeVarVariance::Invariant => ArgVariance::Invariant,
-            TypeVarVariance::Covariant => ArgVariance::Covariant,
-            TypeVarVariance::Contravariant => ArgVariance::Contravariant,
-            TypeVarVariance::Bivariant => ArgVariance::Bivariant,
+        .map(|bound_typevar| {
+            let declared = bound_typevar.variance(db);
+            let effective = combine_use_site_projections(
+                declared,
+                None,
+                specialization.projection_for(db, bound_typevar),
+                false,
+            )
+            .unwrap_or(declared);
+            match effective {
+                TypeVarVariance::Invariant => ArgVariance::Invariant,
+                TypeVarVariance::Covariant => ArgVariance::Covariant,
+                TypeVarVariance::Contravariant => ArgVariance::Contravariant,
+                TypeVarVariance::Bivariant => ArgVariance::Bivariant,
+            }
         })
         .collect()
 }
