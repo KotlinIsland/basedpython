@@ -817,7 +817,6 @@ impl<'src> Parser<'src> {
 
     /// Parses `abstract a: int` → produces a synthetic `AnnAssign` that the
     /// `modifiers` transform rewrites to `a: int` (strips the `abstract` prefix).
-    /// The real annotation is stored as the `value` field so the transform can reconstruct it.
     fn parse_abstract_annot_decl(&mut self, start: TextSize) -> Stmt {
         self.parse_modifier_annot_decl(start, "__abstract_annot__")
     }
@@ -879,8 +878,9 @@ impl<'src> Parser<'src> {
     }
 
     /// Parses `<modifier> name: T [= v]` and emits an `AnnAssign` whose
-    /// annotation is a synthetic `Name(synthetic_id)` spanning the modifier
-    /// prefix. The downstream transform deletes that prefix from the source
+    /// annotation is `Subscript(Name(synthetic_id), T)` — a synthetic marker
+    /// spanning the modifier prefix, keeping the declared type `T` in annotation
+    /// position. The downstream transform deletes that prefix from the source
     /// text, leaving `name: T [= v]` behind.
     fn parse_modifier_annot_decl(&mut self, start: TextSize, synthetic_id: &'static str) -> Stmt {
         let modifier_range = self.current_token_range();
@@ -918,39 +918,32 @@ impl<'src> Parser<'src> {
             range: name.range,
             node_index: AtomicNodeIndex::NONE,
         });
-        // a `final` anywhere in the chain keeps the real type under a `__final__[T]`
-        // marker so ty applies `Final` in every scope (mirrors the sole
-        // `final x: T` path); any other chain strips to the no-op marker with the
-        // annotation stashed in `value` (matches the historical `abstract a: T`
-        // shape — the transform uses ranges, not AST semantics)
-        let (annotation, value) = if let Some(final_range) = final_range {
-            let final_marker = Expr::Name(ast::ExprName {
-                id: Name::new_static("__final__"),
-                ctx: ExprContext::Invalid,
-                range: final_range,
-                node_index: AtomicNodeIndex::NONE,
-            });
-            let annotation = Expr::Subscript(ast::ExprSubscript {
-                range: TextRange::new(final_range.start(), annotation_expr.range().end()),
-                value: Box::new(final_marker),
-                slice: Box::new(annotation_expr),
-                ctx: ExprContext::Load,
-                node_index: AtomicNodeIndex::NONE,
-                is_typeof: false,
-            });
-            (annotation, assigned)
-        } else {
-            let synthetic_ann = Expr::Name(ast::ExprName {
-                id: Name::new_static(synthetic_id),
-                ctx: ExprContext::Invalid,
-                range: TextRange::new(modifier_range.start(), name.range.start()),
-                node_index: AtomicNodeIndex::NONE,
-            });
-            (
-                synthetic_ann,
-                Some(assigned.unwrap_or_else(|| Box::new(annotation_expr))),
-            )
-        };
+        // a `final` anywhere in the chain carries the `Final` qualifier, which ty
+        // must apply in every scope; the other modifiers are no-ops to ty. either
+        // way the declared type stays under the marker in annotation position, so
+        // `T` is the declaration — stashing it in `value` instead would make
+        // `override x: T = v` declare nothing and read as `x = v`
+        let marker_range = final_range
+            .unwrap_or_else(|| TextRange::new(modifier_range.start(), name.range.start()));
+        let marker = Expr::Name(ast::ExprName {
+            id: Name::new_static(if final_range.is_some() {
+                "__final__"
+            } else {
+                synthetic_id
+            }),
+            ctx: ExprContext::Invalid,
+            range: marker_range,
+            node_index: AtomicNodeIndex::NONE,
+        });
+        let annotation = Expr::Subscript(ast::ExprSubscript {
+            range: TextRange::new(marker_range.start(), annotation_expr.range().end()),
+            value: Box::new(marker),
+            slice: Box::new(annotation_expr),
+            ctx: ExprContext::Load,
+            node_index: AtomicNodeIndex::NONE,
+            is_typeof: false,
+        });
+        let value = assigned;
         self.eat(TokenKind::Semi);
         self.eat(TokenKind::Newline);
         Stmt::AnnAssign(ast::StmtAnnAssign {

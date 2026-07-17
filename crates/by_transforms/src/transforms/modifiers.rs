@@ -315,6 +315,18 @@ impl<'src> Modifiers<'src> {
     fn process_ann_assign(&mut self, node: &StmtAnnAssign) {
         let name = self.src(node.target.range()).to_owned();
 
+        // `[modifiers] a: T [= v]` where no modifier carries meaning — erase only
+        // the modifier prefix; the rest of the statement stays exactly as written,
+        // with or without an initializer
+        if let Expr::Subscript(s) = node.annotation.as_ref()
+            && matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__abstract_annot__" | "__visibility_annot__" | "__modifier_annot__"))
+        {
+            let erase_range = TextRange::new(node.range().start(), node.target.range().start());
+            self.edits
+                .push(Fix::safe_edit(Edit::range_deletion(erase_range)));
+            return;
+        }
+
         let Some(value) = &node.value else {
             // valueless typed `let x: T` / `final x: T` → `x: Final[T]` — a
             // read-only declaration with no initializer, `Final` in every scope
@@ -369,14 +381,6 @@ impl<'src> Modifiers<'src> {
                             format!("{name} = NewType(\"{name}\", {value_src})"),
                             node.range(),
                         )));
-                    }
-                    "__abstract_annot__" | "__visibility_annot__" | "__modifier_annot__" => {
-                        // erase only the modifier prefix; the rest of the
-                        // statement (`a: int [= v]`) remains in source unchanged
-                        let erase_range =
-                            TextRange::new(node.range().start(), node.target.range().start());
-                        self.edits
-                            .push(Fix::safe_edit(Edit::range_deletion(erase_range)));
                     }
                     _ => {}
                 }

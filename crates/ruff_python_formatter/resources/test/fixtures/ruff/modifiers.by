@@ -42,3 +42,17 @@ final PAIR: tuple[int, str] = (1, "a")
 class G:
     final tag: str
     final override label: str = "x"
+
+
+# no-op annotation modifiers: the declared type must survive the round trip, with
+# and without an initializer, alone and in a chain
+override x: int = 1
+abstract y: str
+private z: int = 2
+export e: str = "e"
+private override chained: bytes = b""
+
+
+class H:
+    abstract member: int
+    override label: str = "x"
