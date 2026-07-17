@@ -119,6 +119,7 @@ use crate::types::{
     is_discarded_dict_key_assignment, todo_type,
 };
 use crate::{AnalysisSettings, Db, FxIndexSet, Program};
+use fluid::FluidTimeline;
 use ty_python_core::ast_ids::ScopedUseId;
 use ty_python_core::definition::{
     AnnotatedAssignmentDefinitionKind, AssignmentDefinitionKind, ComprehensionDefinitionKind,
@@ -147,7 +148,7 @@ mod dict;
 mod dynamic_class;
 mod enum_call;
 mod final_attribute;
-mod fluid;
+pub(super) mod fluid;
 mod function;
 mod imports;
 mod named_tuple;
@@ -293,6 +294,12 @@ pub(super) struct TypeInferenceBuilder<'db, 'ast> {
     /// constraining events starting from this type.
     fluid_creation: Option<Type<'db>>,
 
+    /// The resolved event timeline of a fluid specialization candidate, with cumulative
+    /// solutions. Only set when this region is the standalone inference of the
+    /// candidate's assigned value; uses of the binding look up their own prefix of the
+    /// events here instead of re-solving it.
+    fluid_timeline: Option<FluidTimeline<'db>>,
+
     /// Expressions that are string annotations
     string_annotations: FxHashSet<ExpressionNodeKey>,
 
@@ -414,6 +421,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             collection_use_constraints: FxHashMap::default(),
             fluid_adoptions: FxHashMap::default(),
             fluid_creation: None,
+            fluid_timeline: None,
             string_annotations: FxHashSet::default(),
             expected_types: FxHashMap::default(),
             bindings: VecMap::default(),
@@ -11197,6 +11205,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             mut collection_use_constraints,
             mut fluid_adoptions,
             fluid_creation,
+            fluid_timeline,
             string_annotations,
             expected_types,
             scope,
@@ -11240,6 +11249,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 || !collection_use_constraints.is_empty()
                 || !fluid_adoptions.is_empty()
                 || fluid_creation.is_some()
+                || fluid_timeline.is_some()
                 || !expected_types.is_empty()
                 || cycle_recovery.is_some()
                 || !bindings.is_empty()
@@ -11264,6 +11274,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     cycle_recovery,
                     collection_use_constraints,
                     fluid_creation,
+                    fluid_timeline,
                 })
             });
 
@@ -11284,6 +11295,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             qualifiers,
             type_expression_flags,
             fluid_creation: _,
+            fluid_timeline: _,
             mut fluid_adoptions,
             mut collection_use_constraints,
             string_annotations,
@@ -11409,6 +11421,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             expected_types: _,
             return_types_and_ranges: _,
             fluid_creation: _,
+            fluid_timeline: _,
             fluid_adoptions: _,
             collection_use_constraints: _,
             dataclass_field_specifiers: _,
@@ -11449,6 +11462,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             qualifiers,
             type_expression_flags,
             fluid_creation,
+            fluid_timeline,
             mut fluid_adoptions,
             mut collection_use_constraints,
             string_annotations,
@@ -11482,6 +11496,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             + usize::from(!collection_use_constraints.is_empty())
             + usize::from(!fluid_adoptions.is_empty())
             + usize::from(fluid_creation.is_some())
+            + usize::from(fluid_timeline.is_some())
             + usize::from(!called_functions.is_empty())
             + usize::from(!type_expression_flags.is_empty())
             + usize::from(cycle_recovery.is_some())
@@ -11538,6 +11553,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     fluid_adoptions,
                     collection_use_constraints,
                     fluid_creation,
+                    fluid_timeline,
                     called_functions: called_functions
                         .into_iter()
                         .collect::<Vec<_>>()
@@ -11592,6 +11608,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             expected_types,
             type_expression_flags,
             fluid_creation: _,
+            fluid_timeline: _,
             mut fluid_adoptions,
             mut collection_use_constraints,
             expressions,
@@ -11679,6 +11696,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // expression.
             context: _,
             fluid_creation: _,
+            fluid_timeline: _,
             fluid_adoptions: _,
             collection_use_constraints: _,
             expressions: _,
@@ -11731,6 +11749,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             expressions,
             type_expression_flags,
             fluid_creation: _,
+            fluid_timeline: _,
             fluid_adoptions,
             collection_use_constraints,
             string_annotations,

@@ -257,6 +257,36 @@ while coin():
     nums.append(nums[0] + 1)
 ```
 
+## a use in its own statement's argument position
+
+a widening event constrains the receiver of its own statement, but not the arguments: python
+evaluates the arguments first. so the argument position of `x.append(x)` sees the specialization
+from before the statement, which is what stops the constraint from feeding itself
+
+```py
+x = [1]
+x.append(x)
+reveal_type(x)  # revealed: list[int | list[int]]
+```
+
+the same holds when the self-reference follows earlier widenings — the argument sees them, but not
+its own statement's event
+
+```py
+y = [1]
+y.append("s")
+y.append(y)
+reveal_type(y)  # revealed: list[int | str | list[int | str]]
+```
+
+a subscript store is a receiver position, so it does observe its own statement
+
+```py
+z = {0: 1}
+z[1] = z[0]
+reveal_type(z)  # revealed: dict[int, int]
+```
+
 ## only inferred specializations are fluid
 
 an explicit specialization is a declaration, not an inference — it is checked as usual
