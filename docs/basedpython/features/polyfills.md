@@ -1,6 +1,23 @@
 # polyfills
 
-basedpython backfills modern python syntax and stdlib features to older supported versions by rewriting them at transpile time. minimum supported runtime is **python 3.10**
+a polyfill takes plain python source and rewrites it into equivalent code that runs on an older target — python in, older python out:
+
+```python
+class Map[K, V]: ...
+```
+
+transpiles to:
+
+```python
+from typing import TypeVar, Generic
+
+_K = TypeVar("_K")
+_V = TypeVar("_V")
+
+class Map(Generic[_K, _V]): ...
+```
+
+basedpython backfills modern python syntax and stdlib features to older supported versions this way, at transpile time. minimum supported runtime is **python 3.10**
 
 scope of this page: rewrites that apply to **plain python source** (forms a user could type into a `.py` file). basedpython-specific surface syntax has its own feature page
 
@@ -57,7 +74,7 @@ filter(lambda x: x is not None, items)
 
 ### `heapq` max-heap functions
 
-`heapq.heapify_max`, `heapq.heappush_max`, `heapq.heappop_max`, `heapq.heapreplace_max`, and `heapq.heappushpop_max` are injected as pure-Python shims when used
+`heapq.heapify_max`, `heapq.heappush_max`, `heapq.heappop_max`, `heapq.heapreplace_max`, and `heapq.heappushpop_max` are injected as pure-python shims when used
 
 ### `datetime.date.strptime` / `datetime.time.strptime`
 
@@ -110,7 +127,7 @@ redirected to `typing_extensions.deprecated`
 
 ### `copy.replace()`
 
-injected as a pure-Python shim that calls `obj.__replace__(**changes)`:
+injected as a pure-python shim that calls `obj.__replace__(**changes)`:
 
 ```python
 # python source
@@ -127,7 +144,7 @@ new = _replace(obj, x=1)
 
 ### `base64.z85encode` / `base64.z85decode`
 
-injected as pure-Python shims (the Z85 alphabet and algorithm are fully specifiable in Python)
+injected as pure-python shims (the Z85 alphabet and algorithm are fully specifiable in Python)
 
 ______________________________________________________________________
 
@@ -135,7 +152,7 @@ ______________________________________________________________________
 
 ### generic classes and functions (PEP 695)
 
-the `[T]` type parameter syntax and `type` alias statement are desugared to `TypeVar`, `Generic`, and `TypeAlias`. See the detailed examples in the section below
+the `[T]` type parameter syntax and `type` alias statement are desugared to `TypeVar`, `Generic`, and `TypeAlias`. see the detailed examples in the section below
 
 ### `typing.override` (PEP 698)
 
@@ -147,7 +164,7 @@ redirected to `typing_extensions.Unpack` on 3.10–3.11
 
 ### `itertools.batched()`
 
-injected as a pure-Python shim on 3.10–3.11:
+injected as a pure-python shim on 3.10–3.11:
 
 ```python
 def _batched(iterable, n, *, strict=False):
@@ -168,7 +185,7 @@ injected as a wrapper around `os.walk()`
 
 ### `random.binomialvariate(n, p)`
 
-injected as a pure-Python shim
+injected as a pure-python shim
 
 ______________________________________________________________________
 
@@ -192,19 +209,19 @@ redirected to `typing_extensions.Required` / `typing_extensions.NotRequired`
 
 ### `typing.TypeVarTuple` / `typing.Unpack` (PEP 646)
 
-Redirected to `typing_extensions.TypeVarTuple` / `typing_extensions.Unpack`
+redirected to `typing_extensions.TypeVarTuple` / `typing_extensions.Unpack`
 
 ### `typing.dataclass_transform` (PEP 681)
 
-Redirected to `typing_extensions.dataclass_transform`
+redirected to `typing_extensions.dataclass_transform`
 
 ### `typing.reveal_type` / `typing.assert_type`
 
-Redirected to `typing_extensions.reveal_type` / `typing_extensions.assert_type`
+redirected to `typing_extensions.reveal_type` / `typing_extensions.assert_type`
 
 ### `datetime.UTC`
 
-Rewritten to `datetime.timezone.utc`:
+rewritten to `datetime.timezone.utc`:
 
 ```python
 # python source
@@ -216,7 +233,7 @@ from datetime import UTC
 from datetime import timezone as UTC
 ```
 
-Or inline:
+or inline:
 
 ```python
 # python source
@@ -230,7 +247,7 @@ datetime.timezone.utc
 
 ### `sys.exception()`
 
-Rewritten to `sys.exc_info()[1]`:
+rewritten to `sys.exc_info()[1]`:
 
 ```python
 # python source
@@ -244,15 +261,15 @@ err = sys.exc_info()[1]
 
 ### `math.exp2(x)`
 
-Rewritten to `2 ** x`.
+rewritten to `2 ** x`
 
 ### `math.cbrt(x)`
 
-Injected as a shim: `x ** (1 / 3)` for positive values, with sign handling for negative values.
+injected as a shim: `x ** (1 / 3)` for positive values, with sign handling for negative values
 
 ### `enum.StrEnum`
 
-Injected as a pure-Python shim:
+injected as a pure-python shim:
 
 ```python
 class StrEnum(str, enum.Enum):
@@ -296,7 +313,7 @@ ______________________________________________________________________
 
 ## generic classes and functions (PEP 695)
 
-Python 3.12 introduced compact generic syntax. basedpython rewrites it using `typing.TypeVar` and `typing.Generic`
+python 3.12 introduced compact generic syntax. basedpython rewrites it using `typing.TypeVar` and `typing.Generic`
 
 | basedpython                        | Python output                                   |
 | ---------------------------------- | ----------------------------------------------- |
@@ -369,7 +386,7 @@ def identity(x: T) -> T:
     return x
 ```
 
-a bound (`T: Foo`) maps to `TypeVar("_T", bound=Foo)`. constraints (`T: (Foo, Bar)`) map to `TypeVar("_T", Foo, Bar)`.
+a bound (`T: Foo`) maps to `TypeVar("_T", bound=Foo)`. constraints (`T: (Foo, Bar)`) map to `TypeVar("_T", Foo, Bar)`
 
 `type` aliases:
 

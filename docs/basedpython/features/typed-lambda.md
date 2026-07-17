@@ -1,20 +1,20 @@
 # typed lambda
 
-standard python lambdas cannot have type annotations, which makes it impossible for type checkers to understand their signatures without contextual `Callable` type hints
-
 basedpython extends lambda syntax to support inline type annotations:
 
-```bython
+```by
 a = lambda (a: int, b: str) -> int: a + b
 ```
 
-at runtime this is equivalent to a standard python lambda — annotations are type-only and stripped during transpilation:
+transpiles to:
 
 ```python
 a = lambda a, b: a + b
 ```
 
-the type checker uses the original annotations to infer the lambda's signature
+at runtime this is equivalent to a standard python lambda — annotations are type-only and stripped during transpilation, and the type checker uses the original annotations to infer the lambda's signature
+
+standard python lambdas cannot have type annotations, which makes it impossible for type checkers to understand their signatures without contextual `Callable` type hints
 
 ## syntax
 
@@ -24,7 +24,7 @@ lambda_typed ::= "lambda" "(" [params] ")" ["->" expr] ":" expr
 
 parameters follow the same annotation rules as function definitions - all parameter kinds are supported:
 
-```bython
+```by
 f = lambda (x: int, y: str = "hi") -> bool: x > 0
 g = lambda (*args: int, **kwargs: str) -> None: None
 h = lambda (a: int, /, b: str, *, c: float) -> int: 0
@@ -40,7 +40,7 @@ the type checker uses the annotations to infer the full signature of the lambda 
 
 example - type error when calling with wrong argument types:
 
-```bython
+```by
 f = lambda (x: int) -> str: str(x)
 f("not an int")  # error: expected int, got str
 ```
@@ -49,7 +49,7 @@ f("not an int")  # error: expected int, got str
 
 the transform strips all annotations, producing a standard python lambda:
 
-```bython
+```by
 lambda (a: int, b: str) -> int: a + b
 ```
 

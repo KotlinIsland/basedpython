@@ -4,13 +4,6 @@ python has no literal syntax for the special floating-point values, so they have
 no literal *type* either — an annotation cannot say "this is infinity". basedpython
 adds three special float-literal types, written as attributes of `float`:
 
-- `float.inf` — positive infinity
-- `-float.inf` — negative infinity
-- `float.nan` — not-a-number
-
-they exist only in **type positions**. the transpiler erases each to plain `float`
-in the emitted python, since the runtime has no spelling for them:
-
 ```by
 def clamp(lo: -float.inf, hi: float.inf) -> None:
     ...
@@ -24,6 +17,13 @@ def clamp(lo: float, hi: float) -> None:
 ```
 
 ## the literal types
+
+- `float.inf` — positive infinity
+- `-float.inf` — negative infinity
+- `float.nan` — not-a-number
+
+they exist only in **type positions**. the transpiler erases each to plain `float`
+in the emitted python, since the runtime has no spelling for them
 
 bound as parameters so the inferred type can be revealed:
 

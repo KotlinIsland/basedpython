@@ -1,94 +1,41 @@
-# basedpython language reference
+# basedpython
 
-basedpython is a Python-like language that transpiles to pure Python
+a python-like language that transpiles to pure python
 
-## getting started
+```by
+enum class Shape:
+    case Circle(radius: int)
+    case Rect(width: int, height: int)
 
-- [getting started](getting-started.md)
+    def area(self) -> int:
+        match self:
+            case Shape.Circle(r): return 3 * r * r
+            case Shape.Rect(w, h): return w * h
 
-## tools
+def first_circle(shapes: list[Shape]) -> Shape.Circle | None:
+    for shape in shapes:
+        if shape is Shape.Circle:
+            return shape
 
-`by` and `buff` are available when the `basedpython` package is installed
+def stats(shapes: list[Shape]) -> (count: int, total: int):
+    return (len(shapes), sum(s.area() for s in shapes))
 
-- [`by` cli reference](cli-reference.md)
+def main():
+    let shapes = [Shape.Circle(1), Shape.Rect(2, 3)]
+    let summary = stats(shapes)
+    print(f"{summary.count} shapes, {summary.total} total")
+    print(first_circle(shapes)?.radius ?? 0)
+```
 
-## runtime compatibility
+## contents
 
-- [polyfills](features/polyfills.md)
-
-## project-level features
-
-- [api lockfile (`api.lock`)](features/api-lock.md)
-
-## enhancements that also apply to python
-
-type-checking improvements with no new syntax — they work in `.by` and `.py` files alike
-
-- [fluid specializations](features/fluid-specializations.md)
-
-## basedpython language features
-
-- [tuple type literals](features/tuple-types.md)
-- [callable arrow syntax](features/callable.md)
-- [intersection types](features/intersection.md)
-- [`or` / `and` type operators](features/or-and-types.md)
-- [negation types (`not T`)](features/not-type.md)
-- [`typeof` keyword](features/typeof.md)
-- [star projections (`X[*]`)](features/star-projection.md)
-- [strict `float` and `complex`](features/no-number-promotions.md)
-- [infinity and nan float literals](features/float-literals.md)
-- [literal type promotion](features/literal-types.md)
-- [symbolic operations in types](features/symbolic-type-ops.md)
-- [typed dict literals](features/typed-dict-literal.md)
-- [anonymous named tuple types](features/anonymous-named-tuple.md)
-- [explicit typevar constraints](features/constraints.md)
-- [typevar variance keywords](features/variance.md)
-- [safe variance](features/safe-variance.md)
-- [overlapping](features/overlapping.md)
-- [explicit generic call sites](features/generic-calls.md)
-- [reified type parameters](features/reified-generics.md)
-- [type reification](features/type-reification.md)
-- [parametric type tests](features/parametric-type-tests.md)
-- [automatic forward references](features/forward-references.md)
-- [implicit typing imports](features/implicit-typing.md)
-- [typed lambda](features/typed-lambda.md)
-- [implicit overload stubs](features/overloads.md)
-- [decorator keyword](features/decorator-keyword.md)
-- [type narrowing predicates](features/type-is.md)
-- [generics](features/generics.md)
-- [runtime type-soundness checks](features/soundness.md)
-
-## syntax extensions
-
-- [modifiers and visibility](features/modifiers.md)
-- [based enums (`enum class`)](features/enums.md)
-- [sealed classes](features/sealed-classes.md)
-- [init method shorthand](features/init-method.md)
-- [empty declarations](features/empty-declarations.md)
-- [main function](features/main-function.md)
-- [identity and isinstance (`===` / `!==` / `is`)](features/identity-swap.md)
-- [optional chaining (`?.`)](features/optional-chaining.md)
-- [none-coalesce operator (`??`)](features/none-coalesce.md)
-- [postfix await (`.await`)](features/await-attribute.md)
-- [mutable default arguments](features/mutable-defaults.md)
-- [dedented triple-quoted strings](features/dedent-strings.md)
-- [custom string tags](features/string-tags.md)
-- [extensions](features/extensions.md)
-- [tuple member access (`expr.N`)](features/tuple-index.md)
-- [keyword arguments in subscripts](features/kw-subscript.md)
-- [unpack syntax](features/unpack-syntax.md)
-- [super keyword](features/super.md)
-- [`cast` keyword](features/cast.md)
-- [checked & safe casts (`cast` / `cast?`)](features/checked-cast.md)
-- [`sentinel` declarations](features/sentinel.md)
-- [lazy imports](features/lazy-imports.md)
-- [repeated `_` parameters](features/repeated-underscore.md)
-
-## planned
-
-- [destructuring with `if let`](features/if-let.md)
+- [getting started](getting-started.md) — install, your first file, project layout
+- [features](features/index.md) — the full language reference
+- [`by` cli reference](cli-reference.md) — commands and flags
 
 ## development
 
 - [how transpilation works](development/how-transpilation-works.md)
 - [reverse transforms](development/reverse-transforms.md)
+- [sourcemaps](development/sourcemaps.md)
+- [typeshed patches](development/typeshed-patches.md)

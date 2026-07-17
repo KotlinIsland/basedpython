@@ -1,5 +1,17 @@
 # generic parameter syntax
 
+type parameter lists accept the full set of value parameter markers, so the same
+`/`, `*`, `*Args`, `**Kwargs` carry the meaning they have in `def`:
+
+```by
+class A[Positional, /, PositionalOrNamed, *, Named]
+
+class B[Positional, /, PositionalOrNamed, *Args, Named, **Kwargs]
+```
+
+`*Args` behaves the same as a type variable tuple. `**Kwargs` captures a typed
+dictionary of named type arguments
+
 ## motivation
 
 parameter specifications do not actually accept variadic arguments, despite the
@@ -14,17 +26,6 @@ that the same `/`, `*`, `*Args`, `**Kwargs` markers carry the same meaning
 they have in `def`
 
 ## syntax
-
-type parameters accept the full set of value parameter markers:
-
-```by
-class A[Positional, /, PositionalOrNamed, *, Named]
-
-class B[Positional, /, PositionalOrNamed, *Args, Named, **Kwargs]
-```
-
-`*Args` behaves the same as a type variable tuple. `**Kwargs` captures a typed
-dictionary of named type arguments
 
 specialization at the call site uses the same positional / keyword form:
 

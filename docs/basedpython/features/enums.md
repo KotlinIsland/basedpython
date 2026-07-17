@@ -5,7 +5,18 @@ rust and swift enums but with pythonic surface syntax. variants can carry
 typed payloads, support pattern matching, and integrate with ty's
 exhaustiveness checking. methods, classmethods, properties, and generics
 live directly on the enum body. type-directed emit lowers the surface form
-to a sealed dataclass hierarchy at runtime
+to a sealed dataclass hierarchy at runtime:
+
+```by
+enum class Shape:
+    case Circle(radius: float)
+    case Rectangle(width: float, height: float)
+
+    def area(self) -> float:
+        match self:
+            case Shape.Circle(r): 3.14 * r * r
+            case Shape.Rectangle(w, h): w * h
+```
 
 ## goals
 
@@ -87,7 +98,7 @@ they are reached qualified through the enum name — `Shape.Circle(2.0)`,
 classes at runtime, so `x is Shape.Circle` works (recall `is` is basedpython's
 [`isinstance`](identity-swap.md); use `type(x) === Shape.Circle` for an
 exact-class check). because variants are qualified, the same variant name may
-appear in two different enums (`A.Same` vs `B.Same`) without collision.
+appear in two different enums (`A.Same` vs `B.Same`) without collision
 
 ## methods and other members
 
@@ -183,7 +194,7 @@ an enum whose variants are **all unit** (no payloads) lowers to an idiomatic
 `class Color(Enum): Red = auto(); Green = auto()`. this is the form the reverse
 transform recognises. because the lowering is a real `Enum`, the type checker
 models the class with the `Enum` base too: members expose `name` / `value` and
-the class iterates like any python enum.
+the class iterates like any python enum
 
 any other enum (one or more payload-carrying variants) lowers to a sealed
 hierarchy: the enum class holds the shared members, and each variant becomes a
@@ -221,4 +232,4 @@ Shape.Point = _Shape_Point()  # the variant is the singleton value, not the clas
 
 `__match_args__` comes from dataclass for payload variants. generic enums lower
 to a `class Shape[T]:` (PEP 695) with the variant subclasses parametrised the
-same way.
+same way

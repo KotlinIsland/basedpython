@@ -1,13 +1,7 @@
 # decorator keyword
 
-`decorator def` declares a function that can be used as a decorator in three call shapes:
-
-- `@d` — direct decoration
-- `@d()` — parens, no options
-- `@d(opt=...)` — parens with options
-
-the first positional parameter is the decorated callable. all other parameters must be
-keyword-only and have defaults — they are the decorator's options
+`decorator def` declares a function that can be used as a decorator in three call
+shapes — bare, with empty parens, and with options:
 
 ```by
 decorator def d(fn: (...) -> object, option: bool = False) -> int:
@@ -22,6 +16,15 @@ def f2(): ...
 @d(option=True)
 def f3(): ...
 ```
+
+## call shapes
+
+- `@d` — direct decoration
+- `@d()` — parens, no options
+- `@d(opt=...)` — parens with options
+
+the first positional parameter is the decorated callable. all other parameters must be
+keyword-only and have defaults — they are the decorator's options
 
 ## rules
 

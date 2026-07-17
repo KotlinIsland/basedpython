@@ -14,9 +14,9 @@ by --help
 
 ## your first file
 
-basedpython source files use the `.by` extension. Create `main.by`:
+basedpython source files use the `.by` extension. create `main.by`:
 
-```bython
+```by
 message = "hello"
 print(message)
 ```
@@ -27,7 +27,7 @@ run it directly:
 by run main
 ```
 
-`by run main` finds `main.by` in the current directory, transpiles it (and all other `.by` files in the project) to a temporary directory, then executes `python -m main` from there.
+`by run main` finds `main.by` in the current directory, transpiles it (and all other `.by` files in the project) to a temporary directory, then executes `python -m main` from there
 
 ## project layout
 
@@ -62,7 +62,7 @@ utils.by -> out/utils.py
 build complete (2 files)
 ```
 
-the generated `.py` files are ordinary Python. Run them with any Python tool:
+the generated `.py` files are ordinary python. run them with any python tool:
 
 ```sh
 python out/main.py
