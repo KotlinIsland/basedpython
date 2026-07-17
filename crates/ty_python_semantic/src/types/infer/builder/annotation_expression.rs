@@ -461,11 +461,19 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 let ast::Expr::Name(value_name) = value.as_ref() else {
                     return None;
                 };
-                // typed `let x: T = v` / `final x: T = v` — slice is the type.
-                // `final` is `Final` everywhere; `let` only at module scope
+                // every modifier declaration keeps the declared type as the slice
                 let always_final = match value_name.id.as_str() {
+                    // typed `let x: T = v` / `final x: T = v`.
+                    // `final` is `Final` everywhere; `let` only at module scope
                     "__let__" => false,
                     "__final__" => true,
+                    // modifiers ty places no meaning on (`override x: T`,
+                    // `abstract x: T`, `private x: T`): the declaration is just `x: T`
+                    "__modifier_annot__" | "__abstract_annot__" | "__visibility_annot__" => {
+                        return Some(TypeAndQualifiers::declared(
+                            self.infer_type_expression(slice),
+                        ));
+                    }
                     _ => return None,
                 };
                 let inner = self.infer_type_expression(slice);

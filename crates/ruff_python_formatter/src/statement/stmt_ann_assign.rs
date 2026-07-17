@@ -60,22 +60,30 @@ fn synthetic_marker(ann: &Expr) -> Option<&'static str> {
     None
 }
 
-/// detect a synthetic basedpython modifier annotation (`abstract` / visibility)
-/// — produced by the parser for `abstract a: T`, `private a: T`, `public a: T`,
-/// and `export a: T`. The synthetic `annotation` is a Name with a special id;
-/// the user-typed annotation expression is stashed in `value`. The original
-/// source-text keyword lives at the annotation's range
-fn synthetic_modifier_annot<'a>(ann: &Expr, src: &'a str) -> Option<&'a str> {
-    let Expr::Name(name) = ann else {
+/// detect a synthetic basedpython no-op modifier annotation — produced by the
+/// parser for `abstract a: T`, `private a: T`, `public a: T`, `export a: T`, and
+/// any other modifier chain that carries no meaning to ty (`override a: T`).
+/// Mirrors [`synthetic_final`]: the annotation is `Subscript(Name(<marker>), T)`,
+/// the surface keyword text lives at the marker's range, and the type is the slice
+fn synthetic_modifier_annot<'ast, 'src>(
+    ann: &'ast Expr,
+    src: &'src str,
+) -> Option<(&'src str, &'ast Expr)> {
+    let Expr::Subscript(s) = ann else {
         return None;
     };
-    let id = name.id.as_str();
-    if id != "__abstract_annot__" && id != "__visibility_annot__" {
+    let Expr::Name(name) = s.value.as_ref() else {
+        return None;
+    };
+    if !matches!(
+        name.id.as_str(),
+        "__abstract_annot__" | "__visibility_annot__" | "__modifier_annot__"
+    ) {
         return None;
     }
     let start = u32::from(name.range.start()) as usize;
     let end = u32::from(name.range.end()) as usize;
-    Some(src.get(start..end)?.trim())
+    Some((src.get(start..end)?.trim(), s.slice.as_ref()))
 }
 
 impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
@@ -131,18 +139,25 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
             return Ok(());
         }
         if f.options().is_basedpython()
-            && let Some(modifier_src) = synthetic_modifier_annot(annotation, f.context().source())
+            && let Some((modifier_kw, type_ann)) =
+                synthetic_modifier_annot(annotation, f.context().source())
         {
-            // `<modifier> <target>: <ann> [= value]`. the original
-            // user-typed annotation is in `value` (when no `= value`) or used
-            // as the annotation directly (when there is an `= value`)
-            let modifier_kw: &str = modifier_src;
-            write!(f, [text(modifier_kw), space(), target.format()])?;
-            // when the source had no `= value` the parser stored the
-            // user-typed annotation in `value` instead. that's the form we
-            // need to recover here as the annotation
+            // `<modifier> <target>: <T> [= value]` — the surface modifier prefix is
+            // rendered verbatim from source (it may be a chain, e.g. `private
+            // override`), then the declared type
+            write!(
+                f,
+                [
+                    text(modifier_kw),
+                    space(),
+                    target.format(),
+                    token(":"),
+                    space(),
+                    type_ann.format()
+                ]
+            )?;
             if let Some(v) = value {
-                write!(f, [token(":"), space(), v.format()])?;
+                write!(f, [space(), token("="), space(), v.format()])?;
             }
             return Ok(());
         }

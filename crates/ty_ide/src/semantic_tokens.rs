@@ -5160,6 +5160,35 @@ final c: str = \"x\"
     }
 
     #[test]
+    fn semantic_tokens_modifier_annotation_keywords() {
+        // the modifiers that carry no type meaning still declare a type, and it
+        // is highlighted like any other annotation
+        let test = SemanticTokenTest::new_by(
+            "
+override x: int = 1
+abstract y: str
+private override z: bytes = b\"\"
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "override" @ 1..9: Keyword
+        "x" @ 10..11: Variable [definition]
+        "int" @ 13..16: Class
+        "1" @ 19..20: Number
+        "abstract" @ 21..29: Keyword
+        "y" @ 30..31: Variable [definition]
+        "str" @ 33..36: Class
+        "private override" @ 37..53: Keyword
+        "z" @ 54..55: Variable [definition]
+        "bytes" @ 57..62: Class
+        "b\"\"" @ 65..68: String
+        "#);
+    }
+
+    #[test]
     fn semantic_tokens_typeof_keyword() {
         let test = SemanticTokenTest::new_by(
             "
@@ -5247,6 +5276,7 @@ class C(B):
         "B" @ 70..71: Class
         "override" @ 78..86: Keyword
         "x" @ 87..88: Variable [definition]
+        "int" @ 90..93: Class
         "2" @ 96..97: Number
         "#);
     }
