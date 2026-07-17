@@ -2,7 +2,37 @@
 
 basedpython promotes commonly-used decorators and `typing` annotations into first-class
 keyword modifiers on classes, functions, and assignments. the surface keywords replace
-boilerplate decorator/annotation pairs at transpile time
+boilerplate decorator/annotation pairs at transpile time:
+
+```by
+data class Point:
+    x: int
+    y: int
+
+    override def __repr__(self) -> str:
+        return f"({self.x}, {self.y})"
+
+let ORIGIN = Point(0, 0)
+```
+
+transpiles to:
+
+```python
+from dataclasses import dataclass
+from typing import Final
+from typing_extensions import override
+
+@dataclass(slots=True)
+class Point:
+    x: int
+    y: int
+
+    @override
+    def __repr__(self) -> str:
+        return f"({self.x}, {self.y})"
+
+ORIGIN: Final = Point(0, 0)
+```
 
 ## class modifiers
 

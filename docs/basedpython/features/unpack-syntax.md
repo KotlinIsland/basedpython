@@ -1,27 +1,34 @@
 # unpack syntax
 
-basedpython polyfills the PEP 646 starred-type syntax in variadic parameter annotations for Python versions below 3.11
+basedpython polyfills the PEP 646 starred-type syntax for python versions below 3.11:
 
-## transformation
-
-```python
-# basedpython
+```by
 def f(*args: *tuple[int, ...]):
     pass
 ```
 
+transpiles to:
+
 ```python
-# generated Python
-from typing import Unpack
+from typing_extensions import Unpack
 def f(*args: Unpack[tuple[int, ...]]):
     pass
 ```
 
-the starred form (`*T`) is native in Python 3.11+. for earlier targets the equivalent `Unpack[T]` form is used instead
+the starred form (`*T`) is native in python 3.11+. for earlier targets the equivalent `Unpack[T]` form is used instead. the import resolves to `typing_extensions` because `typing.Unpack` only exists from 3.11 — the version at which this transform stops firing
 
 ## when it applies
 
-the transform applies only to `*args` parameter annotations. starred expressions in other positions (unpacking in assignments, function calls, etc.) are never affected
+the transform rewrites starred types in variadic parameter annotations and inside subscript slices:
+
+```by
+def f(*args: *tuple[int, ...]): ...
+coords: tuple[*Ts]
+
+class Stack(Generic[*Ts]): ...
+```
+
+starred expressions in value positions (unpacking in assignments, function calls, etc.) are never affected
 
 ## `--min-version` interaction
 

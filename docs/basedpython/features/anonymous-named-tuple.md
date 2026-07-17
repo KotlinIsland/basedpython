@@ -1,10 +1,20 @@
 # anonymous named tuple types
 
 basedpython supports an inline syntax for `typing.NamedTuple` types directly in
-type-expression positions. the surface syntax avoids the boilerplate of declaring
-a separate class while still producing a real `NamedTuple` subclass at runtime,
-so field-name access and the standard `NamedTuple` API (`._asdict()`, `._replace()`)
-continue to work
+type-expression positions, so a structural record needs no separate class:
+
+```by
+def swap(p: (name: str, age: int)) -> (name: str, age: int):
+    return (p.name.upper(), p.age + 1)
+
+def main():
+    let point = (name="ada", age=36)
+    print(point.name, point.age)
+```
+
+the surface syntax avoids the boilerplate of declaring a separate class while
+still producing a real `NamedTuple` subclass at runtime, so field-name access and
+the standard `NamedTuple` API (`._asdict()`, `._replace()`) continue to work
 
 ## syntax
 

@@ -3,6 +3,30 @@
 basedpython swaps the surface syntax for identity comparison and `isinstance`
 checks: `===` is identity and `is` is an instance check
 
+```by
+if x === y:
+    ...
+if x !== y:
+    ...
+if x is int:
+    ...
+if x is not str:
+    ...
+```
+
+transpiles to:
+
+```python
+if x is y:
+    ...
+if x is not y:
+    ...
+if isinstance(x, int):
+    ...
+if not isinstance(x, str):
+    ...
+```
+
 | basedpython  | Python output          |
 | ------------ | ---------------------- |
 | `x === y`    | `x is y`               |

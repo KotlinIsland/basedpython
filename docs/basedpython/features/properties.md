@@ -1,16 +1,44 @@
 # properties
 
+basedpython gives classes Kotlin-style property syntax. `var` and `let`
+declare instance state with a single declaration site; custom `get`/`set`
+accessors turn the declaration into a python `@property` with a backing
+field
+
+```by
+class Person:
+    var age: int = 0
+        get() = field
+        set(value):
+            assert value >= 0
+            field = value
+```
+
+transpiles to:
+
+```python
+class Person:
+    def __init__(self) -> None:
+        self._age: int = 0
+
+    @property
+    def age(self) -> int:
+        return self._age
+
+    @age.setter
+    def age(self, value: int) -> None:
+        assert value >= 0
+        self._age = value
+```
+
 > **STATUS: planned for version 0.0.1a3, not yet implemented.** the `var`
 > keyword, the `get`/`set` accessor block, `field`, `lateinit`, and the
 > `let x: T` accessor form described below are not yet recognized by the
 > parser. `let x: T = init` at class scope partially works as the
 > [modifier](modifiers.md) form. tracking item: properties v0.0.1a3
 
-basedpython gives classes Kotlin-style property syntax. `var` and `let`
-declare instance state with a single declaration site; custom `get`/`set`
-accessors turn the declaration into a python `@property` with a backing
-field. without accessors the declaration stays a plain attribute — no
-descriptor overhead
+without accessors the declaration stays a plain attribute — no descriptor
+overhead
 
 read-only-ness is a type-checker-only marker. no `Final` annotation is
 emitted, so subclasses are free to override the property
@@ -169,31 +197,8 @@ explicit declaration rather than inferred from the property
 
 ## lowering — accessor form
 
-```by
-class Person:
-    var age: int = 0
-        get() = field
-        set(value):
-            assert value >= 0
-            field = value
-```
-
-transpiles to:
-
-```python
-class Person:
-    def __init__(self) -> None:
-        self._age: int = 0
-
-    @property
-    def age(self) -> int:
-        return self._age
-
-    @age.setter
-    def age(self, value: int) -> None:
-        assert value >= 0
-        self._age = value
-```
+the accessor form lowers to a `@property` pair over a backing field, as in the
+opening example
 
 setter parameter annotation comes from the property's declared type.
 getter return annotation matches. without an explicit `field` declaration,

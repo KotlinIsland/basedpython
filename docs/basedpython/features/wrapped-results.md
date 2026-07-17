@@ -1,5 +1,15 @@
 # wrapped optional and result types
 
+basedpython provides first-class wrapped types for absence (`Optional`) and
+fallibility (`Result`) with auto-wrap at return sites and a symmetric set of
+postfix operators for propagation, assertion, coalescing, and chaining
+
+```by
+def f() -> int?:
+    return None   # auto-wraps to Optional.None_
+    return 1      # auto-wraps to Optional.Some(1)
+```
+
 > **status.** the `T?` / `T ? E` type forms and the postfix `^` / `!`
 > operators are recognized by the parser. a single `T?` lowers to `T | None`
 > and is understood by the type checker. a nested optional is a distinct
@@ -22,19 +32,10 @@
 > settled. `??` and `?.` against plain `T | None` work today — see
 > [none-coalesce](none-coalesce.md) and [optional-chaining](optional-chaining.md)
 
-basedpython provides first-class wrapped types for absence (`Optional`) and
-fallibility (`Result`) with auto-wrap at return sites and a symmetric set of
-postfix operators for propagation, assertion, coalescing, and chaining
-
 ## type syntax
 
-`T?` declares an optional value (Swift-style `Optional<T>`):
-
-```by
-def f() -> int?:
-    return None   # auto-wraps to Optional.None_
-    return 1      # auto-wraps to Optional.Some(1)
-```
+`T?` declares an optional value (Swift-style `Optional<T>`), as in the opening
+example
 
 `T ? E` declares a result with value type `T` and error type `E`
 (Rust-style `Result<T, E>`). **not yet implemented** — the `?`-infix result

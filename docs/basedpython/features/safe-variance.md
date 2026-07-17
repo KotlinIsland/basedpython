@@ -2,6 +2,18 @@
 
 > planned for `0.0.1a3` — not yet implemented
 
+a [private](modifiers.md) member is invisible to external observers, so it
+cannot break variance — which lets a [covariant](variance.md) `out T` class hold
+a mutable `T`-typed field:
+
+```by
+class A[out T]:
+    private t: T      # mutable field under `out T` — sound because it is private
+
+    def f(self, other: A[object]):
+        other.t = 1   # error — privacy violation
+```
+
 a [covariant](variance.md) type parameter (`out T`) is only sound while `T`
 is never written through, nor read off of, a *widened* view of the class.
 the classic hole is a mutable `T`-typed field: `A[int]` is assignable to

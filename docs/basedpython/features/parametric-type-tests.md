@@ -1,11 +1,9 @@
 # parametric type tests
 
 basedpython's `is` keyword is an instance test (`x is int` lowers to
-`isinstance(x, int)`). when the right-hand side is a *parameterized* generic
-— `x is list[int]` — plain `isinstance` cannot answer it: `isinstance(x, list[int])` is a runtime `TypeError`, and the builtins erase their type
-arguments anyway. `x is C[args]` means `type(x) <: C[args]`, so it follows
-`C`'s declared variance. basedpython resolves it rust-style, from static types
-at compile time, keeping a runtime residue only where one is needed:
+`isinstance(x, int)`). when the right-hand side is a *parameterized* generic,
+`x is C[args]` means `type(x) <: C[args]`, so it follows `C`'s declared
+variance:
 
 ```by
 class Box[out T]:
@@ -14,6 +12,13 @@ class Box[out T]:
 b: Box[int] = Box[int]()
 b is Box[object]   # True — Box is covariant, and int <: object
 ```
+
+## why `isinstance` can't answer this
+
+plain `isinstance` cannot answer a parameterized test — `x is list[int]`:
+`isinstance(x, list[int])` is a runtime `TypeError`, and the builtins erase
+their type arguments anyway. basedpython resolves it rust-style, from static
+types at compile time, keeping a runtime residue only where one is needed
 
 ## how a test resolves
 
@@ -97,7 +102,7 @@ def g(x) -> bool:
 ## `===` is unaffected
 
 the `===` / `!==` identity operators keep python semantics; only the `is` /
-`is not` keyword form is a type test.
+`is not` keyword form is a type test
 
 ```by
 xs = [1, 2]
@@ -108,4 +113,4 @@ xs === list[int]   # plain identity — the list is not the class object
 
 a user-generic probe works on any target version. the reified-cell token
 equality path is only reached inside a [reified generic](reified-generics.md),
-which already requires python 3.12+.
+which already requires python 3.12+

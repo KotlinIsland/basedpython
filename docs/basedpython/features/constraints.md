@@ -1,5 +1,23 @@
 # explicit typevar constraints
 
+basedpython requires an explicit `constraints` keyword to declare a constrained
+typevar, making the intent unambiguous:
+
+```by
+def f[T: constraints (int, str)](x: T) -> T: ...
+```
+
+transpiles to:
+
+```python
+def f[T: (int, str)](x: T) -> T: ...
+```
+
+the keyword is erased — `constraints (int, str)` is exactly python's
+`(int, str)` constraint tuple. targeting below 3.12 additionally rewrites the
+type parameter into a `TypeVar`, but that is the [pep 695 polyfill](polyfills.md)
+at work, not this feature
+
 ## motivation
 
 in Python, typevar constraints use a tuple literal as the bound annotation:
@@ -11,12 +29,9 @@ def f[T: (int, str)](x: T) -> T: ...
 this is ambiguous: `(int, str)` looks like a tuple type being used as an upper bound, not
 a list of discrete constraints. the distinction only becomes clear from context
 
-basedpython requires an explicit `constraints` keyword to declare constraints, making the
-intent unambiguous
-
 ## syntax
 
-```bython
+```by
 def f[T: constraints (int, str)](x: T) -> T: ...
 
 class Container[T: constraints (int, str, bytes)]: ...
@@ -31,7 +46,7 @@ exactly `int` or `str`, never a subtype or union
 
 `T: (int, str)` is a typevar with an upper bound of type `tuple[int, str]`, not constraints
 
-```bython
+```by
 # constraints: T is int or str
 def constrained[T: constraints (int, str)](x: T) -> T: ...
 
@@ -43,7 +58,7 @@ def bounded[T: (int, str)](x: T) -> T: ...
 
 a constrained typevar must have at least two constraint types:
 
-```bython
+```by
 # error: TypeVar must have at least two constrained types
 def f[T: constraints (int,)](): ...
 ```
