@@ -931,8 +931,9 @@ Box().kind[float]()
 
 #[test]
 fn type_reification_makes_specializations_explicit() {
-    // bare generic constructor calls and collection literals carry their
-    // inferred specialization in the generated python
+    // a bare generic *constructor* call carries its inferred specialization in
+    // the generated python (the instance stamps `__orig_class__`); builtin
+    // collection literals are not reified — the wrap would be erased bloat
     let out = transpile_at_313(
         "\
 class A[T]:
@@ -942,24 +943,17 @@ class A[T]:
 a = A(1)
 xs = [1, 2]
 d = {\"k\": 1}
-t = 1, \"x\"
 ",
     );
     assert!(
         out.contains("a = A[int](1)"),
         "constructor should reify:\n{out}"
     );
+    assert!(out.contains("xs = [1, 2]"), "list stays bare:\n{out}");
+    assert!(out.contains("d = {\"k\": 1}"), "dict stays bare:\n{out}");
     assert!(
-        out.contains("xs = list[int]([1, 2])"),
-        "list literal should reify:\n{out}"
-    );
-    assert!(
-        out.contains("d = dict[str, int]({\"k\": 1})"),
-        "dict literal should reify:\n{out}"
-    );
-    assert!(
-        out.contains("t = tuple[int, str]((1, \"x\"))"),
-        "tuple literal should reify:\n{out}"
+        !out.contains("list[int]") && !out.contains("dict[str"),
+        "no collection reification:\n{out}"
     );
 }
 

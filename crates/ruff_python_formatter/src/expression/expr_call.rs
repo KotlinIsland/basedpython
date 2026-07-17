@@ -26,11 +26,30 @@ impl FormatNodeRule<ExprCall> for FormatExprCall {
         let ExprCall {
             range: _,
             node_index: _,
-            is_cast: _,
+            is_cast,
+            is_checked_cast,
             is_string_tag: _,
             func,
             arguments,
         } = item;
+
+        // basedpython casts parse as a synthetic `cast(<type>, <value>)` call
+        // but their surface form is the infix `<value> cast <type>` (checked)
+        // or `<value> cast? <type>` (safe). render that back rather than the
+        // call, or the surface keyword — and, for `cast?`, its semantics — are
+        // lost on reformat
+        if (*is_cast || *is_checked_cast)
+            && let [type_arg, value_arg] = arguments.args.as_ref()
+        {
+            value_arg.format().fmt(f)?;
+            space().fmt(f)?;
+            token("cast").fmt(f)?;
+            if *is_checked_cast {
+                token("?").fmt(f)?;
+            }
+            space().fmt(f)?;
+            return type_arg.format().fmt(f);
+        }
 
         let comments = f.context().comments().clone();
         let dangling = comments.dangling(item);

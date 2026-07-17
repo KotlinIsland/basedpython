@@ -65,6 +65,7 @@ pub(crate) fn unnecessary_paren_on_raise_exception(checker: &Checker, expr: &Exp
         range: _,
         node_index: _,
         is_cast: _,
+        is_checked_cast: _,
         is_string_tag: _,
     }) = expr
     else {

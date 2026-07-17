@@ -507,6 +507,16 @@
             }
           ]
         },
+        "erased-cast-argument": {
+          "title": "detects casts whose type arguments cannot be checked at runtime",
+          "description": "## What it does\nChecks for a basedpython `cast` / `cast?` whose target type carries type\narguments that are erased at runtime.\n\n## Why is this bad?\nA checked cast validates its value with `isinstance`, which can only test\na class — a builtin container erases its type arguments, so `list[int]`\nis checkable only as `list`. The cast still narrows the static type to\n`list[int]`, but nothing verifies the `int` claim at runtime, which is\nexactly the assumption a checked cast exists to rule out.\n\nA *user* generic does not have this problem: its instances carry\n`__orig_class__`, so `A[int]` is checked in full.\n\n## Example\n\n```by\ndef f(x: object):\n    a = x cast list[int]   # warning: only `list` is checked\n    b = x cast list        # ok — no argument claimed\n\nclass A[T]:\n    init(self, t: T)\n\ndef g(x: object):\n    a = x cast A[int]      # ok — checked in full via `__orig_class__`\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "erased-type-check": {
           "title": "detects parametric type tests against a runtime-erased builtin",
           "description": "## What it does\nChecks for parametric type tests (`x is list[int]`) against a builtin\ncollection whose instances erase their type arguments at runtime.\n\n## Why is this bad?\nA parametric `is` test is answered from static types wherever possible\n(Rust-style). When it cannot be — the value's type is dynamic or\nerased — the last resort is a runtime probe of the value's\n`__orig_class__`. A builtin `list` / `dict` / `set` / `tuple` built at\nruntime carries no such attribute, so the probe can never succeed: the\ntest is always `False`, whatever the value actually is.\n\n## Example\n\n```by\ndef f(x):\n    return x is list[int]  # error: builtin collections erase type arguments\n```\n\nReify the type parameter (so the test compares the reified cell), or\ntest against a user-defined generic (whose instances carry\n`__orig_class__`):\n\n```by\ndef f[T](x: T):\n    return x is list[int]  # ok — compares the reified `T`\n\nclass A[T]: ...\ndef g(x):\n    return x is A[int]     # ok — probes `x.__orig_class__`\n```",

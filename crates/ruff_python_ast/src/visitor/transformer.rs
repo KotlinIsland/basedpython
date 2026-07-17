@@ -525,6 +525,7 @@ pub fn walk_expr<V: Transformer + ?Sized>(visitor: &V, expr: &mut Expr) {
             range: _,
             node_index: _,
             is_cast: _,
+            is_checked_cast: _,
             is_string_tag: _,
         }) => {
             visitor.visit_expr(func);

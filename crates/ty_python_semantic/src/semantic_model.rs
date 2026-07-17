@@ -17,8 +17,8 @@ use crate::place::implicit_globals::all_implicit_module_globals;
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
 use crate::types::list_members::{Member, all_members, all_reachable_members};
 use crate::types::{
-    CycleDetector, KnownClass, SpecialFormType, Type, TypeQualifiers, binding_type,
-    infer_complete_scope_types, inferred_declaration,
+    CycleDetector, SpecialFormType, Type, TypeQualifiers, binding_type, infer_complete_scope_types,
+    inferred_declaration,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::place_table;
@@ -133,22 +133,6 @@ impl<'db> SemanticModel<'db> {
         Some(crate::types::reified_infer::classify_parametric_is(
             self.db, lhs_ty, alias, rhs,
         ))
-    }
-
-    /// basedpython: the runtime spelling (`list[int]`) with which the
-    /// transpiler wraps a collection literal to make its inferred element
-    /// types explicit (`[1, 2]` → `list[int]([1, 2])`). `None` for
-    /// non-display expressions or when no spelling exists
-    pub fn reified_collection_literal_spelling(&self, expr: &ast::Expr) -> Option<String> {
-        let expected = match expr {
-            ast::Expr::List(_) => KnownClass::List,
-            ast::Expr::Set(_) => KnownClass::Set,
-            ast::Expr::Dict(_) => KnownClass::Dict,
-            ast::Expr::Tuple(_) => KnownClass::Tuple,
-            _ => return None,
-        };
-        let ty = expr.inferred_type(self)?;
-        crate::types::reified_infer::collection_literal_spelling(self.db, self.file, ty, expected)
     }
 
     pub fn line_index(&self) -> LineIndex {

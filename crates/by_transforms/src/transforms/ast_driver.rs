@@ -34,14 +34,14 @@ use ruff_source_file::LineEnding;
 use ruff_text_size::{Ranged, TextRange};
 
 use super::{
-    annotation, anon_named_tuple, auto_quote, callable, cast, coalesce, coalesce_chain, compat,
-    decl_site_variance, decorator_keyword, dedent_string, dynamic_keyword, empty_declarations,
-    float_const, force_unwrap, generic_call, generics, identity_swap, implicit_typing, init_method,
-    just_float, kw_subscript, literal_types, main_function, modifiers, mutable_defaults,
-    none_chain, optional_type, overload, parametric_is, postfix_await, propagate, reified_generic,
-    repeated_underscore, sentinel, some_ctor, soundness, string_tag, super_keyword,
-    symbolic_type_op, top_star, tuple_index, type_is, type_reification, typed_dict_literal,
-    typed_lambda, typeof_keyword, unpack, use_site_variance,
+    annotation, anon_named_tuple, auto_quote, callable, checked_cast, coalesce, coalesce_chain,
+    compat, decl_site_variance, decorator_keyword, dedent_string, dynamic_keyword,
+    empty_declarations, float_const, force_unwrap, generic_call, generics, identity_swap,
+    implicit_typing, init_method, just_float, kw_subscript, literal_types, main_function,
+    modifiers, mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await,
+    propagate, reified_generic, repeated_underscore, sentinel, some_ctor, soundness, string_tag,
+    super_keyword, symbolic_type_op, top_star, tuple_index, type_is, type_reification,
+    typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -190,10 +190,22 @@ fn materialize_fragments(
     all: &[(usize, usize, SubPatch)],
     contained: &[usize],
 ) {
-    for frag in frags {
+    for (i, frag) in frags.iter().enumerate() {
         match frag {
             Fragment::Lit(s) => out.push_str(s),
             Fragment::Src(span) => {
+                // a zero-width insertion at this span's end is normally deferred
+                // to the *next* `Src` span (which re-emits it at its start), so
+                // two adjacent passthroughs don't both emit it. but when no
+                // adjacent `Src` follows (the next fragment is literal text, or
+                // this is the last fragment) there is nothing to defer it to, so
+                // this span must emit it — otherwise a wrap whose closing token
+                // sits at the span boundary (a reified `[1]` → `list[int]([1])`)
+                // loses that token
+                let include_end = !matches!(
+                    frags.get(i + 1),
+                    Some(Fragment::Src(next)) if next.start() == span.end()
+                );
                 apply_within(
                     out,
                     source,
@@ -201,6 +213,7 @@ fn materialize_fragments(
                     usize::from(span.end()),
                     all,
                     contained,
+                    include_end,
                 );
             }
         }
@@ -212,7 +225,9 @@ fn materialize_fragments(
 /// overlap. Nested templates recurse; a same-start insertion at depth ≥ 2 is
 /// emitted ahead of its nested template rather than absorbed into it (only the
 /// top-level claim pass implements absorption — no current pass nests
-/// templates, so the simpler rule suffices here).
+/// templates, so the simpler rule suffices here). `include_end` controls
+/// whether a zero-width insertion exactly at `e0` is emitted here (see
+/// [`materialize_fragments`]).
 fn apply_within(
     out: &mut String,
     source: &str,
@@ -220,15 +235,16 @@ fn apply_within(
     e0: usize,
     all: &[(usize, usize, SubPatch)],
     contained: &[usize],
+    include_end: bool,
 ) {
     let mut cursor = s0;
     let mut k = 0;
     while k < contained.len() {
         let idx = contained[k];
         let (s, e) = (all[idx].0, all[idx].1);
-        // outside this span, a boundary insertion at its end, or overlapping
-        // an already-applied edit — skip
-        if s < cursor || s < s0 || e > e0 || (s == e && s == e0) {
+        // outside this span, a deferred boundary insertion at its end, or
+        // overlapping an already-applied edit — skip
+        if s < cursor || s < s0 || e > e0 || (!include_end && s == e && s == e0) {
             k += 1;
             continue;
         }
@@ -367,15 +383,6 @@ pub(crate) fn run_against_source<'a>(
         text_edits: RefCell::new(vec![]),
     };
 
-    let cast_inner = cast::CastFold::new();
-    let cast_pass = VisitorPass {
-        inner: &cast_inner,
-        changed_cell: cast_inner.changed_cell(),
-        imports: vec![], // declared after run; see post-pass merge below
-        hoist: RefCell::new(vec![]),
-        text_edits: RefCell::new(vec![]),
-    };
-
     // resolve symbolic operations in type positions (`1 + 1` → `Literal[2]`)
     // up front, from the original parse where `typeof` operands are still
     // intact for ty to read. the pass replaces each operation node and must run
@@ -477,6 +484,7 @@ pub(crate) fn run_against_source<'a>(
     let optional_type_pass = optional_type::OptionalTypePass::new(source_ref);
     let generics_pass = generics::GenericPolyfillPass::new(source_ref, config.clone());
     let soundness_pass = soundness::SoundnessPass::new(source_ref, config);
+    let checked_cast_pass = checked_cast::CheckedCastPass::new(config.checked_cast);
     let variance_pass = decl_site_variance::VarianceStripPass::new();
     let anon_named_tuple_pass =
         anon_named_tuple::AnonNamedTuplePass::new(source_ref, config.clone());
@@ -522,7 +530,6 @@ pub(crate) fn run_against_source<'a>(
         // pass that zeroes ranges
         &symbolic_pass,
         &coalesce_pass,
-        &cast_pass,
         &typeof_pass,
         &sentinel_pass,
         &repeated_underscore_pass,
@@ -540,6 +547,10 @@ pub(crate) fn run_against_source<'a>(
         // later pass (e.g. coalesce on a wrapped iterable) is claimed and
         // materialized inside the check rather than dropping it
         &soundness_pass,
+        // checked cast wraps `<value> cast? <type>` in `_checked_cast(...)`; its
+        // template passes value + type through as `Src`, so lowerings inside
+        // them (a `??` value, a `T?` type) still compose
+        &checked_cast_pass,
         &dynamic_keyword_pass,
         &just_float_pass,
         &float_const_pass,
@@ -601,10 +612,6 @@ pub(crate) fn run_against_source<'a>(
     }
 
     // collect import requests the inner passes raised at the end of their run
-    if cast_inner.ever_changed() {
-        ctx.required_imports
-            .push("from typing import cast".to_owned());
-    }
     if typeof_inner.ever_changed() {
         ctx.required_imports
             .push("from ty_extensions import TypeOf".to_owned());
@@ -954,5 +961,38 @@ mod driver_tests {
         let src = "x = None\na = x ?? x ?? \"fallback\"\n";
         let (out, _, _) = run_against_source(src, &Config::test_default(), None);
         assert!(!out.contains("??"), "still has ??: {out}");
+    }
+
+    /// a zero-width insertion exactly at a `Src` span's end must be emitted
+    /// when the following fragment is literal text — nothing else can emit it,
+    /// so deferring it (the rule for adjacent passthroughs) would lose it
+    #[test]
+    fn end_boundary_insertion_emitted_before_literal() {
+        use ruff_text_size::TextSize;
+        let source = "[1]";
+        let all = vec![(3usize, 3usize, SubPatch::Text(")".to_owned()))];
+        let frags = vec![
+            Fragment::Src(TextRange::new(TextSize::from(0u32), TextSize::from(3u32))),
+            Fragment::Lit("Y".to_owned()),
+        ];
+        let mut out = String::new();
+        materialize_fragments(&mut out, &frags, source, &all, &[0]);
+        assert_eq!(out, "[1])Y");
+    }
+
+    /// between two adjacent `Src` spans the shared boundary insertion is
+    /// emitted only by the second (at its start), never twice
+    #[test]
+    fn shared_boundary_insertion_emitted_once() {
+        use ruff_text_size::TextSize;
+        let source = "[1]W";
+        let all = vec![(3usize, 3usize, SubPatch::Text(")".to_owned()))];
+        let frags = vec![
+            Fragment::Src(TextRange::new(TextSize::from(0u32), TextSize::from(3u32))),
+            Fragment::Src(TextRange::new(TextSize::from(3u32), TextSize::from(4u32))),
+        ];
+        let mut out = String::new();
+        materialize_fragments(&mut out, &frags, source, &all, &[0]);
+        assert_eq!(out, "[1])W");
     }
 }

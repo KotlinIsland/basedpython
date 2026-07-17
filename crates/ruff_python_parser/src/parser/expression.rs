@@ -385,12 +385,65 @@ impl<'src> Parser<'src> {
                 continue;
             }
 
+            // basedpython infix `<value> cast? <type>` — a *checked* cast. The
+            // `?` directly follows the `cast` soft keyword (no expression can
+            // start with `?`, so this never collides with `<value> cast <type>`
+            // or `<value> cast <type>?`). Lowered by `transforms::checked_cast`
+            // to `value if isinstance(value, type) else None`; its type is
+            // `type | None`.
+            if current_token == TokenKind::Cast && self.peek() == TokenKind::Question {
+                if left_precedence > OperatorPrecedence::None {
+                    break;
+                }
+                self.error_if_not_basedpython(
+                    "`cast?` (checked cast) keyword is not valid in .py files".to_string(),
+                );
+                let cast_keyword_range = self.current_token_range();
+                self.bump(TokenKind::Cast);
+                // the operator is both tokens, so its span reaches the `?` —
+                // consumers that point at the keyword (semantic tokens) must
+                // cover `cast?`, not just the `cast`
+                let question_range = self.current_token_range();
+                self.bump(TokenKind::Question);
+                let operator_range =
+                    TextRange::new(cast_keyword_range.start(), question_range.end());
+                let right =
+                    self.parse_binary_expression_or_higher(OperatorPrecedence::None, context);
+                let value_expr = left.expr;
+                let type_expr = right.expr;
+                let args_range = TextRange::new(operator_range.end(), type_expr.range().end());
+                let func = Expr::Name(ast::ExprName {
+                    range: operator_range,
+                    id: Name::new_static("cast"),
+                    ctx: ExprContext::Load,
+                    node_index: AtomicNodeIndex::NONE,
+                });
+                let arguments = ast::Arguments {
+                    range: args_range,
+                    node_index: AtomicNodeIndex::NONE,
+                    args: Box::from([type_expr, value_expr]),
+                    keywords: ThinVec::new(),
+                };
+                left = ParsedExpr {
+                    expr: Expr::Call(ast::ExprCall {
+                        func: Box::new(func),
+                        arguments,
+                        range: self.node_range(start),
+                        node_index: AtomicNodeIndex::NONE,
+                        is_cast: false,
+                        is_checked_cast: true,
+                        is_string_tag: false,
+                    }),
+                    is_parenthesized: false,
+                };
+                continue;
+            }
+
             // basedpython infix `<value> cast <type>` soft keyword.
             // Treated as the loosest binary-like operator: only consumed at
             // the outermost expression level (where left_precedence is None).
             // Lowered by `transforms::cast` to `cast(<type>, <value>)`.
-            if current_token == TokenKind::Name
-                && self.src_text(self.current_token_range()) == "cast"
+            if current_token == TokenKind::Cast
                 && (EXPR_SET.contains(self.peek()) || self.peek().is_soft_keyword())
             {
                 if left_precedence > OperatorPrecedence::None {
@@ -400,7 +453,7 @@ impl<'src> Parser<'src> {
                     "`cast` keyword is not valid in .py files".to_string(),
                 );
                 let cast_keyword_range = self.current_token_range();
-                self.bump(TokenKind::Name);
+                self.bump(TokenKind::Cast);
                 let right =
                     self.parse_binary_expression_or_higher(OperatorPrecedence::None, context);
                 let value_expr = left.expr;
@@ -425,6 +478,7 @@ impl<'src> Parser<'src> {
                         range: self.node_range(start),
                         node_index: AtomicNodeIndex::NONE,
                         is_cast: true,
+                        is_checked_cast: false,
                         is_string_tag: false,
                     }),
                     is_parenthesized: false,
@@ -1123,6 +1177,7 @@ impl<'src> Parser<'src> {
                         range: self.node_range(start),
                         node_index: AtomicNodeIndex::NONE,
                         is_cast: false,
+                        is_checked_cast: false,
                         is_string_tag: true,
                     })
                 }
@@ -1240,6 +1295,7 @@ impl<'src> Parser<'src> {
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             is_cast: false,
+            is_checked_cast: false,
             is_string_tag: false,
         }
     }

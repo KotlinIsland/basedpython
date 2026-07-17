@@ -1,0 +1,16 @@
+---
+source: crates/ruff_linter/src/rules/flake8_type_checking/mod.rs
+---
+TC006 [*] Add quotes to type expression in `typing.cast()`
+  --> TC006_basedpython.by:13:16
+   |
+12 | # a real `typing.cast()` call in the same file is still flagged
+13 | flagged = cast(int, val)
+   |                ^^^
+   |
+help: Add quotes
+   |
+12 | # a real `typing.cast()` call in the same file is still flagged
+   - flagged = cast(int, val)
+13 + flagged = cast("int", val)
+   |

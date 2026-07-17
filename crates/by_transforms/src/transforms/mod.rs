@@ -3,7 +3,7 @@ pub(crate) mod anon_named_tuple;
 pub(crate) mod ast_driver;
 pub(crate) mod auto_quote;
 pub(crate) mod callable;
-pub(crate) mod cast;
+pub(crate) mod checked_cast;
 pub(crate) mod coalesce;
 pub(crate) mod coalesce_chain;
 pub(crate) mod compat;

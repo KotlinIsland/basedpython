@@ -276,25 +276,6 @@ pub(crate) fn constructor_specialization_display<'db>(
 /// specialization of the expected builtin: empty or partially-`Unknown`
 /// elements, a `TypedDict`-typed dict display, a shadowed builtin name, or
 /// elements without a runtime spelling.
-pub(crate) fn collection_literal_spelling<'db>(
-    db: &'db dyn Db,
-    file: File,
-    literal_ty: Type<'db>,
-    expected: KnownClass,
-) -> Option<String> {
-    let Type::NominalInstance(instance) = literal_ty.promote(db) else {
-        return None;
-    };
-    let class = instance.class(db);
-    let ClassType::Generic(alias) = class else {
-        return None;
-    };
-    if !ClassLiteral::Static(alias.origin(db)).is_known(db, expected) {
-        return None;
-    }
-    spell_class(db, file, class)
-}
-
 /// the class's bare name, provided that name resolves — in the module's
 /// globals, else builtins — to this very class, so the injected expression
 /// evaluates to the intended type object

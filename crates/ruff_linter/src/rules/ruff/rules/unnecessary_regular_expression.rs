@@ -360,6 +360,7 @@ impl<'a> ReFunc<'a> {
             range: TextRange::default(),
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
             is_cast: false,
+            is_checked_cast: false,
             is_string_tag: false,
         })
     }

@@ -199,6 +199,7 @@ pub(crate) fn native_literals(
         range: call_range,
         node_index: _,
         is_cast: _,
+        is_checked_cast: _,
         is_string_tag: _,
     } = call;
 

@@ -1,43 +1,40 @@
 //! type reification (basedpython)
 //!
 //! at runtime, `A(1)` constructs an `A` whose specialization is invisible —
-//! nothing records that this was an `A[int]`. the transpiler makes every
-//! inferred specialization explicit in the generated python:
+//! nothing records that this was an `A[int]`. the transpiler makes the
+//! inferred specialization of a *user-defined generic* constructor explicit
+//! in the generated python:
 //!
 //! ```by
 //! class A[T]:
 //!     def __init__(self, t: T): ...
 //!
 //! a = A(1)
-//! xs = [1, 2]
 //! ```
 //!
 //! →
 //!
 //! ```python
 //! a = A[int](1)
-//! xs = list[int]([1, 2])
 //! ```
 //!
 //! `A[int](…)` routes through `types.GenericAlias.__call__`, which stamps
 //! `__orig_class__` on the constructed instance, so the specialization is
-//! observable at runtime. collection literals (list / set / dict / tuple
-//! displays) are wrapped in the equivalent explicit constructor for the same
-//! reason — the builtins silently reject the `__orig_class__` stamp, but the
-//! constructed value is identical and the generated source records the
-//! element types explicitly. a tuple display always gets its own inner
-//! parentheses so it stays a single constructor argument
+//! observable at runtime. builtin collection literals are *not* reified: a
+//! `list` / `dict` / `set` / `tuple` silently drops the `__orig_class__`
+//! stamp, so `list[int]([1, 2])` is runtime-identical to `[1, 2]` — the wrap
+//! would be pure bloat.
 //!
 //! reification is best-effort: it fires only when ty solved the
 //! specialization to types with a runtime spelling (see ty's `reified_infer`
-//! module) — dynamic, unsolved or scope-local arguments leave the call or
-//! literal as written. type positions never reify (annotations, type
-//! parameter lists, `type X = …` values, type-context subscript slices such
-//! as legacy `Callable[[int], str]` parameter lists), and dunders that static
-//! readers require to stay literal displays (`__all__`, `__slots__`,
-//! `__match_args__`) are skipped. pep 585 makes the builtins subscriptable
-//! at runtime in 3.9, so the pass is inert below that target, and stubs have
-//! no runtime to observe, so stub sources are left alone
+//! module) — dynamic, unsolved or scope-local arguments leave the call as
+//! written. type positions never reify (annotations, type parameter lists,
+//! `type X = …` values, type-context subscript slices such as legacy
+//! `Callable[[int], str]` parameter lists), and dunders that static readers
+//! require to stay literal displays (`__all__`, `__slots__`, `__match_args__`)
+//! are skipped. pep 585 makes the builtins subscriptable at runtime in 3.9, so
+//! the pass is inert below that target, and stubs have no runtime to observe,
+//! so stub sources are left alone
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, Expr, PythonVersion, Stmt};
@@ -69,55 +66,9 @@ fn is_version_info(expr: &Expr) -> bool {
     }
 }
 
-/// the collection literal that `call` already reifies explicitly — the sole
-/// argument of a subscripted builtin collection name of the matching kind
-/// (`list[int]([1, 2])`) — so the wrap below must not wrap it again
-fn explicitly_reified_literal(call: &ast::ExprCall) -> Option<&Expr> {
-    let Expr::Subscript(subscript) = call.func.as_ref() else {
-        return None;
-    };
-    let Expr::Name(name) = subscript.value.as_ref() else {
-        return None;
-    };
-    if !call.arguments.keywords.is_empty() {
-        return None;
-    }
-    let [argument] = call.arguments.args.as_ref() else {
-        return None;
-    };
-    let matches_kind = match name.id.as_str() {
-        "list" => matches!(argument, Expr::List(_)),
-        "set" => matches!(argument, Expr::Set(_)),
-        "dict" => matches!(argument, Expr::Dict(_)),
-        "tuple" => matches!(argument, Expr::Tuple(_)),
-        _ => false,
-    };
-    matches_kind.then_some(argument)
-}
-
 struct Reifier<'ti> {
     types: &'ti dyn TypeInfo,
     edits: Vec<(TextRange, String)>,
-}
-
-impl Reifier<'_> {
-    fn reify_collection_literal(&mut self, expr: &Expr) {
-        let Some(spelling) = self.types.collection_literal_spelling(expr) else {
-            return;
-        };
-        // an unparenthesized tuple display needs its own pair to stay a
-        // single constructor argument; a parenthesized one already carries it
-        let (open, close) = match expr {
-            Expr::Tuple(tuple) if !tuple.parenthesized => ("((", "))"),
-            _ => ("(", ")"),
-        };
-        self.edits.push((
-            TextRange::empty(expr.range().start()),
-            format!("{spelling}{open}"),
-        ));
-        self.edits
-            .push((TextRange::empty(expr.range().end()), close.to_owned()));
-    }
 }
 
 impl<'ast> Visitor<'ast> for Reifier<'_> {
@@ -161,13 +112,6 @@ impl<'ast> Visitor<'ast> for Reifier<'_> {
                         format!("[{arguments}]"),
                     ));
                 }
-                if let Some(literal) = explicitly_reified_literal(call) {
-                    self.visit_expr(&call.func);
-                    // the already-wrapped literal itself stays bare; its
-                    // elements still reify
-                    walk_expr(self, literal);
-                    return;
-                }
                 walk_expr(self, expr);
             }
             Expr::Compare(compare)
@@ -189,29 +133,8 @@ impl<'ast> Visitor<'ast> for Reifier<'_> {
                     self.visit_expr(&subscript.value);
                 } else {
                     self.visit_expr(&subscript.value);
-                    // a value-position subscript key is a structural index
-                    // (tuple keys and kw-subscripts read it verbatim), not a
-                    // constructed value — its own display never wraps, though
-                    // displays nested inside it still do
-                    match subscript.slice.as_ref() {
-                        slice @ (Expr::List(_) | Expr::Set(_) | Expr::Dict(_) | Expr::Tuple(_)) => {
-                            walk_expr(self, slice);
-                        }
-                        slice => self.visit_expr(slice),
-                    }
+                    self.visit_expr(&subscript.slice);
                 }
-            }
-            Expr::List(list) if list.ctx.is_load() => {
-                self.reify_collection_literal(expr);
-                walk_expr(self, expr);
-            }
-            Expr::Tuple(tuple) if tuple.ctx.is_load() && !tuple.elts.is_empty() => {
-                self.reify_collection_literal(expr);
-                walk_expr(self, expr);
-            }
-            Expr::Set(_) | Expr::Dict(_) => {
-                self.reify_collection_literal(expr);
-                walk_expr(self, expr);
             }
             _ => walk_expr(self, expr),
         }
@@ -331,44 +254,26 @@ mod tests {
     }
 
     #[test]
-    fn list_literal_wrapped() {
-        let out = out("xs = [1, 2]\n");
-        assert!(
-            out.contains("xs = list[int]([1, 2])"),
-            "list should wrap: {out}"
-        );
-    }
-
-    #[test]
-    fn set_literal_wrapped() {
-        let out = out("xs = {1, 2}\n");
-        assert!(
-            out.contains("xs = set[int]({1, 2})"),
-            "set should wrap: {out}"
-        );
-    }
-
-    #[test]
-    fn dict_literal_wrapped() {
-        let out = out("xs = {\"a\": 1}\n");
-        assert!(
-            out.contains("xs = dict[str, int]({\"a\": 1})"),
-            "dict should wrap: {out}"
-        );
-    }
-
-    #[test]
-    fn tuple_literals_wrapped_with_inner_parens() {
-        let bare = out("t = 1, \"x\"\n");
-        assert!(
-            bare.contains("t = tuple[int, str]((1, \"x\"))"),
-            "unparenthesized tuple should wrap with inner parens: {bare}"
-        );
-        let parenthesized = out("t = (1, \"x\")\n");
-        assert!(
-            parenthesized.contains("t = tuple[int, str]((1, \"x\"))"),
-            "parenthesized tuple keeps its own parens as the argument's: {parenthesized}"
-        );
+    fn collection_literals_not_reified() {
+        // a builtin collection erases its type arguments at runtime, so
+        // wrapping a display in `list[int](…)` would be pure bloat — the
+        // literals stay bare
+        for (src, expected) in [
+            ("xs = [1, 2]\n", "xs = [1, 2]"),
+            ("xs = {1, 2}\n", "xs = {1, 2}"),
+            ("xs = {\"a\": 1}\n", "xs = {\"a\": 1}"),
+            ("t = 1, \"x\"\n", "t = 1, \"x\""),
+            ("t = (1, \"x\")\n", "t = (1, \"x\")"),
+            ("xs = [1, \"x\"]\n", "xs = [1, \"x\"]"),
+            ("xs = [[1], [2]]\n", "xs = [[1], [2]]"),
+        ] {
+            let out = out(src);
+            assert!(out.contains(expected), "{src:?} should stay bare: {out}");
+            assert!(
+                !out.contains("list[int]") && !out.contains("set[int]"),
+                "no collection wrap: {out}"
+            );
+        }
     }
 
     #[test]
@@ -390,12 +295,11 @@ mod tests {
     }
 
     #[test]
-    fn lambda_default_wraps() {
-        // lambdas keep their defaults (no sentinel lowering), so they reify
+    fn lambda_default_not_reified() {
         let out = out("f = lambda xs=[1]: xs\n");
         assert!(
-            out.contains("lambda xs=list[int]([1]): xs"),
-            "lambda default should wrap: {out}"
+            out.contains("lambda xs=[1]: xs"),
+            "lambda default stays bare: {out}"
         );
     }
 
@@ -431,29 +335,11 @@ mod tests {
     }
 
     #[test]
-    fn mixed_elements_spell_a_union() {
-        let out = out("xs = [1, \"x\"]\n");
-        assert!(
-            out.contains("xs = list[int | str]([1, \"x\"])"),
-            "union elements should spell: {out}"
-        );
-    }
-
-    #[test]
-    fn nested_literals_each_wrap() {
-        let out = out("xs = [[1], [2]]\n");
-        assert!(
-            out.contains("xs = list[list[int]]([list[int]([1]), list[int]([2])])"),
-            "nested literals should each wrap: {out}"
-        );
-    }
-
-    #[test]
-    fn annotation_type_expressions_untouched() {
+    fn annotation_and_value_both_bare() {
         let out = out("x: list[int] = [1]\n");
         assert!(
-            out.contains("x: list[int] = list[int]([1])"),
-            "annotation stays, value wraps: {out}"
+            out.contains("x: list[int] = [1]"),
+            "annotation stays, value is not reified: {out}"
         );
     }
 

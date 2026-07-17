@@ -161,6 +161,7 @@ fn check_mark_parentheses(checker: &Checker, decorator: &Decorator, marker: &str
             range: _,
             node_index: _,
             is_cast: _,
+            is_checked_cast: _,
             is_string_tag: _,
         }) => {
             if !checker.settings().flake8_pytest_style.mark_parentheses

@@ -113,6 +113,7 @@ pub(crate) fn assert_raises_exception(checker: &Checker, items: &[WithItem]) {
             range: _,
             node_index: _,
             is_cast: _,
+            is_checked_cast: _,
             is_string_tag: _,
         }) = &item.context_expr
         else {
@@ -140,6 +141,7 @@ pub(crate) fn assert_raises_exception_call(
         range,
         node_index: _,
         is_cast: _,
+        is_checked_cast: _,
         is_string_tag: _,
     }: &ast::ExprCall,
 ) {

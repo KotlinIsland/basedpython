@@ -109,6 +109,7 @@ fn isinstance_call(lhs: Expr, rhs: Expr, negate: bool) -> Expr {
             keywords: thin_vec::ThinVec::new(),
         },
         is_cast: false,
+        is_checked_cast: false,
         is_string_tag: false,
     });
     if negate {

@@ -1172,7 +1172,7 @@ mod tests {
         )
         .unwrap();
         assert!(out.contains("a: _AnonNamedTuple_"));
-        assert!(out.contains("= tuple[str]((\"asdf\",))"), "got: {out}");
+        assert!(out.contains("= (\"asdf\",)"), "got: {out}");
     }
 
     #[test]
@@ -1391,7 +1391,7 @@ mod tests {
     #[test]
     fn return_coercion_only_inside_anon_nt_function() {
         // A plain tuple return from a function whose return is plain `tuple`
-        // is left alone.
+        // is left alone (and a builtin display is never reified).
         check(
             indoc! {"
                 def f() -> tuple[str, int]:
@@ -1399,7 +1399,7 @@ mod tests {
             "},
             indoc! {"
                 def f() -> tuple[str, int]:
-                    return tuple[str, int]((\"asdf\", 1))
+                    return (\"asdf\", 1)
             "},
         );
     }
@@ -1416,7 +1416,7 @@ mod tests {
             &Config::test_default(),
         )
         .unwrap();
-        assert!(out.contains("return tuple[str]((\"asdf\",))"), "got: {out}");
+        assert!(out.contains("return (\"asdf\",)"), "got: {out}");
     }
 
     #[test]

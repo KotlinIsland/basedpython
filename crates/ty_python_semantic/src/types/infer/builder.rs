@@ -54,13 +54,13 @@ use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
 use crate::types::diagnostic::{
     self, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS, CYCLIC_TYPE_ALIAS_DEFINITION,
-    ERASED_TYPE_CHECK, FINAL_ON_VARIABLE, GeneratorMismatchKind, INEFFECTIVE_FINAL,
-    INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT, INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION,
-    INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE,
-    INVALID_TYPE_FORM, INVALID_TYPE_GUARD_CALL, INVALID_TYPE_VARIABLE_BOUND,
-    INVALID_TYPE_VARIABLE_CONSTRAINTS, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
-    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
-    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
+    ERASED_CAST_ARGUMENT, ERASED_TYPE_CHECK, FINAL_ON_VARIABLE, GeneratorMismatchKind,
+    INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT, INVALID_DECLARATION,
+    INVALID_ENUM_MEMBER_ANNOTATION, INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE,
+    INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM, INVALID_TYPE_GUARD_CALL,
+    INVALID_TYPE_VARIABLE_BOUND, INVALID_TYPE_VARIABLE_CONSTRAINTS, POSSIBLY_MISSING_IMPLICIT_CALL,
+    POSSIBLY_MISSING_SUBMODULE, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL,
+    UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
     hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
     report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
@@ -99,6 +99,7 @@ use crate::types::newtype::NewType;
 use crate::types::reified_infer::{self, ReifiedInferenceError};
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope};
+use crate::types::soundness::{erases_type_arguments, runtime_check_target};
 use crate::types::special_form::TypeQualifier;
 use crate::types::subclass_of::SubclassOfInner;
 use crate::types::tuple::promotion::TupleSizePromotionConstraints;
@@ -3119,6 +3120,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     self.infer_standalone_expression_impl(value, standalone_expression, tcx)
                 } else if let ast::Expr::Call(call_expr) = value
                     && !call_expr.is_cast
+                    && !call_expr.is_checked_cast
                 {
                     // If the RHS is not a standalone expression, this is a simple assignment
                     // (single target, no unpackings). That means it's a valid syntactic form
@@ -8263,6 +8265,34 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         Some(constraint)
     }
 
+    /// a checked cast validates its value with `isinstance`, which can only
+    /// test a class — so a target whose type arguments are erased at runtime
+    /// (`list[int]`, unlike a user generic's `A[int]`) narrows to a claim that
+    /// nothing verifies.
+    ///
+    /// the wording describes what a runtime check *can* test rather than what
+    /// the transpiler emits, since ty cannot see whether checked casts are
+    /// switched off (`--no-checked-cast`, which lowers to a bare `typing.cast`)
+    fn report_erased_cast_argument(&mut self, type_arg: &ast::Expr, target: Type<'db>) {
+        if !erases_type_arguments(self.db(), self.file(), target) {
+            return;
+        }
+        let Some(builder) = self.context.report_lint(&ERASED_CAST_ARGUMENT, type_arg) else {
+            return;
+        };
+        let db = self.db();
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "Type arguments of `{}` are erased at runtime",
+            target.display(db)
+        ));
+        match runtime_check_target(db, self.file(), target) {
+            Some(shallow) => diagnostic.info(format_args!(
+                "a runtime check can only test `{shallow}`; the type arguments are assumed"
+            )),
+            None => diagnostic.info("the type arguments are assumed"),
+        }
+    }
+
     fn infer_call_expression(
         &mut self,
         call_expression: &ast::ExprCall,
@@ -8276,7 +8306,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             && let [type_arg, value_arg] = &*call_expression.arguments.args
         {
             self.infer_expression(value_arg, TypeContext::default());
-            return self.infer_type_expression(type_arg);
+            let target = self.infer_type_expression(type_arg);
+            self.report_erased_cast_argument(type_arg, target);
+            return target;
+        }
+
+        // basedpython `<value> cast? <type>` (checked cast) parses the same way
+        // but evaluates to `value` or `None`, so its type is `type | None`
+        if call_expression.is_checked_cast
+            && let [type_arg, value_arg] = &*call_expression.arguments.args
+        {
+            self.infer_expression(value_arg, TypeContext::default());
+            let target = self.infer_type_expression(type_arg);
+            self.report_erased_cast_argument(type_arg, target);
+            return UnionType::from_elements(self.db(), [target, Type::none(self.db())]);
         }
 
         let callable_type =
@@ -8404,6 +8447,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             func,
             arguments,
             is_cast: _,
+            is_checked_cast: _,
             is_string_tag: _,
         } = call_expression;
 

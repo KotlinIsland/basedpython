@@ -69,7 +69,7 @@ use ruff_python_ast::{Comprehension, Expr, ExprCall, Stmt, StmtFunctionDef, Unar
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
-use super::parametric_is::PARAMETRIC_IS_RUNTIME;
+use super::parametric_is::{PARAMETRIC_IS_RUNTIME, variance_tuple};
 use super::source_util::{line_indent, line_start};
 use crate::Config;
 use crate::config::SoundnessPositions;
@@ -129,21 +129,6 @@ async def _soundness_aiter_p(_it, _alias, _variances):
     async for _x in _it:
         yield _soundness_parametric(_x, _alias, _variances)
 ";
-
-/// render a variance-code list as a python tuple literal (`(0,)`, `(0, 1)`)
-fn variance_tuple(variances: &[u8]) -> String {
-    match variances {
-        [single] => format!("({single},)"),
-        _ => format!(
-            "({})",
-            variances
-                .iter()
-                .map(u8::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    }
-}
 
 /// which parameter an argument binds to, for the `arguments` gate
 enum ArgSlot<'a> {

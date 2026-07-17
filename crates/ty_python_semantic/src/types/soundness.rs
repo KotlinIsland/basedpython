@@ -116,6 +116,34 @@ pub fn runtime_check_plan<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Op
     runtime_check_target(db, file, ty).map(CheckKind::Isinstance)
 }
 
+/// whether a runtime check against `ty` must silently drop a type-argument
+/// claim: `ty` carries a written generic specialization, but its arguments are
+/// erased at runtime, so only the origin class can be tested. this is what
+/// separates `list[int]` (a builtin, erased — only `list` is checkable) from
+/// `A[int]` (a user generic, whose instances carry `__orig_class__`)
+pub fn erases_type_arguments<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> bool {
+    match ty {
+        Type::NominalInstance(instance) => {
+            let ClassType::Generic(alias) = instance.class(db) else {
+                return false;
+            };
+            // a bare `list` infers as `list[Unknown]`: no argument was written,
+            // so there is no claim to drop
+            alias
+                .specialization(db)
+                .types(db)
+                .iter()
+                .any(|argument| !argument.is_dynamic())
+                && parametric_soundness_spelling(db, file, ty).is_none()
+        }
+        Type::Union(union) => union
+            .elements(db)
+            .iter()
+            .any(|element| erases_type_arguments(db, file, *element)),
+        _ => false,
+    }
+}
+
 /// the runtime variance code the `_parametric_is` probe expects
 fn variance_code(variance: ArgVariance) -> u8 {
     match variance {

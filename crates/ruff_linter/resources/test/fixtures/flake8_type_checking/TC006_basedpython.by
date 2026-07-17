@@ -1,0 +1,13 @@
+from typing import cast
+
+val = 1
+
+# the infix `cast` / `cast?` operators are not `typing.cast()` calls — there is
+# no syntax to quote their type, and `val cast "int"` is a cast to `str`, so
+# TC006 must not fire (its fix would silently retarget the check)
+ok_cast = val cast int
+ok_try = val cast? int
+ok_generic = val cast list[int]
+
+# a real `typing.cast()` call in the same file is still flagged
+flagged = cast(int, val)

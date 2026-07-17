@@ -1,0 +1,41 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/cast.by
+---
+## Input
+```bython
+a = x cast int
+b = x cast? int
+c = x cast int | str
+d = x cast? int | str
+e = f() cast int
+g = (a + b) cast? SomeClass
+
+
+def h(v: object) -> int:
+    return v cast int
+
+
+def i(v: object):
+    n = v cast? int
+    return n
+```
+
+## Output
+```bython
+a = x cast int
+b = x cast? int
+c = x cast int | str
+d = x cast? int | str
+e = f() cast int
+g = (a + b) cast? SomeClass
+
+
+def h(v: object) -> int:
+    return v cast int
+
+
+def i(v: object):
+    n = v cast? int
+    return n
+```
