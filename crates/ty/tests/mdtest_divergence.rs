@@ -123,7 +123,13 @@ fn transpile(source: &str, min_version: &str) -> Result<String, String> {
     // their annotations when executed — the checks would report those as
     // divergences rather than transpiler bugs, so this harness opts out
     let mut child = Command::new(env!("CARGO_BIN_EXE_by"))
-        .args(["transpile", "--min-version", min_version, "--no-soundness"])
+        .args([
+            "transpile",
+            "--min-version",
+            min_version,
+            "--soundness",
+            "none",
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

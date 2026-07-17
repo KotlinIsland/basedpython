@@ -73,9 +73,12 @@ pub(crate) enum Command {
         /// [default: the version of the interpreter that will run it]
         #[arg(long, value_name = "VERSION")]
         min_version: Option<String>,
-        /// skip runtime type-soundness checks (`_soundness_check` insertions)
-        #[arg(long)]
-        no_soundness: bool,
+        /// which runtime type-soundness checks to insert: `default`, `all`
+        /// (adds the opt-in `parameters` entry checks), `none`, or a
+        /// comma-separated subset of `generic-calls`, `projections`,
+        /// `iterations`, `assignments`, `returns`, `arguments`, `parameters`
+        #[arg(long, value_name = "SPEC", default_value = "default")]
+        soundness: String,
     },
 
     /// Transpile all .by files and write them to out/.
@@ -83,9 +86,12 @@ pub(crate) enum Command {
         /// minimum Python version the output must run on
         #[arg(long, value_name = "VERSION", default_value = "3.10")]
         min_version: String,
-        /// skip runtime type-soundness checks (`_soundness_check` insertions)
-        #[arg(long)]
-        no_soundness: bool,
+        /// which runtime type-soundness checks to insert: `default`, `all`
+        /// (adds the opt-in `parameters` entry checks), `none`, or a
+        /// comma-separated subset of `generic-calls`, `projections`,
+        /// `iterations`, `assignments`, `returns`, `arguments`, `parameters`
+        #[arg(long, value_name = "SPEC", default_value = "default")]
+        soundness: String,
     },
 
     /// Generate an api lockfile (`api.lock`) summarising the public type-level
@@ -123,9 +129,12 @@ pub(crate) enum Command {
         /// minimum Python version the output must run on
         #[arg(long, value_name = "VERSION", default_value = "3.10")]
         min_version: String,
-        /// skip runtime type-soundness checks (`_soundness_check` insertions)
-        #[arg(long)]
-        no_soundness: bool,
+        /// which runtime type-soundness checks to insert: `default`, `all`
+        /// (adds the opt-in `parameters` entry checks), `none`, or a
+        /// comma-separated subset of `generic-calls`, `projections`,
+        /// `iterations`, `assignments`, `returns`, `arguments`, `parameters`
+        #[arg(long, value_name = "SPEC", default_value = "default")]
+        soundness: String,
     },
 }
 

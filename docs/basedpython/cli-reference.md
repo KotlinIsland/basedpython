@@ -23,6 +23,7 @@ in addition to the cli provided by `ty`, `by` includes:
 ```sh
 by run MODULE [ARGS...]             # transpile + run with `python -m MODULE`
 by run MODULE --min-version 3.12    # target a specific runtime python version
+by run MODULE --soundness none      # disable runtime type-soundness checks
 ```
 
 equivalent to `by build && python -m MODULE`, but only transpiles the
@@ -46,6 +47,7 @@ and `build` alike
 ```sh
 by build                            # transpile every .by/.byi under the project root
 by build --min-version 3.12         # target a specific runtime python version
+by build --soundness returns,arguments  # only these soundness positions
 ```
 
 writes the transpiled python to `./out/` mirroring the source tree. the
@@ -70,7 +72,14 @@ by transpile FILE           # read FILE, write transpiled python to stdout
 by transpile                # read from stdin, write to stdout
 by transpile FILE --reverse         # convert python source into basedpython idioms
 by transpile FILE --min-version 3.12 # target a specific runtime python version
+by transpile FILE --soundness none   # omit runtime type-soundness checks
 echo 'x: int = 1' | by transpile
 ```
 
 stops at the first transpile error and prints a diagnostic
+
+`--soundness` accepts `default` (the six inference-gap checks), `all` (those
+plus the opt-in `parameters` entry checks), `none`, or a comma-separated
+subset of `generic-calls`, `projections`, `iterations`, `assignments`,
+`returns`, `arguments`, `parameters` — see [runtime type-soundness
+checks](features/soundness.md)

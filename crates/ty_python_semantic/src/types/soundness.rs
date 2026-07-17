@@ -16,9 +16,24 @@ use ruff_db::files::File;
 use crate::Db;
 use crate::place::{Place, explicit_global_symbol};
 use crate::types::instance::Protocol;
+use crate::types::reified_infer::{ArgVariance, parametric_soundness_spelling};
+use crate::types::signatures::CallableSignature;
 use crate::types::visitor::any_over_type;
 use crate::types::{ClassLiteral, ClassType, FunctionType, KnownClass, Type};
 use ty_module_resolver::{KnownModule, file_to_module};
+
+/// How a runtime soundness check validates a value against a target type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CheckKind {
+    /// a shallow `isinstance(value, <target>)` check — the string is the
+    /// second `isinstance` argument (`str`, `(int, type(None))`)
+    Isinstance(String),
+    /// a deep check that validates the base class *and*, when the value
+    /// carries `__orig_class__`, its type arguments. `alias` is the runtime
+    /// spelling of the specialization (`A[int]`); `variances` is one code per
+    /// type parameter (0 invariant, 1 covariant, 2 contravariant, 3 bivariant)
+    Parametric { alias: String, variances: Vec<u8> },
+}
 
 /// whether a call through `callee` produces a result whose type was derived
 /// by substituting typevars: the declared return type mentions a typevar
@@ -82,6 +97,33 @@ pub fn is_specialized_generic_instance<'db>(db: &'db dyn Db, ty: Type<'db>) -> b
 /// `list` — the element claim is validated at its own projection sites
 pub fn runtime_check_target<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<String> {
     target(db, file, ty, 0)
+}
+
+/// The runtime soundness check for a value whose declared type is `ty`.
+///
+/// Prefers a [`CheckKind::Parametric`] deep check when `ty` is a user-defined
+/// generic specialization whose instances carry `__orig_class__` (so the type
+/// arguments are checkable at runtime); otherwise falls back to the shallow
+/// [`CheckKind::Isinstance`] of [`runtime_check_target`]. `None` when neither
+/// applies (no faithful runtime test).
+pub fn runtime_check_plan<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<CheckKind> {
+    if let Some((alias, variances)) = parametric_soundness_spelling(db, file, ty) {
+        return Some(CheckKind::Parametric {
+            alias,
+            variances: variances.iter().copied().map(variance_code).collect(),
+        });
+    }
+    runtime_check_target(db, file, ty).map(CheckKind::Isinstance)
+}
+
+/// the runtime variance code the `_parametric_is` probe expects
+fn variance_code(variance: ArgVariance) -> u8 {
+    match variance {
+        ArgVariance::Invariant => 0,
+        ArgVariance::Covariant => 1,
+        ArgVariance::Contravariant => 2,
+        ArgVariance::Bivariant => 3,
+    }
 }
 
 fn target<'db>(db: &'db dyn Db, file: File, ty: Type<'db>, depth: u8) -> Option<String> {
@@ -159,4 +201,60 @@ fn builtin_target(db: &dyn Db, file: File, name: &str) -> Option<String> {
         Place::Undefined => Some(name.to_owned()),
         Place::Defined(_) => None,
     }
+}
+
+/// selects which parameter of a call an argument binds to, for
+/// [`parameter_check_plan`]
+#[derive(Clone, Copy)]
+pub enum ArgSelector<'a> {
+    /// a positional argument at the given 0-based index (after any bound
+    /// `self`/`cls`, which the bound-method signature already drops)
+    Positional(usize),
+    /// a keyword argument passed by name
+    Keyword(&'a str),
+}
+
+/// the runtime soundness check for the parameter that `selector` binds to in
+/// a call through `callee`, or `None` when the boundary can't be validated
+/// faithfully: a non-function callee, an overloaded signature (overload
+/// resolution is ty's job, and the wrong overload's parameter type would be
+/// misleading), a variadic / unmatched / unannotated parameter, or a
+/// parameter type with no runtime test. deliberately conservative —
+/// a missed check is a no-op, a wrong one changes semantics
+pub fn parameter_check_plan<'db>(
+    db: &'db dyn Db,
+    file: File,
+    callee: Type<'db>,
+    selector: ArgSelector<'_>,
+) -> Option<CheckKind> {
+    let signature = single_signature(db, callee)?;
+    let parameters = signature.parameters();
+    let parameter = match selector {
+        ArgSelector::Positional(index) => parameters.get_positional(index)?,
+        ArgSelector::Keyword(name) => parameters.keyword_by_name(name).map(|(_, p)| p)?,
+    };
+    // `*args` / `**kwargs` collect many values into a container — the
+    // annotation describes the element, not the argument as passed, so a
+    // direct isinstance would be wrong
+    if parameter.is_variadic() || parameter.is_keyword_variadic() {
+        return None;
+    }
+    runtime_check_plan(db, file, parameter.annotated_type())
+}
+
+/// the sole overload of `callee`'s signature, or `None` if `callee` is not a
+/// plain function / bound method or is overloaded
+fn single_signature<'db>(
+    db: &'db dyn Db,
+    callee: Type<'db>,
+) -> Option<crate::types::signatures::Signature<'db>> {
+    let signature: CallableSignature<'db> = match callee {
+        Type::FunctionLiteral(function) => function.signature(db).clone(),
+        Type::BoundMethod(method) => method.bound_signatures(db).clone(),
+        _ => return None,
+    };
+    let [overload] = signature.overloads.as_slice() else {
+        return None;
+    };
+    Some(overload.clone())
 }

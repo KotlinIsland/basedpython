@@ -476,7 +476,7 @@ pub(crate) fn run_against_source<'a>(
     let none_chain_pass = none_chain::NoneChainPass::new(source_ref);
     let optional_type_pass = optional_type::OptionalTypePass::new(source_ref);
     let generics_pass = generics::GenericPolyfillPass::new(source_ref, config.clone());
-    let soundness_pass = soundness::SoundnessPass::new(config);
+    let soundness_pass = soundness::SoundnessPass::new(source_ref, config);
     let variance_pass = decl_site_variance::VarianceStripPass::new();
     let anon_named_tuple_pass =
         anon_named_tuple::AnonNamedTuplePass::new(source_ref, config.clone());

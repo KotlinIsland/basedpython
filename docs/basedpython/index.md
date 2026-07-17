@@ -56,6 +56,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [decorator keyword](features/decorator-keyword.md)
 - [type narrowing predicates](features/type-is.md)
 - [generics](features/generics.md)
+- [runtime type-soundness checks](features/soundness.md)
 
 ## syntax extensions
 

@@ -138,11 +138,27 @@ pub(crate) trait TypeInfo {
     /// of it consume an annotation-level claim
     fn is_specialized_generic_instance(&self, expr: &Expr) -> bool;
 
-    /// render `expr`'s inferred type as an `isinstance` second argument
-    /// (`str`, `(int, type(None))`), or `None` when the type has no faithful
-    /// shallow runtime test or its name doesn't resolve at module scope
-    fn soundness_check_target(&self, expr: &Expr) -> Option<String>;
+    /// the runtime soundness check for `expr`'s inferred type — a shallow
+    /// `isinstance` target (`str`, `(int, type(None))`) or a deep parametric
+    /// check for a user-generic specialization (`A[int]` + variances). `None`
+    /// when the type has no faithful runtime test or its name doesn't resolve
+    /// at module scope
+    fn soundness_check_plan(&self, expr: &Expr) -> Option<SoundnessCheck>;
+
+    /// the soundness check for the parameter that the positional argument at
+    /// `index` binds to in a call through `callee` (see
+    /// [`soundness_check_plan`](TypeInfo::soundness_check_plan)). `None` when
+    /// the callee isn't a single-overload function/method, the parameter is
+    /// variadic/unannotated, or its type has no runtime test
+    fn call_positional_param_plan(&self, callee: &Expr, index: usize) -> Option<SoundnessCheck>;
+
+    /// like [`call_positional_param_plan`](TypeInfo::call_positional_param_plan)
+    /// but for a keyword argument matched by `name`
+    fn call_keyword_param_plan(&self, callee: &Expr, name: &str) -> Option<SoundnessCheck>;
 }
+
+/// re-export of the ty-side check plan so transforms name a single type
+pub(crate) use ty_python_semantic::types::soundness::CheckKind as SoundnessCheck;
 
 impl TypeInfo for SemanticModel<'_> {
     fn subscript_is_type_context(&self, name: &ExprName) -> bool {
@@ -340,9 +356,29 @@ impl TypeInfo for SemanticModel<'_> {
         })
     }
 
-    fn soundness_check_target(&self, expr: &Expr) -> Option<String> {
+    fn soundness_check_plan(&self, expr: &Expr) -> Option<SoundnessCheck> {
         let ty = expr.inferred_type(self)?;
-        ty_python_semantic::types::soundness::runtime_check_target(self.db(), self.file(), ty)
+        ty_python_semantic::types::soundness::runtime_check_plan(self.db(), self.file(), ty)
+    }
+
+    fn call_positional_param_plan(&self, callee: &Expr, index: usize) -> Option<SoundnessCheck> {
+        let ty = callee.inferred_type(self)?;
+        ty_python_semantic::types::soundness::parameter_check_plan(
+            self.db(),
+            self.file(),
+            ty,
+            ty_python_semantic::types::soundness::ArgSelector::Positional(index),
+        )
+    }
+
+    fn call_keyword_param_plan(&self, callee: &Expr, name: &str) -> Option<SoundnessCheck> {
+        let ty = callee.inferred_type(self)?;
+        ty_python_semantic::types::soundness::parameter_check_plan(
+            self.db(),
+            self.file(),
+            ty,
+            ty_python_semantic::types::soundness::ArgSelector::Keyword(name),
+        )
     }
 }
 
