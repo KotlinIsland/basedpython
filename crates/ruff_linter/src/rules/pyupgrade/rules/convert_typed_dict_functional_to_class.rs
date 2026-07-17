@@ -136,6 +136,7 @@ fn match_typed_dict_assign<'a>(
         range: _,
         node_index: _,
         is_cast: _,
+        is_checked_cast: _,
         is_string_tag: _,
     }) = value
     else {
@@ -280,6 +281,7 @@ fn match_fields_and_total(arguments: &Arguments) -> Option<(Suite, Option<&Keywo
                     range: _,
                     node_index: _,
                     is_cast: _,
+                    is_checked_cast: _,
                     is_string_tag: _,
                 }) => Some((fields_from_dict_call(func, keywords)?, total)),
                 _ => None,

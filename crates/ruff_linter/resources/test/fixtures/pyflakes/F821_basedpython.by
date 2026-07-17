@@ -17,3 +17,11 @@ xs: list[dynamic]
 
 # in value position `dynamic` is an ordinary name — still flagged when unbound
 print(dynamic)
+
+# `cast` / `cast?` are keyword operators, not name references — the synthetic
+# `cast` callee must not be flagged as undefined
+val = 1
+ok_cast = val cast int
+ok_try = val cast? int
+# but an undefined *type* argument to the cast is still a real reference
+bad_cast = val cast UndefinedType

@@ -79,6 +79,11 @@ pub(crate) enum Command {
         /// `iterations`, `assignments`, `returns`, `arguments`, `parameters`
         #[arg(long, value_name = "SPEC", default_value = "default")]
         soundness: String,
+        /// lower `<value> cast <type>` to an unchecked `typing.cast` instead
+        /// of a runtime-checked cast that raises on a type mismatch (the
+        /// `cast?` safe form is unaffected)
+        #[arg(long)]
+        no_checked_cast: bool,
     },
 
     /// Transpile all .by files and write them to out/.
@@ -92,6 +97,11 @@ pub(crate) enum Command {
         /// `iterations`, `assignments`, `returns`, `arguments`, `parameters`
         #[arg(long, value_name = "SPEC", default_value = "default")]
         soundness: String,
+        /// lower `<value> cast <type>` to an unchecked `typing.cast` instead
+        /// of a runtime-checked cast that raises on a type mismatch (the
+        /// `cast?` safe form is unaffected)
+        #[arg(long)]
+        no_checked_cast: bool,
     },
 
     /// Generate an api lockfile (`api.lock`) summarising the public type-level
@@ -135,6 +145,11 @@ pub(crate) enum Command {
         /// `iterations`, `assignments`, `returns`, `arguments`, `parameters`
         #[arg(long, value_name = "SPEC", default_value = "default")]
         soundness: String,
+        /// lower `<value> cast <type>` to an unchecked `typing.cast` instead
+        /// of a runtime-checked cast that raises on a type mismatch (the
+        /// `cast?` safe form is unaffected)
+        #[arg(long)]
+        no_checked_cast: bool,
     },
 }
 

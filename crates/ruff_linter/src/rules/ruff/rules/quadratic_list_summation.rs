@@ -116,6 +116,7 @@ pub(crate) fn quadratic_list_summation(checker: &Checker, call: &ast::ExprCall) 
         range,
         node_index: _,
         is_cast: _,
+        is_checked_cast: _,
         is_string_tag: _,
     } = call;
 

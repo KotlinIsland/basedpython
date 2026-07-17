@@ -1,0 +1,15 @@
+a = x cast int
+b = x cast? int
+c = x cast int | str
+d = x cast? int | str
+e = f() cast int
+g = (a + b) cast? SomeClass
+
+
+def h(v: object) -> int:
+    return v cast int
+
+
+def i(v: object):
+    n = v cast? int
+    return n

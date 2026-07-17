@@ -1259,6 +1259,7 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
                 range: _,
                 node_index: _,
                 is_cast: _,
+                is_checked_cast: _,
                 is_string_tag: _,
             }) => Self::Call(ExprCall {
                 func: func.into(),

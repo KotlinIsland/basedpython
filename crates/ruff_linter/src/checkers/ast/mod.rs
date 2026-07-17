@@ -1735,6 +1735,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 range: _,
                 node_index: _,
                 is_cast: _,
+                is_checked_cast: _,
                 is_string_tag: _,
             }) => {
                 if let Expr::Name(ast::ExprName {
@@ -1857,12 +1858,19 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 arguments,
                 range: _,
                 node_index: _,
-                is_cast: _,
+                is_cast,
+                is_checked_cast,
                 is_string_tag: _,
             }) => {
-                self.visit_expr(func);
-
-                let callable =
+                let callable = if *is_cast || *is_checked_cast {
+                    // basedpython `<value> cast[?] <type>`: the callee is a
+                    // synthetic `cast` name, not a real reference — visiting it
+                    // would raise a false `undefined-name`. its `[type, value]`
+                    // arguments are exactly a `typing.cast`'s, so route them
+                    // through that handling (arg 0 is a type position)
+                    Some(typing::Callable::Cast)
+                } else {
+                    self.visit_expr(func);
                     self.semantic
                         .resolve_qualified_name(func)
                         .and_then(|qualified_name| {
@@ -1915,7 +1923,8 @@ impl<'a> Visitor<'a> for Checker<'a> {
                             } else {
                                 None
                             }
-                        });
+                        })
+                };
                 match callable {
                     Some(typing::Callable::Bool) => {
                         let mut args = arguments.args.iter();
@@ -1927,14 +1936,17 @@ impl<'a> Visitor<'a> for Checker<'a> {
                         }
                     }
                     Some(typing::Callable::Cast) => {
+                        let is_infix_cast = *is_cast || *is_checked_cast;
                         for (i, arg) in arguments.iter_source_order().enumerate() {
                             match (i, arg) {
-                                (0, ArgOrKeyword::Arg(arg)) => self.visit_cast_type_argument(arg),
+                                (0, ArgOrKeyword::Arg(arg)) => {
+                                    self.visit_cast_type_argument(arg, is_infix_cast);
+                                }
                                 (_, ArgOrKeyword::Arg(arg)) => self.visit_non_type_definition(arg),
                                 (_, ArgOrKeyword::Keyword(Keyword { arg, value, .. })) => {
                                     if let Some(id) = arg {
                                         if id == "typ" {
-                                            self.visit_cast_type_argument(value);
+                                            self.visit_cast_type_argument(value, is_infix_cast);
                                         } else {
                                             self.visit_non_type_definition(value);
                                         }
@@ -2668,10 +2680,19 @@ impl<'a> Checker<'a> {
     }
 
     /// Visit an [`Expr`], and treat it as the `typ` argument to `typing.cast`.
-    fn visit_cast_type_argument(&mut self, arg: &'a Expr) {
+    ///
+    /// `is_infix_cast` marks basedpython's `<value> cast[?] <type>` surface
+    /// form, which only shares the argument shape of a `typing.cast()` call.
+    fn visit_cast_type_argument(&mut self, arg: &'a Expr, is_infix_cast: bool) {
         self.visit_type_definition(arg);
 
-        if !self.source_type.is_stub() && self.is_rule_enabled(Rule::RuntimeCastValue) {
+        // quoting the type is a `typing.cast()` style choice that the infix
+        // form has no syntax for: `a cast "int"` is a cast to `str`, so the
+        // fix would silently retarget the check
+        if !is_infix_cast
+            && !self.source_type.is_stub()
+            && self.is_rule_enabled(Rule::RuntimeCastValue)
+        {
             flake8_type_checking::rules::runtime_cast_value(self, arg);
         }
     }

@@ -733,6 +733,7 @@ impl<'src> Lexer<'src> {
             b"await" => TokenKind::Await,
             b"break" => TokenKind::Break,
             b"case" => TokenKind::Case,
+            b"cast" => TokenKind::Cast,
             b"class" => TokenKind::Class,
             b"continue" => TokenKind::Continue,
             b"def" => TokenKind::Def,
@@ -2638,6 +2639,28 @@ t"{(lambda x:{x})}"
     fn test_nested_t_and_fstring() {
         let source = r#"t"foo {f"bar {x + t"{wow}"}"} baz" f'foo {t'bar'!r} some {f"another"}'"#;
         assert_snapshot!(lex_source(source));
+    }
+
+    #[test]
+    fn cast_lexes_as_soft_keyword() {
+        // basedpython `cast` is a soft keyword: it lexes as its own token but
+        // stays usable as an identifier via the parser's soft-keyword handling
+        let kinds: Vec<_> = lex_source("a cast int")
+            .tokens
+            .iter()
+            .map(Token::kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                TokenKind::Name,
+                TokenKind::Cast,
+                TokenKind::Name,
+                TokenKind::Newline
+            ]
+        );
+        assert!(TokenKind::Cast.is_soft_keyword());
+        assert!(!TokenKind::Cast.is_non_soft_keyword());
     }
 
     #[test]

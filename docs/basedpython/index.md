@@ -79,6 +79,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [unpack syntax](features/unpack-syntax.md)
 - [super keyword](features/super.md)
 - [`cast` keyword](features/cast.md)
+- [checked & safe casts (`cast` / `cast?`)](features/checked-cast.md)
 - [`sentinel` declarations](features/sentinel.md)
 - [lazy imports](features/lazy-imports.md)
 - [repeated `_` parameters](features/repeated-underscore.md)

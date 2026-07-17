@@ -380,9 +380,9 @@ mod tests {
 
     #[test]
     fn non_annotation_tuple_unchanged() {
-        // the display is not rewritten into a type expression; it only gains
-        // the reification wrapper
-        check("x = (1, 2)\n", "x = tuple[int, int]((1, 2))\n");
+        // a value-position tuple display is not rewritten into a type
+        // expression, and builtin collection literals are not reified
+        check("x = (1, 2)\n", "x = (1, 2)\n");
     }
 
     #[test]

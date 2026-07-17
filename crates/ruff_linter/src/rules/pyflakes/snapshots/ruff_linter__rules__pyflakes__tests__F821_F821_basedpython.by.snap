@@ -27,4 +27,15 @@ F821 Undefined name `dynamic`
 18 | # in value position `dynamic` is an ordinary name — still flagged when unbound
 19 | print(dynamic)
    |       ^^^^^^^
+20 |
+21 | # `cast` / `cast?` are keyword operators, not name references — the synthetic
+   |
+
+F821 Undefined name `UndefinedType`
+  --> F821_basedpython.by:27:21
+   |
+25 | ok_try = val cast? int
+26 | # but an undefined *type* argument to the cast is still a real reference
+27 | bad_cast = val cast UndefinedType
+   |                     ^^^^^^^^^^^^^
    |

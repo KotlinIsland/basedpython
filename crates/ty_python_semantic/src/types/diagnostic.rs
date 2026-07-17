@@ -130,6 +130,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SHADOWED_TYPE_VARIABLE);
     registry.register_lint(&SUBCLASS_OF_FINAL_CLASS);
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
+    registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
     registry.register_lint(&REIFIED_CLASSMETHOD);
     registry.register_lint(&ERASED_TYPE_CHECK);
@@ -929,6 +930,41 @@ declare_lint! {
         summary: "detects subclasses of sealed classes from outside their workspace",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a basedpython `cast` / `cast?` whose target type carries type
+    /// arguments that are erased at runtime.
+    ///
+    /// ## Why is this bad?
+    /// A checked cast validates its value with `isinstance`, which can only test
+    /// a class — a builtin container erases its type arguments, so `list[int]`
+    /// is checkable only as `list`. The cast still narrows the static type to
+    /// `list[int]`, but nothing verifies the `int` claim at runtime, which is
+    /// exactly the assumption a checked cast exists to rule out.
+    ///
+    /// A *user* generic does not have this problem: its instances carry
+    /// `__orig_class__`, so `A[int]` is checked in full.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def f(x: object):
+    ///     a = x cast list[int]   # warning: only `list` is checked
+    ///     b = x cast list        # ok — no argument claimed
+    ///
+    /// class A[T]:
+    ///     init(self, t: T)
+    ///
+    /// def g(x: object):
+    ///     a = x cast A[int]      # ok — checked in full via `__orig_class__`
+    /// ```
+    pub(crate) static ERASED_CAST_ARGUMENT = {
+        summary: "detects casts whose type arguments cannot be checked at runtime",
+        status: LintStatus::stable("0.0.61"),
+        default_level: Level::Warn,
     }
 }
 

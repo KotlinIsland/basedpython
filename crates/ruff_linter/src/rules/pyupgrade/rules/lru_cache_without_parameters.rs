@@ -62,6 +62,7 @@ pub(crate) fn lru_cache_without_parameters(checker: &Checker, decorator_list: &[
             range: _,
             node_index: _,
             is_cast: _,
+            is_checked_cast: _,
             is_string_tag: _,
         }) = &decorator.expression
         else {

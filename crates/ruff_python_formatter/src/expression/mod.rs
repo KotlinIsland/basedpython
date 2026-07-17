@@ -720,6 +720,7 @@ impl<'input> CanOmitOptionalParenthesesVisitor<'input> {
                 range: _,
                 node_index: _,
                 is_cast: _,
+                is_checked_cast: _,
                 is_string_tag: _,
                 func,
                 arguments: _,

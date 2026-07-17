@@ -436,6 +436,12 @@ expression. The `func` is a synthetic `Name(\"cast\")`, and `arguments` holds
 `[type, value]` in `typing.cast` order. The parentheses are not present in the
 source — surface form is `<value> cast <type>`. Lowered to `cast(<type>, <value>)`
 with an injected `from typing import cast`""" },
+  { name = "is_checked_cast", type = "bool", doc = """basedpython: when true, this call is a `<value> cast? <type>` checked
+cast. Like `is_cast`, `func` is a synthetic `Name(\"cast\")` and `arguments`
+holds `[type, value]`, but the surface form is `<value> cast? <type>` and it
+carries runtime semantics: it evaluates to `value` when `isinstance(value, type)`
+holds and `None` otherwise, so its inferred type is `type | None`. Lowered to
+`(value if isinstance(value, type) else None)`""" },
   { name = "is_string_tag", type = "bool", doc = """basedpython: when true, this call is a custom string tag `tag"..."`.
 The `func` is the tag identifier and `arguments` holds exactly the template
 literal, whose opening quote directly abuts the tag name — no parentheses or

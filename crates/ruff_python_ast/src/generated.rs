@@ -9900,6 +9900,13 @@ pub struct ExprCall {
     /// source — surface form is `<value> cast <type>`. Lowered to `cast(<type>, <value>)`
     /// with an injected `from typing import cast`
     pub is_cast: bool,
+    /// basedpython: when true, this call is a `<value> cast? <type>` checked
+    /// cast. Like `is_cast`, `func` is a synthetic `Name("cast")` and `arguments`
+    /// holds `[type, value]`, but the surface form is `<value> cast? <type>` and it
+    /// carries runtime semantics: it evaluates to `value` when `isinstance(value, type)`
+    /// holds and `None` otherwise, so its inferred type is `type | None`. Lowered to
+    /// `(value if isinstance(value, type) else None)`
+    pub is_checked_cast: bool,
     /// basedpython: when true, this call is a custom string tag `tag"..."`.
     /// The `func` is the tag identifier and `arguments` holds exactly the template
     /// literal, whose opening quote directly abuts the tag name — no parentheses or
@@ -11002,6 +11009,7 @@ impl ExprCall {
             func,
             arguments,
             is_cast: _,
+            is_checked_cast: _,
             is_string_tag: _,
             range: _,
             node_index: _,

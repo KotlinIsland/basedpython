@@ -1055,6 +1055,27 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 self.visit_expr(subscript.value.as_ref());
                 self.visit_annotated_arguments(subscript.slice.as_ref());
             }
+            // `<value> cast <type>` / `<value> cast? <type>`. The parser lowers both to a
+            // synthesized `cast(<type>, <value>)` whose `func` is an `ExprName` covering the
+            // keyword's own range, so the generic `Call` arm below would try to resolve it as a
+            // reference to `typing.cast` — which isn't in scope, leaving the keyword untokenized.
+            // Report the keyword instead. `args` is `[type, value]`, but `value` precedes the
+            // keyword in source and `add_token` requires file order, so emit value first.
+            ast::Expr::Call(call)
+                if (call.is_cast || call.is_checked_cast)
+                    && matches!(&*call.arguments.args, [_, _]) =>
+            {
+                let [type_expr, value_expr] = &*call.arguments.args else {
+                    unreachable!("guarded by the `matches!` above")
+                };
+                self.visit_expr(value_expr);
+                self.add_token(
+                    call.func.as_ref(),
+                    SemanticTokenType::Keyword,
+                    SemanticTokenModifier::empty(),
+                );
+                self.visit_annotation(type_expr);
+            }
             ast::Expr::Call(call) => {
                 self.visit_expr(call.func.as_ref());
 
@@ -4685,6 +4706,62 @@ from pathlib import Missing as Alias
         assert_snapshot!(test.to_snapshot(&tokens), @r#""pathlib" @ 6..13: Namespace"#);
     }
 
+    /// The infix `cast` keyword is lowered to a synthesized `cast(<type>, <value>)` call whose
+    /// `func` is an `ExprName` sitting on the keyword's own range. It must be reported as a
+    /// keyword, not resolved as if it were a reference to `typing.cast`.
+    ///
+    /// `cast?` is two tokens, and the `?` need not be adjacent — the keyword span has to reach
+    /// it either way, or the `?` goes unhighlighted.
+    #[test]
+    fn infix_cast_keyword() {
+        let test = SemanticTokenTest::new_by(
+            r#"
+a = 1 cast int
+b = 1 cast? int
+c = 1 cast ? int
+"#,
+        );
+
+        let tokens = test.highlight_file();
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "a" @ 1..2: Variable [definition]
+        "1" @ 5..6: Number
+        "cast" @ 7..11: Keyword
+        "int" @ 12..15: Class
+        "b" @ 16..17: Variable [definition]
+        "1" @ 20..21: Number
+        "cast?" @ 22..27: Keyword
+        "int" @ 28..31: Class
+        "c" @ 32..33: Variable [definition]
+        "1" @ 36..37: Number
+        "cast ?" @ 38..44: Keyword
+        "int" @ 45..48: Class
+        "#);
+    }
+
+    /// A real `typing.cast(...)` call is *not* the keyword form (`is_cast` is false) and must keep
+    /// resolving as a function reference.
+    #[test]
+    fn cast_call_is_not_the_keyword() {
+        let test = SemanticTokenTest::new_by(
+            r#"
+from typing import cast
+
+x = cast(int, "")
+"#,
+        );
+
+        let tokens = test.highlight_file();
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "typing" @ 6..12: Namespace
+        "cast" @ 20..24: Function
+        "x" @ 26..27: Variable [definition]
+        "cast" @ 30..34: Function
+        "int" @ 35..38: Class
+        "\"\"" @ 40..42: String
+        "#);
+    }
+
     pub(super) struct SemanticTokenTest {
         pub(super) db: ty_project::TestDb,
         file: File,
@@ -4692,12 +4769,21 @@ from pathlib import Missing as Alias
 
     impl SemanticTokenTest {
         fn new(source: &str) -> Self {
+            Self::with_path(source, "src/main.py")
+        }
+
+        /// A basedpython file. `is_basedpython` is derived from the `.by` extension.
+        fn new_by(source: &str) -> Self {
+            Self::with_path(source, "src/main.by")
+        }
+
+        fn with_path(source: &str, path: &str) -> Self {
             let mut db =
                 ty_project::TestDb::new(ProjectMetadata::new("test", SystemPathBuf::from("/")));
 
             db.init_program().unwrap();
 
-            let path = SystemPath::new("src/main.py");
+            let path = SystemPath::new(path);
             db.write_file(path, ruff_python_trivia::textwrap::dedent(source))
                 .expect("Write to memory file system to always succeed");
 

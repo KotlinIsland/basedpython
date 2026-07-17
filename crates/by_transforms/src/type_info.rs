@@ -57,12 +57,6 @@ pub(crate) trait TypeInfo {
     /// missing spelling is never an error
     fn constructor_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String>;
 
-    /// the runtime spelling (`list[int]`, `tuple[int, str]`) that makes a
-    /// collection literal's inferred element types explicit, or `None` when
-    /// the literal's type has no spelling (empty / partially-`Unknown`
-    /// elements, a TypedDict-typed dict display, a shadowed builtin name)
-    fn collection_literal_spelling(&self, expr: &Expr) -> Option<String>;
-
     /// how the keyword-form parametric type test `lhs is rhs` resolves
     /// (rust-style: statically folded, reified-cell token equality, witness
     /// probe, or an unchecked runtime probe). `None` when `rhs` is not a
@@ -155,6 +149,15 @@ pub(crate) trait TypeInfo {
     /// like [`call_positional_param_plan`](TypeInfo::call_positional_param_plan)
     /// but for a keyword argument matched by `name`
     fn call_keyword_param_plan(&self, callee: &Expr, name: &str) -> Option<SoundnessCheck>;
+
+    /// the runtime check for a type expression used as a checked cast target,
+    /// or `None` when the type has no faithful runtime test. a user generic
+    /// whose instances carry `__orig_class__` yields a deep
+    /// [`SoundnessCheck::Parametric`] (`A[int]`); anything else collapses to a
+    /// shallow [`SoundnessCheck::Isinstance`] (`list[object]` → `list`,
+    /// `int | str` → `(int, str)`), since `isinstance(x, list[object])` is
+    /// itself a runtime error
+    fn cast_check_plan(&self, type_expr: &Expr) -> Option<SoundnessCheck>;
 }
 
 /// re-export of the ty-side check plan so transforms name a single type
@@ -202,10 +205,6 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn constructor_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String> {
         self.reified_constructor_type_arguments(call)
-    }
-
-    fn collection_literal_spelling(&self, expr: &Expr) -> Option<String> {
-        self.reified_collection_literal_spelling(expr)
     }
 
     fn parametric_is_plan(
@@ -379,6 +378,11 @@ impl TypeInfo for SemanticModel<'_> {
             ty,
             ty_python_semantic::types::soundness::ArgSelector::Keyword(name),
         )
+    }
+
+    fn cast_check_plan(&self, type_expr: &Expr) -> Option<SoundnessCheck> {
+        let ty = type_expr.inferred_type(self)?;
+        ty_python_semantic::types::soundness::runtime_check_plan(self.db(), self.file(), ty)
     }
 }
 

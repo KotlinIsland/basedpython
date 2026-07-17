@@ -140,6 +140,7 @@ fn collect_nested_args(min_max: MinMax, args: &[Expr], semantic: &SemanticModel)
                 range: _,
                 node_index: _,
                 is_cast: _,
+                is_checked_cast: _,
                 is_string_tag: _,
             }) = arg
             {
@@ -212,6 +213,7 @@ pub(crate) fn nested_min_max(
             range: TextRange::default(),
             node_index: ruff_python_ast::AtomicNodeIndex::NONE,
             is_cast: false,
+            is_checked_cast: false,
             is_string_tag: false,
         });
         diagnostic.set_fix(Fix::unsafe_edit(Edit::range_replacement(

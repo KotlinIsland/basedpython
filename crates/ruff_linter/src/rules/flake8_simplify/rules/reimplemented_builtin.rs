@@ -438,6 +438,7 @@ fn return_stmt(id: Name, test: &Expr, target: &Expr, iter: &Expr, generator: Gen
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
         is_cast: false,
+        is_checked_cast: false,
         is_string_tag: false,
     };
     let node3 = ast::StmtReturn {

@@ -44,6 +44,22 @@ use crate::type_info::TypeInfo;
 /// covariant. `_sub` is a deliberately conservative one-level subtype check —
 /// exact, the `object` top type, or an unparameterized supertype origin — so
 /// it never reports a subtype that does not hold
+/// render a variance-code list as the python tuple literal `_parametric_is`
+/// takes as its `variances` argument (`(0,)`, `(0, 1)`)
+pub(crate) fn variance_tuple(variances: &[u8]) -> String {
+    match variances {
+        [single] => format!("({single},)"),
+        _ => format!(
+            "({})",
+            variances
+                .iter()
+                .map(u8::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
 pub(crate) const PARAMETRIC_IS_RUNTIME: &str = "\
 def _parametric_is(value, alias, variances):
     origin = getattr(alias, \"__origin__\", alias)

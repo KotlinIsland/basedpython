@@ -39,6 +39,11 @@ pub struct Config {
     /// Tests that compare exact transpile output should leave this
     /// [`SoundnessPositions::none`] unless they exercise the checks themselves
     pub soundness: SoundnessPositions,
+    /// when true (the default), the `<value> cast? <type>` checked-cast
+    /// operator is lowered to a runtime `isinstance` test that yields the
+    /// value or `None`. when false, using `cast?` is a transpile error — the
+    /// feature is simply unavailable
+    pub checked_cast: bool,
 }
 
 /// Per-position toggles for the runtime type-soundness checks. Each field
@@ -134,6 +139,7 @@ impl Default for Config {
             inject_future_annotations: false,
             prune_unused_imports_after_reverse: true,
             soundness: SoundnessPositions::defaults(),
+            checked_cast: true,
         }
     }
 }
