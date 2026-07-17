@@ -27,13 +27,50 @@ pub(crate) fn parse_version(s: &str) -> anyhow::Result<Config> {
     })
 }
 
+/// Parse a `--soundness` spec: `default` (the inference-gap checks), `all`
+/// (those plus the opt-in `parameters` entry checks), `none`, or a
+/// comma-separated subset of the position names. Unknown names are a hard
+/// error so a typo doesn't silently disable a check the user expected.
+pub(crate) fn parse_soundness(spec: &str) -> anyhow::Result<by_transforms::SoundnessPositions> {
+    use by_transforms::SoundnessPositions;
+
+    match spec.trim() {
+        "default" => return Ok(SoundnessPositions::defaults()),
+        "all" => return Ok(SoundnessPositions::all()),
+        "none" => return Ok(SoundnessPositions::none()),
+        _ => {}
+    }
+    let mut positions = SoundnessPositions::none();
+    for name in spec.split(',') {
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        match name {
+            "generic-calls" => positions.generic_calls = true,
+            "projections" => positions.projections = true,
+            "iterations" => positions.iterations = true,
+            "assignments" => positions.assignments = true,
+            "returns" => positions.returns = true,
+            "arguments" => positions.arguments = true,
+            "parameters" => positions.parameters = true,
+            other => anyhow::bail!(
+                "unknown soundness position {other:?} — use `default`, `all`, `none`, or a \
+                 comma-separated subset of: generic-calls, projections, iterations, assignments, \
+                 returns, arguments, parameters"
+            ),
+        }
+    }
+    Ok(positions)
+}
+
 // ── run ──────────────────────────────────────────────────────────────────────
 
 #[allow(clippy::exit, clippy::print_stderr)]
 pub(crate) fn cmd_run(
     module: &str,
     min_version: Option<&str>,
-    no_soundness: bool,
+    soundness: &str,
 ) -> anyhow::Result<ExitStatus> {
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
     // `run` executes on a specific interpreter, so by default target *its*
@@ -62,7 +99,7 @@ pub(crate) fn cmd_run(
         },
         (None, None) => Config::default(),
     };
-    config.soundness_checks = !no_soundness;
+    config.soundness = parse_soundness(soundness)?;
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let tmp = tempfile::TempDir::new().context("failed to create temp directory")?;
 
@@ -132,9 +169,9 @@ fn detect_python_version(python: &str) -> Option<PythonVersion> {
 // ── build ────────────────────────────────────────────────────────────────────
 
 #[allow(clippy::print_stderr)]
-pub(crate) fn cmd_build(min_version: &str, no_soundness: bool) -> anyhow::Result<ExitStatus> {
+pub(crate) fn cmd_build(min_version: &str, soundness: &str) -> anyhow::Result<ExitStatus> {
     let mut config = parse_version(min_version)?;
-    config.soundness_checks = !no_soundness;
+    config.soundness = parse_soundness(soundness)?;
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let out = cwd.join("out");
     let files = bpy_files(&cwd);
@@ -174,10 +211,10 @@ pub(crate) fn cmd_transpile(
     file: Option<&PathBuf>,
     reverse: bool,
     min_version: &str,
-    no_soundness: bool,
+    soundness: &str,
 ) -> anyhow::Result<ExitStatus> {
     let mut config = parse_version(min_version)?;
-    config.soundness_checks = !no_soundness;
+    config.soundness = parse_soundness(soundness)?;
 
     // a directory argument transpiles the whole tree in place: forward turns
     // every `.by` into a `.py` (type-aware, one shared project db); reverse

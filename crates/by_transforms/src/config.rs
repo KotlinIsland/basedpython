@@ -33,13 +33,95 @@ pub struct Config {
     /// the arrow form). Tests that compare verbatim preservation should set
     /// this to `false`
     pub prune_unused_imports_after_reverse: bool,
-    /// when true (the default), insert runtime `_soundness_check` validations
-    /// at expressions whose inferred type rests on an assumption the checker
-    /// cannot verify: typevar solutions at generic call sites, element
-    /// projections out of annotated containers, and explicit `Any` flowing
-    /// into a declared binding. Tests that compare exact transpile output
-    /// should set this to `false` unless they exercise the checks themselves
-    pub soundness_checks: bool,
+    /// which runtime `_soundness_check` insertions are enabled (all on by
+    /// default). each field guards one syntactic position where ty's
+    /// inference rests on an unverifiable assumption; see [`SoundnessPositions`].
+    /// Tests that compare exact transpile output should leave this
+    /// [`SoundnessPositions::none`] unless they exercise the checks themselves
+    pub soundness: SoundnessPositions,
+}
+
+/// Per-position toggles for the runtime type-soundness checks. Each field
+/// enables validation at one syntactic position where ty accepts a value on
+/// an annotation-level claim it can't verify at runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent per-position toggles, not a state machine"
+)]
+pub struct SoundnessPositions {
+    /// results of calls whose type is typevar-derived — a generic function's
+    /// return (`t[T]() -> T`) or a method bound to a specialized generic
+    /// instance (`dict[str, int].get`)
+    pub generic_calls: bool,
+    /// element reads out of a specialized container (`a[0]` on `list[str]`)
+    pub projections: bool,
+    /// loop / comprehension elements drawn from a specialized iterable
+    pub iterations: bool,
+    /// explicit `Any` (or a context-solved generic result) flowing into an
+    /// annotated assignment target (`a: str = any_val`)
+    pub assignments: bool,
+    /// a returned value validated against the enclosing function's declared
+    /// return type (`def g() -> str: return any_val`)
+    pub returns: bool,
+    /// a call argument validated against its matched parameter's annotation
+    /// (`takes(any_val)` where `takes(s: str)`)
+    pub arguments: bool,
+    /// a function's own parameters validated against their annotations at
+    /// entry, defending its contract against callers the checker never saw
+    /// (untyped or third-party code). off in the default set — it runs on
+    /// every call, so it's opt-in — but included in [`Self::all`]
+    pub parameters: bool,
+}
+
+impl SoundnessPositions {
+    /// every position enabled, including the opt-in defensive `parameters`
+    /// entry checks (the CLI `--soundness all`)
+    pub fn all() -> Self {
+        Self {
+            parameters: true,
+            ..Self::defaults()
+        }
+    }
+
+    /// the positions enabled without an explicit request: every inference-gap
+    /// check, but *not* the defensive `parameters` entry checks (those add a
+    /// check on every call, so they stay opt-in)
+    pub fn defaults() -> Self {
+        Self {
+            generic_calls: true,
+            projections: true,
+            iterations: true,
+            assignments: true,
+            returns: true,
+            arguments: true,
+            parameters: false,
+        }
+    }
+
+    /// no position enabled — the pass is a no-op
+    pub fn none() -> Self {
+        Self {
+            generic_calls: false,
+            projections: false,
+            iterations: false,
+            assignments: false,
+            returns: false,
+            arguments: false,
+            parameters: false,
+        }
+    }
+
+    /// whether any position is enabled
+    pub fn any(self) -> bool {
+        self.generic_calls
+            || self.projections
+            || self.iterations
+            || self.assignments
+            || self.returns
+            || self.arguments
+            || self.parameters
+    }
 }
 
 impl Default for Config {
@@ -51,7 +133,7 @@ impl Default for Config {
             lazy_imports: true,
             inject_future_annotations: false,
             prune_unused_imports_after_reverse: true,
-            soundness_checks: true,
+            soundness: SoundnessPositions::defaults(),
         }
     }
 }
@@ -60,12 +142,13 @@ impl Config {
     /// Config used by the in-tree transform unit tests. Identical to
     /// [`Config::default`] but with `lazy_imports` and
     /// `prune_unused_imports_after_reverse` disabled so test expected
-    /// strings don't need to include the lazy preamble or worry about pruning
+    /// strings don't need to include the lazy preamble or worry about pruning,
+    /// and all soundness checks off so plain output isn't peppered with them
     pub fn test_default() -> Self {
         Self {
             lazy_imports: false,
             prune_unused_imports_after_reverse: false,
-            soundness_checks: false,
+            soundness: SoundnessPositions::none(),
             ..Self::default()
         }
     }

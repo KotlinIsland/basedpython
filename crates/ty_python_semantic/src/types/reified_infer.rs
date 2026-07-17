@@ -482,6 +482,42 @@ fn try_token_eq<'db>(
     }
 }
 
+/// The runtime alias spelling and per-parameter variances for a *deep*
+/// soundness check of `ty`, or `None` when no runtime parameter check is
+/// possible. `Some` only when `ty` is an instance of a user-defined generic
+/// class whose instances carry `__orig_class__` (so the type arguments survive
+/// to runtime) and whose specialization has a runtime spelling (`A[int]`);
+/// builtin collections erase their arguments and return `None`, as does any
+/// specialization with an unspellable argument.
+///
+/// Used by the transpiler's soundness pass: where a shallow `isinstance`
+/// check would validate only the base class, this lets it also validate the
+/// type arguments against the value's reified `__orig_class__`.
+pub(crate) fn parametric_soundness_spelling<'db>(
+    db: &'db dyn Db,
+    file: File,
+    ty: Type<'db>,
+) -> Option<(String, Box<[ArgVariance]>)> {
+    let Type::NominalInstance(instance) = ty else {
+        return None;
+    };
+    let ClassType::Generic(alias) = instance.class(db) else {
+        return None;
+    };
+    let origin = ClassLiteral::Static(alias.origin(db));
+    // builtin collections erase their type arguments at runtime, so there is
+    // nothing to probe — the base `isinstance` check is all that's sound
+    if !target_carries_orig_class(db, origin) {
+        return None;
+    }
+    let spelling = spell_class(db, file, ClassType::Generic(alias))?;
+    let variances = target_variances(db, origin);
+    if variances.is_empty() {
+        return None;
+    }
+    Some((spelling, variances))
+}
+
 /// the declared variance of each of the target class's type parameters — how
 /// the runtime probe matches each argument
 fn target_variances<'db>(db: &'db dyn Db, origin: ClassLiteral<'db>) -> Box<[ArgVariance]> {
