@@ -289,6 +289,21 @@ pub(super) struct TypeInferenceBuilder<'db, 'ast> {
     /// bidirectional type context, the contextual type.
     fluid_adoptions: FxHashMap<ExpressionNodeKey, Type<'db>>,
 
+    /// basedpython `?.`: for each link of an optional chain, the type that link has
+    /// when every `?.` receiver in the chain is present.
+    ///
+    /// A link's own expression type carries the `None` it short-circuits to, but the rest
+    /// of the chain must resolve against the present type: `a?.b.c` lowers to
+    /// `None if a is None else a.b.c`, which never reaches `.c` with an absent `a`. Folding
+    /// the `None` into each link instead would leave every later `.attr`, `(...)` or `[...]`
+    /// in the chain resolving against a value the lowering never produces.
+    ///
+    /// Only populated for links that can short-circuit, so a hit here doubles as "this
+    /// expression is a chain link that contributes a `None` to the end of its chain". An
+    /// attribute that is optional in its *own* right stays optional in the recorded type,
+    /// so `a?.cb()` still reports a possibly-`None` `cb`.
+    basedpython_chain_present: FxHashMap<ExpressionNodeKey, Type<'db>>,
+
     /// The creation-time type of a fluid specialization candidate, with literal types
     /// retained. Only set when this region is the standalone inference of the
     /// candidate's assigned value; uses of the binding re-solve their own prefix of the
@@ -421,6 +436,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             type_expression_flags: FxHashMap::default(),
             collection_use_constraints: FxHashMap::default(),
             fluid_adoptions: FxHashMap::default(),
+            basedpython_chain_present: FxHashMap::default(),
             fluid_creation: None,
             fluid_timeline: None,
             string_annotations: FxHashSet::default(),
@@ -5581,18 +5597,54 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// Whether `expression`'s type may be shared through the multi-inference expression cache.
+    ///
+    /// A basedpython optional-chain link carries the present-receiver type that the rest of its
+    /// chain resolves against out of band, in [`Self::basedpython_chain_present`], which the
+    /// cache does not hold. Serving a link from the cache would strand the next link with the
+    /// short-circuit `None`, and would do so only on whichever speculative attempt happened to
+    /// miss the cache first.
+    fn is_expression_cacheable(&self, expression: &ast::Expr) -> bool {
+        !(self.is_basedpython_file() && is_basedpython_chain_link(expression))
+    }
+
+    fn cached_expression_type(
+        &self,
+        expression: &ast::Expr,
+        tcx: TypeContext<'db>,
+    ) -> Option<Type<'db>> {
+        let expression_cache = self.expression_cache.as_ref()?;
+        if !self.is_expression_cacheable(expression) {
+            return None;
+        }
+        expression_cache
+            .borrow()
+            .get(&(expression.into(), tcx))
+            .copied()
+    }
+
+    fn cache_expression_type(
+        &mut self,
+        expression: &ast::Expr,
+        tcx: TypeContext<'db>,
+        ty: Type<'db>,
+    ) {
+        if let Some(expression_cache) = &self.expression_cache
+            && self.is_expression_cacheable(expression)
+        {
+            expression_cache
+                .borrow_mut()
+                .insert((expression.into(), tcx), ty);
+        }
+    }
+
     /// Infer the type of an expression.
     fn infer_expression_impl(
         &mut self,
         expression: &ast::Expr,
         tcx: TypeContext<'db>,
     ) -> Type<'db> {
-        if let Some(ty) = self.expression_cache.as_ref().and_then(|expression_cache| {
-            expression_cache
-                .borrow()
-                .get(&(expression.into(), tcx))
-                .copied()
-        }) {
+        if let Some(ty) = self.cached_expression_type(expression, tcx) {
             self.store_expression_type(expression, ty);
             return ty;
         }
@@ -5601,12 +5653,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             && let Some(ty) = self.infer_type_form_contextual_expression(expression, target)
         {
             self.store_expression_type(expression, ty);
-
-            if let Some(expression_cache) = &self.expression_cache {
-                expression_cache
-                    .borrow_mut()
-                    .insert((expression.into(), tcx), ty);
-            }
+            self.cache_expression_type(expression, tcx, ty);
 
             return ty;
         }
@@ -5698,12 +5745,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         self.store_expression_type(expression, ty);
-
-        if let Some(expression_cache) = &self.expression_cache {
-            expression_cache
-                .borrow_mut()
-                .insert((expression.into(), tcx), ty);
-        }
+        self.cache_expression_type(expression, tcx, ty);
 
         ty
     }
@@ -8333,7 +8375,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let callable_type =
             self.infer_maybe_standalone_expression(&call_expression.func, TypeContext::default());
 
-        self.infer_call_expression_impl(call_expression, callable_type, tcx)
+        // basedpython `a?.b()`: the `?.` short-circuit covers the call too, matching the
+        // `None if a is None else a.b()` lowering, so call the present-receiver callable and
+        // let the `None` ride out to the end of the chain
+        let (callable_type, in_chain) =
+            self.basedpython_chain_receiver(&call_expression.func, callable_type);
+
+        let return_type = self.infer_call_expression_impl(call_expression, callable_type, tcx);
+
+        self.basedpython_chain_result(call_expression, return_type, in_chain)
     }
 
     fn infer_empty_list_or_set_constructor(
@@ -10257,18 +10307,75 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         crate::types::bound_super::BoundSuperType::build(db, pivot_class_type, owner_type).ok()
     }
 
+    /// Resolve `receiver` to the type the next link of a basedpython optional chain must be
+    /// looked up against, and report whether that chain can short-circuit.
+    ///
+    /// `receiver_type` is the receiver's own type, which already carries any short-circuit
+    /// `None`. See [`Self::basedpython_chain_present`].
+    fn basedpython_chain_receiver(
+        &self,
+        receiver: &ast::Expr,
+        receiver_type: Type<'db>,
+    ) -> (Type<'db>, bool) {
+        // every attribute, call and subscript asks; only a `.by` file that has already walked
+        // a `?.` can answer
+        if self.basedpython_chain_present.is_empty() {
+            return (receiver_type, false);
+        }
+        match self
+            .basedpython_chain_present
+            .get(&ExpressionNodeKey::from(receiver))
+        {
+            Some(present) => (*present, true),
+            None => (receiver_type, false),
+        }
+    }
+
+    /// Record a basedpython optional-chain link's present-receiver type and return the type
+    /// the link itself evaluates to.
+    ///
+    /// `short_circuits` is whether a `?.` anywhere in the chain can be absent; when it is,
+    /// the link evaluates to `present | None` and the chain carries on from `present`.
+    fn basedpython_chain_result(
+        &mut self,
+        link: impl Into<ExpressionNodeKey>,
+        present: Type<'db>,
+        short_circuits: bool,
+    ) -> Type<'db> {
+        if !short_circuits {
+            return present;
+        }
+        self.basedpython_chain_present.insert(link.into(), present);
+        UnionType::from_two_elements(self.db(), present, Type::none(self.db()))
+    }
+
     /// Infer the type of a [`ast::ExprAttribute`] expression, assuming a load context.
     fn infer_attribute_load(&mut self, attribute: &ast::ExprAttribute) -> Type<'db> {
         let value_type =
             self.infer_maybe_standalone_expression(&attribute.value, TypeContext::default());
-        self.infer_attribute_load_impl(attribute, value_type)
+        let (value_type, in_chain) = self.basedpython_chain_receiver(&attribute.value, value_type);
+        self.infer_attribute_load_chained(attribute, value_type, in_chain)
     }
 
-    /// Infer the type of a [`ast::ExprAttribute`] expression, assuming a load context.
+    /// Infer the type of a [`ast::ExprAttribute`] expression, assuming a load context and a
+    /// receiver that does not continue a basedpython optional chain.
     fn infer_attribute_load_impl(
         &mut self,
         attribute: &ast::ExprAttribute,
+        value_type: Type<'db>,
+    ) -> Type<'db> {
+        self.infer_attribute_load_chained(attribute, value_type, false)
+    }
+
+    /// Infer the type of a [`ast::ExprAttribute`] expression, assuming a load context.
+    ///
+    /// `in_chain` is whether `value_type` came from an already-short-circuiting basedpython
+    /// optional chain, which this access extends.
+    fn infer_attribute_load_chained(
+        &mut self,
+        attribute: &ast::ExprAttribute,
         mut value_type: Type<'db>,
+        in_chain: bool,
     ) -> Type<'db> {
         fn union_elements_missing_attribute<'db>(
             db: &'db dyn Db,
@@ -10294,7 +10401,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // narrow value_type to its non-None component for the attribute
         // lookup, then re-union with None at the end. records whether we
         // performed the narrowing so we know to re-add None
-        let mut none_chain_was_optional = false;
+        let mut none_chain_was_optional = in_chain;
         if self.is_basedpython_file() && attribute.optional {
             // a wrapped optional's present value is its inner type — peel the
             // wrapper before the lookup (the runtime reads `.value`); the
@@ -10341,7 +10448,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             && let Some(spec) = value_type.exact_tuple_instance_spec(db)
             && let Ok(element_ty) = (&*spec).py_index(db, index)
         {
-            return element_ty;
+            return self.basedpython_chain_result(attribute, element_ty, none_chain_was_optional);
         }
 
         if let Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) = value_type
@@ -10628,10 +10735,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         // basedpython `?.`: short-circuit returns None on a None receiver, so
         // the overall expression type is the attribute type unioned with None
-        if none_chain_was_optional {
-            return UnionType::from_two_elements(db, final_type, Type::none(db));
-        }
-        final_type
+        self.basedpython_chain_result(attribute, final_type, none_chain_was_optional)
     }
 
     fn infer_attribute_expression(&mut self, attribute: &ast::ExprAttribute) -> Type<'db> {
@@ -11266,6 +11370,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             // builder only state
             expression_cache: _,
+            basedpython_chain_present: _,
             reachability_cache: _,
             typevar_binding_context: _,
             deferred_state: _,
@@ -11358,6 +11463,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             // builder only state
             expression_cache: _,
+            basedpython_chain_present: _,
             reachability_cache: _,
             dataclass_field_specifiers: _,
             slice_materialization: _,
@@ -11457,6 +11563,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             bindings,
             called_functions,
             expression_cache: _,
+            basedpython_chain_present: _,
             reachability_cache: _,
             declarations: _,
             deferred: _,
@@ -11522,6 +11629,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             // builder only state
             expression_cache: _,
+            basedpython_chain_present: _,
             reachability_cache: _,
             dataclass_field_specifiers: _,
             slice_materialization: _,
@@ -11671,6 +11779,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             // Builder only state
             expression_cache: _,
+            basedpython_chain_present: _,
             reachability_cache: _,
             dataclass_field_specifiers: _,
             slice_materialization: _,
@@ -11742,6 +11851,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             fluid_creation: _,
             fluid_timeline: _,
             fluid_adoptions: _,
+            basedpython_chain_present: _,
             collection_use_constraints: _,
             expressions: _,
             string_annotations: _,
@@ -11812,6 +11922,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             // builder only state
             expression_cache: _,
+            basedpython_chain_present,
             reachability_cache: _,
             typevar_binding_context: _,
             deferred_state: _,
@@ -11850,6 +11961,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         self.fluid_adoptions.extend(fluid_adoptions);
+
+        // adopting the speculative builder's expression types means adopting the optional-chain
+        // provenance of those same expressions, or a chain this region goes on to extend would
+        // resolve its next link against a short-circuit `None`
+        self.basedpython_chain_present
+            .extend(basedpython_chain_present);
 
         #[expect(
             clippy::iter_over_hash_type,
@@ -11939,6 +12056,23 @@ fn is_collection_literal(expression: &ast::Expr) -> bool {
         expression,
         ast::Expr::List(_) | ast::Expr::Set(_) | ast::Expr::Dict(_)
     )
+}
+
+/// Returns `true` if `expression` is a link of a basedpython optional chain: a `?.` access, or a
+/// trailer applied to one.
+///
+/// A chain runs from its first `?.` out through the trailers that follow it, exactly as far as the
+/// `None if a is None else <rest of chain>` lowering short-circuits. `a?.b.c()[0]` is one chain of
+/// four links, so an absent `a` skips all of `.b`, `.c`, `()` and `[0]`.
+fn is_basedpython_chain_link(expression: &ast::Expr) -> bool {
+    match expression {
+        ast::Expr::Attribute(attribute) => {
+            attribute.optional || is_basedpython_chain_link(&attribute.value)
+        }
+        ast::Expr::Call(call) => is_basedpython_chain_link(&call.func),
+        ast::Expr::Subscript(subscript) => is_basedpython_chain_link(&subscript.value),
+        _ => false,
+    }
 }
 
 /// Returns `true` if applying type context to the given expression may be deferred after inference.

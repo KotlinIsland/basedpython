@@ -187,14 +187,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     ) -> Type<'db> {
         let value_ty = self.infer_expression(&subscript.value, TypeContext::default());
 
+        // basedpython `a?.b[0]`: the `?.` short-circuit covers the subscript too, matching the
+        // `None if a is None else a.b[0]` lowering, so index the present-receiver value and
+        // let the `None` ride out to the end of the chain
+        let (value_ty, in_chain) = self.basedpython_chain_receiver(&subscript.value, value_ty);
+
         // If we have an implicit type alias like `MyList = list[T]`, and if `MyList` is being
         // used in another implicit type alias like `Numbers = MyList[int]`, then we infer the
         // right hand side as a value expression, and need to handle the specialization here.
-        if value_ty.is_generic_alias() {
-            return self.infer_explicit_type_alias_specialization(subscript, value_ty, false);
-        }
+        let ty = if value_ty.is_generic_alias() {
+            self.infer_explicit_type_alias_specialization(subscript, value_ty, false)
+        } else {
+            self.infer_subscript_load_impl(value_ty, subscript, tcx)
+        };
 
-        self.infer_subscript_load_impl(value_ty, subscript, tcx)
+        self.basedpython_chain_result(subscript, ty, in_chain)
     }
 
     pub(super) fn infer_subscript_load_impl(

@@ -120,6 +120,31 @@ def g(a: A):
     reveal_type(w?.v)  # revealed: int | None
 ```
 
+## a chain over a wrapped optional runs to the end of its trailers
+
+peeling the wrapper opens a chain like any other `?.`, so the trailers that follow are resolved
+against the present value and only the end result is unioned with `None`.
+
+```by
+class Inner:
+    code: str
+
+class A:
+    inner: Inner = Inner()
+
+    def get(self) -> Inner:
+        return self.inner
+
+def f[T](t: T) -> T?:
+    return Some(t)
+
+def g(a: A):
+    w = f(a)
+    reveal_type(w?.inner.code)  # revealed: str | None
+    reveal_type(w?.get())       # revealed: Inner | None
+    reveal_type(w?.get().code)  # revealed: str | None
+```
+
 ## force-unwrap `!` peels one optional layer
 
 `expr!` removes one layer of optionality: a wrapped optional yields the next layer in, and a plain
