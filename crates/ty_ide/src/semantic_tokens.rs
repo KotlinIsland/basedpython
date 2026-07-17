@@ -704,6 +704,23 @@ impl<'db> SemanticTokenVisitor<'db> {
     }
 }
 
+/// The body statements that stand for source text of their own.
+///
+/// basedpython's `init(...)` shorthand prepends a synthesized
+/// `self.<name>: <ann> = <name>` for every `let` parameter, each anchored back
+/// on the parameter it came from. That text belongs to the signature — already
+/// tokenized by the parameter walk, and positioned *before* the body — so
+/// visiting these would emit tokens out of file order.
+fn source_ordered_body(func: &ast::StmtFunctionDef) -> &[ast::Stmt] {
+    let parameters_end = func.parameters.end();
+    let synthesized = func
+        .body
+        .iter()
+        .take_while(|stmt| stmt.start() < parameters_end)
+        .count();
+    &func.body[synthesized..]
+}
+
 impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
     fn enter_node(&mut self, node: AnyNodeRef<'_>) -> TraversalSignal {
         // If we have a range filter and this node doesn't intersect, skip it
@@ -757,7 +774,7 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
 
                 self.in_class_scope = false;
                 self.expecting_docstring = true;
-                self.visit_body(&func.body);
+                self.visit_body(source_ordered_body(func));
                 self.expecting_docstring = false;
                 self.in_class_scope = prev_in_class;
             }
@@ -4704,6 +4721,47 @@ from pathlib import Missing as Alias
 
         let tokens = test.highlight_file();
         assert_snapshot!(test.to_snapshot(&tokens), @r#""pathlib" @ 6..13: Namespace"#);
+    }
+
+    /// A `let` parameter makes `init(...)` synthesize a `self.<name> = <name>`
+    /// body statement anchored back on the parameter's own text. The parameter
+    /// walk already covers that text, so the synthesized statement must not be
+    /// visited again — tokens have to come out in file order.
+    #[test]
+    fn init_let_parameter_keeps_file_order() {
+        let test = SemanticTokenTest::new_by(
+            r#"
+class B:
+    init(self, let a: int = 1)
+
+    let x: int = 1
+
+class C(B):
+    override x: int = 2
+"#,
+        );
+
+        let tokens = test.highlight_file();
+        assert!(
+            tokens.iter().is_sorted_by_key(SemanticToken::start),
+            "tokens must be sorted: {tokens:?}"
+        );
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "B" @ 7..8: Class [definition]
+        "init" @ 14..18: Decorator
+        "init" @ 14..18: Method [definition]
+        "self" @ 19..23: SelfParameter [definition]
+        "a" @ 29..30: Parameter [definition]
+        "int" @ 32..35: Class
+        "1" @ 38..39: Number
+        "x" @ 50..51: Variable [definition]
+        "int" @ 53..56: Class
+        "1" @ 59..60: Number
+        "C" @ 68..69: Class [definition]
+        "B" @ 70..71: Class
+        "x" @ 87..88: Variable [definition]
+        "2" @ 96..97: Number
+        "#);
     }
 
     /// The infix `cast` keyword is lowered to a synthesized `cast(<type>, <value>)` call whose

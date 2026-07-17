@@ -435,7 +435,15 @@ impl<'a> FoldingRangeVisitor<'a> {
         decorators: &[D],
         name_start: TextSize,
     ) -> TextSize {
-        let search_start = decorators.last().map_or(statement_start, Ranged::end);
+        // a *synthetic* decorator need not precede the name: basedpython's
+        // `init(...)` shorthand marks the `init` keyword with one, so it spans
+        // the same text the name is anchored to. clamping keeps the search
+        // range well-formed — it collapses to empty, no keyword is found, and
+        // the header falls back to the name itself
+        let search_start = decorators
+            .last()
+            .map_or(statement_start, Ranged::end)
+            .min(name_start);
         self.find_token_start(keyword, TextRange::new(search_start, name_start))
             .unwrap_or(search_start)
     }
@@ -762,6 +770,36 @@ mod tests {
     use crate::tests::CursorTest;
     use insta::assert_snapshot;
     use ruff_db::diagnostic::{Annotation, Diagnostic, DiagnosticId, LintName, Severity, Span};
+
+    /// `init(...)` carries a synthetic decorator spanning the `init` keyword —
+    /// the same text its `__init__` name is anchored to — so the header search
+    /// range would be inverted
+    #[test]
+    fn basedpython_init_shorthand() {
+        let test = CursorTest::builder()
+            .source(
+                "main.by",
+                r#"
+class A[T]:
+    t: T
+    init(self, t: T)
+<CURSOR>
+"#,
+            )
+            .build();
+
+        assert_snapshot!(test.folding_ranges(), @"
+        info[folding-range]: Folding Range
+         --> main.by:2:12
+          |
+        2 |   class A[T]:
+          |  ____________^
+        3 | |     t: T
+        4 | |     init(self, t: T)
+          | |____________________^
+          |
+        ");
+    }
 
     #[test]
     fn test_folding_range_class() {
