@@ -390,7 +390,7 @@ class Optional:
             "},
             indoc! {"
                 def f(a: str | None):
-                    return None if a is None else a.b
+                    return (None if a is None else a.b)
             "},
         );
     }

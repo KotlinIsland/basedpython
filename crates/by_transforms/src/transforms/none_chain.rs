@@ -1,19 +1,18 @@
 use std::fmt::Write as _;
 
-use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt};
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
 
-use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
+use crate::transforms::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
 
-/// rewrites `a?.b` to `None if a is None else a.b`
-/// and chains like `a?.b?.c` to `None if a is None else None if (_t := a.b) is None else _t.c`
+/// rewrites `a?.b` to `(None if a is None else a.b)`
+/// and chains like `a?.b?.c` to `(None if a is None else None if (_t := a.b) is None else _t.c)`
 pub(crate) struct NoneChain<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
-    pub(crate) edits: Vec<Fix>,
+    pub(crate) template_edits: Vec<(TextRange, Vec<Fragment>)>,
 }
 
 impl<'src> NoneChain<'src> {
@@ -21,7 +20,7 @@ impl<'src> NoneChain<'src> {
         Self {
             source,
             types,
-            edits: Vec::new(),
+            template_edits: Vec::new(),
         }
     }
 }
@@ -112,6 +111,27 @@ pub(super) fn build_expansion(guards: &[String], result: &str, temp: &str) -> St
     s
 }
 
+/// the `?.` attribute chain at the base of `expr`, with its expansion, when `expr` is a
+/// link of an optional chain.
+///
+/// a chain runs from its first `?.` out through the trailers applied to it — `.attr`,
+/// `(...)`, `[...]`. only the attribute part expands; the trailers stay source
+fn chain_head<'a>(
+    expr: &'a Expr,
+    source: &str,
+    types: &dyn TypeInfo,
+) -> Option<(&'a Expr, String, Vec<String>)> {
+    if let Some((form, guards)) = expand_chain(expr, source, types) {
+        return Some((expr, form, guards));
+    }
+    match expr {
+        Expr::Attribute(attribute) => chain_head(&attribute.value, source, types),
+        Expr::Call(call) => chain_head(&call.func, source, types),
+        Expr::Subscript(subscript) => chain_head(&subscript.value, source, types),
+        _ => None,
+    }
+}
+
 pub(crate) struct NoneChainPass<'src> {
     source: &'src str,
 }
@@ -128,12 +148,34 @@ impl TypeAwarePass for NoneChainPass<'_> {
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
-        for fix in inner.edits {
-            for edit in fix.edits() {
-                let range = edit.range();
-                let repl = edit.content().unwrap_or_default().to_owned();
-                ctx.text_edits.push((range, repl));
+        ctx.template_edits.extend(inner.template_edits);
+    }
+}
+
+impl NoneChain<'_> {
+    /// visit the sub-expressions of the trailers between `head` and `expr` — the parts that
+    /// pass through as source and so can carry chains of their own. `head` itself is
+    /// rendered from its expansion, not walked
+    fn visit_trailers(&mut self, expr: &Expr, head: &Expr) {
+        if expr.range() == head.range() {
+            return;
+        }
+        match expr {
+            Expr::Attribute(attribute) => self.visit_trailers(&attribute.value, head),
+            Expr::Call(call) => {
+                self.visit_trailers(&call.func, head);
+                for arg in &*call.arguments.args {
+                    self.visit_expr(arg);
+                }
+                for keyword in &*call.arguments.keywords {
+                    self.visit_expr(&keyword.value);
+                }
             }
+            Expr::Subscript(subscript) => {
+                self.visit_trailers(&subscript.value, head);
+                self.visit_expr(&subscript.slice);
+            }
+            _ => {}
         }
     }
 }
@@ -144,15 +186,26 @@ impl<'ast> Visitor<'ast> for NoneChain<'_> {
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Expr::Attribute(_) = expr {
-            if let Some((form, guards)) = expand_chain(expr, self.source, self.types) {
-                let temp = pick_temp_var(self.types, expr);
-                self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    build_expansion(&guards, &form, temp),
-                    expr.range(),
-                )));
-                return;
-            }
+        // top-down, so the first link of a chain we reach is its outermost: the edit spans
+        // the whole chain, not just the `?.` access. a conditional binds looser than every
+        // operator, so an expansion that stopped at the access would regroup whatever
+        // followed into its `else` branch — `not a?.b` would yield `a.b`, and
+        // `[i for i in a?.b]` would not even parse. the parentheses keep the emitted tree
+        // the one that was parsed
+        if let Some((head, form, guards)) = chain_head(expr, self.source, self.types) {
+            let temp = pick_temp_var(self.types, expr);
+            let expansion = build_expansion(&guards, &form, temp);
+            let trailers = TextRange::new(head.range().end(), expr.range().end());
+            self.template_edits.push((
+                expr.range(),
+                vec![
+                    Fragment::Lit(format!("({expansion}")),
+                    Fragment::Src(trailers),
+                    Fragment::Lit(")".to_owned()),
+                ],
+            ));
+            self.visit_trailers(expr, head);
+            return;
         }
         walk_expr(self, expr);
     }
@@ -181,21 +234,21 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("x = None if w is None else w.value.bit_length\n"),
+            out.contains("x = (None if w is None else w.value.bit_length)\n"),
             "got: {out}"
         );
     }
 
     #[test]
     fn basic_chain() {
-        check("x = a?.b\n", "x = None if a is None else a.b\n");
+        check("x = a?.b\n", "x = (None if a is None else a.b)\n");
     }
 
     #[test]
     fn double_chain() {
         check(
             "x = a?.a?.b\n",
-            "x = None if a is None else None if (_t := a.a) is None else _t.b\n",
+            "x = (None if a is None else None if (_t := a.a) is None else _t.b)\n",
         );
     }
 
@@ -203,7 +256,7 @@ mod tests {
     fn double_chain_t_taken() {
         check(
             "_t = 1\nx = a?.a?.b\n",
-            "_t = 1\nx = None if a is None else None if (_t0 := a.a) is None else _t0.b\n",
+            "_t = 1\nx = (None if a is None else None if (_t0 := a.a) is None else _t0.b)\n",
         );
     }
 
@@ -211,21 +264,139 @@ mod tests {
     fn triple_chain() {
         check(
             "x = a?.b?.c?.d\n",
-            "x = None if a is None else None if (_t := a.b) is None else None if (_t := _t.c) is None else _t.d\n",
+            "x = (None if a is None else None if (_t := a.b) is None else None if (_t := _t.c) is None else _t.d)\n",
         );
     }
 
     #[test]
     fn mixed_chain() {
-        check("x = a?.b.c\n", "x = None if a is None else a.b.c\n");
+        check("x = a?.b.c\n", "x = (None if a is None else a.b.c)\n");
     }
 
     #[test]
     fn optional_after_plain_attr() {
         check(
             "x = a.b?.c\n",
-            "x = None if (_t := a.b) is None else _t.c\n",
+            "x = (None if (_t := a.b) is None else _t.c)\n",
         );
+    }
+
+    // the edit spans the whole chain — the `?.` access plus the trailers applied to it — and
+    // parenthesizes it, so the emitted tree is the one that was parsed. the trailers pass
+    // through as source, so chains nested in them still expand on their own
+
+    #[test]
+    fn call_on_chain() {
+        check("x = a?.b()\n", "x = (None if a is None else a.b())\n");
+    }
+
+    #[test]
+    fn call_on_double_chain() {
+        check(
+            "x = a?.b?.c()\n",
+            "x = (None if a is None else None if (_t := a.b) is None else _t.c())\n",
+        );
+    }
+
+    #[test]
+    fn call_with_args_on_chain() {
+        check(
+            "x = a?.b(1, k=2)\n",
+            "x = (None if a is None else a.b(1, k=2))\n",
+        );
+    }
+
+    #[test]
+    fn chain_in_call_argument_expands_separately() {
+        // the outer edit replaces only `a?.b`, so a chain nested in an argument is a
+        // non-overlapping edit of its own rather than text copied verbatim
+        check(
+            "x = a?.b(c?.d)\n",
+            "x = (None if a is None else a.b((None if c is None else c.d)))\n",
+        );
+    }
+
+    #[test]
+    fn trailers_after_call_on_chain() {
+        check(
+            "x = a?.b().c[0]\n",
+            "x = (None if a is None else a.b().c[0])\n",
+        );
+    }
+
+    #[test]
+    fn subscript_on_chain() {
+        check("x = a?.b[0]\n", "x = (None if a is None else a.b[0])\n");
+    }
+
+    #[test]
+    fn call_on_chain_with_coalesce() {
+        check(
+            "x = a?.b() ?? c\n",
+            "x = _t if (_t := (None if a is None else a.b())) is not None else c\n",
+        );
+    }
+
+    // a conditional binds looser than every operator, so an expansion that stopped at the
+    // `?.` access regrouped whatever followed into its `else` branch. each of these was
+    // wrong before the chain got its own parentheses — silently, in code ty accepts
+
+    #[test]
+    fn operand_of_a_binary_op() {
+        // was `None if a is None else a.b + 1` — the `+ 1` moved inside the else
+        check("x = a?.b + 1\n", "x = (None if a is None else a.b) + 1\n");
+    }
+
+    #[test]
+    fn operand_of_a_unary_op() {
+        // was `-None if a is None else a.b`, which evaluates `-None` and raises
+        check("x = -a?.b\n", "x = -(None if a is None else a.b)\n");
+    }
+
+    #[test]
+    fn operand_of_not() {
+        // was `not None if a is None else a.b`, which yields `a.b` — not `not a.b`
+        check("x = not a?.b\n", "x = not (None if a is None else a.b)\n");
+    }
+
+    #[test]
+    fn operand_of_a_comparison() {
+        // was `None if a is None else a.b == z`, yielding `None` rather than `None == z`
+        check("x = a?.b == z\n", "x = (None if a is None else a.b) == z\n");
+    }
+
+    #[test]
+    fn body_of_a_conditional() {
+        // was `None if a is None else a.b if z else w`, which ignored `z` entirely
+        check(
+            "x = a?.b if z else w\n",
+            "x = (None if a is None else a.b) if z else w\n",
+        );
+    }
+
+    #[test]
+    fn test_of_a_conditional() {
+        // an unparenthesized conditional is not a valid `if` test — this did not parse
+        check(
+            "x = z if a?.b else w\n",
+            "x = z if (None if a is None else a.b) else w\n",
+        );
+    }
+
+    #[test]
+    fn comprehension_iterable() {
+        // an unparenthesized conditional is not a valid comprehension iterable — this did
+        // not parse
+        check(
+            "x = [i for i in a?.b]\n",
+            "x = [i for i in (None if a is None else a.b)]\n",
+        );
+    }
+
+    #[test]
+    fn delimited_positions_stay_correct() {
+        check("x = [a?.b]\n", "x = [(None if a is None else a.b)]\n");
+        check("x = z[a?.b]\n", "x = z[(None if a is None else a.b)]\n");
     }
 
     #[test]
