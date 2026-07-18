@@ -159,6 +159,12 @@ pub(crate) trait TypeInfo {
     /// `int | str` → `(int, str)`), since `isinstance(x, list[object])` is
     /// itself a runtime error
     fn cast_check_plan(&self, type_expr: &Expr) -> Option<SoundnessCheck>;
+
+    /// the keyword a trailing lambda block is passed with — the name of the
+    /// callee's last declared parameter. `None` means the lambda is appended
+    /// as a positional argument instead (unknown callee signature, or a
+    /// variadic / positional-only last parameter)
+    fn trailing_lambda_keyword(&self, callee: &Expr) -> Option<String>;
 }
 
 /// re-export of the ty-side check plan so transforms name a single type
@@ -384,6 +390,10 @@ impl TypeInfo for SemanticModel<'_> {
     fn cast_check_plan(&self, type_expr: &Expr) -> Option<SoundnessCheck> {
         let ty = type_expr.inferred_type(self)?;
         ty_python_semantic::types::soundness::runtime_check_plan(self.db(), self.file(), ty)
+    }
+
+    fn trailing_lambda_keyword(&self, callee: &Expr) -> Option<String> {
+        SemanticModel::trailing_lambda_keyword(self, callee)
     }
 }
 

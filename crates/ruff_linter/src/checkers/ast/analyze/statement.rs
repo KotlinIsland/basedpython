@@ -57,6 +57,7 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
                 parameters,
                 body,
                 type_params: _,
+                is_trailing_lambda: _,
                 range: _,
                 node_index: _,
             },

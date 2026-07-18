@@ -93,6 +93,13 @@ fields = [
   { name = "parameters", type = "Box<crate::Parameters>" },
   { name = "returns", type = "Expr?", is_annotation = true },
   { name = "body", type = "ThinVec<Stmt>" },
+  { name = "is_trailing_lambda", type = "bool", doc = """basedpython: when true, this function is a trailing lambda block —
+a statement-level `<call>:` followed by an indented suite. The suite is the
+function body, `parameters` holds the single implicit parameter `it`, `name`
+is the synthetic `__trailing_lambda__`, and `decorator_list` holds exactly one
+synthetic decorator whose expression is the called expression from the source
+(no `@` is present). Lowered to a `def` followed by the call with the function
+appended as its last argument""" },
 ]
 
 [Stmt.nodes.StmtClassDef]

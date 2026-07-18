@@ -568,10 +568,13 @@ fn trailing_function_or_class_def<'a>(
         // ```
         !comments.has_trailing_own_line(*last_child))
     .find(|last_child| {
-        matches!(
-            last_child,
-            AnyNodeRef::StmtFunctionDef(_) | AnyNodeRef::StmtClassDef(_)
-        )
+        // basedpython: a trailing lambda block parses as a `FunctionDef` but
+        // reads as a call statement — no definition blank lines after it
+        matches!(last_child, AnyNodeRef::StmtClassDef(_))
+            || matches!(
+                last_child,
+                AnyNodeRef::StmtFunctionDef(function) if !function.is_trailing_lambda
+            )
     })
 }
 
@@ -781,8 +784,15 @@ pub(crate) fn as_only_an_ellipsis<'a>(body: &'a [Stmt], comments: &Comments) -> 
 }
 
 /// Returns `true` if a [`Stmt`] is a class or function definition.
+///
+/// basedpython: a trailing lambda block parses as a `FunctionDef` but reads
+/// as a call statement, so it does not get definition blank-line treatment.
 const fn is_class_or_function_definition(stmt: &Stmt) -> bool {
-    matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_))
+    match stmt {
+        Stmt::FunctionDef(function) => !function.is_trailing_lambda,
+        Stmt::ClassDef(_) => true,
+        _ => false,
+    }
 }
 
 /// Returns `true` if a [`Stmt`] is an import.

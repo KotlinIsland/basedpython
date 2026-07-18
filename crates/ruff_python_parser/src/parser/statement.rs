@@ -1322,6 +1322,13 @@ impl<'src> Parser<'src> {
     fn parse_single_simple_statement(&mut self) -> Stmt {
         let stmt = self.parse_simple_statement();
 
+        // basedpython: a trailing lambda block is a compound statement — it
+        // consumed its own newline, indent and dedent, so the simple-statement
+        // termination handling below does not apply
+        if matches!(&stmt, Stmt::FunctionDef(function) if function.is_trailing_lambda) {
+            return stmt;
+        }
+
         // The order of the token is important here.
         let has_eaten_semicolon = self.eat(TokenKind::Semi);
         let has_eaten_newline = self.eat(TokenKind::Newline);
@@ -1366,6 +1373,14 @@ impl<'src> Parser<'src> {
             progress.assert_progressing(self);
 
             stmts.push(self.parse_simple_statement());
+
+            // basedpython: a trailing lambda block consumed its own suite —
+            // no semicolon or newline follows it
+            if matches!(stmts.last(), Some(Stmt::FunctionDef(function)) if function.is_trailing_lambda)
+            {
+                stmts.shrink_to_fit();
+                return stmts;
+            }
 
             if !self.eat(TokenKind::Semi) {
                 if self.at_simple_stmt() {
@@ -1532,6 +1547,20 @@ impl<'src> Parser<'src> {
                 if self.at(TokenKind::Equal) {
                     Stmt::Assign(self.parse_assign_statement(parsed_expr, start))
                 } else if self.at(TokenKind::Colon) {
+                    // basedpython: an expression followed by `:` and an indented
+                    // suite is a trailing lambda block — the suite becomes a
+                    // function passed as the call's last argument. an annotation
+                    // can never start with a newline, so the shapes are disjoint.
+                    // gated on basedpython mode (not just reported) because the
+                    // shape shows up in `.py` error recovery — consuming the
+                    // suite there would change upstream's diagnostics
+                    if self.options.is_basedpython
+                        && self.peek2() == (TokenKind::Newline, TokenKind::Indent)
+                    {
+                        return Stmt::FunctionDef(
+                            self.parse_trailing_lambda_statement(parsed_expr, start),
+                        );
+                    }
                     Stmt::AnnAssign(self.parse_annotated_assignment_statement(parsed_expr, start))
                 } else if let Some(op) = self.current_token_kind().as_augmented_assign_operator() {
                     Stmt::AugAssign(self.parse_augmented_assignment_statement(
@@ -3307,6 +3336,7 @@ impl<'src> Parser<'src> {
             decorator_list,
             is_async: false,
             returns,
+            is_trailing_lambda: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         }
@@ -3372,6 +3402,7 @@ impl<'src> Parser<'src> {
                 range: TextRange::empty(params_end),
                 node_index: AtomicNodeIndex::NONE,
             }))),
+            is_trailing_lambda: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         }
@@ -3452,6 +3483,84 @@ impl<'src> Parser<'src> {
             }),
         };
         out.push(stmt);
+    }
+
+    /// Parses a statement-level trailing lambda block — an expression followed
+    /// by `:` and an indented suite (basedpython only):
+    ///
+    /// ```text
+    /// f(2):
+    ///     print(it)
+    /// ```
+    ///
+    /// Produces a synthetic [`StmtFunctionDef`] with `is_trailing_lambda` set:
+    /// the suite is the function body, `parameters` holds the single implicit
+    /// parameter `it`, and the called expression is carried by a synthetic
+    /// decorator whose range is the expression's own (no `@` in the source).
+    /// The lowering emits a `def` and re-emits the call with the function
+    /// appended as its last argument.
+    ///
+    /// The caller has already parsed the expression, checked basedpython mode
+    /// (`.py` files keep upstream's annotated-assignment errors for this
+    /// shape), and is positioned at the `:` token.
+    ///
+    /// [`StmtFunctionDef`]: ast::StmtFunctionDef
+    fn parse_trailing_lambda_statement(
+        &mut self,
+        callee: ParsedExpr,
+        start: TextSize,
+    ) -> ast::StmtFunctionDef {
+        let colon_start = self.current_token_range().start();
+        self.bump(TokenKind::Colon);
+        let body = self.parse_body(Clause::FunctionDef);
+
+        let callee_range = callee.expr.range();
+        let decorator = ast::Decorator {
+            expression: callee.expr,
+            range: callee_range,
+            node_index: AtomicNodeIndex::NONE,
+        };
+
+        // synthetic identifiers anchor zero-width on the `:` so IDE token
+        // walks stay ordered relative to the callee (before) and body (after)
+        let synthetic = TextRange::empty(colon_start);
+        let it = ast::ParameterWithDefault {
+            parameter: ast::Parameter {
+                name: ast::Identifier {
+                    id: Name::new_static("it"),
+                    range: synthetic,
+                    node_index: AtomicNodeIndex::NONE,
+                },
+                annotation: None,
+                range: synthetic,
+                node_index: AtomicNodeIndex::NONE,
+            },
+            default: None,
+            range: synthetic,
+            node_index: AtomicNodeIndex::NONE,
+        };
+        let parameters = ast::Parameters {
+            args: std::iter::once(it).collect(),
+            range: synthetic,
+            ..ast::Parameters::default()
+        };
+
+        ast::StmtFunctionDef {
+            name: ast::Identifier {
+                id: Name::new_static("__trailing_lambda__"),
+                range: synthetic,
+                node_index: AtomicNodeIndex::NONE,
+            },
+            type_params: None,
+            parameters: Box::new(parameters),
+            body,
+            decorator_list: vec![decorator].into(),
+            is_async: false,
+            returns: None,
+            is_trailing_lambda: true,
+            range: self.node_range(start),
+            node_index: AtomicNodeIndex::NONE,
+        }
     }
 
     /// Parses a class definition.
@@ -4442,6 +4551,7 @@ impl<'src> Parser<'src> {
                     node_index: AtomicNodeIndex::default(),
                     range,
                     is_async: false,
+                    is_trailing_lambda: false,
                     decorator_list: decorators,
                     name: ast::Identifier {
                         id: Name::empty(),
@@ -4932,10 +5042,18 @@ impl<'src> Parser<'src> {
 
                     // TODO(dhruvmanila): Pyright seems to only highlight the first non-default argument
                     // https://github.com/microsoft/pyright/blob/3b70417dd549f6663b8f86a76f75d8dfd450f4a8/packages/pyright-internal/src/parser/parser.ts#L2038-L2042
+                    //
+                    // basedpython relaxes this for `def` (not `lambda`): a required
+                    // parameter may follow a defaulted one — the lowering gives it a
+                    // `_MISSING` sentinel default plus a body guard that raises. this
+                    // is what lets a trailing lambda bind the last parameter while
+                    // earlier defaulted parameters keep their defaults
                     if param.default.is_none()
                         && seen_default_param
                         && !seen_keyword_only_separator
                         && parameters.vararg.is_none()
+                        && !(parser.options.is_basedpython
+                            && function_kind == FunctionKind::FunctionDef)
                     {
                         // test_ok params_non_default_after_star
                         // def foo(a=10, *, b, c=11, d): ...

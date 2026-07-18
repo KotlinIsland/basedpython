@@ -1676,6 +1676,7 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 decorator_list,
                 returns,
                 type_params,
+                is_trailing_lambda: _,
                 range: _,
                 node_index: _,
             }) => Self::FunctionDef(StmtFunctionDef {

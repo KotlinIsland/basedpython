@@ -1,0 +1,23 @@
+def f(x: int = 1, a: (int) -> str):
+    a(x)
+
+
+# consecutive trailing lambda blocks share the synthetic
+# `__trailing_lambda__` name; they are call statements, not redefinitions
+f:
+    print(it)
+
+f(2):
+    print(it)
+
+f:
+    print(it)
+
+
+# a real redefinition still fires
+def g():
+    pass
+
+
+def g():
+    pass

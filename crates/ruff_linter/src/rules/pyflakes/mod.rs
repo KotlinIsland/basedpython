@@ -131,6 +131,7 @@ mod tests {
     #[test_case(Rule::RedefinedWhileUnused, Path::new("F811_29.pyi"))]
     #[test_case(Rule::RedefinedWhileUnused, Path::new("F811_30.py"))]
     #[test_case(Rule::RedefinedWhileUnused, Path::new("F811_31.py"))]
+    #[test_case(Rule::RedefinedWhileUnused, Path::new("F811_basedpython.by"))]
     #[test_case(Rule::RedefinedWhileUnused, Path::new("F811_32.py"))]
     #[test_case(Rule::RedefinedWhileUnused, Path::new("F811_33.pyi"))]
     #[test_case(Rule::RedefinedWhileUnused, Path::new("F811_35.py"))]
