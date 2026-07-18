@@ -98,6 +98,14 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 
 - [destructuring with `if let`](features/if-let.md)
 
+## framework support
+
+- [architecture](frameworks/index.md)
+- [pydantic](frameworks/pydantic.md)
+- [sqlalchemy](frameworks/sqlalchemy.md)
+- [pytest](frameworks/pytest.md)
+- [django](frameworks/django.md)
+
 ## development
 
 - [how transpilation works](development/how-transpilation-works.md)

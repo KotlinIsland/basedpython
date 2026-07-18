@@ -36,10 +36,10 @@ use ruff_text_size::{Ranged, TextRange};
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
     coalesce_chain, compat, context_params, decl_site_variance, decorator_keyword, dedent_string,
-    dynamic_keyword, empty_declarations, extension, float_const, force_unwrap, generic_call,
-    generics, grapheme_string, identity_swap, implicit_typing, init_method, just_float,
-    kw_subscript, literal_types, main_function, modifiers, mutable_defaults, none_chain,
-    optional_type, overload, parametric_is, postfix_await, propagate, reified_generic,
+    dynamic_keyword, empty_declarations, extension, float_const, force_unwrap, frameworks,
+    generic_call, generics, grapheme_string, identity_swap, implicit_typing, init_method,
+    just_float, kw_subscript, literal_types, main_function, modifiers, mutable_defaults,
+    none_chain, optional_type, overload, parametric_is, postfix_await, propagate, reified_generic,
     repeated_underscore, sentinel, some_ctor, soundness, string_tag, super_keyword,
     symbolic_type_op, top_star, trailing_lambda, tuple_index, type_is, type_reification,
     typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
@@ -485,6 +485,7 @@ pub(crate) fn run_against_source<'a>(
     let context_params_pass = context_params::ContextParamsPass::new(source_ref);
     let extension_block_pass = extension::ExtensionBlockPass::new(source_ref);
     let extension_call_pass = extension::ExtensionCallPass;
+    let frameworks_pass = frameworks::FrameworksPass::new(source_ref);
     let variance_pass = decl_site_variance::VarianceStripPass::new();
     let anon_named_tuple_pass =
         anon_named_tuple::AnonNamedTuplePass::new(source_ref, config.clone());
@@ -542,6 +543,10 @@ pub(crate) fn run_against_source<'a>(
     // type-aware passes: operate on the salsa-owned parsed module (so
     // semantic queries hit the right AST nodes), emit text_edits / imports
     let type_aware: &[&dyn TypeAwarePass] = &[
+        // framework gates only push errors (no edits), so their position is
+        // order-independent; first, so a hard incompatibility surfaces
+        // before any edit-conflict noise
+        &frameworks_pass,
         // soundness wraps whole gated expressions in `_soundness_check(...)`
         // template edits; it runs first so an equal-span template from a
         // later pass (e.g. coalesce on a wrapped iterable) is claimed and
