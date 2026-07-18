@@ -178,6 +178,8 @@ pub(crate) mod tests {
         python_platform: PythonPlatform,
         /// Path and content pairs for files that should be present
         files: Vec<(&'a str, &'a str)>,
+        /// Directories resolved as site-packages (third-party) search paths
+        site_packages: Vec<SystemPathBuf>,
     }
 
     impl<'a> TestDbBuilder<'a> {
@@ -186,7 +188,20 @@ pub(crate) mod tests {
                 python_version: PythonVersion::default(),
                 python_platform: PythonPlatform::default(),
                 files: vec![],
+                site_packages: vec![],
             }
+        }
+
+        /// Resolve `path` as a site-packages directory, so files written
+        /// under it model an installed third-party package (`KnownModule`
+        /// third-party gating requires this — a first-party file can never
+        /// be recognized as e.g. `pydantic.main`).
+        pub(crate) fn with_site_packages(
+            mut self,
+            path: &(impl AsRef<SystemPath> + ?Sized),
+        ) -> Self {
+            self.site_packages.push(path.as_ref().to_path_buf());
+            self
         }
 
         pub(crate) fn with_python_version(mut self, version: PythonVersion) -> Self {
@@ -213,9 +228,18 @@ pub(crate) mod tests {
 
             let src_root = SystemPathBuf::from("/src");
             db.memory_file_system().create_directory_all(&src_root)?;
+            for site_packages in &self.site_packages {
+                db.memory_file_system()
+                    .create_directory_all(site_packages)?;
+            }
 
             db.write_files(self.files)
                 .context("Failed to write test files")?;
+
+            let search_paths = SearchPathSettings {
+                site_packages_paths: self.site_packages,
+                ..SearchPathSettings::new(vec![src_root])
+            };
 
             Program::from_settings(
                 &db,
@@ -225,7 +249,7 @@ pub(crate) mod tests {
                         source: PythonVersionSource::default(),
                     },
                     python_platform: self.python_platform,
-                    search_paths: SearchPathSettings::new(vec![src_root])
+                    search_paths: search_paths
                         .to_search_paths(db.system(), db.vendored(), &FallibleStrategy)
                         .context("Invalid search path settings")?,
                 },

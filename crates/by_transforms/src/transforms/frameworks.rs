@@ -1,0 +1,214 @@
+//! Framework lowering gates — reject basedpython constructs that are
+//! runtime-broken inside framework-transformed classes.
+//!
+//! The conformance contract is the compatibility matrix in
+//! `docs/basedpython/frameworks/index.md`. This pass only ever *rejects*
+//! with a clear message; a lowering that must merely adapt to a framework
+//! does so in its own pass by consulting the same
+//! [`TypeInfo::framework_class_role`] query.
+
+use ruff_python_ast::visitor::{Visitor, walk_stmt};
+use ruff_python_ast::{Expr, Stmt, StmtClassDef};
+
+use super::ast_driver::{PassContext, TypeAwarePass};
+use super::source_util::is_synthetic_decorator;
+use crate::type_info::{FrameworkRole, TypeInfo};
+
+pub(crate) struct FrameworksPass<'src> {
+    source: &'src str,
+}
+
+impl<'src> FrameworksPass<'src> {
+    pub(crate) fn new(source: &'src str) -> Self {
+        Self { source }
+    }
+}
+
+fn role_name(role: FrameworkRole) -> &'static str {
+    match role {
+        FrameworkRole::PydanticModel => "pydantic model",
+    }
+}
+
+struct GateVisitor<'a> {
+    source: &'a str,
+    types: &'a dyn TypeInfo,
+    errors: Vec<String>,
+}
+
+impl GateVisitor<'_> {
+    fn check_class(&mut self, class: &StmtClassDef) {
+        let Some(role) = self.types.framework_class_role(class) else {
+            return;
+        };
+        let role = role_name(role);
+        let class_name = class.name.as_str();
+
+        for dec in &class.decorator_list {
+            if !is_synthetic_decorator(self.source, dec) {
+                continue;
+            }
+            let Expr::Name(name) = &dec.expression else {
+                continue;
+            };
+            if matches!(name.id.as_str(), "data_class" | "frozen_data_class") {
+                self.errors.push(format!(
+                    "`data class` on {role} `{class_name}`: the framework synthesizes its own \
+                     constructor and metaclass, and stacking `@dataclass` on it breaks at \
+                     runtime. use a plain `class`"
+                ));
+            }
+        }
+
+        for stmt in &class.body {
+            let Stmt::FunctionDef(func) = stmt else {
+                continue;
+            };
+            // same detection as the init_method lowering: the parser marks the
+            // `init(...)` shorthand with a synthetic `__init_method__` decorator
+            if func.decorator_list.iter().any(
+                |dec| matches!(&dec.expression, Expr::Name(n) if n.id.as_str() == "__init_method__"),
+            ) {
+                self.errors.push(format!(
+                    "`init` shorthand in {role} `{class_name}`: the framework synthesizes \
+                     `__init__` from field declarations. declare fields instead, or write \
+                     `def __init__` explicitly to override it"
+                ));
+            }
+        }
+    }
+}
+
+impl<'a> Visitor<'a> for GateVisitor<'_> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if let Stmt::ClassDef(class) = stmt {
+            self.check_class(class);
+        }
+        walk_stmt(self, stmt);
+    }
+}
+
+impl TypeAwarePass for FrameworksPass<'_> {
+    fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
+        let mut visitor = GateVisitor {
+            source: self.source,
+            types,
+            errors: Vec::new(),
+        };
+        for stmt in stmts {
+            visitor.visit_stmt(stmt);
+        }
+        ctx.errors.append(&mut visitor.errors);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use ruff_db::files::system_path_to_file;
+    use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
+    use ty_project::{ProjectMetadata, TestDb};
+
+    use crate::{Config, transpile_typed};
+
+    /// a project db whose `/sp` directory resolves as site-packages, holding
+    /// a mock pydantic package (`BaseModel` must be *defined* in
+    /// `pydantic.main` on a third-party search path to be recognized)
+    fn pydantic_db(files: &[(&str, &str)]) -> TestDb {
+        let mut db = TestDb::new(ProjectMetadata::new(
+            ruff_python_ast::name::Name::new_static(""),
+            SystemPathBuf::from("/proj"),
+        ));
+        db.write_file(
+            "/sp/pydantic/__init__.pyi",
+            "from pydantic.main import BaseModel as BaseModel\n",
+        )
+        .expect("write file failed");
+        db.write_file("/sp/pydantic/main.pyi", "class BaseModel: ...\n")
+            .expect("write file failed");
+        for (path, src) in files {
+            db.write_file(path, src).expect("write file failed");
+        }
+        db.init_program_with_site_packages(["/sp"])
+            .expect("program init failed");
+        db
+    }
+
+    fn transpile_result(db: &TestDb, path: &str) -> Result<String, String> {
+        let file = system_path_to_file(db, path).expect("file not in db");
+        transpile_typed(db, file, &Config::test_default()).map_err(|err| err.to_string())
+    }
+
+    #[test]
+    fn data_class_modifier_on_pydantic_model_rejected() {
+        let db = pydantic_db(&[(
+            "/proj/models.by",
+            "from pydantic import BaseModel\ndata class User(BaseModel):\n    name: str\n",
+        )]);
+        let err = transpile_result(&db, "/proj/models.by").expect_err("gate should reject");
+        assert!(
+            err.contains("`data class` on pydantic model `User`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn init_shorthand_in_pydantic_model_rejected() {
+        let db = pydantic_db(&[(
+            "/proj/models.by",
+            "from pydantic import BaseModel\nclass User(BaseModel):\n    init(self, let name: str)\n",
+        )]);
+        let err = transpile_result(&db, "/proj/models.by").expect_err("gate should reject");
+        assert!(
+            err.contains("`init` shorthand in pydantic model `User`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn inherited_model_is_gated_too() {
+        let db = pydantic_db(&[(
+            "/proj/models.by",
+            "from pydantic import BaseModel\nclass Base(BaseModel): ...\ndata class User(Base):\n    name: str\n",
+        )]);
+        let err = transpile_result(&db, "/proj/models.by").expect_err("gate should reject");
+        assert!(
+            err.contains("`data class` on pydantic model `User`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn ordinary_class_untouched_with_pydantic_imported() {
+        let db = pydantic_db(&[(
+            "/proj/models.by",
+            "import pydantic\ndata class Point:\n    x: int\n",
+        )]);
+        let out =
+            transpile_result(&db, "/proj/models.by").expect("ordinary class should transpile");
+        assert!(
+            out.contains("@dataclass(slots=True)"),
+            "data class should lower normally, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn plain_fields_in_pydantic_model_transpile() {
+        let db = pydantic_db(&[(
+            "/proj/models.by",
+            "from pydantic import BaseModel\nclass User(BaseModel):\n    name: str\n",
+        )]);
+        let out = transpile_result(&db, "/proj/models.by").expect("plain model should transpile");
+        assert!(out.contains("class User(BaseModel):"), "got:\n{out}");
+    }
+
+    #[test]
+    fn explicit_dunder_init_in_pydantic_model_allowed() {
+        // pydantic itself allows overriding `__init__` explicitly; only the
+        // shorthand (which hides the override) is gated
+        let db = pydantic_db(&[(
+            "/proj/models.by",
+            "from pydantic import BaseModel\nclass User(BaseModel):\n    def __init__(self, name: str):\n        super().__init__(name=name)\n",
+        )]);
+        transpile_result(&db, "/proj/models.by").expect("explicit __init__ should transpile");
+    }
+}

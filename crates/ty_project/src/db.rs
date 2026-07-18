@@ -622,7 +622,7 @@ pub(crate) mod testing {
     use ruff_db::Db as SourceDb;
     use ruff_db::diagnostic::Diagnostic;
     use ruff_db::files::{File, FileRootKind, Files};
-    use ruff_db::system::{DbWithTestSystem, System, TestSystem};
+    use ruff_db::system::{DbWithTestSystem, System, SystemPath, SystemPathBuf, TestSystem};
     use ruff_db::vendored::VendoredFileSystem;
     use ruff_python_ast::PythonVersion;
     use ty_module_resolver::SearchPathSettings;
@@ -683,11 +683,41 @@ pub(crate) mod testing {
             &mut self,
             python_version: PythonVersion,
         ) -> anyhow::Result<()> {
+            self.init_program_inner(python_version, Vec::new());
+            Ok(())
+        }
+
+        /// Like [`init_program`](Self::init_program), but also resolving each
+        /// given directory as a site-packages (third-party) search path.
+        /// Write the mock package files *before* calling this — search paths
+        /// are validated eagerly.
+        pub fn init_program_with_site_packages(
+            &mut self,
+            site_packages: impl IntoIterator<Item = impl AsRef<SystemPath>>,
+        ) -> anyhow::Result<()> {
+            self.init_program_inner(
+                PythonVersion::latest_ty(),
+                site_packages
+                    .into_iter()
+                    .map(|path| path.as_ref().to_path_buf())
+                    .collect(),
+            );
+            Ok(())
+        }
+
+        fn init_program_inner(
+            &mut self,
+            python_version: PythonVersion,
+            site_packages_paths: Vec<SystemPathBuf>,
+        ) {
             let root = self.project().root(self);
 
-            let search_paths = SearchPathSettings::new(vec![root.to_path_buf()])
-                .to_search_paths(self.system(), self.vendored(), &FallibleStrategy)
-                .expect("Valid search path settings");
+            let search_paths = SearchPathSettings {
+                site_packages_paths,
+                ..SearchPathSettings::new(vec![root.to_path_buf()])
+            }
+            .to_search_paths(self.system(), self.vendored(), &FallibleStrategy)
+            .expect("Valid search path settings");
 
             self.files().try_add_root(self, root, FileRootKind::Project);
 
@@ -702,8 +732,6 @@ pub(crate) mod testing {
                     search_paths,
                 },
             );
-
-            Ok(())
         }
     }
 
