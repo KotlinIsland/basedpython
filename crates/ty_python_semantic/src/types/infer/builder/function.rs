@@ -851,6 +851,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             node_index: _,
             name: _,
             annotation,
+            is_context: _,
         } = parameter;
 
         if let Some(annotation) = annotation.as_deref() {

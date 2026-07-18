@@ -2963,6 +2963,10 @@ pub struct Parameter {
     pub node_index: AtomicNodeIndex,
     pub name: Identifier,
     pub annotation: Option<Box<Expr>>,
+    /// basedpython: `true` when written with the `context` prefix
+    /// (`def f(context b: str)`). when unmatched at a call site, the argument
+    /// is resolved implicitly from `context` declarations in scope
+    pub is_context: bool,
 }
 
 impl Parameter {

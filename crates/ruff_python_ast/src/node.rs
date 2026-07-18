@@ -361,6 +361,7 @@ impl ast::Parameter {
             node_index: _,
             name,
             annotation,
+            is_context: _,
         } = self;
 
         visitor.visit_identifier(name);

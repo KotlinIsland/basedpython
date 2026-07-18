@@ -11,8 +11,13 @@ impl FormatNodeRule<Parameter> for FormatParameter {
             node_index: _,
             name,
             annotation,
+            is_context,
         } = item;
 
+        if *is_context {
+            token("context").fmt(f)?;
+            space().fmt(f)?;
+        }
         name.format().fmt(f)?;
 
         if let Some(annotation) = annotation.as_deref() {

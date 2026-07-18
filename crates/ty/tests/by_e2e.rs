@@ -206,6 +206,44 @@ print(A.__sealed_members__ == (B, C))
 }
 
 #[test]
+fn context_parameters_pass_implicitly_at_runtime() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def greet(name: str, context greeting: str) -> str:
+    return f\"{greeting}, {name}\"
+
+def shout(name: str, context greeting: str) -> str:
+    return greet(name).upper()
+
+context g = \"hello\"
+print(greet(\"world\"))
+print(shout(\"moon\", greeting=\"good night\"))
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "hello, world\nGOOD NIGHT, MOON"
+    );
+}
+
+#[test]
 fn enum_lowers_to_sealed_dataclass_hierarchy() {
     let out = transpile(
         "\

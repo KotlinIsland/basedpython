@@ -9001,6 +9001,22 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .bindings_for_call(callable_type)
             .match_parameters(self.db(), &call_arguments);
 
+        // basedpython: fill unmatched `context` parameters from the `context`
+        // declarations visible at this call site, before check/report. gated
+        // to the callables the transpiler can also inject for (a plain
+        // function or bound method — `single_signature`), so a call the
+        // checker accepts is always one the lowering completes
+        if matches!(
+            callable_type,
+            Type::FunctionLiteral(_) | Type::BoundMethod(_)
+        ) {
+            bindings.resolve_context_arguments(
+                self.db(),
+                self.scope(),
+                call_expression.range().start(),
+            );
+        }
+
         report_missing_implicit_constructor_call(
             &self.context,
             self.db(),
