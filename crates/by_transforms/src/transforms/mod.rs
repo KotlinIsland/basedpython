@@ -18,6 +18,7 @@ pub(crate) mod enums;
 pub(crate) mod extension;
 pub(crate) mod float_const;
 pub(crate) mod force_unwrap;
+pub(crate) mod frameworks;
 pub(crate) mod generic_call;
 pub(crate) mod generics;
 pub(crate) mod grapheme_string;

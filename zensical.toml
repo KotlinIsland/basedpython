@@ -89,6 +89,14 @@ features = [
 ]
 
 [[project.nav]]
+"framework support" = [
+  { "Pydantic" = "frameworks/pydantic.md" },
+  { "SQLAlchemy" = "frameworks/sqlalchemy.md" },
+  { "pytest" = "frameworks/pytest.md" },
+  { "Django" = "frameworks/django.md" },
+]
+
+[[project.nav]]
 development = [
   { "how transpilation works" = "development/how-transpilation-works.md" },
   { "reverse transforms" = "development/reverse-transforms.md" },

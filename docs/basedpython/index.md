@@ -33,6 +33,7 @@ def main():
 
 - [getting started](getting-started.md) — install, your first file, project layout
 - [features](features/index.md) — the full language reference
+- [framework support](frameworks/index.md) — popular python library support
 - [`by` cli reference](cli-reference.md) — commands and flags
 
 ## development

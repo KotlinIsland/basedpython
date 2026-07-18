@@ -1,6 +1,6 @@
 //! Abstraction over type/binding information consumed by transforms.
 
-use ruff_python_ast::{Expr, ExprCall, ExprName};
+use ruff_python_ast::{Expr, ExprCall, ExprName, StmtClassDef};
 use ty_python_core::{global_scope, place_table, semantic_index};
 use ty_python_semantic::types::{DynamicType, KnownClass, KnownInstanceType, Type, character};
 use ty_python_semantic::{HasType, SemanticModel};
@@ -208,10 +208,21 @@ pub(crate) trait TypeInfo {
     /// assignment lowering (they are already the right runtime type, so
     /// wrapping them in `Character(...)` again would be redundant)
     fn is_character_instance(&self, expr: &Expr) -> bool;
+
+    /// the framework role of the class `class_def` defines — `Some` when ty
+    /// resolves it to a class a supported framework transforms at runtime
+    /// (a pydantic model today; sqlalchemy/django as their sessions land).
+    /// lowering passes consult this to gate constructs that would be
+    /// runtime-broken inside such a class; see
+    /// `docs/basedpython/frameworks/index.md`
+    fn framework_class_role(&self, class_def: &StmtClassDef) -> Option<FrameworkRole>;
 }
 
 /// re-export of the ty-side check plan so transforms name a single type
 pub(crate) use ty_python_semantic::types::soundness::CheckKind as SoundnessCheck;
+
+/// re-export of the ty-side framework role so transforms name a single type
+pub(crate) use ty_python_semantic::types::FrameworkRole;
 
 impl TypeInfo for SemanticModel<'_> {
     fn subscript_is_type_context(&self, name: &ExprName) -> bool {
@@ -484,6 +495,12 @@ impl TypeInfo for SemanticModel<'_> {
     fn is_character_instance(&self, expr: &Expr) -> bool {
         expr.inferred_type(self)
             .is_some_and(|ty| character::is_character_instance(self.db(), ty))
+    }
+
+    fn framework_class_role(&self, class_def: &StmtClassDef) -> Option<FrameworkRole> {
+        let ty = class_def.inferred_type(self)?;
+        let class = ty.as_class_literal()?;
+        ty_python_semantic::types::class_framework_role(self.db(), class)
     }
 }
 
