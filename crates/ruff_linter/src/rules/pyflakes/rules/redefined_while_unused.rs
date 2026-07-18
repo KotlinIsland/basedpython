@@ -111,6 +111,24 @@ pub(crate) fn redefined_while_unused(checker: &Checker, scope_id: ScopeId, scope
                 continue;
             }
 
+            // basedpython: trailing lambda blocks all bind the synthetic
+            // `__trailing_lambda__` name — they are call statements, not
+            // reusable definitions, so they neither redefine nor get redefined
+            if checker.source_type.is_basedpython() {
+                let is_trailing_lambda = |source: Option<NodeId>| {
+                    source.is_some_and(|source| {
+                        checker
+                            .semantic()
+                            .statement(source)
+                            .as_function_def_stmt()
+                            .is_some_and(|function| function.is_trailing_lambda)
+                    })
+                };
+                if is_trailing_lambda(binding.source) || is_trailing_lambda(shadowed.source) {
+                    continue;
+                }
+            }
+
             // If the shadowing binding isn't considered a "redefinition" of the
             // shadowed binding, abort — unless both are annotated assignments
             // and preview mode is enabled (see #23802).

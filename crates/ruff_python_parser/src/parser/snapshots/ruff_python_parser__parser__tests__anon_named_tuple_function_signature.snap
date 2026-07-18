@@ -172,6 +172,7 @@ ModModule {
                         },
                     ),
                 ],
+                is_trailing_lambda: false,
             },
         ),
     ],

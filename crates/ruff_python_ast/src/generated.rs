@@ -9411,6 +9411,14 @@ pub struct StmtFunctionDef {
     pub parameters: Box<crate::Parameters>,
     pub returns: Option<Box<Expr>>,
     pub body: thin_vec::ThinVec<Stmt>,
+    /// basedpython: when true, this function is a trailing lambda block —
+    /// a statement-level `<call>:` followed by an indented suite. The suite is the
+    /// function body, `parameters` holds the single implicit parameter `it`, `name`
+    /// is the synthetic `__trailing_lambda__`, and `decorator_list` holds exactly one
+    /// synthetic decorator whose expression is the called expression from the source
+    /// (no `@` is present). Lowered to a `def` followed by the call with the function
+    /// appended as its last argument
+    pub is_trailing_lambda: bool,
 }
 
 /// See also [ClassDef](https://docs.python.org/3/library/ast.html#ast.ClassDef)
@@ -10287,6 +10295,7 @@ impl StmtFunctionDef {
             parameters,
             returns,
             body,
+            is_trailing_lambda: _,
             range: _,
             node_index: _,
         } = self;

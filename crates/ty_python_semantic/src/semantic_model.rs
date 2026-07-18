@@ -117,6 +117,16 @@ impl<'db> SemanticModel<'db> {
         )
     }
 
+    /// basedpython: the keyword the transpiler passes a trailing lambda block
+    /// with — the name of the callee's last declared parameter. `None` means
+    /// the lambda is appended as a positional argument instead (unknown
+    /// callee signature, or a variadic / positional-only last parameter)
+    pub fn trailing_lambda_keyword(&self, callee: &ast::Expr) -> Option<String> {
+        let callee_ty = callee.inferred_type(self)?;
+        crate::types::trailing_lambda::trailing_lambda_keyword(self.db, callee_ty)
+            .map(|name| name.to_string())
+    }
+
     /// basedpython: how the parametric type test `lhs is rhs` (keyword form)
     /// resolves, from the operands' inferred types. `rhs` may name the target
     /// specialization directly (`list[int]`) or through an alias — an implicit

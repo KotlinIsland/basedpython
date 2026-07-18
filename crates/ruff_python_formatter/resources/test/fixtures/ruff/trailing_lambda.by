@@ -1,0 +1,22 @@
+def f(x: int = 1, a: (int) -> str):
+    a(x)
+
+
+f:
+    print(it)  # prints 1
+
+f(2):
+    print(it)  # prints 2
+
+
+x = 1
+f( 2 ):
+    y   =   it
+    print(y)
+x = 2
+
+
+def outer():
+    f:
+        print(it)
+    return None

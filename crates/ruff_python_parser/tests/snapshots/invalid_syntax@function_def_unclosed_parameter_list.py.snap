@@ -73,6 +73,7 @@ Module(
                     },
                     returns: None,
                     body: [],
+                    is_trailing_lambda: false,
                 },
             ),
             FunctionDef(
@@ -116,6 +117,7 @@ Module(
                             },
                         ),
                     ],
+                    is_trailing_lambda: false,
                 },
             ),
             FunctionDef(
@@ -215,6 +217,7 @@ Module(
                     },
                     returns: None,
                     body: [],
+                    is_trailing_lambda: false,
                 },
             ),
         ],

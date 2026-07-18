@@ -33,6 +33,7 @@ Module(
                     },
                     returns: None,
                     body: [],
+                    is_trailing_lambda: false,
                 },
             ),
             FunctionDef(
@@ -67,6 +68,7 @@ Module(
                         ),
                     ),
                     body: [],
+                    is_trailing_lambda: false,
                 },
             ),
             Assign(

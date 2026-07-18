@@ -26,9 +26,10 @@ use crate::{
             function_known_decorators, infer_statement_types, nearest_enclosing_function,
             original_class_type,
         },
-        infer_definition_types, infer_scope_types,
+        infer_definition_types, infer_expression_types, infer_scope_types,
         signatures::ReturnCallableTypeVarScope,
         todo_type,
+        trailing_lambda::trailing_lambda_it_type,
         typed_dict::extract_unpacked_typed_dict_keys_from_kwargs_annotation,
     },
 };
@@ -341,6 +342,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             returns: _,
             body: _,
             decorator_list,
+            is_trailing_lambda,
         } = function;
 
         let db = self.db();
@@ -362,6 +364,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let mut final_decorator = None;
 
         for decorator in decorator_list {
+            // basedpython: a trailing lambda block's synthetic decorator holds the
+            // called expression, not a decorator. the call is checked (with the
+            // lambda appended) in the decorators region; the function type itself
+            // stays undecorated
+            if *is_trailing_lambda {
+                continue;
+            }
             // basedpython `decorator def` parses as a synthetic decorator whose
             // expression name is `decorator_keyword` (with `ExprContext::Invalid`).
             // the transpile expands the function into overloads + a runtime
@@ -951,6 +960,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 definition,
                 &DeclaredAndInferredType::are_the_same_type(declared_ty),
             );
+        } else if let Some(function) = self.enclosing_trailing_lambda() {
+            // basedpython: the implicit `it` parameter of a trailing lambda
+            // block is context-typed from the called expression — the sole
+            // positional parameter of the callable its last parameter is
+            // declared as. the self/cls and overload-inheritance special
+            // cases below must never apply to the synthetic parameter
+            let ty = self
+                .trailing_lambda_it_parameter_type(function)
+                .unwrap_or_else(Type::unknown);
+            self.add_binding(parameter.into(), definition)
+                .insert(self, ty);
         } else {
             // basedpython: an unannotated parameter on an overload
             // implementation inherits its type from the union of the matching
@@ -1072,6 +1092,31 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.add_binding(parameter.into(), definition)
                 .insert(self, inferred_ty);
         }
+    }
+
+    /// basedpython: the enclosing function when the current scope is a
+    /// trailing lambda block's body
+    fn enclosing_trailing_lambda(&self) -> Option<&'ast ast::StmtFunctionDef> {
+        let function_scope = self.scope().scope(self.db());
+        let function = function_scope.node().as_function()?.node(self.module());
+        function.is_trailing_lambda.then_some(function)
+    }
+
+    /// basedpython: the type of a trailing lambda's implicit `it` parameter,
+    /// read from the callee's standalone-expression inference (registered by
+    /// the semantic index builder — independent of the enclosing definition's
+    /// inference, so no cycle). `None` when the callee's signature or its
+    /// last parameter's callable shape is not inspectable
+    fn trailing_lambda_it_parameter_type(
+        &self,
+        function: &ast::StmtFunctionDef,
+    ) -> Option<Type<'db>> {
+        let db = self.db();
+        let callee = function.trailing_lambda_callee()?;
+        let expression = self.index.try_expression(callee)?;
+        let callee_ty = infer_expression_types(db, expression, TypeContext::default())
+            .try_expression_type(callee)?;
+        trailing_lambda_it_type(db, callee_ty)
     }
 
     /// Special case for unannotated `cls` and `self` arguments to class methods and instance methods.

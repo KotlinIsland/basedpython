@@ -242,6 +242,7 @@ fn function(
                 decorator_list: ast::DecoratorList::new(),
                 returns: Some(Box::new(return_type)),
                 type_params: None,
+                is_trailing_lambda: false,
                 range: TextRange::default(),
                 node_index: ruff_python_ast::AtomicNodeIndex::NONE,
             });
@@ -258,6 +259,7 @@ fn function(
         decorator_list: DecoratorList::new(),
         returns: None,
         type_params: None,
+        is_trailing_lambda: false,
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
     });

@@ -45,6 +45,7 @@ pub(crate) mod string_tag;
 pub(crate) mod super_keyword;
 pub(crate) mod symbolic_type_op;
 pub(crate) mod top_star;
+pub(crate) mod trailing_lambda;
 pub(crate) mod tuple_index;
 pub(crate) mod type_expr_walker;
 pub(crate) mod type_is;
