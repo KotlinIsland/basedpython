@@ -433,6 +433,7 @@ impl<'a> From<&'a Box<ast::Parameter>> for ComparableParameter<'a> {
 pub struct ComparableParameter<'a> {
     arg: &'a str,
     annotation: Option<Box<ComparableExpr<'a>>>,
+    is_context: bool,
 }
 
 impl<'a> From<&'a ast::Parameter> for ComparableParameter<'a> {
@@ -440,6 +441,7 @@ impl<'a> From<&'a ast::Parameter> for ComparableParameter<'a> {
         Self {
             arg: arg.name.as_str(),
             annotation: arg.annotation.as_ref().map(Into::into),
+            is_context: arg.is_context,
         }
     }
 }

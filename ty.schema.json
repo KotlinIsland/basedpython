@@ -347,6 +347,16 @@
             }
           ]
         },
+        "ambiguous-context-argument": {
+          "title": "detects calls whose `context` parameter matches several context values",
+          "description": "## What it does\nChecks for calls where several `context` declarations in the same scope\ncould fill one `context` parameter.\n\n## Why is this bad?\nThe implicit argument is chosen by assignability, not by name. When two\ndeclarations in the winning scope both match, either choice would be\narbitrary — the call must pass the argument explicitly (or the extra\ndeclaration must move to another scope).\n\n## Examples\n```python\ndef f(a: int, context b: str): ...\n\ncontext s1 = \"hello\"\ncontext s2 = \"world\"\nf(1)          # error: `s1` and `s2` both match\nf(1, b=s1)    # ok — explicit\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "ambiguous-protocol-member": {
           "title": "detects protocol classes with ambiguous interfaces",
           "description": "## What it does\n\nChecks for protocol classes with members that will lead to ambiguous interfaces.\n\n## Why is this bad?\n\nAssigning to an undeclared variable in a protocol class, or to an undeclared attribute\nthrough a protocol method's `self` or `cls` receiver, leads to an ambiguous interface\nwhich may lead to the type checker inferring unexpected things. It's recommended to\nensure that all members of a protocol class are explicitly declared.\n\n## Examples\n\n```py\nfrom typing import ClassVar, Protocol\n\n\nclass BaseProto(Protocol):\n    a: int  # fine (explicitly declared as `int`)\n    instance_member: str\n    class_member: ClassVar[str]\n\n    # fine: a method definition using `def` is considered a declaration\n    def method_member(self) -> int: ...\n\n    def method(self) -> None:\n        self.instance_member = \"value\"  # fine (declared in the class body)\n        self.implicit = \"value\"  # error: [ambiguous-protocol-member]\n\n    @classmethod\n    def class_method(cls) -> None:\n        cls.class_member = \"value\"  # fine (declared in the class body)\n        cls.implicit_class = \"value\"  # error: [ambiguous-protocol-member]\n\n    # no explicit declaration, leading to ambiguity\n    c = \"some variable\"  # error\n    # no explicit declaration, leading to ambiguity\n    b = method_member  # error\n\n    # This creates implicit assignments of `d` and `e` in the protocol class body.\n    # Were they really meant to be considered protocol members?\n    # error: \"`d` is not declared as a protocol member\"\n    # error: \"`e` is not declared as a protocol member\"\n    for d, e in enumerate(range(42)):\n        pass\n\n\nclass SubProto(BaseProto, Protocol):\n    a = 42  # fine (declared in superclass)\n```",
@@ -1150,6 +1160,16 @@
         "missing-argument": {
           "title": "detects missing required arguments in a call",
           "description": "## What it does\n\nChecks for missing required arguments in a call.\n\n## Why is this bad?\n\nFailing to provide a required argument will raise a `TypeError` at runtime.\n\n## Examples\n\n```python\ndef func(x: int): ...\n\n\n# TypeError: func() missing 1 required positional argument: 'x'\nfunc()  # error\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "missing-context-argument": {
+          "title": "detects calls whose `context` parameter has no matching context value",
+          "description": "## What it does\nChecks for calls that leave a basedpython `context` parameter unfilled:\nno explicit argument matches it and no `context` declaration in scope\nhas a type assignable to it.\n\n## Why is this bad?\nA `context` parameter has no default — the call raises `TypeError` at\nruntime unless something supplies the argument.\n\n## Examples\n```python\ndef f(a: int, context b: str): ...\n\nf(1)                  # error: no context value in scope\ncontext s = \"hello\"\nf(1)                  # ok — `s` is passed implicitly\n```",
           "default": "error",
           "oneOf": [
             {

@@ -1,6 +1,6 @@
 //! Abstraction over type/binding information consumed by transforms.
 
-use ruff_python_ast::{Expr, ExprName};
+use ruff_python_ast::{Expr, ExprCall, ExprName};
 use ty_python_core::{global_scope, place_table, semantic_index};
 use ty_python_semantic::types::{DynamicType, KnownClass, KnownInstanceType, Type};
 use ty_python_semantic::{HasType, SemanticModel};
@@ -173,6 +173,13 @@ pub(crate) trait TypeInfo {
     /// as a positional argument instead (unknown callee signature, or a
     /// variadic / positional-only last parameter)
     fn trailing_lambda_keyword(&self, callee: &Expr) -> Option<String>;
+
+    /// the implicit context arguments the lowering must append to `call`:
+    /// `(parameter name, variable name)` pairs for each `context` parameter
+    /// that no explicit argument matches, resolved from the `context`
+    /// declarations in scope at the call site. empty when the callee has no
+    /// context parameters or nothing resolves
+    fn implicit_context_arguments(&self, call: &ExprCall) -> Vec<(String, String)>;
 }
 
 /// re-export of the ty-side check plan so transforms name a single type
@@ -408,6 +415,21 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn trailing_lambda_keyword(&self, callee: &Expr) -> Option<String> {
         SemanticModel::trailing_lambda_keyword(self, callee)
+    }
+
+    fn implicit_context_arguments(&self, call: &ExprCall) -> Vec<(String, String)> {
+        let Some(callee) = call.func.inferred_type(self) else {
+            return Vec::new();
+        };
+        ty_python_semantic::types::context_params::implicit_context_arguments(
+            self.db(),
+            self.file(),
+            callee,
+            call,
+        )
+        .into_iter()
+        .map(|(parameter, variable)| (parameter.to_string(), variable.to_string()))
+        .collect()
     }
 }
 

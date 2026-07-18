@@ -292,6 +292,19 @@ impl<'src> Parser<'src> {
             return Some(self.parse_sentinel_decl(start));
         }
 
+        // `context NAME = value` / `context NAME: T = value` — a context
+        // declaration: the variable becomes an implicit-argument candidate for
+        // `context` parameters at later call sites
+        if kw == "context"
+            && self.peek() == TokenKind::Name
+            && matches!(self.peek_nth(1).0, TokenKind::Equal | TokenKind::Colon)
+        {
+            self.error_if_not_basedpython(
+                "`context` declarations are not valid in .py files".to_string(),
+            );
+            return Some(self.parse_context_decl(start));
+        }
+
         // The current token must itself be a modifier or an introducer
         // (`let` and bare `abstract a: T`) for a chain or introducer to be possible.
         if !is_modifier_kw(kw) && kw != "let" {
@@ -690,6 +703,57 @@ impl<'src> Parser<'src> {
             target: Box::new(target),
             annotation: Box::new(annotation),
             value,
+            simple: true,
+            range: self.node_range(start),
+            node_index: AtomicNodeIndex::NONE,
+        })
+    }
+
+    /// Parses `context x = v` / `context x: T = v` → produces a synthetic
+    /// `AnnAssign` whose annotation is the `__context__` marker. the declared
+    /// variable becomes an implicit-argument candidate for `context`
+    /// parameters at later call sites; the lowering strips the keyword
+    fn parse_context_decl(&mut self, start: TextSize) -> Stmt {
+        let context_range = self.current_token_range();
+        self.bump(TokenKind::Name); // consume "context"
+        let name = self.parse_identifier();
+        let marker = Expr::Name(ast::ExprName {
+            id: Name::new_static("__context__"),
+            ctx: ExprContext::Invalid,
+            range: context_range,
+            node_index: AtomicNodeIndex::NONE,
+        });
+        // optional `: annotation` before `=`
+        let annotation = if self.eat(TokenKind::Colon) {
+            let type_ann = self.parse_conditional_expression_or_higher().expr;
+            let slice_range = type_ann.range();
+            Expr::Subscript(ast::ExprSubscript {
+                value: Box::new(marker),
+                slice: Box::new(type_ann),
+                ctx: ExprContext::Load,
+                range: TextRange::new(context_range.start(), slice_range.end()),
+                node_index: AtomicNodeIndex::NONE,
+                is_typeof: false,
+            })
+        } else {
+            marker
+        };
+        self.expect(TokenKind::Equal);
+        let value = self
+            .parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
+            .expr;
+        let target = Expr::Name(ast::ExprName {
+            id: name.id.clone(),
+            ctx: ExprContext::Store,
+            range: name.range,
+            node_index: AtomicNodeIndex::NONE,
+        });
+        self.eat(TokenKind::Semi);
+        self.eat(TokenKind::Newline);
+        Stmt::AnnAssign(ast::StmtAnnAssign {
+            target: Box::new(target),
+            annotation: Box::new(annotation),
+            value: Some(Box::new(value)),
             simple: true,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
@@ -3532,6 +3596,7 @@ impl<'src> Parser<'src> {
                     node_index: AtomicNodeIndex::NONE,
                 },
                 annotation: None,
+                is_context: false,
                 range: synthetic,
                 node_index: AtomicNodeIndex::NONE,
             },
@@ -4672,6 +4737,7 @@ impl<'src> Parser<'src> {
         start: TextSize,
         function_kind: FunctionKind,
         allow_star_annotation: AllowStarAnnotation,
+        allow_context: AllowContextModifier,
     ) -> ast::Parameter {
         // basedpython: optional `let` prefix on a parameter marks it for
         // auto-attribute-assignment inside an `init(...)` shorthand. The
@@ -4685,6 +4751,21 @@ impl<'src> Parser<'src> {
                 "`let` parameter modifier is not valid in .py files".to_string(),
             );
             self.bump(TokenKind::Name);
+        }
+        // basedpython: optional `context` prefix marks the parameter as
+        // implicitly fillable from `context` declarations in scope at the
+        // call site. not meaningful on `*args` / `**kwargs`
+        let mut is_context = false;
+        if matches!(allow_context, AllowContextModifier::Yes)
+            && self.at(TokenKind::Name)
+            && self.src_text(self.current_token_range()) == "context"
+            && self.peek() == TokenKind::Name
+        {
+            self.error_if_not_basedpython(
+                "`context` parameter modifier is not valid in .py files".to_string(),
+            );
+            self.bump(TokenKind::Name);
+            is_context = true;
         }
         let name = self.parse_identifier();
 
@@ -4768,6 +4849,7 @@ impl<'src> Parser<'src> {
             name,
             annotation,
             node_index: AtomicNodeIndex::NONE,
+            is_context,
         }
     }
 
@@ -4784,7 +4866,12 @@ impl<'src> Parser<'src> {
         start: TextSize,
         function_kind: FunctionKind,
     ) -> ast::ParameterWithDefault {
-        let parameter = self.parse_parameter(start, function_kind, AllowStarAnnotation::No);
+        let parameter = self.parse_parameter(
+            start,
+            function_kind,
+            AllowStarAnnotation::No,
+            AllowContextModifier::Yes,
+        );
 
         let default = if self.eat(TokenKind::Equal) {
             if self.at_expr() {
@@ -4864,7 +4951,7 @@ impl<'src> Parser<'src> {
                     parser.bump(TokenKind::Star);
 
                     if parser.at_name_or_soft_keyword() {
-                        let param = parser.parse_parameter(param_start, function_kind, AllowStarAnnotation::Yes);
+                        let param = parser.parse_parameter(param_start, function_kind, AllowStarAnnotation::Yes, AllowContextModifier::No);
                         let param_star_range = parser.node_range(star_range.start());
 
                         if parser.at(TokenKind::Equal) {
@@ -4931,7 +5018,7 @@ impl<'src> Parser<'src> {
                     let double_star_range = parser.current_token_range();
                     parser.bump(TokenKind::DoubleStar);
 
-                    let param = parser.parse_parameter(param_start, function_kind, AllowStarAnnotation::No);
+                    let param = parser.parse_parameter(param_start, function_kind, AllowStarAnnotation::No, AllowContextModifier::No);
                     let param_double_star_range = parser.node_range(double_star_range.start());
 
                     if parameters.kwarg.is_some() {
@@ -5093,6 +5180,41 @@ impl<'src> Parser<'src> {
             // def foo(a, *,): ...
             // def foo(*, **kwargs): ...
             self.add_error(ParseErrorType::ExpectedKeywordParam, star_range);
+        }
+
+        // basedpython: a `context` parameter receives its implicit argument by
+        // keyword, so it must not sit where an explicit positional argument
+        // could land on it (or slide past it) at a call site
+        for param in &parameters.posonlyargs {
+            if param.parameter.is_context {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "a positional-only parameter cannot be a `context` parameter".to_string(),
+                    ),
+                    &param.parameter,
+                );
+            }
+        }
+        let mut seen_context_param = false;
+        for param in &parameters.args {
+            if param.parameter.is_context {
+                seen_context_param = true;
+            } else if seen_context_param {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "parameter after a `context` parameter must also be `context`".to_string(),
+                    ),
+                    &param.parameter,
+                );
+            }
+        }
+        if seen_context_param && let Some(vararg) = &parameters.vararg {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "`*` parameter cannot follow a `context` parameter".to_string(),
+                ),
+                vararg.as_ref(),
+            );
         }
 
         if matches!(function_kind, FunctionKind::FunctionDef) {
@@ -5725,6 +5847,14 @@ impl ExceptClauseKind {
 
 #[derive(Debug, Copy, Clone)]
 enum AllowStarAnnotation {
+    Yes,
+    No,
+}
+
+/// basedpython: whether a `context` prefix may mark this parameter. `No` for
+/// `*args` / `**kwargs`, where an implicit keyword argument cannot land
+#[derive(Debug, Copy, Clone)]
+enum AllowContextModifier {
     Yes,
     No,
 }

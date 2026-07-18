@@ -180,7 +180,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         // basedpython annotation markers — `let x = v`, `final x: T`, `class a = v`,
         // `[modifiers] a = v`, `newtype X = T`, `abstract a: T`, `sentinel A`
         // parse to AnnAssign with a synthetic Name/Subscript annotation whose
-        // id is one of `__let__`, `__final__`, `__classvar__`, `__modifier_assign__`,
+        // id is one of `__let__`, `__final__`, `__classvar__`, `__context__`, `__modifier_assign__`,
         // `__modifier_annot__`, `__newtype__`, `__abstract_annot__`, `__sentinel__`.
         // resolve them so ty applies the right qualifier without a transpile step
         if let Some(result) = self.synthetic_annotation_marker(annotation) {
@@ -455,6 +455,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 )),
                 "__modifier_assign__" => Some(TypeAndQualifiers::declared(Type::unknown())),
                 "__sentinel__" => Some(TypeAndQualifiers::declared(Type::unknown())),
+                "__context__" => Some(TypeAndQualifiers::declared(Type::unknown())),
                 _ => None,
             },
             ast::Expr::Subscript(ast::ExprSubscript { value, slice, .. }) => {
@@ -468,8 +469,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     "__let__" => false,
                     "__final__" => true,
                     // modifiers ty places no meaning on (`override x: T`,
-                    // `abstract x: T`, `private x: T`): the declaration is just `x: T`
-                    "__modifier_annot__" | "__abstract_annot__" | "__visibility_annot__" => {
+                    // `abstract x: T`, `private x: T`), and typed `context x: T = v`:
+                    // the declaration is just `x: T`
+                    "__modifier_annot__" | "__abstract_annot__" | "__visibility_annot__"
+                    | "__context__" => {
                         return Some(TypeAndQualifiers::declared(
                             self.infer_type_expression(slice),
                         ));

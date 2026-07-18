@@ -39,6 +39,7 @@ Module(
                                         node_index: NodeIndex(None),
                                     },
                                     annotation: None,
+                                    is_context: false,
                                 },
                                 default: Some(
                                     NumberLiteral(
@@ -64,6 +65,7 @@ Module(
                                         node_index: NodeIndex(None),
                                     },
                                     annotation: None,
+                                    is_context: false,
                                 },
                                 default: None,
                             },
@@ -88,6 +90,7 @@ Module(
                                             },
                                         ),
                                     ),
+                                    is_context: false,
                                 },
                                 default: None,
                             },

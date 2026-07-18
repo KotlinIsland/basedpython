@@ -4060,6 +4060,11 @@ pub(crate) struct Parameter<'db> {
     /// Syntax-level annotation kind for cases where the annotation has special parameter semantics.
     annotation_kind: ParameterAnnotationKind,
 
+    /// basedpython: the parameter was declared with the `context` prefix, so an
+    /// unmatched argument for it is resolved implicitly from `context`
+    /// declarations in scope at the call site
+    is_context: bool,
+
     kind: ParameterKind<'db>,
 }
 
@@ -4087,6 +4092,7 @@ impl<'db> Parameter<'db> {
             definition: None,
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
+            is_context: false,
             kind: ParameterKind::PositionalOnly {
                 name,
                 default_type: None,
@@ -4100,6 +4106,7 @@ impl<'db> Parameter<'db> {
             definition: None,
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
+            is_context: false,
             kind: ParameterKind::PositionalOrKeyword {
                 name,
                 default_type: None,
@@ -4113,6 +4120,7 @@ impl<'db> Parameter<'db> {
             definition: None,
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
+            is_context: false,
             kind: ParameterKind::Variadic { name },
         }
     }
@@ -4123,6 +4131,7 @@ impl<'db> Parameter<'db> {
             definition: None,
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
+            is_context: false,
             kind: ParameterKind::KeywordOnly {
                 name,
                 default_type: None,
@@ -4136,6 +4145,7 @@ impl<'db> Parameter<'db> {
             definition: None,
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
+            is_context: false,
             kind: ParameterKind::KeywordVariadic { name },
         }
     }
@@ -4194,6 +4204,7 @@ impl<'db> Parameter<'db> {
                 .apply_type_mapping_impl(db, type_mapping, tcx, visitor),
             inferred_annotation: self.inferred_annotation,
             annotation_kind: self.annotation_kind,
+            is_context: self.is_context,
         }
     }
 
@@ -4209,6 +4220,7 @@ impl<'db> Parameter<'db> {
             definition: self.definition,
             inferred_annotation: self.inferred_annotation,
             annotation_kind: self.annotation_kind,
+            is_context: self.is_context,
             kind,
         }
     }
@@ -4224,6 +4236,7 @@ impl<'db> Parameter<'db> {
             definition,
             annotation_kind,
             inferred_annotation,
+            is_context,
             kind,
         } = self;
 
@@ -4284,6 +4297,7 @@ impl<'db> Parameter<'db> {
             definition: *definition,
             inferred_annotation: *inferred_annotation,
             annotation_kind: *annotation_kind,
+            is_context: *is_context,
             kind,
         })
     }
@@ -4328,6 +4342,7 @@ impl<'db> Parameter<'db> {
             definition,
             inferred_annotation,
             annotation_kind,
+            is_context: parameter.is_context,
             kind,
         }
     }
@@ -4395,6 +4410,12 @@ impl<'db> Parameter<'db> {
     /// Annotated type of the parameter. If no annotation was provided, this is `Unknown`.
     pub(crate) fn annotated_type(&self) -> Type<'db> {
         self.annotated_type
+    }
+
+    /// basedpython: whether this is a `context` parameter, implicitly fillable
+    /// from `context` declarations in scope at the call site
+    pub(crate) fn is_context(&self) -> bool {
+        self.is_context
     }
 
     /// Returns the source definition represented by this parameter, if any.
@@ -4628,6 +4649,7 @@ mod tests {
         annotated_type: &'a Type<'db>,
         annotation_kind: ParameterAnnotationKind,
         inferred_annotation: bool,
+        is_context: bool,
         kind: &'a ParameterKind<'db>,
     }
 
@@ -4638,6 +4660,7 @@ mod tests {
                 definition: _,
                 annotation_kind,
                 inferred_annotation,
+                is_context,
                 kind,
             } = parameter;
 
@@ -4645,6 +4668,7 @@ mod tests {
                 annotated_type,
                 annotation_kind: *annotation_kind,
                 inferred_annotation: *inferred_annotation,
+                is_context: *is_context,
                 kind,
             }
         }
