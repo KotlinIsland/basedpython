@@ -1562,6 +1562,11 @@ impl<'a> Generator<'a> {
     }
 
     fn unparse_parameter(&mut self, parameter: &Parameter) {
+        // basedpython surface syntax keeps the `context` prefix; python output
+        // drops it — the lowering passes the argument explicitly instead
+        if self.mode == Mode::BasedPython && parameter.is_context {
+            self.p("context ");
+        }
         self.p_id(&parameter.name);
         if let Some(ann) = &parameter.annotation {
             self.p(": ");

@@ -26,6 +26,19 @@ fn synthetic_let(ann: &Expr) -> Option<Option<&Expr>> {
     }
 }
 
+/// detect a synthetic basedpython `context` annotation: returns `None` for bare
+/// `__context__`, or `Some(type_expr)` for the typed form `__context__[T]`
+#[allow(clippy::option_option)]
+fn synthetic_context(ann: &Expr) -> Option<Option<&Expr>> {
+    match ann {
+        Expr::Name(n) if n.id.as_str() == "__context__" => Some(None),
+        Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__context__") => {
+            Some(Some(s.slice.as_ref()))
+        }
+        _ => None,
+    }
+}
+
 /// detect a synthetic basedpython `final` annotation (`__final__[T]`), produced
 /// by the parser for `final x: T` and modifier chains like `final override x: T`.
 /// the surface modifier prefix (`final`, or `final override`, …) lives in the
@@ -100,6 +113,16 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
         // basedpython synthetic annotations — format back to the surface syntax
         if let Some(type_ann) = synthetic_let(annotation) {
             write!(f, [token("let"), space(), target.format()])?;
+            if let Some(t) = type_ann {
+                write!(f, [token(":"), space(), t.format()])?;
+            }
+            if let Some(v) = value {
+                write!(f, [space(), token("="), space(), v.format()])?;
+            }
+            return Ok(());
+        }
+        if let Some(type_ann) = synthetic_context(annotation) {
+            write!(f, [token("context"), space(), target.format()])?;
             if let Some(t) = type_ann {
                 write!(f, [token(":"), space(), t.format()])?;
             }

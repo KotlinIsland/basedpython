@@ -34,12 +34,13 @@ use crate::types::callable::CallableTypeKind;
 use crate::types::constraints::{
     ConstraintSet, ConstraintSetBuilder, PathBound, PathBounds, Solutions,
 };
+use crate::types::context_params::{ContextResolution, resolve_context_argument};
 use crate::types::dedicated::pydantic::{self, ConfigBoolean};
 use crate::types::diagnostic::{
-    CALL_NON_CALLABLE, CALL_TOP_CALLABLE, INVALID_ARGUMENT_TYPE, INVALID_DATACLASS,
-    MISSING_ARGUMENT, NO_MATCHING_OVERLOAD, PARAMETER_ALREADY_ASSIGNED,
-    POSITIONAL_ONLY_PARAMETER_AS_KWARG, TOO_MANY_POSITIONAL_ARGUMENTS, UNKNOWN_ARGUMENT,
-    add_invariant_generic_hints, note_numbers_module_not_supported,
+    AMBIGUOUS_CONTEXT_ARGUMENT, CALL_NON_CALLABLE, CALL_TOP_CALLABLE, INVALID_ARGUMENT_TYPE,
+    INVALID_DATACLASS, MISSING_ARGUMENT, MISSING_CONTEXT_ARGUMENT, NO_MATCHING_OVERLOAD,
+    PARAMETER_ALREADY_ASSIGNED, POSITIONAL_ONLY_PARAMETER_AS_KWARG, TOO_MANY_POSITIONAL_ARGUMENTS,
+    UNKNOWN_ARGUMENT, add_invariant_generic_hints, note_numbers_module_not_supported,
 };
 use crate::types::enums::is_enum_class;
 use crate::types::function::{
@@ -71,6 +72,7 @@ use crate::types::{
 use crate::{DisplaySettings, FxOrderSet, Program};
 use ruff_db::diagnostic::{Annotation, Diagnostic, Span, SubDiagnostic, SubDiagnosticSeverity};
 use ruff_python_ast::{self as ast, AnyNodeRef, ArgOrKeyword, PythonVersion};
+use ty_python_core::scope::ScopeId;
 use ty_python_core::semantic_index;
 
 pub(crate) use self::constructor::ConstructorCallableKind;
@@ -739,6 +741,27 @@ impl<'db> Bindings<'db> {
         self.elements
             .iter_mut()
             .flat_map(BindingsElement::callables_mut)
+    }
+
+    /// basedpython: after parameter matching, fill unmatched `context`
+    /// parameters from the `context` declarations visible at the call site,
+    /// rewriting each binding's missing-argument errors. must run before
+    /// `check_types` so a fully resolved call binds cleanly. overloaded
+    /// callables are skipped — the transpiler's injection is limited to
+    /// single-signature callees (`single_signature`), and checking must not
+    /// accept a call the lowering cannot complete
+    pub(crate) fn resolve_context_arguments(
+        &mut self,
+        db: &'db dyn Db,
+        scope: ScopeId<'db>,
+        call_offset: ruff_text_size::TextSize,
+    ) {
+        for callable_binding in self.iter_flat_mut() {
+            let [binding] = callable_binding.overloads.as_mut_slice() else {
+                continue;
+            };
+            binding.resolve_context_arguments(db, scope, call_offset);
+        }
     }
 
     fn iter_callable_items(&self) -> impl Iterator<Item = &CallableItem<'db>> {
@@ -6420,6 +6443,65 @@ impl<'db> Binding<'db> {
             .retain(|error| !matches!(error, BindingError::MissingArguments { .. }));
     }
 
+    /// basedpython: resolve implicit arguments for unmatched `context`
+    /// parameters. resolved parameters are dropped from the missing-argument
+    /// error; unresolved ones become their own diagnostics. call paths that
+    /// never reach this method (dunder calls, operators) keep the plain
+    /// missing-argument error, so an unresolved `context` parameter can never
+    /// pass silently
+    fn resolve_context_arguments(
+        &mut self,
+        db: &'db dyn Db,
+        scope: ScopeId<'db>,
+        call_offset: ruff_text_size::TextSize,
+    ) {
+        let parameters = self.signature.parameters();
+        if !parameters.iter().any(Parameter::is_context) {
+            return;
+        }
+        let mut context_errors = Vec::new();
+        for error in &mut self.errors {
+            let BindingError::MissingArguments {
+                parameters: missing,
+                ..
+            } = error
+            else {
+                continue;
+            };
+            missing.0.retain(|parameter_context| {
+                let Some(parameter) = parameters.get(parameter_context.index) else {
+                    return true;
+                };
+                if !parameter.is_context() {
+                    return true;
+                }
+                match resolve_context_argument(db, scope, call_offset, parameter.annotated_type()) {
+                    ContextResolution::Resolved { .. } => false,
+                    ContextResolution::NotFound => {
+                        context_errors.push(BindingError::NoContextArgument {
+                            parameter: parameter_context.clone(),
+                        });
+                        false
+                    }
+                    ContextResolution::Ambiguous(candidates) => {
+                        context_errors.push(BindingError::AmbiguousContextArgument {
+                            parameter: parameter_context.clone(),
+                            candidates,
+                        });
+                        false
+                    }
+                }
+            });
+        }
+        self.errors.retain(|error| {
+            !matches!(
+                error,
+                BindingError::MissingArguments { parameters, .. } if parameters.0.is_empty()
+            )
+        });
+        self.errors.extend(context_errors);
+    }
+
     /// Downstream constructor validation is deferred until after partial signatures are merged.
     fn clear_deferred_constructor_errors_for_partial_application(&mut self) {
         self.errors.retain(|error| {
@@ -6937,6 +7019,17 @@ pub(crate) enum BindingError<'db> {
         /// `**kwargs` are required.
         paramspec: Option<BoundTypeVarInstance<'db>>,
     },
+    /// basedpython: a `context` parameter is unmatched and no visible
+    /// `context` declaration is assignable to it.
+    NoContextArgument {
+        parameter: ParameterContext,
+    },
+    /// basedpython: a `context` parameter is unmatched and several `context`
+    /// declarations in the same scope are assignable to it.
+    AmbiguousContextArgument {
+        parameter: ParameterContext,
+        candidates: Vec<ast::name::Name>,
+    },
     /// A call argument can't be matched to any parameter.
     UnknownArgument {
         argument_name: ast::name::Name,
@@ -7069,6 +7162,8 @@ impl BindingError<'_> {
             | BindingError::InvalidDataclassApplication(..)
             | BindingError::InvalidDataclassArgument(..)
             | BindingError::MissingArguments { .. }
+            | BindingError::NoContextArgument { .. }
+            | BindingError::AmbiguousContextArgument { .. }
             | BindingError::UnmatchedOverload
             | BindingError::PropertyHasNoSetter(..)
             | BindingError::PropertyHasNoDeleter(..) => {}
@@ -7138,6 +7233,8 @@ impl<'db> BindingError<'db> {
             Self::InvalidArgumentType { .. }
             | Self::InvalidKeyType { .. }
             | Self::MissingArguments { .. }
+            | Self::NoContextArgument { .. }
+            | Self::AmbiguousContextArgument { .. }
             | Self::UnknownArgument { .. }
             | Self::UnknownKeywordVariadicArgument { .. }
             | Self::PositionalOnlyParameterAsKwarg { .. }
@@ -7398,6 +7495,49 @@ impl<'db> BindingError<'db> {
                             ),
                         ));
                     }
+                }
+            }
+
+            Self::NoContextArgument { parameter } => {
+                let range = all_arguments_range(node);
+                if let Some(builder) = context.report_lint(&MISSING_CONTEXT_ARGUMENT, range) {
+                    let mut diag = builder.into_diagnostic(format_args!(
+                        "no context value found for parameter {parameter}{}",
+                        callable_description
+                            .map(|description| format!(" of {description}"))
+                            .unwrap_or_default()
+                    ));
+                    diag.sub(SubDiagnostic::new(
+                        SubDiagnosticSeverity::Info,
+                        format_args!(
+                            "a `context NAME = ...` declaration before the call (or an explicit \
+                             argument) supplies it"
+                        ),
+                    ));
+                }
+            }
+
+            Self::AmbiguousContextArgument {
+                parameter,
+                candidates,
+            } => {
+                let range = all_arguments_range(node);
+                if let Some(builder) = context.report_lint(&AMBIGUOUS_CONTEXT_ARGUMENT, range) {
+                    let candidates = candidates
+                        .iter()
+                        .map(|name| format!("`{name}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let mut diag = builder.into_diagnostic(format_args!(
+                        "ambiguous context value for parameter {parameter}{}",
+                        callable_description
+                            .map(|description| format!(" of {description}"))
+                            .unwrap_or_default()
+                    ));
+                    diag.sub(SubDiagnostic::new(
+                        SubDiagnosticSeverity::Info,
+                        format_args!("{candidates} all match; pass the argument explicitly"),
+                    ));
                 }
             }
 

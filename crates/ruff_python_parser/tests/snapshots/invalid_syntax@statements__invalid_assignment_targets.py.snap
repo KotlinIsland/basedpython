@@ -277,6 +277,7 @@ Module(
                                                         node_index: NodeIndex(None),
                                                     },
                                                     annotation: None,
+                                                    is_context: false,
                                                 },
                                                 default: None,
                                             },

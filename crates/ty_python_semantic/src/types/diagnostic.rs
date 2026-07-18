@@ -131,6 +131,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SUBCLASS_OF_FINAL_CLASS);
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
+    registry.register_lint(&MISSING_CONTEXT_ARGUMENT);
+    registry.register_lint(&AMBIGUOUS_CONTEXT_ARGUMENT);
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
     registry.register_lint(&REIFIED_CLASSMETHOD);
     registry.register_lint(&ERASED_TYPE_CHECK);
@@ -965,6 +967,58 @@ declare_lint! {
         summary: "detects casts whose type arguments cannot be checked at runtime",
         status: LintStatus::stable("0.0.61"),
         default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for calls that leave a basedpython `context` parameter unfilled:
+    /// no explicit argument matches it and no `context` declaration in scope
+    /// has a type assignable to it.
+    ///
+    /// ## Why is this bad?
+    /// A `context` parameter has no default — the call raises `TypeError` at
+    /// runtime unless something supplies the argument.
+    ///
+    /// ## Examples
+    /// ```python
+    /// def f(a: int, context b: str): ...
+    ///
+    /// f(1)                  # error: no context value in scope
+    /// context s = "hello"
+    /// f(1)                  # ok — `s` is passed implicitly
+    /// ```
+    pub(crate) static MISSING_CONTEXT_ARGUMENT = {
+        summary: "detects calls whose `context` parameter has no matching context value",
+        status: LintStatus::stable("0.0.61"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for calls where several `context` declarations in the same scope
+    /// could fill one `context` parameter.
+    ///
+    /// ## Why is this bad?
+    /// The implicit argument is chosen by assignability, not by name. When two
+    /// declarations in the winning scope both match, either choice would be
+    /// arbitrary — the call must pass the argument explicitly (or the extra
+    /// declaration must move to another scope).
+    ///
+    /// ## Examples
+    /// ```python
+    /// def f(a: int, context b: str): ...
+    ///
+    /// context s1 = "hello"
+    /// context s2 = "world"
+    /// f(1)          # error: `s1` and `s2` both match
+    /// f(1, b=s1)    # ok — explicit
+    /// ```
+    pub(crate) static AMBIGUOUS_CONTEXT_ARGUMENT = {
+        summary: "detects calls whose `context` parameter matches several context values",
+        status: LintStatus::stable("0.0.61"),
+        default_level: Level::Error,
     }
 }
 

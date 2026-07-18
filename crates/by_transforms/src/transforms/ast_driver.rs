@@ -35,7 +35,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, checked_cast, coalesce, coalesce_chain,
-    compat, decl_site_variance, decorator_keyword, dedent_string, dynamic_keyword,
+    compat, context_params, decl_site_variance, decorator_keyword, dedent_string, dynamic_keyword,
     empty_declarations, float_const, force_unwrap, generic_call, generics, identity_swap,
     implicit_typing, init_method, just_float, kw_subscript, literal_types, main_function,
     modifiers, mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await,
@@ -479,6 +479,7 @@ pub(crate) fn run_against_source<'a>(
     let soundness_pass = soundness::SoundnessPass::new(source_ref, config);
     let checked_cast_pass = checked_cast::CheckedCastPass::new(config.checked_cast);
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
+    let context_params_pass = context_params::ContextParamsPass::new(source_ref);
     let variance_pass = decl_site_variance::VarianceStripPass::new();
     let anon_named_tuple_pass =
         anon_named_tuple::AnonNamedTuplePass::new(source_ref, config.clone());
@@ -550,6 +551,11 @@ pub(crate) fn run_against_source<'a>(
         // so lowerings inside them (including nested trailing lambdas) are
         // claimed and materialized in place
         &trailing_lambda_pass,
+        // context parameters: strip `context` prefixes, lower `context NAME =`
+        // declarations, and append the resolved implicit arguments before each
+        // call's closing paren. single insertions, so they compose inside any
+        // wrapping template's `Src` spans (including the trailing-lambda one)
+        &context_params_pass,
         &dynamic_keyword_pass,
         &just_float_pass,
         &float_const_pass,
