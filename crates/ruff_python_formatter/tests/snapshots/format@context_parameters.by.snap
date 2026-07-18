@@ -1,0 +1,57 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/context_parameters.by
+---
+## Input
+```bython
+# `context` declarations, untyped and typed
+context s1 = "asdf"
+context s2: str = "fdsa"
+
+
+# `context` parameters: positional-or-keyword (trailing) and keyword-only
+def f(a: int, context b: str) -> str:
+    return b
+
+
+def g(a: int, *, context b: str, context c: int) -> int:
+    return c
+
+
+class H:
+    def m(self, context b: str) -> str:
+        return b
+
+
+# a declaration inside a function body
+def local() -> None:
+    context inner = "local"
+    f(1)
+```
+
+## Output
+```bython
+# `context` declarations, untyped and typed
+context s1 = "asdf"
+context s2: str = "fdsa"
+
+
+# `context` parameters: positional-or-keyword (trailing) and keyword-only
+def f(a: int, context b: str) -> str:
+    return b
+
+
+def g(a: int, *, context b: str, context c: int) -> int:
+    return c
+
+
+class H:
+    def m(self, context b: str) -> str:
+        return b
+
+
+# a declaration inside a function body
+def local() -> None:
+    context inner = "local"
+    f(1)
+```
