@@ -1,0 +1,22 @@
+def f(context b: str) -> str:
+    return b
+
+
+# a `context` declaration is consumed implicitly by context-parameter
+# resolution at later call sites — never flagged as unused
+def implicit_use() -> str:
+    context greeting = "hello"
+    return f()
+
+
+# even with no call in sight the declaration stays exempt: whether a later
+# edit adds a consuming call is not this rule's business
+def no_call_yet() -> None:
+    context spare = "unused"
+
+
+# the typed form is exempt too; an ordinary assignment beside it still fires
+def mixed() -> str:
+    context typed: str = "hello"
+    plain = "dead"  # F841
+    return f()
