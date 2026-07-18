@@ -172,6 +172,7 @@ mod tests {
     #[test_case(Rule::UndefinedName, Path::new("F821_31.py"))]
     #[test_case(Rule::UndefinedName, Path::new("F821_32.pyi"))]
     #[test_case(Rule::UndefinedName, Path::new("F821_basedpython.by"))]
+    #[test_case(Rule::UnusedVariable, Path::new("F841_basedpython.by"))]
     #[test_case(Rule::UndefinedName, Path::new("F821_33.py"))]
     #[test_case(Rule::UndefinedName, Path::new("F821_34.pyi"))]
     #[test_case(Rule::UndefinedName, Path::new("F821_34.py"))]
