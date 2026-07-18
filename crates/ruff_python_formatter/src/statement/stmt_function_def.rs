@@ -7,14 +7,39 @@ use crate::prelude::*;
 use crate::statement::clause::{ClauseHeader, clause};
 use crate::statement::stmt_class_def::FormatDecorators;
 use crate::statement::suite::SuiteKind;
+use crate::verbatim::verbatim_text;
 use ruff_formatter::write;
 use ruff_python_ast::{NodeKind, StmtFunctionDef};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 #[derive(Default)]
 pub struct FormatStmtFunctionDef;
 
 impl FormatNodeRule<StmtFunctionDef> for FormatStmtFunctionDef {
     fn fmt_fields(&self, item: &StmtFunctionDef, f: &mut PyFormatter) -> FormatResult<()> {
+        // basedpython trailing lambda blocks (`f(2):` + suite) have no
+        // AST-faithful surface printer — their identifiers are synthetic and
+        // zero-width — so emit them verbatim, like based enums. the range
+        // extends to the end of the final line so a trailing end-of-line
+        // comment (outside the node range but marked formatted below) is
+        // carried along rather than dropped
+        if item.is_trailing_lambda {
+            let source = f.context().source();
+            let end_offset = usize::from(item.range().end());
+            let line_end = source[end_offset..]
+                .find(['\n', '\r'])
+                .map_or(source.len(), |eol| end_offset + eol);
+            let verbatim_range = TextRange::new(
+                item.range().start(),
+                TextSize::try_from(line_end).expect("source length fits u32"),
+            );
+            write!(f, [verbatim_text(verbatim_range)])?;
+            f.context()
+                .comments()
+                .mark_verbatim_node_comments_formatted(item.into());
+            return Ok(());
+        }
+
         let StmtFunctionDef {
             decorator_list,
             body,
@@ -117,6 +142,7 @@ fn format_function_header(f: &mut PyFormatter, item: &StmtFunctionDef) -> Format
         parameters,
         returns,
         body: _,
+        is_trailing_lambda: _,
     } = item;
 
     let comments = f.context().comments().clone();

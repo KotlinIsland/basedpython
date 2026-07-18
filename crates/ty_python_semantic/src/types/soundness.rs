@@ -272,7 +272,7 @@ pub fn parameter_check_plan<'db>(
 
 /// the sole overload of `callee`'s signature, or `None` if `callee` is not a
 /// plain function / bound method or is overloaded
-fn single_signature<'db>(
+pub(crate) fn single_signature<'db>(
     db: &'db dyn Db,
     callee: Type<'db>,
 ) -> Option<crate::types::signatures::Signature<'db>> {

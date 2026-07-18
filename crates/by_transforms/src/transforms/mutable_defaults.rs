@@ -9,6 +9,17 @@
 //! Only number, bool, None, string, and ellipsis literals (and unary +/-
 //! on a number) are kept as-is; everything else is re-evaluated per call.
 //!
+//! The same sentinel machinery lowers basedpython's relaxed parameter order —
+//! a `def` may declare a required parameter after a defaulted one (so a
+//! trailing lambda can bind the last parameter while earlier parameters keep
+//! their defaults). Python rejects that shape, so the required parameter gets
+//! a sentinel default and a guard that raises:
+//!
+//!   def f(x=1, a):      →   def f(x=1, a=_MISSING):
+//!       ...                     if a is _MISSING:
+//!                                   raise ...  # a `TypeError`, like python's own
+//!                               ...
+//!
 //! The rewrite touches only the default expressions (each swapped for the
 //! sentinel) and inserts the guard lines at the body start — the rest of the
 //! function, body included, keeps its source bytes, so sibling lowerings
@@ -41,6 +52,31 @@ fn is_immutable_scalar(expr: &Expr) -> bool {
     }
 }
 
+/// what a `_MISSING`-sentinel guard does when the argument was not supplied
+enum Guard {
+    /// re-evaluate the written default per call (mutable defaults)
+    Reevaluate { name: String, default: String },
+    /// raise — the parameter is required, its sentinel default only exists
+    /// because python rejects a required parameter after a defaulted one
+    Required { name: String, function: String },
+}
+
+impl Guard {
+    fn write(&self, text: &mut String, base: &str) {
+        match self {
+            Guard::Reevaluate { name, default } => {
+                let _ = write!(text, "if {name} is _MISSING:\n{base}    {name} = {default}");
+            }
+            Guard::Required { name, function } => {
+                let _ = write!(
+                    text,
+                    "if {name} is _MISSING:\n{base}    raise TypeError(\"{function}() missing required argument: '{name}'\")"
+                );
+            }
+        }
+    }
+}
+
 struct MutableDefaults<'src> {
     source: &'src str,
     edits: Vec<(TextRange, String)>,
@@ -53,23 +89,53 @@ impl MutableDefaults<'_> {
     }
 
     fn process_function(&mut self, f: &StmtFunctionDef) {
-        // (param name, default source) for each non-scalar default
-        let mut guards: Vec<(String, String)> = Vec::new();
+        let mut guards: Vec<Guard> = Vec::new();
         let params = f.parameters.as_ref();
-        for pw in params
-            .posonlyargs
-            .iter()
-            .chain(params.args.iter())
-            .chain(params.kwonlyargs.iter())
-        {
+        // positional parameters: swap non-scalar defaults for the sentinel,
+        // and give basedpython's required-after-defaulted parameters a
+        // sentinel default plus a raising guard (keyword-only parameters may
+        // follow a default without one in python already)
+        let mut seen_default = false;
+        for pw in params.posonlyargs.iter().chain(params.args.iter()) {
+            match pw.default.as_deref() {
+                Some(d) => {
+                    seen_default = true;
+                    if !is_immutable_scalar(d) {
+                        self.edits.push((d.range(), "_MISSING".to_owned()));
+                        guards.push(Guard::Reevaluate {
+                            name: pw.parameter.name.id.to_string(),
+                            default: self.src(d.range()).to_owned(),
+                        });
+                    }
+                }
+                None if seen_default => {
+                    // `=` spacing mirrors python style: spaced when annotated
+                    let sentinel = if pw.parameter.annotation.is_some() {
+                        " = _MISSING"
+                    } else {
+                        "=_MISSING"
+                    };
+                    self.edits.push((
+                        TextRange::empty(pw.parameter.range().end()),
+                        sentinel.to_owned(),
+                    ));
+                    guards.push(Guard::Required {
+                        name: pw.parameter.name.id.to_string(),
+                        function: f.name.id.to_string(),
+                    });
+                }
+                None => {}
+            }
+        }
+        for pw in &params.kwonlyargs {
             if let Some(d) = pw.default.as_deref()
                 && !is_immutable_scalar(d)
             {
                 self.edits.push((d.range(), "_MISSING".to_owned()));
-                guards.push((
-                    pw.parameter.name.id.to_string(),
-                    self.src(d.range()).to_owned(),
-                ));
+                guards.push(Guard::Reevaluate {
+                    name: pw.parameter.name.id.to_string(),
+                    default: self.src(d.range()).to_owned(),
+                });
             }
         }
         if guards.is_empty() {
@@ -93,21 +159,17 @@ impl MutableDefaults<'_> {
                 // the insertion lands after the statement's own indentation;
                 // each guard re-establishes it for the following line
                 let base = prefix.to_owned();
-                for (name, default) in &guards {
-                    let _ = write!(
-                        text,
-                        "if {name} is _MISSING:\n{base}    {name} = {default}\n{base}"
-                    );
+                for guard in &guards {
+                    guard.write(&mut text, &base);
+                    let _ = write!(text, "\n{base}");
                 }
             } else {
                 // single-line body (`def f(x=[]): ...`) — break it onto its own
                 // indented line after the guards
                 let base = format!("{}    ", line_indent(self.source, f.range().start()));
-                for (name, default) in &guards {
-                    let _ = write!(
-                        text,
-                        "\n{base}if {name} is _MISSING:\n{base}    {name} = {default}"
-                    );
+                for guard in &guards {
+                    let _ = write!(text, "\n{base}");
+                    guard.write(&mut text, &base);
                 }
                 let _ = write!(text, "\n{base}");
             }
@@ -116,11 +178,9 @@ impl MutableDefaults<'_> {
             // docstring-only body: append the guards after it
             let doc_end = f.body[docstring_count - 1].range().end();
             let base = format!("{}    ", line_indent(self.source, f.range().start()));
-            for (name, default) in &guards {
-                let _ = write!(
-                    text,
-                    "\n{base}if {name} is _MISSING:\n{base}    {name} = {default}"
-                );
+            for guard in &guards {
+                let _ = write!(text, "\n{base}");
+                guard.write(&mut text, &base);
             }
             self.edits.push((TextRange::empty(doc_end), text));
         }
@@ -320,6 +380,77 @@ mod tests {
                     if y is _MISSING:
                         y = {}
                     pass
+            "},
+        );
+    }
+
+    #[test]
+    fn required_after_default() {
+        check(
+            indoc! {"
+                def f(x=1, a):
+                    print(x, a)
+            "},
+            indoc! {"
+                _MISSING = object()
+                def f(x=1, a=_MISSING):
+                    if a is _MISSING:
+                        raise TypeError(\"f() missing required argument: 'a'\")
+                    print(x, a)
+            "},
+        );
+    }
+
+    #[test]
+    fn required_after_default_annotated() {
+        check(
+            indoc! {"
+                def f(x: int = 1, a: int):
+                    print(x, a)
+            "},
+            indoc! {"
+                _MISSING = object()
+                def f(x: int = 1, a: int = _MISSING):
+                    if a is _MISSING:
+                        raise TypeError(\"f() missing required argument: 'a'\")
+                    print(x, a)
+            "},
+        );
+    }
+
+    #[test]
+    fn required_after_mutable_default() {
+        // both duties in one signature: the mutable default re-evaluates, the
+        // required parameter raises — guards in parameter order
+        check(
+            indoc! {"
+                def f(x=[], a):
+                    print(x, a)
+            "},
+            indoc! {"
+                _MISSING = object()
+                def f(x=_MISSING, a=_MISSING):
+                    if x is _MISSING:
+                        x = []
+                    if a is _MISSING:
+                        raise TypeError(\"f() missing required argument: 'a'\")
+                    print(x, a)
+            "},
+        );
+    }
+
+    #[test]
+    fn required_keyword_only_untouched() {
+        // a keyword-only parameter without a default after a defaulted one is
+        // already valid python
+        check(
+            indoc! {"
+                def f(x=1, *, a):
+                    print(x, a)
+            "},
+            indoc! {"
+                def f(x=1, *, a):
+                    print(x, a)
             "},
         );
     }

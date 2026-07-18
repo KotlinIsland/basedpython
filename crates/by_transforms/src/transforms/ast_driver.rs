@@ -40,8 +40,8 @@ use super::{
     implicit_typing, init_method, just_float, kw_subscript, literal_types, main_function,
     modifiers, mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await,
     propagate, reified_generic, repeated_underscore, sentinel, some_ctor, soundness, string_tag,
-    super_keyword, symbolic_type_op, top_star, tuple_index, type_is, type_reification,
-    typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
+    super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_is,
+    type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -485,6 +485,7 @@ pub(crate) fn run_against_source<'a>(
     let generics_pass = generics::GenericPolyfillPass::new(source_ref, config.clone());
     let soundness_pass = soundness::SoundnessPass::new(source_ref, config);
     let checked_cast_pass = checked_cast::CheckedCastPass::new(config.checked_cast);
+    let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
     let variance_pass = decl_site_variance::VarianceStripPass::new();
     let anon_named_tuple_pass =
         anon_named_tuple::AnonNamedTuplePass::new(source_ref, config.clone());
@@ -551,6 +552,11 @@ pub(crate) fn run_against_source<'a>(
         // template passes value + type through as `Src`, so lowerings inside
         // them (a `??` value, a `T?` type) still compose
         &checked_cast_pass,
+        // trailing lambda blocks re-emit a whole statement as a def + call
+        // template; the suite and the called expression pass through as `Src`,
+        // so lowerings inside them (including nested trailing lambdas) are
+        // claimed and materialized in place
+        &trailing_lambda_pass,
         &dynamic_keyword_pass,
         &just_float_pass,
         &float_const_pass,

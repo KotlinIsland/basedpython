@@ -266,6 +266,74 @@ impl<'a> Generator<'a> {
         }
 
         match ast {
+            // basedpython: a trailing lambda block renders as its lowered
+            // python — the surface `<call>:` form would not parse downstream.
+            // this path has no type info to spell the last-parameter keyword,
+            // so the function is appended positionally, ahead of any keyword
+            // arguments (the same best-effort the text lowering uses for
+            // uninspectable signatures)
+            Stmt::FunctionDef(function) if function.trailing_lambda_callee().is_some() => {
+                self.newlines(if self.indent_depth == 0 { 2 } else { 1 });
+                statement!({
+                    self.p("def ");
+                    self.p_id(&function.name);
+                    self.p("(");
+                    self.unparse_parameters(&function.parameters);
+                    self.p("):");
+                });
+                self.body(&function.body);
+                let marker = &function.decorator_list[0].expression;
+                statement!({
+                    match marker {
+                        Expr::Call(call)
+                            if !call.is_cast && !call.is_checked_cast && !call.is_string_tag =>
+                        {
+                            self.unparse_expr(&call.func, precedence::MAX);
+                            self.p("(");
+                            let mut first = true;
+                            let mut appended = false;
+                            for arg_or_keyword in call.arguments.iter_source_order() {
+                                if !appended && matches!(arg_or_keyword, ArgOrKeyword::Keyword(_)) {
+                                    self.p_delim(&mut first, ", ");
+                                    self.p_id(&function.name);
+                                    appended = true;
+                                }
+                                match arg_or_keyword {
+                                    ArgOrKeyword::Arg(arg) => {
+                                        self.p_delim(&mut first, ", ");
+                                        self.unparse_expr(arg, precedence::COMMA);
+                                    }
+                                    ArgOrKeyword::Keyword(keyword) => {
+                                        self.p_delim(&mut first, ", ");
+                                        if let Some(arg) = &keyword.arg {
+                                            self.p_id(arg);
+                                            self.p("=");
+                                            self.unparse_expr(&keyword.value, precedence::COMMA);
+                                        } else {
+                                            self.p("**");
+                                            self.unparse_expr(&keyword.value, precedence::MAX);
+                                        }
+                                    }
+                                }
+                            }
+                            if !appended {
+                                self.p_delim(&mut first, ", ");
+                                self.p_id(&function.name);
+                            }
+                            self.p(")");
+                        }
+                        _ => {
+                            self.unparse_expr(marker, precedence::MAX);
+                            self.p("(");
+                            self.p_id(&function.name);
+                            self.p(")");
+                        }
+                    }
+                });
+                if self.indent_depth == 0 {
+                    self.newlines(2);
+                }
+            }
             Stmt::FunctionDef(ast::StmtFunctionDef {
                 is_async,
                 name,

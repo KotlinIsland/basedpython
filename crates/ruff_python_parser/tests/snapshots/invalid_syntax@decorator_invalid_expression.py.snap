@@ -142,6 +142,7 @@ Module(
                             },
                         ),
                     ],
+                    is_trailing_lambda: false,
                 },
             ),
         ],

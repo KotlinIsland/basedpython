@@ -2707,11 +2707,20 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     returns,
                     body,
                     is_async: _,
+                    is_trailing_lambda: _,
                     range: _,
                     node_index: _,
                 } = function_def;
                 for decorator in decorator_list {
                     self.visit_decorator(decorator);
+                }
+
+                // basedpython: a trailing lambda's synthetic decorator holds the
+                // called expression. its callee is a standalone expression so
+                // the lambda's implicit `it` parameter can read the callee's
+                // type without depending on the enclosing definition inference
+                if let Some(callee) = function_def.trailing_lambda_callee() {
+                    self.add_standalone_expression(callee);
                 }
 
                 // Evaluate default args before we visit the body. If the default expression ends

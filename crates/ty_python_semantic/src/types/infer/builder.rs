@@ -43,7 +43,7 @@ use crate::subscript::PyIndex;
 use crate::types::add_inferred_python_version_hint_to_diagnostic;
 use crate::types::attribute_write::assignment_attribute_members;
 use crate::types::call::bind::MatchingOverloadIndex;
-use crate::types::call::{Binding, Bindings, CallArguments, CallError, CallErrorKind};
+use crate::types::call::{Argument, Binding, Bindings, CallArguments, CallError, CallErrorKind};
 use crate::types::callable::{CallableFunctionProvenance, CallableTypeKind};
 use crate::types::class::{
     ClassLiteral, CodeGeneratorKind, DynamicNamedTupleAnchor, DynamicNamedTupleLiteral,
@@ -102,6 +102,7 @@ use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope};
 use crate::types::soundness::{erases_type_arguments, runtime_check_target};
 use crate::types::special_form::TypeQualifier;
 use crate::types::subclass_of::SubclassOfInner;
+use crate::types::trailing_lambda::trailing_lambda_keyword;
 use crate::types::tuple::promotion::TupleSizePromotionConstraints;
 use crate::types::tuple::{Tuple, TupleLength, TupleSpecBuilder, TupleType};
 use crate::types::type_alias::{ManualPEP695TypeAliasType, PEP695TypeAliasType};
@@ -1250,8 +1251,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let DefinitionKind::Function(function) = definition.kind(self.db()) else {
             return;
         };
+        let function_node = function.node(self.module());
 
-        for decorator in &function.node(self.module()).decorator_list {
+        // basedpython: a trailing lambda block's single synthetic decorator
+        // holds the called expression, not a decorator — check the call (with
+        // the lambda appended) instead of inferring a decoration
+        if function_node.is_trailing_lambda {
+            self.infer_trailing_lambda_marker(function_node);
+            return;
+        }
+
+        for decorator in &function_node.decorator_list {
             let decorator_type = self.infer_decorator(decorator);
             if let Type::FunctionLiteral(function) = decorator_type
                 && let Some(KnownFunction::NoTypeCheck) = function.known(self.db())
@@ -1260,6 +1270,86 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // `@no_type_check`, including later decorators.
                 self.context.inference_flags |= InferenceFlags::IN_NO_TYPE_CHECK;
             }
+        }
+    }
+
+    /// basedpython: check a trailing lambda statement's call — the expression
+    /// carried by its synthetic decorator — with the lambda appended as its
+    /// last argument. The argument is bound by keyword (the callee's last
+    /// declared parameter) when the signature is inspectable, mirroring the
+    /// lowering; positionally otherwise. Its type is deliberately `Unknown`:
+    /// the lambda's `it` parameter is context-typed separately, and the
+    /// block's return is unchecked (it is written for effect).
+    ///
+    /// Diagnostics anchor on the decorator node — never the call expression —
+    /// so argument-index lookups can't reach for the synthetic argument,
+    /// which has no AST node.
+    fn infer_trailing_lambda_marker(&mut self, function: &ast::StmtFunctionDef) {
+        let Some(signature_callee) = function.trailing_lambda_callee() else {
+            return;
+        };
+        let Some(decorator) = function.decorator_list.first() else {
+            return;
+        };
+        let expression = &decorator.expression;
+
+        // the callee is a standalone expression (see the semantic index
+        // builder), so the lambda's `it` parameter inference shares this
+        // result without a cycle through the decorators region
+        let callee_ty = self.infer_standalone_expression(signature_callee, TypeContext::default());
+
+        let mut items: Vec<(Argument<'_>, Option<Type<'db>>)> = Vec::new();
+        let marker_call = match expression {
+            ast::Expr::Call(call) if std::ptr::eq(signature_callee, call.func.as_ref()) => {
+                Some(call)
+            }
+            _ => None,
+        };
+        if let Some(call) = marker_call {
+            for arg_or_keyword in call.arguments.iter_source_order() {
+                let item = match arg_or_keyword {
+                    ast::ArgOrKeyword::Arg(argument) => match argument {
+                        ast::Expr::Starred(ast::ExprStarred { value, .. }) => {
+                            let ty = self.infer_expression(value, TypeContext::default());
+                            self.store_expression_type(argument, ty);
+                            (Argument::Variadic, Some(ty))
+                        }
+                        _ => (
+                            Argument::Positional,
+                            Some(self.infer_expression(argument, TypeContext::default())),
+                        ),
+                    },
+                    ast::ArgOrKeyword::Keyword(ast::Keyword { arg, value, .. }) => {
+                        let ty = self.infer_expression(value, TypeContext::default());
+                        match arg {
+                            Some(name) => (Argument::Keyword(&name.id), Some(ty)),
+                            None => (Argument::Keywords, Some(ty)),
+                        }
+                    }
+                };
+                items.push(item);
+            }
+        }
+
+        let keyword = trailing_lambda_keyword(self.db(), callee_ty);
+        items.push((
+            match &keyword {
+                Some(name) => Argument::Keyword(name),
+                None => Argument::Positional,
+            },
+            Some(Type::unknown()),
+        ));
+        let call_arguments: CallArguments<'_, 'db> = items.into_iter().collect();
+
+        let return_ty = match callee_ty.try_call(self.db(), &call_arguments) {
+            Ok(bindings) => bindings.return_type(self.db()),
+            Err(error) => {
+                error.1.report_diagnostics(&self.context, decorator.into());
+                error.return_type(self.db())
+            }
+        };
+        if marker_call.is_some() {
+            self.store_expression_type(expression, return_ty);
         }
     }
 
@@ -11540,7 +11630,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let known_decorators = match self.region {
             InferenceRegion::FunctionDecorators(definition) => match definition.kind(self.db()) {
-                DefinitionKind::Function(function) => {
+                // basedpython: a trailing lambda's synthetic decorator holds the
+                // called expression — its type must not be read as a decoration
+                // (a call returning e.g. `staticmethod` would poison the flags)
+                DefinitionKind::Function(function)
+                    if !function.node(self.module()).is_trailing_lambda =>
+                {
                     function.node(self.module()).decorator_list.iter().fold(
                         FunctionDecorators::empty(),
                         |known_decorators, decorator| {

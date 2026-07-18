@@ -164,6 +164,7 @@ mod string_annotation;
 mod subclass_of;
 #[cfg(test)]
 pub(crate) mod tests;
+pub(crate) mod trailing_lambda;
 mod tuple;
 pub(crate) mod type_alias;
 mod type_expansion;

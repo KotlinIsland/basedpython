@@ -23,10 +23,31 @@ use crate::str_prefix::{
 };
 use crate::{
     Expr, ExprRef, InterpolatedStringElement, LiteralExpressionRef, OperatorPrecedence, Pattern,
-    Stmt, TypeParam, int,
+    Stmt, StmtFunctionDef, TypeParam, int,
     name::Name,
     str::{Quote, TripleQuotes},
 };
+
+impl StmtFunctionDef {
+    /// basedpython: the expression whose signature decides how a trailing
+    /// lambda block is passed. The synthetic decorator carries the called
+    /// expression; for a plain parenthesized call (`f(2):`) the deciding
+    /// signature is the call's own callee, while a parenthesis-free call form
+    /// (a `cast`, a string tag) or any other expression is called as a whole.
+    /// `None` when this function is not a trailing lambda
+    pub fn trailing_lambda_callee(&self) -> Option<&Expr> {
+        if !self.is_trailing_lambda {
+            return None;
+        }
+        let decorator = self.decorator_list.first()?;
+        Some(match &decorator.expression {
+            Expr::Call(call) if !call.is_cast && !call.is_checked_cast && !call.is_string_tag => {
+                &call.func
+            }
+            expression => expression,
+        })
+    }
+}
 
 impl StmtClassDef {
     /// Return an iterator over the bases of the class.
