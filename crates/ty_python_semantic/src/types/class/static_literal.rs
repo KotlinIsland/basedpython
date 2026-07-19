@@ -35,7 +35,7 @@ use crate::{
             typed_dict::{TypedDictFields, synthesize_typed_dict_method, typed_dict_class_member},
         },
         context::InferContext,
-        dedicated::pydantic,
+        dedicated::{django, pydantic},
         definition_expression_type, determine_upper_bound,
         diagnostic::INVALID_DATACLASS_OVERRIDE,
         enums::{enum_metadata, is_enum_class_by_inheritance, try_unwrap_nonmember_value},
@@ -1533,9 +1533,12 @@ impl<'db> StaticClassLiteral<'db> {
         let field_policy = CodeGeneratorKind::from_class(db, self.into())?;
         let pydantic_constructor_fields_are_keyword_only =
             field_policy.is_pydantic() && pydantic::constructor_fields_are_keyword_only(db, self);
-        let pydantic_constructor_fields_are_optional = name == "__init__"
-            && field_policy.is_pydantic()
-            && pydantic::constructor_fields_are_optional(db, self);
+        // Django constructors accept any subset of fields; requiredness is a
+        // `full_clean`/`save` concern.
+        let constructor_fields_are_optional = name == "__init__"
+            && (field_policy == CodeGeneratorKind::Django
+                || (field_policy.is_pydantic()
+                    && pydantic::constructor_fields_are_optional(db, self)));
 
         let instance_ty =
             Type::instance(db, self.apply_optional_specialization(db, specialization));
@@ -1572,6 +1575,15 @@ impl<'db> StaticClassLiteral<'db> {
                         alias,
                         strict,
                     } => (*init, *default_ty, None, alias.as_ref(), None, *strict),
+                    FieldKind::Django { many_to_many, .. } => (
+                        // many-to-many values cannot be set at construction
+                        !*many_to_many,
+                        None,
+                        Some(true),
+                        None,
+                        None,
+                        pydantic::ConfigBoolean::Unspecified,
+                    ),
                     FieldKind::TypedDict { .. } => continue,
                 };
                 let mut field_ty = field.declared_ty;
@@ -1651,7 +1663,7 @@ impl<'db> StaticClassLiteral<'db> {
                     field_ty = pydantic::constructor_parameter_type(db, field_ty, strict, metadata);
                 }
 
-                if pydantic_constructor_fields_are_optional && default_ty.is_none() {
+                if constructor_fields_are_optional && default_ty.is_none() {
                     default_ty = Some(Type::unknown());
                 }
 
@@ -1721,6 +1733,28 @@ impl<'db> StaticClassLiteral<'db> {
                 }
             }
 
+            // Django's `Model.__init__` also accepts the `pk` alias and the
+            // `<field>_id` attname of every to-one relation field.
+            if name == "__init__" && field_policy == CodeGeneratorKind::Django {
+                for (parameter_name, parameter_ty) in django::extra_constructor_parameters(
+                    db,
+                    self.fields(db, specialization, field_policy),
+                ) {
+                    if parameters
+                        .iter()
+                        .filter_map(Parameter::name)
+                        .any(|existing| *existing == parameter_name)
+                    {
+                        continue;
+                    }
+                    parameters.push(
+                        Parameter::keyword_only(parameter_name)
+                            .with_annotated_type(parameter_ty)
+                            .with_default_type(Type::unknown()),
+                    );
+                }
+            }
+
             // In the event that we have a mix of keyword-only and positional parameters, we need to sort them
             // so that the keyword-only parameters appear after positional parameters.
             parameters.sort_by_key(Parameter::is_keyword_only);
@@ -1745,6 +1779,16 @@ impl<'db> StaticClassLiteral<'db> {
             Some(Type::function_like_callable(db, signature))
         };
 
+        // A model whose MRO contains unresolved bases has an incomplete field
+        // list; degrade all Django synthesis to the stubs' gradual fallbacks
+        // (`Model.__init__(*args, **kwargs)`, `pk: Any`) rather than invent a
+        // closed signature that produces false positives.
+        let django_mro_is_fully_static = || {
+            !self
+                .iter_mro(db, specialization)
+                .any(|base| matches!(base, ClassBase::Any | ClassBase::Dynamic(_)))
+        };
+
         match (field_policy, name) {
             (field_policy, "__init__")
                 if field_policy.synthesizes_constructor_signature_from_fields() =>
@@ -1755,10 +1799,31 @@ impl<'db> StaticClassLiteral<'db> {
                     return None;
                 }
 
+                if field_policy == CodeGeneratorKind::Django && !django_mro_is_fully_static() {
+                    return None;
+                }
+
                 let self_parameter = Parameter::positional_or_keyword(Name::new_static("self"))
                     // TODO: could be `Self`.
                     .with_annotated_type(instance_ty);
                 signature_from_fields(vec![self_parameter], Type::none(db))
+            }
+            (CodeGeneratorKind::Django, name) => {
+                // dunder lookups happen while inferring the very definitions the
+                // reverse-accessor scan reads; a reverse accessor is never a dunder
+                if name.starts_with("__") {
+                    return None;
+                }
+                if !django_mro_is_fully_static() {
+                    return None;
+                }
+                django::synthesized_model_attribute(
+                    db,
+                    self,
+                    self.fields(db, specialization, field_policy),
+                    name,
+                )
+                .or_else(|| django::reverse_accessors(db, self).get(name).copied())
             }
             (
                 CodeGeneratorKind::NamedTuple,
@@ -2277,6 +2342,10 @@ impl<'db> StaticClassLiteral<'db> {
         specialization: Option<Specialization<'db>>,
         field_policy: CodeGeneratorKind<'db>,
     ) -> FxIndexMap<Name, Field<'db>> {
+        if field_policy == CodeGeneratorKind::Django {
+            return self.django_own_fields(db, specialization);
+        }
+
         let class_body_scope = self.body_scope(db);
         let table = place_table(db, class_body_scope);
 
@@ -2378,6 +2447,8 @@ impl<'db> StaticClassLiteral<'db> {
                 }
 
                 let kind = match field_policy {
+                    // handled by the `django_own_fields` early return above
+                    CodeGeneratorKind::Django => continue,
                     CodeGeneratorKind::NamedTuple => FieldKind::NamedTuple { default_ty },
                     CodeGeneratorKind::DataclassLike(_) => FieldKind::Dataclass {
                         default_ty,
@@ -2453,6 +2524,69 @@ impl<'db> StaticClassLiteral<'db> {
         attributes.shrink_to_fit();
 
         attributes
+    }
+
+    /// Django's value-inferred fields: *unannotated* class-body assignments
+    /// whose inferred type is a `django.db.models.Field` instance. Per-field
+    /// facts (`null`, `primary_key`, `related_name`) come from literal
+    /// keywords of the field constructor call; anything dynamic degrades the
+    /// field to unknown-but-present.
+    fn django_own_fields(
+        self,
+        db: &'db dyn Db,
+        specialization: Option<Specialization<'db>>,
+    ) -> FxIndexMap<Name, Field<'db>> {
+        let class_body_scope = self.body_scope(db);
+        let table = place_table(db, class_body_scope);
+        let use_def = use_def_map(db, class_body_scope);
+        let module = parsed_module(db, self.file(db)).load(db);
+
+        let mut field_bindings = Vec::new();
+        for (symbol_id, bindings) in use_def.all_end_of_scope_symbol_bindings() {
+            // field contents come from the bindings live at end of scope, but
+            // field order is anchored to the first binding in the class body
+            let mut first_order = None;
+            let mut last_definition = None;
+            for binding in bindings.clone() {
+                if let DefinitionState::Defined(definition) = binding.binding {
+                    first_order.get_or_insert(binding.binding_order);
+                    last_definition = Some(definition);
+                }
+            }
+            let (Some(order), Some(definition)) = (first_order, last_definition) else {
+                continue;
+            };
+            let Some(ty) = place_from_bindings(db, bindings)
+                .place
+                .ignore_possibly_undefined()
+            else {
+                continue;
+            };
+            if !django::is_field_instance(db, ty) {
+                continue;
+            }
+            field_bindings.push((order, symbol_id, ty, definition));
+        }
+        field_bindings.sort_unstable_by_key(|(order, ..)| *order);
+
+        let mut fields = FxIndexMap::default();
+        for (_, symbol_id, ty, definition) in field_bindings {
+            let facts = django::field_facts(db, definition, &module);
+            let field = Field {
+                declared_ty: ty.apply_optional_specialization(db, specialization),
+                kind: FieldKind::Django {
+                    primary_key: facts.primary_key,
+                    null: facts.null,
+                    many_to_many: django::is_many_to_many_instance(db, ty),
+                    related_name: facts.related_name,
+                    has_choices: facts.has_choices,
+                },
+                first_declaration: Some(definition),
+            };
+            fields.insert(table.symbol(symbol_id).name().clone(), field);
+        }
+        fields.shrink_to_fit();
+        fields
     }
 
     /// Look up an instance attribute (available in `__dict__`) of the given name.

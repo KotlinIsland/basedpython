@@ -52,14 +52,16 @@ use crate::types::class::{
 };
 use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
+use crate::types::dedicated::django;
 use crate::types::diagnostic::{
     self, AMBIGUOUS_EXTENSION_MEMBER, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS,
     CYCLIC_TYPE_ALIAS_DEFINITION, ERASED_CAST_ARGUMENT, ERASED_TYPE_CHECK, FINAL_ON_VARIABLE,
     GeneratorMismatchKind, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT,
-    INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_LEGACY_TYPE_VARIABLE,
-    INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM,
-    INVALID_TYPE_GUARD_CALL, INVALID_TYPE_VARIABLE_BOUND, INVALID_TYPE_VARIABLE_CONSTRAINTS,
-    NON_OVERLAPPING_CAST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
+    INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_FIELD_LOOKUP,
+    INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE,
+    INVALID_TYPE_FORM, INVALID_TYPE_GUARD_CALL, INVALID_TYPE_VARIABLE_BOUND,
+    INVALID_TYPE_VARIABLE_CONSTRAINTS, NON_OVERLAPPING_CAST, OPTIONAL_OBJECT_CONVERSION,
+    POSSIBLY_MISSING_IMPLICIT_CALL,
     POSSIBLY_MISSING_SUBMODULE, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL,
     UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
     hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
@@ -4300,31 +4302,34 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         TypeQualifier::ClassVar | TypeQualifier::Final | TypeQualifier::InitVar => {
                         }
                     },
-                    Some(CodeGeneratorKind::NamedTuple) | None => match qualifier {
-                        TypeQualifier::NotRequired
-                        | TypeQualifier::Required
-                        | TypeQualifier::ReadOnly => {
-                            let Some(builder) =
-                                self.context.report_lint(&INVALID_TYPE_FORM, annotation)
-                            else {
-                                continue;
-                            };
-                            builder.into_diagnostic(format_args!(
-                                "`{name}` is only allowed in TypedDict fields",
-                                name = qualifier.name()
-                            ));
+                    Some(CodeGeneratorKind::NamedTuple | CodeGeneratorKind::Django) | None => {
+                        match qualifier {
+                            TypeQualifier::NotRequired
+                            | TypeQualifier::Required
+                            | TypeQualifier::ReadOnly => {
+                                let Some(builder) =
+                                    self.context.report_lint(&INVALID_TYPE_FORM, annotation)
+                                else {
+                                    continue;
+                                };
+                                builder.into_diagnostic(format_args!(
+                                    "`{name}` is only allowed in TypedDict fields",
+                                    name = qualifier.name()
+                                ));
+                            }
+                            TypeQualifier::InitVar => {
+                                let Some(builder) =
+                                    self.context.report_lint(&INVALID_TYPE_FORM, annotation)
+                                else {
+                                    continue;
+                                };
+                                builder.into_diagnostic(
+                                    "`InitVar` is only allowed in dataclass fields",
+                                );
+                            }
+                            TypeQualifier::ClassVar | TypeQualifier::Final => {}
                         }
-                        TypeQualifier::InitVar => {
-                            let Some(builder) =
-                                self.context.report_lint(&INVALID_TYPE_FORM, annotation)
-                            else {
-                                continue;
-                            };
-                            builder
-                                .into_diagnostic("`InitVar` is only allowed in dataclass fields");
-                        }
-                        TypeQualifier::ClassVar | TypeQualifier::Final => {}
-                    },
+                    }
                 }
             }
         }
@@ -8667,6 +8672,102 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }))
     }
 
+    /// Validate a django `Manager`/`QuerySet` method call against the bound
+    /// model's fields: lookup kwargs (`filter`, `get`, …), `create()` kwargs,
+    /// and literal field-name arguments (`order_by`, `only`, …). No-op for any
+    /// call that isn't a recognized queryset method on a resolved model.
+    fn check_django_queryset_call(
+        &self,
+        bound_method: crate::types::BoundMethodType<'db>,
+        call_expression: &ast::ExprCall,
+    ) {
+        let db = self.db();
+        let method_name = bound_method.function(db).name(db);
+        let Some(kind) = django::queryset_method_kind(method_name.as_str()) else {
+            return;
+        };
+        let Some(model) = django::queryset_or_manager_model(db, bound_method.self_instance(db))
+        else {
+            return;
+        };
+        let model_name = model.name(db);
+
+        let report_unknown = |range: TextRange, model_name: &str, segment: &str, key: &str| {
+            if let Some(builder) = self.context.report_lint(&INVALID_FIELD_LOOKUP, range) {
+                if key == segment {
+                    builder.into_diagnostic(format_args!(
+                        "Model `{model_name}` has no field `{segment}`"
+                    ));
+                } else {
+                    builder.into_diagnostic(format_args!(
+                        "Model `{model_name}` has no field `{segment}` (in lookup `{key}`)"
+                    ));
+                }
+            }
+        };
+
+        match kind {
+            django::QuerysetMethodKind::Lookup | django::QuerysetMethodKind::Create => {
+                let is_create = kind == django::QuerysetMethodKind::Create;
+                for keyword in &call_expression.arguments.keywords {
+                    let Some(arg) = &keyword.arg else {
+                        continue; // `**kwargs` unpacking — can't check statically
+                    };
+                    let key = arg.as_str();
+                    let resolution = if is_create {
+                        django::resolve_create_kwarg(db, model, key)
+                    } else {
+                        django::resolve_lookup(db, model, key)
+                    };
+                    match resolution {
+                        django::FieldResolution::Unknown { model, segment } => {
+                            report_unknown(keyword.range(), &model, &segment, key);
+                        }
+                        django::FieldResolution::Resolved {
+                            operand: Some(operand),
+                        } => {
+                            // a lookup on `field=None` is always valid (isnull
+                            // semantics); a `create()` assignment is not
+                            let operand = if is_create {
+                                operand
+                            } else {
+                                UnionType::from_two_elements(db, operand, Type::none(db))
+                            };
+                            let value_ty = self.expression_type(&keyword.value);
+                            if !value_ty.is_assignable_to(db, operand) {
+                                if let Some(builder) =
+                                    self.context.report_lint(&INVALID_FIELD_LOOKUP, keyword)
+                                {
+                                    builder.into_diagnostic(format_args!(
+                                        "Value for `{key}` has type `{}`, \
+                                         but `{}` expects `{}`",
+                                        value_ty.display(db),
+                                        model_name,
+                                        operand.display(db),
+                                    ));
+                                }
+                            }
+                        }
+                        django::FieldResolution::Resolved { operand: None } => {}
+                    }
+                }
+            }
+            django::QuerysetMethodKind::FieldNames => {
+                for arg in &call_expression.arguments.args {
+                    let ast::Expr::StringLiteral(literal) = arg else {
+                        continue; // only literal field names are checkable
+                    };
+                    let name = literal.value.to_str();
+                    if let django::FieldResolution::Unknown { model, segment } =
+                        django::resolve_field_name(db, model, name)
+                    {
+                        report_unknown(arg.range(), &model, &segment, &segment);
+                    }
+                }
+            }
+        }
+    }
+
     fn infer_call_expression_impl(
         &mut self,
         call_expression: &ast::ExprCall,
@@ -9341,6 +9442,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                 call_expression,
                             );
                         }
+                    }
+                    Type::BoundMethod(bound_method) => {
+                        self.check_django_queryset_call(bound_method, call_expression);
                     }
                     Type::Never => {
                         // In unreachable sections of code, we infer `Never` for symbols that were

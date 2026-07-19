@@ -35,6 +35,7 @@ use crate::types::constraints::{
     ConstraintSet, ConstraintSetBuilder, PathBound, PathBounds, Solutions,
 };
 use crate::types::context_params::{ContextResolution, resolve_context_argument};
+use crate::types::dedicated::django;
 use crate::types::dedicated::pydantic::{self, ConfigBoolean};
 use crate::types::diagnostic::{
     AMBIGUOUS_CONTEXT_ARGUMENT, CALL_NON_CALLABLE, CALL_TOP_CALLABLE, INVALID_ARGUMENT_TYPE,
@@ -1670,6 +1671,61 @@ impl<'db> Bindings<'db> {
                         }
                         _ => {}
                     },
+
+                    // django `values()` / `values_list()`: refine the stub's
+                    // `QuerySet[Model, dict[str, Any]]` / `QuerySet[Model, Any]`
+                    // row type from the literal field arguments
+                    Type::BoundMethod(bound_method)
+                        if matches!(
+                            bound_method.function(db).name(db).as_str(),
+                            "values" | "values_list"
+                        ) =>
+                    {
+                        if let Some(model) =
+                            django::queryset_or_manager_model(db, bound_method.self_instance(db))
+                        {
+                            let mut fields: Vec<&str> = Vec::new();
+                            let mut all_literal = true;
+                            let mut flat = false;
+                            let mut named = false;
+                            for (arg, types) in call_arguments.iter() {
+                                match arg {
+                                    Argument::Positional => {
+                                        match types.get_default().and_then(Type::as_string_literal)
+                                        {
+                                            Some(literal) => fields.push(literal.value(db)),
+                                            None => all_literal = false,
+                                        }
+                                    }
+                                    Argument::Keyword("flat") => {
+                                        flat =
+                                            types.get_default() == Some(Type::bool_literal(true));
+                                    }
+                                    Argument::Keyword("named") => {
+                                        named =
+                                            types.get_default() == Some(Type::bool_literal(true));
+                                    }
+                                    Argument::Variadic | Argument::Keywords => all_literal = false,
+                                    _ => {}
+                                }
+                            }
+                            let row = if all_literal {
+                                if bound_method.function(db).name(db) == "values_list" {
+                                    django::values_list_row_type(db, model, &fields, flat, named)
+                                } else {
+                                    django::values_row_type(db, model, &fields)
+                                }
+                            } else {
+                                None
+                            };
+                            if let Some(row) = row
+                                && let Some(refined) =
+                                    django::with_queryset_row(db, overload.return_ty, row)
+                            {
+                                overload.set_return_type(refined);
+                            }
+                        }
+                    }
 
                     Type::BoundMethod(bound_method)
                         if bound_method.self_instance(db).is_property_instance() =>

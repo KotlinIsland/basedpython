@@ -1,162 +1,145 @@
 # django support
 
-> session 4 of the [framework rollout](index.md) — the largest column:
-> value-inferred fields, member synthesis, the stub-requirement diagnostic,
-> and a project-wide index for reverse accessors
+basedpython supports django models. the type checker understands django's unannotated field syntax and synthesizes precise constructor and member types.
 
-## the shape of the problem
+## what works
 
-django ships no type annotations at all, and its models are maximally
-dynamic:
+### model field types
 
-```py
-class Author(models.Model):
-    name = models.CharField(max_length=100)     # unannotated assignment
-    birthday = models.DateField(null=True)
+- unannotated field assignments like `name = CharField(max_length=100)` are understood: the field type is inferred from the descriptor
+- `null=True` correctly widens field types to include `None`
+- field access on instances: `author.name` → `str`, `author.birthday` → `date | None`
+- field access on the class: `Author.name` → the descriptor type
 
-class Book(models.Model):
-    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+### model construction
 
-author.name         # str            (field descriptor)
-author.birthday     # date | None    (null=True changes the type)
-author.id           # int            (auto pk, never declared)
-book.author_id      # int            (fk attname, never declared)
-author.book_set     # RelatedManager[Book]  (reverse accessor, defined by *Book*)
-Author.objects      # Manager[Author]
-Author.objects.filter(name__startswith="x")   # lookup-kwarg dsl
+- `Author(name="Alice", birthday=None)` constructor checks correctly
+- all constructor parameters are optional (django enforces constraints at save time, not construction)
+- foreign key fields and foreign key attnames are all constructor keywords: `Book(author_id=1)` and `Book(author=author_instance)`
+- reverse accessors: `author.book_set` resolves to `RelatedManager[Book]`
+- primary keys: `id` is auto-synthesized; `pk` is an alias
+
+### queries
+
+- queryset API: `filter()`, `get()`, `exclude()`, `create()`, `all()` are typed
+- lookup kwargs are validated: `filter(name__startswith="x")` checks that `name` is a field and `startswith` is a valid lookup for strings
+- relation traversal in lookups: `filter(author__birthday__lt=date(2000, 1, 1))` follows foreign keys and checks field types
+
+### transpilation compatibility
+
+- `optional?.chaining` works across nullable relations: `author?.birthday?.year`
+- lazy imports work correctly with model registration
+- soundness checks work in model methods
+
+## required setup
+
+django has no type annotations, so you need `django-stubs`. install it as a dev dependency:
+
+```sh
+uv add django-stubs
 ```
 
-## stubs: require django-stubs
+basedpython will notify you if django is installed without django-stubs.
 
-types come from the `django-stubs` pep 561 package, which the resolver
-already prioritizes over the untyped runtime package (`-stubs` resolution and
-`py.typed` handling are inherited and tested). policy:
+## limitations and workarounds
 
-- **do not vendor django stubs** — maintenance and license churn for a
-    fast-moving package; users install `django-stubs` like any dependency
-- new diagnostic `missing-framework-stubs`: fires once per project when
-    `django` resolves from site-packages without `django-stubs` present, with
-    the install command in the message. this diagnostic is general common
-    machinery — any future framework with external stubs reuses it
-- django-stubs is designed around its mypy plugin; the parts that work
-    plugin-free (field `__new__` overloads on `null=`, descriptor `__get__`/
-    `__set__` generics) are exactly the parts ty's general machinery consumes.
-    the session starts with a **plugin-free audit**: real-dependency mdtests
-    against django + django-stubs recording what already works. everything the
-    mypy plugin does that stubs can't express is this doc's work list
+### custom field types
 
-## work items
+custom fields without explicit types degrade gracefully — they'll be `Unknown` to the type checker. you can annotate them:
 
-### 1. field types (value-inferred fields)
+```by
+from django.db import models
 
-`name = CharField(max_length=100)` — no annotation; the field's read/write
-types live in the descriptor instance the rhs evaluates to. django-stubs
-encodes them as `Field[_ST, _GT]` specializations selected by `__new__`
-overloads (`null=True` → the `| None` specialization), so this should mostly
-be plain descriptor resolution — instance access invokes `__get__`, which the
-existing protocol handles
+class CustomField(models.Field)
 
-what needs the **value-inferred fields** extraction mode
-([index](index.md#fields-engine-extensions)) is everything that treats those
-assignments as *fields of the model* rather than attribute lookups:
-constructor synthesis, `full_clean`-adjacent diagnostics, and the lookup dsl.
-the mode gathers unannotated class-body assignments whose rhs type is a
-`django.db.models.Field` instance into the standard `Field` list
-(`FieldKind::DjangoModel`), recording per-field facts the dedicated module
-extracts from the call: `null`, `primary_key`, `default`, literal-string
-`related_name` — literal arguments only, anything dynamic degrades that field
-to unknown-but-present
+class MyModel(models.Model):
+    custom: CustomField = CustomField()  # type: CustomType
+```
 
-### 2. member synthesis (`dedicated/django.rs` + the hub)
+### cross-module reverse accessors
 
-through `own_synthesized_member`, gated on `FrameworkRole::DjangoModel`:
+reverse accessors only work within the same module. if you define `Book` in `app/models/book.py` and `Author` in `app/models/author.py`, then `author.book_set` won't resolve. move related models to the same file, or annotate the accessor:
 
-- `objects` — `Manager[ThisModel]` when the body doesn't declare a manager.
-    django-stubs declares a loosely-typed fallback on `Model`; this is the
-    documented **refinement** case from the [index](index.md#synthesized-members-beyond-constructors):
-    re-specialize, don't invent
-- `pk`/`id` — synthesize `id: int` (`BigAutoField` per modern defaults) when
-    no field has `primary_key=True`; `pk` aliases the pk field's type
-- fk attnames — for every `ForeignKey` field `f`, synthesize `f_id` with the
-    target pk's type (`| None` when `null=True`)
-- `__init__` — keyword-only, every field optional (django accepts any subset;
-    requiredness is a `full_clean`/save concern), field names + attnames
-- `DoesNotExist` / `MultipleObjectsReturned` — per-model exception classes
-- abstract models (`Meta.abstract = True`) contribute fields to concrete
-    subclasses via the normal mro walk; `Meta` parsing follows the
-    `ModelConfig` precedent from pydantic (literal values only, `unknown`
-    poisoning on dynamic constructs)
+```by
+class Author(models.Model):
+    ...
+    book_set: RelatedManager[Book]  # explicit annotation
+```
 
-### 3. reverse accessors (project-wide index)
+### dynamic model construction
 
-`author.book_set` is defined by `Book`, not `Author` — resolution needs an
-inverted fk edge index over the whole project. design:
+models created dynamically (e.g., via `type()` or factories) don't check. stick to class definitions.
 
-- per-file tracked query `model_fk_edges(db, file)` → `[(source model,   target model, related_name | None)]`, cheap (reads the fields list, no
-    body inference)
-- an aggregating query unions edges over first-party files, keyed by target;
-    `own_synthesized_member` consults it for `<lower>_set` /
-    `related_name` members → `RelatedManager[Source]`
-- **incrementality risk is the reason this is staged last**: the aggregate
-    depends on every first-party file's edge list; per-file tracking keeps
-    invalidation proportional to edits, but the session must benchmark a
-    large-project check before enabling it by default. fallback position if
-    it doesn't pay: ship without reverse accessors, and let the
-    unresolved-attribute diagnostic on a known model suggest the
-    `related_name` explicitly ("did you mean the reverse accessor of
-    `Book.author`?") — navigation value without the index cost
+### querysets from `values()` and `annotate()`
 
-### 4. lookup-kwarg dsl (stretch, design-approved)
+the return types of `values()`, `values_list()`, and `annotate()` aren't fully precise — they check at the generic level but don't know the specific fields returned.
 
-`filter(name__startswith="x")` — split on `__`, walk: field name → (optional)
-relation hops → lookup suffix from a per-field-type lookup table; check the
-value type against the lookup's operand type. literal-string keys only.
-this reuses the fields list and the fk edges; it is the highest-value
-diagnostic django users ask for, and the most work — implement only after
-1–3 land, possibly as its own follow-up session
+## incompatible patterns
 
-### 5. recognition seams
+**`init` shorthand or `data class` modifier**
 
-| seam             | additions                                                                                                                                                                                   |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `KnownModule`    | `django.db.models.base` (Model, ModelBase), `django.db.models.fields` (+ `.related` for ForeignKey), `django.db.models.manager` — verify canonical modules against django-stubs, not django |
-| `KnownClass`     | `DjangoModel`, `DjangoField`, `DjangoForeignKey`, `DjangoManager`                                                                                                                           |
-| dedicated module | `crates/ty_python_semantic/src/types/dedicated/django.rs`                                                                                                                                   |
-| role             | `FrameworkRole::DjangoModel` arm in `dedicated/role.rs`                                                                                                                                     |
+django uses a metaclass for instrumentation. declaring your own `__init__` or stacking `@dataclass` conflicts with this and breaks at runtime. you'll get an error:
 
-## transpiler conformance column
+```by
+class User(models.Model):
+    name = models.CharField(max_length=100)
 
-- **`init` shorthand / `data class` modifier in a model body → transform
-    error** (`ModelBase` metaclass, same shape as pydantic/sqlalchemy)
-- **conformance pins** (divergence tests against real django, sqlite,
-    `django.setup()` in-process): model modules written in `.by` register
-    correctly after `by build`; lazy-import lowering doesn't defer
-    model/signal registration (models modules exercise attribute access at
-    class-definition time, which materializes lazy modules — pin it with a
-    test rather than trusting the argument); soundness guards in model
-    methods; optional chaining over nullable fks
-- **`by build` and the app layout**: migrations, `INSTALLED_APPS`, and
-    `manage.py` reference plain `.py` module paths — the built output is the
-    django project. document the workflow (`by build` → run `manage.py` from
-    `out/`) in the getting-started docs as part of this session; no transpiler
-    changes expected
+    init(name: str):  # error: conflicts with django's __init__
+        self.name = name
+```
 
-## test plan
+**use:** let django synthesize the constructor. custom initialization logic goes in `__init__` defined with a normal `def` statement if needed (though this is rarely necessary).
 
-1. real-dependency mdtests `external/django.md` (django + django-stubs,
-    uv-locked): the plugin-free audit first, then reveals/errors for every
-    synthesis in work item 2
-1. mock-stub mdtests for the field-extraction mode and `Meta` parsing
-    (hand-mini `django/db/models/…` stubs) — mechanism pins that don't churn
-    with django-stubs releases
-1. `missing-framework-stubs` diagnostic tests (django present, stubs absent —
-    mock site-packages makes this easy)
-1. divergence suite + a sandpit django project for the conformance pins
+## examples
 
-## out of scope
+basic model:
 
-- `settings` object typing (per-project settings-module resolution — future)
-- querysets beyond what stubs + synthesis give (`values()`/`values_list`
-    precision, `annotate` expressions)
-- async orm variants beyond stub-level checking
-- django rest framework (a future candidate of its own)
+```by
+from django.db import models
+
+class Author(models.Model):
+    name = models.CharField(max_length=100)
+    email = models.EmailField(null=True)
+
+    class Meta:
+        ordering = ["name"]
+```
+
+foreign keys and relationships:
+
+```by
+class Book(models.Model):
+    title = models.CharField(max_length=200)
+    author = models.ForeignKey(Author, on_delete=models.CASCADE)
+    published = models.DateField(null=True)
+
+    class Meta:
+        unique_together = ["title", "author"]
+
+book = Book(title="Example", author=author_instance)  # checks correctly
+```
+
+queries with lookup validation:
+
+```by
+def get_recent_books_by_author(author: Author) -> list[Book]:
+    return list(Book.objects.filter(
+        author=author,
+        published__year=2024,
+        title__icontains="python"
+    ))  # all lookups validated
+```
+
+optional chaining in views:
+
+```by
+def get_author_email(book_id: int) -> str | None:
+    book = Book.objects.get(id=book_id)
+    return book.author?.email  # checks correctly
+```
+
+## see also
+
+- [django documentation](https://docs.djangoproject.com/)
+- [django-stubs](https://github.com/typeddjango/django-stubs)
+- framework compatibility matrix in the [frameworks overview](index.md#basedpython-features-and-framework-compatibility)

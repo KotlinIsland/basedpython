@@ -159,6 +159,14 @@ pub enum KnownClass {
     PydanticBaseSettings,
     PydanticConfigDict,
     PydanticRootModel,
+    // Django
+    DjangoModel,
+    DjangoField,
+    DjangoForeignKey,
+    DjangoOneToOneField,
+    DjangoManyToManyField,
+    DjangoManager,
+    DjangoQuerySet,
 }
 
 impl KnownClass {
@@ -290,7 +298,14 @@ impl KnownClass {
             | Self::PydanticBaseModel
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
-            | Self::PydanticRootModel => Some(Truthiness::Ambiguous),
+            | Self::PydanticRootModel
+            | Self::DjangoModel
+            | Self::DjangoField
+            | Self::DjangoForeignKey
+            | Self::DjangoOneToOneField
+            | Self::DjangoManyToManyField
+            | Self::DjangoManager
+            | Self::DjangoQuerySet => Some(Truthiness::Ambiguous),
 
             Self::Tuple => None,
         }
@@ -403,7 +418,14 @@ impl KnownClass {
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticConfigDict
-            | KnownClass::PydanticRootModel => false,
+            | KnownClass::PydanticRootModel
+            | KnownClass::DjangoModel
+            | KnownClass::DjangoField
+            | KnownClass::DjangoForeignKey
+            | KnownClass::DjangoOneToOneField
+            | KnownClass::DjangoManyToManyField
+            | KnownClass::DjangoManager
+            | KnownClass::DjangoQuerySet => false,
         }
     }
 
@@ -512,7 +534,14 @@ impl KnownClass {
             | KnownClass::FunctoolsPartial
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
-            | KnownClass::PydanticRootModel => false,
+            | KnownClass::PydanticRootModel
+            | KnownClass::DjangoModel
+            | KnownClass::DjangoField
+            | KnownClass::DjangoForeignKey
+            | KnownClass::DjangoOneToOneField
+            | KnownClass::DjangoManyToManyField
+            | KnownClass::DjangoManager
+            | KnownClass::DjangoQuerySet => false,
 
             KnownClass::PydanticConfigDict => true,
         }
@@ -623,7 +652,14 @@ impl KnownClass {
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticConfigDict
-            | KnownClass::PydanticRootModel => false,
+            | KnownClass::PydanticRootModel
+            | KnownClass::DjangoModel
+            | KnownClass::DjangoField
+            | KnownClass::DjangoForeignKey
+            | KnownClass::DjangoOneToOneField
+            | KnownClass::DjangoManyToManyField
+            | KnownClass::DjangoManager
+            | KnownClass::DjangoQuerySet => false,
         }
     }
 
@@ -745,7 +781,14 @@ impl KnownClass {
             | Self::PydanticBaseModel
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
-            | Self::PydanticRootModel => false,
+            | Self::PydanticRootModel
+            | Self::DjangoModel
+            | Self::DjangoField
+            | Self::DjangoForeignKey
+            | Self::DjangoOneToOneField
+            | Self::DjangoManyToManyField
+            | Self::DjangoManager
+            | Self::DjangoQuerySet => false,
         }
     }
 
@@ -856,7 +899,14 @@ impl KnownClass {
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticConfigDict
-            | KnownClass::PydanticRootModel => false,
+            | KnownClass::PydanticRootModel
+            | KnownClass::DjangoModel
+            | KnownClass::DjangoField
+            | KnownClass::DjangoForeignKey
+            | KnownClass::DjangoOneToOneField
+            | KnownClass::DjangoManyToManyField
+            | KnownClass::DjangoManager
+            | KnownClass::DjangoQuerySet => false,
             KnownClass::NamedTupleFallback
             | KnownClass::TypedDictFallback
             | KnownClass::ExtensionTypedDictFallback => true,
@@ -981,6 +1031,13 @@ impl KnownClass {
             Self::PydanticBaseSettings => "BaseSettings",
             Self::PydanticConfigDict => "ConfigDict",
             Self::PydanticRootModel => "RootModel",
+            Self::DjangoModel => "Model",
+            Self::DjangoField => "Field",
+            Self::DjangoForeignKey => "ForeignKey",
+            Self::DjangoOneToOneField => "OneToOneField",
+            Self::DjangoManyToManyField => "ManyToManyField",
+            Self::DjangoManager => "Manager",
+            Self::DjangoQuerySet => "QuerySet",
         }
     }
 
@@ -1367,6 +1424,13 @@ impl KnownClass {
             Self::PydanticBaseSettings => KnownModule::PydanticSettingsMain,
             Self::PydanticConfigDict => KnownModule::PydanticConfig,
             Self::PydanticRootModel => KnownModule::PydanticRootModel,
+            Self::DjangoModel => KnownModule::DjangoDbModelsBase,
+            Self::DjangoField => KnownModule::DjangoDbModelsFields,
+            Self::DjangoForeignKey | Self::DjangoOneToOneField | Self::DjangoManyToManyField => {
+                KnownModule::DjangoDbModelsFieldsRelated
+            }
+            Self::DjangoManager => KnownModule::DjangoDbModelsManager,
+            Self::DjangoQuerySet => KnownModule::DjangoDbModelsQuery,
         }
     }
 
@@ -1478,7 +1542,14 @@ impl KnownClass {
             | Self::PydanticBaseModel
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
-            | Self::PydanticRootModel => Some(false),
+            | Self::PydanticRootModel
+            | Self::DjangoModel
+            | Self::DjangoField
+            | Self::DjangoForeignKey
+            | Self::DjangoOneToOneField
+            | Self::DjangoManyToManyField
+            | Self::DjangoManager
+            | Self::DjangoQuerySet => Some(false),
 
             Self::Tuple => None,
         }
@@ -1593,7 +1664,14 @@ impl KnownClass {
             | Self::PydanticBaseModel
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
-            | Self::PydanticRootModel => false,
+            | Self::PydanticRootModel
+            | Self::DjangoModel
+            | Self::DjangoField
+            | Self::DjangoForeignKey
+            | Self::DjangoOneToOneField
+            | Self::DjangoManyToManyField
+            | Self::DjangoManager
+            | Self::DjangoQuerySet => false,
         }
     }
 
@@ -1690,7 +1768,7 @@ impl KnownClass {
             "_version_info" => &[Self::VersionInfo],
             "EllipsisType" => &[Self::EllipsisType],
             "NotImplementedType" => &[Self::NotImplementedType],
-            "Field" => &[Self::Field],
+            "Field" => &[Self::Field, Self::DjangoField],
             "KW_ONLY" => &[Self::KwOnly],
             "NamedTupleFallback" => &[Self::NamedTupleFallback],
             "NamedTupleLike" => &[Self::NamedTupleLike],
@@ -1708,6 +1786,12 @@ impl KnownClass {
             "BaseSettings" => &[Self::PydanticBaseSettings],
             "ConfigDict" => &[Self::PydanticConfigDict],
             "RootModel" => &[Self::PydanticRootModel],
+            "Model" => &[Self::DjangoModel],
+            "ForeignKey" => &[Self::DjangoForeignKey],
+            "OneToOneField" => &[Self::DjangoOneToOneField],
+            "ManyToManyField" => &[Self::DjangoManyToManyField],
+            "Manager" => &[Self::DjangoManager],
+            "QuerySet" => &[Self::DjangoQuerySet],
             _ => return None,
         };
 
@@ -1808,7 +1892,14 @@ impl KnownClass {
             | Self::PydanticBaseModel
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
-            | Self::PydanticRootModel => module == self.canonical_module(db),
+            | Self::PydanticRootModel
+            | Self::DjangoModel
+            | Self::DjangoField
+            | Self::DjangoForeignKey
+            | Self::DjangoOneToOneField
+            | Self::DjangoManyToManyField
+            | Self::DjangoManager
+            | Self::DjangoQuerySet => module == self.canonical_module(db),
             Self::NoneType => matches!(module, KnownModule::Typeshed | KnownModule::Types),
             Self::SpecialForm
             | Self::TypeAliasType

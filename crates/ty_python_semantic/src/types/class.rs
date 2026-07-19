@@ -14,7 +14,7 @@ pub(crate) use self::static_literal::{
     based_enum_variant_union, expanded_class_base_entries,
 };
 pub(super) use self::typed_dict::{DynamicTypedDictAnchor, DynamicTypedDictLiteral};
-use super::dedicated::pydantic;
+use super::dedicated::{django, pydantic};
 use super::{
     BoundTypeVarIdentity, BoundTypeVarInstance, MemberLookupPolicy, MroIterator, SpecialFormType,
     SubclassOfType, Type, TypeQualifiers, class_base::ClassBase, function::FunctionType,
@@ -90,6 +90,8 @@ pub(crate) enum CodeGeneratorKind<'db> {
     DataclassLike(Option<DataclassTransformerParams<'db>>),
     /// Classes inheriting from Pydantic's `BaseModel`.
     Pydantic(pydantic::ModelMetadata<'db>),
+    /// Classes inheriting from Django's `Model`.
+    Django,
     /// Classes inheriting from `typing.NamedTuple`
     NamedTuple,
     /// Classes inheriting from `typing.TypedDict` or `typing_extensions.TypedDict`
@@ -166,6 +168,8 @@ impl<'db> CodeGeneratorKind<'db> {
                     class,
                     transformer_params,
                 ))
+            } else if django::is_model(db, class) {
+                Some(CodeGeneratorKind::Django)
             } else if class
                 .explicit_bases(db)
                 .contains(&Type::SpecialForm(SpecialFormType::NamedTuple))
@@ -229,6 +233,7 @@ impl<'db> CodeGeneratorKind<'db> {
             (CodeGeneratorKind::from_class(db, class), self),
             (Some(Self::DataclassLike(_)), Self::DataclassLike(_))
                 | (Some(Self::Pydantic(_)), Self::Pydantic(_))
+                | (Some(Self::Django), Self::Django)
                 | (Some(Self::NamedTuple), Self::NamedTuple)
                 | (Some(Self::TypedDict), Self::TypedDict)
         )
@@ -237,7 +242,7 @@ impl<'db> CodeGeneratorKind<'db> {
     pub(super) fn dataclass_transformer_params(self) -> Option<DataclassTransformerParams<'db>> {
         match self {
             Self::DataclassLike(params) => params,
-            Self::Pydantic(_) | Self::NamedTuple | Self::TypedDict => None,
+            Self::Pydantic(_) | Self::Django | Self::NamedTuple | Self::TypedDict => None,
         }
     }
 
@@ -245,7 +250,7 @@ impl<'db> CodeGeneratorKind<'db> {
         match self {
             Self::DataclassLike(params) => Some(params?.field_specifiers(db)),
             Self::Pydantic(metadata) => Some(metadata.field_specifiers(db)),
-            Self::NamedTuple | Self::TypedDict => None,
+            Self::Django | Self::NamedTuple | Self::TypedDict => None,
         }
     }
 
@@ -253,6 +258,7 @@ impl<'db> CodeGeneratorKind<'db> {
         match self {
             Self::DataclassLike(_) => "dataclass",
             Self::Pydantic(_) => "Pydantic model",
+            Self::Django => "Django model",
             Self::NamedTuple => "named tuple",
             Self::TypedDict => "TypedDict",
         }
@@ -296,13 +302,16 @@ impl<'db> CodeGeneratorKind<'db> {
     /// C(value=42)
     /// ```
     pub(super) const fn synthesizes_constructor_signature_from_fields(self) -> bool {
-        matches!(self, Self::DataclassLike(_) | Self::Pydantic(_))
+        matches!(
+            self,
+            Self::DataclassLike(_) | Self::Pydantic(_) | Self::Django
+        )
     }
 
     pub(super) const fn pydantic_metadata(self) -> Option<pydantic::ModelMetadata<'db>> {
         match self {
             Self::Pydantic(metadata) => Some(metadata),
-            Self::DataclassLike(_) | Self::NamedTuple | Self::TypedDict => None,
+            Self::DataclassLike(_) | Self::Django | Self::NamedTuple | Self::TypedDict => None,
         }
     }
 }
@@ -2463,6 +2472,22 @@ pub(crate) enum FieldKind<'db> {
         /// The mode selected by Pydantic's `strict` argument.
         strict: pydantic::ConfigBoolean,
     },
+    /// Django model field metadata, extracted from the unannotated class-body
+    /// assignment's field constructor call (literal arguments only; anything
+    /// dynamic degrades the field to unknown-but-present)
+    Django {
+        /// `primary_key=True` was passed to the field constructor
+        primary_key: bool,
+        /// `null=True` was passed to the field constructor
+        null: bool,
+        /// the field is a `ManyToManyField`, which the constructor rejects
+        many_to_many: bool,
+        /// a literal-string `related_name=` passed to a relation field
+        related_name: Option<Box<str>>,
+        /// the field was constructed with a `choices=` argument, so django
+        /// synthesizes a `get_<field>_display` method for it
+        has_choices: bool,
+    },
     /// `TypedDict` field metadata
     TypedDict {
         /// Whether this field is required
@@ -2496,6 +2521,9 @@ impl Field<'_> {
             FieldKind::Pydantic {
                 init, default_ty, ..
             } => default_ty.is_none() && *init,
+            // Django accepts any subset of fields at construction; requiredness
+            // is a `full_clean`/`save` concern.
+            FieldKind::Django { .. } => false,
             FieldKind::TypedDict { is_required, .. } => *is_required,
         }
     }

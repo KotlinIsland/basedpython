@@ -202,7 +202,12 @@ fn check_class_declaration<'db>(
                 policy,
             );
         }
-        Some(CodeGeneratorKind::Pydantic(_) | CodeGeneratorKind::TypedDict) | None => {}
+        Some(
+            CodeGeneratorKind::Pydantic(_)
+            | CodeGeneratorKind::Django
+            | CodeGeneratorKind::TypedDict,
+        )
+        | None => {}
     }
 
     if configuration.check_invalid_named_tuple_field_overrides()
