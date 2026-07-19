@@ -69,6 +69,14 @@ pub(crate) trait TypeInfo {
         rhs: &Expr,
     ) -> Option<ty_python_semantic::ParametricIsPlan>;
 
+    /// whether an `is`/`is not` comparison whose rhs is `expr` keeps python
+    /// identity semantics instead of lowering to `isinstance`: true when
+    /// `expr` resolves to a plain *value* — an enum member (`Color.RED`, a
+    /// based-enum unit variant like `Shape.Point`), another literal, or an
+    /// instance of a concrete non-type class — which `isinstance` would
+    /// reject as its classinfo argument at runtime
+    fn is_keeps_identity(&self, expr: &Expr) -> bool;
+
     /// whether `expr` resolves to `typing.Any` (the explicitly-annotated
     /// dynamic type). distinguishes the special form from a shadowing binding
     /// or the `Unknown` that an unresolved / invalid type expression yields,
@@ -220,6 +228,12 @@ impl TypeInfo for SemanticModel<'_> {
         rhs: &Expr,
     ) -> Option<ty_python_semantic::ParametricIsPlan> {
         SemanticModel::parametric_is_plan(self, lhs, rhs)
+    }
+
+    fn is_keeps_identity(&self, expr: &Expr) -> bool {
+        expr.inferred_type(self).is_some_and(|ty| {
+            ty_python_semantic::types::basedpython_is_keeps_identity(self.db(), ty)
+        })
     }
 
     fn is_any(&self, expr: &Expr) -> bool {

@@ -63,3 +63,50 @@ def f(a: int | None):
     if a is ...:
         reveal_type(a)  # revealed: Never
 ```
+
+## `is` with an enum member RHS keeps Python identity semantics
+
+An enum member is a singleton *instance*, not a class — `isinstance(x, Color.RED)` would be a
+runtime `TypeError` — so `is`/`is not` against a member keeps Python identity semantics and narrows
+by identity, the same as literal singletons.
+
+```by
+import enum
+
+class Color(enum.Enum):
+    RED = 1
+    GREEN = 2
+
+def f(c: Color):
+    if c is Color.RED:
+        reveal_type(c)  # revealed: Color.RED
+    if c is not Color.RED:
+        reveal_type(c)  # revealed: Literal[Color.GREEN]
+```
+
+The same holds for based-enum members:
+
+```by
+enum class Genre:
+    case A, B
+
+def g(x: Genre):
+    if x is Genre.A:
+        reveal_type(x)  # revealed: Genre.A
+    if x is not Genre.A:
+        reveal_type(x)  # revealed: Literal[Genre.B]
+```
+
+## An instance check yields `bool`, never an identity fold
+
+The keyword form is an instance check, so Python's identity folds (an instance is never identical to
+a class object, so plain Python would type `x is int` as `Literal[False]`) must not apply —
+otherwise everything after `assert x is int` would be unreachable.
+
+```by
+def f(x: object):
+    b = x is int
+    reveal_type(b)  # revealed: bool
+    assert x is int
+    reveal_type(x)  # revealed: int
+```

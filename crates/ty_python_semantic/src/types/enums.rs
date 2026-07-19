@@ -1549,6 +1549,33 @@ pub(crate) fn is_enum_class<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
     }
 }
 
+/// shared checker/transpiler contract for the basedpython `is`/`is not`
+/// keyword pair: whether a comparison whose rhs has type `ty` keeps python
+/// identity semantics instead of lowering to `isinstance`. true when the rhs
+/// is statically a plain *value* — an enum member (`Color.RED`, a based-enum
+/// unit variant like `Shape.Point`), another literal, or an instance of a
+/// concrete non-type class — which `isinstance` would reject as its classinfo
+/// argument at runtime. a class-like rhs (a class literal, `type[...]`, an
+/// instance of a metaclass), a tuple (a valid multi-target classinfo
+/// spelling), a bare `object` (which admits classes), and anything dynamic or
+/// unresolved lower to `isinstance` as usual
+pub fn basedpython_is_keeps_identity<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    match ty {
+        Type::Union(union) => union
+            .elements(db)
+            .iter()
+            .all(|element| basedpython_is_keeps_identity(db, *element)),
+        // literal values (enum members included) are never classes
+        Type::LiteralValue(_) | Type::EnumComplement(_) => true,
+        Type::NominalInstance(instance) => {
+            !instance.has_known_class(db, KnownClass::Object)
+                && !ty.is_assignable_to(db, KnownClass::Type.to_instance(db))
+                && instance.tuple_spec(db).is_none()
+        }
+        _ => false,
+    }
+}
+
 /// Checks if a class is an enum class by inheritance (either a subtype of `Enum`
 /// or has a metaclass that is a subtype of `EnumType`).
 ///

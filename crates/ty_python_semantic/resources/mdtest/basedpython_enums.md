@@ -359,3 +359,35 @@ class Color(Enum):
 c: Color.RED = Color.RED
 reveal_type(c)  # revealed: Color.RED
 ```
+
+## `is` / `is not` between members keeps identity at runtime
+
+a payload-less variant is a singleton *instance*, not a class, so the `is`/`is not` keyword pair
+keeps python identity semantics for it — the `isinstance` lowering only fires when the rhs resolves
+to a variant *class*. this block is checker-clean, so the divergence harness executes it and pins
+the runtime contract
+
+```by
+enum class Genre:
+    case A, B
+
+assert Genre.A is Genre.A
+assert Genre.A is not Genre.B
+
+g: Genre = Genre.A
+assert g is Genre.A
+assert g is not Genre.B
+
+enum class Shape:
+    case Circle(radius: float)
+    case Point
+
+assert Shape.Point is Shape.Point
+p = Shape.Point
+assert p is Shape.Point
+
+# a payload variant is a class, so the rhs of `is` lowers to `isinstance`
+c = Shape.Circle(1.0)
+assert c is Shape.Circle
+assert c is not Shape.Point
+```
