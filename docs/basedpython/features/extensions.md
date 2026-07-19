@@ -1,6 +1,6 @@
 # extensions
 
-> planned for `0.0.1a3` — not yet implemented
+> planned for `0.0.1a4` — not yet implemented
 
 an extension adds methods and computed properties to an existing type without
 subclassing it or touching its definition:

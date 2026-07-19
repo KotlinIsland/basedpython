@@ -31,11 +31,11 @@ class Person:
         self._age = value
 ```
 
-> **STATUS: planned for version 0.0.1a3, not yet implemented.** the `var`
+> **STATUS: planned for version 0.0.1a4, not yet implemented.** the `var`
 > keyword, the `get`/`set` accessor block, `field`, `lateinit`, and the
 > `let x: T` accessor form described below are not yet recognized by the
 > parser. `let x: T = init` at class scope partially works as the
-> [modifier](modifiers.md) form. tracking item: properties v0.0.1a3
+> [modifier](modifiers.md) form. tracking item: properties v0.0.1a4
 
 without accessors the declaration stays a plain attribute — no descriptor
 overhead

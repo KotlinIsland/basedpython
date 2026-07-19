@@ -1,7 +1,5 @@
 # safe variance
 
-> planned for `0.0.1a3` — not yet implemented
-
 a [private](modifiers.md) member is invisible to external observers, so it
 cannot break variance — which lets a [covariant](variance.md) `out T` class hold
 a mutable `T`-typed field:
