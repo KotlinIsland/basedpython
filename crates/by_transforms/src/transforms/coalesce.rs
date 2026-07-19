@@ -26,9 +26,11 @@ impl<'src> NoneCoalesce<'src> {
     }
 }
 
-fn expand_none_chain(expr: &Expr, source: &str, types: &dyn TypeInfo) -> Option<String> {
-    let (form, guards) = super::none_chain::expand_chain(expr, source, types)?;
-    Some(super::none_chain::build_expansion(&guards, &form, "_t"))
+fn expand_none_chain(expr: &Expr, source: &str, types: &dyn TypeInfo) -> Option<Vec<Fragment>> {
+    let (form, guards, base) = super::none_chain::expand_chain(expr, source, types)?;
+    Some(super::none_chain::build_expansion(
+        &guards, &form, "_t", base,
+    ))
 }
 
 impl<'ast> Visitor<'ast> for NoneCoalesce<'_> {
@@ -79,11 +81,9 @@ impl NoneCoalesce<'_> {
         };
         match expand_none_chain(&b.left, self.source, self.types) {
             Some(expanded) => {
-                let mut t = vec![
-                    Fragment::Lit(format!("_t{unwrap} if (_t := ")),
-                    Fragment::Lit(expanded),
-                    Fragment::Lit(") is not None else ".to_owned()),
-                ];
+                let mut t = vec![Fragment::Lit(format!("_t{unwrap} if (_t := "))];
+                t.extend(expanded);
+                t.push(Fragment::Lit(") is not None else ".to_owned()));
                 t.extend(rhs);
                 t
             }
@@ -120,7 +120,7 @@ impl NoneCoalesce<'_> {
             return self.expand_coalesce(expr);
         }
         if let Some(expanded) = expand_none_chain(expr, self.source, self.types) {
-            return vec![Fragment::Lit(expanded)];
+            return expanded;
         }
         vec![Fragment::Src(expr.range())]
     }

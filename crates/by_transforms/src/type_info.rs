@@ -77,6 +77,15 @@ pub(crate) trait TypeInfo {
     /// reject as its classinfo argument at runtime
     fn is_keeps_identity(&self, expr: &Expr) -> bool;
 
+    /// when `attribute` resolves to a basedpython `extension` member, the
+    /// backing-function rewrite to apply (`xs.second()` →
+    /// `__by_ext__list__second(xs)`). `None` for ordinary attributes —
+    /// extensions never shadow declared members
+    fn extension_attribute_info(
+        &self,
+        attribute: &ruff_python_ast::ExprAttribute,
+    ) -> Option<ty_python_semantic::ExtensionAttributeInfo>;
+
     /// whether `expr` resolves to `typing.Any` (the explicitly-annotated
     /// dynamic type). distinguishes the special form from a shadowing binding
     /// or the `Unknown` that an unresolved / invalid type expression yields,
@@ -241,6 +250,13 @@ impl TypeInfo for SemanticModel<'_> {
         expr.inferred_type(self).is_some_and(|ty| {
             ty_python_semantic::types::basedpython_is_keeps_identity(self.db(), ty)
         })
+    }
+
+    fn extension_attribute_info(
+        &self,
+        attribute: &ruff_python_ast::ExprAttribute,
+    ) -> Option<ty_python_semantic::ExtensionAttributeInfo> {
+        SemanticModel::extension_attribute_info(self, attribute)
     }
 
     fn is_any(&self, expr: &Expr) -> bool {

@@ -146,6 +146,24 @@ pub(crate) fn bind_typevar<'db>(
         {
             return Some(bound);
         }
+        // basedpython: an `extension` body reuses the extended class's type
+        // parameters by name, so the extended class's generic context binds
+        // them here even though the extension is not lexically inside it
+        if (!is_class_scope || !crossed_class_scope)
+            && let Some(class_ref) = ancestor_scope.node().as_class()
+        {
+            let definition = index.expect_single_definition(class_ref);
+            let module = parsed_module(db, definition.file(db)).load(db);
+            if class_ref.node(&module).is_extension()
+                && let Some(ClassLiteral::Static(extension)) =
+                    crate::types::infer::original_class_type(db, definition)
+                && let Some(target) = crate::types::extensions::extended_class(db, extension)
+                && let Some(target_context) = target.generic_context(db)
+                && let Some(bound) = target_context.binds_typevar(db, typevar)
+            {
+                return Some(bound);
+            }
+        }
         // a based-enum variant is conceptually generic in its enum's type
         // parameters (`Tree[T]`'s `Node` variant carries `T`), so it is allowed
         // to reach through to the enclosing enum's type params even though it is
@@ -190,10 +208,18 @@ pub(crate) fn typing_self<'db>(
     // for a based payload enum, `Self` ranges over the closed set of variant
     // types rather than the (abstract) enum instance, so `match self` in a
     // method is exhaustive over the variants — the same closed domain that a
-    // bare `Expr` annotation denotes
+    // bare `Expr` annotation denotes. for an `extension`, `Self` ranges over
+    // the *extended* type — the synthetic extension class never has instances
     let self_bound = class
         .as_static()
-        .and_then(|static_class| crate::types::class::based_enum_variant_union(db, static_class))
+        .and_then(|static_class| {
+            if static_class.is_extension(db) {
+                crate::types::extensions::body_view_class(db, static_class)
+                    .map(|body_view| Type::instance(db, body_view))
+            } else {
+                crate::types::class::based_enum_variant_union(db, static_class)
+            }
+        })
         .unwrap_or_else(|| Type::instance(db, class.identity_specialization(db)));
     let bounds = TypeVarBoundOrConstraints::UpperBound(self_bound);
     let typevar = TypeVarInstance::new(

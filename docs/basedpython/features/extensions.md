@@ -1,61 +1,29 @@
 # extensions
 
-> planned for `0.0.1a4` — not yet implemented
-
 an extension adds methods and computed properties to an existing type without
 subclassing it or touching its definition:
 
 ```by
 extension list:
-    def second(self) -> _T:
+    def second(self) -> Element:
         return self[1]
 ```
 
 `xs.second()` is then available on any `list`, including the builtin one. the
-extension reuses `list`'s own type parameter `_T` — it does not declare a new
-one — so the return type tracks the element type with no extra ceremony
+extension reuses `list`'s own type parameter `Element` — it does not declare a
+new one — so the return type tracks the element type with no extra ceremony
 
-## why swift-style
-
-three languages solve "where do the extended type's parameters come from"
-differently. the choice matters because of one failure mode: a parameter that
-is used before it is bound
-
-kotlin re-declares the parameters on the receiver and again on the method:
-
-```by
-# kotlin-style, rejected
-def list[T].foo[T: int](self) -> T: ...
-```
-
-`T` appears in `list[T]` before the `[T: int]` that declares it, and the two
-`T`s are different parameters that happen to share a spelling. imports are
-explicit — every extension must be named to be used
-
-dart declares two separate parameter lists and binds one to the other:
-
-```by
-# dart-style, rejected
-extension[T] on list[T]:
-    def foo[R](self, r: R) -> T | R: ...
-```
-
-this is unambiguous but verbose, and the binding `[T] on list[T]` restates a
-fact the declaration of `list` already records
-
-swift reuses the extended type's parameters directly, by the names its
-declaration gave them:
+a method may reuse the extended type's parameters directly, by the names its
+declaration gave them, and may also introduce its own fresh parameters:
 
 ```by
 extension list:
-    def foo[R](self, r: R) -> _T | R: ...
+    def foo[R](self, r: R) -> Element | R: ...
 ```
 
-`_T` is not a new parameter and not a sigil — it is the name `list`'s
-declaration bound (`class list[_T]` in typeshed). because it refers to an
-existing declaration, it can never be used before it is defined. a method may
-still introduce its own fresh parameters (`[R]` here), declared normally on the
-method. basedpython takes the swift model
+`Element` is not a new parameter and not a sigil — it is the name `list`'s
+declaration bound (`class list[in out Element]` in basedpython's typeshed).
+`[R]` is a fresh parameter the method declares normally
 
 ## reusing declared parameters
 
@@ -71,11 +39,12 @@ extension Stack:
         return self._items[-1]
 ```
 
-for a typeshed type the names follow typeshed convention (`_T`, `_KT`, `_VT`):
+for a typeshed type the names follow basedpython's typeshed, which spells the
+core containers `list[Element]`, `dict[Key, Value]`, `set[Element]`:
 
 ```by
 extension dict:
-    def invert(self) -> dict[_VT, _KT]: ...
+    def invert(self) -> dict[Value, Key]: ...
 ```
 
 referencing a name the extended type did not declare is an error — there is no
@@ -88,15 +57,15 @@ a bound on a reused parameter narrows where the extension applies. it does not
 re-declare the parameter — it constrains the receiver:
 
 ```by
-extension list[_T: int]:
+extension list[Element: int]:
     def total(self) -> int:
         return sum(self)
 ```
 
-`total` is visible on `list[int]` and `list[bool]`, not on `list[str]`. this is
-swift's `where _T: int`, spelled with basedpython's existing bracket-bound
-syntax so it reads like every other bound in the language. parameters left out
-of the bracket stay reused, unconstrained
+`total` is visible on `list[int]` and `list[bool]`, not on `list[str]`. the
+bound is spelled with basedpython's existing bracket-bound syntax so it reads
+like every other bound in the language. parameters left out of the bracket stay
+reused, unconstrained
 
 constraint applicability is resolved by the type checker per call site, so an
 extension can overlap a builtin or another extension and only apply to the
@@ -107,8 +76,8 @@ arm that satisfies its bound
 extensions add behaviour, not state — methods, `class def`/`static def`
 methods, and computed [properties](properties.md). they may not add stored
 fields, because there is nowhere to store them on an already-constructed
-instance of a builtin. this is the same boundary swift draws, and it keeps the
-feature implementable without touching object layout
+instance of a builtin, and it keeps the feature implementable without touching
+object layout
 
 ```by
 extension str:
@@ -141,20 +110,27 @@ at runtime, so extensions are resolved entirely at transpile time — no runtime
 machinery, the same approach the rest of basedpython takes
 
 each extension member lowers to a module-level free function whose first
-parameter is the receiver:
+parameter is the receiver. annotations are dropped from the backing function
+— they reference type parameters with no runtime binding at module level —
+and a marker comment carries the member kind and the original header
+(bounds included) as provenance for the reverse transpiler:
 
 ```by
 extension list:
-    def second(self) -> _T:
+    def second(self) -> Element:
         return self[1]
 ```
 
 →
 
 ```python
-def __by_ext__list__second(self):
+def __by_ext__list__second(self):  # basedpython: extension method list
     return self[1]
 ```
+
+when a module declares more than one extension of the same target, later
+ones mangle with an ordinal (`__by_ext2__list__…`) so their members don't
+collide — conditional extensions of the same method name coexist this way
 
 call sites are rewritten by the type checker. ty already knows the receiver's
 type and which extensions are in scope, so `xs.second()` resolves to the
@@ -180,8 +156,8 @@ loses to the real attribute — extensions never shadow declared members
 ### implicit imports, lowered
 
 when a call site uses an extension defined in another module, the lowering emits
-the precise import of the backing function into the output, keyed off the
-provenance ty recorded:
+the precise import of the backing function into the output, keyed off ty's
+resolution of the call site:
 
 ```by
 import textwrap
@@ -202,7 +178,22 @@ imported — the implicit-import convenience costs nothing at runtime
 
 ## round-tripping
 
-the reverse transpiler re-sugars both halves from `LoweringMap` provenance:
-a free function tagged `ExtensionMethod` becomes an `extension` block, and a
-call tagged `ExtensionCall` becomes receiver-method form. backing functions and
-calls written by hand without that provenance are left as ordinary python
+the reverse transpiler re-sugars both halves from the marker-comment
+provenance: a backing function tagged `# basedpython: extension …` becomes an
+`extension` block (consecutive same-header functions share one block), and a
+call of a same-file backing function becomes receiver-method form —
+`__by_ext__list__second(xs)` → `xs.second()`, property calls drop back to
+bare attributes, `functools.partial(…, xs)` references to `xs.second`.
+backing-shaped functions and calls written by hand without the marker are
+left as ordinary python, and a call of a backing function *imported* from
+another module conservatively stays as the explicit call
+
+## current limitations
+
+- an extension member cannot be reached through an optional chain
+    (`xs?.second()`) yet — the transpiler reports an error rather than emit
+    code that breaks the chain's short-circuit
+- extension members resolve on a single receiver type, not across a union
+- an unapplied method reference (`f = xs.second`) lowers to
+    `functools.partial`, which binds the receiver eagerly like a bound method
+    but is not one at runtime

@@ -4,6 +4,7 @@ use crate::{
     types::{
         KnownClass, KnownInstanceType, ParamSpecAttrKind, SubclassOfInner, SubclassOfType, Type,
         TypeContext, TypeVarKind, UnionType,
+        class::ClassLiteral,
         diagnostic::{
             FINAL_ON_NON_METHOD, INVALID_PARAMETER_DEFAULT, INVALID_PARAMSPEC, INVALID_TYPE_FORM,
             REIFIED_CLASSMETHOD, USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
@@ -11,6 +12,7 @@ use crate::{
             report_invalid_generator_function_return_type, report_invalid_return_type,
             report_shadowed_type_variable,
         },
+        extensions,
         function::{
             FunctionBodyKind, FunctionDecorators, FunctionLiteral, FunctionType, KnownFunction,
             OverloadLiteral, function_body_kind, is_implicit_classmethod,
@@ -1179,6 +1181,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let class_definition = self.index.expect_single_definition(class);
         let class_literal = original_class_type(db, class_definition)?;
+
+        // basedpython: an extension method's `self` is the *extended* type,
+        // specialized at the extension's view of its type parameters — not a
+        // `Self` typevar of the synthetic extension class (whose own body holds
+        // only the extension members)
+        if let ClassLiteral::Static(static_literal) = class_literal
+            && static_literal.is_extension(db)
+        {
+            let body_view = extensions::body_view_class(db, static_literal)?;
+            return Some(if is_classmethod || function_name == "__new__" {
+                SubclassOfType::from(db, SubclassOfInner::Class(body_view))
+            } else {
+                Type::instance(db, body_view)
+            });
+        }
 
         let typing_self = typing_self(db, self.scope(), Some(method_definition), class_literal);
         if is_classmethod || function_name == "__new__" {

@@ -41,6 +41,7 @@ pub use ty_site_packages::{
     PythonEnvironment, PythonVersionFileSource, PythonVersionSource, PythonVersionWithSource,
     SitePackagesPaths, SysPrefixPathOrigin,
 };
+pub use types::extensions::{ExtensionAttributeInfo, ExtensionMemberKind};
 pub use types::ide_support::{
     ImportAliasResolution, ResolvedDefinition, TypeHierarchyClass, definitions_for_attribute,
     definitions_for_bin_op, definitions_for_imported_symbol, definitions_for_name,

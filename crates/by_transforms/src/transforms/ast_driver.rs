@@ -36,11 +36,11 @@ use ruff_text_size::{Ranged, TextRange};
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, checked_cast, coalesce, coalesce_chain,
     compat, context_params, decl_site_variance, decorator_keyword, dedent_string, dynamic_keyword,
-    empty_declarations, float_const, force_unwrap, generic_call, generics, identity_swap,
-    implicit_typing, init_method, just_float, kw_subscript, literal_types, main_function,
-    modifiers, mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await,
-    propagate, reified_generic, repeated_underscore, sentinel, some_ctor, soundness, string_tag,
-    super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_is,
+    empty_declarations, extension, float_const, force_unwrap, generic_call, generics,
+    identity_swap, implicit_typing, init_method, just_float, kw_subscript, literal_types,
+    main_function, modifiers, mutable_defaults, none_chain, optional_type, overload, parametric_is,
+    postfix_await, propagate, reified_generic, repeated_underscore, sentinel, some_ctor, soundness,
+    string_tag, super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_is,
     type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
@@ -480,6 +480,8 @@ pub(crate) fn run_against_source<'a>(
     let checked_cast_pass = checked_cast::CheckedCastPass::new(config.checked_cast);
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
     let context_params_pass = context_params::ContextParamsPass::new(source_ref);
+    let extension_block_pass = extension::ExtensionBlockPass::new(source_ref);
+    let extension_call_pass = extension::ExtensionCallPass;
     let variance_pass = decl_site_variance::VarianceStripPass::new();
     let anon_named_tuple_pass =
         anon_named_tuple::AnonNamedTuplePass::new(source_ref, config.clone());
@@ -556,6 +558,13 @@ pub(crate) fn run_against_source<'a>(
         // call's closing paren. single insertions, so they compose inside any
         // wrapping template's `Src` spans (including the trailing-lambda one)
         &context_params_pass,
+        // `extension` blocks lower to module-level backing functions; member
+        // bodies pass through as `Src` spans so lowerings inside them (and
+        // the call rewrites below) still compose
+        &extension_block_pass,
+        // type-directed rewrite of attribute accesses ty resolved to
+        // extension members (`xs.second()` → `__by_ext__list__second(xs)`)
+        &extension_call_pass,
         &dynamic_keyword_pass,
         &just_float_pass,
         &float_const_pass,
@@ -960,6 +969,11 @@ pub(crate) fn run_against_source<'a>(
     if needs_trailing_nl && !out.ends_with('\n') {
         out.push('\n');
     }
+    // extension backing functions are lowered in place (so their bodies keep
+    // their source ranges for sibling-pass composition); hoist them to the
+    // module top now that lowering is done, so a member called before its
+    // block's position still resolves
+    let (out, table) = extension::hoist_backing_functions(out, table);
     (Cow::Owned(out), ctx.errors, table)
 }
 

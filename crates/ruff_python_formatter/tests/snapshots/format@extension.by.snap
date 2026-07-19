@@ -1,0 +1,81 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/extension.by
+---
+## Input
+```bython
+# basedpython `extension` blocks — the synthetic `extension_def` marker renders
+# as the `extension` keyword and suppresses the `class` keyword, while the body
+# formats as ordinary class-body statements
+
+extension list:
+    def second(self) -> Element:
+        return self[1]
+
+
+# reused-parameter bound in the bracket header
+extension list[Element: int]:
+    def total(self) -> int:
+        return sum(self)
+
+
+# computed property
+extension str:
+    @property
+    def shouty(self) -> str:
+        return self.upper()
+
+
+# `static def` / `class def` members
+extension str:
+    static def joined(parts: list[str]) -> str:
+        return "-".join(parts)
+    class def empty(cls) -> str:
+        return cls()
+
+
+# a method introducing its own fresh parameters
+extension dict:
+    def get_or[R](self, key: Key, default: R) -> Value | R:
+        return self[key] if key in self else default
+```
+
+## Output
+```bython
+# basedpython `extension` blocks — the synthetic `extension_def` marker renders
+# as the `extension` keyword and suppresses the `class` keyword, while the body
+# formats as ordinary class-body statements
+
+
+extension list:
+    def second(self) -> Element:
+        return self[1]
+
+
+# reused-parameter bound in the bracket header
+extension list[Element: int]:
+    def total(self) -> int:
+        return sum(self)
+
+
+# computed property
+extension str:
+    @property
+    def shouty(self) -> str:
+        return self.upper()
+
+
+# `static def` / `class def` members
+extension str:
+    static def joined(parts: list[str]) -> str:
+        return "-".join(parts)
+
+    class def empty(cls) -> str:
+        return cls()
+
+
+# a method introducing its own fresh parameters
+extension dict:
+    def get_or[R](self, key: Key, default: R) -> Value | R:
+        return self[key] if key in self else default
+```

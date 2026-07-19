@@ -83,6 +83,14 @@ impl StmtClassDef {
         self.has_synthetic_marker("enum_def")
     }
 
+    /// True for an extension declaration (`extension list:`) — methods and
+    /// computed properties added to an existing type. the class name is the
+    /// *extended* type, a reference to an existing declaration, so an
+    /// extension def never introduces a binding for it.
+    pub fn is_extension(&self) -> bool {
+        self.has_synthetic_marker("extension_def")
+    }
+
     /// True for a based-enum variant (`Circle(radius: float)`, `Empty`) — the
     /// nested class defs inside a based enum.
     pub fn is_enum_variant(&self) -> bool {

@@ -123,6 +123,11 @@ bitflags::bitflags! {
         /// enclosing enum's generic context despite having no type params of
         /// their own, so fast paths keyed on `HAS_TYPE_PARAMS` must not skip them.
         const IS_ENUM_VARIANT = 1 << 5;
+        /// basedpython: whether this "class" is an `extension` declaration
+        /// (`extension list:`). its name references the extended type rather
+        /// than declaring a class, its members resolve on receivers of that
+        /// type, and it binds only a mangled module symbol.
+        const IS_EXTENSION = 1 << 6;
     }
 }
 
@@ -153,6 +158,10 @@ impl<'db> StaticClassLiteral<'db> {
 
     pub(crate) fn is_enum_variant(self, db: &'db dyn Db) -> bool {
         self.flags(db).contains(ClassLiteralFlags::IS_ENUM_VARIANT)
+    }
+
+    pub(crate) fn is_extension(self, db: &'db dyn Db) -> bool {
+        self.flags(db).contains(ClassLiteralFlags::IS_EXTENSION)
     }
 }
 
