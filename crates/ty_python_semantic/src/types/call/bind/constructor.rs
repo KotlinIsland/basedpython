@@ -2,6 +2,7 @@ use super::{Binding, Bindings, CallableBinding, CallableItem};
 use crate::db::Db;
 use crate::types::call::arguments::CallArguments;
 use crate::types::constraints::ConstraintSetBuilder;
+use crate::types::dedicated::django;
 use crate::types::generics::Specialization;
 use crate::types::signatures::Parameter;
 use crate::types::{BoundTypeVarInstance, ClassLiteral, DynamicType, Type, TypeContext};
@@ -204,8 +205,32 @@ impl<'db> ConstructorBinding<'db> {
             return return_ty;
         }
 
+        if let Some(pinned) = self.django_field_instance_type(db) {
+            return pinned;
+        }
+
         constructed_instance_type
             .apply_optional_specialization(db, self.instance_return_specialization(db))
+    }
+
+    /// django field constructors: pin the `_ST`/`_GT` (or m2m `_To`/`_Through`)
+    /// specialization that django-stubs leaves to its mypy plugin (see
+    /// `dedicated/django.rs`). restricted to `__init__`-kind bindings because
+    /// that is where the `to=`/`null=`/`through=` arguments bind
+    fn django_field_instance_type(&self, db: &'db dyn Db) -> Option<Type<'db>> {
+        if !self.constructor_kind().is_init() {
+            return None;
+        }
+        let class = self.constructed_class_literal(db)?.as_static()?;
+        let overload = self.first_matching_overload()?;
+        let keyword = |name| overload.parameter_type_by_name(name, false).ok().flatten();
+        django::field_constructor_instance_type(
+            db,
+            class,
+            keyword("to"),
+            keyword("null"),
+            keyword("through"),
+        )
     }
 
     fn first_matching_overload(&self) -> Option<&Binding<'db>> {

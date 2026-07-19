@@ -133,6 +133,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
     registry.register_lint(&INVALID_EXTENSION);
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
+    registry.register_lint(&MISSING_FRAMEWORK_STUBS);
+    registry.register_lint(&INVALID_FIELD_LOOKUP);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&NON_OVERLAPPING_CAST);
     registry.register_lint(&OPTIONAL_OBJECT_CONVERSION);
@@ -969,6 +971,28 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
+    /// Checks for imports of frameworks that ship no inline type annotations
+    /// when their external PEP 561 stubs package is not installed.
+    ///
+    /// ## Why is this bad?
+    /// Without the stubs package the framework's types resolve from its untyped
+    /// runtime source, so most framework-aware checking silently degrades to
+    /// `Unknown`. Installing the stubs package restores precise types.
+    ///
+    /// ## Example
+    ///
+    /// ```py
+    /// from django.db import models  # warning: install `django-stubs` for precise types
+    /// ```
+    pub(crate) static MISSING_FRAMEWORK_STUBS = {
+        summary: "detects framework imports whose external stubs package is not installed",
+        status: LintStatus::stable("0.0.1-alpha.4"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
     /// Checks for attribute accesses that resolve to a member supplied by more
     /// than one applicable basedpython extension.
     ///
@@ -992,6 +1016,29 @@ declare_lint! {
     pub(crate) static AMBIGUOUS_EXTENSION_MEMBER = {
         summary: "detects attribute accesses supplied by more than one extension",
         status: LintStatus::stable("0.0.1-alpha.3"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks django ORM lookups, `create()` keywords, and field-name string
+    /// arguments (`order_by`, `only`, …) against the model's fields.
+    ///
+    /// ## Why is this bad?
+    /// The queryset API accepts `**kwargs`, so a mistyped field name or an
+    /// operand of the wrong type for a lookup is silently accepted by the
+    /// stubs and only fails at runtime.
+    ///
+    /// ## Example
+    ///
+    /// ```py
+    /// Author.objects.filter(nam="x")            # error: no field `nam`
+    /// Author.objects.filter(name__startswith=1) # error: lookup wants `str`
+    /// ```
+    pub(crate) static INVALID_FIELD_LOOKUP = {
+        summary: "detects invalid django model field lookups and field-name arguments",
+        status: LintStatus::stable("0.0.1-alpha.4"),
         default_level: Level::Error,
     }
 }
@@ -4352,6 +4399,10 @@ pub(super) fn report_invalid_method_override<'db>(
                 CodeGeneratorKind::Pydantic(_) => make_sub(format_args!(
                     "`{overridden_method}` is a generated method created because \
                         `{superclass_name}` is a Pydantic model"
+                )),
+                CodeGeneratorKind::Django => make_sub(format_args!(
+                    "`{overridden_method}` is a generated method created because \
+                        `{superclass_name}` is a Django model"
                 )),
                 CodeGeneratorKind::NamedTuple => make_sub(format_args!(
                     "`{overridden_method}` is a generated method created because \

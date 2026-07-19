@@ -4,6 +4,74 @@
 > value-inferred fields, member synthesis, the stub-requirement diagnostic,
 > and a project-wide index for reverse accessors
 
+## status
+
+**implemented and verified** (all four test layers). what shipped, and where
+it deviates from the plan below:
+
+- **recognition + role**: `KnownModule::DjangoDbModels*`,
+    `KnownClass::{DjangoModel, DjangoField, DjangoForeignKey,   DjangoOneToOneField, DjangoManyToManyField, DjangoManager}`,
+    `dedicated/django.rs`, `FrameworkRole::DjangoModel`, transpiler gates —
+    all as planned
+- **field types — plan correction**: django-stubs (6.x) has **no `null=`
+    constructor overloads**; `_ST`/`_GT` are set only by its mypy plugin. the
+    stubs do declare per-field-class `_pyi_private_set_type` /
+    `_pyi_private_get_type` markers for that plugin, so ty re-derives the
+    plugin's specialization at the field constructor call
+    (`ConstructorBinding::return_type` → `django::field_constructor_instance_type`):
+    marker types, `to=` substitution for relation fields (`through=` for m2m),
+    `null=True` unioning `None`. after pinning, reads/writes/`__init__`
+    synthesis all flow through the general descriptor machinery. anything
+    dynamic (string `to=`, non-literal `null=`, markerless custom fields)
+    degrades to no pinning
+- **member synthesis**: `__init__` (keyword-only, all optional, `pk` +
+    fk attnames, m2m excluded), `id`/`pk`, `<field>_id` attnames,
+    `Meta.abstract` handling — as planned, through `own_synthesized_member`.
+    two re-scopes: `objects` needed **no refinement** (the stubs declare
+    `ClassVar[Manager[Self]]`, which resolves precisely), and
+    `DoesNotExist`/`MultipleObjectsReturned` keep their stub declarations
+    (base exception types) — per-model exception subclasses are a possible
+    future nicety, not needed for correct checking of `except` clauses
+- **reverse accessors — re-scoped to same-module**: implemented as a
+    class-keyed tracked query over the model's *own module* (the standard
+    `models.py` layout) instead of the project-wide edge index; cross-module
+    relations degrade to unresolved attributes. reasons: the aggregate's
+    invalidation cost was the design's flagged risk, and enumerating
+    definitions structurally (not resolving every global symbol) keeps the
+    query cycle-free. the project-wide index remains future work with this
+    query as its per-file building block
+- **`missing-framework-stubs`** — implemented as a registered lint fired at
+    each `django` import statement when the runtime package resolves without
+    `django-stubs`, rather than literally once per project: per-file
+    diagnostics are how the salsa architecture parallelizes, and the lint is
+    suppressable/configurable like any other. the framework table
+    (`dedicated/mod.rs`, `EXTERNALLY_STUBBED_FRAMEWORKS`) is the general
+    machinery future frameworks extend
+- **lookup-kwarg dsl (work item 4)**: **implemented** — `filter`/`get`/
+    `exclude`/`get_or_create`/`update_or_create` (+ async) lookup kwargs,
+    `create()`/`acreate()` kwargs, and literal field-name arguments to
+    `order_by`/`only`/`defer`/`values`/`values_list`/`earliest`/`latest` are
+    validated against the field list (relation traversal, operand types for
+    recognized lookups) via the `invalid-field-lookup` diagnostic; the resolver
+    lives in `dedicated/django.rs`, the call-site hook in the builder's
+    `check_call` loop. also added: `get_<field>_display()` for choice fields.
+    a full parity comparison against the mypy plugin is in
+    [django-stubs-parity.md](django-stubs-parity.md), which also records what
+    remains (per-model exception identity, `values`/`annotate` synthetic types,
+    `from_queryset`, project-wide reverse accessors) and why each is blocked on
+    infrastructure rather than django knowledge
+- **transpiler column**: gates + conformance pins verified (see the section
+    below). the sandpit run surfaced and fixed a general composition bug:
+    the lazy-import `_LazyAttr` proxy was not `isinstance`-transparent, so
+    soundness checks against lazily-imported names failed at runtime; the
+    proxy now implements `__instancecheck__`/`__subclasscheck__`
+- **tests**: `dedicated/role.rs` + `transforms/frameworks.rs` unit tests;
+    `mdtest/django.md` mock-stub mechanism pins;
+    `mdtest/external/django.md` real-dependency suite (django 6.0.7 +
+    django-stubs 6.0.7, uv-locked); sandpit runtime conformance project
+    (`basedpython-sandpit/django-conformance`) executing the lowered output
+    against real django + sqlite
+
 ## the shape of the problem
 
 django ships no type annotations at all, and its models are maximally
@@ -38,12 +106,14 @@ already prioritizes over the untyped runtime package (`-stubs` resolution and
     `django` resolves from site-packages without `django-stubs` present, with
     the install command in the message. this diagnostic is general common
     machinery — any future framework with external stubs reuses it
-- django-stubs is designed around its mypy plugin; the parts that work
-    plugin-free (field `__new__` overloads on `null=`, descriptor `__get__`/
-    `__set__` generics) are exactly the parts ty's general machinery consumes.
-    the session starts with a **plugin-free audit**: real-dependency mdtests
-    against django + django-stubs recording what already works. everything the
-    mypy plugin does that stubs can't express is this doc's work list
+- django-stubs is designed around its mypy plugin. **plan correction from
+    the audit**: current stubs have no `null=`-selected `__new__` overloads —
+    the descriptor generics are left entirely to the plugin, which reads the
+    stubs' own `_pyi_private_set_type`/`_pyi_private_get_type` markers. ty
+    consumes the same markers (see [status](#status)). what does work
+    plugin-free: `objects: ClassVar[Manager[Self]]`, the whole queryset api,
+    and the model exception attributes — the audit is recorded at the top of
+    `mdtest/external/django.md`
 
 ## work items
 
@@ -106,14 +176,20 @@ inverted fk edge index over the whole project. design:
     `related_name` explicitly ("did you mean the reverse accessor of
     `Book.author`?") — navigation value without the index cost
 
-### 4. lookup-kwarg dsl (stretch, design-approved)
+### 4. lookup-kwarg dsl (implemented)
 
 `filter(name__startswith="x")` — split on `__`, walk: field name → (optional)
 relation hops → lookup suffix from a per-field-type lookup table; check the
 value type against the lookup's operand type. literal-string keys only.
 this reuses the fields list and the fk edges; it is the highest-value
-diagnostic django users ask for, and the most work — implement only after
-1–3 land, possibly as its own follow-up session
+diagnostic django users ask for.
+
+**done** (see [status](#status) and [django-stubs-parity.md](django-stubs-parity.md)):
+the resolver (`resolve_lookup` / `resolve_create_kwarg` / `resolve_field_name`)
+is in `dedicated/django.rs`; the call-site hook (`check_django_queryset_call`)
+runs in the builder's `check_call` loop, keyed off `queryset_method_kind` +
+`queryset_or_manager_model`. it is deliberately conservative — unrecognized
+lookups, unresolved relation targets, and non-literal keys degrade to no error.
 
 ### 5. recognition seams
 
@@ -137,9 +213,11 @@ diagnostic django users ask for, and the most work — implement only after
     methods; optional chaining over nullable fks
 - **`by build` and the app layout**: migrations, `INSTALLED_APPS`, and
     `manage.py` reference plain `.py` module paths — the built output is the
-    django project. document the workflow (`by build` → run `manage.py` from
-    `out/`) in the getting-started docs as part of this session; no transpiler
-    changes expected
+    django project (`by build` → run from `out/`, exactly the workflow the
+    sandpit conformance project uses). one transpiler change was needed after
+    all: the lazy-import `_LazyAttr` proxy now delegates
+    `__instancecheck__`/`__subclasscheck__`, since soundness checks pass
+    lazily-imported model classes to `isinstance` at runtime
 
 ## test plan
 
