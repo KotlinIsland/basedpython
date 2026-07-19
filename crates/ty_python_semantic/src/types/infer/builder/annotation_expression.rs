@@ -471,7 +471,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     // modifiers ty places no meaning on (`override x: T`,
                     // `abstract x: T`, `private x: T`), and typed `context x: T = v`:
                     // the declaration is just `x: T`
-                    "__modifier_annot__" | "__abstract_annot__" | "__visibility_annot__"
+                    "__modifier_annot__"
+                    | "__abstract_annot__"
+                    | "__visibility_annot__"
                     | "__context__" => {
                         return Some(TypeAndQualifiers::declared(
                             self.infer_type_expression(slice),
