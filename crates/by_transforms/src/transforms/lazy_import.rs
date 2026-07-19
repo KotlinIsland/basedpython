@@ -197,8 +197,15 @@ impl<'src> LazyImport<'src> {
         let is_relative = node.level > 0;
         // `ty_extensions` is a ty-only module — it has no runtime existence on
         // PyPI. Names imported from it (`Intersection`, `Not`, `TypeOf`,
-        // `JustFloat`, `JustComplex`, `Top`) are type-only markers. Replace
-        // with a stub class that supports `X[T]`, `X | Y`, and use-as-base
+        // `Top`) are type-only markers. Replace with a stub class that supports
+        // `X[T]`, `X | Y`, and use-as-base.
+        //
+        // `JustFloat` / `JustComplex` are the exception: they mean *just* the
+        // builtin (basedpython's int-excluding `float` / `complex`), and that
+        // exclusion is static-only — at runtime they are the builtins. Binding
+        // them to the marker breaks any consumer that evaluates the annotation
+        // at runtime (`get_type_hints`, and so pydantic / dataclasses schema
+        // generation), so bind them to the builtin instead
         let is_ty_ext = !is_relative && module_part == "ty_extensions";
         let mut lines: Vec<String> = Vec::new();
         // whether the statement imported a bare `Character` that contributed no
@@ -222,8 +229,17 @@ impl<'src> LazyImport<'src> {
                     }
                     continue;
                 }
-                self.needs_ty_ext_marker = true;
-                lines.push(format!("{bind} = _TyExtMarker"));
+                // `JustFloat` / `JustComplex` are type-only aliases whose
+                // runtime value is the builtin, so `get_type_hints` (and thus
+                // pydantic / dataclasses schema generation) resolves them
+                match name {
+                    "JustFloat" => lines.push(format!("{bind} = float")),
+                    "JustComplex" => lines.push(format!("{bind} = complex")),
+                    _ => {
+                        self.needs_ty_ext_marker = true;
+                        lines.push(format!("{bind} = _TyExtMarker"));
+                    }
+                }
                 continue;
             }
             if is_relative && module_part.is_empty() {
@@ -613,6 +629,54 @@ mod tests {
                 path = _lazy_attr(\"os\", \"path\")
                 getcwd = _lazy_attr(\"os\", \"getcwd\")
             "},
+        );
+    }
+
+    fn transpile_polyfill(input: &str) -> String {
+        transpile(
+            input,
+            &Config {
+                lazy_imports: true,
+                ..Config::test_default()
+            },
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn ty_ext_just_float_binds_to_builtin() {
+        // `float` lowers to `JustFloat`; its runtime binding must be the
+        // builtin so annotation-introspecting consumers (`get_type_hints`,
+        // pydantic / dataclasses schema generation) see a real type, not the
+        // opaque `_TyExtMarker`
+        let out = transpile_polyfill("a: float\n");
+        assert!(
+            out.contains("JustFloat = float"),
+            "JustFloat should bind to the builtin, got:\n{out}"
+        );
+        assert!(
+            !out.contains("JustFloat = _TyExtMarker"),
+            "JustFloat must not bind to the marker, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn ty_ext_just_complex_binds_to_builtin() {
+        let out = transpile_polyfill("a: complex\n");
+        assert!(
+            out.contains("JustComplex = complex"),
+            "JustComplex should bind to the builtin, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn ty_ext_other_markers_stay_marker() {
+        // a genuinely type-only marker (`Not`, from `not int`) has no runtime
+        // meaning, so it keeps the opaque `_TyExtMarker` binding
+        let out = transpile_polyfill("a: not int\n");
+        assert!(
+            out.contains("Not = _TyExtMarker"),
+            "non-Just markers should keep the marker binding, got:\n{out}"
         );
     }
 

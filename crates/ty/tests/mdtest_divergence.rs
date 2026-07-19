@@ -190,6 +190,15 @@ fn clean_mdtest_blocks_run() {
         .output()
         .is_ok_and(|o| o.status.success());
 
+    // the pydantic divergence suite needs the framework installed to execute;
+    // when it isn't present those blocks are skipped exactly like the
+    // typing_extensions ones. run them locally against an interpreter that has
+    // pydantic (e.g. `PYTHON=/path/to/venv/bin/python`) to enforce the contract
+    let has_pydantic = Command::new(&python)
+        .args(["-c", "import pydantic"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+
     let dir = mdtest_dir();
     let mut files: Vec<PathBuf> = fs::read_dir(&dir)
         .expect("mdtest dir")
@@ -263,6 +272,9 @@ fn clean_mdtest_blocks_run() {
                         }
                     };
                     if !has_typing_extensions && transpiled.contains("typing_extensions") {
+                        continue;
+                    }
+                    if !has_pydantic && transpiled.contains("pydantic") {
                         continue;
                     }
                     let py = tmp.path().join(format!(

@@ -1842,6 +1842,11 @@ impl<'db> Bindings<'db> {
                                 }
                             },
                         );
+                        // Pydantic's `Field(frozen=True)` makes a single field immutable on an
+                        // otherwise mutable model. Only an explicit, literal `True` freezes the
+                        // field; a dynamic value degrades to not-frozen.
+                        let frozen = get_argument_type("frozen", false)
+                            .is_some_and(|frozen| frozen.bool(db).is_always_true());
 
                         // `dataclasses.field` and field-specifier functions of commonly used
                         // libraries like `pydantic`, `attrs`, and `SQLAlchemy` all return
@@ -1977,7 +1982,7 @@ impl<'db> Bindings<'db> {
                         // to `T`. Otherwise, we would error on `name: str = field(default="")`.
                         overload.set_return_type(Type::KnownInstance(KnownInstanceType::Field(
                             FieldInstance::new(
-                                db, default_ty, init, kw_only, alias, converter, strict,
+                                db, default_ty, init, kw_only, alias, converter, strict, frozen,
                             ),
                         )));
                     }

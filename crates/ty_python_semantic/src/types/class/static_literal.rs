@@ -46,7 +46,7 @@ use crate::{
         generics::Specialization,
         infer::{infer_unpack_types, original_class_type},
         infer_expression_type, inferred_declaration,
-        known_instance::DeprecatedInstance,
+        known_instance::{DeprecatedInstance, FieldInstance},
         member::{Member, class_member},
         mro::{Mro, MroIterator},
         signatures::CallableSignature,
@@ -1574,6 +1574,7 @@ impl<'db> StaticClassLiteral<'db> {
                         default_ty,
                         alias,
                         strict,
+                        frozen: _,
                     } => (*init, *default_ty, None, alias.as_ref(), None, *strict),
                     FieldKind::Django { many_to_many, .. } => (
                         // many-to-many values cannot be set at construction
@@ -2009,6 +2010,44 @@ impl<'db> StaticClassLiteral<'db> {
 
                     return Some(Type::function_like_callable(db, signature));
                 }
+                // A `pydantic.Field(frozen=True)` freezes a single field on an
+                // otherwise-mutable model. Reject writes to just those fields with an
+                // overloaded `__setattr__`: a `Literal["field"] -> Never` overload per
+                // frozen field, and a `str -> None` catch-all for the rest.
+                if let CodeGeneratorKind::Pydantic(_) = field_policy {
+                    let setattr_signature = |name_ty, return_ty| {
+                        Signature::new(
+                            Parameters::standard([
+                                Parameter::positional_or_keyword(Name::new_static("self"))
+                                    .with_annotated_type(instance_ty),
+                                Parameter::positional_or_keyword(Name::new_static("name"))
+                                    .with_annotated_type(name_ty),
+                                Parameter::positional_or_keyword(Name::new_static("value")),
+                            ]),
+                            return_ty,
+                        )
+                    };
+                    let frozen_overloads: Vec<_> = self
+                        .fields(db, specialization, field_policy)
+                        .iter()
+                        .filter(|(_, field)| field.is_frozen())
+                        .map(|(name, _)| {
+                            setattr_signature(Type::string_literal(db, name), Type::Never)
+                        })
+                        .collect();
+                    if !frozen_overloads.is_empty() {
+                        let overloads = frozen_overloads.into_iter().chain([setattr_signature(
+                            KnownClass::Str.to_instance(db),
+                            Type::none(db),
+                        )]);
+                        return Some(Type::Callable(CallableType::new(
+                            db,
+                            CallableSignature::from_overloads(overloads),
+                            CallableTypeKind::FunctionLike,
+                            CallableFunctionProvenance::None,
+                        )));
+                    }
+                }
                 None
             }
             (field_policy @ CodeGeneratorKind::DataclassLike(_), "__slots__")
@@ -2437,13 +2476,32 @@ impl<'db> StaticClassLiteral<'db> {
                 let mut alias = None;
                 let mut converter = None;
                 let mut strict = pydantic::ConfigBoolean::Unspecified;
-                if let Some(Type::KnownInstance(KnownInstanceType::Field(field))) = default_ty {
+                let mut frozen = false;
+                // A field specifier reaches the field two ways: as the assignment
+                // default (`x: int = Field(...)`), or — PEP 681 — inside the
+                // annotation's `Annotated[T, Field(...)]` metadata. The default
+                // position wins; otherwise fall back to the annotation metadata.
+                let field_specifier = if let Some(Type::KnownInstance(KnownInstanceType::Field(
+                    field,
+                ))) = default_ty
+                {
                     default_ty = field.default_type(db);
+                    Some(field)
+                } else {
+                    first_declaration.and_then(|def| annotated_field_specifier(db, def))
+                };
+                if let Some(field) = field_specifier {
                     init = field.init(db);
                     kw_only = field.kw_only(db);
                     alias.clone_from(field.alias(db));
                     converter = field.converter(db);
                     strict = field.strict(db);
+                    frozen = field.frozen(db);
+                    // an `Annotated`-only specifier carries the default the
+                    // assignment position would otherwise supply
+                    if default_ty.is_none() {
+                        default_ty = field.default_type(db);
+                    }
                 }
 
                 let kind = match field_policy {
@@ -2465,6 +2523,7 @@ impl<'db> StaticClassLiteral<'db> {
                         init: init && !symbol.name().starts_with('_'),
                         alias,
                         strict,
+                        frozen,
                     },
                     CodeGeneratorKind::TypedDict => {
                         let is_required = if attr.is_required() {
@@ -3747,4 +3806,39 @@ fn implicit_attribute_cycle_recover<'db>(
         .inner
         .cycle_normalized(db, previous_member.inner, cycle);
     Member { inner }
+}
+
+/// If `definition` is an annotated assignment whose annotation is
+/// `Annotated[T, ..., <field specifier>(...), ...]`, return the field-specifier
+/// instance carried in the metadata. PEP 681 allows a field specifier
+/// (`pydantic.Field`, `dataclasses.field`, ...) to appear in `Annotated`
+/// metadata instead of the assignment-default position.
+fn annotated_field_specifier<'db>(
+    db: &'db dyn Db,
+    definition: Definition<'db>,
+) -> Option<FieldInstance<'db>> {
+    let DefinitionKind::AnnotatedAssignment(assignment) = definition.kind(db) else {
+        return None;
+    };
+    let module = parsed_module(db, definition.file(db)).load(db);
+    let ast::Expr::Subscript(subscript) = assignment.annotation(&module) else {
+        return None;
+    };
+    if !matches!(
+        definition_expression_type(db, definition, &subscript.value),
+        Type::SpecialForm(SpecialFormType::Annotated)
+    ) {
+        return None;
+    }
+    // the slice of `Annotated[T, m1, m2, ...]` is a tuple whose first element is
+    // the annotated type and whose remaining elements are the metadata
+    let ast::Expr::Tuple(metadata) = subscript.slice.as_ref() else {
+        return None;
+    };
+    metadata.elts.iter().skip(1).find_map(|meta| {
+        match definition_expression_type(db, definition, meta) {
+            Type::KnownInstance(KnownInstanceType::Field(field)) => Some(field),
+            _ => None,
+        }
+    })
 }

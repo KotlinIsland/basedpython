@@ -2471,6 +2471,8 @@ pub(crate) enum FieldKind<'db> {
         alias: Option<Box<str>>,
         /// The mode selected by Pydantic's `strict` argument.
         strict: pydantic::ConfigBoolean,
+        /// Whether `Field(frozen=True)` marks this field immutable after construction.
+        frozen: bool,
     },
     /// Django model field metadata, extracted from the unannotated class-body
     /// assignment's field constructor call (literal arguments only; anything
@@ -2531,6 +2533,16 @@ impl Field<'_> {
     pub(crate) const fn is_read_only(&self) -> bool {
         match &self.kind {
             FieldKind::TypedDict { is_read_only, .. } => *is_read_only,
+            _ => false,
+        }
+    }
+
+    /// Whether this field is immutable after construction because of a per-field
+    /// marker (`pydantic.Field(frozen=True)`). Model-wide freezing (a frozen
+    /// dataclass or a frozen model config) is handled separately.
+    pub(crate) const fn is_frozen(&self) -> bool {
+        match &self.kind {
+            FieldKind::Pydantic { frozen, .. } => *frozen,
             _ => false,
         }
     }

@@ -216,6 +216,14 @@ pub(crate) trait TypeInfo {
     /// runtime-broken inside such a class; see
     /// `docs/basedpython/frameworks/index.md`
     fn framework_class_role(&self, class_def: &StmtClassDef) -> Option<FrameworkRole>;
+
+    /// whether `expr` is a field-specifier call — `pydantic.Field(...)`,
+    /// `dataclasses.field(...)`, `attrs.field(...)`, and the like. the checker
+    /// models these as assignable to the field's declared type, but their
+    /// runtime value is a field-descriptor object (`FieldInfo`, `Field`), so a
+    /// soundness check against the field annotation would always fail at
+    /// runtime — the transpiler must not emit one
+    fn is_field_specifier(&self, expr: &Expr) -> bool;
 }
 
 /// re-export of the ty-side check plan so transforms name a single type
@@ -501,6 +509,13 @@ impl TypeInfo for SemanticModel<'_> {
         let ty = class_def.inferred_type(self)?;
         let class = ty.as_class_literal()?;
         ty_python_semantic::types::class_framework_role(self.db(), class)
+    }
+
+    fn is_field_specifier(&self, expr: &Expr) -> bool {
+        matches!(
+            expr.inferred_type(self),
+            Some(Type::KnownInstance(KnownInstanceType::Field(_)))
+        )
     }
 }
 
