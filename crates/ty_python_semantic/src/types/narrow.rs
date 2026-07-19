@@ -17,11 +17,11 @@ use crate::types::{
     CallableType, ClassBase, ClassLiteral, ClassPatternPositionalSource, ClassType,
     IntersectionBuilder, IntersectionType, KnownClass, KnownInstanceType, LiteralValueTypeKind,
     Parameter, Parameters, Signature, SpecialFormType, SubclassOfInner, SubclassOfType, Truthiness,
-    Type, TypeContext, TypeVarBoundOrConstraints, UnionBuilder, callable_pattern_type,
-    class_pattern_positional_sources, definite_match_pattern_type_for_subject,
-    exact_sequence_pattern_type, infer_expression_types, mapping_pattern_type,
-    pattern_binding_fallthrough_type, sequence_pattern_type_builder, singleton_pattern_type,
-    starred_sequence_pattern_type, typed_dict_matches_class_pattern,
+    Type, TypeContext, TypeVarBoundOrConstraints, UnionBuilder, basedpython_is_keeps_identity,
+    callable_pattern_type, class_pattern_positional_sources,
+    definite_match_pattern_type_for_subject, exact_sequence_pattern_type, infer_expression_types,
+    mapping_pattern_type, pattern_binding_fallthrough_type, sequence_pattern_type_builder,
+    singleton_pattern_type, starred_sequence_pattern_type, typed_dict_matches_class_pattern,
 };
 use ty_python_core::expression::Expression;
 use ty_python_core::frozen::FrozenMap;
@@ -3403,7 +3403,11 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
             let rhs_ty = inference.expression_type(right);
 
             // literal rhs (None, True/False, numbers, strings, bytes, `...`) keeps
-            // Python identity semantics — `isinstance(x, None)` would be invalid
+            // Python identity semantics — `isinstance(x, None)` would be invalid.
+            // the same holds for any rhs that resolves to a plain value (an enum
+            // member like `Color.RED`, a based unit variant, an instance of a
+            // non-type class): it is not a class, so the transpiler keeps `is`
+            // and narrowing must mirror that
             let basedpython_is_keyword = basedpython_keyword_form.as_ref().is_some_and(|src| {
                 use ruff_text_size::Ranged;
                 matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot) && !right.is_literal_expr() && {
@@ -3412,7 +3416,7 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
                     let trimmed = between.trim();
                     !trimmed.starts_with("===") && !trimmed.starts_with("!==")
                 }
-            });
+            }) && !basedpython_is_keeps_identity(self.db, rhs_ty);
 
             // Narrowing for:
             // - `if type(x) is Y`

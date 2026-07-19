@@ -306,6 +306,10 @@ impl ParametricIs<'_, '_> {
             // the disjunction of the arms)
             if matches!(op, CmpOp::Is | CmpOp::IsNot)
                 && is_keyword_comparison(self.source, *op, lhs, rhs)
+                // a subscript that resolves to a plain value (`candidates[0]`
+                // holding an enum member) keeps python identity semantics,
+                // same as identity_swap's rule for unsubscripted rhs
+                && !self.types.is_keeps_identity(rhs)
             {
                 let negate = matches!(op, CmpOp::IsNot);
                 let replacement =
@@ -982,5 +986,68 @@ mod tests {
         "});
         assert!(out.contains("return False"), "erased dict target: {out}");
         assert!(!out.contains("_parametric_is"), "no probe: {out}");
+    }
+
+    #[test]
+    fn stdlib_enum_member_rhs_keeps_identity() {
+        // an enum member is a singleton instance, not a class, so
+        // `isinstance(x, Color.RED)` would be a runtime TypeError; the pair
+        // must keep `is` / `is not`
+        let out = out(indoc! {"
+            from enum import Enum
+
+            class Color(Enum):
+                RED = 1
+                GREEN = 2
+
+            print(Color.RED is Color.RED)
+            print(Color.RED is not Color.GREEN)
+        "});
+        assert!(
+            out.contains("print(Color.RED is Color.RED)"),
+            "enum member rhs keeps identity: {out}"
+        );
+        assert!(
+            out.contains("print(Color.RED is not Color.GREEN)"),
+            "enum member rhs keeps identity under is not: {out}"
+        );
+    }
+
+    #[test]
+    fn caseless_based_variant_rhs_keeps_identity() {
+        // the repro: a payload-less based-enum variant is a singleton instance
+        let out = out(indoc! {"
+            enum class Genre:
+                case A, B
+
+            print(Genre.A is not Genre.B)
+        "});
+        assert!(
+            out.contains("print(Genre.A is not Genre.B)"),
+            "caseless variant rhs keeps identity: {out}"
+        );
+    }
+
+    #[test]
+    fn payload_variant_class_rhs_lowers_but_unit_variant_kept() {
+        // a payload variant resolves to a *class* (→ isinstance); a unit
+        // variant in the same enum is a singleton instance (→ kept)
+        let out = out(indoc! {"
+            enum class Shape:
+                case Circle(radius: float)
+                case Point
+
+            c = Shape.Circle(1.0)
+            print(c is Shape.Circle)
+            print(c is not Shape.Point)
+        "});
+        assert!(
+            out.contains("print(isinstance(c, Shape.Circle))"),
+            "payload variant rhs is a class and lowers to isinstance: {out}"
+        );
+        assert!(
+            out.contains("print(c is not Shape.Point)"),
+            "unit variant rhs is a singleton instance and keeps identity: {out}"
+        );
     }
 }

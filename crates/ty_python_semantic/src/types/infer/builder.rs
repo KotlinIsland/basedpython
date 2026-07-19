@@ -11312,13 +11312,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                 let range = TextRange::new(left.start(), right.end());
 
-                // a basedpython parametric type test (`x is list[int]`) is a
-                // runtime specialization check, not python identity: it always
-                // yields a `bool`, and its reachability is decided by narrowing
-                // (not by the instance-vs-class-object disjointness that would
+                // a basedpython keyword-form `is`/`is not` whose rhs is a
+                // class (or a parametric test like `x is list[int]`) is an
+                // instance check, not python identity: it always yields a
+                // `bool`, and its reachability is decided by narrowing (not
+                // by the instance-vs-class-object disjointness that would
                 // otherwise type it `Literal[False]` and kill a live branch)
                 if let Some(ty) =
-                    builder.check_parametric_is_test(left, right, left_ty, right_ty, *op)
+                    builder.check_basedpython_is_test(left, right, left_ty, right_ty, *op)
                 {
                     return (ty, range);
                 }
@@ -11357,14 +11358,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         )
     }
 
-    /// basedpython: classify a parametric type test (`x is list[int]`,
-    /// keyword form). Returns `Some(bool)` — the runtime result type — when
-    /// this pair is such a test, and errors when the target is a builtin
-    /// collection whose runtime instances erase their type arguments, so no
-    /// runtime probe of the value can ever confirm the specialization.
-    /// `None` when the pair is an ordinary comparison, so the caller keeps
-    /// its usual comparison typing
-    fn check_parametric_is_test(
+    /// basedpython: classify a keyword-form `is`/`is not` pair that performs
+    /// an *instance check* rather than python identity. Returns `Some(bool)`
+    /// — the runtime result type — for any such pair, so the identity folds
+    /// (disjointness → `Literal[False]`) never apply to it; reachability is
+    /// decided by narrowing instead. errors when the pair is a parametric
+    /// test (`x is list[int]`) against a builtin collection whose runtime
+    /// instances erase their type arguments, so no runtime probe of the
+    /// value can ever confirm the specialization. `None` when the pair keeps
+    /// python identity semantics (`===` spelling, a literal or other
+    /// plain-value rhs such as an enum member — mirroring the transpiler's
+    /// lowering), so the caller keeps its usual comparison typing
+    fn check_basedpython_is_test(
         &mut self,
         left: &ast::Expr,
         right: &ast::Expr,
@@ -11373,6 +11378,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         op: ast::CmpOp,
     ) -> Option<Type<'db>> {
         if !matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot) || !self.is_basedpython_file() {
+            return None;
+        }
+        // a literal rhs (`x is None`, `x is 0`) keeps python identity
+        // semantics; the transpiler leaves the operator untouched
+        if right.is_literal_expr() {
             return None;
         }
         let source = ruff_db::source::source_text(self.db(), self.file());
@@ -11407,7 +11417,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return Some(bool_ty);
         }
 
-        let alias = crate::types::reified_infer::parametric_is_target(self.db(), right_ty)?;
+        // a plain-value rhs (an enum member, an instance of a non-type class)
+        // keeps python identity semantics — the transpiler leaves `is`/`is not`
+        // untouched, so ty types it as an ordinary identity comparison too
+        if crate::types::basedpython_is_keeps_identity(self.db(), right_ty) {
+            return None;
+        }
+
+        let Some(alias) = crate::types::reified_infer::parametric_is_target(self.db(), right_ty)
+        else {
+            // a bare class / dynamic rhs (`x is int`, `x is SomeClass`) is an
+            // instance check that lowers to `isinstance`, so it always yields a
+            // `bool` — the identity folds (disjointness → `Literal[False]`)
+            // must not apply
+            return Some(bool_ty);
+        };
         let plan =
             crate::types::reified_infer::classify_parametric_is(self.db(), left_ty, alias, right);
         // only a probe against a runtime-erased target is an error; every
