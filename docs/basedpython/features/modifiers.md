@@ -75,11 +75,15 @@ instead of the usual `: ...`
 | basedpython            | Python output                          |
 | ---------------------- | -------------------------------------- |
 | `let MAX = 100`        | `MAX: Final = 100`                     |
+| `let x: int`           | `x: Final[int]`                        |
+| `let x`                | `x: Final`                             |
 | `class count = 0`      | `count: ClassVar = 0` (inside a class) |
 | `newtype UserId = int` | `UserId = NewType("UserId", int)`      |
 
 `let` works at module and class scope. inside a class, `class x = ...` is the
 class-variable form (distinct from the regular `let x = ...` which is `Final`).
+the initializer may be omitted: `let x: int` declares a read-only attribute and
+a bare `let x` an uninitialized `Final`, both bound by a single later assignment.
 `newtype` introduces a distinct `typing.NewType`-backed type at module scope
 
 ## assignment modifiers
