@@ -561,6 +561,8 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let mut overload = reverse_transforms::overload::OverloadReverse::new(src);
     let mut modifiers_rev = reverse_transforms::modifiers::ModifiersReverse::new(src);
     let mut enums_rev = reverse_transforms::enums::EnumsReverse::new();
+    let mut extension_rev =
+        reverse_transforms::extension::ExtensionReverse::new(src, module.suite());
     let mut coalesce_rev = reverse_transforms::coalesce::CoalesceReverse::new(src);
     let mut generics_rev = reverse_transforms::generics::GenericsReverse::new(src);
     let mut auto_quote_rev = reverse_transforms::auto_quote::AutoQuoteReverse::new(src);
@@ -586,6 +588,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         unpack.visit_stmt(stmt);
         modifiers_rev.visit_stmt(stmt);
         enums_rev.visit_stmt(stmt);
+        extension_rev.visit_stmt(stmt);
         coalesce_rev.visit_stmt(stmt);
         auto_quote_rev.visit_stmt(stmt);
         compat_rev.visit_stmt(stmt);
@@ -636,6 +639,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(overload.edits);
     fixes.extend(modifiers_rev.edits);
     fixes.extend(enums_rev.edits);
+    fixes.extend(extension_rev.edits);
     fixes.extend(coalesce_rev.edits);
     fixes.extend(generics_rev.edits);
     fixes.extend(auto_quote_rev.edits);
@@ -1125,6 +1129,38 @@ mod cross_file {
         assert!(
             out.contains("Box[int](1)"),
             "imported generic constructor must keep its type args, got:\n{out}"
+        );
+    }
+
+    /// an extension declared in an imported module resolves at call sites in
+    /// the importing module: the lowering rewrites the call to the backing
+    /// function and emits its precise import. the surface stays `import ext`
+    #[test]
+    fn imported_extension_rewrites_call_and_adds_import() {
+        let db = project_db(&[
+            (
+                "/ext.by",
+                "extension list:\n    def second(self) -> Element:\n        return self[1]\n",
+            ),
+            (
+                "/main.by",
+                "import ext\n\nxs = [1, 2, 3]\nprint(xs.second())\n",
+            ),
+        ]);
+        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        assert!(
+            out.contains("from ext import __by_ext__list__second"),
+            "backing-function import should be emitted, got:\n{out}"
+        );
+        assert!(
+            out.contains("print(__by_ext__list__second(xs))"),
+            "call should be rewritten, got:\n{out}"
+        );
+        // the defining module lowers the block itself
+        let ext_out = transpile_file(&db, "/ext.by", &Config::test_default());
+        assert!(
+            ext_out.contains("def __by_ext__list__second(self):"),
+            "defining module should lower the block, got:\n{ext_out}"
         );
     }
 

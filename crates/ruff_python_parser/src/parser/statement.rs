@@ -249,6 +249,12 @@ impl<'src> Parser<'src> {
             );
             return Some(self.parse_protocol_def(start, DecoratorList::new()));
         }
+        if kw == "extension" && self.peek() == TokenKind::Name {
+            self.error_if_not_basedpython(
+                "`extension` declarations are not valid in .py files".to_string(),
+            );
+            return Some(self.parse_extension_def(start));
+        }
         // `enum class E:` / `enum class E[T]:` — a "based enum" (an algebraic
         // sum type when its body has payload variants, an idiomatic `Enum` when
         // its variants are all unit). the `class` keyword is part of the
@@ -1089,6 +1095,70 @@ impl<'src> Parser<'src> {
             name,
             type_params: type_params.map(Box::new),
             arguments,
+            body,
+            node_index: AtomicNodeIndex::NONE,
+        })
+    }
+
+    /// Parses an `extension Name[bounds]:` declaration — methods and computed
+    /// properties added to an existing type without subclassing it.
+    ///
+    /// Produces a [`ClassDef`] carrying a synthetic `extension_def` marker
+    /// decorator. the class name is the *extended* type (it references an
+    /// existing declaration rather than introducing a new one), and any
+    /// bracketed type params are constraints on that type's own parameters
+    /// (`extension list[Element: int]:`), not fresh declarations
+    ///
+    /// [`ClassDef`]: ast::StmtClassDef
+    fn parse_extension_def(&mut self, start: TextSize) -> Stmt {
+        let extension_start = self.current_token_range().start();
+        self.bump(TokenKind::Name); // consume "extension"
+        let name_start = self.current_token_range().start();
+        let decorator_range = TextRange::new(extension_start, name_start);
+
+        let mut decorators = DecoratorList::new();
+        decorators.push(ast::Decorator {
+            expression: Expr::Name(ast::ExprName {
+                id: Name::new_static("extension_def"),
+                ctx: ExprContext::Invalid,
+                range: decorator_range,
+                node_index: AtomicNodeIndex::NONE,
+            }),
+            range: decorator_range,
+            node_index: AtomicNodeIndex::NONE,
+        });
+
+        let name = self.parse_identifier();
+        let type_params = self.try_parse_type_params();
+
+        // an extension adds behaviour to the named type; it has no bases
+        if self.at(TokenKind::Lpar) {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "`extension` declarations cannot have base classes".to_string(),
+                ),
+                self.current_token_range(),
+            );
+        }
+
+        let body = if self.eat(TokenKind::Colon) {
+            self.parse_body(Clause::Class)
+        } else {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "Expected `:` after `extension` declaration".to_string(),
+                ),
+                self.current_token_range(),
+            );
+            Suite::new()
+        };
+
+        Stmt::ClassDef(ast::StmtClassDef {
+            range: self.node_range(start),
+            decorator_list: decorators,
+            name,
+            type_params: type_params.map(Box::new),
+            arguments: None,
             body,
             node_index: AtomicNodeIndex::NONE,
         })

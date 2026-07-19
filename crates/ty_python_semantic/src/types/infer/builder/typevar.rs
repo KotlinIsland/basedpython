@@ -4,6 +4,7 @@ use crate::{
     types::{
         BindingContext, KnownClass, KnownInstanceType, LintDiagnosticGuard, Truthiness, Type,
         TypeContext, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance,
+        class::{ClassLiteral, StaticClassLiteral},
         context::InferContext,
         diagnostic::{
             INVALID_LEGACY_TYPE_VARIABLE, INVALID_PARAMSPEC, INVALID_TYPE_VARIABLE_BOUND,
@@ -13,6 +14,7 @@ use crate::{
         infer::{
             InferenceFlags, TypeInferenceBuilder,
             builder::{BoundOrConstraintsNodes, DeclaredAndInferredType, DeferredExpressionState},
+            original_class_type,
         },
         todo_type,
         typevar::{
@@ -36,6 +38,27 @@ use ty_python_core::{
 impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     pub(super) fn is_basedpython_file(&self) -> bool {
         self.file().source_type(self.db()).is_basedpython()
+    }
+
+    /// basedpython: the innermost `extension` declaration enclosing the
+    /// current scope, when inference is inside an extension body
+    pub(super) fn enclosing_extension(&self) -> Option<StaticClassLiteral<'db>> {
+        let db = self.db();
+        for (_, scope) in self.index.ancestor_scopes(self.scope().file_scope_id(db)) {
+            let Some(class) = scope.node().as_class() else {
+                continue;
+            };
+            if !class.node(self.module()).is_extension() {
+                continue;
+            }
+            let definition = self.index.expect_single_definition(class);
+            if let Some(ClassLiteral::Static(literal)) = original_class_type(db, definition)
+                && literal.is_extension(db)
+            {
+                return Some(literal);
+            }
+        }
+        None
     }
 
     pub(super) fn infer_typevar_definition(

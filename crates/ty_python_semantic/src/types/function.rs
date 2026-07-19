@@ -760,6 +760,22 @@ impl<'db> OverloadLiteral<'db> {
             let class_node = class_scope.node().as_class()?;
             let class_def = index.expect_single_definition(class_node);
             let class_literal = original_class_type(db, class_def)?;
+
+            // basedpython: an extension method's `self` is the *extended* type,
+            // specialized at the extension's view of its type parameters. the
+            // receiver's own type arguments are substituted in when the member
+            // is resolved on a receiver, exactly like ordinary generic members
+            if let ClassLiteral::Static(static_literal) = class_literal
+                && static_literal.is_extension(db)
+            {
+                let body_view = crate::types::extensions::body_view_class(db, static_literal)?;
+                return Some(if self.is_classmethod(db) {
+                    SubclassOfType::from(db, SubclassOfInner::Class(body_view))
+                } else {
+                    Type::instance(db, body_view)
+                });
+            }
+
             let class_is_generic = class_literal.generic_context(db).is_some();
             let class_is_fallback = class_literal
                 .known(db)

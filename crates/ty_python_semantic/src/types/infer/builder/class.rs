@@ -119,6 +119,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         | "protocol_class"
                         | "sealed"
                         | "enum_def"
+                        | "extension_def"
                         | "variant_unit"
                         | "variant_tuple"
                         | "private"
@@ -194,6 +195,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             ClassLiteralFlags::IS_ENUM_VARIANT,
             class_node.is_enum_variant(),
         );
+        class_flags.set(ClassLiteralFlags::IS_EXTENSION, class_node.is_extension());
         class_flags.set(
             ClassLiteralFlags::HAS_EXPLICIT_METACLASS,
             has_explicit_metaclass,

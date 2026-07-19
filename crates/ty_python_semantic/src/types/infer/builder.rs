@@ -53,17 +53,17 @@ use crate::types::class::{
 use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
 use crate::types::diagnostic::{
-    self, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS, CYCLIC_TYPE_ALIAS_DEFINITION,
-    ERASED_CAST_ARGUMENT, ERASED_TYPE_CHECK, FINAL_ON_VARIABLE, GeneratorMismatchKind,
-    INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT, INVALID_DECLARATION,
-    INVALID_ENUM_MEMBER_ANNOTATION, INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE,
-    INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM, INVALID_TYPE_GUARD_CALL,
-    INVALID_TYPE_VARIABLE_BOUND, INVALID_TYPE_VARIABLE_CONSTRAINTS, NON_OVERLAPPING_CAST,
-    POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE, UNDEFINED_REVEAL,
-    UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC,
-    UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, hint_if_stdlib_attribute_exists_on_other_versions,
-    report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
-    report_bad_dunder_delete_call, report_call_to_abstract_method,
+    self, AMBIGUOUS_EXTENSION_MEMBER, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS,
+    CYCLIC_TYPE_ALIAS_DEFINITION, ERASED_CAST_ARGUMENT, ERASED_TYPE_CHECK, FINAL_ON_VARIABLE,
+    GeneratorMismatchKind, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT,
+    INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_LEGACY_TYPE_VARIABLE,
+    INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM,
+    INVALID_TYPE_GUARD_CALL, INVALID_TYPE_VARIABLE_BOUND, INVALID_TYPE_VARIABLE_CONSTRAINTS,
+    NON_OVERLAPPING_CAST, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
+    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
+    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
+    hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
+    report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
     report_invalid_class_match_pattern, report_invalid_exception_caught,
     report_invalid_exception_cause, report_invalid_exception_raised,
@@ -77,6 +77,7 @@ use crate::types::diagnostic::{
     report_unsupported_comparison,
 };
 use crate::types::enums::{enum_ignored_names, is_enum_class_by_inheritance};
+use crate::types::extensions;
 use crate::types::function::{
     FunctionDecorators, FunctionType, KnownFunction, report_revealed_type,
     same_module_uncached_raw_signature,
@@ -9085,7 +9086,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 );
                 let collection_generic_context = collection_literal.generic_context(self.db());
 
+                // the identity-receiver probe is speculative: suppress its
+                // diagnostics (a basedpython extension member with a bracket
+                // bound legitimately fails to resolve on the identity
+                // specialization, and that must not surface as an error)
                 let mut identity_bindings = self
+                    .speculate_without_diagnostics()
                     .infer_attribute_load_impl(attribute, identity_instance)
                     .bindings(self.db())
                     .match_parameters(self.db(), &call_arguments)
@@ -9778,6 +9784,28 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         ))),
                     );
                     Place::bound(Type::single_callable(db, signature)).into()
+                } else {
+                    Place::Undefined.into()
+                }
+            })
+            // basedpython only: inside an `extension` body, the extended
+            // type's own type parameters are in scope under the names its
+            // declaration bound (`Element` on `list`). bracket-spelled
+            // (constrained) params resolve normally through the type-param
+            // scope before this fallback is reached. the name resolves to the
+            // typevar *object* — `bind_typevar` recognises extension bodies as
+            // binding the extended class's parameters, exactly as a class body
+            // binds its own
+            .or_fall_back_to(db, || {
+                if self.is_basedpython_file()
+                    && let Some(extension) = self.enclosing_extension()
+                    && let Some(typevar) =
+                        extensions::extension_body_typevar(db, extension, symbol_name)
+                {
+                    Place::bound(Type::KnownInstance(KnownInstanceType::TypeVar(
+                        typevar.typevar(db),
+                    )))
+                    .into()
                 } else {
                     Place::Undefined.into()
                 }
@@ -10612,9 +10640,33 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 assigned_type = Some(ty);
             }
         }
-        let fallback_place = value_type.member(db, &attr.id).map_type(|ty| {
+        let mut fallback_place = value_type.member(db, &attr.id).map_type(|ty| {
             self.narrow_expr_with_applicable_constraints(attribute, ty, &constraint_keys)
         });
+
+        // basedpython: an attribute that resolves to no declared member may be
+        // supplied by an `extension` in scope (this module's, or one from any
+        // module imported with a plain `import mod`). extensions never shadow
+        // declared members — this only runs after normal lookup came up empty
+        if self.is_basedpython_file() && fallback_place.place.is_undefined() {
+            if let Some(resolution) =
+                extensions::resolve_extension_member(db, self.file(), value_type, &attr.id)
+            {
+                if let Some(other) = resolution.ambiguous_with
+                    && let Some(builder) = self
+                        .context
+                        .report_lint(&AMBIGUOUS_EXTENSION_MEMBER, attribute)
+                {
+                    builder.into_diagnostic(format_args!(
+                        "Attribute `{}` is supplied by more than one applicable \
+                        extension of `{}`",
+                        attr.id,
+                        other.name(db),
+                    ));
+                }
+                fallback_place = Place::bound(resolution.ty).into();
+            }
+        }
 
         let attr_name = &attr.id;
         let resolved_type =
