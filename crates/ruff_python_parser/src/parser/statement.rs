@@ -337,8 +337,9 @@ impl<'src> Parser<'src> {
                     let text = self.src_text(range);
                     if text == "let" {
                         // `let` only introduces a declaration when it is shaped
-                        // like `let NAME =` or `let NAME : ...`. otherwise it is
-                        // an ordinary identifier (`let = 5`, `let(x)`,
+                        // like `let NAME =`, `let NAME : ...`, or a bare
+                        // `let NAME` (an uninitialized declaration). otherwise it
+                        // is an ordinary identifier (`let = 5`, `let(x)`,
                         // `print(let)` are valid python), so don't hijack it —
                         // and don't let a tool that parses arbitrary text (e.g.
                         // ERA001 on the comment `# the OS will let us`) panic the
@@ -346,7 +347,11 @@ impl<'src> Parser<'src> {
                         if self.peek_nth(idx).0 != TokenKind::Name
                             || !matches!(
                                 self.peek_nth(idx + 1).0,
-                                TokenKind::Colon | TokenKind::Equal
+                                TokenKind::Colon
+                                    | TokenKind::Equal
+                                    | TokenKind::Newline
+                                    | TokenKind::Semi
+                                    | TokenKind::EndOfFile
                             )
                         {
                             return None;
@@ -678,18 +683,17 @@ impl<'src> Parser<'src> {
         } else {
             let_name
         };
-        // a typed `let NAME: T` may omit the initializer: it declares a
-        // read-only attribute (lowers to `NAME: Final[T]`). an untyped
-        // `let NAME` must have `= value` — `expect` reports a recoverable error
-        // rather than panicking if it is missing
-        let value = if typed && !self.at(TokenKind::Equal) {
-            None
-        } else {
-            self.expect(TokenKind::Equal);
+        // the initializer may be omitted: a typed `let NAME: T` declares a
+        // read-only attribute (lowers to `NAME: Final[T]`) and a bare untyped
+        // `let NAME` declares an uninitialized `Final`. otherwise consume the
+        // `= value`
+        let value = if self.eat(TokenKind::Equal) {
             Some(Box::new(
                 self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
                     .expr,
             ))
+        } else {
+            None
         };
         let target = Expr::Name(ast::ExprName {
             id: name.id.clone(),

@@ -345,6 +345,15 @@ impl<'src> Modifiers<'src> {
                     "]".to_owned(),
                     slice.range().end(),
                 )));
+            } else if matches!(node.annotation.as_ref(), Expr::Name(n) if n.id.as_str() == "__let__")
+            {
+                // valueless untyped `let x` → `x: Final` — an uninitialized
+                // read-only declaration
+                self.needs_final_annotation = true;
+                self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                    format!("{name}: Final"),
+                    node.range(),
+                )));
             }
             return;
         };
@@ -928,6 +937,20 @@ mod tests {
             indoc! {"
                 from typing import Final
                 TOP: Final[int]
+            "},
+        );
+    }
+
+    #[test]
+    fn let_decl_valueless_untyped() {
+        // a bare `let x` with neither type nor initializer declares an
+        // uninitialized `Final` — a later single assignment binds it
+        check(
+            "let a\na = 1\n",
+            indoc! {"
+                from typing import Final
+                a: Final
+                a = 1
             "},
         );
     }
