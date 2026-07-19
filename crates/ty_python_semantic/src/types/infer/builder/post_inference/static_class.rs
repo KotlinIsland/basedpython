@@ -42,6 +42,7 @@ use crate::{
             report_subclass_of_class_with_non_callable_init_subclass, report_unsupported_base,
         },
         enums::is_enum_class_by_inheritance,
+        extensions,
         function::KnownFunction,
         generics::enclosing_generic_contexts,
         infer::builder::post_inference::typed_dict::validate_typed_dict_class,
@@ -86,6 +87,14 @@ pub(crate) fn check_static_class_definitions<'db>(
     let Type::ClassLiteral(ClassLiteral::Static(class)) = ty else {
         return;
     };
+
+    // basedpython: an `extension` declaration is not a class — it references
+    // one. it gets its own validation, and none of the inheritance-based
+    // checks below apply (it has no bases by construction)
+    if class.is_extension(db) {
+        extensions::validate_extension_declaration(context, class, class_node);
+        return;
+    }
 
     // Check that the class does not have a cyclic definition
     if let Some(inheritance_cycle) = class.inheritance_cycle(db) {

@@ -163,6 +163,100 @@ fn basedpython_paramspec_arrow_params_parse() {
 }
 
 #[test]
+fn basedpython_extension_parses_to_marked_class() {
+    let parsed = parse_basedpython_module(
+        "extension list:\n    def second(self) -> Element:\n        return self[1]\n",
+    );
+    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single ClassDef");
+    };
+    assert_eq!(class.name.as_str(), "list");
+    assert!(class.type_params.is_none());
+    assert!(class.arguments.is_none());
+    let names: Vec<&str> = class
+        .decorator_list
+        .iter()
+        .filter_map(|d| d.expression.as_name_expr().map(|n| n.id.as_str()))
+        .collect();
+    assert_eq!(names, ["extension_def"]);
+    assert!(matches!(class.body.as_slice(), [Stmt::FunctionDef(f)] if f.name.as_str() == "second"));
+}
+
+#[test]
+fn basedpython_extension_with_bounds_parses_type_params() {
+    let parsed = parse_basedpython_module(
+        "extension list[Element: int]:\n    def total(self) -> int:\n        return sum(self)\n",
+    );
+    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single ClassDef");
+    };
+    let type_params = class.type_params.as_ref().expect("expected type params");
+    assert_eq!(type_params.type_params.len(), 1);
+    let param = type_params.type_params[0]
+        .as_type_var()
+        .expect("expected a plain TypeVar param");
+    assert_eq!(param.name.as_str(), "Element");
+    assert!(param.bound.is_some());
+}
+
+#[test]
+fn basedpython_extension_rejects_base_classes() {
+    let parsed = crate::Parser::new(
+        "extension list(Sequence):\n    def second(self): ...\n",
+        ParseOptions::from(Mode::Module).with_basedpython(true),
+    )
+    .parse()
+    .try_into_module()
+    .unwrap();
+    assert!(
+        parsed
+            .errors()
+            .iter()
+            .any(|e| e.to_string().contains("cannot have base classes")),
+        "expected a base-class error, got: {:?}",
+        parsed.errors()
+    );
+}
+
+#[test]
+fn basedpython_extension_soft_keyword_stays_a_name() {
+    // `extension` only introduces a declaration when followed by a name.
+    // every other shape must remain an ordinary identifier
+    for source in [
+        "extension = 1",
+        "extension(x)",
+        "extension[0]",
+        "print(extension)",
+        "extension.field = 2",
+        "extension: int = 3",
+    ] {
+        let parsed = parse_basedpython_module(source);
+        assert!(
+            parsed.errors().is_empty(),
+            "unexpected parse errors in {source:?}: {:?}",
+            parsed.errors()
+        );
+        assert!(
+            !matches!(parsed.syntax().body.as_slice(), [Stmt::ClassDef(_)]),
+            "{source:?} must not parse as an extension declaration"
+        );
+    }
+}
+
+#[test]
+fn extension_rejected_in_py_file() {
+    // the `extension` introducer is basedpython-only
+    let has_error = match parse(
+        "extension list:\n    def second(self): ...\n",
+        ParseOptions::from(Mode::Module),
+    ) {
+        Ok(parsed) => !parsed.errors().is_empty(),
+        Err(_) => true,
+    };
+    assert!(has_error, "`extension` must be rejected in a .py file");
+}
+
+#[test]
 fn final_annotation_rejected_in_py_file() {
     // `final x: T` is basedpython-only; a plain `.py` parse must report the gate
     let has_error = match parse("final x: int\n", ParseOptions::from(Mode::Module)) {

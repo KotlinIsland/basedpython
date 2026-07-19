@@ -36,10 +36,11 @@ fn pick_temp_var(types: &dyn TypeInfo, anchor: &Expr) -> &'static str {
     "_t9"
 }
 
-/// walks an attribute-access chain and returns `Some((python_form, guards))` when
-/// any `?.` is present, where `python_form` has all `?.` replaced by `.` and
+/// walks an attribute-access chain and returns `Some((python_form, guards, base))`
+/// when any `?.` is present, where `python_form` has all `?.` replaced by `.`,
 /// `guards` is the ordered list of accumulated sub-expressions that must be
-/// non-None before each subsequent optional access is safe.
+/// non-None before each subsequent optional access is safe, and `base` is the
+/// source range of the first `?.`'s receiver — everything before the first `?`
 ///
 /// a `?.` whose base is a *wrapped* optional (`int??`, a generic `T?`)
 /// reaches its present value through the runtime wrapper: the guard still
@@ -48,7 +49,7 @@ pub(super) fn expand_chain(
     expr: &Expr,
     source: &str,
     types: &dyn TypeInfo,
-) -> Option<(String, Vec<String>)> {
+) -> Option<(String, Vec<String>, TextRange)> {
     let Expr::Attribute(attr) = expr else {
         return None;
     };
@@ -59,11 +60,11 @@ pub(super) fn expand_chain(
         ""
     };
     match expand_chain(&attr.value, source, types) {
-        Some((v_form, mut guards)) => {
+        Some((v_form, mut guards, base)) => {
             if attr.optional {
                 guards.push(v_form.clone());
             }
-            Some((format!("{v_form}{unwrap}.{field}"), guards))
+            Some((format!("{v_form}{unwrap}.{field}"), guards, base))
         }
         None => {
             if !attr.optional {
@@ -72,19 +73,37 @@ pub(super) fn expand_chain(
             let start = usize::from(attr.value.range().start());
             let end = usize::from(attr.value.range().end());
             let v_form = source[start..end].to_owned();
-            Some((format!("{v_form}{unwrap}.{field}"), vec![v_form]))
+            Some((
+                format!("{v_form}{unwrap}.{field}"),
+                vec![v_form],
+                attr.value.range(),
+            ))
         }
     }
 }
 
 /// builds a `None if ... is None else ...` chain from guards and final result,
-/// using walrus assignment to avoid evaluating compound intermediate expressions twice
-pub(super) fn build_expansion(guards: &[String], result: &str, temp: &str) -> String {
+/// using walrus assignment to avoid evaluating compound intermediate
+/// expressions twice.
+///
+/// returns fragments rather than text: a compound chain base is walrus-bound
+/// exactly once, and passing it through as a [`Fragment::Src`] span lets
+/// sibling lowerings inside it (an extension call, a cast, …) materialize
+/// instead of being clobbered. only the first guard can carry the raw base —
+/// every later guard is an incremental `temp.suffix` — and a name-only base
+/// has no interior for an edit to target, so the `Src` is needed exactly there
+pub(super) fn build_expansion(
+    guards: &[String],
+    result: &str,
+    temp: &str,
+    base: TextRange,
+) -> Vec<Fragment> {
+    let mut fragments: Vec<Fragment> = Vec::new();
     let mut s = String::new();
     let mut use_t = false;
     let mut prev_guard: Option<&str> = None;
 
-    for guard in guards {
+    for (position, guard) in guards.iter().enumerate() {
         let guard_expr = if let Some(prev) = prev_guard.filter(|_| use_t) {
             let incremental = &guard[prev.len() + 1..];
             format!("{temp}.{incremental}")
@@ -95,7 +114,14 @@ pub(super) fn build_expansion(guards: &[String], result: &str, temp: &str) -> St
         if guard_expr.chars().all(|c| c.is_alphanumeric() || c == '_') {
             let _ = write!(s, "None if {guard_expr} is None else ");
         } else {
-            let _ = write!(s, "None if ({temp} := {guard_expr}) is None else ");
+            if position == 0 {
+                let _ = write!(s, "None if ({temp} := ");
+                fragments.push(Fragment::Lit(std::mem::take(&mut s)));
+                fragments.push(Fragment::Src(base));
+                let _ = write!(s, ") is None else ");
+            } else {
+                let _ = write!(s, "None if ({temp} := {guard_expr}) is None else ");
+            }
             use_t = true;
         }
         prev_guard = Some(guard.as_str());
@@ -107,8 +133,11 @@ pub(super) fn build_expansion(guards: &[String], result: &str, temp: &str) -> St
     } else {
         s.push_str(result);
     }
+    if !s.is_empty() {
+        fragments.push(Fragment::Lit(s));
+    }
 
-    s
+    fragments
 }
 
 /// the `?.` attribute chain at the base of `expr`, with its expansion, when `expr` is a
@@ -120,9 +149,9 @@ fn chain_head<'a>(
     expr: &'a Expr,
     source: &str,
     types: &dyn TypeInfo,
-) -> Option<(&'a Expr, String, Vec<String>)> {
-    if let Some((form, guards)) = expand_chain(expr, source, types) {
-        return Some((expr, form, guards));
+) -> Option<(&'a Expr, String, Vec<String>, TextRange)> {
+    if let Some((form, guards, base)) = expand_chain(expr, source, types) {
+        return Some((expr, form, guards, base));
     }
     match expr {
         Expr::Attribute(attribute) => chain_head(&attribute.value, source, types),
@@ -192,18 +221,14 @@ impl<'ast> Visitor<'ast> for NoneChain<'_> {
         // followed into its `else` branch — `not a?.b` would yield `a.b`, and
         // `[i for i in a?.b]` would not even parse. the parentheses keep the emitted tree
         // the one that was parsed
-        if let Some((head, form, guards)) = chain_head(expr, self.source, self.types) {
+        if let Some((head, form, guards, base)) = chain_head(expr, self.source, self.types) {
             let temp = pick_temp_var(self.types, expr);
-            let expansion = build_expansion(&guards, &form, temp);
             let trailers = TextRange::new(head.range().end(), expr.range().end());
-            self.template_edits.push((
-                expr.range(),
-                vec![
-                    Fragment::Lit(format!("({expansion}")),
-                    Fragment::Src(trailers),
-                    Fragment::Lit(")".to_owned()),
-                ],
-            ));
+            let mut fragments = vec![Fragment::Lit("(".to_owned())];
+            fragments.extend(build_expansion(&guards, &form, temp, base));
+            fragments.push(Fragment::Src(trailers));
+            fragments.push(Fragment::Lit(")".to_owned()));
+            self.template_edits.push((expr.range(), fragments));
             self.visit_trailers(expr, head);
             return;
         }

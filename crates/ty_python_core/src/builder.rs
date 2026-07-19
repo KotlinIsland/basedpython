@@ -2851,7 +2851,20 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 self.synthesize_nested_binding_definitions(nested_bindings);
 
                 // In Python runtime semantics, a class is registered after its scope is evaluated.
-                let symbol = self.add_symbol(class.name.id.clone());
+                // an `extension list:` block references the extended type rather than
+                // declaring it, so it binds a mangled, per-statement symbol — invisible
+                // to name resolution (`<` cannot appear in an identifier) but still
+                // enumerable, so `extensions_in_module` can find every extension
+                let symbol_name = if class.is_extension() {
+                    Name::new(format!(
+                        "<extension:{}:{}>",
+                        class.name.id,
+                        class.range.start().to_u32()
+                    ))
+                } else {
+                    class.name.id.clone()
+                };
+                let symbol = self.add_symbol(symbol_name);
                 self.add_definition(symbol.into(), class);
             }
             ast::Stmt::TypeAlias(type_alias) => {

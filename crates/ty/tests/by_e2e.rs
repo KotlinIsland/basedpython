@@ -244,6 +244,115 @@ print(shout(\"moon\", greeting=\"good night\"))
 }
 
 #[test]
+fn extension_methods_run_and_track_element_types() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+extension list:
+    def second(self) -> Element:
+        return self[1]
+
+extension str:
+    @property
+    def shouty(self) -> str:
+        return self.upper()
+
+xs = [1, 2, 3]
+print(xs.second())
+print(\"quiet\".shouty)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "2\nQUIET"
+    );
+}
+
+#[test]
+fn extension_member_called_before_its_block_runs() {
+    // the backing function is hoisted above the call, so a member used before
+    // the `extension` block's source position resolves at runtime
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+print(\"asdf\".shout())
+
+extension str:
+    def shout(self) -> str:
+        return self.upper() + \"!\"
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ASDF!");
+}
+
+#[test]
+fn imported_extension_runs_across_modules() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("ext.by"),
+        "\
+extension list:
+    def second(self) -> Element:
+        return self[1]
+",
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+import ext
+
+xs = [\"a\", \"b\", \"c\"]
+print(xs.second())
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "b");
+}
+
+#[test]
 fn enum_lowers_to_sealed_dataclass_hierarchy() {
     let out = transpile(
         "\

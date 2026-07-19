@@ -130,6 +130,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SHADOWED_TYPE_VARIABLE);
     registry.register_lint(&SUBCLASS_OF_FINAL_CLASS);
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
+    registry.register_lint(&INVALID_EXTENSION);
+    registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&NON_OVERLAPPING_CAST);
     registry.register_lint(&MISSING_CONTEXT_ARGUMENT);
@@ -932,6 +934,62 @@ declare_lint! {
     pub(crate) static SUBCLASS_OF_SEALED_CLASS = {
         summary: "detects subclasses of sealed classes from outside their workspace",
         status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for invalid basedpython `extension` declarations: an extended
+    /// name that does not resolve to a class, a bracket type parameter the
+    /// extended type does not declare, or a member that would add stored state.
+    ///
+    /// ## Why is this bad?
+    /// An extension adds behaviour to an existing type. Its name must reference
+    /// a class declaration, its bracket parameters reuse (and constrain) that
+    /// class's own type parameters by name, and its members are resolved at
+    /// transpile time with nowhere to store new fields on already-constructed
+    /// instances.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// extension list[T: int]:  # error: `list` declares no type parameter `T`
+    ///     def total(self) -> int:
+    ///         return sum(self)
+    /// ```
+    pub(crate) static INVALID_EXTENSION = {
+        summary: "detects invalid basedpython extension declarations",
+        status: LintStatus::stable("0.0.1-alpha.3"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for attribute accesses that resolve to a member supplied by more
+    /// than one applicable basedpython extension.
+    ///
+    /// ## Why is this bad?
+    /// When two extensions in scope both add the same member to the receiver's
+    /// type, the access is ambiguous — which implementation runs would depend
+    /// on arbitrary ordering. Constrain one of the extensions (or drop the
+    /// import that brings the second into scope) so exactly one applies.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// extension list:
+    ///     def second(self) -> Element: ...
+    ///
+    /// extension list:
+    ///     def second(self) -> Element: ...
+    ///
+    /// [1, 2].second()  # error: ambiguous extension member
+    /// ```
+    pub(crate) static AMBIGUOUS_EXTENSION_MEMBER = {
+        summary: "detects attribute accesses supplied by more than one extension",
+        status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
     }
 }

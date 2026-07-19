@@ -99,6 +99,52 @@ impl<'db> SemanticModel<'db> {
         )
     }
 
+    /// basedpython: when an attribute access resolves to an `extension`
+    /// member (this module's, or one from a module imported with a plain
+    /// `import mod`), the backing-function rewrite the transpiler applies.
+    /// `None` for ordinary attributes — extensions never shadow declared
+    /// members, so this only answers when normal member lookup finds nothing
+    pub fn extension_attribute_info(
+        &self,
+        attribute: &ast::ExprAttribute,
+    ) -> Option<crate::types::extensions::ExtensionAttributeInfo> {
+        let db = self.db;
+        let receiver_ty = attribute.value.inferred_type(self)?;
+        if !receiver_ty
+            .member(db, attribute.attr.as_str())
+            .place
+            .is_undefined()
+        {
+            return None;
+        }
+        let resolution = crate::types::extensions::resolve_extension_member(
+            db,
+            self.file,
+            receiver_ty,
+            attribute.attr.as_str(),
+        )?;
+        let extension_file = resolution.extension.file(db);
+        let import_from = if extension_file == self.file {
+            None
+        } else {
+            Some(
+                ty_module_resolver::file_to_module(db, extension_file)?
+                    .name(db)
+                    .to_string(),
+            )
+        };
+        Some(crate::types::extensions::ExtensionAttributeInfo {
+            function: crate::types::extensions::backing_function_name(
+                db,
+                resolution.extension,
+                attribute.attr.as_str(),
+            ),
+            kind: resolution.kind,
+            import_from,
+            receiver_is_class: receiver_ty.nominal_class(db).is_none(),
+        })
+    }
+
     /// basedpython: the bracketed type-argument spelling the transpiler
     /// injects at a bare constructor call of a generic class (`A(1)` →
     /// `"int"`), read from the inferred type of the constructed instance.
