@@ -13,8 +13,9 @@ use crate::{
     },
     types::{
         ModuleLiteralType, Type, TypeAndQualifiers,
+        dedicated::EXTERNALLY_STUBBED_FRAMEWORKS,
         diagnostic::{
-            POSSIBLY_MISSING_IMPORT, UNRESOLVED_IMPORT,
+            MISSING_FRAMEWORK_STUBS, POSSIBLY_MISSING_IMPORT, UNRESOLVED_IMPORT,
             hint_if_stdlib_attribute_exists_on_other_versions,
             hint_if_stdlib_submodule_exists_on_other_versions,
         },
@@ -195,6 +196,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return;
         };
 
+        self.check_framework_stubs(alias.range(), &full_module_name);
+
         let binding_ty = if asname.is_some() {
             // If we are renaming the imported module via an `as` clause, then we bind the resolved
             // module's type to that name, even if that module is nested.
@@ -303,6 +306,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         if resolve_module(db, self.file(), &module_name).is_none() {
             self.report_unresolved_import(module_ref.range(), *level, module, Some(&module_name));
+        } else {
+            self.check_framework_stubs(module_ref.range(), &module_name);
         }
     }
 
@@ -328,6 +333,58 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
         let place = typing_extensions_symbol(db, name);
         (!place.place.is_undefined()).then_some(place)
+    }
+
+    /// Warn when a framework that needs an external PEP 561 stubs package
+    /// resolves from its untyped runtime package instead of the stubs.
+    fn check_framework_stubs(&self, range: TextRange, module_name: &ModuleName) {
+        let db = self.db();
+
+        let Some(framework) = EXTERNALLY_STUBBED_FRAMEWORKS
+            .iter()
+            .find(|framework| module_name.components().next() == Some(framework.package))
+        else {
+            return;
+        };
+
+        let Some(package_name) = ModuleName::new(framework.package) else {
+            return;
+        };
+        let Some(module) = resolve_module(db, self.file(), &package_name) else {
+            return;
+        };
+        // A first-party module that happens to share the framework's name is
+        // not the framework.
+        if !module
+            .search_path(db)
+            .is_some_and(ty_module_resolver::SearchPath::is_third_party)
+        {
+            return;
+        }
+        let Some(file) = module.file(db) else {
+            return;
+        };
+        // The stubs, when installed, take resolution priority; resolving to a
+        // file outside the `<package>-stubs` directory means they are absent.
+        let stubs_resolved = file.path(db).as_system_path().is_some_and(|path| {
+            path.components()
+                .any(|component| component.as_str() == framework.stubs_directory)
+        });
+        if stubs_resolved {
+            return;
+        }
+
+        let Some(builder) = self.context.report_lint(&MISSING_FRAMEWORK_STUBS, range) else {
+            return;
+        };
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "Types for `{}` are incomplete without the `{}` package",
+            framework.package, framework.stubs_distribution,
+        ));
+        diagnostic.info(format_args!(
+            "Install it with `pip install {}` (or add it to your dev dependencies)",
+            framework.stubs_distribution,
+        ));
     }
 
     pub(super) fn infer_import_from_definition(

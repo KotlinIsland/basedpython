@@ -648,7 +648,7 @@ impl SearchPath {
     }
 
     /// Is the module on a search path for installed third-party code?
-    pub(crate) fn is_third_party(&self) -> bool {
+    pub fn is_third_party(&self) -> bool {
         match &*self.0 {
             SearchPathInner::SitePackages(_) | SearchPathInner::Editable(_) => true,
             SearchPathInner::Extra(_)

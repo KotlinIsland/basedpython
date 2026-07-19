@@ -553,6 +553,32 @@ mod tests {
     }
 
     #[test]
+    fn attr_proxy_is_isinstance_transparent() {
+        // other lowerings (soundness checks, checked casts) pass imported
+        // names as runtime types; the proxy must delegate isinstance/issubclass
+        let out = transpile(
+            "from os.path import basename\n",
+            &Config {
+                lazy_imports: true,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains(
+                "def __instancecheck__(self, o): return isinstance(o, self._by_resolve())"
+            ),
+            "proxy must delegate __instancecheck__ in:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "def __subclasscheck__(self, o): return issubclass(o, self._by_resolve())"
+            ),
+            "proxy must delegate __subclasscheck__ in:\n{out}"
+        );
+    }
+
+    #[test]
     fn polyfill_dotted_with_alias() {
         check_polyfill_body("import os.path as p\n", "p = _lazy_module(\"os.path\")\n");
     }

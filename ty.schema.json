@@ -347,6 +347,7 @@
             }
           ]
         },
+<<<<<<< HEAD
         "ambiguous-context-argument": {
           "title": "detects calls whose `context` parameter matches several context values",
           "description": "## What it does\nChecks for calls where several `context` declarations in the same scope\ncould fill one `context` parameter.\n\n## Why is this bad?\nThe implicit argument is chosen by assignability, not by name. When two\ndeclarations in the winning scope both match, either choice would be\narbitrary — the call must pass the argument explicitly (or the extra\ndeclaration must move to another scope).\n\n## Examples\n```python\ndef f(a: int, context b: str): ...\n\ncontext s1 = \"hello\"\ncontext s2 = \"world\"\nf(1)          # error: `s1` and `s2` both match\nf(1, b=s1)    # ok — explicit\n```",
@@ -367,6 +368,8 @@
             }
           ]
         },
+=======
+>>>>>>> 58906528b6 ([ty] implement django support)
         "ambiguous-protocol-member": {
           "title": "detects protocol classes with ambiguous interfaces",
           "description": "## What it does\n\nChecks for protocol classes with members that will lead to ambiguous interfaces.\n\n## Why is this bad?\n\nAssigning to an undeclared variable in a protocol class, or to an undeclared attribute\nthrough a protocol method's `self` or `cls` receiver, leads to an ambiguous interface\nwhich may lead to the type checker inferring unexpected things. It's recommended to\nensure that all members of a protocol class are explicitly declared.\n\n## Examples\n\n```py\nfrom typing import ClassVar, Protocol\n\n\nclass BaseProto(Protocol):\n    a: int  # fine (explicitly declared as `int`)\n    instance_member: str\n    class_member: ClassVar[str]\n\n    # fine: a method definition using `def` is considered a declaration\n    def method_member(self) -> int: ...\n\n    def method(self) -> None:\n        self.instance_member = \"value\"  # fine (declared in the class body)\n        self.implicit = \"value\"  # error: [ambiguous-protocol-member]\n\n    @classmethod\n    def class_method(cls) -> None:\n        cls.class_member = \"value\"  # fine (declared in the class body)\n        cls.implicit_class = \"value\"  # error: [ambiguous-protocol-member]\n\n    # no explicit declaration, leading to ambiguity\n    c = \"some variable\"  # error\n    # no explicit declaration, leading to ambiguity\n    b = method_member  # error\n\n    # This creates implicit assignments of `d` and `e` in the protocol class body.\n    # Were they really meant to be considered protocol members?\n    # error: \"`d` is not declared as a protocol member\"\n    # error: \"`e` is not declared as a protocol member\"\n    for d, e in enumerate(range(42)):\n        pass\n\n\nclass SubProto(BaseProto, Protocol):\n    a = 42  # fine (declared in superclass)\n```",
@@ -787,9 +790,15 @@
             }
           ]
         },
+<<<<<<< HEAD
         "invalid-extension": {
           "title": "detects invalid basedpython extension declarations",
           "description": "## What it does\nChecks for invalid basedpython `extension` declarations: an extended\nname that does not resolve to a class, a bracket type parameter the\nextended type does not declare, or a member that would add stored state.\n\n## Why is this bad?\nAn extension adds behaviour to an existing type. Its name must reference\na class declaration, its bracket parameters reuse (and constrain) that\nclass's own type parameters by name, and its members are resolved at\ntranspile time with nowhere to store new fields on already-constructed\ninstances.\n\n## Example\n\n```by\nextension list[T: int]:  # error: `list` declares no type parameter `T`\n    def total(self) -> int:\n        return sum(self)\n```",
+=======
+        "invalid-field-lookup": {
+          "title": "detects invalid django model field lookups and field-name arguments",
+          "description": "## What it does\nChecks django ORM lookups, `create()` keywords, and field-name string\narguments (`order_by`, `only`, …) against the model's fields.\n\n## Why is this bad?\nThe queryset API accepts `**kwargs`, so a mistyped field name or an\noperand of the wrong type for a lookup is silently accepted by the\nstubs and only fails at runtime.\n\n## Example\n\n```py\nAuthor.objects.filter(nam=\"x\")            # error: no field `nam`\nAuthor.objects.filter(name__startswith=1) # error: lookup wants `str`\n```",
+>>>>>>> 58906528b6 ([ty] implement django support)
           "default": "error",
           "oneOf": [
             {
@@ -1197,10 +1206,10 @@
             }
           ]
         },
-        "missing-context-argument": {
-          "title": "detects calls whose `context` parameter has no matching context value",
-          "description": "## What it does\nChecks for calls that leave a basedpython `context` parameter unfilled:\nno explicit argument matches it and no `context` declaration in scope\nhas a type assignable to it.\n\n## Why is this bad?\nA `context` parameter has no default — the call raises `TypeError` at\nruntime unless something supplies the argument.\n\n## Examples\n```python\ndef f(a: int, context b: str): ...\n\nf(1)                  # error: no context value in scope\ncontext s = \"hello\"\nf(1)                  # ok — `s` is passed implicitly\n```",
-          "default": "error",
+        "missing-framework-stubs": {
+          "title": "detects framework imports whose external stubs package is not installed",
+          "description": "## What it does\nChecks for imports of frameworks that ship no inline type annotations\nwhen their external PEP 561 stubs package is not installed.\n\n## Why is this bad?\nWithout the stubs package the framework's types resolve from its untyped\nruntime source, so most framework-aware checking silently degrades to\n`Unknown`. Installing the stubs package restores precise types.\n\n## Example\n\n```py\nfrom django.db import models  # warning: install `django-stubs` for precise types\n```",
+          "default": "warn",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
@@ -1251,16 +1260,6 @@
           "title": "detects class definitions that will fail due to non-callable `__init_subclass__`",
           "description": "## What it does\n\nChecks for class definitions that will fail due to non-callable `__init_subclass__`\nmethods.\n\n## Why is this bad?\n\nIf a class defines a non-callable `__init_subclass__` method/attribute, any attempt\nto subclass that class will raise a `TypeError` at runtime.\n\n## Examples\n\n```python\nclass Super:\n    __init_subclass__ = None\n\n\nclass Sub(Super): ...  # error: [non-callable-init-subclass]\n```\n\n## References\n\n- [Python data model: Customizing class creation](https://docs.python.org/3/reference/datamodel.html#customizing-class-creation)",
           "default": "error",
-          "oneOf": [
-            {
-              "$ref": "#/definitions/Level"
-            }
-          ]
-        },
-        "non-overlapping-cast": {
-          "title": "detects casts between non-overlapping types",
-          "description": "## What it does\nChecks for a `cast` whose value type is disjoint from the target type,\nso no value could ever belong to both.\n\n## Why is this bad?\nA cast between non-overlapping types can never succeed: a checked `cast`\nalways raises at runtime, and a safe `cast?` always yields `None`. The\ncast is almost certainly a mistake.\n\n## Examples\n```by\ndef f(a: object):\n    a cast int       # ok — `object` overlaps `int`\n    \"\" cast int      # warning: `str` and `int` are disjoint\n```",
-          "default": "warn",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"

@@ -27,6 +27,7 @@ impl<'src> FrameworksPass<'src> {
 fn role_name(role: FrameworkRole) -> &'static str {
     match role {
         FrameworkRole::PydanticModel => "pydantic model",
+        FrameworkRole::DjangoModel => "django model",
     }
 }
 
@@ -136,6 +137,100 @@ mod tests {
     fn transpile_result(db: &TestDb, path: &str) -> Result<String, String> {
         let file = system_path_to_file(db, path).expect("file not in db");
         transpile_typed(db, file, &Config::test_default()).map_err(|err| err.to_string())
+    }
+
+    /// a project db with a mock django package in site-packages (`Model` must
+    /// be *defined* in `django.db.models.base` on a third-party search path)
+    fn django_db(files: &[(&str, &str)]) -> TestDb {
+        let mut db = TestDb::new(ProjectMetadata::new(
+            ruff_python_ast::name::Name::new_static(""),
+            SystemPathBuf::from("/proj"),
+        ));
+        db.write_file("/sp/django/__init__.pyi", "")
+            .expect("write file failed");
+        db.write_file("/sp/django/db/__init__.pyi", "")
+            .expect("write file failed");
+        db.write_file(
+            "/sp/django/db/models/__init__.pyi",
+            "from django.db.models.base import Model as Model\n",
+        )
+        .expect("write file failed");
+        db.write_file("/sp/django/db/models/base.pyi", "class Model: ...\n")
+            .expect("write file failed");
+        for (path, src) in files {
+            db.write_file(path, src).expect("write file failed");
+        }
+        db.init_program_with_site_packages(["/sp"])
+            .expect("program init failed");
+        db
+    }
+
+    #[test]
+    fn data_class_modifier_on_django_model_rejected() {
+        let db = django_db(&[(
+            "/proj/models.by",
+            "from django.db import models\ndata class Author(models.Model):\n    name: str\n",
+        )]);
+        let err = transpile_result(&db, "/proj/models.by").expect_err("gate should reject");
+        assert!(
+            err.contains("`data class` on django model `Author`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn init_shorthand_in_django_model_rejected() {
+        let db = django_db(&[(
+            "/proj/models.by",
+            "from django.db import models\nclass Author(models.Model):\n    init(self, let name: str)\n",
+        )]);
+        let err = transpile_result(&db, "/proj/models.by").expect_err("gate should reject");
+        assert!(
+            err.contains("`init` shorthand in django model `Author`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn plain_django_model_transpiles() {
+        let db = django_db(&[(
+            "/proj/models.by",
+            "from django.db import models\nclass Author(models.Model):\n    pass\n",
+        )]);
+        let out = transpile_result(&db, "/proj/models.by").expect("plain model should transpile");
+        assert!(out.contains("class Author(models.Model):"), "got:\n{out}");
+    }
+
+    #[test]
+    fn soundness_guards_in_django_model_methods() {
+        // `Config::test_default()` disables soundness; opt in to pin that the
+        // guard lands inside the method body while the class structure and
+        // field declarations stay untouched (conformance matrix: soundness ✓)
+        let db = django_db(&[(
+            "/proj/models.by",
+            "from django.db import models\n\nclass Author(models.Model):\n    name = models.CharField(max_length=100)\n\n    def display(self, prefix: str) -> str:\n        return prefix + \"x\"\n",
+        )]);
+        let file = system_path_to_file(&db, "/proj/models.by").expect("file not in db");
+        let config = Config {
+            lazy_imports: false,
+            // the `parameters` entry checks are opt-in; they are the position
+            // that lands a guard inside an otherwise precisely-typed method
+            soundness: crate::config::SoundnessPositions::all(),
+            ..Config::default()
+        };
+        let out = transpile_typed(&db, file, &config).expect("model should transpile");
+        assert!(
+            out.contains("class Author(models.Model):"),
+            "class structure should survive, got:\n{out}"
+        );
+        assert!(
+            out.contains("name = models.CharField(max_length=100)"),
+            "field declaration should survive, got:\n{out}"
+        );
+        assert!(
+            out.contains("_soundness_check(prefix, str)"),
+            "parameter guard should land in the method body, got:\n{out}"
+        );
     }
 
     #[test]

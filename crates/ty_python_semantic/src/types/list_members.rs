@@ -592,6 +592,27 @@ impl<'db> AllMembers<'db> {
             Some(CodeGeneratorKind::Pydantic(_)) => {
                 // Pydantic's special attributes are declared on and inherited from `BaseModel`.
             }
+            Some(field_policy @ CodeGeneratorKind::Django) => {
+                // django's synthesized model attributes (`id`, `pk`, fk attnames)
+                // resolve by name only; surface them for completions
+                if let Some(class) = class_literal.as_static() {
+                    let fields = class.fields(db, None, field_policy);
+                    for name in
+                        crate::types::dedicated::django::synthesized_member_names(db, class, fields)
+                    {
+                        if let Place::Defined(DefinedPlace {
+                            ty: synthetic_member,
+                            ..
+                        }) = ty.member(db, name.as_str()).place
+                        {
+                            self.members.insert(Member {
+                                name,
+                                ty: synthetic_member,
+                            });
+                        }
+                    }
+                }
+            }
             None => {}
         }
     }

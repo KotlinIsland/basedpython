@@ -13,7 +13,7 @@
 //! `docs/basedpython/frameworks/index.md`
 
 use crate::Db;
-use crate::types::dedicated::pydantic;
+use crate::types::dedicated::{django, pydantic};
 use crate::types::{ClassLiteral, StaticClassLiteral};
 
 /// the kind of framework class-transformer that applies to a class
@@ -21,6 +21,8 @@ use crate::types::{ClassLiteral, StaticClassLiteral};
 pub enum FrameworkRole {
     /// a pydantic model — `pydantic.BaseModel` in the mro
     PydanticModel,
+    /// a django model — `django.db.models.Model` in the mro
+    DjangoModel,
 }
 
 /// classify `class` against the supported frameworks. `None` for an
@@ -39,6 +41,9 @@ fn static_class_framework_role<'db>(
 ) -> Option<FrameworkRole> {
     if pydantic::is_model(db, class) {
         return Some(FrameworkRole::PydanticModel);
+    }
+    if django::is_model(db, class) {
+        return Some(FrameworkRole::DjangoModel);
     }
     None
 }
@@ -81,6 +86,66 @@ mod tests {
             .as_class_literal()
             .expect("class definition should infer a class literal");
         Ok(class_framework_role(&db, class))
+    }
+
+    /// resolve the framework role of the last class in `/src/main.py`, with a
+    /// mock django package in site-packages (`Model` must be *defined* in
+    /// `django.db.models.base` on a third-party search path to be recognized)
+    fn django_role_of_last_class(source: &str) -> anyhow::Result<Option<FrameworkRole>> {
+        let db = TestDbBuilder::new()
+            .with_site_packages("/sp")
+            .with_file("/sp/django/__init__.pyi", "")
+            .with_file("/sp/django/db/__init__.pyi", "")
+            .with_file(
+                "/sp/django/db/models/__init__.pyi",
+                "from django.db.models.base import Model as Model\n",
+            )
+            .with_file("/sp/django/db/models/base.pyi", "class Model: ...\n")
+            .with_file("/src/main.py", source)
+            .build()?;
+
+        let file = system_path_to_file(&db, "/src/main.py")?;
+        let module = parsed_module(&db, file).load(&db);
+        let model = SemanticModel::new(&db, file);
+        let class_def = module
+            .suite()
+            .iter()
+            .rev()
+            .find_map(|stmt| stmt.as_class_def_stmt())
+            .expect("source should define a class");
+        let ty = class_def
+            .inferred_type(&model)
+            .expect("class should infer a type");
+        let class = ty
+            .as_class_literal()
+            .expect("class definition should infer a class literal");
+        Ok(class_framework_role(&db, class))
+    }
+
+    #[test]
+    fn django_model_direct_base() -> anyhow::Result<()> {
+        let role = django_role_of_last_class(
+            "from django.db import models\nclass Author(models.Model):\n    pass\n",
+        )?;
+        assert_eq!(role, Some(FrameworkRole::DjangoModel));
+        Ok(())
+    }
+
+    #[test]
+    fn django_model_through_inheritance() -> anyhow::Result<()> {
+        let role = django_role_of_last_class(
+            "from django.db.models import Model\nclass Base(Model): ...\nclass Author(Base):\n    pass\n",
+        )?;
+        assert_eq!(role, Some(FrameworkRole::DjangoModel));
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_class_with_django_imported_has_no_role() -> anyhow::Result<()> {
+        let role =
+            django_role_of_last_class("from django.db import models\nclass Author:\n    pass\n")?;
+        assert_eq!(role, None);
+        Ok(())
     }
 
     #[test]
