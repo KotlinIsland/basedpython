@@ -749,6 +749,19 @@ impl<'db> SemanticTokenVisitor<'db> {
                 ast::AnyParameterRef::Variadic(_) => SemanticTokenType::Parameter,
             };
 
+            // basedpython `context` parameter modifier — the keyword text sits
+            // between the parameter start and its name
+            if parameter.is_context && parameter.range().start() < parameter.name.range().start() {
+                self.add_token(
+                    self.keyword_range(TextRange::new(
+                        parameter.range().start(),
+                        parameter.name.range().start(),
+                    )),
+                    SemanticTokenType::Keyword,
+                    SemanticTokenModifier::empty(),
+                );
+            }
+
             self.add_token(
                 parameter.name.range(),
                 token_type,
@@ -5123,6 +5136,34 @@ a: dynamic
         assert_snapshot!(test.to_snapshot(&tokens), @r#"
         "sentinel" @ 0..8: Keyword
         "A" @ 9..10: Variable [definition]
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_context_keyword() {
+        // `context` declarations highlight through the annotation-marker rule;
+        // the parameter modifier is carried by `is_context` and highlighted
+        // from the span ahead of the parameter name
+        let test = SemanticTokenTest::new_by(
+            "
+context s = \"x\"
+
+def f(a: int, context b: str): ...
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "context" @ 1..8: Keyword
+        "s" @ 9..10: Variable [definition]
+        "\"x\"" @ 13..16: String
+        "f" @ 22..23: Function [definition]
+        "a" @ 24..25: Parameter [definition]
+        "int" @ 27..30: Class
+        "context" @ 32..39: Keyword
+        "b" @ 40..41: Parameter [definition]
+        "str" @ 43..46: Class
         "#);
     }
 
