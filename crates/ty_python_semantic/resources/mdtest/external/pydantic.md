@@ -794,11 +794,10 @@ class Person(BaseModel):
     id: Annotated[int, Field(default=0)]
 
 Person(name="Alice", id=1)
-# TODO: This should not be an error
-# error: [invalid-argument-type]
+# `Field(strict=False)` in the metadata relaxes the model-wide `strict=True`
+# for `name`, so a lax `bytes` input is accepted
 Person(name=b"Alice", id=1)
-# TODO: This should not be an error
-# error: [missing-argument]
+# `Field(default=0)` in the metadata makes `id` optional
 Person(name="Alice")
 
 Person(name=None, id=1)  # error: [invalid-argument-type]
@@ -840,9 +839,22 @@ class PersonFrozenName3(BaseModel):
     age: int
 
 person = PersonFrozenName3(name="Alice", age=20)
-# TODO: this should be an error
-person.name = "Bob"
+person.name = "Bob"  # error: [invalid-assignment]
+# `age` is not frozen, so it stays assignable
 person.age += 1
+```
+
+A frozen field is rejected even when the field type is set through `Field(...)` with other
+arguments, and unrelated fields on the same model remain writable:
+
+```py
+class Config(BaseModel):
+    host: str = Field(default="localhost", frozen=True)
+    port: int = Field(default=8080)
+
+c = Config()
+c.host = "example.com"  # error: [invalid-assignment]
+c.port = 9090
 ```
 
 No error is raised when a frozen model is subclassed. The child model is also frozen:
@@ -889,21 +901,41 @@ class Person4(BaseModel):
     name: str = Field(default=None, validate_default=False)
 
 class Person5(BaseModel):
-    # TODO: this should be an error
+    # TODO: this should be an error. Pydantic's stub returns `Any` from the
+    # `validate_default=True` overload of `Field`, so the invalid default is
+    # hidden; recovering it needs pydantic-specific default extraction (forcing
+    # it generally breaks custom `dataclass_transform` specifiers and converters)
     name: str = Field(default=None, validate_default=True)
 ```
 
 ## Verification of models
 
-A field without a type annotation leads to a runtime error.
+A field specifier assigned without a type annotation leads to a runtime error: pydantic does not
+collect it as a field and raises `PydanticUserError` when the class is created.
 
 ```py
 from pydantic import BaseModel, Field
 
-# TODO: this should ideally be an error
 class PersonUntypedField(BaseModel):
     name: str
-    age = Field(default=0)
+    age = Field(default=0)  # error: [unannotated-model-field]
+```
+
+An unannotated assignment that is not a field specifier is a plain class attribute, and an annotated
+field is fine. Dataclasses, which tolerate an unannotated `field()` as an ordinary attribute, are
+not flagged.
+
+```py
+from pydantic import BaseModel, Field
+from dataclasses import dataclass, field
+
+class Model(BaseModel):
+    annotated: int = Field(default=0)
+    label = "person"  # not a field specifier — a plain class attribute
+
+@dataclass
+class DC:
+    x = field(default=0)  # dataclasses allow this
 ```
 
 ## BaseSettings
@@ -1218,6 +1250,56 @@ class User(BaseModel):
     def validate_model_after(self) -> "User":
         reveal_type(self)  # revealed: Self@validate_model_after
         return self
+```
+
+## Bare validator decorators and computed fields
+
+Without the recommended explicit `@classmethod`, a `@field_validator` is inferred as an ordinary
+method — its first parameter binds to `Self`, not `type[Self]` (the limitation noted above). The
+annotated value parameter is still checked precisely. A `@computed_field` property reads back at its
+declared return type.
+
+```py
+from pydantic import BaseModel, field_validator, computed_field
+
+class User(BaseModel):
+    name: str
+
+    @field_validator("name")
+    def validate_name(cls, v: str) -> str:
+        reveal_type(cls)  # revealed: Self@validate_name
+        reveal_type(v)  # revealed: str
+        return v.strip()
+
+    @computed_field
+    @property
+    def shout(self) -> str:
+        return self.name.upper()
+
+reveal_type(User(name="a").shout)  # revealed: str
+```
+
+## Model methods
+
+`model_copy` and `model_construct` return the model type precisely, on both the instance and the
+class. `model_dump_json` returns `str`.
+
+```py
+from pydantic import BaseModel
+
+class Rect(BaseModel):
+    w: int
+    h: int
+
+r = Rect(w=2, h=3)
+reveal_type(r.model_copy())  # revealed: Rect
+reveal_type(r.model_construct(w=1, h=1))  # revealed: Rect
+reveal_type(Rect.model_construct(w=1, h=1))  # revealed: Rect
+reveal_type(r.model_dump_json())  # revealed: str
+# `model_dump` is not modelled precisely yet — it falls back to `Unknown` rather than
+# `dict[str, Any]`. This is sound (Unknown is assignable everywhere) but imprecise; see
+# `docs/basedpython/frameworks/pydantic.md`.
+reveal_type(r.model_dump())  # revealed: Unknown
 ```
 
 ## First-party modules named `pydantic`

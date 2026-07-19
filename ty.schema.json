@@ -347,29 +347,6 @@
             }
           ]
         },
-<<<<<<< HEAD
-        "ambiguous-context-argument": {
-          "title": "detects calls whose `context` parameter matches several context values",
-          "description": "## What it does\nChecks for calls where several `context` declarations in the same scope\ncould fill one `context` parameter.\n\n## Why is this bad?\nThe implicit argument is chosen by assignability, not by name. When two\ndeclarations in the winning scope both match, either choice would be\narbitrary — the call must pass the argument explicitly (or the extra\ndeclaration must move to another scope).\n\n## Examples\n```python\ndef f(a: int, context b: str): ...\n\ncontext s1 = \"hello\"\ncontext s2 = \"world\"\nf(1)          # error: `s1` and `s2` both match\nf(1, b=s1)    # ok — explicit\n```",
-          "default": "error",
-          "oneOf": [
-            {
-              "$ref": "#/definitions/Level"
-            }
-          ]
-        },
-        "ambiguous-extension-member": {
-          "title": "detects attribute accesses supplied by more than one extension",
-          "description": "## What it does\nChecks for attribute accesses that resolve to a member supplied by more\nthan one applicable basedpython extension.\n\n## Why is this bad?\nWhen two extensions in scope both add the same member to the receiver's\ntype, the access is ambiguous — which implementation runs would depend\non arbitrary ordering. Constrain one of the extensions (or drop the\nimport that brings the second into scope) so exactly one applies.\n\n## Example\n\n```by\nextension list:\n    def second(self) -> Element: ...\n\nextension list:\n    def second(self) -> Element: ...\n\n[1, 2].second()  # error: ambiguous extension member\n```",
-          "default": "error",
-          "oneOf": [
-            {
-              "$ref": "#/definitions/Level"
-            }
-          ]
-        },
-=======
->>>>>>> 58906528b6 ([ty] implement django support)
         "ambiguous-protocol-member": {
           "title": "detects protocol classes with ambiguous interfaces",
           "description": "## What it does\n\nChecks for protocol classes with members that will lead to ambiguous interfaces.\n\n## Why is this bad?\n\nAssigning to an undeclared variable in a protocol class, or to an undeclared attribute\nthrough a protocol method's `self` or `cls` receiver, leads to an ambiguous interface\nwhich may lead to the type checker inferring unexpected things. It's recommended to\nensure that all members of a protocol class are explicitly declared.\n\n## Examples\n\n```py\nfrom typing import ClassVar, Protocol\n\n\nclass BaseProto(Protocol):\n    a: int  # fine (explicitly declared as `int`)\n    instance_member: str\n    class_member: ClassVar[str]\n\n    # fine: a method definition using `def` is considered a declaration\n    def method_member(self) -> int: ...\n\n    def method(self) -> None:\n        self.instance_member = \"value\"  # fine (declared in the class body)\n        self.implicit = \"value\"  # error: [ambiguous-protocol-member]\n\n    @classmethod\n    def class_method(cls) -> None:\n        cls.class_member = \"value\"  # fine (declared in the class body)\n        cls.implicit_class = \"value\"  # error: [ambiguous-protocol-member]\n\n    # no explicit declaration, leading to ambiguity\n    c = \"some variable\"  # error\n    # no explicit declaration, leading to ambiguity\n    b = method_member  # error\n\n    # This creates implicit assignments of `d` and `e` in the protocol class body.\n    # Were they really meant to be considered protocol members?\n    # error: \"`d` is not declared as a protocol member\"\n    # error: \"`e` is not declared as a protocol member\"\n    for d, e in enumerate(range(42)):\n        pass\n\n\nclass SubProto(BaseProto, Protocol):\n    a = 42  # fine (declared in superclass)\n```",
@@ -790,15 +767,9 @@
             }
           ]
         },
-<<<<<<< HEAD
-        "invalid-extension": {
-          "title": "detects invalid basedpython extension declarations",
-          "description": "## What it does\nChecks for invalid basedpython `extension` declarations: an extended\nname that does not resolve to a class, a bracket type parameter the\nextended type does not declare, or a member that would add stored state.\n\n## Why is this bad?\nAn extension adds behaviour to an existing type. Its name must reference\na class declaration, its bracket parameters reuse (and constrain) that\nclass's own type parameters by name, and its members are resolved at\ntranspile time with nowhere to store new fields on already-constructed\ninstances.\n\n## Example\n\n```by\nextension list[T: int]:  # error: `list` declares no type parameter `T`\n    def total(self) -> int:\n        return sum(self)\n```",
-=======
         "invalid-field-lookup": {
           "title": "detects invalid django model field lookups and field-name arguments",
-          "description": "## What it does\nChecks django ORM lookups, `create()` keywords, and field-name string\narguments (`order_by`, `only`, …) against the model's fields.\n\n## Why is this bad?\nThe queryset API accepts `**kwargs`, so a mistyped field name or an\noperand of the wrong type for a lookup is silently accepted by the\nstubs and only fails at runtime.\n\n## Example\n\n```py\nAuthor.objects.filter(nam=\"x\")            # error: no field `nam`\nAuthor.objects.filter(name__startswith=1) # error: lookup wants `str`\n```",
->>>>>>> 58906528b6 ([ty] implement django support)
+          "description": "## What it does\nChecks django ORM lookups, `create()` keywords, and field-name string\narguments (`order_by`, `only`, …) against the model's fields.\n\n## Why is this bad?\nThe queryset API accepts `**kwargs`, so a mistyped field name or an\noperand of the wrong type for a lookup is silently accepted by the\nstubs and only fails at runtime.\n\n## Example\n\n```py\nAuthor.objects.filter(nam=\"x\")            # error: no field `name`\nAuthor.objects.filter(name__startswith=1) # error: lookup wants `str`\n```",
           "default": "error",
           "oneOf": [
             {
@@ -1499,6 +1470,16 @@
         "type-assertion-failure": {
           "title": "detects failed type assertions",
           "description": "## What it does\n\nChecks for `assert_type()` and `assert_never()` calls where the actual type\nis not the same as the asserted type.\n\n## Why is this bad?\n\n`assert_type()` allows confirming the inferred type of a certain value.\n\n## Example\n\n```toml\n[environment]\npython-version = \"3.11\"\n```\n\n```python\nfrom typing import assert_type\n\n\ndef _(x: int):\n    assert_type(x, int)  # fine\n    # Actual type does not match asserted type\n    assert_type(x, str)  # error\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unannotated-model-field": {
+          "title": "detects a pydantic model field specifier without a type annotation",
+          "description": "## What it does\nChecks for a pydantic model field assigned a field specifier\n(`Field(...)`) without a type annotation.\n\n## Why is this bad?\nPydantic requires every field to be annotated. An unannotated\n`name = Field(...)` is not collected as a field and raises\n`PydanticUserError` when the model class is created.\n\n## Example\n\n```py\nfrom pydantic import BaseModel, Field\n\nclass User(BaseModel):\n    name = Field(default=\"\")  # error: needs a type annotation\n```",
           "default": "error",
           "oneOf": [
             {

@@ -52,7 +52,7 @@ use crate::types::class::{
 };
 use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
-use crate::types::dedicated::django;
+use crate::types::dedicated::{django, pydantic};
 use crate::types::diagnostic::{
     self, AMBIGUOUS_EXTENSION_MEMBER, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS,
     CYCLIC_TYPE_ALIAS_DEFINITION, ERASED_CAST_ARGUMENT, ERASED_TYPE_CHECK, FINAL_ON_VARIABLE,
@@ -61,9 +61,9 @@ use crate::types::diagnostic::{
     INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE,
     INVALID_TYPE_FORM, INVALID_TYPE_GUARD_CALL, INVALID_TYPE_VARIABLE_BOUND,
     INVALID_TYPE_VARIABLE_CONSTRAINTS, NON_OVERLAPPING_CAST, OPTIONAL_OBJECT_CONVERSION,
-    POSSIBLY_MISSING_IMPLICIT_CALL,
-    POSSIBLY_MISSING_SUBMODULE, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL,
-    UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
+    POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE, UNANNOTATED_MODEL_FIELD,
+    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
+    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
     hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
     report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
@@ -3237,6 +3237,52 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.infer_assignment_definition_impl(assignment, definition, add.type_context());
         self.store_expression_type(target, target_ty);
         add.insert(self, target_ty);
+        self.check_unannotated_model_field(target, assignment.value(self.module()));
+    }
+
+    /// Pydantic requires every field to be annotated. An unannotated class-body
+    /// assignment of a field specifier (`name = Field(...)`) is not collected as
+    /// a field and raises `PydanticUserError` when the model class is created, so
+    /// report it. (Dataclasses tolerate this — it becomes a plain class
+    /// attribute — so the check is gated to pydantic models.)
+    fn check_unannotated_model_field(&mut self, target: &ast::Expr, value: &ast::Expr) {
+        let ast::Expr::Name(name) = target else {
+            return;
+        };
+        // the r.h.s. must be a call to pydantic's `Field` specifier. (Without an
+        // annotation the field-specifier evaluation does not run, so the call's
+        // inferred type is just its default — detect it by the callee instead.)
+        let ast::Expr::Call(call) = value else {
+            return;
+        };
+        let is_pydantic_field = self
+            .try_expression_type(&call.func)
+            .and_then(Type::as_function_literal)
+            .and_then(|function| function.known(self.db()))
+            .is_some_and(|known| known == KnownFunction::PydanticField);
+        if !is_pydantic_field {
+            return;
+        }
+        let db = self.db();
+        let enclosing = self.index.scope(self.scope().file_scope_id(db));
+        let Some(class_node) = enclosing.node().as_class() else {
+            return;
+        };
+        let class_definition = self.index.expect_single_definition(class_node);
+        let Some(class_literal) =
+            original_class_type(db, class_definition).and_then(ClassLiteral::as_static)
+        else {
+            return;
+        };
+        if !pydantic::is_model(db, class_literal) {
+            return;
+        }
+        if let Some(builder) = self.context.report_lint(&UNANNOTATED_MODEL_FIELD, target) {
+            builder.into_diagnostic(format_args!(
+                "Field `{}` needs a type annotation to become a pydantic model field",
+                name.id
+            ));
+        }
     }
 
     fn stub_placeholder_binding_type(&self, value: &ast::Expr) -> Option<Type<'db>> {
@@ -4154,10 +4200,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
         }
 
+        // PEP 681 lets a field specifier appear in the annotation's `Annotated`
+        // metadata (`x: Annotated[int, Field(default=0)]`), so recognize
+        // field-specifier calls while inferring the annotation, exactly as the
+        // r.h.s. value below does. Only populated inside a dataclass-like class
+        // body; cleared immediately after so it does not leak into the value.
+        self.setup_dataclass_field_specifiers();
         let mut declared = self.infer_annotation_expression_allow_pep_613(
             annotation,
             DeferredExpressionState::from(self.defer_annotations()),
         );
+        self.dataclass_field_specifiers.clear();
 
         // basedpython: a valueless `let x: T` (declaration with no initializer)
         // is read-only in every scope, matching a read-only property. the

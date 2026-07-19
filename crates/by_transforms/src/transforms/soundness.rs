@@ -442,6 +442,10 @@ impl<'ast> Visitor<'ast> for Soundness<'_> {
                 if self.positions.assignments
                     && let Some(value) = &ann.value
                     && self.value_needs_context_target(value)
+                    // a field-specifier RHS (`a: int = Field()`) is modelled as
+                    // the field type but is a descriptor object at runtime, so a
+                    // soundness check against the annotation would always fail
+                    && !self.types.is_field_specifier(value)
                     && let Some(plan) = self.check_plan(&ann.annotation)
                 {
                     self.wrap_check(value.range(), &plan);
@@ -612,6 +616,21 @@ mod tests {
             "got:\n{out}"
         );
         assert!(out.contains("def _soundness_check"), "got:\n{out}");
+    }
+
+    #[test]
+    fn field_specifier_assignment_not_checked() {
+        // a field-specifier RHS (`dataclasses.field()`, `pydantic.Field()`) is
+        // modelled as the field type but is a descriptor object at runtime, so a
+        // soundness check against the annotation would always fail
+        let out = check(
+            "from dataclasses import dataclass, field\n@dataclass\nclass A:\n    a: int = field()\n",
+        );
+        assert!(
+            !out.contains("_soundness_check"),
+            "field specifier must not be soundness-wrapped, got:\n{out}"
+        );
+        assert!(out.contains("a: int = field()"), "got:\n{out}");
     }
 
     #[test]
