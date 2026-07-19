@@ -754,9 +754,33 @@ jobs:
 
       - name: Fail on ecosystem errors
         run: |
-          if grep -q "project error" ecosystem-result; then
-            exit 1
+          if ! grep -q "project error" ecosystem-result; then
+            echo "no ecosystem project errors"
+            exit 0
           fi
+
+          # a project error is only a `grep` hit in the bare step otherwise, so
+          # the maintainer can't tell a transient fork-runner `No such file or
+          # directory` (see the parallelism note above) from a real regression
+          # without downloading the artifact. surface the errored projects and
+          # their messages straight into the step log.
+          projects=$(grep -oE '">[^<]+</a> \(error\)' ecosystem-result \
+            | sed -E 's/">([^<]+)<\/a> \(error\)/\1/' | paste -sd', ' -)
+
+          echo "::group::ecosystem project errors (${projects:-unknown})"
+          grep -F "project error" ecosystem-result || true
+          echo
+          # print each errored project's section: its `(error)` summary line
+          # through the closing </details>, which brackets the message body
+          awk '
+            /\(error\)<\/summary>/ { show = 1 }
+            show { print }
+            /<\/details>/ && show { show = 0; print "" }
+          ' ecosystem-result
+          echo "::endgroup::"
+
+          echo "::error title=ecosystem project errors::${projects:-see log} — full report in the ecosystem-result artifact"
+          exit 1
 
   fuzz-ty:
     name: "Fuzz for new ty panics"
