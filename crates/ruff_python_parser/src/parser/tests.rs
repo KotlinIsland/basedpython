@@ -75,6 +75,30 @@ fn basedpython_valueless_typed_let_parses_cleanly() {
 }
 
 #[test]
+fn basedpython_valueless_untyped_let_parses_cleanly() {
+    // a bare `let x` with neither type nor initializer is an uninitialized
+    // declaration; it must parse without error and produce an `AnnAssign` with
+    // no value (the `__let__` marker as a bare annotation)
+    let parsed = parse(
+        "let x\nx = 1\n",
+        ParseOptions::from(Mode::Module).with_basedpython(true),
+    )
+    .expect("valueless untyped `let` should parse");
+    assert!(
+        parsed.errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        parsed.errors()
+    );
+    let ruff_python_ast::Mod::Module(module) = parsed.syntax() else {
+        panic!("expected a module");
+    };
+    let [ruff_python_ast::Stmt::AnnAssign(assign), _] = module.body.as_slice() else {
+        panic!("expected an AnnAssign followed by an assignment");
+    };
+    assert!(assign.value.is_none(), "valueless `let` must have no value");
+}
+
+#[test]
 fn basedpython_decorated_protocol_keyword() {
     // a decorator before the `protocol` introducer (e.g. `@runtime_checkable
     // protocol P:`) must route through the protocol parser, carrying the

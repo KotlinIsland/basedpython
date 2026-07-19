@@ -23,8 +23,10 @@ class E:
     final async def g(self) -> int
 
 
-# `let` declarations, including the valueless read-only form `let x: T`
+# `let` declarations, including the valueless read-only form `let x: T` and the
+# bare uninitialized form `let x`
 let count: int
+let total
 let name: str = "alice"
 
 

@@ -104,3 +104,16 @@ class Sub(Base):
     name: str  # a read-only `let` (property-like) may be overridden
     tag: str  # error: [override-of-final-variable]
 ```
+
+## a bare, valueless `let x`
+
+A `let x` with neither a type nor an initializer declares an uninitialized `Final`: the type is
+inferred from the single later assignment, and a second assignment is rejected.
+
+```by
+let a
+a = 1
+reveal_type(a)  # revealed: 1
+
+a = 2  # error: [invalid-assignment]
+```
