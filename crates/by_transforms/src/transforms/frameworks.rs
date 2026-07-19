@@ -306,4 +306,76 @@ mod tests {
         )]);
         transpile_result(&db, "/proj/models.by").expect("explicit __init__ should transpile");
     }
+
+    // ---- conformance-matrix pins (compat cells marked ✓): the lowering is
+    // already runtime-correct inside a pydantic model, and these tests pin
+    // that it stays so ----
+
+    #[test]
+    fn generic_pydantic_model_never_reified() {
+        // the reified-generics pass wraps *functions* whose type parameters
+        // reach a value position — it never visits a class, so a generic model
+        // is never given a `@generic` wrapper. pydantic's own
+        // `__class_getitem__` reifies `Box[int](...)` natively
+        let db = pydantic_db(&[(
+            "/proj/models.by",
+            "from pydantic import BaseModel\nclass Box[T](BaseModel):\n    value: T\n",
+        )]);
+        let file = system_path_to_file(&db, "/proj/models.by").expect("file not in db");
+        let config = Config {
+            min_version: ruff_python_ast::PythonVersion::PY313,
+            ..Config::test_default()
+        };
+        let out = transpile_typed(&db, file, &config).expect("generic model should transpile");
+        assert!(
+            !out.contains("@generic"),
+            "a model class must never be wrapped with `@generic`, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn class_body_field_default_untouched_in_pydantic_model() {
+        // the mutable-defaults transform rewrites *function* argument defaults;
+        // a class-body field default is left alone (pydantic deep-copies field
+        // defaults itself). pin that the `= []` survives verbatim
+        let db = pydantic_db(&[(
+            "/proj/models.by",
+            "from pydantic import BaseModel\nclass Bag(BaseModel):\n    items: list[int] = []\n",
+        )]);
+        let out = transpile_result(&db, "/proj/models.by").expect("model should transpile");
+        assert!(
+            out.contains("items: list[int] = []"),
+            "class-body field default must survive untouched, got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn soundness_guards_in_pydantic_model_methods() {
+        // `Config::test_default()` disables soundness; opt in to pin that the
+        // guard lands inside the method body while the class structure and
+        // field declarations stay untouched (conformance matrix: soundness ✓)
+        let db = pydantic_db(&[(
+            "/proj/models.by",
+            "from pydantic import BaseModel\n\nclass User(BaseModel):\n    name: str\n\n    def greet(self, prefix: str) -> str:\n        return prefix + self.name\n",
+        )]);
+        let file = system_path_to_file(&db, "/proj/models.by").expect("file not in db");
+        let config = Config {
+            lazy_imports: false,
+            soundness: crate::config::SoundnessPositions::all(),
+            ..Config::default()
+        };
+        let out = transpile_typed(&db, file, &config).expect("model should transpile");
+        assert!(
+            out.contains("class User(BaseModel):"),
+            "class structure should survive, got:\n{out}"
+        );
+        assert!(
+            out.contains("name: str"),
+            "field declaration should survive, got:\n{out}"
+        );
+        assert!(
+            out.contains("_soundness_check(prefix, str)"),
+            "parameter guard should land in the method body, got:\n{out}"
+        );
+    }
 }

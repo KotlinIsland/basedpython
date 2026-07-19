@@ -135,6 +135,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
     registry.register_lint(&MISSING_FRAMEWORK_STUBS);
     registry.register_lint(&INVALID_FIELD_LOOKUP);
+    registry.register_lint(&UNANNOTATED_MODEL_FIELD);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&NON_OVERLAPPING_CAST);
     registry.register_lint(&OPTIONAL_OBJECT_CONVERSION);
@@ -1033,11 +1034,36 @@ declare_lint! {
     /// ## Example
     ///
     /// ```py
-    /// Author.objects.filter(nam="x")            # error: no field `nam`
+    /// Author.objects.filter(nam="x")            # error: no field `name`
     /// Author.objects.filter(name__startswith=1) # error: lookup wants `str`
     /// ```
     pub(crate) static INVALID_FIELD_LOOKUP = {
         summary: "detects invalid django model field lookups and field-name arguments",
+        status: LintStatus::stable("0.0.1-alpha.4"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a pydantic model field assigned a field specifier
+    /// (`Field(...)`) without a type annotation.
+    ///
+    /// ## Why is this bad?
+    /// Pydantic requires every field to be annotated. An unannotated
+    /// `name = Field(...)` is not collected as a field and raises
+    /// `PydanticUserError` when the model class is created.
+    ///
+    /// ## Example
+    ///
+    /// ```py
+    /// from pydantic import BaseModel, Field
+    ///
+    /// class User(BaseModel):
+    ///     name = Field(default="")  # error: needs a type annotation
+    /// ```
+    pub(crate) static UNANNOTATED_MODEL_FIELD = {
+        summary: "detects a pydantic model field specifier without a type annotation",
         status: LintStatus::stable("0.0.1-alpha.4"),
         default_level: Level::Error,
     }

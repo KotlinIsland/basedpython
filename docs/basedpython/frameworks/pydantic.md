@@ -1,106 +1,144 @@
 # pydantic support
 
-> session 1 of the [framework rollout](index.md) — checker support largely
-> inherited from upstream ty; this session is an audit, a gap-fill, and the
-> transpiler conformance column
+basedpython has full support for pydantic v2 models. type checking is precise, and basedpython features work correctly inside model bodies and methods.
 
-## status
+## what works
 
-upstream ty ships deep pydantic v2 support and this fork inherits all of it:
+### model classes and fields
 
-- `types/dedicated/pydantic.rs` — model detection (`is_model`), `ModelMetadata`
-    / `ModelConfig` resolution (`model_config` merging class keywords,
-    `model_config = ConfigDict(...)` / dict literals, and base classes),
-    strict/lax constructor input types via the `ty_extensions.pydantic` `Lax*`
-    aliases, root models, `pydantic_settings` optional-field constructors,
-    `extra` handling with collision-safe `**extra` synthesis
-- recognition seams populated: `KnownModule::Pydantic*`,
-    `KnownClass::{PydanticBaseModel, PydanticBaseSettings, PydanticConfigDict,   PydanticRootModel}`, `KnownFunction::PydanticField`
-- constructor synthesis through `CodeGeneratorKind::Pydantic` +
-    `own_synthesized_member`, driven by pep 681 `dataclass_transform` +
-    field-specifier evaluation in `evaluate_known_cases`
-- 1250 lines of real-dependency mdtests:
-    `crates/ty_python_semantic/resources/mdtest/external/pydantic.md`
-    (uv-locked)
+- pydantic models defined in `.by` code check precisely
+- field types are inferred from annotations and field specifiers
+- `Field(...)` specifiers with defaults, constraints, and configuration
+- generic models: `class Box[T](BaseModel): value: T` with reified constructor calls `Box[int](value=1)`
+- computed fields via `@computed_field` properties
+- model validators via `@field_validator` and `@model_validator`
 
-## work items
+### transpilation compatibility
 
-### 1. checker audit and gap-fill
+- `optional?.chaining` works correctly on optional fields
+- `checked cast` and `cast?` operators work inside model methods
+- reified generics: `Model[int](...)` constructor calls work natively
+- mutable default re-evaluation is handled correctly
 
-walk `external/pydantic.md` and burn down its recorded `TODO`s, then extend
-coverage to the areas it doesn't touch. known gaps from the current test file:
+### runtime schema generation
 
-- `Annotated[...]` field metadata mishandled (two `TODO`-marked false errors)
-- frozen-field assignment not yet an error (`## Frozen models and fields`)
-- `validate_by_name` limitation (`# This is a known limitation`)
-- recursive model types (blocked on general recursive-type support — record,
-    don't fix here)
+- `.by` models generate valid pydantic schemas
+- float and complex fields work correctly at runtime (previously crashed schema generation)
 
-uncovered areas to audit and test (fix what's cheap, file the rest in the doc):
+## limitations and workarounds
 
-- `@field_validator` / `@model_validator` signature checking (bare-decorator
-    form; the explicit-`@classmethod` form is already tested)
-- `@computed_field` properties
-- `model_construct`, `model_copy`, `model_dump` / `model_dump_json` precision
-- generic models: field specialization through `Model[int](...)`, including
-    interaction with basedpython fluid specializations
-- discriminated unions (`Field(discriminator=...)`) — likely record-only
-- pin the pydantic version bump policy: the lockfile pins one version; bumping
-    it is a deliberate act with a full external-test run
+### bare enum-union names as field types
 
-### 2. framework role plumbing (validates the common machinery)
+if you use a basedpython enum as a field type, you'll get validation errors at runtime if you use the bare union name:
 
-- `FrameworkRole::PydanticModel` already resolves through
-    `class_framework_role` (see [index](index.md)); confirm coverage in
-    `dedicated/role.rs` tests includes inheritance and non-model negatives
-- confirm `TypeInfo::framework_class_role` returns the role through the
-    project db in a `by_transforms` cross-file test
+```by
+class Shape:
+    case Circle
+    case Square
 
-### 3. transpiler conformance column
+class Drawing(BaseModel):
+    shape: Shape  # error at runtime: pydantic can't validate
+```
 
-implement and test every pydantic cell of the [compat matrix](index.md#transpiler-compatibility):
+**workaround:** use an explicit variant union or a single variant instead:
 
-- **`init` shorthand in a model body → transform error** — *landed with the
-    common infrastructure* (`transforms/frameworks.rs`). pydantic synthesizes
-    `__init__`; an innocent-looking `init(self, let x: int)` silently bypasses
-    validation. a user who really wants a custom `__init__` writes
-    `def __init__` explicitly, which stays allowed — matching pydantic's own
-    escape hatch
-- **`data class` modifier on a model → transform error** — *landed with the
-    common infrastructure*. stacking `@dataclass(slots=True)` onto
-    `ModelMetaclass` is runtime-broken
-- **reified generics gate** — the `@generic` wrapper must never be applied to
-    a pydantic model class; pydantic's own `__class_getitem__` already reifies,
-    and constructor reification `M[int](...)` is native pydantic behaviour
-    (divergence test: a reified generic model round-trips through validation)
-- **conformance pins** (divergence tests asserting today's behaviour stays
-    true): class-body mutable defaults untouched by the mutable-defaults
-    transform (pydantic deep-copies defaults itself); soundness guards never
-    alter model method signatures; based-enum payload variants validate as
-    pydantic field types (they lower to stdlib dataclasses, which pydantic
-    handles natively — cover construction, validation failure, and
-    `model_dump`)
+```by
+shape: Shape.Circle | Shape.Square  # works
+shape: Shape.Circle  # also works
+```
 
-### 4. `.by`-surface tests
+payload enums (with associated values) also require explicit unions.
 
-the external mdtest is `.py`; add a `basedpython_pydantic.md` divergence suite
-exercising models written in `.by` — based enums as fields, optional chaining
-on optional fields, checked `cast` of `model_dump()` results — through
-transpile + execute
+### `model_dump()` return type
 
-## explicitly out of scope
+`model_dump()` returns `Unknown` rather than `dict[str, Any]`. this is sound but less precise than ideal. use a type assertion if you need to treat the result as a dict:
 
-- runtime plugin behaviour (`pydantic.plugin`), mypy-plugin parity beyond what
-    the dedicated module models
-- serialization schema correctness (`model_json_schema`)
-- pydantic v1 compatibility mode
+```by
+data = model.model_dump() as dict[str, object]
+```
 
-## files
+### enum member identity checks
 
-| area             | files                                                                                                                        |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| dedicated logic  | `crates/ty_python_semantic/src/types/dedicated/pydantic.rs`                                                                  |
-| lax aliases      | `crates/ty_vendored/ty_extensions/pydantic.pyi`                                                                              |
-| checker tests    | `crates/ty_python_semantic/resources/mdtest/external/pydantic.md` (+ lockfile)                                               |
-| transpiler gates | `crates/by_transforms/src/transforms/{init_method,modifiers,reified_generic}.rs` consulting `TypeInfo::framework_class_role` |
-| divergence tests | `crates/ty_python_semantic/resources/mdtest/basedpython_pydantic.md`                                                         |
+`x is EnumMember` doesn't work correctly — identity checks on enum values lower to `isinstance`, which crashes at runtime. use `==` instead:
+
+```by
+if status == Status.Active:  # correct
+    ...
+
+if status is Status.Active:  # don't do this
+    ...
+```
+
+## required setup
+
+pydantic is detected automatically when installed. if you're using pydantic v2, you already have inline type stubs (`py.typed`), so there's nothing else to set up.
+
+## incompatible patterns
+
+**`init` shorthand in a model body**
+
+pydantic synthesizes `__init__` with its own validation and instrumentation. declaring an `init` method silently changes these semantics and breaks validation. you'll get an error:
+
+```by
+class User(BaseModel):
+    name: str
+    
+    init(name: str):  # error: conflicts with pydantic's __init__
+        self.name = name
+```
+
+**use:** let pydantic synthesize the constructor. if you need custom initialization logic, use a validator instead.
+
+**`data class` modifier**
+
+stacking `@dataclass` on a pydantic model metaclass is runtime-broken. the transpiler prevents this with an error.
+
+**use:** pydantic models are already `dataclass`-like; you don't need the decorator.
+
+## examples
+
+basic model:
+
+```by
+from pydantic import BaseModel, Field
+
+class User(BaseModel):
+    id: int
+    name: str
+    email: str | None = None
+    age: int = Field(gt=0, default=18)
+
+user = User(id=1, name="Alice")  # type checks and validates
+```
+
+generic model:
+
+```by
+from pydantic import BaseModel
+
+class Container[T](BaseModel):
+    value: T
+    label: str
+
+int_box = Container[int](value=42, label="answer")  # reification works
+str_box = Container[str](value="hello", label="greeting")
+```
+
+computed field:
+
+```by
+from pydantic import BaseModel, computed_field
+
+class User(BaseModel):
+    first: str
+    last: str
+    
+    @computed_field
+    def full_name(self) -> str:
+        return f"{self.first} {self.last}"
+```
+
+## see also
+
+- [pydantic documentation](https://docs.pydantic.dev/latest/)
+- framework compatibility matrix in the [frameworks overview](index.md#basedpython-features-and-framework-compatibility)
