@@ -1,12 +1,16 @@
 use ruff_python_ast as ast;
 use ruff_text_size::{Ranged, TextRange};
 use ty_module_resolver::{
-    ModuleName, ModuleNameResolutionError, ModuleResolveMode, resolve_module, search_paths,
+    KnownModule, Module, ModuleName, ModuleNameResolutionError, ModuleResolveMode, resolve_module,
+    search_paths,
 };
 
 use crate::{
     Program, TypeQualifiers, add_inferred_python_version_hint_to_diagnostic,
-    place::{DefinedPlace, Definedness, Place, PlaceAndQualifiers, TypeOrigin},
+    place::{
+        DefinedPlace, Definedness, Place, PlaceAndQualifiers, TypeOrigin,
+        basedpython_typing_added_in, basedpython_warnings_added_in, typing_extensions_symbol,
+    },
     types::{
         ModuleLiteralType, Type, TypeAndQualifiers,
         diagnostic::{
@@ -302,6 +306,30 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// basedpython: resolve a version-gated `typing`/`warnings` member from
+    /// `typing_extensions` when it is absent from the module at the target
+    /// Python version. Returns `None` for any other module or name, so ordinary
+    /// unresolved imports still report as usual.
+    fn basedpython_typing_import_redirect(
+        &self,
+        module: Module<'db>,
+        name: &str,
+    ) -> Option<PlaceAndQualifiers<'db>> {
+        let db = self.db();
+        let redirected = if module.is_known(db, KnownModule::Typing) {
+            basedpython_typing_added_in(name).is_some()
+        } else if module.is_known(db, KnownModule::Warnings) {
+            basedpython_warnings_added_in(name).is_some()
+        } else {
+            false
+        };
+        if !redirected {
+            return None;
+        }
+        let place = typing_extensions_symbol(db, name);
+        (!place.place.is_undefined()).then_some(place)
+    }
+
     pub(super) fn infer_import_from_definition(
         &mut self,
         import_from: &ast::StmtImportFrom,
@@ -367,6 +395,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         // First try loading the requested attribute from the module.
         if !skip_self_referential_member_lookup {
+            let mut member = module_literal.static_member(db, name);
+            // basedpython: version-gated `typing`/`warnings` members are always
+            // available. When the member is missing at the target Python version,
+            // fall back to `typing_extensions`, mirroring the transpiler's import
+            // redirect so the checker resolves what the emitted code will import.
+            if member.place.is_undefined()
+                && self.is_basedpython_file()
+                && let Some(redirected) = self.basedpython_typing_import_redirect(module, name)
+            {
+                member = redirected;
+            }
             if let PlaceAndQualifiers {
                 place:
                     Place::Defined(DefinedPlace {
@@ -376,7 +415,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         ..
                     }),
                 qualifiers,
-            } = module_literal.static_member(db, name)
+            } = member
             {
                 if &alias.name != "*" && boundness == Definedness::PossiblyUndefined {
                     // TODO: Consider loading _both_ the attribute and any submodule and unioning them

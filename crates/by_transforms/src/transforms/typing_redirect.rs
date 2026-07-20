@@ -4,7 +4,7 @@ use ruff_python_ast::{Stmt, StmtImportFrom};
 use ruff_text_size::Ranged;
 
 use crate::config::Config;
-use ruff_python_ast::PythonVersion;
+use ty_python_semantic::{basedpython_typing_added_in, basedpython_warnings_added_in};
 
 /// Rewrites `from typing import X` (and `from warnings import deprecated`) to
 /// `from typing_extensions import X` for names not yet in the stdlib at the
@@ -24,42 +24,6 @@ impl<'src> TypingRedirect<'src> {
         }
     }
 
-    /// Returns the Python version when `name` was added to `typing`.
-    /// Returns `None` if it has been in `typing` since before 3.10.
-    fn typing_added_in(name: &str) -> Option<PythonVersion> {
-        match name {
-            // 3.11
-            "Never"
-            | "assert_never"
-            | "LiteralString"
-            | "Required"
-            | "NotRequired"
-            | "Self"
-            | "Unpack"
-            | "TypeVarTuple"
-            | "dataclass_transform"
-            | "reveal_type"
-            | "assert_type"
-            | "get_overloads"
-            | "clear_overloads" => Some(PythonVersion::PY311),
-            // 3.12
-            "override" | "TypeAliasType" => Some(PythonVersion::PY312),
-            // 3.13
-            "TypeIs" | "ReadOnly" | "get_protocol_members" | "is_protocol" | "NoDefault" => {
-                Some(PythonVersion::PY313)
-            }
-            _ => None,
-        }
-    }
-
-    /// Returns the Python version when `name` was added to `warnings`.
-    fn warnings_added_in(name: &str) -> Option<PythonVersion> {
-        match name {
-            "deprecated" => Some(PythonVersion::PY313),
-            _ => None,
-        }
-    }
-
     fn process_import(&mut self, node: &StmtImportFrom) {
         // Skip relative imports and star imports.
         if node.level > 0 {
@@ -71,9 +35,9 @@ impl<'src> TypingRedirect<'src> {
         };
         let module_str = module.id.as_str();
 
-        let added_in: fn(&str) -> Option<PythonVersion> = match module_str {
-            "typing" => Self::typing_added_in,
-            "warnings" => Self::warnings_added_in,
+        let added_in = match module_str {
+            "typing" => basedpython_typing_added_in,
+            "warnings" => basedpython_warnings_added_in,
             _ => return,
         };
 
