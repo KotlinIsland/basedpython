@@ -1227,6 +1227,16 @@
             }
           ]
         },
+        "non-overlapping-cast": {
+          "title": "detects casts between non-overlapping types",
+          "description": "## What it does\nChecks for a `cast` whose value type is disjoint from the target type,\nso no value could ever belong to both.\n\n## Why is this bad?\nA cast between non-overlapping types can never succeed: a checked `cast`\nalways raises at runtime, and a safe `cast?` always yields `None`. The\ncast is almost certainly a mistake.\n\n## Examples\n```by\ndef f(a: object):\n    a cast int       # ok — `object` overlaps `int`\n    \"\" cast int      # warning: `str` and `int` are disjoint\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "not-iterable": {
           "title": "detects iteration over an object that is not iterable",
           "description": "## What it does\n\nChecks for objects that are not iterable but are used in a context that requires them to be.\n\n## Why is this bad?\n\nIterating over an object that is not iterable will raise a `TypeError` at runtime.\n\n## Examples\n\n```python\n# TypeError: 'int' object is not iterable\nfor i in 34:  # error\n    pass\n```",

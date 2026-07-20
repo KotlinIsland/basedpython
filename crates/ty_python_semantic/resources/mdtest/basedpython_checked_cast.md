@@ -35,9 +35,9 @@ def f(a: object):
 The value keeps its own type; only the result is `type | None`.
 
 ```by
-def f(a: str):
+def f(a: object):
     b = a cast? int
-    reveal_type(a)  # revealed: str
+    reveal_type(a)  # revealed: object
     reveal_type(b)  # revealed: int | None
 ```
 

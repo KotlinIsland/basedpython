@@ -131,6 +131,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SUBCLASS_OF_FINAL_CLASS);
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
+    registry.register_lint(&NON_OVERLAPPING_CAST);
     registry.register_lint(&MISSING_CONTEXT_ARGUMENT);
     registry.register_lint(&AMBIGUOUS_CONTEXT_ARGUMENT);
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
@@ -965,6 +966,29 @@ declare_lint! {
     /// ```
     pub(crate) static ERASED_CAST_ARGUMENT = {
         summary: "detects casts whose type arguments cannot be checked at runtime",
+        status: LintStatus::stable("0.0.61"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a `cast` whose value type is disjoint from the target type,
+    /// so no value could ever belong to both.
+    ///
+    /// ## Why is this bad?
+    /// A cast between non-overlapping types can never succeed: a checked `cast`
+    /// always raises at runtime, and a safe `cast?` always yields `None`. The
+    /// cast is almost certainly a mistake.
+    ///
+    /// ## Examples
+    /// ```by
+    /// def f(a: object):
+    ///     a cast int       # ok — `object` overlaps `int`
+    ///     "" cast int      # warning: `str` and `int` are disjoint
+    /// ```
+    pub(crate) static NON_OVERLAPPING_CAST = {
+        summary: "detects casts between non-overlapping types",
         status: LintStatus::stable("0.0.61"),
         default_level: Level::Warn,
     }
