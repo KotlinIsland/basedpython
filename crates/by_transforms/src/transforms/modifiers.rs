@@ -334,8 +334,9 @@ impl<'src> Modifiers<'src> {
                 && matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__let__" | "__final__"))
             {
                 let slice = s.slice.as_ref();
-                let pre_range =
-                    TextRange::new(node.annotation.range().start(), slice.range().start());
+                // start at the statement, not the marker, so any modifier prefix
+                // ahead of `let` (e.g. `override let a: T`) is erased too
+                let pre_range = TextRange::new(node.range().start(), slice.range().start());
                 self.needs_final_annotation = true;
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
                     format!("{name}: Final["),
@@ -394,7 +395,7 @@ impl<'src> Modifiers<'src> {
                     _ => {}
                 }
             }
-            ann @ Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__let__" | "__final__")) =>
+            Expr::Subscript(s) if matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__let__" | "__final__")) =>
             {
                 // typed: `let a: T = v` / `final a: T = v` — annotation is
                 // Subscript(__let__|__final__, T). callable transform visits only
@@ -403,7 +404,9 @@ impl<'src> Modifiers<'src> {
                 let is_final =
                     matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__final__");
                 let slice = s.slice.as_ref();
-                let pre_range = TextRange::new(ann.range().start(), slice.range().start());
+                // start at the statement, not the marker, so any modifier prefix
+                // ahead of `let` (e.g. `override let a: T = v`) is erased too
+                let pre_range = TextRange::new(node.range().start(), slice.range().start());
                 let post_range = TextRange::new(slice.range().end(), value.range().start());
                 if self.class_depth > 0 && !is_final {
                     // inside class: `a: T = v` (no Final wrapper; keep the type)
@@ -1176,6 +1179,36 @@ mod tests {
             indoc! {"
                 from typing import Final
                 a: Final = 1
+            "},
+        );
+    }
+
+    #[test]
+    fn modifier_chain_typed_let_decl_in_class() {
+        // `override let a: T = v` inside a class — the modifier prefix ahead of
+        // `let` must be erased along with the `let` keyword, leaving a plain
+        // annotated attribute. previously `override ` leaked into the output and
+        // re-parsing failed
+        check(
+            indoc! {"
+                class B:
+                    override let a: int = 2
+            "},
+            indoc! {"
+                class B:
+                    a: int = 2
+            "},
+        );
+    }
+
+    #[test]
+    fn modifier_chain_typed_let_decl_module_scope() {
+        // at module scope the same declaration keeps its `Final[T]` wrapper
+        check(
+            "override let a: int = 2\n",
+            indoc! {"
+                from typing import Final
+                a: Final[int] = 2
             "},
         );
     }
