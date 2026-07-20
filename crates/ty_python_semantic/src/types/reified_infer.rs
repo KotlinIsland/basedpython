@@ -434,12 +434,14 @@ pub(crate) fn classify_parametric_is<'db>(
         &target_args_ast,
         rhs_node,
     );
-    // a runtime `__orig_class__` probe is the last resort. it only works when
-    // the target's instances carry a matching attribute — a builtin collection
-    // or a protocol never does, so the test cannot be checked at runtime and
-    // becomes an error
+    // the runtime probe unwinds the value's `__orig_class__` and its class's
+    // generic bases across the mro, so a builtin-collection target is checkable
+    // after all: a concrete subclass that fixes the arguments (`class B(list[int])`)
+    // records `list[int]` in `__orig_bases__`. only a protocol stays an error —
+    // its `isinstance` raises unless `@runtime_checkable`, and even then sees no
+    // arguments, so no sound runtime residue exists
     if let ParametricIsPlan::Probe(_) = plan
-        && let Some(reason) = erased_target_reason(db, target_origin)
+        && let Some(reason @ ErasedTargetReason::Protocol) = erased_target_reason(db, target_origin)
     {
         return ParametricIsPlan::ErasedTarget(reason);
     }

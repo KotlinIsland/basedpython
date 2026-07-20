@@ -415,11 +415,18 @@ pub(crate) fn polyfill_preamble(
     let needs_module = needs_module || needs_attr;
     let mut out = String::new();
     if needs_module {
-        out.push_str("import importlib.util as _by_iu, sys as _by_sys\n");
+        out.push_str("import importlib as _by_il, importlib.util as _by_iu, sys as _by_sys\n");
         out.push_str("def _lazy_module(name):\n");
         out.push_str("    mod = _by_sys.modules.get(name)\n");
         out.push_str("    if mod is not None:\n");
         out.push_str("        return mod\n");
+        // a dotted submodule can't take the `LazyLoader` path: `find_spec`
+        // needs the parent package imported, and a frozen alias like
+        // `collections.abc` (-> `_collections_abc`) fails to re-execute under a
+        // lazy load. import it eagerly — laziness is still preserved at the
+        // attribute level, since `_LazyAttr` only calls this on first use
+        out.push_str("    if \".\" in name:\n");
+        out.push_str("        return _by_il.import_module(name)\n");
         out.push_str("    spec = _by_iu.find_spec(name)\n");
         // `find_spec` returns `None` when the module isn't installed; raise
         // a clean `ImportError` instead of letting the next line crash with

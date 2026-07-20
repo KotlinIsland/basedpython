@@ -1,10 +1,13 @@
 # basedpython: parametric type tests
 
 `x is C[args]` (keyword form) tests a value against a *specialization*. The test is resolved
-rust-style from static types wherever possible. When it can't be — the value's type is dynamic or
-erased — the last resort is a runtime probe of the value's `__orig_class__`. That works for a
-user-defined generic (whose instances carry it) but never for a builtin collection (whose instances
-erase their type arguments), so a probe against a builtin is an error.
+rust-style from static types wherever possible. When it can't be — the value's type is dynamic or a
+mixed union — the last resort is a runtime probe that unwinds the value: its reified
+`__orig_class__` (stamped on a user generic by `A[int](…)`) and every generic base declared across
+`type(value).__mro__` (`__orig_bases__`). A concrete subclass that fixes its arguments
+(`class B(list[int])`) is checkable this way, even against a builtin or abc target. A bare `list`
+records nothing and answers `False`; the narrowing is positive-only, so that `False` is sound. Only
+a protocol target has no runtime residue at all and stays an error.
 
 ## statically decided tests are silent
 
@@ -29,14 +32,50 @@ def g[T](x: list[T]) -> bool:
     return x is list[int]
 ```
 
-## a builtin union cannot be discriminated at runtime
+## a builtin union probes each value
 
-There is no sound runtime way to tell a `list[int]` from a `list[str]`: an empty list has no element
-to inspect, and a builtin's element type is erased. So a builtin union is an error, not a guess.
+A union of builtin specializations is probed, not rejected: the runtime unwinds each value's mro. A
+bare `list` in either arm records no arguments and answers `False` — no element-witness guessing.
 
 ```by
 def f(x: list[int] | list[str]) -> bool:
-    return x is list[int]  # error: [erased-type-check]
+    return x is list[int]
+```
+
+## a concrete subclass fixes the arguments
+
+A class that inherits from a specialization records it in `__orig_bases__`, so the probe recovers
+the arguments accurately — no heuristic, no element inspection. `A` fixes `Sequence[int]` directly;
+`B` fixes `list[int]`, and a `list[int]` is a `Sequence[int]`, so both hold at runtime.
+
+```by
+from collections.abc import Sequence
+
+class A(Sequence[int]):
+    def __getitem__(self, i): ...
+    def __len__(self): ...
+
+class B(list[int]): ...
+
+def f(x: object) -> bool:
+    return x is Sequence[int]
+
+assert f(A())
+assert f(B())
+assert not f(object())
+```
+
+The same subclass is checkable against the builtin origin it fixes, while a bare `list` — which
+records no arguments — answers `False`.
+
+```by
+class B(list[int]): ...
+
+def g(x: object) -> bool:
+    return x is list[int]
+
+assert g(B())
+assert not g([1, 2])
 ```
 
 ## variance is respected
@@ -120,32 +159,32 @@ def f(x: A[int] | A[str]) -> bool:
     return x is A[int]
 ```
 
-## a builtin target on a dynamic value is an error
+## a builtin target on a dynamic value probes
 
-A builtin collection built at runtime carries no record of its type arguments, so the probe can
-never succeed.
+A dynamic value against a builtin target probes: a subclass that fixes the arguments matches, a bare
+`list` answers `False`.
 
 ```by
 def f(x) -> bool:
-    return x is list[int]  # error: [erased-type-check]
+    return x is list[int]
 ```
 
-## an erased type parameter against a builtin is an error
+## a builtin target through a local probes
 
-The value's type reaches the test through a local, so no parameter annotation ties it to `T`; the
-value is a runtime `list`, which is erased.
+The value reaches the test through a local `list` literal. It probes just the same — a bare list
+records no arguments, so it answers `False`.
 
 ```by
 def f[T](x: T) -> bool:
     y = [x]
-    return y is list[int]  # error: [erased-type-check]
+    return y is list[int]
 ```
 
-## a wide static type against a builtin is an error
+## a wide static type against a builtin probes
 
 ```by
 def f(x: object) -> bool:
-    return x is list[int]  # error: [erased-type-check]
+    return x is list[int]
 ```
 
 ## a user-defined generic target is valid
@@ -292,7 +331,7 @@ def f(y: object) -> bool:
     return y is X
 ```
 
-## an alias to a builtin specialization is erased
+## an alias to a builtin specialization probes
 
 Just like the spelled-out form.
 
@@ -300,7 +339,7 @@ Just like the spelled-out form.
 X = list[int]
 
 def f(y: object) -> bool:
-    return y is X  # error: [erased-type-check]
+    return y is X
 ```
 
 ## a PEP 695 type alias targets its value
@@ -318,13 +357,13 @@ def f(y: object) -> bool:
     return y is X
 ```
 
-## a PEP 695 alias to a builtin is erased
+## a PEP 695 alias to a builtin probes
 
 ```by
 type X = list[int]
 
 def f(y: object) -> bool:
-    return y is X  # error: [erased-type-check]
+    return y is X
 ```
 
 ## a bare class name is an ordinary instance test
@@ -366,14 +405,29 @@ def f(a: object) -> bool:
     return a is int | None
 ```
 
-## an erased arm of a union is rejected
+## a builtin arm of a union probes
 
-An arm that can't be checked at runtime (a builtin specialization) is an error, exactly like a
-standalone erased target — it may not silently fold to `False` inside the disjunction.
+A builtin-specialization arm probes just like a standalone builtin target; the arm is
+`_parametric_is` in the disjunction, next to the bare-class arm's `isinstance`.
 
 ```by
 def f(a: object) -> bool:
-    return a is list[int] | int  # error: [erased-type-check]
+    return a is list[int] | int
+```
+
+## a protocol arm of a union is still rejected
+
+A protocol arm has no runtime residue, so it remains an error inside a disjunction — it may not
+silently fold to `False`.
+
+```by
+from typing import Protocol
+
+class P[T](Protocol):
+    def get(self) -> T: ...
+
+def f(a: object) -> bool:
+    return a is P[int] | int  # error: [erased-type-check]
 ```
 
 ## positive narrowing

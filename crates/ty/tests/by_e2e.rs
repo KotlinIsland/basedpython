@@ -1202,10 +1202,11 @@ def p(x) -> bool:
 }
 
 #[test]
-fn parametric_is_erased_builtin_is_a_check_error() {
-    // the acceptance case: `a is list[bool]` on an `object` can never be true
-    // (builtins erase their type arguments), so `by run` refuses to execute;
-    // `a is A[bool]` against a user generic is fine
+fn parametric_is_builtin_target_probes_at_runtime() {
+    // a builtin-specialization target is probed, not rejected: the runtime
+    // unwinds the value's mro. `A(True)` is not a `list`, so `is list[bool]`
+    // is `False`; its `__orig_class__` makes `is A[bool]` `True`. no
+    // erased-type-check error
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("main.by"),
@@ -1228,15 +1229,20 @@ x(A(True))
         .output()
         .expect("failed to spawn by");
 
-    assert!(!output.status.success(), "expected non-zero exit");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("erased-type-check"),
-        "stderr should carry the erased-type-check error:\n{stderr}"
+        output.status.success(),
+        "a builtin target now probes rather than erroring:\n{stderr}"
     );
     assert!(
-        !stderr.contains("A[bool]"),
-        "the user-generic test must not be diagnosed:\n{stderr}"
+        !stderr.contains("erased-type-check"),
+        "no erased-type-check for a builtin target:\n{stderr}"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "False\nTrue"
     );
 }
 
@@ -1378,10 +1384,11 @@ con(Con[object]())
 }
 
 #[test]
-fn parametric_is_empty_builtin_union_does_not_lie() {
-    // regression: an empty `list[int]` passed as `list[int] | list[str]` used
-    // to witness the (absent) first element and answer `False`. the test is
-    // now a check error instead of a silently-wrong result
+fn parametric_is_bare_builtin_answers_false_soundly() {
+    // a bare `list` (here an empty `list[int]`) records no arguments in its
+    // mro, so the probe answers `False`. that is sound, not a lie: the `is`
+    // test narrows only its positive branch, so a `False` never asserts the
+    // value is *not* a `list[int]`
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(
         dir.path().join("main.by"),
@@ -1401,15 +1408,58 @@ x(a)
         .output()
         .expect("failed to spawn by");
 
-    assert!(!output.status.success(), "expected non-zero exit");
     let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stderr.contains("erased-type-check"),
-        "the undecidable builtin union must be an error:\n{stderr}"
+        output.status.success(),
+        "a bare builtin now probes rather than erroring:\n{stderr}"
     );
     assert!(
-        !stdout.contains("False"),
-        "it must not print a wrong answer:\nstdout: {stdout}"
+        !stderr.contains("erased-type-check"),
+        "no erased-type-check for a builtin target:\n{stderr}"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "False");
+}
+
+/// the headline case: a concrete subclass fixes its type arguments in
+/// `__orig_bases__`, so the runtime probe confirms it — even across the
+/// `list` -> `Sequence` boundary, which pure `__mro__` introspection can't see
+/// but `issubclass` + the recorded arguments can
+#[test]
+fn parametric_is_concrete_subclass_confirms_across_origins() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+from collections.abc import Sequence
+
+class A(Sequence[int]):
+    def __getitem__(self, i): ...
+    def __len__(self): ...
+
+class B(list[int]): ...
+
+def f(x: object):
+    print(x is Sequence[int])
+
+f(A())
+f(B())
+print(object() is Sequence[int])
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "by run failed:\n{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "True\nTrue\nFalse"
     );
 }

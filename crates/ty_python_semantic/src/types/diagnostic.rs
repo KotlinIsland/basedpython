@@ -1365,27 +1365,33 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
-    /// Checks for parametric type tests (`x is list[int]`) against a builtin
-    /// collection whose instances erase their type arguments at runtime.
+    /// Checks for parametric type tests (`x is P[int]`) against a protocol,
+    /// which has no sound runtime residue.
     ///
     /// ## Why is this bad?
     /// A parametric `is` test is answered from static types wherever possible
-    /// (Rust-style). When it cannot be — the value's type is dynamic or
-    /// erased — the last resort is a runtime probe of the value's
-    /// `__orig_class__`. A builtin `list` / `dict` / `set` / `tuple` built at
-    /// runtime carries no such attribute, so the probe can never succeed: the
-    /// test is always `False`, whatever the value actually is.
+    /// (Rust-style). When it cannot be — the value's type is dynamic or a mixed
+    /// union — the last resort is a runtime probe that unwinds the value's
+    /// `__orig_class__` and its class's generic bases across the mro. A protocol
+    /// has nothing to unwind: an instance's `__orig_class__` names its concrete
+    /// class, never the protocol, and a structural `isinstance` check sees no
+    /// type arguments (and raises outright unless the protocol is
+    /// `@runtime_checkable`). So the test can never confirm the specialization.
     ///
     /// ## Example
     ///
     /// ```by
+    /// from typing import Protocol
+    /// class P[T](Protocol):
+    ///     def get(self) -> T: ...
+    ///
     /// def f(x):
-    ///     return x is list[int]  # error: builtin collections erase type arguments
+    ///     return x is P[int]  # error: a protocol records no specialization
     /// ```
     ///
-    /// Reify the type parameter (so the test compares the reified cell), or
-    /// test against a user-defined generic (whose instances carry
-    /// `__orig_class__`):
+    /// Reify the type parameter (so the test compares the reified cell), or test
+    /// against a concrete class that fixes the arguments (a user generic, or a
+    /// subclass whose `__orig_bases__` records the specialization):
     ///
     /// ```by
     /// def f[T](x: T):
@@ -1393,10 +1399,10 @@ declare_lint! {
     ///
     /// class A[T]: ...
     /// def g(x):
-    ///     return x is A[int]     # ok — probes `x.__orig_class__`
+    ///     return x is A[int]     # ok — unwinds `x`'s mro
     /// ```
     pub(crate) static ERASED_TYPE_CHECK = {
-        summary: "detects parametric type tests against a runtime-erased builtin",
+        summary: "detects parametric type tests against a protocol with no runtime residue",
         status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
     }
