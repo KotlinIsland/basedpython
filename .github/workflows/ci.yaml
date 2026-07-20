@@ -24,8 +24,6 @@ env:
   PACKAGE_NAME: ruff
   PYTHON_VERSION: "3.14"
   NEXTEST_PROFILE: ci
-  # Enable mdtests that require external dependencies
-  MDTEST_EXTERNAL: "1"
 
 jobs:
   determine_changes:
@@ -318,6 +316,13 @@ jobs:
     env:
       # Line-tables-only debug info: faster builds, backtraces still work.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      # Enable mdtests that require external dependencies. These `uv`-install real
+      # packages and type-check against them — platform-independent behaviour, so
+      # linux coverage suffices. Keeping them off the windows/macos jobs avoids the
+      # fork's slow runners blowing the nextest deadlock timeout on heavy stubs
+      # (django-stubs type-checks in ~8s locally but >180s unoptimised on the fork
+      # windows runner's slow file I/O).
+      MDTEST_EXTERNAL: "1"
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
