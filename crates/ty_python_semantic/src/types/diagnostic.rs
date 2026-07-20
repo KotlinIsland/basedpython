@@ -134,6 +134,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&NON_OVERLAPPING_CAST);
+    registry.register_lint(&OPTIONAL_OBJECT_CONVERSION);
     registry.register_lint(&MISSING_CONTEXT_ARGUMENT);
     registry.register_lint(&AMBIGUOUS_CONTEXT_ARGUMENT);
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
@@ -1047,6 +1048,38 @@ declare_lint! {
     /// ```
     pub(crate) static NON_OVERLAPPING_CAST = {
         summary: "detects casts between non-overlapping types",
+        status: LintStatus::stable("0.0.61"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for an optional value passed where `object` is expected, silently
+    /// discarding a layer of optionality.
+    ///
+    /// ## Why is this bad?
+    /// `object` swallows both the present value and `None`, so consuming an
+    /// optional as `object` loses the information that the value could be
+    /// absent. It is almost always unintended: either the value should be
+    /// unwrapped first with `!`, or the widening should be made explicit with
+    /// `cast object`.
+    ///
+    /// Assigning an optional to a declared `object` variable is *not* flagged —
+    /// the target narrows back to the optional type, so nothing is lost there.
+    /// The diagnostic surfaces at each use of the value as `object` instead.
+    ///
+    /// ## Examples
+    /// ```by
+    /// def sink(o: object): ...
+    ///
+    /// def f(x: int?):
+    ///     sink(x)             # warning: `int | None` widened to `object`
+    ///     sink(x!)            # ok — unwrapped first
+    ///     sink(x cast object) # ok — explicit
+    /// ```
+    pub(crate) static OPTIONAL_OBJECT_CONVERSION = {
+        summary: "detects an optional value implicitly widened to `object`",
         status: LintStatus::stable("0.0.61"),
         default_level: Level::Warn,
     }
