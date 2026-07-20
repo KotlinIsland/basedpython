@@ -30,3 +30,12 @@ final-status-level = "slow"
 [[profile.ci.overrides]]
 filter = 'test(clean_mdtest_blocks_run)'
 slow-timeout = { period = "60s", terminate-after = 3 }
+
+# External-dependency mdtests provision a real virtualenv with `uv` (a network
+# install of the framework plus its stubs) before type-checking, so on the fork's
+# slow runners a single heavy file (django, pydantic) approaches or exceeds the
+# aggressive 60s deadlock cutoff. Like the divergence harness, exempt them: the
+# 60s limit is a deadlock stop-gap, not a runtime budget for real installs.
+[[profile.ci.overrides]]
+filter = 'test(mdtest::external/)'
+slow-timeout = { period = "60s", terminate-after = 3 }
