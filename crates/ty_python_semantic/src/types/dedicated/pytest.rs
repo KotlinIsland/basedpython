@@ -1,0 +1,352 @@
+//! dedicated pytest support — the fixture injection registry
+//!
+//! pytest fills a test or fixture parameter by *name* from a scoped registry
+//! of fixture providers: the function's own module, then the `conftest.py`
+//! chain from its directory up to the project, then pytest's builtin
+//! fixtures. no ordinary checker validates this, so a parameter annotated
+//! with a type that drifts from the fixture's real type checks the body
+//! against a lie, and a renamed fixture leaves a request that only fails at
+//! collection time.
+//!
+//! detection is semantic: a function is a fixture because a decorator
+//! resolves to `_pytest.fixtures.fixture` (`KnownFunction::PytestFixture`),
+//! through any alias or re-export. the builtin fixtures are themselves
+//! `@fixture`-decorated functions in the `_pytest` package, so they resolve
+//! through the very same [`module_fixtures`] machinery — the builtin table
+//! only maps a name to the `_pytest` submodule that defines it, and the
+//! types come from those (typed) modules, so a pytest upgrade updates them
+//! for free. see `docs/basedpython/frameworks/pytest.md`
+
+use ruff_db::files::{File, FilePath, system_path_to_file};
+use ruff_db::parsed::parsed_module;
+use ruff_python_ast::name::Name;
+use ruff_python_ast::{self as ast};
+use rustc_hash::FxHashMap;
+use ty_module_resolver::{KnownModule, ModuleName, file_to_module, resolve_module_confident};
+use ty_python_core::definition::Definition;
+use ty_python_core::semantic_index;
+
+use crate::Db;
+use crate::place::known_module_symbol;
+use crate::types::{
+    FunctionType, KnownClass, KnownFunction, Type, definition_expression_type,
+    infer_definition_types,
+};
+
+/// a pytest fixture provider resolved for a requested parameter name.
+pub(in crate::types) struct ResolvedFixture<'db> {
+    /// the type a parameter bound to this fixture receives, with generator
+    /// unwrapping applied. `None` means the fixture's type could not be
+    /// derived (unannotated / gradual), so a parameter bound to it is not
+    /// checked
+    pub(in crate::types) provided_type: Option<Type<'db>>,
+    /// the fixture's defining function, for a secondary annotation pointing
+    /// at it. `None` for the special `request` fixture, which has no source
+    /// definition
+    pub(in crate::types) definition: Option<Definition<'db>>,
+}
+
+/// what a `@pytest.fixture` decorator declares about a function.
+struct FixtureMarker {
+    /// the fixture's name, when overridden by `@pytest.fixture(name="...")`
+    /// with a literal string; `None` otherwise (the function name is used)
+    name_override: Option<Name>,
+}
+
+/// `true` if `function` is decorated with `@pytest.fixture` (bare or called).
+pub(in crate::types) fn is_fixture_function<'db>(
+    db: &'db dyn Db,
+    function: FunctionType<'db>,
+) -> bool {
+    fixture_marker(db, function).is_some()
+}
+
+fn fixture_marker<'db>(db: &'db dyn Db, function: FunctionType<'db>) -> Option<FixtureMarker> {
+    let file = function.file(db);
+    let definition = function.definition(db);
+    let module = parsed_module(db, file).load(db);
+    let node = function.node(db, file, &module);
+    let types = infer_definition_types(db, definition);
+
+    node.decorator_list.iter().find_map(|decorator| {
+        match &decorator.expression {
+            // `@pytest.fixture(scope=..., name=...)`: the marker is the callee
+            ast::Expr::Call(call) => {
+                if !is_pytest_fixture(db, types.expression_type(&call.func)) {
+                    return None;
+                }
+                let name_override = call.arguments.find_keyword("name").and_then(|keyword| {
+                    definition_expression_type(db, definition, &keyword.value)
+                        .as_string_literal()
+                        .map(|literal| Name::new(literal.value(db)))
+                });
+                Some(FixtureMarker { name_override })
+            }
+            // `@pytest.fixture`
+            expression => {
+                is_pytest_fixture(db, types.expression_type(expression)).then_some(FixtureMarker {
+                    name_override: None,
+                })
+            }
+        }
+    })
+}
+
+fn is_pytest_fixture<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    matches!(
+        ty,
+        Type::FunctionLiteral(function) if function.known(db) == Some(KnownFunction::PytestFixture)
+    )
+}
+
+/// the fixtures a file defines at module level, keyed by fixture name.
+///
+/// this reads only decorator resolution and each candidate's signature — no
+/// body inference — so a consumer does not drag whole-module inference in.
+/// a later definition of the same name wins, mirroring python rebinding.
+#[salsa::tracked(returns(ref), heap_size = ruff_memory_usage::heap_size)]
+pub(in crate::types) fn module_fixtures(
+    db: &dyn Db,
+    file: File,
+) -> FxHashMap<Name, FunctionType<'_>> {
+    let parsed = parsed_module(db, file).load(db);
+    let index = semantic_index(db, file);
+
+    let mut fixtures = FxHashMap::default();
+    for statement in parsed.suite() {
+        let ast::Stmt::FunctionDef(function_node) = statement else {
+            continue;
+        };
+        let definition = index.expect_single_definition(function_node);
+        let Some(function) = infer_definition_types(db, definition).function_type(definition)
+        else {
+            continue;
+        };
+        let Some(marker) = fixture_marker(db, function) else {
+            continue;
+        };
+        let name = marker
+            .name_override
+            .unwrap_or_else(|| function_node.name.id.clone());
+        fixtures.insert(name, function);
+    }
+    fixtures.shrink_to_fit();
+    fixtures
+}
+
+/// the `conftest.py` files that apply to `file`, nearest first.
+///
+/// pytest merges fixtures from every `conftest.py` on the path from the test
+/// file's directory up to the rootdir. we walk the directory ancestors and
+/// collect each `conftest.py` that exists; `system_path_to_file` is
+/// revision-tracked, so a newly added or removed `conftest.py` invalidates
+/// only the files beneath it.
+#[salsa::tracked(returns(ref), heap_size = ruff_memory_usage::heap_size)]
+pub(in crate::types) fn conftest_chain(db: &dyn Db, file: File) -> Vec<File> {
+    let mut chain = Vec::new();
+    let FilePath::System(path) = file.path(db) else {
+        return chain;
+    };
+    let Some(directory) = path.parent() else {
+        return chain;
+    };
+    for ancestor in directory.ancestors() {
+        if let Ok(conftest) = system_path_to_file(db, ancestor.join("conftest.py")) {
+            if conftest != file {
+                chain.push(conftest);
+            }
+        }
+    }
+    chain.shrink_to_fit();
+    chain
+}
+
+/// resolve the fixture named `name` for `file`, in pytest's shadowing order:
+/// the file's own fixtures, then the `conftest.py` chain (nearest first),
+/// then the builtin fixtures. the first hit wins.
+pub(in crate::types) fn resolve_fixture<'db>(
+    db: &'db dyn Db,
+    file: File,
+    name: &str,
+) -> Option<ResolvedFixture<'db>> {
+    if let Some(function) = module_fixtures(db, file).get(name) {
+        return Some(resolved_from_function(db, *function));
+    }
+    for conftest in conftest_chain(db, file) {
+        if let Some(function) = module_fixtures(db, *conftest).get(name) {
+            return Some(resolved_from_function(db, *function));
+        }
+    }
+    resolve_builtin_fixture(db, name)
+}
+
+fn resolved_from_function<'db>(
+    db: &'db dyn Db,
+    function: FunctionType<'db>,
+) -> ResolvedFixture<'db> {
+    ResolvedFixture {
+        provided_type: fixture_provided_type(db, function),
+        definition: Some(function.definition(db)),
+    }
+}
+
+/// the pytest builtin fixtures we resolve, mapping the fixture name to the
+/// `_pytest` submodule whose `@fixture`-decorated function defines it. third
+/// party plugin fixtures (`pytest11` entry points) are not discovered in v1,
+/// which is why the unknown-fixture diagnostic ships off by default.
+const BUILTIN_FIXTURE_MODULES: &[(&str, &str)] = &[
+    ("tmp_path", "_pytest.tmpdir"),
+    ("tmp_path_factory", "_pytest.tmpdir"),
+    ("monkeypatch", "_pytest.monkeypatch"),
+    ("capsys", "_pytest.capture"),
+    ("capsysbinary", "_pytest.capture"),
+    ("capfd", "_pytest.capture"),
+    ("capfdbinary", "_pytest.capture"),
+    ("recwarn", "_pytest.recwarn"),
+    ("caplog", "_pytest.logging"),
+    ("pytestconfig", "_pytest.fixtures"),
+];
+
+fn resolve_builtin_fixture<'db>(db: &'db dyn Db, name: &str) -> Option<ResolvedFixture<'db>> {
+    // `request` is injected by pytest itself rather than defined as a
+    // fixture function; its type is `FixtureRequest`
+    if name == "request" {
+        let request = known_module_symbol(db, KnownModule::PytestFixtures, "FixtureRequest")
+            .place
+            .ignore_possibly_undefined()?
+            .to_instance(db)?;
+        return Some(ResolvedFixture {
+            provided_type: Some(request),
+            definition: None,
+        });
+    }
+
+    let (_, module_name) = BUILTIN_FIXTURE_MODULES
+        .iter()
+        .find(|(fixture_name, _)| *fixture_name == name)?;
+    let module = resolve_module_confident(db, &ModuleName::new(module_name)?)?;
+    let function = module_fixtures(db, module.file(db)?).get(name)?;
+    Some(resolved_from_function(db, *function))
+}
+
+/// the type a parameter bound to `function` receives, or `None` when it
+/// cannot be derived (an unannotated or otherwise gradual return).
+///
+/// a yield fixture annotates its return as `Iterator[T]` / `Generator[T,
+/// ...]` (or the async variants); the provided value is the yielded `T`, so
+/// the generator wrapper is unwrapped. a plain `-> T` fixture provides `T`.
+pub(in crate::types) fn fixture_provided_type<'db>(
+    db: &'db dyn Db,
+    function: FunctionType<'db>,
+) -> Option<Type<'db>> {
+    let signature = function.signature(db);
+    let return_type = signature.iter().last()?.return_ty;
+    if return_type.is_dynamic() {
+        return None;
+    }
+    Some(unwrap_generator(db, return_type))
+}
+
+/// the yielded element of a generator/iterator type, or `ty` unchanged.
+fn unwrap_generator<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
+    for known in [
+        KnownClass::Generator,
+        KnownClass::AsyncGenerator,
+        KnownClass::Iterator,
+        KnownClass::AsyncIterator,
+        KnownClass::Iterable,
+    ] {
+        if let Some(specialization) = ty.known_specialization(db, known) {
+            if let Some(element) = specialization.types(db).first() {
+                return *element;
+            }
+        }
+    }
+    ty
+}
+
+/// `true` if `ty` is an instance of pytest's `MarkGenerator` — the type of
+/// `pytest.mark`, whose `.parametrize` attribute builds the decorator.
+pub(in crate::types) fn is_mark_generator<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    let Some(class) = ty
+        .nominal_class(db)
+        .and_then(|class| class.class_literal(db).as_static())
+    else {
+        return false;
+    };
+    class.name(db).as_str() == "MarkGenerator"
+        && file_to_module(db, class.file(db)).and_then(|module| module.known(db))
+            == Some(KnownModule::PytestMarkStructures)
+}
+
+/// parse `@pytest.mark.parametrize` argnames — a comma-separated string or a
+/// list/tuple of string literals — into the parametrized names. `None` when
+/// the argnames are not a static string literal (dynamic → not checkable).
+pub(in crate::types) fn parametrize_names(argnames: &ast::Expr) -> Option<Vec<Name>> {
+    fn names_from_elements(elements: &[ast::Expr]) -> Option<Vec<Name>> {
+        elements
+            .iter()
+            .map(|element| {
+                element
+                    .as_string_literal_expr()
+                    .map(|literal| Name::new(literal.value.to_str().trim()))
+            })
+            .collect()
+    }
+
+    match argnames {
+        ast::Expr::StringLiteral(literal) => Some(
+            literal
+                .value
+                .to_str()
+                .split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(Name::new)
+                .collect(),
+        ),
+        ast::Expr::List(list) => names_from_elements(&list.elts),
+        ast::Expr::Tuple(tuple) => names_from_elements(&tuple.elts),
+        _ => None,
+    }
+}
+
+/// `true` if `file` is collected by pytest under the default conventions:
+/// its name is `conftest.py`, `test_*.py`, or `*_test.py`.
+pub(in crate::types) fn is_test_file(db: &dyn Db, file: File) -> bool {
+    let FilePath::System(path) = file.path(db) else {
+        return false;
+    };
+    let Some(name) = path.file_name() else {
+        return false;
+    };
+    if name == "conftest.py" {
+        return true;
+    }
+    if path.extension() != Some("py") {
+        return false;
+    }
+    let stem = name.strip_suffix(".py").unwrap_or(name);
+    stem.starts_with("test_") || stem.ends_with("_test")
+}
+
+/// `true` if `function` is a pytest test: a module-level `test*`-named
+/// function in a collected test file. `conftest.py` holds fixtures, not
+/// tests, so its functions are never tests; and pytest only collects tests
+/// at module scope, so a nested helper or a method named `test_*` (class
+/// based tests are out of scope for v1) does not count.
+pub(in crate::types) fn is_test_function<'db>(
+    db: &'db dyn Db,
+    function: FunctionType<'db>,
+) -> bool {
+    let file = function.file(db);
+    if !is_test_file(db, file) {
+        return false;
+    }
+    let FilePath::System(path) = file.path(db) else {
+        return false;
+    };
+    path.file_name() != Some("conftest.py")
+        && function.name(db).starts_with("test")
+        && function.definition(db).file_scope(db).is_global()
+}

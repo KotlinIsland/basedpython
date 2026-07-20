@@ -3,6 +3,49 @@
 > session 3 of the [framework rollout](index.md) — introduces the injection
 > registry, the one genuinely new resolution mechanism in framework support
 
+## status: verified
+
+implemented on this branch. the injection registry lives in
+`crates/ty_python_semantic/src/types/dedicated/pytest.rs`; `function_framework_role`
+(`PytestFixture`, `PytestTest`) sits in `dedicated/role.rs` next to the class
+query; the checks are emitted from `infer_function_body` (in
+`infer/builder/function.rs`), which is a body-scope region and so can safely
+resolve the current function's own type without a salsa cycle.
+
+- **recognition**: `KnownModule::PytestFixtures` (`_pytest.fixtures`) and
+    `PytestMarkStructures` (`_pytest.mark.structures`), both third-party
+    gated; `KnownFunction::PytestFixture` (the `fixture` decorator). no new
+    `KnownClass` — `FixtureRequest` and `MarkGenerator` resolve through
+    `known_module_symbol` / an `(module, name)` check, as pydantic does
+- **registry**: `module_fixtures` (tracked, decorators + signatures only, no
+    body inference), `conftest_chain` (tracked, walks directory ancestors
+    collecting `conftest.py` via the revision-tracked `system_path_to_file`),
+    `resolve_fixture` (module → conftest chain → builtins). the builtin table
+    maps a fixture name to the `_pytest` submodule that defines it and reuses
+    `module_fixtures` over that module, so the *types* come from the real
+    (typed) `_pytest` sources; `request` resolves to `FixtureRequest`
+- **provided type**: the fixture's declared return annotation, with
+    `Iterator[T]` / `Generator[T, …]` / the async variants unwrapped to `T`.
+    an unannotated (gradual) return yields no provided type, so a parameter
+    bound to it is not checked (deriving it from the *inferred* body return is
+    a recorded follow-up — `module_fixtures` deliberately avoids body inference)
+- **diagnostics**: `invalid-fixture-type` (on; subdiagnostic at the fixture
+    definition, cross-file), `unknown-fixture` (off by default — plugin
+    fixtures are not discovered yet), `invalid-parametrize` (name + arity;
+    element-type checking against annotations is the recorded follow-up)
+
+### scope limits (recorded, not regressions)
+
+- **module-level only**: fixtures and tests are recognized at module scope.
+    class-based tests (`class Test*:` with fixture methods) and their `self`
+    are out of scope for v1; `is_test_function` requires the definition to be
+    in the global scope so a nested `test_*` helper is never misclassified
+- **default collection conventions only**: `test_*.py` / `*_test.py` files and
+    `test*` functions; `pytest.ini` / `pyproject` overrides are unread
+- **no plugin fixture discovery** (`pytest11` entry points) — the reason
+    `unknown-fixture` ships off by default
+- `request.getfixturevalue(...)` and fixture cycles are unmodelled
+
 ## the problem
 
 pytest fills test and fixture parameters by *name* from a scoped registry:

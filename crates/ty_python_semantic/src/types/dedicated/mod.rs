@@ -1,5 +1,6 @@
 pub(super) mod django;
 pub(super) mod pydantic;
+pub(super) mod pytest;
 pub(super) mod role;
 pub(super) mod sqlalchemy;
 
