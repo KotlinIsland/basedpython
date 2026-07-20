@@ -1,123 +1,111 @@
 # sqlalchemy support
 
-> session 2 of the [framework rollout](index.md) — first user of the
-> descriptor-annotated fields-engine extension
+basedpython supports sqlalchemy 2.0 declarative models. type checking is precise, and constructor calls check correctly against your schema.
 
-## scope
+## what works
 
-sqlalchemy **2.0 declarative** style only:
+### declarative models with `Mapped` fields
 
-```py
-class Base(DeclarativeBase): ...
+- models that inherit from `DeclarativeBase` check precisely
+- field types declared with `Mapped[T]` annotations are understood: `name: Mapped[str]`, `age: Mapped[int]`
+- constructor calls: `User(name="Alice", age=30)` checks that you're using the right field names and types
+- relationships: `relationship()` fields are constructor keywords too, and their types check correctly
+- abstract models and mixins: fields flow from base classes into subclasses
+- `MappedAsDataclass` models work via the dataclass machinery
+
+### transpilation compatibility
+
+- `optional?.chaining` works across nullable relationships: `user?.address?.city`
+- `checked cast` and `cast?` operators work in model methods
+- soundness checks work correctly with sqlalchemy's descriptor machinery
+
+### runtime queries
+
+- `select()`, `filter()`, comparison operators on columns
+- session and result generics: `session.execute()`, `result.scalars()`
+- async API
+
+## limitations
+
+### `DynamicMapped` and `WriteOnlyMapped`
+
+only `Mapped[T]` unwraps for constructor synthesis. dynamic or write-only collections degrade to less precise checking. you can still use them — they just won't contribute to the constructor signature:
+
+```by
+users: WriteOnlyMapped[list["User"]]  # doesn't appear in __init__
+```
+
+### columns without `Mapped`
+
+sqlalchemy 1.x style `Column()` attributes without `Mapped` aren't recognized. they check as the stubs allow, without constructor synthesis. upgrade to sqlalchemy 2.0's `Mapped` syntax for precise checking.
+
+### custom enum columns
+
+using a basedpython enum as a column type requires a `TypeDecorator` to handle persistence. declare `Mapped[YourEnum]` to check, but provide your own column serialization logic at runtime.
+
+## incompatible patterns
+
+**`init` shorthand or `data class` modifier**
+
+sqlalchemy uses metaclass instrumentation. declaring your own `__init__` or stacking `@dataclass` on a model conflicts with this and breaks at runtime. you'll get an error:
+
+```by
+class User(Base):
+    id: Mapped[int]
+
+    init(id: int):  # error: conflicts with sqlalchemy's __init__
+        self.id = id
+```
+
+**use:** let the synthesized constructor handle initialization. if you need custom logic, use a method instead.
+
+## required setup
+
+sqlalchemy 2.0 has inline type stubs (`py.typed`), so there's no additional setup. just install sqlalchemy 2.0+.
+
+## examples
+
+basic declarative model:
+
+```by
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+class Base(DeclarativeBase)
 
 class User(Base):
     __tablename__ = "user"
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str]
-    addresses: Mapped[list["Address"]] = relationship(back_populates="user")
+    email: Mapped[str | None] = None
+
+user = User(name="Alice", email="alice@example.com")  # checks correctly
 ```
 
-legacy 1.x patterns (`Column()` attributes without `Mapped`, `declarative_base()`
-factory classes, `Query`) are explicitly out of scope — they check as their
-stubs allow, with no dedicated help
+relationships:
 
-## what already works
+```by
+class User(Base):
+    __tablename__ = "user"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    posts: Mapped[list["Post"]] = relationship(back_populates="author")
 
-sqlalchemy 2.0 ships inline types built on the descriptor protocol, which ty
-resolves generally:
+class Post(Base):
+    __tablename__ = "post"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    author_id: Mapped[int]
+    author: Mapped[User] = relationship(back_populates="posts")
 
-- `user.id` → `int`, `User.id` → `InstrumentedAttribute[int]` (class/instance
-    duality via `Mapped.__get__` overloads)
-- `select(User.name).where(User.id == 5)` — comparison operators on
-    `InstrumentedAttribute` produce `ColumnElement[bool]`
-- session/result generics (`Session.execute`, `Result.scalars`), async api
-- baseline real-dependency tests exist:
-    `crates/ty_python_semantic/resources/mdtest/external/sqlalchemy.md`
-- `MappedAsDataclass` models — pep 681 `dataclass_transform`, same path as
-    pydantic
-
-## the gap: constructor synthesis
-
-a plain declarative model inherits `def __init__(self, **kw: Any)` — every
-constructor call is unchecked (`User(nam="typo")` passes). sqlalchemy's actual
-runtime accepts any subset of mapped attributes as keywords. synthesize the
-truthful signature:
-
-```py
-User.__init__  # (self, *, id: int = ..., name: str = ..., addresses: list[Address] = ...) -> None
+user = User(posts=[])  # posts is a constructor argument
 ```
 
-- keyword-only, **every parameter optional** — sqlalchemy allows constructing
-    with any subset (non-nullable columns are enforced at flush, not `__init__`);
-    a required-parameter synthesis would be a lie
-- parameter type is the `Mapped[T]` argument, not the descriptor
-- includes `relationship()` fields — they are constructor keywords too
+optional chaining:
 
-### mechanism
+```by
+def get_first_post_author_email(user: User) -> str | None:
+    return user.posts[0]?.author?.email  # checks correctly
+```
 
-- new `CodeGeneratorKind`/`FieldKind` arm (`SqlalchemyMapped`), classified in
-    `CodeGeneratorKind::from_class` via `dedicated/sqlalchemy.rs::is_declarative`
-    (mro contains `DeclarativeBase`, and the class is not `MappedAsDataclass` —
-    that path already works and must keep winning)
-- fields gathered by the **descriptor-annotated** extraction mode
-    ([index](index.md#fields-engine-extensions)): an annotation whose
-    unsubscripted origin is `Mapped` (or a subclass) declares a field of the
-    argument type; anything else in the body (`__tablename__`, `ClassVar`,
-    plain annotations, methods) is not a field
-- synthesis goes through the `own_synthesized_member` hub — a user-defined
-    `__init__` in the class body wins, `__abstract__` and mixin classes
-    contribute fields to subclasses through the existing mro walk
-- skip synthesis entirely when anything is unresolvable (dynamic base,
-    conditional fields) — fall back to `**kw: Any`, never guess
+## see also
 
-## recognition seams to populate
-
-| seam             | additions                                                                                                                                                                                                                                                                   |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `KnownModule`    | `sqlalchemy.orm.decl_api` (DeclarativeBase, MappedAsDataclass), `sqlalchemy.orm.base`/`sqlalchemy.orm.attributes` (Mapped, InstrumentedAttribute) — verify canonical defining modules against the locked sqlalchemy version before committing, re-exports are not canonical |
-| `KnownClass`     | `SqlalchemyDeclarativeBase`, `SqlalchemyMapped`, `SqlalchemyMappedAsDataclass`                                                                                                                                                                                              |
-| dedicated module | `crates/ty_python_semantic/src/types/dedicated/sqlalchemy.rs` — `is_declarative`, mapped-annotation unwrapping helpers                                                                                                                                                      |
-| role             | `FrameworkRole::SqlalchemyDeclarative` arm in `dedicated/role.rs`                                                                                                                                                                                                           |
-
-## diagnostics
-
-- the existing `external/sqlalchemy.md` `TODO` ("this should ideally be an
-    error") — re-audit once constructor synthesis lands; several imprecisions
-    collapse into ordinary `invalid-argument-type` errors once `__init__` is
-    truthful
-- stretch (design-approved, implement only if time allows):
-    `relationship()` assigned without a `Mapped[...]` annotation → diagnostic
-    suggesting the 2.0 form
-
-## transpiler conformance column
-
-- **`init` shorthand / `data class` modifier in a declarative body → transform
-    error** (same rationale and shape as pydantic; the metaclass is
-    instrumentation-bearing)
-- **based enums as column types** — declaring `Mapped[Shape]` is fine to
-    *check*, but mapping it to a column needs a user-supplied `TypeDecorator`;
-    v1 does nothing special (the stubs surface the error), record a possible
-    future diagnostic
-- **conformance pins** (divergence tests): optional chaining across nullable
-    relationships (`user?.address?.city`); soundness guards inside model
-    methods don't disturb instrumentation; class-body defaults untouched;
-    reification pass skips non-generic model classes
-
-## test plan
-
-1. mock-stub mdtests for detection + field extraction (minimal
-    `sqlalchemy/orm/…` stubs under `.venv/<path-to-site-packages>/`) — these
-    pin the *mechanism*
-1. real-dependency mdtests extending `external/sqlalchemy.md`: synthesized
-    constructor signature reveals, typo'd keyword → error, subset construction
-    ok, mixin/abstract inheritance, user-defined `__init__` wins,
-    `MappedAsDataclass` unchanged
-1. `basedpython_sqlalchemy.md` divergence suite: a `.by` model module
-    transpiles and runs against real sqlalchemy (in-memory sqlite), covering
-    the conformance pins above
-
-## out of scope
-
-- lookup/typing precision inside `select()` beyond what inline stubs give
-- alembic, hybrid extensions (`hybrid_property` checks as its stubs allow)
-- legacy 1.x style
+- [sqlalchemy 2.0 documentation](https://docs.sqlalchemy.org/en/20/)
+- framework compatibility matrix in the [frameworks overview](index.md#basedpython-features-and-framework-compatibility)

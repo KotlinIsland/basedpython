@@ -35,7 +35,7 @@ use crate::{
             typed_dict::{TypedDictFields, synthesize_typed_dict_method, typed_dict_class_member},
         },
         context::InferContext,
-        dedicated::{django, pydantic},
+        dedicated::{django, pydantic, sqlalchemy},
         definition_expression_type, determine_upper_bound,
         diagnostic::INVALID_DATACLASS_OVERRIDE,
         enums::{enum_metadata, is_enum_class_by_inheritance, try_unwrap_nonmember_value},
@@ -1533,10 +1533,11 @@ impl<'db> StaticClassLiteral<'db> {
         let field_policy = CodeGeneratorKind::from_class(db, self.into())?;
         let pydantic_constructor_fields_are_keyword_only =
             field_policy.is_pydantic() && pydantic::constructor_fields_are_keyword_only(db, self);
-        // Django constructors accept any subset of fields; requiredness is a
-        // `full_clean`/`save` concern.
+        // Django and SQLAlchemy constructors accept any subset of fields;
+        // requiredness is a `full_clean`/`save`/flush concern.
         let constructor_fields_are_optional = name == "__init__"
             && (field_policy == CodeGeneratorKind::Django
+                || field_policy == CodeGeneratorKind::SqlalchemyDeclarative
                 || (field_policy.is_pydantic()
                     && pydantic::constructor_fields_are_optional(db, self)));
 
@@ -1579,6 +1580,16 @@ impl<'db> StaticClassLiteral<'db> {
                     FieldKind::Django { many_to_many, .. } => (
                         // many-to-many values cannot be set at construction
                         !*many_to_many,
+                        None,
+                        Some(true),
+                        None,
+                        None,
+                        pydantic::ConfigBoolean::Unspecified,
+                    ),
+                    // every mapped attribute is an optional keyword-only
+                    // constructor parameter
+                    FieldKind::SqlalchemyMapped => (
+                        true,
                         None,
                         Some(true),
                         None,
@@ -1781,10 +1792,11 @@ impl<'db> StaticClassLiteral<'db> {
         };
 
         // A model whose MRO contains unresolved bases has an incomplete field
-        // list; degrade all Django synthesis to the stubs' gradual fallbacks
-        // (`Model.__init__(*args, **kwargs)`, `pk: Any`) rather than invent a
-        // closed signature that produces false positives.
-        let django_mro_is_fully_static = || {
+        // list; degrade Django/SQLAlchemy synthesis to the stubs' gradual
+        // fallbacks (`Model.__init__(*args, **kwargs)`, `__init__(self, **kw:
+        // Any)`) rather than invent a closed signature that produces false
+        // positives.
+        let mro_is_fully_static = || {
             !self
                 .iter_mro(db, specialization)
                 .any(|base| matches!(base, ClassBase::Any | ClassBase::Dynamic(_)))
@@ -1800,7 +1812,11 @@ impl<'db> StaticClassLiteral<'db> {
                     return None;
                 }
 
-                if field_policy == CodeGeneratorKind::Django && !django_mro_is_fully_static() {
+                if matches!(
+                    field_policy,
+                    CodeGeneratorKind::Django | CodeGeneratorKind::SqlalchemyDeclarative
+                ) && !mro_is_fully_static()
+                {
                     return None;
                 }
 
@@ -1815,7 +1831,7 @@ impl<'db> StaticClassLiteral<'db> {
                 if name.starts_with("__") {
                     return None;
                 }
-                if !django_mro_is_fully_static() {
+                if !mro_is_fully_static() {
                     return None;
                 }
                 django::synthesized_model_attribute(
@@ -2244,7 +2260,11 @@ impl<'db> StaticClassLiteral<'db> {
                 if let Some((class_literal, specialization)) = class.static_class_literal(db) {
                     // Pydantic collects annotated attributes from every class in the model's MRO,
                     // including ordinary classes that are not themselves Pydantic models.
-                    if field_policy.is_pydantic() || field_policy.matches(db, class_literal.into())
+                    // SQLAlchemy does the same for its declarative mixins — ordinary classes
+                    // that carry `Mapped[...]` annotations inherited into the model.
+                    if field_policy.is_pydantic()
+                        || field_policy.is_sqlalchemy()
+                        || field_policy.matches(db, class_literal.into())
                     {
                         return Some(FieldSource::Static(class_literal, specialization));
                     }
@@ -2385,6 +2405,10 @@ impl<'db> StaticClassLiteral<'db> {
             return self.django_own_fields(db, specialization);
         }
 
+        if field_policy == CodeGeneratorKind::SqlalchemyDeclarative {
+            return self.sqlalchemy_own_fields(db, specialization);
+        }
+
         let class_body_scope = self.body_scope(db);
         let table = place_table(db, class_body_scope);
 
@@ -2505,8 +2529,11 @@ impl<'db> StaticClassLiteral<'db> {
                 }
 
                 let kind = match field_policy {
-                    // handled by the `django_own_fields` early return above
-                    CodeGeneratorKind::Django => continue,
+                    // handled by the `django_own_fields` / `sqlalchemy_own_fields`
+                    // early returns above
+                    CodeGeneratorKind::Django | CodeGeneratorKind::SqlalchemyDeclarative => {
+                        continue;
+                    }
                     CodeGeneratorKind::NamedTuple => FieldKind::NamedTuple { default_ty },
                     CodeGeneratorKind::DataclassLike(_) => FieldKind::Dataclass {
                         default_ty,
@@ -2643,6 +2670,84 @@ impl<'db> StaticClassLiteral<'db> {
                 first_declaration: Some(definition),
             };
             fields.insert(table.symbol(symbol_id).name().clone(), field);
+        }
+        fields.shrink_to_fit();
+        fields
+    }
+
+    /// SQLAlchemy's descriptor-annotated fields: class-body *annotated*
+    /// assignments whose declared type is a `Mapped[T]` descriptor. the field
+    /// type is the unwrapped `T` (the constructor parameter type), never the
+    /// descriptor. anything else in the body — `__tablename__`, `ClassVar`s,
+    /// plain annotations, methods — is not a field
+    fn sqlalchemy_own_fields(
+        self,
+        db: &'db dyn Db,
+        specialization: Option<Specialization<'db>>,
+    ) -> FxIndexMap<Name, Field<'db>> {
+        let class_body_scope = self.body_scope(db);
+        let table = place_table(db, class_body_scope);
+        let use_def = use_def_map(db, class_body_scope);
+
+        let mut field_declarations = Vec::new();
+        for (symbol_id, declarations) in use_def.all_end_of_scope_symbol_declarations() {
+            // only annotated assignments can be mapped fields; a bare method or
+            // nested class is never one
+            if declarations.clone().any_reachable(db, |declaration| {
+                declaration.is_defined_and(|declaration| {
+                    !matches!(
+                        declaration.kind(db),
+                        DefinitionKind::AnnotatedAssignment(..)
+                    )
+                })
+            }) {
+                continue;
+            }
+
+            // field order is anchored to the first reachable annotated declaration
+            let Some(first_declaration_order) = use_def
+                .reachable_symbol_declarations(symbol_id)
+                .first_reachable_declaration_order(db, |declaration| {
+                    declaration.is_defined_and(|declaration| {
+                        matches!(
+                            declaration.kind(db),
+                            DefinitionKind::AnnotatedAssignment(..)
+                        )
+                    })
+                })
+            else {
+                continue;
+            };
+
+            let result = place_from_declarations(db, declarations.clone());
+            field_declarations.push((first_declaration_order, symbol_id, result));
+        }
+        field_declarations
+            .sort_unstable_by_key(|(first_declaration_order, _, _)| *first_declaration_order);
+
+        let mut fields = FxIndexMap::default();
+        for (_, symbol_id, result) in field_declarations {
+            let symbol = table.symbol(symbol_id);
+            let first_declaration = result.first_declaration;
+            let attr = result.ignore_conflicting_declarations();
+            if attr.is_class_var() {
+                continue;
+            }
+            let Some(attr_ty) = attr.place.ignore_possibly_undefined() else {
+                continue;
+            };
+            // only `Mapped[T]` annotations are fields; unwrap to `T`
+            let Some(field_ty) = sqlalchemy::mapped_field_type(db, attr_ty) else {
+                continue;
+            };
+            fields.insert(
+                symbol.name().clone(),
+                Field {
+                    declared_ty: field_ty.apply_optional_specialization(db, specialization),
+                    kind: FieldKind::SqlalchemyMapped,
+                    first_declaration,
+                },
+            );
         }
         fields.shrink_to_fit();
         fields

@@ -13,7 +13,7 @@
 //! `docs/basedpython/frameworks/index.md`
 
 use crate::Db;
-use crate::types::dedicated::{django, pydantic};
+use crate::types::dedicated::{django, pydantic, sqlalchemy};
 use crate::types::{ClassLiteral, StaticClassLiteral};
 
 /// the kind of framework class-transformer that applies to a class
@@ -23,6 +23,9 @@ pub enum FrameworkRole {
     PydanticModel,
     /// a django model — `django.db.models.Model` in the mro
     DjangoModel,
+    /// a sqlalchemy 2.0 declarative model — `sqlalchemy.orm.DeclarativeBase`
+    /// in the mro (and not a `MappedAsDataclass` model)
+    SqlalchemyDeclarative,
 }
 
 /// classify `class` against the supported frameworks. `None` for an
@@ -44,6 +47,9 @@ fn static_class_framework_role<'db>(
     }
     if django::is_model(db, class) {
         return Some(FrameworkRole::DjangoModel);
+    }
+    if sqlalchemy::is_declarative(db, class) {
+        return Some(FrameworkRole::SqlalchemyDeclarative);
     }
     None
 }
@@ -144,6 +150,84 @@ mod tests {
     fn ordinary_class_with_django_imported_has_no_role() -> anyhow::Result<()> {
         let role =
             django_role_of_last_class("from django.db import models\nclass Author:\n    pass\n")?;
+        assert_eq!(role, None);
+        Ok(())
+    }
+
+    /// resolve the framework role of the last class in `/src/main.py`, with a
+    /// mock sqlalchemy package in site-packages (`DeclarativeBase` must be
+    /// *defined* in `sqlalchemy.orm.decl_api`, `Mapped` in `sqlalchemy.orm.base`,
+    /// both on a third-party search path)
+    fn sqlalchemy_role_of_last_class(source: &str) -> anyhow::Result<Option<FrameworkRole>> {
+        let db = TestDbBuilder::new()
+            .with_site_packages("/sp")
+            .with_file("/sp/sqlalchemy/__init__.pyi", "")
+            .with_file(
+                "/sp/sqlalchemy/orm/__init__.pyi",
+                "from sqlalchemy.orm.decl_api import DeclarativeBase as DeclarativeBase\n\
+                 from sqlalchemy.orm.decl_api import MappedAsDataclass as MappedAsDataclass\n\
+                 from sqlalchemy.orm.base import Mapped as Mapped\n",
+            )
+            .with_file(
+                "/sp/sqlalchemy/orm/decl_api.pyi",
+                "class DeclarativeBase: ...\nclass MappedAsDataclass: ...\n",
+            )
+            .with_file("/sp/sqlalchemy/orm/base.pyi", "class Mapped[T]: ...\n")
+            .with_file("/src/main.py", source)
+            .build()?;
+
+        let file = system_path_to_file(&db, "/src/main.py")?;
+        let module = parsed_module(&db, file).load(&db);
+        let model = SemanticModel::new(&db, file);
+        let class_def = module
+            .suite()
+            .iter()
+            .rev()
+            .find_map(|stmt| stmt.as_class_def_stmt())
+            .expect("source should define a class");
+        let ty = class_def
+            .inferred_type(&model)
+            .expect("class should infer a type");
+        let class = ty
+            .as_class_literal()
+            .expect("class definition should infer a class literal");
+        Ok(class_framework_role(&db, class))
+    }
+
+    #[test]
+    fn sqlalchemy_declarative_direct_base() -> anyhow::Result<()> {
+        let role = sqlalchemy_role_of_last_class(
+            "from sqlalchemy.orm import DeclarativeBase\nclass User(DeclarativeBase):\n    pass\n",
+        )?;
+        assert_eq!(role, Some(FrameworkRole::SqlalchemyDeclarative));
+        Ok(())
+    }
+
+    #[test]
+    fn sqlalchemy_declarative_through_inheritance() -> anyhow::Result<()> {
+        let role = sqlalchemy_role_of_last_class(
+            "from sqlalchemy.orm import DeclarativeBase\nclass Base(DeclarativeBase): ...\nclass User(Base):\n    pass\n",
+        )?;
+        assert_eq!(role, Some(FrameworkRole::SqlalchemyDeclarative));
+        Ok(())
+    }
+
+    #[test]
+    fn sqlalchemy_mapped_as_dataclass_is_not_declarative_role() -> anyhow::Result<()> {
+        // a `MappedAsDataclass` model goes through the dataclass path, not the
+        // declarative constructor synthesis, so it has no declarative role
+        let role = sqlalchemy_role_of_last_class(
+            "from sqlalchemy.orm import DeclarativeBase, MappedAsDataclass\nclass Base(MappedAsDataclass, DeclarativeBase): ...\nclass User(Base):\n    pass\n",
+        )?;
+        assert_eq!(role, None);
+        Ok(())
+    }
+
+    #[test]
+    fn ordinary_class_with_sqlalchemy_imported_has_no_role() -> anyhow::Result<()> {
+        let role = sqlalchemy_role_of_last_class(
+            "from sqlalchemy.orm import DeclarativeBase\nclass User:\n    pass\n",
+        )?;
         assert_eq!(role, None);
         Ok(())
     }

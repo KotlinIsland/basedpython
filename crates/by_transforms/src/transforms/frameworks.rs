@@ -28,6 +28,7 @@ fn role_name(role: FrameworkRole) -> &'static str {
     match role {
         FrameworkRole::PydanticModel => "pydantic model",
         FrameworkRole::DjangoModel => "django model",
+        FrameworkRole::SqlalchemyDeclarative => "sqlalchemy declarative model",
     }
 }
 
@@ -163,6 +164,103 @@ mod tests {
         db.init_program_with_site_packages(["/sp"])
             .expect("program init failed");
         db
+    }
+
+    /// a project db with a mock sqlalchemy package in site-packages
+    /// (`DeclarativeBase` must be *defined* in `sqlalchemy.orm.decl_api`,
+    /// `Mapped` in `sqlalchemy.orm.base`, both on a third-party search path)
+    fn sqlalchemy_db(files: &[(&str, &str)]) -> TestDb {
+        let mut db = TestDb::new(ProjectMetadata::new(
+            ruff_python_ast::name::Name::new_static(""),
+            SystemPathBuf::from("/proj"),
+        ));
+        db.write_file("/sp/sqlalchemy/__init__.pyi", "")
+            .expect("write file failed");
+        db.write_file(
+            "/sp/sqlalchemy/orm/__init__.pyi",
+            "from sqlalchemy.orm.decl_api import DeclarativeBase as DeclarativeBase\n\
+             from sqlalchemy.orm.base import Mapped as Mapped\n",
+        )
+        .expect("write file failed");
+        db.write_file(
+            "/sp/sqlalchemy/orm/decl_api.pyi",
+            "class DeclarativeBase: ...\n",
+        )
+        .expect("write file failed");
+        db.write_file("/sp/sqlalchemy/orm/base.pyi", "class Mapped[T]: ...\n")
+            .expect("write file failed");
+        for (path, src) in files {
+            db.write_file(path, src).expect("write file failed");
+        }
+        db.init_program_with_site_packages(["/sp"])
+            .expect("program init failed");
+        db
+    }
+
+    #[test]
+    fn data_class_modifier_on_sqlalchemy_model_rejected() {
+        let db = sqlalchemy_db(&[(
+            "/proj/models.by",
+            "from sqlalchemy.orm import DeclarativeBase\ndata class User(DeclarativeBase):\n    name: str\n",
+        )]);
+        let err = transpile_result(&db, "/proj/models.by").expect_err("gate should reject");
+        assert!(
+            err.contains("`data class` on sqlalchemy declarative model `User`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn init_shorthand_in_sqlalchemy_model_rejected() {
+        let db = sqlalchemy_db(&[(
+            "/proj/models.by",
+            "from sqlalchemy.orm import DeclarativeBase\nclass User(DeclarativeBase):\n    init(self, let name: str)\n",
+        )]);
+        let err = transpile_result(&db, "/proj/models.by").expect_err("gate should reject");
+        assert!(
+            err.contains("`init` shorthand in sqlalchemy declarative model `User`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn plain_sqlalchemy_model_transpiles() {
+        let db = sqlalchemy_db(&[(
+            "/proj/models.by",
+            "from sqlalchemy.orm import DeclarativeBase, Mapped\nclass User(DeclarativeBase):\n    name: Mapped[str]\n",
+        )]);
+        let out = transpile_result(&db, "/proj/models.by").expect("plain model should transpile");
+        assert!(out.contains("class User(DeclarativeBase):"), "got:\n{out}");
+    }
+
+    #[test]
+    fn soundness_guards_in_sqlalchemy_model_methods() {
+        // `Config::test_default()` disables soundness; opt in to pin that the
+        // guard lands inside the method body while the class structure and
+        // field declarations stay untouched (conformance matrix: soundness ✓)
+        let db = sqlalchemy_db(&[(
+            "/proj/models.by",
+            "from sqlalchemy.orm import DeclarativeBase, Mapped\n\nclass User(DeclarativeBase):\n    name: Mapped[str]\n\n    def greet(self, prefix: str) -> str:\n        return prefix + \"x\"\n",
+        )]);
+        let file = system_path_to_file(&db, "/proj/models.by").expect("file not in db");
+        let config = Config {
+            lazy_imports: false,
+            soundness: crate::config::SoundnessPositions::all(),
+            ..Config::default()
+        };
+        let out = transpile_typed(&db, file, &config).expect("model should transpile");
+        assert!(
+            out.contains("class User(DeclarativeBase):"),
+            "class structure should survive, got:\n{out}"
+        );
+        assert!(
+            out.contains("name: Mapped[str]"),
+            "field declaration should survive, got:\n{out}"
+        );
+        assert!(
+            out.contains("_soundness_check(prefix, str)"),
+            "parameter guard should land in the method body, got:\n{out}"
+        );
     }
 
     #[test]

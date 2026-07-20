@@ -14,7 +14,7 @@ pub(crate) use self::static_literal::{
     based_enum_variant_union, expanded_class_base_entries,
 };
 pub(super) use self::typed_dict::{DynamicTypedDictAnchor, DynamicTypedDictLiteral};
-use super::dedicated::{django, pydantic};
+use super::dedicated::{django, pydantic, sqlalchemy};
 use super::{
     BoundTypeVarIdentity, BoundTypeVarInstance, MemberLookupPolicy, MroIterator, SpecialFormType,
     SubclassOfType, Type, TypeQualifiers, class_base::ClassBase, function::FunctionType,
@@ -92,6 +92,9 @@ pub(crate) enum CodeGeneratorKind<'db> {
     Pydantic(pydantic::ModelMetadata<'db>),
     /// Classes inheriting from Django's `Model`.
     Django,
+    /// Classes inheriting from SQLAlchemy's `DeclarativeBase` (2.0 declarative
+    /// style, and not a `MappedAsDataclass` model).
+    SqlalchemyDeclarative,
     /// Classes inheriting from `typing.NamedTuple`
     NamedTuple,
     /// Classes inheriting from `typing.TypedDict` or `typing_extensions.TypedDict`
@@ -170,6 +173,8 @@ impl<'db> CodeGeneratorKind<'db> {
                 ))
             } else if django::is_model(db, class) {
                 Some(CodeGeneratorKind::Django)
+            } else if sqlalchemy::is_declarative(db, class) {
+                Some(CodeGeneratorKind::SqlalchemyDeclarative)
             } else if class
                 .explicit_bases(db)
                 .contains(&Type::SpecialForm(SpecialFormType::NamedTuple))
@@ -234,6 +239,10 @@ impl<'db> CodeGeneratorKind<'db> {
             (Some(Self::DataclassLike(_)), Self::DataclassLike(_))
                 | (Some(Self::Pydantic(_)), Self::Pydantic(_))
                 | (Some(Self::Django), Self::Django)
+                | (
+                    Some(Self::SqlalchemyDeclarative),
+                    Self::SqlalchemyDeclarative
+                )
                 | (Some(Self::NamedTuple), Self::NamedTuple)
                 | (Some(Self::TypedDict), Self::TypedDict)
         )
@@ -242,7 +251,11 @@ impl<'db> CodeGeneratorKind<'db> {
     pub(super) fn dataclass_transformer_params(self) -> Option<DataclassTransformerParams<'db>> {
         match self {
             Self::DataclassLike(params) => params,
-            Self::Pydantic(_) | Self::Django | Self::NamedTuple | Self::TypedDict => None,
+            Self::Pydantic(_)
+            | Self::Django
+            | Self::SqlalchemyDeclarative
+            | Self::NamedTuple
+            | Self::TypedDict => None,
         }
     }
 
@@ -250,7 +263,7 @@ impl<'db> CodeGeneratorKind<'db> {
         match self {
             Self::DataclassLike(params) => Some(params?.field_specifiers(db)),
             Self::Pydantic(metadata) => Some(metadata.field_specifiers(db)),
-            Self::Django | Self::NamedTuple | Self::TypedDict => None,
+            Self::Django | Self::SqlalchemyDeclarative | Self::NamedTuple | Self::TypedDict => None,
         }
     }
 
@@ -259,6 +272,7 @@ impl<'db> CodeGeneratorKind<'db> {
             Self::DataclassLike(_) => "dataclass",
             Self::Pydantic(_) => "Pydantic model",
             Self::Django => "Django model",
+            Self::SqlalchemyDeclarative => "SQLAlchemy declarative model",
             Self::NamedTuple => "named tuple",
             Self::TypedDict => "TypedDict",
         }
@@ -270,6 +284,10 @@ impl<'db> CodeGeneratorKind<'db> {
 
     pub(super) const fn is_pydantic(self) -> bool {
         matches!(self, Self::Pydantic(_))
+    }
+
+    pub(super) const fn is_sqlalchemy(self) -> bool {
+        matches!(self, Self::SqlalchemyDeclarative)
     }
 
     /// Return `true` if field declarations should be treated as instance attributes.
@@ -304,14 +322,18 @@ impl<'db> CodeGeneratorKind<'db> {
     pub(super) const fn synthesizes_constructor_signature_from_fields(self) -> bool {
         matches!(
             self,
-            Self::DataclassLike(_) | Self::Pydantic(_) | Self::Django
+            Self::DataclassLike(_) | Self::Pydantic(_) | Self::Django | Self::SqlalchemyDeclarative
         )
     }
 
     pub(super) const fn pydantic_metadata(self) -> Option<pydantic::ModelMetadata<'db>> {
         match self {
             Self::Pydantic(metadata) => Some(metadata),
-            Self::DataclassLike(_) | Self::Django | Self::NamedTuple | Self::TypedDict => None,
+            Self::DataclassLike(_)
+            | Self::Django
+            | Self::SqlalchemyDeclarative
+            | Self::NamedTuple
+            | Self::TypedDict => None,
         }
     }
 }
@@ -2497,6 +2519,11 @@ pub(crate) enum FieldKind<'db> {
         /// Whether this field is marked read-only
         is_read_only: bool,
     },
+    /// SQLAlchemy `Mapped[T]` field metadata, extracted from a class-body
+    /// annotation whose declared type is a `Mapped[T]` descriptor. every
+    /// mapped attribute is an optional keyword-only constructor parameter;
+    /// non-nullable columns are enforced at flush, not at `__init__`
+    SqlalchemyMapped,
 }
 
 /// Metadata regarding a dataclass field/attribute or a `TypedDict` "item" / key-value pair.
@@ -2527,6 +2554,9 @@ impl Field<'_> {
             // is a `full_clean`/`save` concern.
             FieldKind::Django { .. } => false,
             FieldKind::TypedDict { is_required, .. } => *is_required,
+            // SQLAlchemy accepts any subset of mapped attributes at
+            // construction; non-nullable columns are enforced at flush.
+            FieldKind::SqlalchemyMapped => false,
         }
     }
 
