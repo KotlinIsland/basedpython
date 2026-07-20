@@ -38,7 +38,7 @@ use super::{
     coalesce_chain, compat, context_params, decl_site_variance, decorator_keyword, dedent_string,
     dynamic_keyword, empty_declarations, extension, float_const, force_unwrap, frameworks,
     generic_call, generics, grapheme_string, identity_swap, implicit_typing, init_method,
-    just_float, kw_subscript, literal_types, main_function, modifiers, mutable_defaults,
+    just_float, kw_subscript, literal_types, local_once, main_function, modifiers, mutable_defaults,
     none_chain, optional_type, overload, parametric_is, postfix_await, propagate, reified_generic,
     repeated_underscore, sentinel, some_ctor, soundness, string_tag, super_keyword,
     symbolic_type_op, top_star, trailing_lambda, tuple_index, type_is, type_reification,
@@ -452,6 +452,7 @@ pub(crate) fn run_against_source<'a>(
         config.inject_future_annotations,
     );
     let init_method_pass = init_method::InitMethod::new(source_ref);
+    let local_once_pass = local_once::LocalOncePass::new(source_ref);
     let modifiers_pass = modifiers::ModifiersPass::new(source_ref);
     let main_function_pass = main_function::MainFunction::new(source_ref, config.is_stub);
     let empty_declarations_pass = empty_declarations::EmptyDeclarations::new();
@@ -514,6 +515,10 @@ pub(crate) fn run_against_source<'a>(
         &postfix_await_pass,
         &auto_quote_pass,
         &init_method_pass,
+        // strip `local` / `once` parameter modifiers (source-span deletions,
+        // like init_method's `let` handling — must read ranges before any
+        // AST-mutation pass zeroes them)
+        &local_once_pass,
         &modifiers_pass,
         // after modifiers so the entry-point guard follows any `__all__` it
         // emits, and before the AST-mutation passes so `main`'s decorator

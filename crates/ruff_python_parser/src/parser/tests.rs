@@ -2,7 +2,9 @@ use ruff_python_ast::{
     Expr, InterpolatedStringElement, IpyEscapeKind, ModModule, Number, Operator, Stmt, UnaryOp,
 };
 
-use crate::{Mode, ParseErrorType, ParseOptions, Parsed, parse, parse_expression, parse_module};
+use crate::{
+    Mode, ParseError, ParseErrorType, ParseOptions, Parsed, parse, parse_expression, parse_module,
+};
 
 /// Parse a module in basedpython mode so tests for `.by`-only syntax don't
 /// trigger the `error_if_not_basedpython` parse-error gates.
@@ -96,6 +98,105 @@ fn basedpython_valueless_untyped_let_parses_cleanly() {
         panic!("expected an AnnAssign followed by an assignment");
     };
     assert!(assign.value.is_none(), "valueless `let` must have no value");
+}
+
+#[test]
+fn basedpython_local_once_param_modifiers() {
+    // `local` / `once` before a parameter name are lifetime modifiers that the
+    // parser consumes (no AST field). the parameter keeps its real name, and the
+    // two may combine in either order (`once local fn`)
+    for (source, param_name) in [
+        ("def f(local x): ...", "x"),
+        ("def f(once fn): ...", "fn"),
+        ("def f(local x: int): ...", "x"),
+        ("def f(once fn: int): ...", "fn"),
+        ("def f(once local fn): ...", "fn"),
+        ("def f(local once fn): ...", "fn"),
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::FunctionDef(func)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single FunctionDef for `{source}`");
+        };
+        let param = func.parameters.args.first().expect("one positional param");
+        assert_eq!(
+            param.parameter.name.as_str(),
+            param_name,
+            "modifier keywords must be stripped from the name in `{source}`"
+        );
+    }
+}
+
+#[test]
+fn basedpython_local_once_as_bare_param_name() {
+    // a parameter literally named `local` or `once` (not followed by another
+    // name) is an ordinary parameter — the trailing-`Name` guard keeps it from
+    // being read as a modifier
+    for (source, name) in [
+        ("def f(local): ...", "local"),
+        ("def f(once): ...", "once"),
+        ("def f(local, once): ...", "local"),
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::FunctionDef(func)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single FunctionDef for `{source}`");
+        };
+        assert_eq!(
+            func.parameters.args[0].parameter.name.as_str(),
+            name,
+            "bare `{name}` must stay a parameter name in `{source}`"
+        );
+    }
+}
+
+#[test]
+fn basedpython_local_once_param_rejected_in_py() {
+    // the modifiers are `.by`-only; a `.py` file using them collects a
+    // `BasedPythonOnly` gate error
+    for source in ["def f(local x): ...", "def f(once fn): ..."] {
+        let parsed = crate::Parser::new(source, ParseOptions::from(Mode::Module))
+            .parse()
+            .try_into_module()
+            .expect("recovers to a module");
+        assert!(
+            parsed.errors().iter().any(ParseError::is_basedpython_only),
+            "expected a BasedPythonOnly error for `{source}`, got {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+#[test]
+fn basedpython_local_once_in_callable_type() {
+    // `local` / `once` modifiers inside a callable-type parameter list parse
+    // cleanly (stripped, no AST field), on the first and subsequent elements
+    for (source, arg_count) in [
+        ("f: (local int) -> None", 1usize),
+        ("f: (local list[int], once str) -> bool", 2),
+        ("f: (int, local str, /, once bool) -> None", 3),
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::AnnAssign(assign)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single AnnAssign for `{source}`");
+        };
+        let Expr::CallableType(callable) = assign.annotation.as_ref() else {
+            panic!("expected a callable type for `{source}`");
+        };
+        assert_eq!(callable.args.len(), arg_count, "arg count for `{source}`");
+    }
+}
+
+#[test]
+fn basedpython_local_in_callable_rejected_in_py() {
+    // the modifier is `.by`-only inside a callable type too
+    let parsed = crate::Parser::new("f: (local int) -> None", ParseOptions::from(Mode::Module))
+        .parse()
+        .try_into_module()
+        .expect("recovers to a module");
+    assert!(
+        parsed.errors().iter().any(ParseError::is_basedpython_only),
+        "expected a BasedPythonOnly error, got {:?}",
+        parsed.errors()
+    );
 }
 
 #[test]

@@ -152,7 +152,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         self.check_pytest_function(function);
 
+        // basedpython: enforce `local` (no escape) and `once` (exactly one call)
+        crate::types::lifetimes::check_local_lifetimes(&self.context, function);
+
         self.infer_body(&function.body);
+
+        // basedpython: a `local` borrow may only be passed on to another `local`
+        // parameter — checked after the body so callee types are available
+        crate::types::lifetimes::check_local_argument_passing(&self.context, function, |expr| {
+            self.try_expression_type(expr)
+        });
 
         let enclosing_function_for_return_check =
             nearest_enclosing_function(db, self.index, self.scope());

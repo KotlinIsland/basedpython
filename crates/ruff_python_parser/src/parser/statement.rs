@@ -4841,6 +4841,24 @@ impl<'src> Parser<'src> {
             self.bump(TokenKind::Name);
             is_context = true;
         }
+
+        // basedpython: `local` / `once` lifetime modifiers on a parameter.
+        // `local` marks a non-escaping (borrowed) parameter; `once` marks a
+        // callback that must be called exactly once. Both may appear, in any
+        // order (`once local fn`). Like `let`, the keywords carry no AST field:
+        // the `Parameter.range` covers them (it starts before this run) and the
+        // strip transform + ty analysis detect them from the source span. The
+        // trailing `Name` guard keeps a parameter literally named `local`/`once`
+        // (`def f(local)`) from being read as a modifier.
+        while self.at(TokenKind::Name)
+            && matches!(self.src_text(self.current_token_range()), "local" | "once")
+            && self.peek() == TokenKind::Name
+        {
+            self.error_if_not_basedpython(
+                "`local` / `once` parameter modifiers are not valid in .py files".to_string(),
+            );
+            self.bump(TokenKind::Name);
+        }
         let name = self.parse_identifier();
 
         // Annotations are only allowed for function definition. For lambda expression,

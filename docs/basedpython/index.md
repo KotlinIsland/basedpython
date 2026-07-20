@@ -93,6 +93,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [`sentinel` declarations](features/sentinel.md)
 - [lazy imports](features/lazy-imports.md)
 - [repeated `_` parameters](features/repeated-underscore.md)
+- [local lifetimes (`local` / `once`)](features/local-lifetimes.md)
 
 ## planned
 

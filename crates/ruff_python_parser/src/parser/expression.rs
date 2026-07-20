@@ -3073,6 +3073,26 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// basedpython: consume a `local` / `once` modifier prefixing a callable-type
+    /// parameter, e.g. the `local` in `(local int) -> None`. The keyword is
+    /// consumed without an AST field — the parsed element starts at the type, so
+    /// ty and the callable transform both see a plain `Callable[[int], None]`.
+    ///
+    /// Only consumed when a bare name (a type) directly follows, so a
+    /// parenthesized name (`(local)`), a call (`once(x)`), or a subscript
+    /// (`local[i]`) is never mistaken for a modifier.
+    fn skip_callable_type_modifiers(&mut self) {
+        while self.at(TokenKind::Name)
+            && matches!(self.src_text(self.current_token_range()), "local" | "once")
+            && self.peek() == TokenKind::Name
+        {
+            self.error_if_not_basedpython(
+                "`local` / `once` in a callable type are not valid in .py files".to_string(),
+            );
+            self.bump(TokenKind::Name);
+        }
+    }
+
     /// Parses an expression in parentheses, a tuple expression, or a generator expression.
     ///
     /// Matches the `(tuple | group | genexp)` rule in the [Python grammar].
@@ -3161,6 +3181,10 @@ impl<'src> Parser<'src> {
                 is_parenthesized: false,
             };
         }
+
+        // basedpython: a callable-type parameter may carry a `local` / `once`
+        // modifier (`(local int) -> None`); strip it before parsing the type
+        self.skip_callable_type_modifiers();
 
         // Use the more general rule of the three to parse the first element
         // and limit it later.
@@ -3491,6 +3515,13 @@ impl<'src> Parser<'src> {
                 break;
             }
 
+            // basedpython: strip a `local` / `once` modifier on this callable
+            // parameter before dispatching on markers / named fields
+            self.skip_callable_type_modifiers();
+            if self.at(TokenKind::Rpar) {
+                break;
+            }
+
             // basedpython markers — switch to extended-tuple parsing.
             // `*Name (...)` (call) and `*Name` followed by `,` or `)` are
             // starred-unpack expressions, NOT spec markers. only `*:`,
@@ -3662,6 +3693,13 @@ impl<'src> Parser<'src> {
         }
 
         loop {
+            if self.at(TokenKind::Rpar) {
+                break;
+            }
+
+            // basedpython: strip a `local` / `once` modifier prefixing this
+            // callable parameter's type
+            self.skip_callable_type_modifiers();
             if self.at(TokenKind::Rpar) {
                 break;
             }

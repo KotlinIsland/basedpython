@@ -139,6 +139,9 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNKNOWN_FIXTURE);
     registry.register_lint(&INVALID_PARAMETRIZE);
     registry.register_lint(&UNANNOTATED_MODEL_FIELD);
+    registry.register_lint(&ESCAPING_LOCAL);
+    registry.register_lint(&ONCE_NOT_CALLED);
+    registry.register_lint(&ONCE_CALLED_TWICE);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&NON_OVERLAPPING_CAST);
     registry.register_lint(&OPTIONAL_OBJECT_CONVERSION);
@@ -1049,6 +1052,33 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
+    /// Checks for a basedpython `local` parameter whose value escapes the call it
+    /// is bound in — returned to the caller, stored on a parameter-rooted object,
+    /// or assigned to a `global` / `nonlocal` binding.
+    ///
+    /// ## Why is this bad?
+    /// A `local` parameter is borrowed only for the duration of the call. Letting
+    /// its value outlive the call defeats the borrow: the caller may release the
+    /// underlying resource, leaving a dangling reference behind.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// _saved: object
+    ///
+    /// def f(local fn: () -> None):
+    ///     global _saved
+    ///     _saved = fn  # error: `fn` is local and cannot escape the call
+    /// ```
+    pub(crate) static ESCAPING_LOCAL = {
+        summary: "detects a `local` parameter whose value escapes its call",
+        status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
     /// Checks for a pydantic model field assigned a field specifier
     /// (`Field(...)`) without a type annotation.
     ///
@@ -1068,6 +1098,28 @@ declare_lint! {
     pub(crate) static UNANNOTATED_MODEL_FIELD = {
         summary: "detects a pydantic model field specifier without a type annotation",
         status: LintStatus::stable("0.0.1-alpha.4"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a basedpython `once` callback parameter that the function body
+    /// never calls.
+    ///
+    /// ## Why is this bad?
+    /// A `once` callback must be called exactly once. A body that never mentions
+    /// it has forgotten to call it — a common completion-handler bug.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def f(once done: () -> None):
+    ///     do_work()  # error: `done` is never called
+    /// ```
+    pub(crate) static ONCE_NOT_CALLED = {
+        summary: "detects a `once` callback that is never called",
+        status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
     }
 }
@@ -1154,6 +1206,29 @@ declare_lint! {
     pub(crate) static INVALID_PARAMETRIZE = {
         summary: "detects a pytest parametrize name or arity mismatch",
         status: LintStatus::stable("0.0.1-alpha.36"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a basedpython `once` callback parameter that a function body may
+    /// call more than once — two unconditional calls, or a call inside a loop.
+    ///
+    /// ## Why is this bad?
+    /// A `once` callback must be called exactly once. Calling it again — or in a
+    /// loop that may run more than once — breaks that contract.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def f(once done: () -> None):
+    ///     for _ in range(3):
+    ///         done()  # error: `done` may be called more than once
+    /// ```
+    pub(crate) static ONCE_CALLED_TWICE = {
+        summary: "detects a `once` callback that may be called more than once",
+        status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
     }
 }
