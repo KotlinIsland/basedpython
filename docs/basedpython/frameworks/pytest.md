@@ -1,121 +1,139 @@
 # pytest support
 
-> session 3 of the [framework rollout](index.md) — introduces the injection
-> registry, the one genuinely new resolution mechanism in framework support
+basedpython understands pytest's fixture system. fixture parameters check correctly against their types, and tests using basedpython features work at runtime.
 
-## the problem
+## what works
 
-pytest fills test and fixture parameters by *name* from a scoped registry:
+### fixtures and dependency injection
 
-```py
-@pytest.fixture
-def db() -> Db:
-    yield make_db()
+- fixture parameters resolve correctly by name
+- fixture type mismatches are caught: if a test requests `db: Database` but the fixture provides `Connection`, you'll get a type error
+- builtin fixtures: `tmp_path`, `monkeypatch`, `capsys`, `tmp_path_factory`, and others from pytest's stubs all have their correct types
+- yield fixtures: `Iterator[T]` and `Generator[T, ...]` unwrap to `T`
+- async fixtures: `AsyncIterator[T]` unwraps to `T`
+- fixture shadowing: fixtures in the current module take precedence over conftest
+- fixture name overrides: `@pytest.fixture(name="custom_name")`
 
-def test_user(db: Db, tmp_path: Path) -> None: ...
+### test parametrization
+
+- `@pytest.mark.parametrize` checks arity and can validate literal parameter values
+- basedpython enum variants work as parametrize values
+
+### transpilation compatibility
+
+- fixture functions written in `.by` work correctly: decorators survive, parameter names survive, type injection works at runtime
+- `yield` fixtures transpose correctly
+- `?:` and other basedpython features work inside test bodies and fixtures
+
+## limitations and workarounds
+
+### plugin-provided fixtures
+
+third-party pytest plugins that inject fixtures via entry points aren't discovered. builtin fixtures work, but plugin fixtures like `django_db` or `flask_app` won't be recognized by the type checker.
+
+**workaround:** annotate the parameter explicitly:
+
+```by
+# from pytest-django, not recognized by the checker
+def test_user(db: DjangoDatabase):
+    user = User.objects.create(name="Alice")
+    assert user.id is not None
 ```
 
-no mainstream checker validates this. the failure modes are silent: a renamed
-fixture leaves tests requesting a name that no longer exists (fails at
-collection, not check time); an annotation that drifts from the fixture's
-return type checks the body against a lie
+### dynamic parametrize arguments
 
-## design: the injection registry
+when parametrize uses dynamic values (not literal strings or values), the checker can't validate them. static arity and value checks only apply to literal arguments.
 
-`crates/ty_python_semantic/src/types/dedicated/pytest.rs` plus project-level
-salsa queries. resolution mirrors pytest's own order and is deliberately
-file-scoped:
+## required setup
 
-- `module_fixtures(db, file)` — fixture functions a file defines: functions
-    whose decorator list resolves to `pytest.fixture` (semantic resolution —
-    `@pytest.fixture`, `@pytest.fixture(scope=...)`, aliased imports all
-    count). the fixture's *name* is the function name unless overridden by the
-    decorator's `name=` argument (literal strings only; a dynamic name makes
-    the fixture unresolvable and disables diagnostics for it, never guesses)
-- `conftest_chain(db, file)` — the `conftest.py` files from the file's
-    directory up to the project root, nearest first
-- `resolve_fixture(db, file, name)` — same module → conftest chain →
-    builtin table; first hit wins (pytest's shadowing order)
-- **builtin fixtures** resolve through a name → (module, symbol) table into
-    the typed `_pytest` stubs (`tmp_path` → `_pytest.tmpdir.tmp_path`, etc.) —
-    the table is data in the dedicated module, the *types* come from stubs, so
-    a pytest upgrade updates types for free
+pytest has inline type stubs, so there's no additional setup. just install pytest.
 
-the fixture's **provided type** is derived from its return annotation with
-generator unwrapping: `Iterator[T]` / `Generator[T, …]` → `T` (yield
-fixtures), `AsyncIterator[T]` → `T` (async), plain `T` → `T`. an unannotated
-fixture provides its inferred return, falling back to no-check when inference
-is `Unknown`-ish
+## examples
 
-**which functions get checked**: fixture functions themselves, and test
-functions — `test_*` functions in `test_*.py` / `*_test.py` files (pytest's
-default conventions; honoring configured overrides is a recorded follow-up,
-not v1). everything else is untouched
+basic fixture:
 
-`function_framework_role(db, function) -> Option<FunctionFrameworkRole>`
-(`PytestFixture`, `PytestTest`) lands in `dedicated/role.rs` alongside the
-class query, as the [index](index.md#framework-roles) anticipates
+```by
+import pytest
+from pathlib import Path
 
-## diagnostics
+@pytest.fixture
+def temp_file(tmp_path: Path) -> Path:
+    file = tmp_path / "test.txt"
+    file.write_text("hello")
+    return file
 
-| check                           | behaviour                                                                                                                                                                                                                                                                                                                  |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| annotated param vs fixture type | on by default — if `resolve_fixture` finds the fixture and the declared annotation isn't assignable from the provided type, error with both types and the fixture's definition as a subdiagnostic                                                                                                                          |
-| unused/unknown fixture name     | **off by default** — a param that resolves to no fixture. third-party plugins inject fixtures via `pytest11` entry points which v1 does not discover, so this diagnostic would false-positive on any plugin user; it ships as an opt-in lint until plugin discovery (site-packages `dist-info` entry-point scanning) lands |
-| `parametrize` arity/types       | `@pytest.mark.parametrize("a,b", [...])` — when argnames is a literal string, check the name list against the function signature and each param-set's arity; element-type checking against annotations where the values are literal. dynamic argnames/argvalues → skip                                                     |
-| fixture cycles                  | recorded follow-up, not v1                                                                                                                                                                                                                                                                                                 |
+def test_read_file(temp_file: Path) -> None:
+    content = temp_file.read_text()
+    assert content == "hello"
+```
 
-subdiagnostics always point at the resolved fixture definition — the value of
-this feature is navigation as much as checking
+fixture with setup and teardown:
 
-## salsa discipline
+```by
+@pytest.fixture
+def database() -> Iterator[Database]:
+    db = Database(":memory:")
+    db.connect()
+    yield db
+    db.close()
 
-`conftest_chain` depends on file-system layout, and `module_fixtures` must not
-drag whole-module type inference into every consumer:
+def test_query(database: Database) -> None:
+    result = database.query("SELECT 1")
+    assert result is not None
+```
 
-- `module_fixtures` is a tracked query reading only decorator resolution and
-    signatures (no body inference)
-- `resolve_fixture` composes tracked queries so a conftest edit only
-    invalidates files under its directory
-- follow the `.node()`-access rule: anything touching ast nodes is
-    `#[salsa::tracked]`
+parametrization:
 
-## transpiler conformance column
+```by
+@pytest.mark.parametrize("x,y,expected", [
+    (2, 3, 5),
+    (0, 0, 0),
+    (-1, 1, 0),
+])
+def test_add(x: int, y: int, expected: int) -> None:
+    assert x + y == expected
+```
 
-pytest's contract with lowered output is *introspection*: it matches
-parameter names, unwraps decorators, and inspects signatures. the conformance
-pins (divergence tests running real pytest over transpiled `.by` test files):
+conftest with multiple fixtures:
 
-- parameter names and order survive every lowering (soundness guards insert
-    body statements only; decorators are preserved verbatim)
-- a yield fixture written in `.by` (with `?.`, based enums, checked casts in
-    its body) collects and injects correctly
-- `parametrize` over based-enum variants works (variants are real classes)
+```by
+# conftest.py
+import pytest
 
-## running `.by` test suites
+@pytest.fixture
+def api_client() -> ApiClient:
+    return ApiClient(base_url="http://localhost:8000")
 
-pytest collects `.py` files, so `.by` tests run against transpiled output:
-`by build` then `pytest out/` works today, with tracebacks mapped through the
-line table. a `by test` convenience command (build + run pytest with mapped
-tracebacks) is the natural follow-up — record as a separate feature, not part
-of this session
+@pytest.fixture
+def authenticated_client(api_client: ApiClient) -> ApiClient:
+    api_client.authenticate("token")
+    return api_client
 
-## test plan
+# test_api.py
+def test_list_users(authenticated_client: ApiClient) -> None:
+    users = authenticated_client.get("/users")
+    assert len(users) > 0
+```
 
-1. mock-stub mdtests for the registry mechanics: minimal `pytest`/`_pytest`
-    stubs; fixtures in module / conftest / nested conftest; shadowing order;
-    `name=` override; yield unwrapping; async fixtures; negative cases (docs
-    warn: one `##` header per example — registry tests are especially prone to
-    the block-concatenation trap)
-1. real-dependency mdtests extending `external/pytest.md` (currently only
-    `pytest.fail` terminality): builtin fixture types (`tmp_path`,
-    `monkeypatch`, `capsys`), `pytest.raises`, parametrize
-1. divergence suite `basedpython_pytest.md` + a sandpit project running real
-    pytest over transpiled tests for the conformance pins
+## collection conventions
 
-## out of scope
+basedpython recognizes the default pytest conventions:
 
-- plugin-provided fixtures (entry-point discovery) — prerequisite for turning
-    the unknown-fixture diagnostic on by default; design recorded above
-- `pytest.ini`/`pyproject` collection-convention overrides
-- `request.getfixturevalue(...)` dynamic access
+- test files: `test_*.py` or `*_test.py`
+- test functions: `test_*` at module scope
+
+custom collection configs in `pytest.ini` or `pyproject.toml` aren't read yet, so stick to the defaults for full checking.
+
+## running tests
+
+`.by` test files transpile to `.py`, so run tests on the transpiled output:
+
+```sh
+by build
+pytest out/
+```
+
+## see also
+
+- [pytest documentation](https://docs.pytest.org/)
+- framework compatibility matrix in the [frameworks overview](index.md#basedpython-features-and-framework-compatibility)

@@ -5,9 +5,11 @@ use crate::{
         KnownClass, KnownInstanceType, ParamSpecAttrKind, SubclassOfInner, SubclassOfType, Type,
         TypeContext, TypeVarKind, UnionType,
         class::ClassLiteral,
+        dedicated::pytest,
         diagnostic::{
-            FINAL_ON_NON_METHOD, INVALID_PARAMETER_DEFAULT, INVALID_PARAMSPEC, INVALID_TYPE_FORM,
-            REIFIED_CLASSMETHOD, USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
+            FINAL_ON_NON_METHOD, INVALID_FIXTURE_TYPE, INVALID_PARAMETER_DEFAULT,
+            INVALID_PARAMETRIZE, INVALID_PARAMSPEC, INVALID_TYPE_FORM, REIFIED_CLASSMETHOD,
+            UNKNOWN_FIXTURE, USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
             is_invalid_typed_dict_literal, report_implicit_return_type,
             report_invalid_generator_function_return_type, report_invalid_return_type,
             report_shadowed_type_variable,
@@ -18,6 +20,7 @@ use crate::{
             OverloadLiteral, function_body_kind, is_implicit_classmethod,
             same_module_uncached_raw_signature,
         },
+        function_framework_role,
         generics::{enclosing_generic_contexts, typing_self},
         infer::{
             InferenceFlags, TypeExpressionFlags, TypeInferenceBuilder,
@@ -41,8 +44,11 @@ use ty_python_core::{
     scope::NodeWithScopeRef,
 };
 
+use ruff_db::diagnostic::{Annotation, Span};
+use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
 use ruff_text_size::Ranged;
+use rustc_hash::FxHashSet;
 
 fn parameters_have_annotations(parameters: &ast::Parameters) -> bool {
     parameters
@@ -143,6 +149,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.file_expression_type(expr)
         });
         self.validate_unpacked_typed_dict_kwargs(&function.parameters);
+
+        self.check_pytest_function(function);
 
         self.infer_body(&function.body);
 
@@ -321,6 +329,176 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     enclosing_class_context,
                     no_return,
                 );
+            }
+        }
+    }
+
+    /// Check a pytest test or fixture function: its parameters against the
+    /// fixtures they resolve to, and any `@pytest.mark.parametrize` markers
+    /// against the function's signature. A function pytest does not manage is
+    /// left untouched.
+    fn check_pytest_function(&self, function_node: &ast::StmtFunctionDef) {
+        let db = self.db();
+        let Some(function) = self.current_function_type() else {
+            return;
+        };
+        if function_framework_role(db, function).is_none() {
+            return;
+        }
+
+        // parametrized names are supplied as arguments, not by fixtures, so
+        // collect them first to exclude them from the fixture resolution below
+        let mut parametrized = FxHashSet::default();
+        self.check_parametrize(function_node, function, &mut parametrized);
+
+        let file = self.file();
+        let callable = function.signature(db);
+        let Some(signature) = callable.iter().last() else {
+            return;
+        };
+        for parameter in signature.parameters() {
+            if parameter.is_variadic() || parameter.is_keyword_variadic() {
+                continue;
+            }
+            let Some(name) = parameter.name() else {
+                continue;
+            };
+            if parametrized.contains(name) {
+                continue;
+            }
+            let Some(range) = parameter
+                .definition()
+                .map(|definition| definition.focus_range(db, self.module()).range())
+            else {
+                continue;
+            };
+
+            match pytest::resolve_fixture(db, file, name.as_str()) {
+                Some(fixture) => {
+                    // only an explicitly annotated parameter can disagree with
+                    // its fixture; an unannotated one adopts the fixture's type
+                    if !parameter.should_annotation_be_displayed() {
+                        continue;
+                    }
+                    let Some(provided) = fixture.provided_type else {
+                        continue;
+                    };
+                    let declared = parameter.annotated_type();
+                    if provided.is_assignable_to(db, declared) {
+                        continue;
+                    }
+                    let Some(builder) = self.context.report_lint(&INVALID_FIXTURE_TYPE, range)
+                    else {
+                        continue;
+                    };
+                    let mut diagnostic = builder.into_diagnostic(format_args!(
+                        "Fixture `{name}` provides `{}`, but the parameter is annotated `{}`",
+                        provided.display(db),
+                        declared.display(db),
+                    ));
+                    if let Some(fixture_definition) = fixture.definition {
+                        let fixture_module =
+                            parsed_module(db, fixture_definition.file(db)).load(db);
+                        let span = Span::from(fixture_definition.focus_range(db, &fixture_module));
+                        diagnostic
+                            .annotate(Annotation::secondary(span).message("fixture defined here"));
+                    }
+                }
+                None => {
+                    if let Some(builder) = self.context.report_lint(&UNKNOWN_FIXTURE, range) {
+                        builder
+                            .into_diagnostic(format_args!("No fixture named `{name}` is defined"));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Check every `@pytest.mark.parametrize` marker on `function_node`,
+    /// recording the parametrized names in `parametrized`.
+    fn check_parametrize(
+        &self,
+        function_node: &ast::StmtFunctionDef,
+        function: FunctionType<'db>,
+        parametrized: &mut FxHashSet<ast::name::Name>,
+    ) {
+        let db = self.db();
+        let definition = function.definition(db);
+        let types = infer_definition_types(db, definition);
+        let callable = function.signature(db);
+        let parameter_names: FxHashSet<&ast::name::Name> = callable
+            .iter()
+            .last()
+            .map(|signature| {
+                signature
+                    .parameters()
+                    .iter()
+                    .filter_map(|parameter| parameter.name())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        for decorator in &function_node.decorator_list {
+            let ast::Expr::Call(call) = &decorator.expression else {
+                continue;
+            };
+            let ast::Expr::Attribute(attribute) = call.func.as_ref() else {
+                continue;
+            };
+            if attribute.attr.as_str() != "parametrize" {
+                continue;
+            }
+            if !pytest::is_mark_generator(db, types.expression_type(attribute.value.as_ref())) {
+                continue;
+            }
+            let Some(argnames) = call.arguments.find_argument_value("argnames", 0) else {
+                continue;
+            };
+            let Some(names) = pytest::parametrize_names(argnames) else {
+                continue;
+            };
+
+            for name in &names {
+                parametrized.insert(name.clone());
+                if !parameter_names.contains(name) {
+                    if let Some(builder) = self.context.report_lint(&INVALID_PARAMETRIZE, argnames)
+                    {
+                        builder.into_diagnostic(format_args!(
+                            "`{}` has no parameter `{name}` to parametrize",
+                            function_node.name,
+                        ));
+                    }
+                }
+            }
+
+            if names.len() > 1 {
+                if let Some(argvalues) = call.arguments.find_argument_value("argvalues", 1) {
+                    self.check_parametrize_arity(argvalues, names.len());
+                }
+            }
+        }
+    }
+
+    /// Check that each literal value row in `argvalues` has `arity` elements.
+    /// Rows that are not list/tuple literals cannot be checked and are skipped.
+    fn check_parametrize_arity(&self, argvalues: &ast::Expr, arity: usize) {
+        let rows = match argvalues {
+            ast::Expr::List(list) => &list.elts,
+            ast::Expr::Tuple(tuple) => &tuple.elts,
+            _ => return,
+        };
+        for row in rows {
+            let row_len = match row {
+                ast::Expr::Tuple(tuple) => tuple.elts.len(),
+                ast::Expr::List(list) => list.elts.len(),
+                _ => continue,
+            };
+            if row_len != arity {
+                if let Some(builder) = self.context.report_lint(&INVALID_PARAMETRIZE, row) {
+                    builder.into_diagnostic(format_args!(
+                        "parametrize value set has {row_len} values, but {arity} names were given",
+                    ));
+                }
             }
         }
     }

@@ -13,8 +13,8 @@
 //! `docs/basedpython/frameworks/index.md`
 
 use crate::Db;
-use crate::types::dedicated::{django, pydantic, sqlalchemy};
-use crate::types::{ClassLiteral, StaticClassLiteral};
+use crate::types::dedicated::{django, pydantic, pytest, sqlalchemy};
+use crate::types::{ClassLiteral, FunctionType, StaticClassLiteral};
 
 /// the kind of framework class-transformer that applies to a class
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update, get_size2::GetSize)]
@@ -50,6 +50,34 @@ fn static_class_framework_role<'db>(
     }
     if sqlalchemy::is_declarative(db, class) {
         return Some(FrameworkRole::SqlalchemyDeclarative);
+    }
+    None
+}
+
+/// the kind of pytest function whose parameters pytest fills from the fixture
+/// registry — the parallel of [`FrameworkRole`] for function-level frameworks
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update, get_size2::GetSize)]
+pub enum FunctionFrameworkRole {
+    /// a pytest fixture — a function decorated with `@pytest.fixture`
+    PytestFixture,
+    /// a pytest test — a `test*` function in a collected test file
+    PytestTest,
+}
+
+/// classify `function` against the supported function-level frameworks.
+/// `None` for an ordinary function. a function that is both a fixture and
+/// named like a test classifies as a fixture: the decorator is explicit,
+/// the name convention is incidental
+#[salsa::tracked(heap_size = ruff_memory_usage::heap_size)]
+pub fn function_framework_role<'db>(
+    db: &'db dyn Db,
+    function: FunctionType<'db>,
+) -> Option<FunctionFrameworkRole> {
+    if pytest::is_fixture_function(db, function) {
+        return Some(FunctionFrameworkRole::PytestFixture);
+    }
+    if pytest::is_test_function(db, function) {
+        return Some(FunctionFrameworkRole::PytestTest);
     }
     None
 }
@@ -284,6 +312,103 @@ mod tests {
             .and_then(crate::types::Type::as_class_literal)
             .expect("class definition should infer a class literal");
         assert_eq!(class_framework_role(&db, class), None);
+        Ok(())
+    }
+
+    /// resolve the function-level framework role of the last top-level
+    /// function in `target`, with a mock pytest package in site-packages
+    /// (`fixture` must be *defined* in `_pytest.fixtures` on a third-party
+    /// search path to be recognized)
+    fn pytest_function_role(
+        files: &[(&str, &str)],
+        target: &str,
+    ) -> anyhow::Result<Option<FunctionFrameworkRole>> {
+        use crate::types::infer_definition_types;
+        use ty_python_core::semantic_index;
+
+        let mut builder = TestDbBuilder::new()
+            .with_site_packages("/sp")
+            .with_file("/sp/pytest/__init__.pyi", "from _pytest.fixtures import fixture as fixture\n")
+            .with_file("/sp/_pytest/__init__.pyi", "")
+            .with_file(
+                "/sp/_pytest/fixtures.pyi",
+                "class FixtureFunctionDefinition: ...\n\
+                 def fixture(function=..., *, scope: str = ..., name: str | None = None) -> FixtureFunctionDefinition: ...\n",
+            );
+        for (path, source) in files {
+            builder = builder.with_file(path, source);
+        }
+        let db = builder.build()?;
+
+        let file = system_path_to_file(&db, target)?;
+        let module = parsed_module(&db, file).load(&db);
+        let index = semantic_index(&db, file);
+        let function_node = module
+            .suite()
+            .iter()
+            .rev()
+            .find_map(|stmt| stmt.as_function_def_stmt())
+            .expect("source should define a function");
+        let definition = index.expect_single_definition(function_node);
+        let function = infer_definition_types(&db, definition)
+            .function_type(definition)
+            .expect("function definition should infer a function type");
+        Ok(function_framework_role(&db, function))
+    }
+
+    #[test]
+    fn pytest_bare_fixture() -> anyhow::Result<()> {
+        let role = pytest_function_role(
+            &[(
+                "/src/conftest.py",
+                "import pytest\n@pytest.fixture\ndef db() -> int:\n    return 1\n",
+            )],
+            "/src/conftest.py",
+        )?;
+        assert_eq!(role, Some(FunctionFrameworkRole::PytestFixture));
+        Ok(())
+    }
+
+    #[test]
+    fn pytest_called_fixture() -> anyhow::Result<()> {
+        let role = pytest_function_role(
+            &[(
+                "/src/conftest.py",
+                "import pytest\n@pytest.fixture(scope=\"session\")\ndef db() -> int:\n    return 1\n",
+            )],
+            "/src/conftest.py",
+        )?;
+        assert_eq!(role, Some(FunctionFrameworkRole::PytestFixture));
+        Ok(())
+    }
+
+    #[test]
+    fn pytest_module_level_test() -> anyhow::Result<()> {
+        let role = pytest_function_role(
+            &[("/src/test_it.py", "def test_answer() -> None:\n    pass\n")],
+            "/src/test_it.py",
+        )?;
+        assert_eq!(role, Some(FunctionFrameworkRole::PytestTest));
+        Ok(())
+    }
+
+    #[test]
+    fn pytest_test_named_function_in_ordinary_file_has_no_role() -> anyhow::Result<()> {
+        let role = pytest_function_role(
+            &[("/src/helpers.py", "def test_answer() -> None:\n    pass\n")],
+            "/src/helpers.py",
+        )?;
+        assert_eq!(role, None);
+        Ok(())
+    }
+
+    #[test]
+    fn pytest_ordinary_function_in_test_file_has_no_role() -> anyhow::Result<()> {
+        let role = pytest_function_role(
+            &[("/src/test_it.py", "def helper() -> None:\n    pass\n")],
+            "/src/test_it.py",
+        )?;
+        assert_eq!(role, None);
         Ok(())
     }
 }

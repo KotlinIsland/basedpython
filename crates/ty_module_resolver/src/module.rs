@@ -372,6 +372,10 @@ pub enum KnownModule {
     SqlalchemyOrmBase,
     #[strum(serialize = "sqlalchemy.orm.decl_api")]
     SqlalchemyOrmDeclApi,
+    #[strum(serialize = "_pytest.fixtures")]
+    PytestFixtures,
+    #[strum(serialize = "_pytest.mark.structures")]
+    PytestMarkStructures,
 }
 
 impl KnownModule {
@@ -425,6 +429,8 @@ impl KnownModule {
             Self::PydanticTypes => "pydantic.types",
             Self::SqlalchemyOrmBase => "sqlalchemy.orm.base",
             Self::SqlalchemyOrmDeclApi => "sqlalchemy.orm.decl_api",
+            Self::PytestFixtures => "_pytest.fixtures",
+            Self::PytestMarkStructures => "_pytest.mark.structures",
         }
     }
 
@@ -461,7 +467,9 @@ impl KnownModule {
             | Self::PydanticSettingsMain
             | Self::PydanticTypes
             | Self::SqlalchemyOrmBase
-            | Self::SqlalchemyOrmDeclApi => true,
+            | Self::SqlalchemyOrmDeclApi
+            | Self::PytestFixtures
+            | Self::PytestMarkStructures => true,
             Self::Builtins
             | Self::Enum
             | Self::Types

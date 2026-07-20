@@ -135,6 +135,9 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
     registry.register_lint(&MISSING_FRAMEWORK_STUBS);
     registry.register_lint(&INVALID_FIELD_LOOKUP);
+    registry.register_lint(&INVALID_FIXTURE_TYPE);
+    registry.register_lint(&UNKNOWN_FIXTURE);
+    registry.register_lint(&INVALID_PARAMETRIZE);
     registry.register_lint(&UNANNOTATED_MODEL_FIELD);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&NON_OVERLAPPING_CAST);
@@ -1065,6 +1068,92 @@ declare_lint! {
     pub(crate) static UNANNOTATED_MODEL_FIELD = {
         summary: "detects a pydantic model field specifier without a type annotation",
         status: LintStatus::stable("0.0.1-alpha.4"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks that a pytest test or fixture parameter's type annotation is
+    /// compatible with the type provided by the fixture of the same name.
+    ///
+    /// ## Why is this bad?
+    /// pytest fills the parameter by name from the fixture registry. If the
+    /// annotation drifts from the fixture's real type, the test body is
+    /// checked against a type the parameter never actually has, hiding real
+    /// errors.
+    ///
+    /// ## Example
+    ///
+    /// ```py
+    /// import pytest
+    ///
+    /// @pytest.fixture
+    /// def user() -> str:
+    ///     return "alice"
+    ///
+    /// def test_user(user: int) -> None:  # error: fixture provides `str`
+    ///     ...
+    /// ```
+    pub(crate) static INVALID_FIXTURE_TYPE = {
+        summary: "detects a pytest parameter annotation incompatible with its fixture",
+        status: LintStatus::stable("0.0.1-alpha.36"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks a pytest test or fixture parameter that resolves to no known
+    /// fixture.
+    ///
+    /// ## Why is this bad?
+    /// pytest fails such a request at collection time with a "fixture not
+    /// found" error. A renamed or misspelled fixture leaves a parameter that
+    /// no provider satisfies.
+    ///
+    /// ## Off by default
+    /// Third-party plugins inject fixtures through `pytest11` entry points,
+    /// which this check does not yet discover, so it would false-positive on
+    /// any plugin-provided fixture. It ships as an opt-in lint until plugin
+    /// discovery lands.
+    ///
+    /// ## Example
+    ///
+    /// ```py
+    /// def test_thing(no_such_fixture) -> None:  # requests an unknown fixture
+    ///     ...
+    /// ```
+    pub(crate) static UNKNOWN_FIXTURE = {
+        summary: "detects a pytest parameter that resolves to no known fixture",
+        status: LintStatus::stable("0.0.1-alpha.36"),
+        default_level: Level::Ignore,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks `@pytest.mark.parametrize` argument names against the decorated
+    /// function's parameters, and each parameter set's arity against the
+    /// number of names.
+    ///
+    /// ## Why is this bad?
+    /// pytest raises a collection error when a parametrized name is not a
+    /// function parameter, or when a value row's length does not match the
+    /// number of names. These fail only when the test is collected.
+    ///
+    /// ## Example
+    ///
+    /// ```py
+    /// import pytest
+    ///
+    /// @pytest.mark.parametrize("a, b", [(1, 2), (3,)])  # error: row has 1 value, expected 2
+    /// def test_add(a: int, b: int) -> None:
+    ///     ...
+    /// ```
+    pub(crate) static INVALID_PARAMETRIZE = {
+        summary: "detects a pytest parametrize name or arity mismatch",
+        status: LintStatus::stable("0.0.1-alpha.36"),
         default_level: Level::Error,
     }
 }

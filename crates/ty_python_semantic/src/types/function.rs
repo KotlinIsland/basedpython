@@ -2247,6 +2247,10 @@ pub enum KnownFunction {
     #[strum(serialize = "Field")]
     PydanticField,
 
+    /// `_pytest.fixtures.fixture` — the `@pytest.fixture` decorator
+    #[strum(serialize = "fixture")]
+    PytestFixture,
+
     /// `functools.total_ordering`
     TotalOrdering,
 
@@ -2366,6 +2370,7 @@ impl KnownFunction {
                 matches!(module, KnownModule::Dataclasses)
             }
             Self::PydanticField => matches!(module, KnownModule::PydanticFields),
+            Self::PytestFixture => matches!(module, KnownModule::PytestFixtures),
             Self::TotalOrdering => module.is_functools(),
             Self::GetattrStatic => module.is_inspect(),
             Self::StaticAssert => module.is_ty_extensions(),
@@ -2897,6 +2902,8 @@ pub(crate) mod tests {
                 KnownFunction::Dataclass | KnownFunction::Field => KnownModule::Dataclasses,
 
                 KnownFunction::PydanticField => KnownModule::PydanticFields,
+
+                KnownFunction::PytestFixture => KnownModule::PytestFixtures,
 
                 KnownFunction::GetattrStatic => KnownModule::Inspect,
 
