@@ -1,6 +1,7 @@
 pub(super) mod django;
 pub(super) mod pydantic;
 pub(super) mod role;
+pub(super) mod sqlalchemy;
 
 /// a supported framework that ships no inline type annotations and needs an
 /// external pep 561 stubs package for precise checking. consulted by the

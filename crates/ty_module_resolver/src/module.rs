@@ -368,6 +368,10 @@ pub enum KnownModule {
     PydanticSettingsMain,
     #[strum(serialize = "pydantic.types")]
     PydanticTypes,
+    #[strum(serialize = "sqlalchemy.orm.base")]
+    SqlalchemyOrmBase,
+    #[strum(serialize = "sqlalchemy.orm.decl_api")]
+    SqlalchemyOrmDeclApi,
 }
 
 impl KnownModule {
@@ -419,6 +423,8 @@ impl KnownModule {
             Self::PydanticRootModel => "pydantic.root_model",
             Self::PydanticSettingsMain => "pydantic_settings.main",
             Self::PydanticTypes => "pydantic.types",
+            Self::SqlalchemyOrmBase => "sqlalchemy.orm.base",
+            Self::SqlalchemyOrmDeclApi => "sqlalchemy.orm.decl_api",
         }
     }
 
@@ -453,7 +459,9 @@ impl KnownModule {
             | Self::PydanticMain
             | Self::PydanticRootModel
             | Self::PydanticSettingsMain
-            | Self::PydanticTypes => true,
+            | Self::PydanticTypes
+            | Self::SqlalchemyOrmBase
+            | Self::SqlalchemyOrmDeclApi => true,
             Self::Builtins
             | Self::Enum
             | Self::Types

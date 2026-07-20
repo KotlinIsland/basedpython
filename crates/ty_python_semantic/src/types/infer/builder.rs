@@ -4355,34 +4355,36 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         TypeQualifier::ClassVar | TypeQualifier::Final | TypeQualifier::InitVar => {
                         }
                     },
-                    Some(CodeGeneratorKind::NamedTuple | CodeGeneratorKind::Django) | None => {
-                        match qualifier {
-                            TypeQualifier::NotRequired
-                            | TypeQualifier::Required
-                            | TypeQualifier::ReadOnly => {
-                                let Some(builder) =
-                                    self.context.report_lint(&INVALID_TYPE_FORM, annotation)
-                                else {
-                                    continue;
-                                };
-                                builder.into_diagnostic(format_args!(
-                                    "`{name}` is only allowed in TypedDict fields",
-                                    name = qualifier.name()
-                                ));
-                            }
-                            TypeQualifier::InitVar => {
-                                let Some(builder) =
-                                    self.context.report_lint(&INVALID_TYPE_FORM, annotation)
-                                else {
-                                    continue;
-                                };
-                                builder.into_diagnostic(
-                                    "`InitVar` is only allowed in dataclass fields",
-                                );
-                            }
-                            TypeQualifier::ClassVar | TypeQualifier::Final => {}
+                    Some(
+                        CodeGeneratorKind::NamedTuple
+                        | CodeGeneratorKind::Django
+                        | CodeGeneratorKind::SqlalchemyDeclarative,
+                    )
+                    | None => match qualifier {
+                        TypeQualifier::NotRequired
+                        | TypeQualifier::Required
+                        | TypeQualifier::ReadOnly => {
+                            let Some(builder) =
+                                self.context.report_lint(&INVALID_TYPE_FORM, annotation)
+                            else {
+                                continue;
+                            };
+                            builder.into_diagnostic(format_args!(
+                                "`{name}` is only allowed in TypedDict fields",
+                                name = qualifier.name()
+                            ));
                         }
-                    }
+                        TypeQualifier::InitVar => {
+                            let Some(builder) =
+                                self.context.report_lint(&INVALID_TYPE_FORM, annotation)
+                            else {
+                                continue;
+                            };
+                            builder
+                                .into_diagnostic("`InitVar` is only allowed in dataclass fields");
+                        }
+                        TypeQualifier::ClassVar | TypeQualifier::Final => {}
+                    },
                 }
             }
         }

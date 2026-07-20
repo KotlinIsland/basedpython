@@ -205,6 +205,7 @@ fn check_class_declaration<'db>(
         Some(
             CodeGeneratorKind::Pydantic(_)
             | CodeGeneratorKind::Django
+            | CodeGeneratorKind::SqlalchemyDeclarative
             | CodeGeneratorKind::TypedDict,
         )
         | None => {}

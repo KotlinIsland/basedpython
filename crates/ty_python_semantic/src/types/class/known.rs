@@ -167,6 +167,10 @@ pub enum KnownClass {
     DjangoManyToManyField,
     DjangoManager,
     DjangoQuerySet,
+    // SQLAlchemy
+    SqlalchemyDeclarativeBase,
+    SqlalchemyMappedAsDataclass,
+    SqlalchemyMapped,
 }
 
 impl KnownClass {
@@ -305,7 +309,10 @@ impl KnownClass {
             | Self::DjangoOneToOneField
             | Self::DjangoManyToManyField
             | Self::DjangoManager
-            | Self::DjangoQuerySet => Some(Truthiness::Ambiguous),
+            | Self::DjangoQuerySet
+            | Self::SqlalchemyDeclarativeBase
+            | Self::SqlalchemyMappedAsDataclass
+            | Self::SqlalchemyMapped => Some(Truthiness::Ambiguous),
 
             Self::Tuple => None,
         }
@@ -425,7 +432,10 @@ impl KnownClass {
             | KnownClass::DjangoOneToOneField
             | KnownClass::DjangoManyToManyField
             | KnownClass::DjangoManager
-            | KnownClass::DjangoQuerySet => false,
+            | KnownClass::DjangoQuerySet
+            | KnownClass::SqlalchemyDeclarativeBase
+            | KnownClass::SqlalchemyMappedAsDataclass
+            | KnownClass::SqlalchemyMapped => false,
         }
     }
 
@@ -541,7 +551,10 @@ impl KnownClass {
             | KnownClass::DjangoOneToOneField
             | KnownClass::DjangoManyToManyField
             | KnownClass::DjangoManager
-            | KnownClass::DjangoQuerySet => false,
+            | KnownClass::DjangoQuerySet
+            | KnownClass::SqlalchemyDeclarativeBase
+            | KnownClass::SqlalchemyMappedAsDataclass
+            | KnownClass::SqlalchemyMapped => false,
 
             KnownClass::PydanticConfigDict => true,
         }
@@ -659,7 +672,10 @@ impl KnownClass {
             | KnownClass::DjangoOneToOneField
             | KnownClass::DjangoManyToManyField
             | KnownClass::DjangoManager
-            | KnownClass::DjangoQuerySet => false,
+            | KnownClass::DjangoQuerySet
+            | KnownClass::SqlalchemyDeclarativeBase
+            | KnownClass::SqlalchemyMappedAsDataclass
+            | KnownClass::SqlalchemyMapped => false,
         }
     }
 
@@ -788,7 +804,10 @@ impl KnownClass {
             | Self::DjangoOneToOneField
             | Self::DjangoManyToManyField
             | Self::DjangoManager
-            | Self::DjangoQuerySet => false,
+            | Self::DjangoQuerySet
+            | KnownClass::SqlalchemyDeclarativeBase
+            | KnownClass::SqlalchemyMappedAsDataclass
+            | KnownClass::SqlalchemyMapped => false,
         }
     }
 
@@ -906,7 +925,10 @@ impl KnownClass {
             | KnownClass::DjangoOneToOneField
             | KnownClass::DjangoManyToManyField
             | KnownClass::DjangoManager
-            | KnownClass::DjangoQuerySet => false,
+            | KnownClass::DjangoQuerySet
+            | KnownClass::SqlalchemyDeclarativeBase
+            | KnownClass::SqlalchemyMappedAsDataclass
+            | KnownClass::SqlalchemyMapped => false,
             KnownClass::NamedTupleFallback
             | KnownClass::TypedDictFallback
             | KnownClass::ExtensionTypedDictFallback => true,
@@ -1038,6 +1060,9 @@ impl KnownClass {
             Self::DjangoManyToManyField => "ManyToManyField",
             Self::DjangoManager => "Manager",
             Self::DjangoQuerySet => "QuerySet",
+            Self::SqlalchemyDeclarativeBase => "DeclarativeBase",
+            Self::SqlalchemyMappedAsDataclass => "MappedAsDataclass",
+            Self::SqlalchemyMapped => "Mapped",
         }
     }
 
@@ -1431,6 +1456,10 @@ impl KnownClass {
             }
             Self::DjangoManager => KnownModule::DjangoDbModelsManager,
             Self::DjangoQuerySet => KnownModule::DjangoDbModelsQuery,
+            Self::SqlalchemyDeclarativeBase | Self::SqlalchemyMappedAsDataclass => {
+                KnownModule::SqlalchemyOrmDeclApi
+            }
+            Self::SqlalchemyMapped => KnownModule::SqlalchemyOrmBase,
         }
     }
 
@@ -1549,7 +1578,10 @@ impl KnownClass {
             | Self::DjangoOneToOneField
             | Self::DjangoManyToManyField
             | Self::DjangoManager
-            | Self::DjangoQuerySet => Some(false),
+            | Self::DjangoQuerySet
+            | Self::SqlalchemyDeclarativeBase
+            | Self::SqlalchemyMappedAsDataclass
+            | Self::SqlalchemyMapped => Some(false),
 
             Self::Tuple => None,
         }
@@ -1671,7 +1703,10 @@ impl KnownClass {
             | Self::DjangoOneToOneField
             | Self::DjangoManyToManyField
             | Self::DjangoManager
-            | Self::DjangoQuerySet => false,
+            | Self::DjangoQuerySet
+            | KnownClass::SqlalchemyDeclarativeBase
+            | KnownClass::SqlalchemyMappedAsDataclass
+            | KnownClass::SqlalchemyMapped => false,
         }
     }
 
@@ -1792,6 +1827,9 @@ impl KnownClass {
             "ManyToManyField" => &[Self::DjangoManyToManyField],
             "Manager" => &[Self::DjangoManager],
             "QuerySet" => &[Self::DjangoQuerySet],
+            "DeclarativeBase" => &[Self::SqlalchemyDeclarativeBase],
+            "MappedAsDataclass" => &[Self::SqlalchemyMappedAsDataclass],
+            "Mapped" => &[Self::SqlalchemyMapped],
             _ => return None,
         };
 
@@ -1899,7 +1937,10 @@ impl KnownClass {
             | Self::DjangoOneToOneField
             | Self::DjangoManyToManyField
             | Self::DjangoManager
-            | Self::DjangoQuerySet => module == self.canonical_module(db),
+            | Self::DjangoQuerySet
+            | Self::SqlalchemyDeclarativeBase
+            | Self::SqlalchemyMappedAsDataclass
+            | Self::SqlalchemyMapped => module == self.canonical_module(db),
             Self::NoneType => matches!(module, KnownModule::Typeshed | KnownModule::Types),
             Self::SpecialForm
             | Self::TypeAliasType

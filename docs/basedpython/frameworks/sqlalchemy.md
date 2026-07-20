@@ -3,6 +3,41 @@
 > session 2 of the [framework rollout](index.md) — first user of the
 > descriptor-annotated fields-engine extension
 
+## status: verified
+
+constructor synthesis from `Mapped[T]` annotations is implemented and tested
+across all four layers:
+
+- **recognition** — `KnownModule::SqlalchemyOrmBase` (`Mapped`),
+    `KnownModule::SqlalchemyOrmDeclApi` (`DeclarativeBase`, `MappedAsDataclass`),
+    third-party gated; `KnownClass::SqlalchemyMapped` /
+    `SqlalchemyDeclarativeBase` / `SqlalchemyMappedAsDataclass`
+- **detection** — `dedicated/sqlalchemy.rs::is_declarative` (mro contains
+    `DeclarativeBase`, and not `MappedAsDataclass` — the dataclass_transform
+    path keeps winning for those), surfaced as
+    `FrameworkRole::SqlalchemyDeclarative` and
+    `CodeGeneratorKind::SqlalchemyDeclarative`
+- **fields** — the descriptor-annotated extraction mode
+    (`sqlalchemy_own_fields`): a class-body annotation whose declared type is a
+    `Mapped[T]` descriptor is a field of the unwrapped type `T`
+    (`mapped_field_type`); mixin/abstract fields flow in through the mro walk
+    (which now collects from ordinary classes for sqlalchemy, like pydantic)
+- **synthesis** — `own_synthesized_member` emits `(self, *, <field>: T = ...,   …) -> None`: keyword-only, every parameter optional; a user-defined
+    `__init__` wins; an unresolvable base degrades to the runtime
+    `__init__(self, **kw)` rather than an unsound closed signature
+- **tests** — unit (`dedicated/role.rs`), mock-stub (`mdtest/sqlalchemy.md`),
+    real-dependency (`mdtest/external/sqlalchemy.md`, lockfile committed),
+    transform gates + soundness pin (`by_transforms` `frameworks.rs`), runtime
+    divergence (`mdtest/basedpython_sqlalchemy.md`, run against real sqlalchemy
+    on in-memory sqlite)
+
+known limitations, deliberately scoped out of v1: only `Mapped[T]` (and direct
+`Mapped` subclasses) unwrap — `DynamicMapped` / `WriteOnlyMapped` collections
+degrade to no synthesis; only `DeclarativeBase` is recognized, not
+`DeclarativeBaseNoMeta` (both degrade gracefully to the stubs' `**kw`); the
+relationship-without-`Mapped` diagnostic (a design-approved stretch) is not
+implemented
+
 ## scope
 
 sqlalchemy **2.0 declarative** style only:
@@ -81,10 +116,13 @@ User.__init__  # (self, *, id: int = ..., name: str = ..., addresses: list[Addre
 
 ## diagnostics
 
-- the existing `external/sqlalchemy.md` `TODO` ("this should ideally be an
-    error") — re-audit once constructor synthesis lands; several imprecisions
-    collapse into ordinary `invalid-argument-type` errors once `__init__` is
-    truthful
+- the `external/sqlalchemy.md` `TODO` ("this should ideally be an error") is
+    resolved: `User(invalid_arg=42)` and typo'd keywords are now
+    `unknown-argument` errors, and a wrong-typed value is `invalid-argument-type`,
+    because the synthesized `__init__` is truthful. the old first example relied
+    on the loose `**kw: Any` (it passed `name=` for a column whose python
+    attribute is `internal_name`, which raises at runtime); it was rewritten to
+    the correct form
 - stretch (design-approved, implement only if time allows):
     `relationship()` assigned without a `Mapped[...]` annotation → diagnostic
     suggesting the 2.0 form
