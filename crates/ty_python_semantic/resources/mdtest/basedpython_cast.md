@@ -21,6 +21,52 @@ b = a cast int | str
 reveal_type(b)  # revealed: int | str
 ```
 
+## statement cast narrows in place
+
+A bare `<value> cast <type>` statement narrows the value for the rest of the scope, like an
+unconditional assertion. The target type replaces the operand's prior type wholesale.
+
+```by
+def f(a: object):
+    reveal_type(a)  # revealed: object
+    a cast int
+    reveal_type(a)  # revealed: int
+```
+
+`cast?` can yield `None`, so it does not narrow its operand.
+
+```by
+def f(a: object):
+    a cast? int
+    reveal_type(a)  # revealed: object
+```
+
+## non-overlapping cast
+
+A `cast` between disjoint types can never succeed — a checked `cast` always raises and a safe
+`cast?` always returns `None` — so it is flagged.
+
+```by
+def f(a: object):
+    a cast int  # ok — `object` overlaps `int`
+    # error: [non-overlapping-cast] "Cast from `""` to `int` is between non-overlapping types"
+    "" cast int
+    # error: [non-overlapping-cast] "Cast from `"s"` to `int` is between non-overlapping types"
+    b = "s" cast? int
+    reveal_type(b)  # revealed: int | None
+```
+
+Overlapping casts stay silent, including a downcast to a subtype.
+
+```by
+class Base: ...
+class Sub(Base): ...
+
+def f(b: Base):
+    b cast Sub
+    reveal_type(b)  # revealed: Sub
+```
+
 ## cast in call argument
 
 ```by

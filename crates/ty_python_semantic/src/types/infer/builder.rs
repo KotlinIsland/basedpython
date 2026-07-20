@@ -58,11 +58,12 @@ use crate::types::diagnostic::{
     INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT, INVALID_DECLARATION,
     INVALID_ENUM_MEMBER_ANNOTATION, INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE,
     INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM, INVALID_TYPE_GUARD_CALL,
-    INVALID_TYPE_VARIABLE_BOUND, INVALID_TYPE_VARIABLE_CONSTRAINTS, POSSIBLY_MISSING_IMPLICIT_CALL,
-    POSSIBLY_MISSING_SUBMODULE, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL,
-    UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
-    hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
-    report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_call_to_abstract_method,
+    INVALID_TYPE_VARIABLE_BOUND, INVALID_TYPE_VARIABLE_CONSTRAINTS, NON_OVERLAPPING_CAST,
+    POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE, UNDEFINED_REVEAL,
+    UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC,
+    UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, hint_if_stdlib_attribute_exists_on_other_versions,
+    report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
+    report_bad_dunder_delete_call, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
     report_invalid_class_match_pattern, report_invalid_exception_caught,
     report_invalid_exception_cause, report_invalid_exception_raised,
@@ -8433,6 +8434,29 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// Warn when a `cast` bridges two types that can never share a value. Such a
+    /// cast is always futile: a checked `cast` raises and a safe `cast?` yields
+    /// `None`. `Any`/`Unknown` overlap everything, so those never fire.
+    fn report_non_overlapping_cast(
+        &mut self,
+        value_arg: &ast::Expr,
+        value_ty: Type<'db>,
+        target: Type<'db>,
+    ) {
+        let db = self.db();
+        if !value_ty.is_disjoint_from(db, target) {
+            return;
+        }
+        let Some(builder) = self.context.report_lint(&NON_OVERLAPPING_CAST, value_arg) else {
+            return;
+        };
+        builder.into_diagnostic(format_args!(
+            "Cast from `{}` to `{}` is between non-overlapping types",
+            value_ty.display(db),
+            target.display(db)
+        ));
+    }
+
     fn infer_call_expression(
         &mut self,
         call_expression: &ast::ExprCall,
@@ -8445,9 +8469,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         if call_expression.is_cast
             && let [type_arg, value_arg] = &*call_expression.arguments.args
         {
-            self.infer_expression(value_arg, TypeContext::default());
+            let value_ty = self.infer_expression(value_arg, TypeContext::default());
             let target = self.infer_type_expression(type_arg);
             self.report_erased_cast_argument(type_arg, target);
+            self.report_non_overlapping_cast(value_arg, value_ty, target);
             return target;
         }
 
@@ -8456,9 +8481,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         if call_expression.is_checked_cast
             && let [type_arg, value_arg] = &*call_expression.arguments.args
         {
-            self.infer_expression(value_arg, TypeContext::default());
+            let value_ty = self.infer_expression(value_arg, TypeContext::default());
             let target = self.infer_type_expression(type_arg);
             self.report_erased_cast_argument(type_arg, target);
+            self.report_non_overlapping_cast(value_arg, value_ty, target);
             return UnionType::from_elements(self.db(), [target, Type::none(self.db())]);
         }
 
