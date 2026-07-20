@@ -16,7 +16,8 @@ f(2):
 ```
 
 customising the lambda's parameters is not supported yet — the block always
-takes exactly one parameter named `it`
+takes exactly one parameter named `it`, defaulted to `None` so a callback whose
+type takes no argument (`() -> None`, invoked as `fn()`) can still call it
 
 ## binding
 
@@ -48,13 +49,65 @@ g:  # error: missing argument for `x`
 the block lowers to a named function followed by the call:
 
 ```python
-def _trailing_lambda_0(it):
+def _trailing_lambda_0(it=None):
     print(it)
 f(2, a=_trailing_lambda_0)
 ```
 
 comments and nested lowerings inside the block and the call arguments are
 preserved in place
+
+## enclosing scope
+
+a block shares the enclosing scope for its assignments: writing to a name that
+is already bound outside the block updates that binding instead of shadowing it
+with a fresh block local. the lowering inserts the `global` / `nonlocal`
+declaration the closure needs, so no manual `nonlocal` is required:
+
+```by
+a: int = 1
+f:
+    a = 2
+print(a)  # 2
+```
+
+→
+
+```python
+a: int = 1
+def _trailing_lambda_0(it=None):
+    global a
+    a = 2
+f(a=_trailing_lambda_0)
+print(a)
+```
+
+a module-level binding is captured with `global`, an enclosing function's local
+with `nonlocal`. a name bound in no enclosing scope stays a plain block local,
+and an attribute or item target (`obj.x = …`) rebinds no name, so neither is
+declared
+
+ty's flow analysis reflects the write too: because the block runs inline at the
+call site, its assignments narrow the enclosing binding, so a `reveal_type`
+after the block sees the block's value, not the value before it:
+
+```by
+def f(fn: () -> None):
+    fn()
+
+def main():
+    a: int = 1
+    f:
+        a = 2
+    reveal_type(a)  # 2, not 1
+```
+
+this treats the block as running once at the `f:` point (like a `with` body).
+a *conditional* assignment unions with the prior value — `if c(): a = 2` leaves
+`a` as `1 | 2`, because the block runs but the write itself might not; only a
+write that happens on every branch drops the prior. a callback the callee never
+actually calls is the same accepted imprecision as a `nonlocal` write ty can't
+prove happens
 
 ## required parameters after defaulted ones
 

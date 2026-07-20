@@ -1,6 +1,7 @@
 //! Abstraction over type/binding information consumed by transforms.
 
 use ruff_python_ast::{Expr, ExprCall, ExprName, StmtClassDef};
+use ty_python_core::scope::ScopeKind;
 use ty_python_core::{global_scope, place_table, semantic_index};
 use ty_python_semantic::types::{DynamicType, KnownClass, KnownInstanceType, Type, character};
 use ty_python_semantic::{HasType, SemanticModel};
@@ -19,6 +20,16 @@ pub(crate) enum AbsentTest {
     /// result form — guard tests `isinstance(x, BaseException)` and returns
     /// the error value
     Result,
+}
+
+/// How an assignment inside a trailing-lambda block reaches an enclosing scope,
+/// so the block writes through instead of shadowing with a fresh local.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum CaptureKind {
+    /// the name is bound at module scope — declare `global`
+    Global,
+    /// the name is bound in an enclosing function — declare `nonlocal`
+    Nonlocal,
 }
 
 pub(crate) trait TypeInfo {
@@ -98,6 +109,12 @@ pub(crate) trait TypeInfo {
 
     /// whether `name` is bound at module level (used to avoid duplicate imports)
     fn is_bound_globally(&self, name: &str) -> bool;
+
+    /// For a name assigned inside a trailing-lambda block anchored at `anchor`
+    /// (an expression in the block), the declaration needed for the write to
+    /// reach an enclosing binding — `global` (module scope) or `nonlocal` (an
+    /// enclosing function) — or `None` for a genuinely new local.
+    fn trailing_block_capture(&self, name: &str, anchor: &Expr) -> Option<CaptureKind>;
 
     /// rendered inferred (literal-promoted) type of `expr`, or `None` when ty
     /// cannot resolve a type (unresolved import, parse error, etc.).
@@ -335,6 +352,32 @@ impl TypeInfo for SemanticModel<'_> {
         table
             .symbol_by_name(name)
             .is_some_and(ty_python_core::symbol::Symbol::is_bound)
+    }
+
+    fn trailing_block_capture(&self, name: &str, anchor: &Expr) -> Option<CaptureKind> {
+        let db = self.db();
+        let file = self.file();
+        let index = semantic_index(db, file);
+        let block_scope = index.try_expression_scope_id(anchor)?;
+        // walk outward from the block's own scope (skipped) to the nearest scope
+        // that already binds the name — it decides the declaration
+        for (ancestor_id, scope) in index.ancestor_scopes(block_scope).skip(1) {
+            let scope_id = ancestor_id.to_scope_id(db, file);
+            if !place_table(db, scope_id)
+                .symbol_by_name(name)
+                .is_some_and(ty_python_core::symbol::Symbol::is_bound)
+            {
+                continue;
+            }
+            match scope.kind() {
+                ScopeKind::Module => return Some(CaptureKind::Global),
+                ScopeKind::Function | ScopeKind::Lambda => return Some(CaptureKind::Nonlocal),
+                // class / type-param / type-alias / comprehension scopes are not
+                // `global` / `nonlocal` targets — name resolution skips them
+                _ => {}
+            }
+        }
+        None
     }
 
     fn promoted_type_display(&self, expr: &Expr) -> Option<String> {
