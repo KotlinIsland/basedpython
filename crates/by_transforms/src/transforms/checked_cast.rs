@@ -223,9 +223,14 @@ impl<'ast> Visitor<'ast> for CastLower<'_> {
             && (call.is_cast || call.is_checked_cast)
             && let [type_arg, value_arg] = &*call.arguments.args
         {
-            let helper = if call.is_checked_cast {
+            // a statically-proven upcast needs no runtime check — the probe
+            // would always pass, and for a subscripted protocol or builtin
+            // target it cannot even run — so it degrades to a plain
+            // `typing.cast`, exactly as a disabled checked cast does
+            let redundant = self.types.cast_is_redundant(value_arg, type_arg);
+            let helper = if call.is_checked_cast && !redundant {
                 Helper::Try
-            } else if self.checked {
+            } else if self.checked && !redundant {
                 Helper::Checked
             } else {
                 Helper::TypingCast
@@ -441,6 +446,50 @@ mod tests {
             out.matches(')').count(),
             "balanced parens:\n{out}"
         );
+    }
+
+    /// a statically-proven upcast needs no runtime check: casting a value
+    /// already known to be the target degrades to a plain `typing.cast`, which
+    /// avoids a probe that (for a subscripted builtin) drops the argument claim
+    /// and (for a subscripted protocol) would be a runtime error
+    #[test]
+    fn redundant_upcast_is_typing_cast() {
+        let out = check("class B[T](list[T]): ...\n\ndef f():\n    b = B[int]() cast list[int]\n");
+        assert!(out.contains("b = cast(list[int], B[int]())"), "got:\n{out}");
+        assert!(!out.contains("_checked_cast"), "no runtime probe:\n{out}");
+    }
+
+    /// the same upcast through `cast?` also degrades — the value always matches,
+    /// so no probe or `None` arm is needed at runtime
+    #[test]
+    fn redundant_try_upcast_is_typing_cast() {
+        let out = check("class B[T](list[T]): ...\n\ndef f():\n    b = B[int]() cast? list[int]\n");
+        assert!(out.contains("b = cast(list[int], B[int]())"), "got:\n{out}");
+        assert!(!out.contains("_try_cast"), "no runtime probe:\n{out}");
+    }
+
+    /// subclassing a subscripted protocol is a redundant upcast too — a bare
+    /// `isinstance(v, Sequence[object])` would raise, so it must not be emitted
+    #[test]
+    fn redundant_upcast_to_protocol_is_typing_cast() {
+        let out = check(
+            "from collections.abc import Sequence\n\nclass A[T](Sequence[T]):\n    def __getitem__(self, i): ...  # type: ignore\n    def __len__(self): ...\n\ndef f():\n    a = A[int]() cast Sequence[object]\n",
+        );
+        assert!(
+            out.contains("a = cast(Sequence[object], A[int]())"),
+            "got:\n{out}"
+        );
+        assert!(
+            !out.contains("_checked_cast") && !out.contains("_parametric_is"),
+            "no runtime probe:\n{out}"
+        );
+    }
+
+    /// a genuine cast whose value is *not* already the target keeps its probe
+    #[test]
+    fn non_redundant_cast_keeps_probe() {
+        let out = check("def f(a: object):\n    b = a cast list[int]\n");
+        assert!(out.contains("b = _checked_cast(a, list)"), "got:\n{out}");
     }
 
     #[test]

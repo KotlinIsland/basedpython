@@ -177,6 +177,13 @@ pub(crate) trait TypeInfo {
     /// itself a runtime error
     fn cast_check_plan(&self, type_expr: &Expr) -> Option<SoundnessCheck>;
 
+    /// whether a `cast`'s value is already statically the target type, so its
+    /// runtime check is redundant and the value passes through unchecked. this
+    /// covers upcasts a runtime probe cannot even express — a value whose
+    /// static type subclasses a subscripted protocol (`A[int]() cast
+    /// Sequence[object]`) or a subscripted builtin (`B[int]() cast list[int]`)
+    fn cast_is_redundant(&self, value: &Expr, target: &Expr) -> bool;
+
     /// the keyword a trailing lambda block is passed with — the name of the
     /// callee's last declared parameter. `None` means the lambda is appended
     /// as a positional argument instead (unknown callee signature, or a
@@ -465,6 +472,15 @@ impl TypeInfo for SemanticModel<'_> {
     fn cast_check_plan(&self, type_expr: &Expr) -> Option<SoundnessCheck> {
         let ty = type_expr.inferred_type(self)?;
         ty_python_semantic::types::soundness::runtime_check_plan(self.db(), self.file(), ty)
+    }
+
+    fn cast_is_redundant(&self, value: &Expr, target: &Expr) -> bool {
+        let (Some(value_ty), Some(target_ty)) =
+            (value.inferred_type(self), target.inferred_type(self))
+        else {
+            return false;
+        };
+        ty_python_semantic::types::soundness::cast_is_redundant(self.db(), value_ty, target_ty)
     }
 
     fn trailing_lambda_keyword(&self, callee: &Expr) -> Option<String> {
