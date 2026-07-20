@@ -713,6 +713,50 @@ pub(crate) fn is_basedpython_implicit_typing_name(name: &str) -> bool {
         .is_ok()
 }
 
+/// The Python version in which `name` was added to the `typing` module, or
+/// `None` if it has been available since before 3.10.
+///
+/// basedpython makes these names available regardless of the target Python
+/// version. This is the single source of truth for that set: `by_transforms`'
+/// `typing_redirect` pass rewrites `from typing import <name>` to
+/// `from typing_extensions import <name>` when the name postdates the minimum
+/// version, and the type checker mirrors that redirect when resolving imports
+/// (see `infer_import_from_definition`).
+pub fn basedpython_typing_added_in(name: &str) -> Option<PythonVersion> {
+    match name {
+        // 3.11
+        "Never"
+        | "assert_never"
+        | "LiteralString"
+        | "Required"
+        | "NotRequired"
+        | "Self"
+        | "Unpack"
+        | "TypeVarTuple"
+        | "dataclass_transform"
+        | "reveal_type"
+        | "assert_type"
+        | "get_overloads"
+        | "clear_overloads" => Some(PythonVersion::PY311),
+        // 3.12
+        "override" | "TypeAliasType" => Some(PythonVersion::PY312),
+        // 3.13
+        "TypeIs" | "ReadOnly" | "get_protocol_members" | "is_protocol" | "NoDefault" => {
+            Some(PythonVersion::PY313)
+        }
+        _ => None,
+    }
+}
+
+/// The Python version in which `name` was added to the `warnings` module, or
+/// `None`. See [`basedpython_typing_added_in`].
+pub fn basedpython_warnings_added_in(name: &str) -> Option<PythonVersion> {
+    match name {
+        "deprecated" => Some(PythonVersion::PY313),
+        _ => None,
+    }
+}
+
 /// Lookup the type of `symbol` in the `typing_extensions` module namespace.
 ///
 /// Returns `Place::Undefined` if the `typing_extensions` module isn't available for some reason.
