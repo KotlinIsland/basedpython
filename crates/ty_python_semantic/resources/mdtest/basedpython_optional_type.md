@@ -229,3 +229,79 @@ a local binding still shadows it:
 Some = 3
 reveal_type(Some)  # revealed: 3
 ```
+
+## passing an optional where `object` is expected is flagged
+
+`object` absorbs the `None` arm silently, so passing an optional to an `object` parameter loses the
+information that the value could be absent. the use is flagged where the optional is consumed as
+`object`, and the user is nudged toward `!` (unwrap) or `cast object` (make it explicit).
+
+```by
+def sink(o: object): ...
+
+def f(x: int?):
+    # error: [optional-object-conversion] "Optional `int | None` is implicitly widened to `object`"
+    sink(x)
+```
+
+## unwrapping or an explicit cast silences the warning
+
+```by
+def sink(o: object): ...
+
+def f(x: int?):
+    sink(x!)
+    sink(x cast object)
+```
+
+## a non-optional value passed to `object` is never flagged
+
+a plain value, or a bare `None`, has no optional layer to lose:
+
+```by
+def sink(o: object): ...
+
+def f():
+    sink(3)
+    sink(None)
+```
+
+## assigning to a variable is not the trigger — the use is
+
+the target of `a: object = x` narrows back to the optional type, so nothing is lost at the
+assignment. the error instead surfaces at each use of the narrowed value as `object`.
+
+```by
+def sink(o: object): ...
+
+def f(x: int?):
+    a: object = x
+    # error: [optional-object-conversion] "Optional `int | None` is implicitly widened to `object`"
+    sink(a)
+```
+
+## a lesser depth of optional is flagged too
+
+widening drops a *layer* of optionality: passing `object??` (rendered `object?`) to an `object`
+parameter still discards the outer layer.
+
+```by
+def sink(o: object): ...
+
+def f(x: object??):
+    # error: [optional-object-conversion] "Optional `object?` is implicitly widened to `object`"
+    sink(x)
+```
+
+## passing an optional to a parameter of equal depth stays silent
+
+the receiving parameter preserves the `None` arm, so nothing is lost:
+
+```by
+def sink(o: int?): ...
+def wide(o: int | str | None): ...
+
+def f(x: int?):
+    sink(x)
+    wide(x)
+```

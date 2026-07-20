@@ -1277,6 +1277,16 @@
             }
           ]
         },
+        "optional-object-conversion": {
+          "title": "detects an optional value implicitly widened to `object`",
+          "description": "## What it does\nChecks for an optional value passed where `object` is expected, silently\ndiscarding a layer of optionality.\n\n## Why is this bad?\n`object` swallows both the present value and `None`, so consuming an\noptional as `object` loses the information that the value could be\nabsent. It is almost always unintended: either the value should be\nunwrapped first with `!`, or the widening should be made explicit with\n`cast object`.\n\nAssigning an optional to a declared `object` variable is *not* flagged —\nthe target narrows back to the optional type, so nothing is lost there.\nThe diagnostic surfaces at each use of the value as `object` instead.\n\n## Examples\n```by\ndef sink(o: object): ...\n\ndef f(x: int?):\n    sink(x)             # warning: `int | None` widened to `object`\n    sink(x!)            # ok — unwrapped first\n    sink(x cast object) # ok — explicit\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "override-of-final-method": {
           "title": "detects overrides of final methods",
           "description": "## What it does\n\nChecks for methods on subclasses that override superclass methods decorated with `@final`.\n\n## Why is this bad?\n\nDecorating a method with `@final` declares to the type checker that it should not be\noverridden on any subclass.\n\n## Example\n\n```python\nfrom typing import final\n\n\nclass A:\n    @final\n    def foo(self): ...\n\n\nclass B(A):\n    def foo(self): ...  # error\n```",

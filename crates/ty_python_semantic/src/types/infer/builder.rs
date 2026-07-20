@@ -59,9 +59,9 @@ use crate::types::diagnostic::{
     INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_LEGACY_TYPE_VARIABLE,
     INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM,
     INVALID_TYPE_GUARD_CALL, INVALID_TYPE_VARIABLE_BOUND, INVALID_TYPE_VARIABLE_CONSTRAINTS,
-    NON_OVERLAPPING_CAST, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
-    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
-    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
+    NON_OVERLAPPING_CAST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
+    POSSIBLY_MISSING_SUBMODULE, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL,
+    UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
     hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
     report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
@@ -194,6 +194,43 @@ fn should_preserve_inferred_binding_type(ty: Type<'_>) -> bool {
     // Dataclass field specifiers carry metadata in the inferred RHS type; replacing it with the
     // declared field type would lose settings like `init=False`.
     matches!(ty, Type::KnownInstance(KnownInstanceType::Field(_)))
+}
+
+/// Whether `ty` carries an optional layer at its top level: a wrapped optional
+/// (`int??`), or a union with a `None` arm alongside at least one other member
+/// (`int | None`). A bare `None` is not optional — there is nothing to lose.
+fn is_optional_value<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    match ty {
+        Type::KnownInstance(KnownInstanceType::WrappedOptional(_)) => true,
+        Type::Union(union) => {
+            let elements = union.elements(db);
+            elements.iter().any(|element| element.is_none(db))
+                && elements.iter().any(|element| !element.is_none(db))
+        }
+        _ => false,
+    }
+}
+
+/// Whether `ty` is the top type `object` (or `object | None`, the `object?`
+/// surface form) — a target that absorbs an optional's `None` arm without
+/// preserving it. Only such a target makes the widening both silent and lossy.
+fn target_swallows_optional<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    match ty {
+        Type::NominalInstance(instance) => instance
+            .class(db)
+            .class_literal(db)
+            .is_known(db, KnownClass::Object),
+        Type::Union(union) => {
+            let elements = union.elements(db);
+            elements
+                .iter()
+                .any(|element| target_swallows_optional(db, *element))
+                && elements
+                    .iter()
+                    .all(|element| element.is_none(db) || target_swallows_optional(db, *element))
+        }
+        _ => false,
+    }
 }
 
 /// We currently store one dataclass field-specifiers inline, because that covers standard
@@ -8458,6 +8495,47 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         ));
     }
 
+    /// Warn when an optional value is passed as an argument to a parameter typed
+    /// `object`. `object` swallows the `None` arm silently, so the call is
+    /// well-typed but discards the "could be absent" information the optional
+    /// carried. Unlike a declared assignment — which narrows the target back to
+    /// the optional type — a call argument really is consumed as `object` here,
+    /// so this use site is where the loss becomes observable. `!` (unwrap) or
+    /// `cast object` (make it explicit) are the intended alternatives.
+    fn report_optional_object_arguments(&mut self, call: &ast::ExprCall, bindings: &Bindings<'db>) {
+        if !self.is_basedpython_file() {
+            return;
+        }
+        let db = self.db();
+        let arguments: Vec<ast::ArgOrKeyword> = call.arguments.iter_source_order().collect();
+        let Some(parameter_types) = bindings.single_overload_parameter_types(arguments.len())
+        else {
+            return;
+        };
+        for (argument, parameter_type) in arguments.iter().zip(parameter_types) {
+            let Some(parameter_type) = parameter_type else {
+                continue;
+            };
+            if !target_swallows_optional(db, parameter_type) {
+                continue;
+            }
+            let value = argument.value();
+            let argument_type = self.expression_type(value);
+            if !is_optional_value(db, argument_type) {
+                continue;
+            }
+            let Some(builder) = self.context.report_lint(&OPTIONAL_OBJECT_CONVERSION, value) else {
+                continue;
+            };
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "Optional `{}` is implicitly widened to `{}`",
+                argument_type.display(db),
+                parameter_type.display(db)
+            ));
+            diagnostic.help("Unwrap it with `!`, or convert explicitly with `cast object`");
+        }
+    }
+
     fn infer_call_expression(
         &mut self,
         call_expression: &ast::ExprCall,
@@ -9227,6 +9305,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
             }
         }
+
+        self.report_optional_object_arguments(call_expression, &bindings);
 
         for binding in bindings.iter_flat_mut() {
             let binding_type = binding.callable_type;
