@@ -930,6 +930,87 @@ pub fn map_subscript(expr: &Expr) -> &Expr {
     }
 }
 
+/// basedpython: `local` / `once` lifetime modifiers detected on a parameter.
+///
+/// The parser consumes the keywords without an AST field (mirroring the `let`
+/// init prefix), so they are recovered here from the source span between the
+/// parameter's start and its name. `strip_ranges` is empty — and does not
+/// allocate — for the common unmodified parameter.
+#[derive(Debug, Default, Clone)]
+pub struct ParameterModifiers {
+    /// `local x` — a non-escaping (borrowed) parameter that must not outlive
+    /// the call it is bound in
+    pub local: bool,
+    /// `once fn` — a callback that must be called exactly once
+    pub once: bool,
+    /// source range of each `local` / `once` keyword together with the
+    /// whitespace up to the next token, for deletion when lowering to python
+    pub strip_ranges: Vec<TextRange>,
+}
+
+impl ParameterModifiers {
+    /// whether any lifetime modifier is present
+    pub fn any(&self) -> bool {
+        self.local || self.once
+    }
+}
+
+/// basedpython: detect `local` / `once` modifiers on `param`, read from `source`
+/// (the file the parameter was parsed from).
+///
+/// The prefix between `param.range().start()` and the parameter name holds a run
+/// of `let` / `local` / `once` keywords. This records the `local` / `once` ones
+/// (a `let` is left in place for the init-method transform) along with the
+/// ranges to strip when lowering.
+pub fn parameter_modifiers(source: &str, param: &ast::Parameter) -> ParameterModifiers {
+    let mut mods = ParameterModifiers::default();
+    let prefix_start = param.range().start();
+    let name_start = param.name.range().start();
+    if prefix_start >= name_start {
+        return mods;
+    }
+    let base = usize::from(prefix_start);
+    let prefix = &source[base..usize::from(name_start)];
+
+    // walk the whitespace-separated keyword run left to right
+    let mut rel = 0usize;
+    while rel < prefix.len() {
+        let after_ws = rel + leading_whitespace_len(&prefix[rel..]);
+        if after_ws >= prefix.len() {
+            break;
+        }
+        let word_end = prefix[after_ws..]
+            .find(char::is_whitespace)
+            .map_or(prefix.len(), |p| after_ws + p);
+        let is_modifier = match &prefix[after_ws..word_end] {
+            "local" => {
+                mods.local = true;
+                true
+            }
+            "once" => {
+                mods.once = true;
+                true
+            }
+            _ => false,
+        };
+        if is_modifier {
+            // strip the keyword plus the whitespace up to the next token
+            let del_end = word_end + leading_whitespace_len(&prefix[word_end..]);
+            mods.strip_ranges.push(TextRange::new(
+                TextSize::try_from(base + after_ws).expect("offset fits u32"),
+                TextSize::try_from(base + del_end).expect("offset fits u32"),
+            ));
+        }
+        rel = word_end;
+    }
+    mods
+}
+
+/// byte length of the leading run of whitespace in `s`
+fn leading_whitespace_len(s: &str) -> usize {
+    s.len() - s.trim_start().len()
+}
+
 /// basedpython: returns `true` if `expr` is a single parser-synthesized
 /// `[*]` marker — `Starred(Name(id="", ctx=Invalid))`. An empty-id `Name`
 /// with `Invalid` context is unique to this synthesis and cannot appear from

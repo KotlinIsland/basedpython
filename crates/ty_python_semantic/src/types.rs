@@ -151,6 +151,7 @@ mod infer;
 mod instance;
 mod iteration;
 mod known_instance;
+mod lifetimes;
 pub mod list_members;
 mod literal;
 mod match_pattern;
