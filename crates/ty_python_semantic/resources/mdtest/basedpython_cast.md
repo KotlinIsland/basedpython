@@ -120,6 +120,45 @@ def f(a: object):
     reveal_type(b)  # revealed: A[int]
 ```
 
+## a statically-proven upcast is not erased
+
+When the value is already the target statically, the cast verifies nothing at runtime, so no
+argument claim is dropped — `erased-cast-argument` must stay silent even for a builtin target.
+`B[int]` subclasses `list[int]`, so the argument is already guaranteed.
+
+```by
+class B[T](list[T]): ...
+
+def f():
+    b = B[int]() cast list[int]  # no erased-cast-argument: already a `list[int]`
+    reveal_type(b)  # revealed: list[int]
+```
+
+The same holds for a subscripted protocol target, whose runtime `isinstance` would otherwise be an
+error. Since the argument is covariant `object`, an `A[int]` is already a `Sequence[object]`.
+
+```by
+from collections.abc import Sequence
+
+class A[T](Sequence[T]):
+    def __getitem__(self, i): ...
+    def __len__(self): ...
+
+def f():
+    a = A[int]() cast Sequence[object]
+    reveal_type(a)  # revealed: Sequence[object]
+```
+
+A dynamic value is *not* a subtype of a concrete target, so its check is kept and the argument is
+still reported as erased.
+
+```by
+def f(a):
+    # error: [erased-cast-argument] "Type arguments of `list[int]` are erased at runtime"
+    b = a cast list[int]
+    reveal_type(b)  # revealed: list[int]
+```
+
 ## user generic arguments are checked, not assumed
 
 `T` is invariant here, so an `A[str]` is not an `A[int]`. These assertions run for real: the

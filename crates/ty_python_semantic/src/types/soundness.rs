@@ -144,6 +144,17 @@ pub fn erases_type_arguments<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) ->
     }
 }
 
+/// whether a `cast` from `value_ty` to `target` needs no runtime verification
+/// because the checker already proves the value is the target: a runtime check
+/// would always pass, so it is redundant. this both saves the probe and avoids
+/// emitting one that cannot run — a subscripted builtin (`list[int]`) whose
+/// arguments are erased, or a subscripted protocol (`Sequence[object]`) whose
+/// bare `isinstance` is itself a runtime error. gradual `Any`/`Unknown` values
+/// are *not* subtypes of a concrete target, so their checks are kept
+pub fn cast_is_redundant<'db>(db: &'db dyn Db, value_ty: Type<'db>, target: Type<'db>) -> bool {
+    value_ty.is_subtype_of(db, target)
+}
+
 /// the runtime variance code the `_parametric_is` probe expects
 fn variance_code(variance: ArgVariance) -> u8 {
     match variance {
