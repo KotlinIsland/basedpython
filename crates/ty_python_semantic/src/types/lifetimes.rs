@@ -14,7 +14,7 @@
 //! directly, never guessing through opaque calls, aliasing, or closures. See
 //! `docs/basedpython/features/local-lifetimes.md`.
 
-use ruff_db::parsed::parsed_module;
+use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_db::source::source_text;
 use ruff_python_ast::helpers::parameter_modifiers;
 use ruff_python_ast::statement_visitor::{StatementVisitor, walk_stmt};
@@ -22,12 +22,17 @@ use ruff_python_ast::visitor::{Visitor, walk_expr};
 use ruff_python_ast::{self as ast, Expr, ExprName, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
+use ty_python_core::SemanticIndex;
+use ty_python_core::scope::{FileScopeId, NodeWithScopeKind};
 
 use crate::Db;
 
 use super::Type;
 use super::context::InferContext;
-use super::diagnostic::{ESCAPING_LOCAL, ONCE_CALLED_TWICE, ONCE_NOT_CALLED};
+use super::diagnostic::{
+    ESCAPING_LOCAL, INVALID_ASSIGNMENT, ONCE_CALLED_TWICE, ONCE_NOT_CALLED,
+    TRAILING_LAMBDA_CONTROL_FLOW,
+};
 
 /// How a `local` value left the call — feeds the diagnostic message.
 #[derive(Clone, Copy)]
@@ -624,4 +629,173 @@ impl<'ast> StatementVisitor<'ast> for OnceCounter<'_, 'ast> {
             _ => {}
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// non-`once` trailing-lambda blocks: no non-local control flow.
+// ---------------------------------------------------------------------------
+
+/// basedpython: report non-local control flow in a non-`once` trailing-lambda
+/// block. Only a `once` block runs exactly once (`with`-like), so only there may
+/// control flow target the enclosing scope; a non-`once` block is an ordinary
+/// closure that may run any number of times.
+///
+/// This covers only `return`: because the block is a function scope, a `break` /
+/// `continue` that would leave it is already a `break`-outside-loop syntax error
+/// (with the right loop-depth analysis — one inside a block-local loop is fine),
+/// so re-reporting it here would only double the diagnostic.
+pub(super) fn check_non_once_trailing_lambda<'ast>(
+    context: &InferContext<'_, 'ast>,
+    function: &'ast ast::StmtFunctionDef,
+) {
+    ControlFlowChecker { context }.visit_body(&function.body);
+}
+
+struct ControlFlowChecker<'a, 'db, 'ast> {
+    context: &'a InferContext<'db, 'ast>,
+}
+
+impl<'ast> StatementVisitor<'ast> for ControlFlowChecker<'_, '_, 'ast> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        match stmt {
+            // a nested function / class is its own `return` target
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
+            Stmt::Return(ret) => {
+                if let Some(builder) = self.context.report_lint(&TRAILING_LAMBDA_CONTROL_FLOW, ret)
+                {
+                    builder.into_diagnostic(
+                        "`return` is not allowed in a non-`once` trailing-lambda block — \
+                         it would leave the block, not the enclosing scope",
+                    );
+                }
+            }
+            _ => {}
+        }
+        walk_stmt(self, stmt);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// non-`once` trailing-lambda blocks: no writing an enclosing `let` / `final`.
+// ---------------------------------------------------------------------------
+
+/// basedpython: a non-`once` trailing-lambda block may run more than once, so an
+/// assignment there to a name an enclosing scope declares `let` / `final` could
+/// bind that `Final` repeatedly. Report each such assignment.
+pub(super) fn check_non_once_trailing_lambda_final_writes<'db, 'ast>(
+    context: &InferContext<'db, 'ast>,
+    index: &'ast SemanticIndex<'db>,
+    module: &'ast ParsedModuleRef,
+    block_scope: FileScopeId,
+    function: &'ast ast::StmtFunctionDef,
+) {
+    FinalWriteChecker {
+        context,
+        index,
+        module,
+        block_scope,
+    }
+    .visit_body(&function.body);
+}
+
+struct FinalWriteChecker<'a, 'db, 'ast> {
+    context: &'a InferContext<'db, 'ast>,
+    index: &'ast SemanticIndex<'db>,
+    module: &'ast ParsedModuleRef,
+    block_scope: FileScopeId,
+}
+
+impl<'ast> StatementVisitor<'ast> for FinalWriteChecker<'_, '_, 'ast> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        match stmt {
+            // a nested scope's assignments rebind its own names, not ours
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    self.check_target(target);
+                }
+            }
+            Stmt::AnnAssign(ann) if ann.value.is_some() => self.check_target(&ann.target),
+            Stmt::AugAssign(aug) => self.check_target(&aug.target),
+            _ => {}
+        }
+        walk_stmt(self, stmt);
+    }
+}
+
+impl<'ast> FinalWriteChecker<'_, '_, 'ast> {
+    fn check_target(&self, target: &'ast Expr) {
+        // only a bare-name target rebinds an enclosing name
+        let Expr::Name(name) = target else {
+            return;
+        };
+        let Some(declaration) = self.enclosing_final_declaration(name.id.as_str()) else {
+            return;
+        };
+        let Some(builder) = self.context.report_lint(&INVALID_ASSIGNMENT, name) else {
+            return;
+        };
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "`{}` is `Final`, so a non-`once` trailing-lambda block cannot assign it",
+            name.id
+        ));
+        diagnostic.annotate(
+            self.context
+                .secondary(declaration)
+                .message(format_args!("`{}` declared `Final` here", name.id)),
+        );
+    }
+
+    /// The range of the enclosing `let` / `final` declaration `name` resolves to,
+    /// if any. Mirrors the write-back's resolution: the nearest ancestor scope
+    /// that binds or declares the name is the one that matters, so a nearer,
+    /// non-`final` binding shadows a farther `let`.
+    fn enclosing_final_declaration(&self, name: &str) -> Option<TextRange> {
+        for (scope_id, scope) in self.index.ancestor_scopes(self.block_scope).skip(1) {
+            let table = self.index.place_table(scope_id);
+            let Some(symbol_id) = table.symbol_id(name) else {
+                continue;
+            };
+            let symbol = table.symbol(symbol_id);
+            if !(symbol.is_bound() || symbol.is_declared()) {
+                continue;
+            }
+            // the nearest resolving scope; only a `let` / `final` there bans the write
+            let body = match scope.node() {
+                NodeWithScopeKind::Function(func) => &func.node(self.module).body,
+                NodeWithScopeKind::Module => &self.module.syntax().body,
+                _ => return None,
+            };
+            return final_declaration_range(body, name);
+        }
+        None
+    }
+}
+
+/// The range of `name`'s `let` / `final` declaration in `body` (`__let__` /
+/// `__final__` marker, bare or subscripted), i.e. a `Final` in a function /
+/// module scope. Only the scope's own statements are inspected — a declaration
+/// is always at its scope's top level.
+fn final_declaration_range(body: &[ast::Stmt], name: &str) -> Option<TextRange> {
+    fn marker(annotation: &ast::Expr) -> Option<&str> {
+        match annotation {
+            ast::Expr::Name(n) => Some(n.id.as_str()),
+            ast::Expr::Subscript(s) => match s.value.as_ref() {
+                ast::Expr::Name(n) => Some(n.id.as_str()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+    body.iter().find_map(|stmt| {
+        let ast::Stmt::AnnAssign(ann) = stmt else {
+            return None;
+        };
+        let ast::Expr::Name(target) = ann.target.as_ref() else {
+            return None;
+        };
+        (target.id.as_str() == name
+            && matches!(marker(&ann.annotation), Some("__let__" | "__final__")))
+        .then(|| target.range())
+    })
 }

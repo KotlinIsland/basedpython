@@ -184,6 +184,16 @@ impl<'db> SemanticModel<'db> {
             .map(|name| name.to_string())
     }
 
+    /// basedpython: whether the trailing-lambda callee's callback parameter is
+    /// marked `once` — the block then runs exactly once (`with`-semantics), so
+    /// its `return` may target the enclosing scope. `false` for anything the
+    /// marker can't be read from (a non-function-literal callee).
+    pub fn trailing_lambda_callee_is_once(&self, callee: &ast::Expr) -> bool {
+        callee
+            .inferred_type(self)
+            .is_some_and(|ty| crate::types::trailing_lambda::callee_callback_is_once(self.db, ty))
+    }
+
     /// basedpython: how the parametric type test `lhs is rhs` (keyword form)
     /// resolves, from the operands' inferred types. `rhs` may name the target
     /// specialization directly (`list[int]`) or through an alias — an implicit

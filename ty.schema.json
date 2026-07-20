@@ -557,6 +557,16 @@
             }
           ]
         },
+        "escaping-local": {
+          "title": "detects a `local` parameter whose value escapes its call",
+          "description": "## What it does\nChecks for a basedpython `local` parameter whose value escapes the call it\nis bound in — returned to the caller, stored on a parameter-rooted object,\nor assigned to a `global` / `nonlocal` binding.\n\n## Why is this bad?\nA `local` parameter is borrowed only for the duration of the call. Letting\nits value outlive the call defeats the borrow: the caller may release the\nunderlying resource, leaving a dangling reference behind.\n\n## Example\n\n```by\n_saved: object\n\ndef f(local fn: () -> None):\n    global _saved\n    _saved = fn  # error: `fn` is local and cannot escape the call\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "experimental-syntax": {
           "title": "detects experimental syntax",
           "description": "## What it does\n\nChecks for experimental syntax that is not part of the Python typing specification.\n\n## Why is this bad?\n\nExperimental syntax is specific to ty. It may be rejected by other type checkers and may never be\nstandardized, or be subject to breaking changes.\n\n## Examples\n\n```toml\n[environment]\npython-version = \"3.14\"\n```\n\n```python\nclass A: ...\n\n\nclass B: ...\n\n\ndef f(value: A & B) -> None: ...  # error: [experimental-syntax]\ndef g(value: ~A) -> None: ...  # error: [experimental-syntax]\n```",
@@ -1327,6 +1337,26 @@
             }
           ]
         },
+        "once-called-twice": {
+          "title": "detects a `once` callback that may be called more than once",
+          "description": "## What it does\nChecks for a basedpython `once` callback parameter that a function body may\ncall more than once — two unconditional calls, or a call inside a loop.\n\n## Why is this bad?\nA `once` callback must be called exactly once. Calling it again — or in a\nloop that may run more than once — breaks that contract.\n\n## Example\n\n```by\ndef f(once done: () -> None):\n    for _ in range(3):\n        done()  # error: `done` may be called more than once\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "once-not-called": {
+          "title": "detects a `once` callback that is never called",
+          "description": "## What it does\nChecks for a basedpython `once` callback parameter that the function body\nnever calls.\n\n## Why is this bad?\nA `once` callback must be called exactly once. A body that never mentions\nit has forgotten to call it — a common completion-handler bug.\n\n## Example\n\n```by\ndef f(once done: () -> None):\n    do_work()  # error: `done` is never called\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "optional-object-conversion": {
           "title": "detects an optional value implicitly widened to `object`",
           "description": "## What it does\nChecks for an optional value passed where `object` is expected, silently\ndiscarding a layer of optionality.\n\n## Why is this bad?\n`object` swallows both the present value and `None`, so consuming an\noptional as `object` loses the information that the value could be\nabsent. It is almost always unintended: either the value should be\nunwrapped first with `!`, or the widening should be made explicit with\n`cast object`.\n\nAssigning an optional to a declared `object` variable is *not* flagged —\nthe target narrows back to the optional type, so nothing is lost there.\nThe diagnostic surfaces at each use of the value as `object` instead.\n\n## Examples\n```by\ndef sink(o: object): ...\n\ndef f(x: int?):\n    sink(x)             # warning: `int | None` widened to `object`\n    sink(x!)            # ok — unwrapped first\n    sink(x cast object) # ok — explicit\n```",
@@ -1530,6 +1560,26 @@
         "too-many-positional-arguments": {
           "title": "detects calls passing too many positional arguments",
           "description": "## What it does\n\nChecks for calls that pass more positional arguments than the callable can accept.\n\n## Why is this bad?\n\nPassing too many positional arguments will raise `TypeError` at runtime.\n\n## Example\n\n```python\ndef f(): ...\n\n\nf(\"foo\")  # error\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "trailing-lambda-control-flow": {
+          "title": "detects non-local control flow in a non-`once` trailing-lambda block",
+          "description": "## What it does\nChecks for a `return` in a trailing-lambda block whose callback is **not**\n`once`.\n\n## Why is this bad?\nA block bound to a `once` callback runs exactly once, like a `with` body,\nso its `return` may target the enclosing function. A non-`once` callback\nmay run any number of times (or not at all), so the block is an ordinary\nclosure — a `return` would leave the block, not the enclosing scope, which\nis almost never what the caller intends.\n\nA `break` / `continue` that would leave the block is already reported as\nbeing outside a loop (the block is a function scope), so this lint covers\nonly `return`.\n\n## Example\n\n```by\ndef each(items: list[int], fn: (int) -> None): ...\n\ndef find(items: list[int]) -> int:\n    each(items):\n        return it  # error: `return` in a non-`once` block leaves the block\n    return -1\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "trailing-lambda-return-type": {
+          "title": "detects a trailing-lambda callback whose return type is not `None`",
+          "description": "## What it does\nChecks for a trailing-lambda block whose callback is declared to return a\ntype other than `None`.\n\n## Why is this bad?\nA trailing-lambda block lowers to a function that returns `None` (in a\n`once` block a `return` targets the *enclosing* function, not the block).\nA callback declared to return anything else can never be satisfied by the\nblock. Callbacks with non-`None` return types are not yet supported.\n\n## Example\n\n```by\ndef f(a: (int) -> str):  # callback returns `str`\n    print(a(1))\n\nf:  # error: the block returns `None`, not `str`\n    print(it)\n```",
           "default": "error",
           "oneOf": [
             {

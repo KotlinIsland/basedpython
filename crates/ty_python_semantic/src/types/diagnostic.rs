@@ -142,6 +142,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&ESCAPING_LOCAL);
     registry.register_lint(&ONCE_NOT_CALLED);
     registry.register_lint(&ONCE_CALLED_TWICE);
+    registry.register_lint(&TRAILING_LAMBDA_CONTROL_FLOW);
+    registry.register_lint(&TRAILING_LAMBDA_RETURN_TYPE);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&NON_OVERLAPPING_CAST);
     registry.register_lint(&OPTIONAL_OBJECT_CONVERSION);
@@ -1228,6 +1230,66 @@ declare_lint! {
     /// ```
     pub(crate) static ONCE_CALLED_TWICE = {
         summary: "detects a `once` callback that may be called more than once",
+        status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a `return` in a trailing-lambda block whose callback is **not**
+    /// `once`.
+    ///
+    /// ## Why is this bad?
+    /// A block bound to a `once` callback runs exactly once, like a `with` body,
+    /// so its `return` may target the enclosing function. A non-`once` callback
+    /// may run any number of times (or not at all), so the block is an ordinary
+    /// closure — a `return` would leave the block, not the enclosing scope, which
+    /// is almost never what the caller intends.
+    ///
+    /// A `break` / `continue` that would leave the block is already reported as
+    /// being outside a loop (the block is a function scope), so this lint covers
+    /// only `return`.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def each(items: list[int], fn: (int) -> None): ...
+    ///
+    /// def find(items: list[int]) -> int:
+    ///     each(items):
+    ///         return it  # error: `return` in a non-`once` block leaves the block
+    ///     return -1
+    /// ```
+    pub(crate) static TRAILING_LAMBDA_CONTROL_FLOW = {
+        summary: "detects non-local control flow in a non-`once` trailing-lambda block",
+        status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a trailing-lambda block whose callback is declared to return a
+    /// type other than `None`.
+    ///
+    /// ## Why is this bad?
+    /// A trailing-lambda block lowers to a function that returns `None` (in a
+    /// `once` block a `return` targets the *enclosing* function, not the block).
+    /// A callback declared to return anything else can never be satisfied by the
+    /// block. Callbacks with non-`None` return types are not yet supported.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def f(a: (int) -> str):  # callback returns `str`
+    ///     print(a(1))
+    ///
+    /// f:  # error: the block returns `None`, not `str`
+    ///     print(it)
+    /// ```
+    pub(crate) static TRAILING_LAMBDA_RETURN_TYPE = {
+        summary: "detects a trailing-lambda callback whose return type is not `None`",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
     }
