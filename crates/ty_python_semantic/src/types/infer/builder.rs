@@ -100,7 +100,7 @@ use crate::types::match_pattern::{ClassPatternPositionalResult, class_pattern_po
 use crate::types::narrow::NarrowingEvaluatorExtension;
 use crate::types::narrow::pattern_success_types;
 use crate::types::newtype::NewType;
-use crate::types::reified_infer::{self, ErasedTargetReason, ReifiedInferenceError};
+use crate::types::reified_infer::{self, ReifiedInferenceError};
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope};
 use crate::types::soundness::{cast_is_redundant, erases_type_arguments, runtime_check_target};
@@ -11776,7 +11776,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ) else {
                     continue;
                 };
-                if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) =
+                if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(_) =
                     crate::types::reified_infer::classify_parametric_is(
                         self.db(),
                         left_ty,
@@ -11784,7 +11784,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         arm,
                     )
                 {
-                    self.report_erased_type_check(arm.range(), &source[arm.range()], reason);
+                    self.report_erased_type_check(arm.range(), &source[arm.range()]);
                 }
             }
             return Some(bool_ty);
@@ -11810,53 +11810,35 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // only a probe against a runtime-erased target is an error; every
         // other plan (fold, reified-cell equality, witness, or a probe of a
         // user generic that carries `__orig_class__`) is a valid test
-        if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(reason) = plan {
+        if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(_) = plan {
             self.report_erased_type_check(
                 TextRange::new(left.start(), right.end()),
                 &source[right.range()],
-                reason,
             );
         }
         Some(bool_ty)
     }
 
     /// report an `erased-type-check` for a parametric `is`-target (or one arm
-    /// of a union target) whose specialization cannot be probed at runtime
-    fn report_erased_type_check(
-        &self,
-        primary: TextRange,
-        target: &str,
-        reason: ErasedTargetReason,
-    ) {
+    /// of a union target) whose specialization cannot be probed at runtime.
+    /// only a protocol target reaches this: a concrete class — builtin or user
+    /// — records its specialization on the instance or across its mro, so the
+    /// runtime probe unwinds it instead
+    fn report_erased_type_check(&self, primary: TextRange, target: &str) {
         let Some(builder) = self.context.report_lint(&ERASED_TYPE_CHECK, primary) else {
             return;
         };
         let mut diagnostic = builder.into_diagnostic(format_args!(
-            "`is {target}` cannot be checked at runtime: {}",
-            match reason {
-                ErasedTargetReason::BuiltinCollection =>
-                    "builtin collections erase their type arguments",
-                ErasedTargetReason::Protocol =>
-                    "a protocol's instances don't record which specialization they satisfy",
-            }
+            "`is {target}` cannot be checked at runtime: a protocol's instances don't record which \
+             specialization they satisfy"
         ));
-        match reason {
-            ErasedTargetReason::BuiltinCollection => {
-                diagnostic.info(format_args!(
-                    "a `list` / `dict` / `set` / `tuple` built at runtime carries no record of \
-                     its type arguments, so no runtime check can confirm the specialization"
-                ));
-            }
-            ErasedTargetReason::Protocol => {
-                diagnostic.info(format_args!(
-                    "an instance's `__orig_class__` names its concrete class, never the protocol, \
-                     and a structural `isinstance` check can't see type arguments"
-                ));
-            }
-        }
         diagnostic.info(format_args!(
-            "reify the type parameter (`def f[T](x: T)`), or test against a concrete generic \
-             class whose instances carry `__orig_class__`"
+            "an instance's `__orig_class__` names its concrete class, never the protocol, and a \
+             structural `isinstance` check can't see type arguments"
+        ));
+        diagnostic.info(format_args!(
+            "reify the type parameter (`def f[T](x: T)`), or test against a concrete class that \
+             records the specialization on its instances or across its mro"
         ));
     }
 

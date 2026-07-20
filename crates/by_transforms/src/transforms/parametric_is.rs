@@ -12,16 +12,20 @@
 //!   structurally and lowers to equality checks of the reified cells:
 //!   `x: T` is `list[int]` → `T == list[int]`; `x: list[T]` is `list[int]`
 //!   → `T == int`
-//! - the value is undecidable statically (a mixed union, a dynamic value) but
-//!   the target is a *user-defined* generic → probe the value's
-//!   `__orig_class__`, natively stamped on user generics by `A[int](…)`;
-//!   answers `False` for values that carry none. this soundly discriminates a
-//!   `A[int] | A[str]` union too, per arm
-//! - the value is undecidable and the target is a *builtin* collection, whose
-//!   runtime instances erase their type arguments → ty errors
-//!   (`erased-type-check`) and the lowering is the constant `False`. there is
-//!   no element-witness heuristic: an empty `list[int]` has no element, and a
-//!   builtin's element type is erased, so "check the first item" is unsound
+//! - the value is undecidable statically (a mixed union, a dynamic value) →
+//!   probe at runtime. the probe ([`PARAMETRIC_IS_RUNTIME`]) unwinds the value:
+//!   its reified `__orig_class__` (stamped by `A[int](…)`) and every generic
+//!   base declared across `type(value).__mro__` (`__orig_bases__`). a concrete
+//!   subclass that fixes the arguments is checkable this way even against a
+//!   builtin or abc target — `class B(list[int])` records `list[int]`, so
+//!   `B() is list[int]` and `B() is Sequence[int]` both answer True; a bare
+//!   `list` records nothing and answers False. the narrowing is positive-only,
+//!   so a False never narrows unsoundly. no element-witness heuristic is used:
+//!   the arguments come from the class's declared bases, never from peeking at a
+//!   runtime element
+//! - the value is undecidable and the target is a *protocol* → still an error
+//!   (`erased-type-check`): its `isinstance` raises unless `@runtime_checkable`,
+//!   and even then carries no arguments, so no sound runtime residue exists
 //!
 //! a union rhs (`x is A[int] | object`) is the disjunction of its arms — each
 //! arm lowered by its own kind — never a runtime `isinstance(x, A[int] |
@@ -65,27 +69,52 @@ pub(crate) fn variance_tuple(variances: &[u8]) -> String {
 }
 
 pub(crate) const PARAMETRIC_IS_RUNTIME: &str = "\
+def _by_generic_args(value, origin):
+    found = []
+    def consider(alias):
+        base_origin = getattr(alias, \"__origin__\", None)
+        if base_origin is origin:
+            found.append(getattr(alias, \"__args__\", ()))
+        elif isinstance(base_origin, type) and isinstance(origin, type):
+            # a specialization of a sub-origin (`list[int]` for a `Sequence`
+            # target) carries the arguments through inheritance, matched by
+            # position once membership is established
+            try:
+                is_sub = issubclass(base_origin, origin)
+            except TypeError:
+                is_sub = False
+            if is_sub:
+                found.append(getattr(alias, \"__args__\", ()))
+    reified = getattr(value, \"__orig_class__\", None)
+    if reified is not None:
+        consider(reified)
+    for klass in type(value).__mro__:
+        for base in klass.__dict__.get(\"__orig_bases__\", ()):
+            consider(base)
+    return found
+
 def _parametric_is(value, alias, variances):
     alias = getattr(alias, \"__value__\", alias)
     origin = getattr(alias, \"__origin__\", alias)
     if not isinstance(value, origin):
         return False
-    reified = getattr(value, \"__orig_class__\", None)
-    if reified is None or getattr(reified, \"__origin__\", None) is not origin:
-        return False
-    reified_args = getattr(reified, \"__args__\", ())
     target_args = getattr(alias, \"__args__\", ())
-    if len(reified_args) != len(target_args) or len(target_args) != len(variances):
+    if len(target_args) != len(variances):
         return False
-    for r, t, v in zip(reified_args, target_args, variances):
-        if v == 3 or r == t:
+    for reified_args in _by_generic_args(value, origin):
+        if len(reified_args) != len(target_args):
             continue
-        if v == 1 and _parametric_is_sub(r, t):
-            continue
-        if v == 2 and _parametric_is_sub(t, r):
-            continue
-        return False
-    return True
+        for r, t, v in zip(reified_args, target_args, variances):
+            if v == 3 or r == t:
+                continue
+            if v == 1 and _parametric_is_sub(r, t):
+                continue
+            if v == 2 and _parametric_is_sub(t, r):
+                continue
+            break
+        else:
+            return True
+    return False
 
 def _parametric_is_sub(a, b):
     if a is b or b is object:
@@ -674,16 +703,18 @@ mod tests {
     }
 
     #[test]
-    fn implicit_alias_builtin_target_is_erased() {
-        // an alias to a builtin specialization is erased just like the direct
-        // form — a constant, and ty reports the error
+    fn implicit_alias_builtin_target_probes() {
+        // an alias to a builtin specialization probes just like the direct form
+        // — the alias name `X` is passed through so the runtime unwinds it
         let out = out(indoc! {"
             X = list[int]
             def f(y: object) -> bool:
                 return y is X
         "});
-        assert!(out.contains("return False"), "erased alias target: {out}");
-        assert!(!out.contains("_parametric_is"), "no probe: {out}");
+        assert!(
+            out.contains("return _parametric_is(y, X, (0,))"),
+            "alias to a builtin probes through `X`: {out}"
+        );
     }
 
     #[test]
@@ -881,39 +912,33 @@ mod tests {
     }
 
     #[test]
-    fn dynamic_value_against_builtin_folds_false() {
-        // a builtin collection erases its type arguments at runtime, so the
-        // probe can never succeed — ty errors and the lowering is a constant
+    fn dynamic_value_against_builtin_probes_mro() {
+        // a builtin collection target is checkable after all: the probe unwinds
+        // the value's mro/`__orig_bases__`, so a concrete subclass that fixes
+        // the arguments (`class B(list[int])`) answers True while a bare list
+        // answers False — sound, since the test narrows only its positive branch
         let out = out(indoc! {"
             def f(x) -> bool:
                 return x is list[int]
         "});
         assert!(
-            out.contains("return False"),
-            "erased builtin target lowers to False: {out}"
-        );
-        assert!(
-            !out.contains("_parametric_is"),
-            "no probe against an erased builtin: {out}"
+            out.contains("return _parametric_is(x, list[int], (0,))"),
+            "builtin target probes via mro: {out}"
         );
     }
 
     #[test]
-    fn builtin_union_is_an_error_not_a_witness() {
-        // a builtin collection's element type is erased at runtime and an
-        // empty list has no element to witness, so a builtin union can't be
-        // discriminated — ty errors and the lowering is the constant `False`
+    fn builtin_union_probes_each_value() {
+        // a union of builtin specializations is still probeable — the runtime
+        // unwinds each value's mro; a bare list in either arm simply answers
+        // False, no element-witness heuristic involved
         let out = out(indoc! {"
             def f(x: list[int] | list[str]) -> bool:
                 return x is list[int]
         "});
         assert!(
-            out.contains("return False"),
-            "builtin union is erased, not witnessed: {out}"
-        );
-        assert!(
-            !out.contains("_witness_is") && !out.contains("_parametric_is"),
-            "no runtime heuristic for a builtin union: {out}"
+            out.contains("return _parametric_is(x, list[int], (0,))"),
+            "builtin union probes via mro: {out}"
         );
     }
 
@@ -977,15 +1002,17 @@ mod tests {
     }
 
     #[test]
-    fn erased_builtin_probe_becomes_false() {
-        // a dynamic value against a builtin target can't probe (no
-        // __orig_class__); lowers to a constant, no polyfill
+    fn builtin_multi_arg_target_probes() {
+        // a two-argument builtin target probes with a variance code per
+        // parameter; the runtime unwinds `dict`-fixing subclasses via the mro
         let out = out(indoc! {"
             def f(x) -> bool:
                 return x is dict[str, int]
         "});
-        assert!(out.contains("return False"), "erased dict target: {out}");
-        assert!(!out.contains("_parametric_is"), "no probe: {out}");
+        assert!(
+            out.contains("return _parametric_is(x, dict[str, int], (0, 0))"),
+            "builtin dict target probes: {out}"
+        );
     }
 
     #[test]
