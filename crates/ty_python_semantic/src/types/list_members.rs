@@ -613,6 +613,11 @@ impl<'db> AllMembers<'db> {
                     }
                 }
             }
+            Some(CodeGeneratorKind::SqlalchemyDeclarative) => {
+                // SQLAlchemy mapped attributes are real class-body annotations,
+                // so they already surface as ordinary members; only `__init__`
+                // is synthesized and it is not a completion member here.
+            }
             None => {}
         }
     }

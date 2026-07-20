@@ -199,6 +199,14 @@ fn clean_mdtest_blocks_run() {
         .output()
         .is_ok_and(|o| o.status.success());
 
+    // the sqlalchemy divergence suite likewise needs the framework installed to
+    // execute; skip its blocks when it isn't present, and run them locally
+    // against an interpreter that has sqlalchemy to enforce the contract
+    let has_sqlalchemy = Command::new(&python)
+        .args(["-c", "import sqlalchemy"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+
     let dir = mdtest_dir();
     let mut files: Vec<PathBuf> = fs::read_dir(&dir)
         .expect("mdtest dir")
@@ -275,6 +283,9 @@ fn clean_mdtest_blocks_run() {
                         continue;
                     }
                     if !has_pydantic && transpiled.contains("pydantic") {
+                        continue;
+                    }
+                    if !has_sqlalchemy && transpiled.contains("sqlalchemy") {
                         continue;
                     }
                     let py = tmp.path().join(format!(

@@ -11,7 +11,10 @@ dependencies = ["SQLAlchemy==2.0.44"]
 
 ## ORM Model
 
-This test makes sure that ty understands SQLAlchemy's `dataclass_transform` setup:
+A plain 2.0 declarative model inherits SQLAlchemy's runtime `__init__(self, **kw)`, which accepts
+any mapped attribute as a keyword. ty synthesizes the truthful signature from the `Mapped[T]`
+annotations: keyword-only, and every parameter optional (SQLAlchemy enforces non-nullable columns at
+flush, not at construction).
 
 ```py
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -22,22 +25,148 @@ class Base(DeclarativeBase):
 class User(Base):
     __tablename__ = "user"
 
-    id: Mapped[int] = mapped_column(primary_key=True, init=False)
-    internal_name: Mapped[str] = mapped_column(alias="name")
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column()
+
+reveal_type(User.__init__)  # revealed: (self: User, *, id: int = ..., name: str = ...) -> None
 
 user = User(name="John Doe")
 reveal_type(user.id)  # revealed: int
-reveal_type(user.internal_name)  # revealed: str
+reveal_type(user.name)  # revealed: str
 ```
 
-Unfortunately, SQLAlchemy overrides `__init__` and explicitly accepts all combinations of keyword
-arguments. This is why we currently cannot flag invalid constructor calls:
+Any subset of the mapped attributes constructs, including none of them:
 
 ```py
-reveal_type(User.__init__)  # revealed: def __init__(self, **kw: Any) -> Unknown
+User()
+User(id=1)
+User(id=1, name="Alice")
+```
 
-# TODO: this should ideally be an error
-invalid_user = User(invalid_arg=42)
+A keyword that names no mapped attribute is now an error (previously the loose `**kw: Any` silently
+accepted it):
+
+```py
+# error: [unknown-argument] "Argument `nam` does not match any known parameter"
+User(nam="typo")
+```
+
+The parameter type is the `Mapped[T]` argument, so a value of the wrong type is rejected:
+
+```py
+# error: [invalid-argument-type]
+User(name=123)
+```
+
+## Relationships are constructor keywords
+
+`relationship()` fields are mapped attributes too, so they join the synthesized constructor:
+
+```py
+from __future__ import annotations
+
+from sqlalchemy import ForeignKey
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+class Base(DeclarativeBase):
+    pass
+
+class Address(Base):
+    __tablename__ = "address"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    email: Mapped[str]
+    user_id: Mapped[int] = mapped_column(ForeignKey("user.id"))
+    user: Mapped[User] = relationship(back_populates="addresses")
+
+class User(Base):
+    __tablename__ = "user"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    addresses: Mapped[list[Address]] = relationship(back_populates="user")
+
+# revealed: (self: User, *, id: int = ..., name: str = ..., addresses: list[Address] = ...) -> None
+reveal_type(User.__init__)
+
+alice = User(name="Alice", addresses=[Address(email="a@example.com")])
+reveal_type(alice.addresses)  # revealed: list[Address]
+```
+
+## Mixin and abstract fields are inherited
+
+Fields declared on an `__abstract__` model or an ordinary declarative mixin flow into a concrete
+model's constructor through the MRO:
+
+```py
+from datetime import datetime
+
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+class Base(DeclarativeBase):
+    pass
+
+class TimestampMixin:
+    created_at: Mapped[datetime]
+
+class Widget(TimestampMixin, Base):
+    __tablename__ = "widget"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+
+# revealed: (self: Widget, *, created_at: datetime = ..., id: int = ..., name: str = ...) -> None
+reveal_type(Widget.__init__)
+```
+
+## A user-defined constructor wins
+
+An explicit `__init__` in the class body overrides synthesis:
+
+```py
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+class Base(DeclarativeBase):
+    pass
+
+class User(Base):
+    __tablename__ = "user"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str]
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+reveal_type(User.__init__)  # revealed: def __init__(self, name: str) -> None
+User("Alice")
+# error: [missing-argument]
+User()
+```
+
+## MappedAsDataclass is unchanged
+
+`MappedAsDataclass` models are PEP 681 `dataclass_transform` classes and keep going through the
+dataclass path — `init=False`, `default=`, and positional fields all honored:
+
+```py
+from sqlalchemy.orm import DeclarativeBase, MappedAsDataclass, Mapped, mapped_column
+
+class Base(MappedAsDataclass, DeclarativeBase):
+    pass
+
+class User(Base):
+    __tablename__ = "user"
+
+    id: Mapped[int] = mapped_column(primary_key=True, init=False)
+    name: Mapped[str] = mapped_column()
+
+# id is init=False, so it is not a constructor parameter, and name is positional-or-keyword. The
+# parameter type comes from `Mapped.__set__`, which the dataclass descriptor path reads (unlike the
+# plain-declarative path, which uses the `Mapped[T]` argument directly).
+# revealed: (self: User, name: SQLCoreOperations[str] | str) -> None
+reveal_type(User.__init__)
+User("Alice")
 ```
 
 ## Basic query example
