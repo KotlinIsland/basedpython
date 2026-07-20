@@ -3562,6 +3562,25 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
     ) -> Option<NarrowingConstraints<'db>> {
         let inference = infer_expression_types(self.db, expression, TypeContext::default());
 
+        // basedpython `<value> cast <type>` narrows the value place to the target
+        // type wholesale: a checked cast is an assertion that overrides the
+        // static type, so the whole prior type is replaced (unlike `isinstance`,
+        // which intersects). The safe `cast?` form can yield `None`, so it is
+        // left to ordinary assignment narrowing and does not narrow its operand.
+        // There is no negative branch for an unconditional cast statement.
+        if expr_call.is_cast
+            && is_positive
+            && let [_type_arg, value_arg] = &*expr_call.arguments.args
+            && let Some(target) = PlaceExpr::try_from_expr(value_arg)
+        {
+            let place = self.expect_place(&target);
+            let cast_ty = inference.expression_type(expr_call);
+            return Some(NarrowingConstraints::from_iter([(
+                place,
+                NarrowingConstraint::replacement(cast_ty),
+            )]));
+        }
+
         if let Some(type_guard_call_constraints) =
             self.evaluate_type_guard_call(inference, expr_call, is_positive)
         {

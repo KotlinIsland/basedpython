@@ -4131,6 +4131,19 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
                 self.visit_expr(value);
 
+                // basedpython `<value> cast <type>` as a bare statement narrows the
+                // value place to the target type for the rest of the scope, like an
+                // unconditional `assert isinstance(value, type)`. The synthetic
+                // `cast` callee is unresolved and never `NoReturn`, so the terminal
+                // call analysis below is skipped for it.
+                if let ast::Expr::Call(call) = value.as_ref()
+                    && call.is_cast
+                {
+                    let predicate = self.build_predicate(value);
+                    self.record_narrowing_constraint(predicate);
+                    return;
+                }
+
                 // If the statement is a call (or an `await` wrapping a call), it could
                 // possibly be a call to a function marked with `NoReturn` (for example,
                 // `sys.exit()` or `await async_exit()`). In this case, we use a special
