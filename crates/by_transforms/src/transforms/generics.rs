@@ -180,6 +180,15 @@ impl<'src> GenericPolyfill<'src> {
         &self.source[usize::from(range.start())..usize::from(range.end())]
     }
 
+    /// whether `class` carries the synthetic `protocol_class` marker the parser
+    /// emits for a `protocol P:` declaration
+    fn has_protocol_marker(&self, class: &StmtClassDef) -> bool {
+        class.decorator_list.iter().any(|dec| {
+            super::source_util::is_synthetic_decorator(self.source, dec)
+                && matches!(&dec.expression, Expr::Name(name) if name.id.as_str() == "protocol_class")
+        })
+    }
+
     /// Lower one element of a parameter-shape tuple to a Python type
     /// expression suitable for inclusion inside `tuple[...]`. Mirrors the
     /// rules in `annotation.rs::lower_tuple_element`
@@ -452,9 +461,20 @@ impl<'src> GenericPolyfill<'src> {
             self.parameters_targets
                 .insert(class.name.id.as_str().to_owned());
         }
+        // a `protocol P[T]:` with no explicit bases defers its `Protocol` base to
+        // this pass, which owns the base list for a type-param class (modifiers
+        // skips it to avoid two competing base-parens around the type params)
+        let deferred_protocol = class.arguments.is_none() && self.has_protocol_marker(class);
         // PEP 695 class type params are native syntax in 3.12+ (3.13+ with defaults)
         if self.supports_native_type_params(&tp.type_params) {
             self.strip_constraints_keyword(&tp.type_params);
+            if deferred_protocol {
+                // keep the native `[T]`, append the base after it: `[T](Protocol)`
+                self.edits.push(Fix::safe_edit(Edit::insertion(
+                    "(Protocol)".to_owned(),
+                    tp.range().end(),
+                )));
+            }
             return;
         }
 
@@ -498,6 +518,13 @@ impl<'src> GenericPolyfill<'src> {
             }
             self.edits
                 .push(Fix::safe_edit(Edit::range_deletion(tp.range())));
+        } else if deferred_protocol {
+            // the marker protocol's base goes in the same parens as `Generic`,
+            // positional and before it: `(Protocol, Generic[_T])`
+            self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                format!("(Protocol, {generic_str})"),
+                tp.range(),
+            )));
         } else {
             self.edits.push(Fix::safe_edit(Edit::range_replacement(
                 format!("({generic_str})"),
@@ -1087,6 +1114,62 @@ mod tests {
                 from typing import TypeVar, Generic
                 _T = TypeVar(\"_T\")
                 class Foo(Base, Generic[_T]): ...
+            "},
+        );
+    }
+
+    /// regression: a `protocol P[T]:` with no explicit base used to have the
+    /// generics pass and the modifiers pass both create a base-parens list,
+    /// producing invalid `class A(Protocol)(Generic[_T])`. generics now owns the
+    /// whole base list, placing `Protocol` before `Generic`
+    #[test]
+    fn protocol_class_type_params_legacy() {
+        check(
+            indoc! {"
+                protocol Foo[T]:
+                    a: T
+            "},
+            indoc! {"
+                from typing import Protocol, TypeVar, Generic
+                _T = TypeVar(\"_T\")
+                class Foo(Protocol, Generic[_T]):
+                    a: _T
+            "},
+        );
+    }
+
+    /// on a native-PEP-695 target the type params stay `[T]` and `Protocol` is
+    /// appended after them
+    #[test]
+    fn protocol_class_type_params_native() {
+        check_at(
+            indoc! {"
+                protocol Foo[T]:
+                    a: T
+            "},
+            indoc! {"
+                from typing import Protocol
+                class Foo[T](Protocol):
+                    a: T
+            "},
+            PythonVersion::PY313,
+        );
+    }
+
+    /// an explicit base composes: modifiers adds `Protocol` to the existing
+    /// parens and generics adds `Generic` there too
+    #[test]
+    fn protocol_class_type_params_with_base() {
+        check(
+            indoc! {"
+                protocol Foo[T](Bar):
+                    a: T
+            "},
+            indoc! {"
+                from typing import Protocol, TypeVar, Generic
+                _T = TypeVar(\"_T\")
+                class Foo(Bar, Protocol, Generic[_T]):
+                    a: _T
             "},
         );
     }

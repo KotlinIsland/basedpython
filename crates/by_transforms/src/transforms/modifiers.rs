@@ -192,7 +192,14 @@ impl<'src> Modifiers<'src> {
                         "class ".to_owned(),
                         dec.range(),
                     )));
-                    self.insert_protocol_base(class);
+                    // a class with type params and no explicit bases has its base
+                    // list built by the generics pass (native `[T]` on 3.12+,
+                    // `(Generic[_T])` on the legacy path), which adds `Protocol`
+                    // there — so the two passes don't emit competing base-parens
+                    // around the type params. every other shape keeps the base here
+                    if !(class.type_params.is_some() && class.arguments.is_none()) {
+                        self.insert_protocol_base(class);
+                    }
                 }
                 "export" => {
                     self.edits
