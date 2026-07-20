@@ -1825,6 +1825,132 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         }
     }
 
+    /// basedpython: record definite shadowing write-backs for the enclosing-scope
+    /// names a trailing-lambda block assigns.
+    ///
+    /// A trailing-lambda block (`f:` + suite) runs inline at its call site — the
+    /// lowering inserts a matching `global` / `nonlocal` — so a name it binds that
+    /// is already bound in an enclosing scope should read as the block's value
+    /// after the block, like an inline assignment. This reuses the `NestedBindings`
+    /// inference (which yields the block's exit value) but records a *shadowing*
+    /// binding for a definite result, rather than the union the general nested-write
+    /// case keeps (a general nested function may be called at any time; this block
+    /// runs right here).
+    fn synthesize_trailing_lambda_writebacks(
+        &mut self,
+        block_scope: FileScopeId,
+        body: &[ast::Stmt],
+    ) {
+        // whether the block unconditionally rebinds `name` on every path — a
+        // top-level `name = …` (annotated or augmented too). a definite rebind
+        // shadows the enclosing value (`a = 2` → `2`); a conditional one lets the
+        // enclosing value survive on the un-taken path (`if c(): a = 2` → `1 | 2`)
+        fn definitely_assigns(body: &[ast::Stmt], name: &str) -> bool {
+            fn is_target(expr: &ast::Expr, name: &str) -> bool {
+                matches!(expr, ast::Expr::Name(name_expr) if name_expr.id.as_str() == name)
+            }
+            body.iter().any(|stmt| match stmt {
+                ast::Stmt::Assign(assign) => {
+                    assign.targets.iter().any(|target| is_target(target, name))
+                }
+                ast::Stmt::AnnAssign(ann) => ann.value.is_some() && is_target(&ann.target, name),
+                ast::Stmt::AugAssign(aug) => is_target(&aug.target, name),
+                // a `with` body runs unconditionally
+                ast::Stmt::With(with) => definitely_assigns(&with.body, name),
+                // an `if` chain assigns definitely only when every branch does —
+                // the main body, every `elif`, and a final `else` (without one the
+                // fall-through path skips the assignment)
+                ast::Stmt::If(if_stmt) => {
+                    let has_else = if_stmt
+                        .elif_else_clauses
+                        .iter()
+                        .any(|clause| clause.test.is_none());
+                    has_else
+                        && definitely_assigns(&if_stmt.body, name)
+                        && if_stmt
+                            .elif_else_clauses
+                            .iter()
+                            .all(|clause| definitely_assigns(&clause.body, name))
+                }
+                _ => false,
+            })
+        }
+
+        let enclosing = self.current_scope();
+
+        // names the block binds locally, excluding any it already declares
+        // `global` / `nonlocal` (those flow through the general nested path)
+        let candidates: Vec<Name> = self.place_tables[block_scope]
+            .symbols()
+            .filter(|symbol| symbol.is_bound() && !symbol.is_global() && !symbol.is_nonlocal())
+            .map(|symbol| symbol.name().clone())
+            .collect();
+
+        for name in candidates {
+            // the nearest enclosing scope that already binds this name; without one
+            // the block name is a genuine new local and writes back nothing
+            let Some(bound_scope) = self
+                .scope_stack
+                .iter()
+                .rev()
+                .skip_while(|scope| scope.file_scope_id != enclosing)
+                .find_map(|scope| {
+                    let table = &self.place_tables[scope.file_scope_id];
+                    let place_id = table.symbol_id(&name)?;
+                    table
+                        .place(place_id)
+                        .is_bound()
+                        .then_some(scope.file_scope_id)
+                })
+            else {
+                continue;
+            };
+
+            let kind = if bound_scope == FileScopeId::global() {
+                GlobalOrNonlocal::Global
+            } else {
+                GlobalOrNonlocal::Nonlocal
+            };
+
+            let definite = definitely_assigns(body, name.as_str());
+            let place: ScopedPlaceId = self.add_symbol(name.clone()).into();
+            let definition = Definition::new(
+                self.db,
+                self.current_scope_id(),
+                place,
+                DefinitionKind::NestedBindings(Box::new(NestedBindingsDefinitionKind {
+                    name,
+                    nested_declarations: std::iter::once(NestedDeclaration {
+                        kind,
+                        file_scope_id: block_scope,
+                        range: TextRange::default(),
+                        is_bound: true,
+                    })
+                    .collect(),
+                })),
+                false,
+            );
+
+            self.invalidate_narrowing_aliases_for(place);
+            // the block runs at this point (once, like a `with` body), so a definite
+            // rebind replaces the enclosing binding; a conditional one is kept
+            // alongside it, matching a real `nonlocal` write's union
+            let (previous, future) = if definite {
+                (
+                    PreviousDefinitions::AreShadowed,
+                    FutureDefinitions::ShadowThisOne,
+                )
+            } else {
+                (
+                    PreviousDefinitions::AreKept,
+                    FutureDefinitions::DontShadowThisOne,
+                )
+            };
+            self.current_use_def_map_mut()
+                .record_binding(place, definition, previous, future);
+        }
+    }
+
     fn record_expression_narrowing_constraint(
         &mut self,
         predicate_node: &'ast ast::Expr,
@@ -2707,7 +2833,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     returns,
                     body,
                     is_async: _,
-                    is_trailing_lambda: _,
+                    is_trailing_lambda,
                     range: _,
                     node_index: _,
                 } = function_def;
@@ -2740,7 +2866,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     self.visit_expr(default);
                 }
 
-                let nested_bindings = self.with_type_params(
+                let (nested_bindings, block_scope) = self.with_type_params(
                     NodeWithScopeRef::FunctionTypeParameters(function_def),
                     type_params.as_deref(),
                     |builder| {
@@ -2750,6 +2876,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         }
 
                         builder.push_scope(NodeWithScopeRef::Function(function_def));
+                        let block_scope = builder.current_scope();
 
                         builder.declare_parameters(parameters);
 
@@ -2765,7 +2892,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         builder.visit_body(body);
 
                         builder.current_first_parameter_name = first_parameter_name;
-                        builder.pop_scope()
+                        (builder.pop_scope(), block_scope)
                     },
                 );
 
@@ -2805,6 +2932,15 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 // mdtest case "Visibility of `nonlocal` bindings from nested and sibling scopes"
                 // and its `global` counterpart.
                 self.synthesize_nested_binding_definitions(nested_bindings);
+
+                // basedpython: a trailing-lambda block (`f:` + suite) runs inline at
+                // its call site, so an assignment to an enclosing name writes through
+                // to that binding (the lowering inserts the matching `global` /
+                // `nonlocal`). Model that as a definite shadowing write in the
+                // enclosing scope, so `reveal_type` after the block reflects it.
+                if *is_trailing_lambda {
+                    self.synthesize_trailing_lambda_writebacks(block_scope, body);
+                }
 
                 // The symbol for the function name itself has to be evaluated
                 // at the end to match the runtime evaluation of parameter defaults

@@ -114,6 +114,118 @@ f:
         reveal_type(it)  # revealed: int
 ```
 
+## a block assignment writes through to the enclosing scope
+
+A trailing-lambda block runs inline at its call site, so assigning to a name bound in an enclosing
+scope updates that binding — `reveal_type` after the block reflects the block's value (the lowering
+inserts the matching `nonlocal` / `global`).
+
+```by
+from typing_extensions import reveal_type
+
+def run(fn: () -> None):
+    fn()
+
+def main():
+    a: int = 1
+    run:
+        a = 2
+    reveal_type(a)  # revealed: 2
+```
+
+## a module-level binding is captured the same way
+
+```by
+from typing_extensions import reveal_type
+
+def run(fn: () -> None):
+    fn()
+
+top: int = 1
+
+run:
+    top = 2
+
+reveal_type(top)  # revealed: 2
+```
+
+## a name bound in no enclosing scope stays a block local
+
+```by
+from typing_extensions import reveal_type
+
+def run(fn: () -> None):
+    fn()
+
+def main():
+    a: int = 1
+    run:
+        fresh = 9
+    reveal_type(a)  # revealed: 1
+```
+
+## a conditional block assignment unions with the prior value
+
+The block runs once, but the assignment is conditional — so on the branch that skips it, `a` keeps
+its prior value, giving a union rather than a definite narrowing.
+
+```by
+from typing_extensions import reveal_type
+
+def run(fn: () -> None):
+    fn()
+
+def cond() -> bool:
+    return True
+
+def main():
+    a: int = 1
+    run:
+        if cond():
+            a = 2
+    reveal_type(a)  # revealed: 1 | 2
+```
+
+## a definite assignment on every branch shadows the prior
+
+When every branch (including a final `else`) rebinds the name, the prior value cannot survive, so it
+is dropped.
+
+```by
+from typing_extensions import reveal_type
+
+def run(fn: () -> None):
+    fn()
+
+def cond() -> bool:
+    return True
+
+def main():
+    a: int = 1
+    run:
+        if cond():
+            a = 2
+        else:
+            a = 3
+    reveal_type(a)  # revealed: 2 | 3
+```
+
+## a binding after the block wins
+
+```by
+from typing_extensions import reveal_type
+
+def run(fn: () -> None):
+    fn()
+
+def main():
+    a: int = 1
+    run:
+        a = 2
+    a = 3
+    reveal_type(a)  # revealed: 3
+```
+
 ## not valid in `.py` files
 
 The shape parses exactly as it does in upstream python — an annotated assignment missing its

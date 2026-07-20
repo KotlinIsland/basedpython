@@ -13,7 +13,7 @@
 //! function appended as its last argument:
 //!
 //! ```text
-//! def _trailing_lambda_0(it):
+//! def _trailing_lambda_0(it=None):
 //!     print(it)
 //! f(2, a=_trailing_lambda_0)
 //! ```
@@ -29,13 +29,13 @@
 //! and lowerings nested inside them (a `??` argument, a `cast` callee, a
 //! nested trailing lambda in the body) still compose.
 
-use ruff_python_ast::visitor::{Visitor, walk_stmt};
-use ruff_python_ast::{ArgOrKeyword, Expr, Stmt, StmtFunctionDef};
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
+use ruff_python_ast::{ArgOrKeyword, Expr, ExprContext, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::source_util::line_indent;
-use crate::type_info::TypeInfo;
+use crate::type_info::{CaptureKind, TypeInfo};
 
 struct TrailingLambdaLower<'a, 'src> {
     source: &'src str,
@@ -43,6 +43,37 @@ struct TrailingLambdaLower<'a, 'src> {
     edits: Vec<(TextRange, Vec<Fragment>)>,
     /// monotonic across the file so sibling lambdas get distinct names
     counter: usize,
+}
+
+/// Collects the `Name` targets *assigned* directly in a block — every rebinding,
+/// via `=`, `for`, `with as`, `:=`, or augmented / annotated assignment (ruff
+/// marks them all [`ExprContext::Store`]). Attribute / subscript targets
+/// (`a.b = …`) don't rebind a name, so their `Load`-context root is skipped.
+/// Nested functions, classes, lambdas, and comprehensions are their own scope
+/// and are not descended into.
+struct BlockAssignments<'ast> {
+    names: Vec<&'ast Expr>,
+}
+
+impl<'ast> Visitor<'ast> for BlockAssignments<'ast> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        if matches!(stmt, Stmt::FunctionDef(_) | Stmt::ClassDef(_)) {
+            return;
+        }
+        walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        match expr {
+            Expr::Name(name) if matches!(name.ctx, ExprContext::Store) => self.names.push(expr),
+            Expr::Lambda(_)
+            | Expr::ListComp(_)
+            | Expr::SetComp(_)
+            | Expr::DictComp(_)
+            | Expr::Generator(_) => {}
+            _ => walk_expr(self, expr),
+        }
+    }
 }
 
 impl TrailingLambdaLower<'_, '_> {
@@ -56,6 +87,58 @@ impl TrailingLambdaLower<'_, '_> {
                 return name;
             }
         }
+    }
+
+    /// The `global` / `nonlocal` lines a block needs so its assignments write
+    /// through to the enclosing scope instead of shadowing it with a fresh
+    /// local. Returns the text to splice right after `def …(it):` — each
+    /// declaration on its own indented line — or `None` when nothing is
+    /// captured. This is what lets `f:\n    a = 2` update an enclosing `a`
+    /// without a manual `nonlocal a`.
+    fn capture_declarations(&self, function: &StmtFunctionDef) -> Option<String> {
+        let mut collector = BlockAssignments { names: Vec::new() };
+        for stmt in &function.body {
+            collector.visit_stmt(stmt);
+        }
+
+        let mut seen: Vec<&str> = Vec::new();
+        let mut globals: Vec<&str> = Vec::new();
+        let mut nonlocals: Vec<&str> = Vec::new();
+        for name_expr in &collector.names {
+            let Expr::Name(name) = name_expr else {
+                continue;
+            };
+            let id = name.id.as_str();
+            // `it` is the block's own parameter, never a capture
+            if id == "it" || seen.contains(&id) {
+                continue;
+            }
+            seen.push(id);
+            match self.types.trailing_block_capture(id, name_expr) {
+                Some(CaptureKind::Global) => globals.push(id),
+                Some(CaptureKind::Nonlocal) => nonlocals.push(id),
+                None => {}
+            }
+        }
+
+        let mut lines: Vec<String> = Vec::new();
+        if !globals.is_empty() {
+            lines.push(format!("global {}", globals.join(", ")));
+        }
+        if !nonlocals.is_empty() {
+            lines.push(format!("nonlocal {}", nonlocals.join(", ")));
+        }
+        if lines.is_empty() {
+            return None;
+        }
+        let indent = line_indent(self.source, function.body.first()?.range().start());
+        let mut out = String::new();
+        for line in &lines {
+            out.push('\n');
+            out.push_str(indent);
+            out.push_str(line);
+        }
+        Some(out)
     }
 
     fn process(&mut self, function: &StmtFunctionDef) {
@@ -95,11 +178,20 @@ impl TrailingLambdaLower<'_, '_> {
             None => name.clone(),
         };
 
-        let mut fragments = vec![
-            Fragment::Lit(format!("def {name}(it):")),
-            Fragment::Src(TextRange::new(colon + TextSize::from(1), stmt_range.end())),
-            Fragment::Lit(format!("\n{indent}")),
-        ];
+        // `it` defaults to `None` so a callback whose type takes no argument
+        // (`() -> None`, invoked as `fn()`) can still call the block, which
+        // always declares the single implicit `it` parameter
+        let mut fragments = vec![Fragment::Lit(format!("def {name}(it=None):"))];
+        // write-through declarations so block assignments update enclosing
+        // bindings; spliced ahead of the suite so they precede every use
+        if let Some(declarations) = self.capture_declarations(function) {
+            fragments.push(Fragment::Lit(declarations));
+        }
+        fragments.push(Fragment::Src(TextRange::new(
+            colon + TextSize::from(1),
+            stmt_range.end(),
+        )));
+        fragments.push(Fragment::Lit(format!("\n{indent}")));
         match plain_call {
             Some(call) => {
                 let arguments = &call.arguments;
@@ -217,7 +309,7 @@ mod tests {
                 print(it)
         "});
         assert!(
-            out.contains("def _trailing_lambda_0(it):\n    print(it)"),
+            out.contains("def _trailing_lambda_0(it=None):\n    print(it)"),
             "got:\n{out}"
         );
         assert!(out.contains("f(a=_trailing_lambda_0)"), "got:\n{out}");
@@ -334,7 +426,7 @@ mod tests {
         "});
         assert!(
             out.contains(
-                "    def _trailing_lambda_0(it):\n        print(it)\n    g(a=_trailing_lambda_0)"
+                "    def _trailing_lambda_0(it=None):\n        print(it)\n    g(a=_trailing_lambda_0)"
             ),
             "got:\n{out}"
         );
@@ -351,7 +443,7 @@ mod tests {
                     print(it)
         "});
         assert!(
-            out.contains("def _trailing_lambda_1(it):\n        print(it)"),
+            out.contains("def _trailing_lambda_1(it=None):\n        print(it)"),
             "got:\n{out}"
         );
         assert!(out.contains("    g(a=_trailing_lambda_1)"), "got:\n{out}");
@@ -369,7 +461,7 @@ mod tests {
                 print(it)
         "});
         assert!(
-            out.contains("def _trailing_lambda_0(it):  # header note"),
+            out.contains("def _trailing_lambda_0(it=None):  # header note"),
             "got:\n{out}"
         );
         assert!(out.contains("    # body note"), "got:\n{out}");
@@ -399,8 +491,80 @@ mod tests {
             f:
                 print(it)
         "});
-        assert!(out.contains("def _trailing_lambda_1(it):"), "got:\n{out}");
+        assert!(
+            out.contains("def _trailing_lambda_1(it=None):"),
+            "got:\n{out}"
+        );
         assert!(out.contains("f(a=_trailing_lambda_1)"), "got:\n{out}");
+    }
+
+    #[test]
+    fn assignment_captures_module_binding_as_global() {
+        // a block assignment to a module-level name writes through via `global`
+        let out = check(indoc! {"
+            def f(fn: () -> None):
+                fn()
+
+            a: int = 1
+            f:
+                a = 2
+        "});
+        assert!(
+            out.contains("def _trailing_lambda_0(it=None):\n    global a\n    a = 2"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn assignment_captures_enclosing_function_as_nonlocal() {
+        // a block assignment to an enclosing function's local writes through via
+        // `nonlocal`
+        let out = check(indoc! {"
+            def f(fn: () -> None):
+                fn()
+
+            def outer():
+                b = 1
+                f:
+                    b = 2
+        "});
+        assert!(
+            out.contains("    def _trailing_lambda_0(it=None):\n        nonlocal b\n        b = 2"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn new_local_in_block_is_not_captured() {
+        // a name bound in no enclosing scope stays a plain block local
+        let out = check(indoc! {"
+            def f(fn: () -> None):
+                fn()
+
+            a: int = 1
+            f:
+                fresh = a
+        "});
+        assert!(!out.contains("global fresh"), "got:\n{out}");
+        assert!(!out.contains("nonlocal fresh"), "got:\n{out}");
+    }
+
+    #[test]
+    fn attribute_target_does_not_capture_root() {
+        // `obj.x = …` rebinds no name, so the root `obj` gets no declaration
+        let out = check(indoc! {"
+            def f(fn: () -> None):
+                fn()
+
+            class C:
+                x: int = 0
+
+            obj: C = C()
+            f:
+                obj.x = 1
+        "});
+        assert!(!out.contains("global obj"), "got:\n{out}");
+        assert!(!out.contains("nonlocal"), "got:\n{out}");
     }
 
     #[test]
