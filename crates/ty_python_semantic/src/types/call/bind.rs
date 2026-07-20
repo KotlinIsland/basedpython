@@ -1147,6 +1147,36 @@ impl<'db> Bindings<'db> {
         argument_types.get_default().unwrap_or(Type::unknown())
     }
 
+    /// For a plain call — a single callable with a single matching overload — the
+    /// annotated parameter type each source-order argument was matched to, as a
+    /// vector of `argument_count` entries in source order. An entry is `None`
+    /// when the argument matched zero or several parameters (unpacking). Returns
+    /// `None` for union, overloaded, or errored callees, where no single
+    /// parameter type per argument is well-defined. Used by basedpython's
+    /// optional→object widening check.
+    pub(crate) fn single_overload_parameter_types(
+        &self,
+        argument_count: usize,
+    ) -> Option<Vec<Option<Type<'db>>>> {
+        let binding = self.single_element()?;
+        let (_, overload) = binding.matching_overloads().exactly_one().ok()?;
+        let parameters = overload.signature.parameters();
+        Some(
+            (0..argument_count)
+                .map(|index| {
+                    match overload
+                        .matched_argument_for_call_argument(binding, index)?
+                        .parameters
+                        .as_slice()
+                    {
+                        [parameter] => Some(parameters[parameter.index].annotated_type()),
+                        _ => None,
+                    }
+                })
+                .collect(),
+        )
+    }
+
     /// Report diagnostics for all of the errors that occurred when trying to match actual
     /// arguments to formal parameters. If the callable is a union, or has multiple overloads, we
     /// report a single diagnostic if we couldn't match any union element or overload.
