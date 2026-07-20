@@ -207,6 +207,15 @@ fn clean_mdtest_blocks_run() {
         .output()
         .is_ok_and(|o| o.status.success());
 
+    // the pytest divergence suite drives real pytest over the transpiled output
+    // (each block re-invokes `pytest.main` on itself under `__main__`); skip its
+    // blocks when pytest isn't installed, and run them locally against an
+    // interpreter that has pytest to enforce the contract
+    let has_pytest = Command::new(&python)
+        .args(["-c", "import pytest"])
+        .output()
+        .is_ok_and(|o| o.status.success());
+
     let dir = mdtest_dir();
     let mut files: Vec<PathBuf> = fs::read_dir(&dir)
         .expect("mdtest dir")
@@ -286,6 +295,9 @@ fn clean_mdtest_blocks_run() {
                         continue;
                     }
                     if !has_sqlalchemy && transpiled.contains("sqlalchemy") {
+                        continue;
+                    }
+                    if !has_pytest && transpiled.contains("pytest") {
                         continue;
                     }
                     let py = tmp.path().join(format!(
