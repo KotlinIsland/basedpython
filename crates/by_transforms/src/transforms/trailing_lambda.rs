@@ -30,7 +30,7 @@
 //! nested trailing lambda in the body) still compose.
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{ArgOrKeyword, Expr, ExprContext, Stmt, StmtFunctionDef};
+use ruff_python_ast::{ArgOrKeyword, Expr, ExprContext, Stmt, StmtFunctionDef, StmtReturn};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
@@ -76,6 +76,24 @@ impl<'ast> Visitor<'ast> for BlockAssignments<'ast> {
     }
 }
 
+/// Collects the `return` statements a `once` block propagates to the enclosing
+/// function — those directly in the block, in source order. Nested functions
+/// and classes are their own `return` target and are not descended into.
+struct BlockReturns<'ast> {
+    returns: Vec<&'ast StmtReturn>,
+}
+
+impl<'ast> Visitor<'ast> for BlockReturns<'ast> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        match stmt {
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => return,
+            Stmt::Return(ret) => self.returns.push(ret),
+            _ => {}
+        }
+        walk_stmt(self, stmt);
+    }
+}
+
 impl TrailingLambdaLower<'_, '_> {
     /// a function name that is unbound at the statement's scope and unused by
     /// earlier lowerings in this run
@@ -91,19 +109,27 @@ impl TrailingLambdaLower<'_, '_> {
 
     /// The `global` / `nonlocal` lines a block needs so its assignments write
     /// through to the enclosing scope instead of shadowing it with a fresh
-    /// local. Returns the text to splice right after `def …(it):` — each
-    /// declaration on its own indented line — or `None` when nothing is
-    /// captured. This is what lets `f:\n    a = 2` update an enclosing `a`
-    /// without a manual `nonlocal a`.
-    fn capture_declarations(&self, function: &StmtFunctionDef) -> Option<String> {
+    /// local, plus the names to pre-initialize in the enclosing scope (a fresh
+    /// binding a `once` block leaks needs a prior enclosing binding for its
+    /// `nonlocal` to be valid). Returns `(lines to splice after `def …(it):`,
+    /// names to pre-init before the `def`)`. This is what lets `f:\n    a = 2`
+    /// update an enclosing `a` without a manual `nonlocal a`.
+    fn capture_declarations(&self, function: &StmtFunctionDef) -> (Option<String>, Vec<String>) {
         let mut collector = BlockAssignments { names: Vec::new() };
         for stmt in &function.body {
             collector.visit_stmt(stmt);
         }
 
+        // a fresh binding survives only from a `once` block that unconditionally
+        // binds it, matching the type checker's write-back
+        let is_once = function
+            .trailing_lambda_callee()
+            .is_some_and(|callee| self.types.trailing_lambda_callee_is_once(callee));
+
         let mut seen: Vec<&str> = Vec::new();
         let mut globals: Vec<&str> = Vec::new();
         let mut nonlocals: Vec<&str> = Vec::new();
+        let mut preinits: Vec<String> = Vec::new();
         for name_expr in &collector.names {
             let Expr::Name(name) = name_expr else {
                 continue;
@@ -117,6 +143,18 @@ impl TrailingLambdaLower<'_, '_> {
             match self.types.trailing_block_capture(id, name_expr) {
                 Some(CaptureKind::Global) => globals.push(id),
                 Some(CaptureKind::Nonlocal) => nonlocals.push(id),
+                // a name bound in no enclosing scope is a fresh binding; it
+                // survives a `once` block that unconditionally binds it
+                None if is_once && definitely_assigns(&function.body, id) => {
+                    match self.types.trailing_block_fresh_capture(name_expr) {
+                        Some(CaptureKind::Global) => globals.push(id),
+                        Some(CaptureKind::Nonlocal) => {
+                            nonlocals.push(id);
+                            preinits.push(id.to_owned());
+                        }
+                        None => {}
+                    }
+                }
                 None => {}
             }
         }
@@ -129,16 +167,22 @@ impl TrailingLambdaLower<'_, '_> {
             lines.push(format!("nonlocal {}", nonlocals.join(", ")));
         }
         if lines.is_empty() {
-            return None;
+            return (None, preinits);
         }
-        let indent = line_indent(self.source, function.body.first()?.range().start());
+        let indent = line_indent(
+            self.source,
+            function
+                .body
+                .first()
+                .map_or(function.range().start(), |stmt| stmt.range().start()),
+        );
         let mut out = String::new();
         for line in &lines {
             out.push('\n');
             out.push_str(indent);
             out.push_str(line);
         }
-        Some(out)
+        (Some(out), preinits)
     }
 
     fn process(&mut self, function: &StmtFunctionDef) {
@@ -178,19 +222,52 @@ impl TrailingLambdaLower<'_, '_> {
             None => name.clone(),
         };
 
+        // basedpython: a `once` block runs exactly once, so its `return` targets
+        // the enclosing function. collect the block's returns; when present, a
+        // list cell captures the returned value (see `push_body_capturing_returns`)
+        // and the enclosing function returns it after the call — an empty cell
+        // meaning the block never returned
+        let returns = if self.types.trailing_lambda_callee_is_once(signature_callee) {
+            let mut collector = BlockReturns {
+                returns: Vec::new(),
+            };
+            for stmt in &function.body {
+                collector.visit_stmt(stmt);
+            }
+            collector.returns
+        } else {
+            Vec::new()
+        };
+        let ret_cell = format!("{name}_return");
+
+        // write-through declarations (spliced after `def …:`) and the fresh
+        // surviving bindings to pre-init before it
+        let (declarations, preinits) = self.capture_declarations(function);
+
         // `it` defaults to `None` so a callback whose type takes no argument
         // (`() -> None`, invoked as `fn()`) can still call the block, which
         // always declares the single implicit `it` parameter
-        let mut fragments = vec![Fragment::Lit(format!("def {name}(it=None):"))];
+        let mut fragments = Vec::new();
+        if !returns.is_empty() {
+            fragments.push(Fragment::Lit(format!("{ret_cell} = []\n{indent}")));
+        }
+        // a fresh binding a `once` block leaks needs a prior enclosing binding so
+        // its in-block `nonlocal` is valid; the block overwrites this on its run
+        for preinit in &preinits {
+            fragments.push(Fragment::Lit(format!("{preinit} = None\n{indent}")));
+        }
+        fragments.push(Fragment::Lit(format!("def {name}(it=None):")));
         // write-through declarations so block assignments update enclosing
         // bindings; spliced ahead of the suite so they precede every use
-        if let Some(declarations) = self.capture_declarations(function) {
+        if let Some(declarations) = declarations {
             fragments.push(Fragment::Lit(declarations));
         }
-        fragments.push(Fragment::Src(TextRange::new(
-            colon + TextSize::from(1),
-            stmt_range.end(),
-        )));
+        let body = TextRange::new(colon + TextSize::from(1), stmt_range.end());
+        if returns.is_empty() {
+            fragments.push(Fragment::Src(body));
+        } else {
+            push_body_capturing_returns(&mut fragments, body, &returns, &ret_cell);
+        }
         fragments.push(Fragment::Lit(format!("\n{indent}")));
         match plain_call {
             Some(call) => {
@@ -249,8 +326,76 @@ impl TrailingLambdaLower<'_, '_> {
                 }
             }
         }
+
+        // basedpython: once the `once` block's call has run, return its captured
+        // value to the enclosing function (an empty cell means it never returned)
+        if !returns.is_empty() {
+            let body_indent = function
+                .body
+                .first()
+                .map(|stmt| line_indent(self.source, stmt.range().start()))
+                .unwrap_or(indent);
+            fragments.push(Fragment::Lit(format!(
+                "\n{indent}if {ret_cell}:\n{body_indent}return {ret_cell}[0]"
+            )));
+        }
+
         self.edits.push((stmt_range, fragments));
     }
+}
+
+/// Splits the block body around each `return`, rewriting `return <expr>` to
+/// `<cell>.append(<expr>); return` (and a bare `return` to `.append(None)`) so
+/// the value lands in the enclosing function's cell while the block still exits
+/// at that point. `returns` is in source order, so the cursor only moves forward.
+/// Whether `body` binds `name` on every path — a top-level `name = …` (annotated
+/// or augmented), a `with` body, or an `if` chain whose main body and every
+/// branch (including a final `else`) bind it. Mirrors the type checker's
+/// write-back so a fresh binding is captured exactly when it survives definitely.
+fn definitely_assigns(body: &[Stmt], name: &str) -> bool {
+    fn is_target(expr: &Expr, name: &str) -> bool {
+        matches!(expr, Expr::Name(n) if n.id.as_str() == name)
+    }
+    body.iter().any(|stmt| match stmt {
+        Stmt::Assign(assign) => assign.targets.iter().any(|t| is_target(t, name)),
+        Stmt::AnnAssign(ann) => ann.value.is_some() && is_target(&ann.target, name),
+        Stmt::AugAssign(aug) => is_target(&aug.target, name),
+        Stmt::With(with) => definitely_assigns(&with.body, name),
+        Stmt::If(if_stmt) => {
+            if_stmt
+                .elif_else_clauses
+                .iter()
+                .any(|clause| clause.test.is_none())
+                && definitely_assigns(&if_stmt.body, name)
+                && if_stmt
+                    .elif_else_clauses
+                    .iter()
+                    .all(|clause| definitely_assigns(&clause.body, name))
+        }
+        _ => false,
+    })
+}
+
+fn push_body_capturing_returns(
+    fragments: &mut Vec<Fragment>,
+    body: TextRange,
+    returns: &[&StmtReturn],
+    cell: &str,
+) {
+    let mut cursor = body.start();
+    for ret in returns {
+        fragments.push(Fragment::Src(TextRange::new(cursor, ret.range().start())));
+        match &ret.value {
+            Some(value) => {
+                fragments.push(Fragment::Lit(format!("{cell}.append(")));
+                fragments.push(Fragment::Src(value.range()));
+                fragments.push(Fragment::Lit("); return".to_owned()));
+            }
+            None => fragments.push(Fragment::Lit(format!("{cell}.append(None); return"))),
+        }
+        cursor = ret.range().end();
+    }
+    fragments.push(Fragment::Src(TextRange::new(cursor, body.end())));
 }
 
 impl<'ast> Visitor<'ast> for TrailingLambdaLower<'_, '_> {
@@ -581,5 +726,98 @@ mod tests {
             out.contains("f(y if y is not None else 3, a=_trailing_lambda_0)"),
             "got:\n{out}"
         );
+    }
+
+    #[test]
+    fn once_block_return_targets_enclosing_function() {
+        // a `once` block runs exactly once, so its `return` propagates to the
+        // enclosing function via a list cell filled inside the block
+        let out = check(indoc! {"
+            def each(items: list[int], once fn: (int) -> None):
+                fn(items[0])
+
+            def find(items: list[int]) -> int:
+                each(items):
+                    return it
+                return -1
+        "});
+        assert!(
+            out.contains("_trailing_lambda_0_return = []"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains("_trailing_lambda_0_return.append(it); return"),
+            "got:\n{out}"
+        );
+        assert!(
+            out.contains(
+                "    if _trailing_lambda_0_return:\n        return _trailing_lambda_0_return[0]"
+            ),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn once_block_without_return_is_unchanged() {
+        // no `return` in the block means no cell / propagation
+        let out = check(indoc! {"
+            def run(once fn: () -> None):
+                fn()
+
+            x: int = 1
+            run:
+                x = 2
+        "});
+        assert!(!out.contains("_return = []"), "got:\n{out}");
+        assert!(!out.contains(".append("), "got:\n{out}");
+        assert!(
+            out.contains("def _trailing_lambda_0(it=None):"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn once_block_fresh_binding_survives_via_nonlocal_preinit() {
+        // a `once` block's new binding survives; inside a function it becomes a
+        // `nonlocal` with a pre-init so the declaration is valid
+        let out = check(indoc! {"
+            def run(once fn: () -> None):
+                fn()
+
+            def main():
+                run:
+                    fresh = 9
+        "});
+        assert!(out.contains("    fresh = None\n"), "got:\n{out}");
+        assert!(out.contains("        nonlocal fresh\n"), "got:\n{out}");
+    }
+
+    #[test]
+    fn once_block_fresh_binding_at_module_uses_global() {
+        // at module scope the fresh binding is a `global` — no pre-init needed
+        let out = check(indoc! {"
+            def run(once fn: () -> None):
+                fn()
+
+            run:
+                top = 7
+        "});
+        assert!(out.contains("global top"), "got:\n{out}");
+        assert!(!out.contains("top = None"), "got:\n{out}");
+    }
+
+    #[test]
+    fn non_once_block_fresh_binding_is_not_captured() {
+        // a non-`once` block's new binding is not (yet) leaked, so no capture
+        let out = check(indoc! {"
+            def run(fn: () -> None):
+                fn()
+
+            def main():
+                run:
+                    fresh = 9
+        "});
+        assert!(!out.contains("nonlocal fresh"), "got:\n{out}");
+        assert!(!out.contains("fresh = None"), "got:\n{out}");
     }
 }

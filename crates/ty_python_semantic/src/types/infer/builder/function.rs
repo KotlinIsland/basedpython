@@ -9,10 +9,10 @@ use crate::{
         diagnostic::{
             FINAL_ON_NON_METHOD, INVALID_FIXTURE_TYPE, INVALID_PARAMETER_DEFAULT,
             INVALID_PARAMETRIZE, INVALID_PARAMSPEC, INVALID_TYPE_FORM, REIFIED_CLASSMETHOD,
-            UNKNOWN_FIXTURE, USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
-            is_invalid_typed_dict_literal, report_implicit_return_type,
-            report_invalid_generator_function_return_type, report_invalid_return_type,
-            report_shadowed_type_variable,
+            TRAILING_LAMBDA_RETURN_TYPE, UNKNOWN_FIXTURE, USELESS_OVERLOAD_BODY,
+            add_type_expression_reference_link, is_invalid_typed_dict_literal,
+            report_implicit_return_type, report_invalid_generator_function_return_type,
+            report_invalid_return_type, report_shadowed_type_variable,
         },
         extensions,
         function::{
@@ -154,6 +154,26 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         // basedpython: enforce `local` (no escape) and `once` (exactly one call)
         crate::types::lifetimes::check_local_lifetimes(&self.context, function);
+
+        // basedpython: a trailing-lambda block always returns `None`, so its
+        // callback must be declared to return `None`
+        if function.is_trailing_lambda {
+            self.check_trailing_lambda_callback_returns_none(function);
+        }
+
+        // basedpython: a non-`once` trailing-lambda block is an ordinary closure
+        // (unknown execution count), so non-local control flow is not allowed, and
+        // it may not bind an enclosing `let` / `final` (which could then run twice)
+        if function.is_trailing_lambda && !self.trailing_lambda_callee_is_once(function) {
+            crate::types::lifetimes::check_non_once_trailing_lambda(&self.context, function);
+            crate::types::lifetimes::check_non_once_trailing_lambda_final_writes(
+                &self.context,
+                self.index,
+                self.module(),
+                self.scope().file_scope_id(db),
+                function,
+            );
+        }
 
         self.infer_body(&function.body);
 
@@ -1307,6 +1327,64 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let callee_ty = infer_expression_types(db, expression, TypeContext::default())
             .try_expression_type(callee)?;
         trailing_lambda_it_type(db, callee_ty)
+    }
+
+    /// basedpython: whether this trailing-lambda block's callee marks its callback
+    /// parameter `once` — the block then runs exactly once (`with`-like). Anything
+    /// unresolvable is treated as not-`once` (the restricted default).
+    fn trailing_lambda_callee_is_once(&self, function: &ast::StmtFunctionDef) -> bool {
+        let db = self.db();
+        let Some(callee) = function.trailing_lambda_callee() else {
+            return false;
+        };
+        let Some(expression) = self.index.try_expression(callee) else {
+            return false;
+        };
+        let Some(callee_ty) = infer_expression_types(db, expression, TypeContext::default())
+            .try_expression_type(callee)
+        else {
+            return false;
+        };
+        crate::types::trailing_lambda::callee_callback_is_once(db, callee_ty)
+    }
+
+    /// basedpython: a trailing-lambda block lowers to a function returning `None`
+    /// (in a `once` block a `return` targets the enclosing function, not the
+    /// block), so its callback must be declared to return `None`. Report a
+    /// callback with any other return type — those are not yet supported.
+    fn check_trailing_lambda_callback_returns_none(&self, function: &ast::StmtFunctionDef) {
+        let db = self.db();
+        let Some(callee) = function.trailing_lambda_callee() else {
+            return;
+        };
+        let Some(expression) = self.index.try_expression(callee) else {
+            return;
+        };
+        let Some(callee_ty) = infer_expression_types(db, expression, TypeContext::default())
+            .try_expression_type(callee)
+        else {
+            return;
+        };
+        let Some(return_ty) =
+            crate::types::trailing_lambda::trailing_lambda_callback_return_type(db, callee_ty)
+        else {
+            return;
+        };
+        // the block returns `None`; a declared return type that accepts `None`
+        // (`None`, `int | None`, `object`, …) is satisfiable, anything else is not
+        if Type::none(db).is_assignable_to(db, return_ty) {
+            return;
+        }
+        if let Some(builder) = self
+            .context
+            .report_lint(&TRAILING_LAMBDA_RETURN_TYPE, callee)
+        {
+            builder.into_diagnostic(format_args!(
+                "a trailing-lambda callback must return `None`, not `{}` \
+                 (other return types are not yet supported)",
+                return_ty.display(db)
+            ));
+        }
     }
 
     /// Special case for unannotated `cls` and `self` arguments to class methods and instance methods.

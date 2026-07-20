@@ -116,6 +116,11 @@ pub(crate) trait TypeInfo {
     /// enclosing function) — or `None` for a genuinely new local.
     fn trailing_block_capture(&self, name: &str, anchor: &Expr) -> Option<CaptureKind>;
 
+    /// the capture kind a *fresh* block binding (one bound in no enclosing scope)
+    /// takes to survive the boundary: `Global` at module scope, `Nonlocal` inside
+    /// a function — the nearest such enclosing scope of the block at `anchor`
+    fn trailing_block_fresh_capture(&self, anchor: &Expr) -> Option<CaptureKind>;
+
     /// rendered inferred (literal-promoted) type of `expr`, or `None` when ty
     /// cannot resolve a type (unresolved import, parse error, etc.).
     /// example: a literal `20` inferred as `Literal[20]` is promoted to
@@ -206,6 +211,11 @@ pub(crate) trait TypeInfo {
     /// as a positional argument instead (unknown callee signature, or a
     /// variadic / positional-only last parameter)
     fn trailing_lambda_keyword(&self, callee: &Expr) -> Option<String>;
+
+    /// whether the trailing-lambda callee's callback parameter is `once` — the
+    /// block runs exactly once, so its `return` propagates to the enclosing
+    /// function rather than to the block. `false` when the marker is unreadable
+    fn trailing_lambda_callee_is_once(&self, callee: &Expr) -> bool;
 
     /// the implicit context arguments the lowering must append to `call`:
     /// `(parameter name, variable name)` pairs for each `context` parameter
@@ -380,6 +390,23 @@ impl TypeInfo for SemanticModel<'_> {
         None
     }
 
+    fn trailing_block_fresh_capture(&self, anchor: &Expr) -> Option<CaptureKind> {
+        let db = self.db();
+        let file = self.file();
+        let index = semantic_index(db, file);
+        let block_scope = index.try_expression_scope_id(anchor)?;
+        // the nearest function / module ancestor — where a fresh binding becomes
+        // a local (a `nonlocal` target in a function, `global` at module scope)
+        for (_, scope) in index.ancestor_scopes(block_scope).skip(1) {
+            match scope.kind() {
+                ScopeKind::Module => return Some(CaptureKind::Global),
+                ScopeKind::Function | ScopeKind::Lambda => return Some(CaptureKind::Nonlocal),
+                _ => {}
+            }
+        }
+        None
+    }
+
     fn promoted_type_display(&self, expr: &Expr) -> Option<String> {
         let ty = expr.inferred_type(self)?;
         let promoted = ty.promote(self.db());
@@ -528,6 +555,10 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn trailing_lambda_keyword(&self, callee: &Expr) -> Option<String> {
         SemanticModel::trailing_lambda_keyword(self, callee)
+    }
+
+    fn trailing_lambda_callee_is_once(&self, callee: &Expr) -> bool {
+        SemanticModel::trailing_lambda_callee_is_once(self, callee)
     }
 
     fn implicit_context_arguments(&self, call: &ExprCall) -> Vec<(String, String)> {

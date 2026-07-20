@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use except_handlers::TryNodeContextStackManager;
 use itertools::Itertools;
-use ruff_python_ast::helpers::{Truthiness, any_over_expr, is_dotted_name};
+use ruff_python_ast::helpers::{Truthiness, any_over_expr, is_dotted_name, parameter_modifiers};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use ruff_db::files::File;
@@ -1825,9 +1825,77 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         }
     }
 
-    /// basedpython: record definite shadowing write-backs for the enclosing-scope
-    /// names a trailing-lambda block assigns.
+    /// basedpython: whether a trailing-lambda callee's callback parameter is
+    /// marked `once` — the block then runs exactly once, so an assignment to an
+    /// enclosing name is a definite narrowing; a non-`once` block may run any
+    /// number of times, so the write unions with the prior value.
     ///
+    /// Resolved syntactically at build time (type inference is not available
+    /// yet): a same-file `Name` callee is looked up in the enclosing scopes'
+    /// `def`s. Anything else — an import, a method, a non-`Name` callee, or an
+    /// unresolved name — is conservatively *not* `once`, which keeps the write a
+    /// union (a sound over-approximation; never a spurious definite narrowing).
+    fn trailing_lambda_callee_is_once(&self, callee: &ast::Expr) -> bool {
+        let ast::Expr::Name(name) = callee else {
+            return false;
+        };
+        let target = name.id.as_str();
+        let source = self.source_text().as_str();
+        for scope in self.scope_stack.iter().rev() {
+            let body = match self.scopes[scope.file_scope_id].node() {
+                NodeWithScopeKind::Function(func) => &func.node(self.module).body,
+                NodeWithScopeKind::Module => &self.module.syntax().body,
+                _ => continue,
+            };
+            // the nearest enclosing `def` of this name decides; a name bound
+            // some other way (import, reassignment) is left conservatively
+            // non-`once`
+            for stmt in body {
+                if let ast::Stmt::FunctionDef(def) = stmt
+                    && def.name.as_str() == target
+                {
+                    return def
+                        .parameters
+                        .args
+                        .last()
+                        .is_some_and(|last| parameter_modifiers(source, &last.parameter).once);
+                }
+            }
+        }
+        false
+    }
+
+    /// basedpython: whether every path through `body` diverges (a `return` /
+    /// `raise`, or an `if` whose main body and every branch — including a final
+    /// `else` — diverge). Conservative: it only claims divergence for shapes it
+    /// can see through, never guessing. Used to tell whether a `once` block's
+    /// guaranteed run also guarantees a return out of the enclosing function.
+    fn always_returns(body: &[ast::Stmt]) -> bool {
+        let Some(last) = body.last() else {
+            return false;
+        };
+        match last {
+            ast::Stmt::Return(_) | ast::Stmt::Raise(_) => true,
+            ast::Stmt::With(with) => Self::always_returns(&with.body),
+            ast::Stmt::If(if_stmt) => {
+                if_stmt
+                    .elif_else_clauses
+                    .iter()
+                    .any(|clause| clause.test.is_none())
+                    && Self::always_returns(&if_stmt.body)
+                    && if_stmt
+                        .elif_else_clauses
+                        .iter()
+                        .all(|clause| Self::always_returns(&clause.body))
+            }
+            _ => false,
+        }
+    }
+
+    /// basedpython: record shadowing write-backs for the enclosing-scope names a
+    /// trailing-lambda block assigns.
+    ///
+    /// A trailing-lambda block (`f:` + suite) runs inline at its call site — the
     /// A trailing-lambda block (`f:` + suite) runs inline at its call site — the
     /// lowering inserts a matching `global` / `nonlocal` — so a name it binds that
     /// is already bound in an enclosing scope should read as the block's value
@@ -1840,6 +1908,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         &mut self,
         block_scope: FileScopeId,
         body: &[ast::Stmt],
+        is_once: bool,
     ) {
         // whether the block unconditionally rebinds `name` on every path — a
         // top-level `name = …` (annotated or augmented too). a definite rebind
@@ -1887,9 +1956,10 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             .collect();
 
         for name in candidates {
-            // the nearest enclosing scope that already binds this name; without one
-            // the block name is a genuine new local and writes back nothing
-            let Some(bound_scope) = self
+            // the nearest enclosing scope that already binds *or declares* this
+            // name. a declaration counts (`let a: int` with no value) so a block
+            // assignment fills it in rather than reading as a fresh local
+            let resolved_scope = self
                 .scope_stack
                 .iter()
                 .rev()
@@ -1897,14 +1967,26 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 .find_map(|scope| {
                     let table = &self.place_tables[scope.file_scope_id];
                     let place_id = table.symbol_id(&name)?;
-                    table
-                        .place(place_id)
-                        .is_bound()
-                        .then_some(scope.file_scope_id)
-                })
-            else {
+                    let place = table.place(place_id);
+                    (place.is_bound() || place.is_declared()).then_some(scope.file_scope_id)
+                });
+
+            // only a `once` block runs exactly once; a non-`once` block may run
+            // any number of times (including zero), so even an unconditional write
+            // unions with the prior value rather than shadowing it
+            let definite = is_once && definitely_assigns(body, name.as_str());
+
+            // a name bound nowhere outside the block is a genuinely new binding.
+            // it survives the boundary only from a `once` block that
+            // *unconditionally* binds it (definite) — the lowering then makes it a
+            // `nonlocal` / `global` enclosing local. a conditional or non-`once`
+            // write would leave it possibly-unbound, which is not yet modeled, so
+            // such a name stays a block local for now
+            let is_fresh = resolved_scope.is_none();
+            if is_fresh && !definite {
                 continue;
-            };
+            }
+            let bound_scope = resolved_scope.unwrap_or(enclosing);
 
             let kind = if bound_scope == FileScopeId::global() {
                 GlobalOrNonlocal::Global
@@ -1912,8 +1994,17 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 GlobalOrNonlocal::Nonlocal
             };
 
-            let definite = definitely_assigns(body, name.as_str());
             let place: ScopedPlaceId = self.add_symbol(name.clone()).into();
+
+            // a fresh binding is only in the block's scope so far; mark it
+            // *declared* in the enclosing scope so it resolves as a local there
+            // (`is_local` accepts a declaration), which the nested-binding
+            // inference needs to see the block's write. it is deliberately not
+            // marked *bound*, so the lowering still treats it as a fresh name that
+            // needs a `nonlocal` pre-init rather than a plain write-through
+            if is_fresh {
+                self.mark_place_declared(place);
+            }
             let definition = Definition::new(
                 self.db,
                 self.current_scope_id(),
@@ -1932,9 +2023,10 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             );
 
             self.invalidate_narrowing_aliases_for(place);
-            // the block runs at this point (once, like a `with` body), so a definite
-            // rebind replaces the enclosing binding; a conditional one is kept
-            // alongside it, matching a real `nonlocal` write's union
+            // a `once` block runs right here, so an unconditional rebind replaces
+            // the enclosing binding; a conditional rebind — or any write in a
+            // non-`once` block — is kept alongside the prior value, a union that
+            // matches a real `nonlocal` write
             let (previous, future) = if definite {
                 (
                     PreviousDefinitions::AreShadowed,
@@ -2936,10 +3028,23 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 // basedpython: a trailing-lambda block (`f:` + suite) runs inline at
                 // its call site, so an assignment to an enclosing name writes through
                 // to that binding (the lowering inserts the matching `global` /
-                // `nonlocal`). Model that as a definite shadowing write in the
-                // enclosing scope, so `reveal_type` after the block reflects it.
+                // `nonlocal`), reflected in `reveal_type` after the block. a `once`
+                // block runs exactly once, so an unconditional write shadows; a
+                // non-`once` block may run any number of times, so it unions.
                 if *is_trailing_lambda {
-                    self.synthesize_trailing_lambda_writebacks(block_scope, body);
+                    let is_once = function_def
+                        .trailing_lambda_callee()
+                        .is_some_and(|callee| self.trailing_lambda_callee_is_once(callee));
+                    self.synthesize_trailing_lambda_writebacks(block_scope, body, is_once);
+
+                    // a `once` block runs exactly once; if it always returns, the
+                    // enclosing function returns through it (the lowering
+                    // propagates the return), so code after the block is
+                    // unreachable — just like a `return` here
+                    if is_once && Self::always_returns(body) {
+                        self.record_terminal_finally_entry();
+                        self.mark_unreachable();
+                    }
                 }
 
                 // The symbol for the function name itself has to be evaluated
