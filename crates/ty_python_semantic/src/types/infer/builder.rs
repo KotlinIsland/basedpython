@@ -103,7 +103,7 @@ use crate::types::newtype::NewType;
 use crate::types::reified_infer::{self, ErasedTargetReason, ReifiedInferenceError};
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope};
-use crate::types::soundness::{erases_type_arguments, runtime_check_target};
+use crate::types::soundness::{cast_is_redundant, erases_type_arguments, runtime_check_target};
 use crate::types::special_form::TypeQualifier;
 use crate::types::subclass_of::SubclassOfInner;
 use crate::types::trailing_lambda::trailing_lambda_keyword;
@@ -8521,7 +8521,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// the wording describes what a runtime check *can* test rather than what
     /// the transpiler emits, since ty cannot see whether checked casts are
     /// switched off (`--no-checked-cast`, which lowers to a bare `typing.cast`)
-    fn report_erased_cast_argument(&mut self, type_arg: &ast::Expr, target: Type<'db>) {
+    fn report_erased_cast_argument(
+        &mut self,
+        type_arg: &ast::Expr,
+        value_ty: Type<'db>,
+        target: Type<'db>,
+    ) {
+        // a statically-proven upcast (`B[int]() cast list[int]`) verifies
+        // nothing at runtime, so no argument claim is dropped and the lint
+        // would be a false positive
+        if cast_is_redundant(self.db(), value_ty, target) {
+            return;
+        }
         if !erases_type_arguments(self.db(), self.file(), target) {
             return;
         }
@@ -8619,7 +8630,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         {
             let value_ty = self.infer_expression(value_arg, TypeContext::default());
             let target = self.infer_type_expression(type_arg);
-            self.report_erased_cast_argument(type_arg, target);
+            self.report_erased_cast_argument(type_arg, value_ty, target);
             self.report_non_overlapping_cast(value_arg, value_ty, target);
             return target;
         }
@@ -8631,7 +8642,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         {
             let value_ty = self.infer_expression(value_arg, TypeContext::default());
             let target = self.infer_type_expression(type_arg);
-            self.report_erased_cast_argument(type_arg, target);
+            self.report_erased_cast_argument(type_arg, value_ty, target);
             self.report_non_overlapping_cast(value_arg, value_ty, target);
             return UnionType::from_elements(self.db(), [target, Type::none(self.db())]);
         }
