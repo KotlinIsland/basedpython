@@ -69,7 +69,8 @@ pub(crate) use crate::types::class_base::ClassBase;
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::context::{LintDiagnosticGuard, LintDiagnosticGuardBuilder};
 pub use crate::types::dedicated::role::{
-    FrameworkRole, FunctionFrameworkRole, class_framework_role, function_framework_role,
+    FrameworkRole, FunctionFrameworkRole, class_body_annotation_is_semantic, class_framework_role,
+    function_framework_role,
 };
 use crate::types::diagnostic::{INVALID_AWAIT, INVALID_TYPE_FORM};
 pub use crate::types::display::{DisplaySettings, TypeDetail, TypeDisplayDetails};
@@ -1553,7 +1554,7 @@ impl<'db> Type<'db> {
         )
     }
 
-    pub(crate) fn has_dynamic(self, db: &'db dyn Db) -> bool {
+    pub fn has_dynamic(self, db: &'db dyn Db) -> bool {
         any_over_type(db, self, false, |ty| ty.is_dynamic())
     }
 

@@ -37,8 +37,8 @@ use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
     coalesce_chain, compat, context_params, decl_site_variance, decorator_keyword, dedent_string,
     dynamic_keyword, empty_declarations, extension, float_const, force_unwrap, frameworks,
-    generic_call, generics, grapheme_string, identity_swap, implicit_typing, init_method,
-    just_float, kw_subscript, literal_types, local_once, main_function, modifiers,
+    generic_call, generics, grapheme_string, identity_swap, implicit_typing, inferred_annotation,
+    init_method, just_float, kw_subscript, literal_types, local_once, main_function, modifiers,
     mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await, propagate,
     reified_generic, repeated_underscore, sentinel, some_ctor, soundness, string_tag,
     super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_is,
@@ -470,6 +470,7 @@ pub(crate) fn run_against_source<'a>(
         type_reification::TypeReificationPass::new(config.min_version, config.is_stub);
     let parametric_is_pass = parametric_is::ParametricIsPass::new(source_ref);
     let implicit_typing_pass = implicit_typing::ImplicitTypingPass::new();
+    let inferred_annotation_pass = inferred_annotation::InferredAnnotationPass::new();
     let tuple_types_pass = annotation::TupleLiteralTypePass::new(source_ref);
     let literal_types_pass = literal_types::LiteralTypePass::new(source_ref);
     let callable_pass = callable::CallableSyntaxPass::new(source_ref);
@@ -608,6 +609,10 @@ pub(crate) fn run_against_source<'a>(
         // token equality / witness probe / unchecked runtime probe)
         &parametric_is_pass,
         &implicit_typing_pass,
+        // synthesize declared types for bare class-body assignments
+        // (`class A: a = 1` → `a: int = 1`); a zero-width insertion at the
+        // target name, disjoint from the value-position lowerings above
+        &inferred_annotation_pass,
         &tuple_types_pass,
         &literal_types_pass,
         &callable_pass,

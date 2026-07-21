@@ -708,7 +708,7 @@ mod tests {
             indoc! {"
                 from __future__ import annotations
                 class E:
-                    MAX = 10
+                    MAX: int = 10
 
                 class _E_A(E):
                     __slots__ = ()
