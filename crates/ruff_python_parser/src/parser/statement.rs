@@ -98,6 +98,54 @@ fn is_modifier_kw(text: &str) -> bool {
     )
 }
 
+/// basedpython modifier keywords that may prefix a parameter name — the
+/// [`is_modifier_kw`] set plus the binding keywords `let` / `var`. inside an
+/// `init(...)` shorthand these mark the parameter for auto-attribute assignment
+/// (`self.<name> = <name>`); elsewhere the chain is consumed but inert. which
+/// combinations are actually valid for the context is a semantic concern the
+/// `init_method` lowering checks, not the parser
+fn is_param_modifier_kw(text: &str) -> bool {
+    is_modifier_kw(text) || matches!(text, "let" | "var")
+}
+
+/// True when a parameter's modifier prefix (the source between the parameter
+/// node start and its name) declares an instance attribute — i.e. it contains
+/// the binding keyword `let` or `var`.
+fn param_prefix_declares_attribute(prefix: &str) -> bool {
+    prefix
+        .split_whitespace()
+        .any(|word| matches!(word, "let" | "var"))
+}
+
+/// True when a parameter's modifier prefix carries the `private` visibility
+/// keyword — the synthesised attribute is then name-mangled (`self.__name`).
+fn param_prefix_is_private(prefix: &str) -> bool {
+    prefix.split_whitespace().any(|word| word == "private")
+}
+
+/// A zero-width synthetic `self` parameter injected into an `init(...)` whose
+/// author omitted it. Its empty range is the marker the `init_method` transform
+/// keys on to emit the matching source-level `self`.
+fn synth_self_parameter(at: TextSize) -> ast::ParameterWithDefault {
+    let range = TextRange::empty(at);
+    ast::ParameterWithDefault {
+        range,
+        parameter: ast::Parameter {
+            range,
+            name: ast::Identifier {
+                id: Name::new_static("self"),
+                range,
+                node_index: AtomicNodeIndex::NONE,
+            },
+            annotation: None,
+            node_index: AtomicNodeIndex::NONE,
+            is_context: false,
+        },
+        default: None,
+        node_index: AtomicNodeIndex::NONE,
+    }
+}
+
 /// Builds a synthetic marker [`Decorator`](ast::Decorator) (a zero-width `Name`
 /// with [`ExprContext::Invalid`]) used to tag a based-enum variant `ClassDef`
 /// with its kind. The lowering phase reads the marker; it never appears in
@@ -3509,11 +3557,32 @@ impl<'src> Parser<'src> {
             node_index: AtomicNodeIndex::NONE,
         };
 
-        let parameters = self.parse_parameters(FunctionKind::FunctionDef);
+        let mut parameters = self.parse_parameters(FunctionKind::FunctionDef);
         let params_end = parameters.range().end();
 
-        // synthesise `self.<name>: <ann> = <name>` for every `let`-prefixed parameter
-        // and prepend to the body so ty's instance-attribute analysis picks them up
+        // `init(...)` implies `self` as the first parameter. inject a synthetic
+        // (zero-width) `self` into the AST when the author omitted it, so ty
+        // resolves `self` in the synthesised `self.<name> = <name>` assignments
+        // and in the body. the `init_method` transform detects the same omission
+        // from the source and performs the matching source-level insertion
+        let has_self = parameters
+            .posonlyargs
+            .first()
+            .map(|p| &p.parameter)
+            .or_else(|| parameters.args.first().map(|p| &p.parameter))
+            .is_some_and(|p| p.name.as_str() == "self");
+        if !has_self {
+            let self_param = synth_self_parameter(parameters.range.start() + TextSize::from(1u32));
+            if parameters.posonlyargs.is_empty() {
+                parameters.args.insert(0, self_param);
+            } else {
+                parameters.posonlyargs.insert(0, self_param);
+            }
+        }
+
+        // synthesise `self.<name>: <ann> = <name>` for every attribute parameter
+        // (`let` / `var`) and prepend to the body so ty's instance-attribute
+        // analysis picks them up
         let synthetic_body = self.synthesize_let_assignments(&parameters);
 
         // bodyless form is permitted: `init(self, let a: int)` with no `:`
@@ -3547,10 +3616,11 @@ impl<'src> Parser<'src> {
     }
 
     /// Build the synthetic `self.<name>: <ann> = <name>` statements for each
-    /// `let`-prefixed parameter. A parameter is recognised as `let`-prefixed
-    /// when the source span between its node start and its name has the form
-    /// `let ` — the parser consumes the keyword but does not record it on the
-    /// `Parameter` node, so we read it back from the source
+    /// attribute-declaring parameter (one prefixed with `let` or `var`). The
+    /// prefix is read back from the source span between the parameter node start
+    /// and its name — the parser consumes the modifier keywords but does not
+    /// record them on the `Parameter` node. A `private` prefix name-mangles the
+    /// synthesised attribute to `self.__name`
     fn synthesize_let_assignments(&self, params: &ast::Parameters) -> Vec<Stmt> {
         let mut out = Vec::new();
         for p in &params.posonlyargs {
@@ -3575,11 +3645,18 @@ impl<'src> Parser<'src> {
         let prefix_start = usize::from(param.range.start());
         let prefix_end = usize::from(param.name.range.start());
         let prefix = &self.source[prefix_start..prefix_end];
-        if !prefix.trim_start().starts_with("let") {
+        if !param_prefix_declares_attribute(prefix) {
             return;
         }
         let name_range = param.name.range;
         let name_id = param.name.id.clone();
+        // a `private` attribute is name-mangled (`self.__name`); the parameter
+        // itself keeps its declared name, so the value read stays `name_id`
+        let attr_id = if param_prefix_is_private(prefix) {
+            Name::new(format!("__{name_id}"))
+        } else {
+            name_id.clone()
+        };
         let self_expr = Expr::Name(ast::ExprName {
             id: Name::new_static("self"),
             ctx: ExprContext::Load,
@@ -3589,7 +3666,7 @@ impl<'src> Parser<'src> {
         let attr_target = Expr::Attribute(ast::ExprAttribute {
             value: Box::new(self_expr),
             attr: ast::Identifier {
-                id: name_id.clone(),
+                id: attr_id,
                 range: name_range,
                 node_index: AtomicNodeIndex::NONE,
             },
@@ -4813,17 +4890,22 @@ impl<'src> Parser<'src> {
         allow_star_annotation: AllowStarAnnotation,
         allow_context: AllowContextModifier,
     ) -> ast::Parameter {
-        // basedpython: optional `let` prefix on a parameter marks it for
-        // auto-attribute-assignment inside an `init(...)` shorthand. The
-        // prefix is detected from the source span between `start` and the
-        // parameter name by the `init_method` transform — no AST field needed
-        if self.at(TokenKind::Name)
-            && self.src_text(self.current_token_range()) == "let"
+        // basedpython: a chain of modifier keywords (`let`, `var`, `private`,
+        // `public`, ...) may prefix a parameter name. inside an `init(...)`
+        // shorthand these mark the parameter for auto-attribute-assignment; the
+        // chain is detected from the source span between `start` and the
+        // parameter name by the `init_method` transform and by
+        // `synthesize_let_assignments` — no AST field needed. the parser is
+        // permissive here; the `init_method` lowering rejects combinations that
+        // are invalid for this context
+        while self.at(TokenKind::Name)
             && self.peek() == TokenKind::Name
+            && is_param_modifier_kw(self.src_text(self.current_token_range()))
         {
-            self.error_if_not_basedpython(
-                "`let` parameter modifier is not valid in .py files".to_string(),
-            );
+            let kw = self.src_text(self.current_token_range()).to_string();
+            self.error_if_not_basedpython(format!(
+                "`{kw}` parameter modifier is not valid in .py files"
+            ));
             self.bump(TokenKind::Name);
         }
         // basedpython: optional `context` prefix marks the parameter as

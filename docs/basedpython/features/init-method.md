@@ -53,6 +53,49 @@ or, if unannotated, a bare assignment (`self.<name> = <name>`)
 
 a non-`let` parameter is just a parameter — no attribute is created for it
 
+## `var` and visibility modifiers
+
+`var` is the mutable counterpart of `let`; on an `init` parameter it
+self-assigns identically. a visibility modifier — `private` or `public` — may
+precede `let` / `var`. `private` name-mangles the synthesised attribute to
+`self.__name`, while the parameter itself keeps its declared name:
+
+```by
+class A:
+    init(private var a: int)
+```
+
+transpiles to:
+
+```python
+class A:
+    def __init__(self, a: int):
+        self.__a: int = a
+```
+
+a visibility modifier without `let` / `var` has no attribute to name, and any
+other modifier keyword (`final`, `abstract`, …) is meaningless in this
+position — both are reported as errors
+
+## implicit `self`
+
+`self` may be omitted from the parameter list. it is implied, so it is
+injected into the generated `def __init__` signature and `let` / `var`
+attributes and `self` references in the body resolve against it:
+
+```by
+class A:
+    init(let a: int)
+```
+
+transpiles to:
+
+```python
+class A:
+    def __init__(self, a: int):
+        self.a: int = a
+```
+
 ## why
 
 constructors with `self.x = x; self.y = y` boilerplate are ubiquitous.
