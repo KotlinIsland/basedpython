@@ -24,7 +24,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use ruff_python_ast::visitor::transformer::{Transformer, walk_expr};
-use ruff_python_ast::{Expr, ModModule, Operator, Stmt, UnaryOp};
+use ruff_python_ast::{CmpOp, Expr, ModModule, Operator, Stmt, UnaryOp};
 use ruff_python_parser::parse_expression;
 use ruff_text_size::{Ranged, TextRange};
 
@@ -102,6 +102,23 @@ impl TypeExprVisitor for FoldCollector<'_> {
                         (u.op, u.operand.as_ref()),
                         (UnaryOp::USub | UnaryOp::UAdd, Expr::NumberLiteral(_))
                     )
+            }
+            // a single rich comparison in a type position (`I < 10`) folds to the
+            // type ty gives it; identity/membership operators keep their own
+            // lowerings (`a is T` → `TypeIs[T]`)
+            Expr::Compare(c) => {
+                c.ops.len() == 1
+                    && matches!(
+                        c.ops[0],
+                        CmpOp::Eq | CmpOp::NotEq | CmpOp::Lt | CmpOp::LtE | CmpOp::Gt | CmpOp::GtE
+                    )
+            }
+            // a positional method call in a type position (`S.startswith("foo")`)
+            // folds to the type ty gives it, so the annotation is runtime-safe
+            Expr::Call(call) => {
+                matches!(call.func.as_ref(), Expr::Attribute(_))
+                    && call.arguments.keywords.is_empty()
+                    && !call.arguments.args.iter().any(Expr::is_starred_expr)
             }
             _ => false,
         };
@@ -389,6 +406,33 @@ mod tests {
             indoc! {"
                 from typing import Literal
                 x: Literal[2] | Literal[4]
+            "},
+        );
+    }
+
+    #[test]
+    fn rich_comparison_folds() {
+        // a comparison in a type position folds to the type ty gives it, so the
+        // annotation is runtime-safe (`I < 10` with a type parameter folds to `bool`;
+        // a concrete comparison folds to the literal result)
+        check(
+            "c: 1 < 2\n",
+            indoc! {"
+                from typing import Literal
+                c: Literal[True]
+            "},
+        );
+    }
+
+    #[test]
+    fn method_call_folds() {
+        // a method call in a type position folds to the type ty gives it, rather than
+        // leaking a call that would crash at runtime
+        check(
+            "d: \"ab\".startswith(\"a\")\n",
+            indoc! {"
+                from typing import Literal
+                d: Literal[True]
             "},
         );
     }

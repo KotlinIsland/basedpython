@@ -13,7 +13,7 @@ class Array[Dim: int]:
     pass
 
 def extend[Dim: int](a: Array[Dim]) -> Array[Dim + 1]:
-    raise NotImplementedError
+    return a
 
 def foo(data: Array[5]):
     data2 = extend(data)
@@ -24,7 +24,7 @@ def foo(data: Array[5]):
 
 ```by
 def succ[I: int](i: I) -> I + 1:
-    raise NotImplementedError
+    return i + 1
 
 reveal_type(succ(4))  # revealed: 5
 reveal_type(succ(41))  # revealed: 42
@@ -37,10 +37,10 @@ class Array[Dim: int]:
     pass
 
 def extend[Dim: int](a: Array[Dim]) -> Array[Dim + 1]:
-    raise NotImplementedError
+    return a
 
 def shrink[Dim: int](a: Array[Dim]) -> Array[Dim - 2]:
-    raise NotImplementedError
+    return a
 
 def foo(data: Array[5]):
     reveal_type(extend(extend(data)))  # revealed: Array[7]
@@ -51,12 +51,12 @@ def foo(data: Array[5]):
 
 ```by
 def f[I: int](i: I) -> I * 2 + 1:
-    raise NotImplementedError
+    return i * 2 + 1
 
 reveal_type(f(10))  # revealed: 21
 
 def g[I: int](i: I) -> -I + 1:
-    raise NotImplementedError
+    return -i + 1
 
 reveal_type(g(5))  # revealed: -4
 ```
@@ -65,10 +65,10 @@ reveal_type(g(5))  # revealed: -4
 
 ```by
 def neg[I: int](i: I) -> -I:
-    raise NotImplementedError
+    return -i
 
 def inv[I: int](i: I) -> ~I:
-    raise NotImplementedError
+    return ~i
 
 reveal_type(neg(5))  # revealed: -5
 reveal_type(inv(0))  # revealed: -1
@@ -78,10 +78,10 @@ reveal_type(inv(0))  # revealed: -1
 
 ```by
 def lt[I: int](i: I) -> I < 10:
-    raise NotImplementedError
+    return i < 10
 
 def eq[I: int](i: I) -> I == 5:
-    raise NotImplementedError
+    return i == 5
 
 reveal_type(lt(3))  # revealed: True
 reveal_type(lt(20))  # revealed: False
@@ -96,7 +96,7 @@ view a method body has), and re-folds known literal methods once the parameter i
 
 ```by
 def starts[S: str](s: S) -> S.startswith("foo"):
-    raise NotImplementedError
+    return s.startswith("foo")
 
 reveal_type(starts("foobar"))  # revealed: True
 reveal_type(starts("bar"))  # revealed: False
@@ -109,7 +109,7 @@ as on values
 
 ```by
 def lit() -> "ab".startswith("a"):
-    raise NotImplementedError
+    return "ab".startswith("a")
 
 reveal_type(lit())  # revealed: True
 
@@ -117,7 +117,7 @@ class Array[Dim: int]:
     pass
 
 def two() -> Array[1 + 1]:
-    raise NotImplementedError
+    return Array[2]()
 
 reveal_type(two())  # revealed: Array[2]
 ```
@@ -132,7 +132,7 @@ class Array[Dim: int]:
     pass
 
 def extend[Dim: int](a: Array[Dim]) -> Array[Dim + 1]:
-    raise NotImplementedError
+    return a
 
 def foo(data: Array[int]):
     reveal_type(extend(data))  # revealed: Array[int]
