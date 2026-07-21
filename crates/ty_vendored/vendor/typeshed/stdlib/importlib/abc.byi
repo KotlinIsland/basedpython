@@ -133,10 +133,10 @@ class SourceLoader(_bootstrap_external.SourceLoader, ResourceLoader, ExecutionLo
     """
 
     @deprecated("Deprecated since Python 3.3. Use `importlib.resources.abc.SourceLoader.path_stats` instead.")
-    def path_mtime(self, path: str) -> float:
+    override def path_mtime(self, path: str) -> float:
         """Return the (int) modification time for the path (str)."""
 
-    def set_data(self, path: str, data: bytes) -> None:
+    override def set_data(self, path: str, data: bytes) -> None:
         """Write the bytes to the path (if possible).
 
         Accepts a str path and data as bytes.
@@ -146,10 +146,10 @@ class SourceLoader(_bootstrap_external.SourceLoader, ResourceLoader, ExecutionLo
         silently.
         """
 
-    def get_source(self, fullname: str) -> str | None:
+    override def get_source(self, fullname: str) -> str | None:
         """Concrete implementation of InspectLoader.get_source."""
 
-    def path_stats(self, path: str) -> Mapping[str, dynamic]:
+    override def path_stats(self, path: str) -> Mapping[str, dynamic]:
         """Return a metadata dict for the source pointed to by the path (str).
         Possible keys:
         - 'mtime' (mandatory) is the numeric timestamp of last source
@@ -235,13 +235,13 @@ class FileLoader(_bootstrap_external.FileLoader, ResourceLoader, ExecutionLoader
         finder.
         """
 
-    def get_data(self, path: str) -> bytes:
+    override def get_data(self, path: str) -> bytes:
         """Return the data from path as raw bytes."""
 
-    def get_filename(self, fullname: str | None = None) -> str:
+    override def get_filename(self, fullname: str | None = None) -> str:
         """Return the path to the source file as found by the finder."""
 
-    def load_module(self, fullname: str | None = None) -> types.ModuleType:
+    override def load_module(self, fullname: str | None = None) -> types.ModuleType:
         """Load a module from a file.
 
         This method is deprecated.  Use exec_module() instead.
@@ -349,10 +349,10 @@ if sys.version_info < (3, 11):
         abstract def files(self) -> Traversable:
             """Return a Traversable object for the loaded package."""
 
-        def open_resource(self, resource: str) -> BufferedReader
-        def resource_path(self, resource: dynamic) -> str
-        def is_resource(self, path: str) -> bool
-        def contents(self) -> Iterator[str]
+        override def open_resource(self, resource: str) -> BufferedReader
+        override def resource_path(self, resource: dynamic) -> str
+        override def is_resource(self, path: str) -> bool
+        override def contents(self) -> Iterator[str]
 
 elif sys.version_info < (3, 14):
     from importlib.resources.abc import (

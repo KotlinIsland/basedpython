@@ -247,8 +247,8 @@ else:
             True
             """
 
-        def __hash__(self) -> int
-        def __iter__(self) -> Iterator[dynamic]:  # result of iter((str, Self)), really
+        override def __hash__(self) -> int
+        override def __iter__(self) -> Iterator[dynamic]:  # result of iter((str, Self)), really
             """
             Supply iter so one may construct dicts of EntryPoints by name.
             """
@@ -326,7 +326,7 @@ else:
 
         # int argument is deprecated since 3.10
         __slots__ = ()
-        def __getitem__(self, name: int | str) -> EntryPoint:
+        override def __getitem__(self, name: int | str) -> EntryPoint:
             """
             Get the EntryPoint in self matching name.
             """
@@ -580,7 +580,7 @@ class DistributionFinder(MetaPathFinder):
         """
 
 class MetadataPathFinder(DistributionFinder):
-    class def find_distributions(cls, context: DistributionFinder.Context = ...) -> Iterable[PathDistribution]:
+    override class def find_distributions(cls, context: DistributionFinder.Context = ...) -> Iterable[PathDistribution]:
         """
         Find distributions.
 
@@ -594,7 +594,7 @@ class MetadataPathFinder(DistributionFinder):
         class def invalidate_caches(cls) -> None
     else:
         # Yes, this is an instance method that has a parameter named "cls"
-        def invalidate_caches(cls) -> None
+        override def invalidate_caches(cls) -> None
 
 class PathDistribution(Distribution):
     _path: _SimplePath
@@ -604,7 +604,7 @@ class PathDistribution(Distribution):
         :param path: SimplePath indicating the metadata directory.
         """
 
-    def read_text(self, filename: StrPath) -> str | None:
+    override def read_text(self, filename: StrPath) -> str | None:
         """Attempt to load metadata file given by the name.
 
         Python distribution metadata is organized by blobs of text
@@ -626,7 +626,7 @@ class PathDistribution(Distribution):
         :return: The text if found, otherwise None.
         """
 
-    def locate_file(self, path: StrPath) -> _SimplePath
+    override def locate_file(self, path: StrPath) -> _SimplePath
 
 def distribution(distribution_name: str) -> Distribution:
     """Get the ``Distribution`` instance for the named package.

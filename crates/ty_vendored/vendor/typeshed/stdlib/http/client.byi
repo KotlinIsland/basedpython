@@ -222,20 +222,20 @@ class HTTPResponse(io.BufferedIOBase, BinaryIO):
     url: str
     init(self, sock: socket, debuglevel: int = 0, method: str | None = None, url: str | None = None)
     def peek(self, n: int = -1) -> bytes
-    def read(self, amt: int | None = None) -> bytes:
+    override def read(self, amt: int | None = None) -> bytes:
         """Read and return the response body, or up to the next amt bytes."""
 
-    def read1(self, n: int = -1) -> bytes:
+    override def read1(self, n: int = -1) -> bytes:
         """Read with at most one underlying system call.  If at least one
         byte is buffered, return that instead.
         """
 
-    def readinto(self, b: WriteableBuffer) -> int:
+    override def readinto(self, b: WriteableBuffer) -> int:
         """Read up to len(b) bytes into bytearray b and return the number
         of bytes read.
         """
 
-    def readline(self, limit: int = -1) -> bytes
+    override def readline(self, limit: int = -1) -> bytes
 
     def getheader(self, name: str) -> str | None:
         """Returns the value of the header matching *name*.
@@ -257,9 +257,9 @@ class HTTPResponse(io.BufferedIOBase, BinaryIO):
     def isclosed(self) -> bool:
         """True if the connection is closed."""
 
-    def __iter__(self) -> Iterator[bytes]
-    def __enter__(self) -> Self
-    def __exit__(
+    override def __iter__(self) -> Iterator[bytes]
+    override def __enter__(self) -> Self
+    override def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: types.TracebackType | None
     ) -> None
     @deprecated("Deprecated since Python 3.9. Use `HTTPResponse.headers` attribute instead.")

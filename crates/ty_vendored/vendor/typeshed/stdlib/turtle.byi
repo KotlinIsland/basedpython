@@ -287,12 +287,12 @@ else:
         """
 
         def __new__(cls, x: float, y: float) -> Self
-        def __add__(self, other: (float, float)) -> Vec2D
+        override def __add__(self, other: (float, float)) -> Vec2D
 
-        def __mul__(self, other: Vec2D) -> float
+        override def __mul__(self, other: Vec2D) -> float
         def __mul__(self, other: float) -> Vec2D
 
-        def __rmul__(self, other: float) -> Vec2D
+        override def __rmul__(self, other: float) -> Vec2D
         def __sub__(self, other: (float, float)) -> Vec2D
         def __neg__(self) -> Vec2D
         def __abs__(self) -> float
@@ -1566,7 +1566,7 @@ class RawTurtle(TPen, TNavigator):
         undobuffersize: int = 1000,
         visible: bool = True,
     )
-    def reset(self) -> None:
+    override def reset(self) -> None:
         """Delete the turtle's drawings and restore its default values.
 
         No argument.

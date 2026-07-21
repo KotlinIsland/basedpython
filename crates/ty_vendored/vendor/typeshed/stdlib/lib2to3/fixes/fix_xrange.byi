@@ -10,9 +10,9 @@ class FixXrange(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     transformed_xranges: set[Incomplete] | None
-    def start_tree(self, tree: Node, filename: StrPath) -> None
-    def finish_tree(self, tree: Node, filename: StrPath) -> None
-    def transform(self, node, results)
+    override def start_tree(self, tree: Node, filename: StrPath) -> None
+    override def finish_tree(self, tree: Node, filename: StrPath) -> None
+    override def transform(self, node, results)
     def transform_xrange(self, node, results) -> None
     def transform_range(self, node, results)
     P1: ClassVar[str]

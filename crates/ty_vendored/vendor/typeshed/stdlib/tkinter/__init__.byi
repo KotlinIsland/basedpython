@@ -491,7 +491,7 @@ class Variable:
         in Tcl 9.0.  Use trace_info() instead.
         """
 
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
     def __del__(self) -> None:
         """Unset the variable in Tcl."""
 
@@ -511,11 +511,11 @@ class StringVar(Variable):
         then the existing value is retained.
         """
 
-    def set(self, value: str) -> None:
+    override def set(self, value: str) -> None:
         """Set the variable to VALUE."""
 
     initialize = set
-    def get(self) -> str:
+    override def get(self) -> str:
         """Return value of variable as string."""
 
 class IntVar(Variable):
@@ -532,11 +532,11 @@ class IntVar(Variable):
         then the existing value is retained.
         """
 
-    def set(self, value: int) -> None:
+    override def set(self, value: int) -> None:
         """Set the variable to VALUE."""
 
     initialize = set
-    def get(self) -> int:
+    override def get(self) -> int:
         """Return the value of the variable as an integer."""
 
 class DoubleVar(Variable):
@@ -553,11 +553,11 @@ class DoubleVar(Variable):
         then the existing value is retained.
         """
 
-    def set(self, value: float) -> None:
+    override def set(self, value: float) -> None:
         """Set the variable to VALUE."""
 
     initialize = set
-    def get(self) -> float:
+    override def get(self) -> float:
         """Return the value of the variable as a float."""
 
 class BooleanVar(Variable):
@@ -574,11 +574,11 @@ class BooleanVar(Variable):
         then the existing value is retained.
         """
 
-    def set(self, value: bool) -> None:
+    override def set(self, value: bool) -> None:
         """Set the variable to VALUE."""
 
     initialize = set
-    def get(self) -> bool:
+    override def get(self) -> bool:
         """Return the value of the variable as a bool."""
 
 def mainloop(n: int = 0) -> None:
@@ -2211,7 +2211,7 @@ class Tk(Misc, Wm):
         """
 
     # Keep this in sync with ttktheme.ThemedTk. See issue #13858
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -2247,7 +2247,7 @@ class Tk(Misc, Wm):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
-    def destroy(self) -> None:
+    override def destroy(self) -> None:
         """Destroy this and all descendants widgets. This will
         end the application of this Tcl interpreter.
         """
@@ -2526,7 +2526,7 @@ class BaseWidget(Misc):
         and appropriate options.
         """
 
-    def destroy(self) -> None:
+    override def destroy(self) -> None:
         """Destroy this and all descendants widgets."""
 
 # This class represents any widget except Toplevel or Tk.
@@ -2540,7 +2540,7 @@ class Widget(BaseWidget, Pack, Place, Grid):
     # Allow bind callbacks to take e.g. Event[Label] instead of Event[Misc].
     # Tk and Toplevel get notified for their child widgets' events, but other
     # widgets don't.
-    def bind[W: Misc](
+    override def bind[W: Misc](
         self: W,
         sequence: str | None = None,
         func: ((Event[W]) -> object) | None = None,
@@ -2630,7 +2630,7 @@ class Toplevel(BaseWidget, Wm):
         use, visual, width.
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -2737,7 +2737,7 @@ class Button(Widget):
             overrelief, state, width
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -2867,7 +2867,7 @@ class Canvas(Widget, XView, YView):
         yscrollcommand, yscrollincrement.
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -2986,7 +2986,7 @@ class Canvas(Widget, XView, YView):
         """Return all items with TAGORID."""
 
     # Incompatible with Misc.bbox(), tkinter violates LSP
-    def bbox(self, *args: str | int) -> (int, int, int, int):
+    override def bbox(self, *args: str | int) -> (int, int, int, int):
         """Return a tuple of X1,Y1,X2,Y2 coordinates for a rectangle
         which encloses all items with tags specified as arguments.
         """
@@ -3513,7 +3513,7 @@ class Canvas(Widget, XView, YView):
         """
     def dtag(self, id: int, tag_to_delete: str, /) -> None
 
-    def focus(self, *args):
+    override def focus(self, *args):
         """Set focus to the first item specified in ARGS."""
 
     def gettags(self, tagOrId: str | int, /) -> (*: str):
@@ -3574,7 +3574,7 @@ class Canvas(Widget, XView, YView):
         (optional below another item).
         """
 
-    def lower(self, first: str | int, second: str | int | None = ..., /) -> None:
+    override def lower(self, first: str | int, second: str | int | None = ..., /) -> None:
         """Lower an item TAGORID given in ARGS
         (optional below another item).
         """
@@ -3584,12 +3584,12 @@ class Canvas(Widget, XView, YView):
         (optional above another item).
         """
 
-    def tkraise(self, first: str | int, second: str | int | None = ..., /) -> None:
+    override def tkraise(self, first: str | int, second: str | int | None = ..., /) -> None:
         """Raise an item TAGORID given in ARGS
         (optional above another item).
         """
 
-    def lift(self, first: str | int, second: str | int | None = ..., /) -> None:
+    override def lift(self, first: str | int, second: str | int | None = ..., /) -> None:
         """Raise an item TAGORID given in ARGS
         (optional above another item).
         """
@@ -3697,7 +3697,7 @@ class Checkbutton(Widget):
         underline, variable, width, wraplength.
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -3833,7 +3833,7 @@ class Entry(Widget, XView):
         xscrollcommand.
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -3917,7 +3917,7 @@ class Entry(Widget, XView):
     def selection_adjust(self, index: str | int) -> None:
         """Adjust the end of the selection near the cursor to INDEX."""
 
-    def selection_clear(self) -> None:
+    override def selection_clear(self) -> None:
         """Clear the selection if it is in this widget."""
 
     def selection_from(self, index: str | int) -> None:
@@ -3977,7 +3977,7 @@ class Frame(Widget):
         highlightcolor, highlightthickness, relief, takefocus, visual, width.
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -4072,7 +4072,7 @@ class Label(Widget):
 
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -4187,7 +4187,7 @@ class Listbox(Widget, XView, YView):
         width, xscrollcommand, yscrollcommand, listvariable.
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -4239,7 +4239,7 @@ class Listbox(Widget, XView, YView):
     def activate(self, index: str | int) -> None:
         """Activate item identified by INDEX."""
 
-    def bbox(self, index: str | int) -> (int, int, int, int) | None:
+    override def bbox(self, index: str | int) -> (int, int, int, int) | None:
         """Return a tuple of X1,Y1,X2,Y2 coordinates for a rectangle
         which encloses the item identified by the given index.
         """
@@ -4278,7 +4278,7 @@ class Listbox(Widget, XView, YView):
         """Set the fixed end oft the selection to INDEX."""
 
     select_anchor = selection_anchor
-    def selection_clear(self, first: str | int, last: str | int | None = None) -> None:
+    override def selection_clear(self, first: str | int, last: str | int | None = None) -> None:
         """Clear the selection from FIRST to LAST (included)."""
 
     select_clear = selection_clear
@@ -4292,7 +4292,7 @@ class Listbox(Widget, XView, YView):
         """
 
     select_set = selection_set
-    def size(self) -> int:
+    override def size(self) -> int:
         """Return the number of elements in the listbox."""
 
     def itemcget(self, index: str | int, option):
@@ -4348,7 +4348,7 @@ class Menu(Widget):
         selectcolor, takefocus, tearoff, tearoffcommand, title, type.
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -4697,7 +4697,7 @@ class Menubutton(Widget):
         wraplength: float | str = 0,
     )
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -4786,7 +4786,7 @@ class Message(Widget):
         width: float | str = 0,
     )
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -4891,7 +4891,7 @@ class Radiobutton(Widget):
         width, wraplength.
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -5019,7 +5019,7 @@ class Scale(Widget):
         tickinterval, to, troughcolor, variable, width.
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -5135,7 +5135,7 @@ class Scrollbar(Widget):
         troughcolor, width.
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -5294,7 +5294,7 @@ class Text(Widget, XView, YView):
 
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -5359,7 +5359,7 @@ class Text(Widget, XView, YView):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
-    def bbox(self, index: str | float | _tkinter.Tcl_Obj | Widget) -> (int, int, int, int) | None:
+    override def bbox(self, index: str | float | _tkinter.Tcl_Obj | Widget) -> (int, int, int, int) | None:
         """Return a tuple of (x,y,width,height) which gives the bounding
         box of the visible part of the character at the given index.
         """
@@ -5729,7 +5729,7 @@ class Text(Widget, XView, YView):
     ) -> str:
         """Create an embedded image at INDEX."""
 
-    def image_names(self) -> (*: str):
+    override def image_names(self) -> (*: str):
         """Return all names of embedded images in this widget."""
 
     def index(self, index: str | float | _tkinter.Tcl_Obj | Widget) -> str:
@@ -6142,7 +6142,7 @@ class PhotoImage(Image, _PhotoImageLike):
         width.
         """
 
-    def configure(
+    override def configure(
         self,
         *,
         data: str | bytes = ...,
@@ -6162,7 +6162,7 @@ class PhotoImage(Image, _PhotoImageLike):
     def cget(self, option: str) -> str:
         """Return the value of OPTION."""
 
-    def __getitem__(self, key: str) -> str  # always string: image['height'] can be '0'
+    override def __getitem__(self, key: str) -> str  # always string: image['height'] can be '0'
     if sys.version_info >= (3, 13):
         def copy(
             self,
@@ -6518,7 +6518,7 @@ class Spinbox(Widget, XView):
             width, wrap,
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -6588,7 +6588,7 @@ class Spinbox(Widget, XView):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
-    def bbox(self, index) -> (int, int, int, int) | None:
+    override def bbox(self, index) -> (int, int, int, int) | None:
         """Return a tuple of X1,Y1,X2,Y2 coordinates for a
         rectangle which encloses the character given by index.
 
@@ -6682,7 +6682,7 @@ class Spinbox(Widget, XView):
         anchor point, inclusive.
         """
 
-    def selection_clear(self):
+    override def selection_clear(self):
         """Clear the selection
 
         If the selection isn't in this widget then the
@@ -6762,7 +6762,7 @@ class LabelFrame(Widget):
             visual, width
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -6849,7 +6849,7 @@ class PanedWindow(Widget):
             sashwidth, showhandle,
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,

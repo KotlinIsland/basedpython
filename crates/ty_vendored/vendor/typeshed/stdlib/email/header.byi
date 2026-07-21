@@ -100,8 +100,8 @@ class Header:
         """
 
     __hash__: ClassVar[None]
-    def __eq__(self, other: object) -> bool
-    def __ne__(self, value: object, /) -> bool
+    override def __eq__(self, other: object) -> bool
+    override def __ne__(self, value: object, /) -> bool
 
 # decode_header() either returns list[tuple[str, None]] if the header
 # contains no encoded parts, or list[tuple[bytes, str | None]] if the header

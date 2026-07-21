@@ -35,27 +35,27 @@ if sys.version_info < (3, 11):
 class FileReader(abc.TraversableResources):
     path: pathlib.Path
     init(self, loader: FileLoader)
-    def resource_path(self, resource: StrPath) -> str:
+    override def resource_path(self, resource: StrPath) -> str:
         """
         Return the file system path to prevent
         `resources.path()` from creating a temporary
         copy.
         """
 
-    def files(self) -> pathlib.Path
+    override def files(self) -> pathlib.Path
 
 class ZipReader(abc.TraversableResources):
     prefix: str
     archive: str
     init(self, loader: zipimporter, module: str)
-    def open_resource(self, resource: str) -> BufferedReader
-    def is_resource(self, path: StrPath) -> bool:
+    override def open_resource(self, resource: str) -> BufferedReader
+    override def is_resource(self, path: StrPath) -> bool:
         """
         Workaround for `zipfile.Path.is_file` returning true
         for non-existent paths.
         """
 
-    def files(self) -> zipfile.Path
+    override def files(self) -> zipfile.Path
 
 class MultiplexedPath(abc.Traversable):
     """
@@ -66,33 +66,33 @@ class MultiplexedPath(abc.Traversable):
     """
 
     init(self, *paths: abc.Traversable)
-    def iterdir(self) -> Iterator[abc.Traversable]
-    def read_bytes(self) -> NoReturn
-    def read_text(self, *args: Never, **kwargs: Never) -> NoReturn
-    def is_dir(self) -> True
-    def is_file(self) -> False
+    override def iterdir(self) -> Iterator[abc.Traversable]
+    override def read_bytes(self) -> NoReturn
+    override def read_text(self, *args: Never, **kwargs: Never) -> NoReturn
+    override def is_dir(self) -> True
+    override def is_file(self) -> False
 
     if sys.version_info >= (3, 12):
         def joinpath(self, *descendants: StrPath) -> abc.Traversable
     elif sys.version_info >= (3, 11):
         def joinpath(self, child: StrPath) -> abc.Traversable
     else:
-        def joinpath(self, child: str) -> abc.Traversable
+        override def joinpath(self, child: str) -> abc.Traversable
 
     if sys.version_info < (3, 12):
         __truediv__ = joinpath
 
-    def open(self, *args: Never, **kwargs: Never) -> NoReturn
+    override def open(self, *args: Never, **kwargs: Never) -> NoReturn
     let name: str
 
 class NamespaceReader(abc.TraversableResources):
     path: MultiplexedPath
     init(self, namespace_path: Iterable[str])
-    def resource_path(self, resource: str) -> str:
+    override def resource_path(self, resource: str) -> str:
         """
         Return the file system path to prevent
         `resources.path()` from creating a temporary
         copy.
         """
 
-    def files(self) -> MultiplexedPath
+    override def files(self) -> MultiplexedPath

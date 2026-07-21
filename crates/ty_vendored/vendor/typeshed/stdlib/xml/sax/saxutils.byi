@@ -47,17 +47,17 @@ class XMLGenerator(handler.ContentHandler):
     def _qname(self, name: (str | None, str)) -> str:
         """Builds a qualified name from a (ns_url, localname) pair"""
 
-    def startDocument(self) -> None
-    def endDocument(self) -> None
-    def startPrefixMapping(self, prefix: str | None, uri: str) -> None
-    def endPrefixMapping(self, prefix: str | None) -> None
-    def startElement(self, name: str, attrs: xmlreader.AttributesImpl) -> None
-    def endElement(self, name: str) -> None
-    def startElementNS(self, name: (str | None, str), qname: str | None, attrs: xmlreader.AttributesNSImpl) -> None
-    def endElementNS(self, name: (str | None, str), qname: str | None) -> None
-    def characters(self, content: str) -> None
-    def ignorableWhitespace(self, content: str) -> None
-    def processingInstruction(self, target: str, data: str) -> None
+    override def startDocument(self) -> None
+    override def endDocument(self) -> None
+    override def startPrefixMapping(self, prefix: str | None, uri: str) -> None
+    override def endPrefixMapping(self, prefix: str | None) -> None
+    override def startElement(self, name: str, attrs: xmlreader.AttributesImpl) -> None
+    override def endElement(self, name: str) -> None
+    override def startElementNS(self, name: (str | None, str), qname: str | None, attrs: xmlreader.AttributesNSImpl) -> None
+    override def endElementNS(self, name: (str | None, str), qname: str | None) -> None
+    override def characters(self, content: str) -> None
+    override def ignorableWhitespace(self, content: str) -> None
+    override def processingInstruction(self, target: str, data: str) -> None
 
 class XMLFilterBase(xmlreader.XMLReader):
     """This class is designed to sit between an XMLReader and the
@@ -93,12 +93,12 @@ class XMLFilterBase(xmlreader.XMLReader):
     # EntityResolver methods
     def resolveEntity(self, publicId: str | None, systemId: str) -> str
     # XMLReader methods
-    def parse(self, source: xmlreader.InputSource | _Source) -> None
-    def setLocale(self, locale: str) -> None
-    def getFeature(self, name: str) -> 1 | 0 | bool
-    def setFeature(self, name: str, state: 1 | 0 | bool) -> None
-    def getProperty(self, name: str) -> object
-    def setProperty(self, name: str, value: object) -> None
+    override def parse(self, source: xmlreader.InputSource | _Source) -> None
+    override def setLocale(self, locale: str) -> None
+    override def getFeature(self, name: str) -> 1 | 0 | bool
+    override def setFeature(self, name: str, state: 1 | 0 | bool) -> None
+    override def getProperty(self, name: str) -> object
+    override def setProperty(self, name: str, value: object) -> None
     # XMLFilter methods
     def getParent(self) -> xmlreader.XMLReader | None
     def setParent(self, parent: xmlreader.XMLReader) -> None

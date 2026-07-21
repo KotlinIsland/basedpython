@@ -184,22 +184,22 @@ class Maildir(Mailbox[MaildirMessage]):
     ):
         """Initialize a Maildir instance."""
 
-    def add(self, message: _MessageData | MaildirMessage) -> str:
+    override def add(self, message: _MessageData | MaildirMessage) -> str:
         """Add message and return assigned key."""
 
-    def remove(self, key: str) -> None:
+    override def remove(self, key: str) -> None:
         """Remove the keyed message; raise KeyError if it doesn't exist."""
 
-    def __setitem__(self, key: str, message: _MessageData | MaildirMessage) -> None:
+    override def __setitem__(self, key: str, message: _MessageData | MaildirMessage) -> None:
         """Replace the keyed message; raise KeyError if it doesn't exist."""
 
-    def get_message(self, key: str) -> MaildirMessage:
+    override def get_message(self, key: str) -> MaildirMessage:
         """Return a Message representation or raise a KeyError."""
 
-    def get_bytes(self, key: str) -> bytes:
+    override def get_bytes(self, key: str) -> bytes:
         """Return a bytes representation or raise a KeyError."""
 
-    def get_file(self, key: str) -> _ProxyFile:
+    override def get_file(self, key: str) -> _ProxyFile:
         """Return a file-like representation or raise a KeyError."""
 
     if sys.version_info >= (3, 13):
@@ -221,25 +221,25 @@ class Maildir(Mailbox[MaildirMessage]):
         def remove_flag(self, key: str, flag: str) -> None:
             """Unset the given string flag(s) without changing others on the keyed message."""
 
-    def iterkeys(self) -> Iterator[str]:
+    override def iterkeys(self) -> Iterator[str]:
         """Return an iterator over keys."""
 
-    def __contains__(self, key: str) -> bool:
+    override def __contains__(self, key: str) -> bool:
         """Return True if the keyed message exists, False otherwise."""
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return a count of messages in the mailbox."""
 
-    def flush(self) -> None:
+    override def flush(self) -> None:
         """Write any pending changes to disk."""
 
-    def lock(self) -> None:
+    override def lock(self) -> None:
         """Lock the mailbox."""
 
-    def unlock(self) -> None:
+    override def unlock(self) -> None:
         """Unlock the mailbox if it is locked."""
 
-    def close(self) -> None:
+    override def close(self) -> None:
         """Flush and close the mailbox."""
 
     def list_folders(self) -> list[str]:
@@ -263,49 +263,49 @@ class Maildir(Mailbox[MaildirMessage]):
 class _singlefileMailbox[out MessageT: Message = Message](Mailbox[MessageT], metaclass=ABCMeta):
     """A single-file mailbox."""
 
-    def add(self, message: _MessageData) -> str:
+    override def add(self, message: _MessageData) -> str:
         """Add message and return assigned key."""
 
-    def remove(self, key: str) -> None:
+    override def remove(self, key: str) -> None:
         """Remove the keyed message; raise KeyError if it doesn't exist."""
 
-    def __setitem__(self, key: str, message: _MessageData) -> None:
+    override def __setitem__(self, key: str, message: _MessageData) -> None:
         """Replace the keyed message; raise KeyError if it doesn't exist."""
 
-    def iterkeys(self) -> Iterator[str]:
+    override def iterkeys(self) -> Iterator[str]:
         """Return an iterator over keys."""
 
-    def __contains__(self, key: str) -> bool:
+    override def __contains__(self, key: str) -> bool:
         """Return True if the keyed message exists, False otherwise."""
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return a count of messages in the mailbox."""
 
-    def lock(self) -> None:
+    override def lock(self) -> None:
         """Lock the mailbox."""
 
-    def unlock(self) -> None:
+    override def unlock(self) -> None:
         """Unlock the mailbox if it is locked."""
 
-    def flush(self) -> None:
+    override def flush(self) -> None:
         """Write any pending changes to disk."""
 
-    def close(self) -> None:
+    override def close(self) -> None:
         """Flush and close the mailbox."""
 
 class _mboxMMDF[out MessageT: Message = Message](_singlefileMailbox[MessageT]):
     """An mbox or MMDF mailbox."""
 
-    def get_message(self, key: str) -> MessageT:
+    override def get_message(self, key: str) -> MessageT:
         """Return a Message representation or raise a KeyError."""
 
-    def get_file(self, key: str, from_: bool = False) -> _PartialFile:
+    override def get_file(self, key: str, from_: bool = False) -> _PartialFile:
         """Return a file-like representation or raise a KeyError."""
 
-    def get_bytes(self, key: str, from_: bool = False) -> bytes:
+    override def get_bytes(self, key: str, from_: bool = False) -> bytes:
         """Return a string representation or raise a KeyError."""
 
-    def get_string(self, key: str, from_: bool = False) -> str:
+    override def get_string(self, key: str, from_: bool = False) -> str:
         """Return a string representation or raise a KeyError."""
 
 class mbox(_mboxMMDF[mboxMessage]):
@@ -330,43 +330,43 @@ class MH(Mailbox[MHMessage]):
     init(self, path: StrPath, factory: ((_GetFileReturn) -> MHMessage) | None = None, create: bool = True):
         """Initialize an MH instance."""
 
-    def add(self, message: _MessageData) -> str:
+    override def add(self, message: _MessageData) -> str:
         """Add message and return assigned key."""
 
-    def remove(self, key: str) -> None:
+    override def remove(self, key: str) -> None:
         """Remove the keyed message; raise KeyError if it doesn't exist."""
 
-    def __setitem__(self, key: str, message: _MessageData) -> None:
+    override def __setitem__(self, key: str, message: _MessageData) -> None:
         """Replace the keyed message; raise KeyError if it doesn't exist."""
 
-    def get_message(self, key: str) -> MHMessage:
+    override def get_message(self, key: str) -> MHMessage:
         """Return a Message representation or raise a KeyError."""
 
-    def get_bytes(self, key: str) -> bytes:
+    override def get_bytes(self, key: str) -> bytes:
         """Return a bytes representation or raise a KeyError."""
 
-    def get_file(self, key: str) -> _ProxyFile:
+    override def get_file(self, key: str) -> _ProxyFile:
         """Return a file-like representation or raise a KeyError."""
 
-    def iterkeys(self) -> Iterator[str]:
+    override def iterkeys(self) -> Iterator[str]:
         """Return an iterator over keys."""
 
-    def __contains__(self, key: str) -> bool:
+    override def __contains__(self, key: str) -> bool:
         """Return True if the keyed message exists, False otherwise."""
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return a count of messages in the mailbox."""
 
-    def flush(self) -> None:
+    override def flush(self) -> None:
         """Write any pending changes to the disk."""
 
-    def lock(self) -> None:
+    override def lock(self) -> None:
         """Lock the mailbox."""
 
-    def unlock(self) -> None:
+    override def unlock(self) -> None:
         """Unlock the mailbox if it is locked."""
 
-    def close(self) -> None:
+    override def close(self) -> None:
         """Flush and close the mailbox."""
 
     def list_folders(self) -> list[str]:
@@ -398,13 +398,13 @@ class Babyl(_singlefileMailbox[BabylMessage]):
     ):
         """Initialize a Babyl mailbox."""
 
-    def get_message(self, key: str) -> BabylMessage:
+    override def get_message(self, key: str) -> BabylMessage:
         """Return a Message representation or raise a KeyError."""
 
-    def get_bytes(self, key: str) -> bytes:
+    override def get_bytes(self, key: str) -> bytes:
         """Return a string representation or raise a KeyError."""
 
-    def get_file(self, key: str) -> io.BytesIO:
+    override def get_file(self, key: str) -> io.BytesIO:
         """Return a file-like representation or raise a KeyError."""
 
     def get_labels(self) -> list[str]:

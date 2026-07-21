@@ -55,20 +55,20 @@ class PullDOM(ContentHandler):
     )
     init(self, documentFactory: _DocumentFactory = None)
     def pop(self) -> Element | Document
-    def setDocumentLocator(self, locator: Locator) -> None
-    def startPrefixMapping(self, prefix: str | None, uri: str) -> None
-    def endPrefixMapping(self, prefix: str | None) -> None
-    def startElementNS(self, name: _NSName, tagName: str | None, attrs: AttributesNSImpl) -> None
-    def endElementNS(self, name: _NSName, tagName: str | None) -> None
-    def startElement(self, name: str, attrs: AttributesImpl) -> None
-    def endElement(self, name: str) -> None
+    override def setDocumentLocator(self, locator: Locator) -> None
+    override def startPrefixMapping(self, prefix: str | None, uri: str) -> None
+    override def endPrefixMapping(self, prefix: str | None) -> None
+    override def startElementNS(self, name: _NSName, tagName: str | None, attrs: AttributesNSImpl) -> None
+    override def endElementNS(self, name: _NSName, tagName: str | None) -> None
+    override def startElement(self, name: str, attrs: AttributesImpl) -> None
+    override def endElement(self, name: str) -> None
     def comment(self, s: str) -> None
-    def processingInstruction(self, target: str, data: str) -> None
-    def ignorableWhitespace(self, chars: str) -> None
-    def characters(self, chars: str) -> None
-    def startDocument(self) -> None
+    override def processingInstruction(self, target: str, data: str) -> None
+    override def ignorableWhitespace(self, chars: str) -> None
+    override def characters(self, chars: str) -> None
+    override def startDocument(self) -> None
     def buildDocument(self, uri: str | None, tagname: str | None) -> Element
-    def endDocument(self) -> None
+    override def endDocument(self) -> None
     def clear(self) -> None:
         """clear(): Explicitly release parsing structures"""
 
@@ -95,11 +95,11 @@ class DOMEventStream:
         """clear(): Explicitly release parsing objects"""
 
 class SAX2DOM(PullDOM):
-    def startElementNS(self, name: _NSName, tagName: str | None, attrs: AttributesNSImpl) -> None
-    def startElement(self, name: str, attrs: AttributesImpl) -> None
-    def processingInstruction(self, target: str, data: str) -> None
-    def ignorableWhitespace(self, chars: str) -> None
-    def characters(self, chars: str) -> None
+    override def startElementNS(self, name: _NSName, tagName: str | None, attrs: AttributesNSImpl) -> None
+    override def startElement(self, name: str, attrs: AttributesImpl) -> None
+    override def processingInstruction(self, target: str, data: str) -> None
+    override def ignorableWhitespace(self, chars: str) -> None
+    override def characters(self, chars: str) -> None
 
 final default_bufsize: int
 

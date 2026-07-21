@@ -41,9 +41,9 @@ class TypedDictFallback(Mapping[str, object], metaclass=ABCMeta):
     def pop[Element](self, k: Never, default: Element = ...) -> object
     def update(self, m: typing_extensions.Self, /) -> None
     def __delitem__(self, k: Never) -> None
-    def items(self) -> dict_items[str, object]
-    def keys(self) -> dict_keys[str, object]
-    def values(self) -> dict_values[str, object]
+    override def items(self) -> dict_items[str, object]
+    override def keys(self) -> dict_keys[str, object]
+    override def values(self) -> dict_values[str, object]
 
     def __or__(self, value: typing_extensions.Self, /) -> typing_extensions.Self
     def __or__(self, value: dict[str, dynamic], /) -> dict[str, object]

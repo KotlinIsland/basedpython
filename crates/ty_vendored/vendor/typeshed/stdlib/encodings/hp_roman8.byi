@@ -14,14 +14,14 @@ from _codecs import _EncodingMap
 from _typeshed import ReadableBuffer
 
 class Codec(codecs.Codec):
-    def encode(self, input: str, errors: str = "strict") -> (bytes, int)
-    def decode(self, input: bytes, errors: str = "strict") -> (str, int)
+    override def encode(self, input: str, errors: str = "strict") -> (bytes, int)
+    override def decode(self, input: bytes, errors: str = "strict") -> (str, int)
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
-    def encode(self, input: str, final: bool = False) -> bytes
+    override def encode(self, input: str, final: bool = False) -> bytes
 
 class IncrementalDecoder(codecs.IncrementalDecoder):
-    def decode(self, input: ReadableBuffer, final: bool = False) -> str
+    override def decode(self, input: ReadableBuffer, final: bool = False) -> str
 
 class StreamWriter(Codec, codecs.StreamWriter)
 class StreamReader(Codec, codecs.StreamReader)

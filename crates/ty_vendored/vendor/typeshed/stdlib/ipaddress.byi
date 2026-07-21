@@ -101,10 +101,10 @@ class _BaseAddress(_IPAddressBase):
 
     __slots__ = ()
     def __add__(self, other: int) -> Self
-    def __hash__(self) -> int
+    override def __hash__(self) -> int
     def __int__(self) -> int
     def __sub__(self, other: int) -> Self
-    def __format__(self, fmt: str) -> str:
+    override def __format__(self, fmt: str) -> str:
         """Returns an IP address as a formatted string.
 
         Supported presentation types are:
@@ -117,7 +117,7 @@ class _BaseAddress(_IPAddressBase):
         '#' and the grouping option '_' are supported.
         """
 
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
     def __lt__(self, other: Self) -> bool
     if sys.version_info >= (3, 11):
         def __ge__(self, other: Self) -> bool:
@@ -151,8 +151,8 @@ class _BaseNetwork[in out A: constraints (IPv4Address, IPv6Address)](_IPAddressB
     def __contains__(self, other: dynamic) -> bool
     def __getitem__(self, n: int) -> A
     def __iter__(self) -> Iterator[A]
-    def __eq__(self, other: object) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
     def __lt__(self, other: Self) -> bool
     if sys.version_info >= (3, 11):
         def __ge__(self, other: Self) -> bool:
@@ -448,8 +448,8 @@ class IPv4Network(_BaseV4, _BaseNetwork[IPv4Address]):
 class IPv4Interface(IPv4Address):
     netmask: IPv4Address
     network: IPv4Network
-    def __eq__(self, other: object) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
     let hostmask: IPv4Address
     let ip: IPv4Address
     let with_hostmask: str
@@ -522,8 +522,8 @@ class IPv6Address(_BaseV6, _BaseAddress):
 
     let scope_id: str | None
 
-    def __hash__(self) -> int
-    def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
 
 class IPv6Network(_BaseV6, _BaseNetwork[IPv6Address]):
     """This class represents and manipulates 128-bit IPv6 networks.
@@ -574,8 +574,8 @@ class IPv6Network(_BaseV6, _BaseNetwork[IPv6Address]):
 class IPv6Interface(IPv6Address):
     netmask: IPv6Address
     network: IPv6Network
-    def __eq__(self, other: object) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
     let hostmask: IPv6Address
     let ip: IPv6Address
     let with_hostmask: str

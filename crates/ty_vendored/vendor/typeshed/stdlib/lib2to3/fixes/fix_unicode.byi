@@ -18,5 +18,5 @@ class FixUnicode(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     unicode_literals: bool
-    def start_tree(self, tree: Node, filename: StrPath) -> None
-    def transform(self, node, results)
+    override def start_tree(self, tree: Node, filename: StrPath) -> None
+    override def transform(self, node, results)

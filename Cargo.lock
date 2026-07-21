@@ -305,6 +305,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
 
 [[package]]
+name = "by_override_patch"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "ruff_db",
+ "ruff_ranged_value",
+ "ruff_text_size",
+ "ty_project",
+ "ty_python_semantic",
+ "walkdir",
+]
+
+[[package]]
 name = "by_transforms"
 version = "0.0.0"
 dependencies = [

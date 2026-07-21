@@ -135,7 +135,7 @@ class DateTime:
     def __le__(self, other: _DateTimeComparable) -> bool
     def __gt__(self, other: _DateTimeComparable) -> bool
     def __ge__(self, other: _DateTimeComparable) -> bool
-    def __eq__(self, other: _DateTimeComparable) -> bool
+    override def __eq__(self, other: _DateTimeComparable) -> bool
     def make_comparable(self, other: _DateTimeComparable) -> (str, str)  # undocumented
     def timetuple(self) -> time.struct_time  # undocumented
     def decode(self, data: dynamic) -> None
@@ -151,7 +151,7 @@ class Binary:
     init(self, data: bytes | bytearray | None = None)
     def decode(self, data: ReadableBuffer) -> None
     def encode(self, out: SupportsWrite[str]) -> None
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
     __hash__: ClassVar[None]
 
 def _binary(data: ReadableBuffer) -> Binary  # undocumented
@@ -403,7 +403,7 @@ class SafeTransport(Transport):
         headers: Iterable[(str, str)] = (),
         context: dynamic | None = None,
     )
-    def make_connection(self, host: _HostType) -> http.client.HTTPSConnection
+    override def make_connection(self, host: _HostType) -> http.client.HTTPSConnection
 
 class ServerProxy:
     """uri [,options] -> a logical connection to an XML-RPC server

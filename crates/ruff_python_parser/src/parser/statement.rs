@@ -671,8 +671,17 @@ impl<'src> Parser<'src> {
                 node_index: AtomicNodeIndex::NONE,
             });
 
-            // stop when we reach the def / async def / class being modified
-            if self.at(TokenKind::Def) || self.at(TokenKind::Class) || self.at(TokenKind::Async) {
+            // stop when we reach the def / async def being modified
+            if self.at(TokenKind::Def) || self.at(TokenKind::Async) {
+                break;
+            }
+            // a `class` token is ambiguous: `class def f` is the classmethod
+            // modifier (keep looping so the next iteration consumes it as such),
+            // while `class Foo` is the class being modified (end the chain)
+            if self.at(TokenKind::Class) {
+                if matches!(self.peek(), TokenKind::Def | TokenKind::Async) {
+                    continue;
+                }
                 break;
             }
             // another modifier keyword follows — keep looping. an `enum class` /

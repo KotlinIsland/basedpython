@@ -138,67 +138,67 @@ class Fraction(Rational):
     let numerator: int
     let denominator: int
 
-    def __add__(a, b: int | Fraction) -> Fraction:
+    override def __add__(a, b: int | Fraction) -> Fraction:
         """a + b"""
     def __add__(a, b: float) -> float
     def __add__(a, b: complex) -> complex
 
-    def __radd__(b, a: int | Fraction) -> Fraction:
+    override def __radd__(b, a: int | Fraction) -> Fraction:
         """a + b"""
     def __radd__(b, a: float) -> float
     def __radd__(b, a: complex) -> complex
 
-    def __sub__(a, b: int | Fraction) -> Fraction:
+    override def __sub__(a, b: int | Fraction) -> Fraction:
         """a - b"""
     def __sub__(a, b: float) -> float
     def __sub__(a, b: complex) -> complex
 
-    def __rsub__(b, a: int | Fraction) -> Fraction:
+    override def __rsub__(b, a: int | Fraction) -> Fraction:
         """a - b"""
     def __rsub__(b, a: float) -> float
     def __rsub__(b, a: complex) -> complex
 
-    def __mul__(a, b: int | Fraction) -> Fraction:
+    override def __mul__(a, b: int | Fraction) -> Fraction:
         """a * b"""
     def __mul__(a, b: float) -> float
     def __mul__(a, b: complex) -> complex
 
-    def __rmul__(b, a: int | Fraction) -> Fraction:
+    override def __rmul__(b, a: int | Fraction) -> Fraction:
         """a * b"""
     def __rmul__(b, a: float) -> float
     def __rmul__(b, a: complex) -> complex
 
-    def __truediv__(a, b: int | Fraction) -> Fraction:
+    override def __truediv__(a, b: int | Fraction) -> Fraction:
         """a / b"""
     def __truediv__(a, b: float) -> float
     def __truediv__(a, b: complex) -> complex
 
-    def __rtruediv__(b, a: int | Fraction) -> Fraction:
+    override def __rtruediv__(b, a: int | Fraction) -> Fraction:
         """a / b"""
     def __rtruediv__(b, a: float) -> float
     def __rtruediv__(b, a: complex) -> complex
 
-    def __floordiv__(a, b: int | Fraction) -> int:
+    override def __floordiv__(a, b: int | Fraction) -> int:
         """a // b"""
     def __floordiv__(a, b: float) -> float
 
-    def __rfloordiv__(b, a: int | Fraction) -> int:
+    override def __rfloordiv__(b, a: int | Fraction) -> int:
         """a // b"""
     def __rfloordiv__(b, a: float) -> float
 
-    def __mod__(a, b: int | Fraction) -> Fraction:
+    override def __mod__(a, b: int | Fraction) -> Fraction:
         """a % b"""
     def __mod__(a, b: float) -> float
 
-    def __rmod__(b, a: int | Fraction) -> Fraction:
+    override def __rmod__(b, a: int | Fraction) -> Fraction:
         """a % b"""
     def __rmod__(b, a: float) -> float
 
-    def __divmod__(a, b: int | Fraction) -> (int, Fraction):
+    override def __divmod__(a, b: int | Fraction) -> (int, Fraction):
         """(a // b, a % b)"""
     def __divmod__(a, b: float) -> (float, Fraction)
 
-    def __rdivmod__(a, b: int | Fraction) -> (int, Fraction):
+    override def __rdivmod__(a, b: int | Fraction) -> (int, Fraction):
         """(a // b, a % b)"""
     def __rdivmod__(a, b: float) -> (float, Fraction)
 
@@ -214,7 +214,7 @@ class Fraction(Rational):
         def __pow__(a, b: float | Fraction, modulo: None = None) -> float
         def __pow__(a, b: complex, modulo: None = None) -> complex
     else:
-        def __pow__(a, b: int) -> Fraction:
+        override def __pow__(a, b: int) -> Fraction:
             """a ** b
 
             If b is not an integer, the result will be a float or complex
@@ -230,54 +230,54 @@ class Fraction(Rational):
             """a ** b"""
         def __rpow__(b, a: complex, modulo: None = None) -> complex
     else:
-        def __rpow__(b, a: float | Fraction) -> float:
+        override def __rpow__(b, a: float | Fraction) -> float:
             """a ** b"""
         def __rpow__(b, a: complex) -> complex
 
-    def __pos__(a) -> Fraction:
+    override def __pos__(a) -> Fraction:
         """+a: Coerces a subclass instance to Fraction"""
 
-    def __neg__(a) -> Fraction:
+    override def __neg__(a) -> Fraction:
         """-a"""
 
-    def __abs__(a) -> Fraction:
+    override def __abs__(a) -> Fraction:
         """abs(a)"""
 
-    def __trunc__(a) -> int:
+    override def __trunc__(a) -> int:
         """math.trunc(a)"""
 
-    def __floor__(a) -> int:
+    override def __floor__(a) -> int:
         """math.floor(a)"""
 
-    def __ceil__(a) -> int:
+    override def __ceil__(a) -> int:
         """math.ceil(a)"""
 
-    def __round__(self, ndigits: None = None) -> int:
+    override def __round__(self, ndigits: None = None) -> int:
         """round(self, ndigits)
 
         Rounds half toward even.
         """
     def __round__(self, ndigits: int) -> Fraction
 
-    def __hash__(self) -> int:
+    override def __hash__(self) -> int:
         """hash(self)"""
 
-    def __eq__(a, b: object) -> bool:
+    override def __eq__(a, b: object) -> bool:
         """a == b"""
 
-    def __lt__(a, b: _ComparableNum) -> bool:
+    override def __lt__(a, b: _ComparableNum) -> bool:
         """a < b"""
 
     def __gt__(a, b: _ComparableNum) -> bool:
         """a > b"""
 
-    def __le__(a, b: _ComparableNum) -> bool:
+    override def __le__(a, b: _ComparableNum) -> bool:
         """a <= b"""
 
     def __ge__(a, b: _ComparableNum) -> bool:
         """a >= b"""
 
-    def __bool__(a) -> bool:
+    override def __bool__(a) -> bool:
         """a != 0"""
 
     def __copy__(self) -> Self
@@ -292,7 +292,7 @@ class Fraction(Rational):
 
     let imag: 0
 
-    def conjugate(self) -> Fraction:
+    override def conjugate(self) -> Fraction:
         """Conjugate is a no-op for Reals."""
 
     if sys.version_info >= (3, 14):

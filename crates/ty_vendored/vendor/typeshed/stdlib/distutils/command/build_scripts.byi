@@ -20,10 +20,10 @@ class build_scripts(Command):
     force: Incomplete
     executable: Incomplete
     outfiles: Incomplete
-    def initialize_options(self) -> None
-    def finalize_options(self) -> None
+    override def initialize_options(self) -> None
+    override def finalize_options(self) -> None
     def get_source_files(self)
-    def run(self) -> None
+    override def run(self) -> None
     def copy_scripts(self):
         """Copy each script listed in 'self.scripts'; if it's marked as a
         Python script in the Unix way (first line matches 'first_line_re',
@@ -32,4 +32,4 @@ class build_scripts(Command):
         """
 
 class build_scripts_2to3(build_scripts, Mixin2to3):
-    def copy_scripts(self)
+    override def copy_scripts(self)

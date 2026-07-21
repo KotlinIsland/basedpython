@@ -80,7 +80,7 @@ class ShareableList[in out SLT: constraints (int, float, bool, str, bytes, None)
 
     def __getitem__(self, position: int) -> SLT
     def __setitem__(self, position: int, value: SLT) -> None
-    def __reduce__(self) -> (Self, (*: SLT))
+    override def __reduce__(self) -> (Self, (*: SLT))
     def __len__(self) -> int
     let format: str
 

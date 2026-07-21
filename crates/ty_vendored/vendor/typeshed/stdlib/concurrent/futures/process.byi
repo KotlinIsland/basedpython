@@ -80,7 +80,7 @@ class _ExceptionWithTraceback:
     exc: BaseException
     tb: TracebackType
     init(self, exc: BaseException, tb: TracebackType)
-    def __reduce__(self) -> str | (*: dynamic)
+    override def __reduce__(self) -> str | (*: dynamic)
 
 def _rebuild_exc(exc: Exception, tb: str) -> Exception
 
@@ -230,7 +230,7 @@ class _ExecutorManagerThread(Thread):
     work_ids_queue: Queue[int]
     pending_work_items: dict[int, _WorkItem[dynamic]]
     init(self, executor: ProcessPoolExecutor)
-    def run(self) -> None
+    override def run(self) -> None
     def add_call_item_to_queue(self) -> None
     def wait_result_broken_or_wakeup(self) -> (dynamic, bool, str)
     def process_result_item(self, result_item: int | _ResultItem) -> None

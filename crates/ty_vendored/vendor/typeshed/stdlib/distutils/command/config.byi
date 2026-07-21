@@ -31,9 +31,9 @@ class config(Command):
     noisy: int
     dump_source: int
     temp_files: Sequence[str]
-    def initialize_options(self) -> None
-    def finalize_options(self) -> None
-    def run(self) -> None
+    override def initialize_options(self) -> None
+    override def finalize_options(self) -> None
+    override def run(self) -> None
     def try_cpp(
         self,
         body: str | None = None,

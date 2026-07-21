@@ -22,7 +22,7 @@ class BaseTestSuite:
 
     def countTestCases(self) -> int
     def __iter__(self) -> Iterator[_TestType]
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
     __hash__: ClassVar[None]
 
 class TestSuite(BaseTestSuite):
@@ -35,4 +35,4 @@ class TestSuite(BaseTestSuite):
     subclassing, do not forget to call the base class constructor.
     """
 
-    def run(self, result: unittest.result.TestResult, debug: bool = False) -> unittest.result.TestResult
+    override def run(self, result: unittest.result.TestResult, debug: bool = False) -> unittest.result.TestResult

@@ -133,8 +133,8 @@ class TestCase:
         not have a method with the specified name.
         """
 
-    def __eq__(self, other: object) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
     def setUp(self) -> None:
         """Hook method for setting up the test fixture before exercising it."""
 
@@ -684,8 +684,8 @@ class FunctionTestCase(TestCase):
         description: str | None = None,
     )
     def runTest(self) -> None
-    def __hash__(self) -> int
-    def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
 
 class _AssertRaisesContext[in out E: BaseException](_AssertRaisesBaseContext):
     """A context manager used to implement TestCase.assertRaises* methods."""

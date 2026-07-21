@@ -11,14 +11,14 @@ def ToASCII(label: str) -> bytes
 def ToUnicode(label: bytes | str) -> str
 
 class Codec(codecs.Codec):
-    def encode(self, input: str, errors: str = "strict") -> (bytes, int)
-    def decode(self, input: ReadableBuffer | str, errors: str = "strict") -> (str, int)
+    override def encode(self, input: str, errors: str = "strict") -> (bytes, int)
+    override def decode(self, input: ReadableBuffer | str, errors: str = "strict") -> (str, int)
 
 class IncrementalEncoder(codecs.BufferedIncrementalEncoder):
-    def _buffer_encode(self, input: str, errors: str, final: bool) -> (bytes, int)
+    override def _buffer_encode(self, input: str, errors: str, final: bool) -> (bytes, int)
 
 class IncrementalDecoder(codecs.BufferedIncrementalDecoder):
-    def _buffer_decode(self, input: ReadableBuffer | str, errors: str, final: bool) -> (str, int)
+    override def _buffer_decode(self, input: ReadableBuffer | str, errors: str, final: bool) -> (str, int)
 
 class StreamWriter(Codec, codecs.StreamWriter)
 class StreamReader(Codec, codecs.StreamReader)

@@ -364,8 +364,8 @@ class _RawIOBase(_IOBase):
     # The following methods can return None if the file is in non-blocking mode
     # and no data is available.
     def readinto(self, buffer: WriteableBuffer, /) -> int | MaybeNone
-    def write(self, b: ReadableBuffer, /) -> int | MaybeNone
-    def read(self, size: int = -1, /) -> bytes | MaybeNone
+    override def write(self, b: ReadableBuffer, /) -> int | MaybeNone
+    override def read(self, size: int = -1, /) -> bytes | MaybeNone
 
 class _BufferedIOBase(_IOBase):
     """Base class for buffered IO objects.
@@ -391,7 +391,7 @@ class _BufferedIOBase(_IOBase):
         """
 
     def readinto(self, buffer: WriteableBuffer, /) -> int
-    def write(self, buffer: ReadableBuffer, /) -> int:
+    override def write(self, buffer: ReadableBuffer, /) -> int:
         """Write buffer b to the IO stream.
 
         Return the number of bytes written, which is always
@@ -402,7 +402,7 @@ class _BufferedIOBase(_IOBase):
         """
 
     def readinto1(self, buffer: WriteableBuffer, /) -> int
-    def read(self, size: int | None = -1, /) -> bytes:
+    override def read(self, size: int | None = -1, /) -> bytes:
         """Read and return up to n bytes.
 
         If the size argument is omitted, None, or negative, read and
@@ -460,7 +460,7 @@ class FileIO(RawIOBase, _RawIOBase, BinaryIO):
     )
     let closefd: bool
 
-    def seek(self, pos: int, whence: int = 0, /) -> int:
+    override def seek(self, pos: int, whence: int = 0, /) -> int:
         """Move to new file position and return the file position.
 
         Argument offset is a byte count.  Optional argument whence defaults
@@ -473,7 +473,7 @@ class FileIO(RawIOBase, _RawIOBase, BinaryIO):
         Note that not all file objects are seekable.
         """
 
-    def read(self, size: int | None = -1, /) -> bytes | MaybeNone:
+    override def read(self, size: int | None = -1, /) -> bytes | MaybeNone:
         """Read at most size bytes, returned as bytes.
 
         If size is less than 0, read all bytes in the file making multiple
@@ -501,14 +501,14 @@ class BytesIO(BufferedIOBase, _BufferedIOBase, BinaryIO):
     def getbuffer(self) -> memoryview:
         """Get a read-write view over the contents of the BytesIO object."""
 
-    def read1(self, size: int | None = -1, /) -> bytes:
+    override def read1(self, size: int | None = -1, /) -> bytes:
         """Read at most size bytes, returned as a bytes object.
 
         If the size argument is negative or omitted, read until EOF is
         reached.  Return an empty bytes object at EOF.
         """
 
-    def readlines(self, size: int | None = None, /) -> list[bytes]:
+    override def readlines(self, size: int | None = None, /) -> list[bytes]:
         """List of bytes objects, each a line from the file.
 
         Call readline() repeatedly and return a list of the lines so read.
@@ -516,7 +516,7 @@ class BytesIO(BufferedIOBase, _BufferedIOBase, BinaryIO):
         total number of bytes in the lines returned.
         """
 
-    def seek(self, pos: int, whence: int = 0, /) -> int:
+    override def seek(self, pos: int, whence: int = 0, /) -> int:
         """Change stream position.
 
         Seek to byte offset pos relative to position indicated by whence:
@@ -563,8 +563,8 @@ class BufferedReader[in out BufferedReaderStreamT: _BufferedReaderStream = _Buff
         def __init__(self, raw: BufferedReaderStreamT, buffer_size: int = 8192) -> None
 
     def peek(self, size: int = 0, /) -> bytes
-    def seek(self, target: int, whence: int = 0, /) -> int
-    def truncate(self, pos: int | None = None, /) -> int
+    override def seek(self, target: int, whence: int = 0, /) -> int
+    override def truncate(self, pos: int | None = None, /) -> int
 
 @type_check_only
 protocol _BufferedWriterStream:
@@ -605,9 +605,9 @@ class BufferedWriter[in out BufferedWriterStreamT: _BufferedWriterStream = _Buff
     else:
         def __init__(self, raw: BufferedWriterStreamT, buffer_size: int = 8192) -> None
 
-    def write(self, buffer: ReadableBuffer, /) -> int
-    def seek(self, target: int, whence: int = 0, /) -> int
-    def truncate(self, pos: int | None = None, /) -> int
+    override def write(self, buffer: ReadableBuffer, /) -> int
+    override def seek(self, target: int, whence: int = 0, /) -> int
+    override def truncate(self, pos: int | None = None, /) -> int
 
 @disjoint_base
 class BufferedRandom(BufferedIOBase, _BufferedIOBase, BinaryIO):
@@ -626,9 +626,9 @@ class BufferedRandom(BufferedIOBase, _BufferedIOBase, BinaryIO):
     else:
         def __init__(self, raw: RawIOBase, buffer_size: int = 8192) -> None
 
-    def seek(self, target: int, whence: int = 0, /) -> int  # stubtest needs this
+    override def seek(self, target: int, whence: int = 0, /) -> int  # stubtest needs this
     def peek(self, size: int = 0, /) -> bytes
-    def truncate(self, pos: int | None = None, /) -> int
+    override def truncate(self, pos: int | None = None, /) -> int
 
 @disjoint_base
 class BufferedRWPair[in out BufferedReaderStreamT: _BufferedReaderStream = _BufferedReaderStream, in out BufferedWriterStreamT: _BufferedWriterStream = _BufferedWriterStream](BufferedIOBase, _BufferedIOBase):
@@ -682,10 +682,10 @@ class _TextIOBase(_IOBase):
     Subclasses should override.
     """
 
-    def __iter__(self) -> Iterator[str]:
+    override def __iter__(self) -> Iterator[str]:
         """Implement iter(self)."""
 
-    def __next__(self) -> str:
+    override def __next__(self) -> str:
         """Implement next(self)."""
 
     def detach(self) -> BinaryIO:
@@ -695,28 +695,28 @@ class _TextIOBase(_IOBase):
         an unusable state.
         """
 
-    def write(self, s: str, /) -> int:
+    override def write(self, s: str, /) -> int:
         """Write string s to stream.
 
         Return the number of characters written
         (which is always equal to the length of the string).
         """
 
-    def writelines(self, lines: Iterable[str], /) -> None:
+    override def writelines(self, lines: Iterable[str], /) -> None:
         """Write a list of lines to stream.
 
         Line separators are not added, so it is usual for each of the
         lines provided to have a line separator at the end.
         """
 
-    def readline(self, size: int = -1, /) -> str:
+    override def readline(self, size: int = -1, /) -> str:
         """Read until newline or EOF.
 
         Return an empty string if EOF is hit immediately.
         If size is specified, at most size characters will be read.
         """
 
-    def readlines(self, hint: int = -1, /) -> list[str]:
+    override def readlines(self, hint: int = -1, /) -> list[str]:
         """Return a list of lines from the stream.
 
         hint can be specified to control the number of lines read: no more
@@ -724,7 +724,7 @@ class _TextIOBase(_IOBase):
         lines so far exceeds hint.
         """
 
-    def read(self, size: int | None = -1, /) -> str:
+    override def read(self, size: int | None = -1, /) -> str:
         """Read at most size characters from stream.
 
         Read from underlying buffer until we have size characters or we hit
@@ -812,12 +812,12 @@ class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _T
         This also does an implicit stream flush.
         """
 
-    def readline(self, size: int = -1, /) -> str
+    override def readline(self, size: int = -1, /) -> str
     # Equals the "buffer" argument passed in to the constructor.
-    def detach(self) -> BufferT
+    override def detach(self) -> BufferT
     # TextIOWrapper's version of seek only supports a limited subset of
     # operations.
-    def seek(self, cookie: int, whence: int = 0, /) -> int:
+    override def seek(self, cookie: int, whence: int = 0, /) -> int:
         """Set the stream position, and return the new stream position.
 
           cookie
@@ -838,7 +838,7 @@ class TextIOWrapper[out BufferT: _WrappedBuffer = _WrappedBuffer](TextIOBase, _T
         and may raise exceptions.
         """
 
-    def truncate(self, pos: int | None = None, /) -> int
+    override def truncate(self, pos: int | None = None, /) -> int
 
 @disjoint_base
 class StringIO(TextIOBase, _TextIOBase, TextIO):
@@ -857,7 +857,7 @@ class StringIO(TextIOBase, _TextIOBase, TextIO):
         """Retrieve the entire contents of the object."""
 
     let line_buffering: bool
-    def seek(self, pos: int, whence: int = 0, /) -> int:
+    override def seek(self, pos: int, whence: int = 0, /) -> int:
         """Change stream position.
 
         Seek to character offset pos relative to position indicated by
@@ -868,7 +868,7 @@ class StringIO(TextIOBase, _TextIOBase, TextIO):
         Returns the new absolute position.
         """
 
-    def truncate(self, pos: int | None = None, /) -> int:
+    override def truncate(self, pos: int | None = None, /) -> int:
         """Truncate size to pos.
 
         The pos argument defaults to the current file position, as

@@ -706,24 +706,24 @@ class Row(Sequence[dynamic]):
     def keys(self) -> list[str]:
         """Returns the keys of the row."""
 
-    def __getitem__(self, key: int | str, /) -> dynamic:
+    override def __getitem__(self, key: int | str, /) -> dynamic:
         """Return self[key]."""
     def __getitem__(self, key: slice[SupportsIndex | None], /) -> (*: dynamic)
 
-    def __hash__(self) -> int
-    def __iter__(self) -> Iterator[dynamic]:
+    override def __hash__(self) -> int
+    override def __iter__(self) -> Iterator[dynamic]:
         """Implement iter(self)."""
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
     # These return NotImplemented for anything that is not a Row.
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
     def __ge__(self, value: object, /) -> bool
     def __gt__(self, value: object, /) -> bool
     def __le__(self, value: object, /) -> bool
     def __lt__(self, value: object, /) -> bool
-    def __ne__(self, value: object, /) -> bool
+    override def __ne__(self, value: object, /) -> bool
 
 # This class is not exposed. It calls itself sqlite3.Statement.
 @type_check_only

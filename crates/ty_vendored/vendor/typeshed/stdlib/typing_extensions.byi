@@ -442,9 +442,9 @@ class _TypedDict(Mapping[str, object], metaclass=abc.ABCMeta):
     # Mypy plugin hook for 'pop' expects that 'default' has a type variable type.
     def pop(self, k: Never, default: _T = ...) -> object
     def update(self, m: Self, /) -> None
-    def items(self) -> dict_items[str, object]
-    def keys(self) -> dict_keys[str, object]
-    def values(self) -> dict_values[str, object]
+    override def items(self) -> dict_items[str, object]
+    override def keys(self) -> dict_keys[str, object]
+    override def values(self) -> dict_values[str, object]
     def __delitem__(self, k: Never) -> None
 
     def __or__(self, value: Self, /) -> Self:
@@ -1435,8 +1435,8 @@ class Doc:
 
     documentation: str
     init(self, documentation: str, /)
-    def __hash__(self) -> int
-    def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
 
 # PEP 728
 @type_check_only

@@ -13,4 +13,4 @@ from .. import fixer_base
 class FixIsinstance(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
-    def transform(self, node, results) -> None
+    override def transform(self, node, results) -> None

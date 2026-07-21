@@ -64,13 +64,13 @@ class Server(AbstractServer):
         def close_clients(self) -> None
         def abort_clients(self) -> None
 
-    def get_loop(self) -> AbstractEventLoop
-    def is_serving(self) -> bool
-    async def start_serving(self) -> None
-    async def serve_forever(self) -> None
+    override def get_loop(self) -> AbstractEventLoop
+    override def is_serving(self) -> bool
+    override async def start_serving(self) -> None
+    override async def serve_forever(self) -> None
     let sockets: (*: socket)
-    def close(self) -> None
-    async def wait_closed(self) -> None:
+    override def close(self) -> None
+    override async def wait_closed(self) -> None:
         """Wait until server is closed and all connections are dropped.
 
         - If the server is not closed, wait.
@@ -89,10 +89,10 @@ class Server(AbstractServer):
         """
 
 class BaseEventLoop(AbstractEventLoop):
-    def run_forever(self) -> None:
+    override def run_forever(self) -> None:
         """Run until stop() is called."""
 
-    def run_until_complete[Element](self, future: _AwaitableLike[Element]) -> Element:
+    override def run_until_complete[Element](self, future: _AwaitableLike[Element]) -> Element:
         """Run until the Future is done.
 
         If the argument is a coroutine, it is wrapped in a Task.
@@ -104,20 +104,20 @@ class BaseEventLoop(AbstractEventLoop):
         Return the Future's result, or raise its exception.
         """
 
-    def stop(self) -> None:
+    override def stop(self) -> None:
         """Stop running the event loop.
 
         Every callback already scheduled will still run.  This simply
         informs run_forever to stop looping after a complete iteration.
         """
 
-    def is_running(self) -> bool:
+    override def is_running(self) -> bool:
         """Returns True if the event loop is running."""
 
-    def is_closed(self) -> bool:
+    override def is_closed(self) -> bool:
         """Returns True if the event loop was closed."""
 
-    def close(self) -> None:
+    override def close(self) -> None:
         """Close the event loop.
 
         This clears the queues and shuts down the executor,
@@ -126,11 +126,11 @@ class BaseEventLoop(AbstractEventLoop):
         The event loop must not be running.
         """
 
-    async def shutdown_asyncgens(self) -> None:
+    override async def shutdown_asyncgens(self) -> None:
         """Shutdown all active asynchronous generators."""
 
     # Methods scheduling callbacks.  All these return Handles.
-    def call_soon[*Ts](self, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None) -> Handle:
+    override def call_soon[*Ts](self, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None) -> Handle:
         """Arrange for a callback to be called as soon as possible.
 
         This operates as a FIFO queue: callbacks are called in the
@@ -141,7 +141,7 @@ class BaseEventLoop(AbstractEventLoop):
         the callback when it is called.
         """
 
-    def call_later[*Ts](
+    override def call_later[*Ts](
         self, delay: float, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None
     ) -> TimerHandle:
         """Arrange for a callback to be called at a given time.
@@ -160,7 +160,7 @@ class BaseEventLoop(AbstractEventLoop):
         the callback when it is called.
         """
 
-    def call_at[*Ts](
+    override def call_at[*Ts](
         self, when: float, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None
     ) -> TimerHandle:
         """Like call_later(), but uses an absolute time.
@@ -168,7 +168,7 @@ class BaseEventLoop(AbstractEventLoop):
         Absolute time corresponds to the event loop's time() method.
         """
 
-    def time(self) -> float:
+    override def time(self) -> float:
         """Return the time according to the event loop's clock.
 
         This is a float expressed in seconds since an epoch, but the
@@ -177,7 +177,7 @@ class BaseEventLoop(AbstractEventLoop):
         """
 
     # Future methods
-    def create_future(self) -> Future[dynamic]:
+    override def create_future(self) -> Future[dynamic]:
         """Create a Future object attached to the loop."""
 
     # Tasks methods
@@ -203,13 +203,13 @@ class BaseEventLoop(AbstractEventLoop):
             """
 
     else:
-        def create_task[Element](self, coro: _CoroutineLike[Element], *, name: object = None) -> Task[Element]:
+        override def create_task[Element](self, coro: _CoroutineLike[Element], *, name: object = None) -> Task[Element]:
             """Schedule a coroutine object.
 
             Return a task object.
             """
 
-    def set_task_factory(self, factory: _TaskFactory | None) -> None:
+    override def set_task_factory(self, factory: _TaskFactory | None) -> None:
         """Set a task factory that will be used by loop.create_task().
 
         If factory is None the default task factory will be set.
@@ -221,19 +221,19 @@ class BaseEventLoop(AbstractEventLoop):
         Task.  The callable must return a Task.
         """
 
-    def get_task_factory(self) -> _TaskFactory | None:
+    override def get_task_factory(self) -> _TaskFactory | None:
         """Return a task factory, or None if the default one is in use."""
 
     # Methods for interacting with threads
-    def call_soon_threadsafe[*Ts](
+    override def call_soon_threadsafe[*Ts](
         self, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None
     ) -> Handle:
         """Like call_soon(), but thread-safe."""
 
-    def run_in_executor[*Ts, Element](self, executor: Executor | None, func: Callable[[Unpack[Ts]], Element], *args: *Ts) -> Future[Element]
-    def set_default_executor(self, executor: ThreadPoolExecutor) -> None
+    override def run_in_executor[*Ts, Element](self, executor: Executor | None, func: Callable[[Unpack[Ts]], Element], *args: *Ts) -> Future[Element]
+    override def set_default_executor(self, executor: ThreadPoolExecutor) -> None
     # Network I/O methods returning Futures.
-    async def getaddrinfo(
+    override async def getaddrinfo(
         self,
         host: bytes | str | None,
         port: bytes | str | int | None,
@@ -243,7 +243,7 @@ class BaseEventLoop(AbstractEventLoop):
         proto: int = 0,
         flags: int = 0,
     ) -> list[(AddressFamily, SocketKind, int, str, (str, int) | (str, int, int, int) | (int, bytes))]
-    async def getnameinfo(self, sockaddr: (str, int) | (str, int, int, int), flags: int = 0) -> (str, str)
+    override async def getnameinfo(self, sockaddr: (str, int) | (str, int, int, int), flags: int = 0) -> (str, str)
 
     if sys.version_info >= (3, 12):
         async def create_connection[ProtocolT: BaseProtocol](
@@ -344,7 +344,7 @@ class BaseEventLoop(AbstractEventLoop):
             interleave: int | None = None,
         ) -> (Transport, ProtocolT)
     else:
-        async def create_connection[ProtocolT: BaseProtocol](
+        override async def create_connection[ProtocolT: BaseProtocol](
             self,
             protocol_factory: () -> ProtocolT,
             host: str = ...,
@@ -494,7 +494,7 @@ class BaseEventLoop(AbstractEventLoop):
             start_serving: bool = True,
         ) -> Server
     else:
-        async def create_server(
+        override async def create_server(
             self,
             protocol_factory: _ProtocolFactory,
             host: str | Sequence[str] | None = None,
@@ -570,7 +570,7 @@ class BaseEventLoop(AbstractEventLoop):
             ssl_shutdown_timeout: float | None = None,
         ) -> (Transport, ProtocolT)
     else:
-        async def start_tls(
+        override async def start_tls(
             self,
             transport: BaseTransport,
             protocol: BaseProtocol,
@@ -586,7 +586,7 @@ class BaseEventLoop(AbstractEventLoop):
             immediately.
             """
 
-        async def connect_accepted_socket[ProtocolT: BaseProtocol](
+        override async def connect_accepted_socket[ProtocolT: BaseProtocol](
             self,
             protocol_factory: () -> ProtocolT,
             sock: socket,
@@ -595,10 +595,10 @@ class BaseEventLoop(AbstractEventLoop):
             ssl_handshake_timeout: float | None = None,
         ) -> (Transport, ProtocolT)
 
-    async def sock_sendfile(
+    override async def sock_sendfile(
         self, sock: socket, file: IO[bytes], offset: int = 0, count: int | None = None, *, fallback: bool | None = True
     ) -> int
-    async def sendfile(
+    override async def sendfile(
         self, transport: WriteTransport, file: IO[bytes], offset: int = 0, count: int | None = None, *, fallback: bool = True
     ) -> int:
         """Send a file to transport.
@@ -641,7 +641,7 @@ class BaseEventLoop(AbstractEventLoop):
             """Create datagram connection."""
 
     else:
-        async def create_datagram_endpoint[ProtocolT: BaseProtocol](
+        override async def create_datagram_endpoint[ProtocolT: BaseProtocol](
             self,
             protocol_factory: () -> ProtocolT,
             local_addr: (str, int) | str | None = None,
@@ -658,13 +658,13 @@ class BaseEventLoop(AbstractEventLoop):
             """Create datagram connection."""
 
     # Pipes and subprocesses.
-    async def connect_read_pipe[ProtocolT: BaseProtocol](
+    override async def connect_read_pipe[ProtocolT: BaseProtocol](
         self, protocol_factory: () -> ProtocolT, pipe: dynamic
     ) -> (ReadTransport, ProtocolT)
-    async def connect_write_pipe[ProtocolT: BaseProtocol](
+    override async def connect_write_pipe[ProtocolT: BaseProtocol](
         self, protocol_factory: () -> ProtocolT, pipe: dynamic
     ) -> (WriteTransport, ProtocolT)
-    async def subprocess_shell[ProtocolT: BaseProtocol](
+    override async def subprocess_shell[ProtocolT: BaseProtocol](
         self,
         protocol_factory: () -> ProtocolT,
         cmd: bytes | str,
@@ -680,7 +680,7 @@ class BaseEventLoop(AbstractEventLoop):
         text: False | None = None,
         **kwargs: dynamic,
     ) -> (SubprocessTransport, ProtocolT)
-    async def subprocess_exec[ProtocolT: BaseProtocol](
+    override async def subprocess_exec[ProtocolT: BaseProtocol](
         self,
         protocol_factory: () -> ProtocolT,
         program: dynamic,
@@ -696,26 +696,26 @@ class BaseEventLoop(AbstractEventLoop):
         text: False | None = None,
         **kwargs: dynamic,
     ) -> (SubprocessTransport, ProtocolT)
-    def add_reader[*Ts](self, fd: FileDescriptorLike, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
-    def remove_reader(self, fd: FileDescriptorLike) -> bool
-    def add_writer[*Ts](self, fd: FileDescriptorLike, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
-    def remove_writer(self, fd: FileDescriptorLike) -> bool
+    override def add_reader[*Ts](self, fd: FileDescriptorLike, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
+    override def remove_reader(self, fd: FileDescriptorLike) -> bool
+    override def add_writer[*Ts](self, fd: FileDescriptorLike, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
+    override def remove_writer(self, fd: FileDescriptorLike) -> bool
     # The sock_* methods (and probably some others) are not actually implemented on
     # BaseEventLoop, only on subclasses. We list them here for now for convenience.
-    async def sock_recv(self, sock: socket, nbytes: int) -> bytes
-    async def sock_recv_into(self, sock: socket, buf: WriteableBuffer) -> int
-    async def sock_sendall(self, sock: socket, data: ReadableBuffer) -> None
-    async def sock_connect(self, sock: socket, address: _Address) -> None
-    async def sock_accept(self, sock: socket) -> (socket, _RetAddress)
+    override async def sock_recv(self, sock: socket, nbytes: int) -> bytes
+    override async def sock_recv_into(self, sock: socket, buf: WriteableBuffer) -> int
+    override async def sock_sendall(self, sock: socket, data: ReadableBuffer) -> None
+    override async def sock_connect(self, sock: socket, address: _Address) -> None
+    override async def sock_accept(self, sock: socket) -> (socket, _RetAddress)
     if sys.version_info >= (3, 11):
         async def sock_recvfrom(self, sock: socket, bufsize: int) -> (bytes, _RetAddress)
         async def sock_recvfrom_into(self, sock: socket, buf: WriteableBuffer, nbytes: int = 0) -> (int, _RetAddress)
         async def sock_sendto(self, sock: socket, data: ReadableBuffer, address: _Address) -> int
     # Signal handling.
-    def add_signal_handler[*Ts](self, sig: int, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
-    def remove_signal_handler(self, sig: int) -> bool
+    override def add_signal_handler[*Ts](self, sig: int, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
+    override def remove_signal_handler(self, sig: int) -> bool
     # Error handlers.
-    def set_exception_handler(self, handler: _ExceptionHandler | None) -> None:
+    override def set_exception_handler(self, handler: _ExceptionHandler | None) -> None:
         """Set handler as the new event loop exception handler.
 
         If handler is None, the default exception handler will
@@ -728,10 +728,10 @@ class BaseEventLoop(AbstractEventLoop):
         documentation for details about context).
         """
 
-    def get_exception_handler(self) -> _ExceptionHandler | None:
+    override def get_exception_handler(self) -> _ExceptionHandler | None:
         """Return an exception handler, or None if the default one is in use."""
 
-    def default_exception_handler(self, context: _Context) -> None:
+    override def default_exception_handler(self, context: _Context) -> None:
         """Default exception handler.
 
         This is called when an exception occurs and no exception
@@ -747,7 +747,7 @@ class BaseEventLoop(AbstractEventLoop):
         `call_exception_handler()`.
         """
 
-    def call_exception_handler(self, context: _Context) -> None:
+    override def call_exception_handler(self, context: _Context) -> None:
         """Call the current event loop's exception handler.
 
         The context argument is a dict containing the following keys:
@@ -773,8 +773,8 @@ class BaseEventLoop(AbstractEventLoop):
         """
 
     # Debug flag management.
-    def get_debug(self) -> bool
-    def set_debug(self, enabled: bool) -> None
+    override def get_debug(self) -> bool
+    override def set_debug(self, enabled: bool) -> None
     if sys.version_info >= (3, 12):
         async def shutdown_default_executor(self, timeout: float | None = None) -> None:
             """Schedule the shutdown of the default executor.
@@ -785,7 +785,7 @@ class BaseEventLoop(AbstractEventLoop):
             """
 
     else:
-        async def shutdown_default_executor(self) -> None:
+        override async def shutdown_default_executor(self) -> None:
             """Schedule the shutdown of the default executor."""
 
     def __del__(self) -> None

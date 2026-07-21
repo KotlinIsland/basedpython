@@ -489,7 +489,7 @@ class BufferedIncrementalEncoder(IncrementalEncoder):
     buffer: str
     init(self, errors: str = "strict")
     abstract def _buffer_encode(self, input: str, errors: str, final: bool) -> (bytes, int)
-    def encode(self, input: str, final: bool = False) -> bytes
+    override def encode(self, input: str, final: bool = False) -> bytes
 
 class BufferedIncrementalDecoder(IncrementalDecoder):
     """
@@ -501,7 +501,7 @@ class BufferedIncrementalDecoder(IncrementalDecoder):
     buffer: bytes
     init(self, errors: str = "strict")
     abstract def _buffer_decode(self, input: ReadableBuffer, errors: str, final: bool) -> (str, int)
-    def decode(self, input: ReadableBuffer, final: bool = False) -> str
+    override def decode(self, input: ReadableBuffer, final: bool = False) -> str
 
 # TODO: it is not possible to specify the requirement that all other
 # attributes and methods are passed-through from the stream.
@@ -675,33 +675,33 @@ class StreamReaderWriter(TextIO):
 
         """
 
-    def read(self, size: int = -1) -> str
-    def readline(self, size: int | None = None) -> str
-    def readlines(self, sizehint: int | None = None) -> list[str]
-    def __next__(self) -> str:
+    override def read(self, size: int = -1) -> str
+    override def readline(self, size: int | None = None) -> str
+    override def readlines(self, sizehint: int | None = None) -> list[str]
+    override def __next__(self) -> str:
         """Return the next decoded line from the input stream."""
 
-    def __iter__(self) -> Self
-    def write(self, data: str) -> None
-    def writelines(self, list: Iterable[str]) -> None
+    override def __iter__(self) -> Self
+    override def write(self, data: str) -> None
+    override def writelines(self, list: Iterable[str]) -> None
     def reset(self) -> None
-    def seek(self, offset: int, whence: int = 0) -> None
-    def __enter__(self) -> Self
-    def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
+    override def seek(self, offset: int, whence: int = 0) -> None
+    override def __enter__(self) -> Self
+    override def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
     def __getattr__(self, name: str) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
     # These methods don't actually exist directly, but they are needed to satisfy the TextIO
     # interface. At runtime, they are delegated through __getattr__.
-    def close(self) -> None
-    def fileno(self) -> int
-    def flush(self) -> None
-    def isatty(self) -> bool
-    def readable(self) -> bool
-    def truncate(self, size: int | None = ...) -> int
-    def seekable(self) -> bool
-    def tell(self) -> int
-    def writable(self) -> bool
+    override def close(self) -> None
+    override def fileno(self) -> int
+    override def flush(self) -> None
+    override def isatty(self) -> bool
+    override def readable(self) -> bool
+    override def truncate(self, size: int | None = ...) -> int
+    override def seekable(self) -> bool
+    override def tell(self) -> int
+    override def writable(self) -> bool
 
 class StreamRecoder(BinaryIO):
     """StreamRecoder instances translate data from one encoding to another.
@@ -749,31 +749,31 @@ class StreamRecoder(BinaryIO):
 
         """
 
-    def read(self, size: int = -1) -> bytes
-    def readline(self, size: int | None = None) -> bytes
-    def readlines(self, sizehint: int | None = None) -> list[bytes]
-    def __next__(self) -> bytes:
+    override def read(self, size: int = -1) -> bytes
+    override def readline(self, size: int | None = None) -> bytes
+    override def readlines(self, sizehint: int | None = None) -> list[bytes]
+    override def __next__(self) -> bytes:
         """Return the next decoded line from the input stream."""
 
-    def __iter__(self) -> Self
+    override def __iter__(self) -> Self
     # Base class accepts more types than just bytes
-    def write(self, data: bytes) -> None
-    def writelines(self, list: Iterable[bytes]) -> None
+    override def write(self, data: bytes) -> None
+    override def writelines(self, list: Iterable[bytes]) -> None
     def reset(self) -> None
     def __getattr__(self, name: str) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
-    def __enter__(self) -> Self
-    def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
-    def seek(self, offset: int, whence: int = 0) -> None
+    override def __enter__(self) -> Self
+    override def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
+    override def seek(self, offset: int, whence: int = 0) -> None
     # These methods don't actually exist directly, but they are needed to satisfy the BinaryIO
     # interface. At runtime, they are delegated through __getattr__.
-    def close(self) -> None
-    def fileno(self) -> int
-    def flush(self) -> None
-    def isatty(self) -> bool
-    def readable(self) -> bool
-    def truncate(self, size: int | None = ...) -> int
-    def seekable(self) -> bool
-    def tell(self) -> int
-    def writable(self) -> bool
+    override def close(self) -> None
+    override def fileno(self) -> int
+    override def flush(self) -> None
+    override def isatty(self) -> bool
+    override def readable(self) -> bool
+    override def truncate(self, size: int | None = ...) -> int
+    override def seekable(self) -> bool
+    override def tell(self) -> int
+    override def writable(self) -> bool

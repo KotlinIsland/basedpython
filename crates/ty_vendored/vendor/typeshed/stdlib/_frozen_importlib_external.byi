@@ -304,23 +304,23 @@ class ExtensionFileLoader(FileLoader, _LoaderBasics, importlib.abc.ExecutionLoad
     """
 
     init(self, name: str, path: str)
-    def get_filename(self, fullname: str | None = None) -> str:
+    override def get_filename(self, fullname: str | None = None) -> str:
         """Return the path to the source file as found by the finder."""
 
     def get_source(self, fullname: str) -> None:
         """Return None as extension modules have no source code."""
 
-    def create_module(self, spec: ModuleSpec) -> types.ModuleType:
+    override def create_module(self, spec: ModuleSpec) -> types.ModuleType:
         """Create an uninitialized extension module"""
 
-    def exec_module(self, module: types.ModuleType) -> None:
+    override def exec_module(self, module: types.ModuleType) -> None:
         """Initialize an extension module"""
 
     def get_code(self, fullname: str) -> None:
         """Return None as an extension module cannot create a code object."""
 
-    def __eq__(self, other: object) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
 
 if sys.version_info >= (3, 11):
     class NamespaceLoader(importlib.abc.InspectLoader):

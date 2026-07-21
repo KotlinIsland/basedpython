@@ -98,7 +98,7 @@ class TimerHandle(Handle):
         loop: AbstractEventLoop,
         context: Context | None = None,
     )
-    def __hash__(self) -> int
+    override def __hash__(self) -> int
     def when(self) -> float:
         """Return a scheduled callback time.
 
@@ -110,7 +110,7 @@ class TimerHandle(Handle):
     def __le__(self, other: TimerHandle) -> bool
     def __gt__(self, other: TimerHandle) -> bool
     def __ge__(self, other: TimerHandle) -> bool
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
 
 class AbstractServer:
     """Abstract server returned by create_server()."""
@@ -956,16 +956,16 @@ else:
         associated).
         """
 
-        def get_event_loop(self) -> AbstractEventLoop:
+        override def get_event_loop(self) -> AbstractEventLoop:
             """Get the event loop for the current context.
 
             Returns an instance of EventLoop or raises an exception.
             """
 
-        def set_event_loop(self, loop: AbstractEventLoop | None) -> None:
+        override def set_event_loop(self, loop: AbstractEventLoop | None) -> None:
             """Set the event loop."""
 
-        def new_event_loop(self) -> AbstractEventLoop:
+        override def new_event_loop(self) -> AbstractEventLoop:
             """Create a new event loop.
 
             You must call set_event_loop() to make this the current event

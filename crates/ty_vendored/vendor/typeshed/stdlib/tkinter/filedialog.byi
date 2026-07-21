@@ -95,13 +95,13 @@ class LoadFileDialog(FileDialog):
     """File selection dialog which checks that the file exists."""
 
     title: str
-    def ok_command(self) -> None
+    override def ok_command(self) -> None
 
 class SaveFileDialog(FileDialog):
     """File selection dialog which checks that the file may be created."""
 
     title: str
-    def ok_command(self) -> None
+    override def ok_command(self) -> None
 
 class _Dialog(commondialog.Dialog)
 

@@ -28,9 +28,9 @@ class HTTPError(URLError, addinfourl):
     """Raised when HTTP error occurs, but also acts like non-error return"""
 
     @property
-    def headers(self) -> Message
+    override def headers(self) -> Message
     @headers.setter
-    def headers(self, headers: Message) -> None
+    override def headers(self, headers: Message) -> None
 
     let reason: str
     code: int

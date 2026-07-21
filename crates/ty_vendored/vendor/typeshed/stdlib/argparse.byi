@@ -698,9 +698,9 @@ class Namespace(_AttributeHolder):
 
     init(self, **kwargs: dynamic)
     def __getattr__(self, name: str) -> dynamic
-    def __setattr__(self, name: str, value: dynamic, /) -> None
+    override def __setattr__(self, name: str, value: dynamic, /) -> None
     def __contains__(self, key: str) -> bool
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
     __hash__: ClassVar[None]
 
 @deprecated("Deprecated since Python 3.14. Open files after parsing arguments instead.")

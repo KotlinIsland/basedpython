@@ -34,6 +34,6 @@ class DecompressReader(RawIOBase):
         trailing_error: type[Exception] | (*: type[Exception]) = (),
         **decomp_args: dynamic,  # These are passed to decomp_factory.
     )
-    def readinto(self, b: WriteableBuffer) -> int
-    def read(self, size: int = -1) -> bytes
-    def seek(self, offset: int, whence: int = 0) -> int
+    override def readinto(self, b: WriteableBuffer) -> int
+    override def read(self, size: int = -1) -> bytes
+    override def seek(self, offset: int, whence: int = 0) -> int

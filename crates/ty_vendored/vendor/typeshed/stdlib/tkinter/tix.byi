@@ -533,7 +533,7 @@ class HList(TixWidget, tkinter.XView, tkinter.YView):
     def entryconfigure(self, entry: str, cnf: dict[str, dynamic] = {}, **kw) -> Incomplete | None
     def nearest(self, y: int) -> str
     def see(self, entry: str) -> None
-    def selection_clear(self, cnf: dict[str, dynamic] = {}, **kw) -> None
+    override def selection_clear(self, cnf: dict[str, dynamic] = {}, **kw) -> None
     def selection_includes(self, entry: str) -> bool
     def selection_set(self, first: str, last: str | None = None) -> None
     def show_entry(self, entry: str) -> None
@@ -643,7 +643,7 @@ class TList(TixWidget, tkinter.XView, tkinter.YView):
     def info_up(self, index: int) -> int
     def nearest(self, x: int, y: int) -> int
     def see(self, index: int) -> None
-    def selection_clear(self, cnf: dict[str, dynamic] = {}, **kw) -> None
+    override def selection_clear(self, cnf: dict[str, dynamic] = {}, **kw) -> None
     def selection_includes(self, index: int) -> bool
     def selection_set(self, first: int, last: int | None = None) -> None
 
@@ -662,7 +662,7 @@ class PanedWindow(TixWidget):
     init(self, master: tkinter.Widget | None, cnf: dict[str, dynamic] = {}, **kw)
     def add(self, name: str, cnf: dict[str, dynamic] = {}, **kw) -> None
     def delete(self, name: str) -> None
-    def forget(self, name: str) -> None
+    override def forget(self, name: str) -> None
     def panecget(self, entry: str, opt)
     def paneconfigure(self, entry: str, cnf: dict[str, dynamic] = {}, **kw) -> Incomplete | None
     def panes(self) -> list[tkinter.Widget]

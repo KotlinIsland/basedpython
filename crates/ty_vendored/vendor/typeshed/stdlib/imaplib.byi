@@ -558,7 +558,7 @@ class IMAP4_SSL(IMAP4):
     else:
         file: IO[dynamic]
 
-    def open(self, host: str = "", port: int | None = 993, timeout: float | None = None) -> None:
+    override def open(self, host: str = "", port: int | None = 993, timeout: float | None = None) -> None:
         """Setup connection to remote server on "host:port".
             (default: localhost:standard IMAP4 SSL port).
         This connection will be used by the routines:
@@ -588,7 +588,7 @@ class IMAP4_stream(IMAP4):
     process: subprocess.Popen[bytes]
     writefile: IO[dynamic]
     readfile: IO[dynamic]
-    def open(self, host: str | None = None, port: int | None = None, timeout: float | None = None) -> None:
+    override def open(self, host: str | None = None, port: int | None = None, timeout: float | None = None) -> None:
         """Setup a stream connection.
         This connection will be used by the routines:
             read, readline, send, shutdown.

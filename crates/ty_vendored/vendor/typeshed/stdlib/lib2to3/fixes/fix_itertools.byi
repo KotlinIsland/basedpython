@@ -15,4 +15,4 @@ class FixItertools(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     it_funcs: str
     PATTERN: ClassVar[str]
-    def transform(self, node, results) -> None
+    override def transform(self, node, results) -> None

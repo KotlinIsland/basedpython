@@ -449,11 +449,11 @@ class HTTPPasswordMgr:
         """Accept authority or URI and extract only the authority and path."""
 
 class HTTPPasswordMgrWithDefaultRealm(HTTPPasswordMgr):
-    def add_password(self, realm: str | None, uri: str | Sequence[str], user: str, passwd: str) -> None
-    def find_user_password(self, realm: str | None, authuri: str) -> (str | None, str | None)
+    override def add_password(self, realm: str | None, uri: str | Sequence[str], user: str, passwd: str) -> None
+    override def find_user_password(self, realm: str | None, authuri: str) -> (str | None, str | None)
 
 class HTTPPasswordMgrWithPriorAuth(HTTPPasswordMgrWithDefaultRealm):
-    def add_password(
+    override def add_password(
         self, realm: str | None, uri: str | Sequence[str], user: str, passwd: str, is_authenticated: bool = False
     ) -> None
     def update_authenticated(self, uri: str | Sequence[str], is_authenticated: bool = False) -> None
@@ -751,7 +751,7 @@ if sys.version_info < (3, 14):
             This function supports Basic authentication only.
             """
 
-        def http_error_default(
+        override def http_error_default(
             self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage
         ) -> addinfourl:  # undocumented
             """Default error handling -- don't raise an exception."""

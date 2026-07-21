@@ -62,8 +62,8 @@ class _ProactorSocketTransport(_ProactorReadPipeTransport, _ProactorBaseWritePip
         server: events.AbstractServer | None = None,
     )
     def _set_extra(self, sock: socket) -> None
-    def can_write_eof(self) -> True
+    override def can_write_eof(self) -> True
 
 class BaseProactorEventLoop(base_events.BaseEventLoop):
     init(self, proactor: dynamic)
-    async def sock_recv(self, sock: socket, n: int) -> bytes
+    override async def sock_recv(self, sock: socket, n: int) -> bytes

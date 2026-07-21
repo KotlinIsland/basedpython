@@ -11,4 +11,4 @@ class FixIntern(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     order: ClassVar["pre"]
     PATTERN: ClassVar[str]
-    def transform(self, node, results)
+    override def transform(self, node, results)

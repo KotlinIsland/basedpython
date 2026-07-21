@@ -570,7 +570,7 @@ class NormalDist:
         above or below the mean of the normal distribution.
         """
 
-    def __eq__(x1, x2: object) -> bool:
+    override def __eq__(x1, x2: object) -> bool:
         """Two NormalDist objects are equal if their mu and sigma are both equal."""
 
     def __add__(x1, x2: float | NormalDist) -> NormalDist:
@@ -620,7 +620,7 @@ class NormalDist:
         """Subtract a NormalDist from a constant or another NormalDist."""
 
     __rmul__ = __mul__
-    def __hash__(self) -> int:
+    override def __hash__(self) -> int:
         """NormalDist objects hash equal if their mu and sigma are both equal."""
 
 if sys.version_info >= (3, 12):
