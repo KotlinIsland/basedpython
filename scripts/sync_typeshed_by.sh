@@ -38,10 +38,11 @@ fi
 cd "$REPO_ROOT"
 
 echo "==> building by + by_typeshed_patch"
-cargo build --bin by --bin by_typeshed_patch
+cargo build --bin by --bin by_typeshed_patch --bin by_override_patch
 
 BY="$REPO_ROOT/target/debug/by"
 PATCH="$REPO_ROOT/target/debug/by_typeshed_patch"
+OVERRIDE_PATCH="$REPO_ROOT/target/debug/by_override_patch"
 
 echo "==> phase 1: reverse-transpile .pyi -> .byi"
 pyi_count=0
@@ -60,6 +61,11 @@ fi
 if [[ "$SKIP_PATCHES" -eq 0 ]]; then
     echo "==> phase 2: ast patches + pep 695 conversion"
     "$PATCH" "$TYPESHED"
+
+    # phase 3 needs the final `.byi` form: it type-checks the whole typeshed with
+    # ty and marks every genuine override, so it must run after the ast patches
+    echo '==> phase 3: mark overriding methods with `override`'
+    "$OVERRIDE_PATCH" "$TYPESHED"
 fi
 
 echo "==> done. review diff with: git diff -- $TYPESHED"

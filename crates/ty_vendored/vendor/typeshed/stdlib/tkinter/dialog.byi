@@ -10,4 +10,4 @@ class Dialog(Widget):
     widgetName: str
     num: int
     init(self, master=None, cnf: Mapping[str, dynamic] = {}, **kw)
-    def destroy(self) -> None
+    override def destroy(self) -> None

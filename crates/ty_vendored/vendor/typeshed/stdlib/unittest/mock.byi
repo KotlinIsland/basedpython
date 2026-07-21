@@ -156,11 +156,11 @@ else:
             from_kall: bool = True,
         )
         __hash__: ClassVar[None]
-        def __eq__(self, other: object) -> bool
-        def __ne__(self, value: object, /) -> bool
+        override def __eq__(self, other: object) -> bool
+        override def __ne__(self, value: object, /) -> bool
         def __call__(self, *args: dynamic, **kwargs: dynamic) -> _Call
         def __getattr__(self, attr: str) -> dynamic
-        def __getattribute__(self, attr: str) -> dynamic
+        override def __getattribute__(self, attr: str) -> dynamic
         let args: (*: dynamic)
         let kwargs: Mapping[str, dynamic]
         def call_list(self) -> dynamic:
@@ -172,7 +172,7 @@ else:
 call: _Call
 
 class _CallList(list[_Call]):
-    def __contains__(self, value: dynamic) -> bool
+    override def __contains__(self, value: dynamic) -> bool
 
 class Base:
     init(self, *args: dynamic, **kwargs: dynamic)
@@ -217,9 +217,9 @@ class NonCallableMock(Base, dynamic):
         **kwargs: dynamic,
     )
     def __getattr__(self, name: str) -> dynamic
-    def __delattr__(self, name: str) -> None
-    def __setattr__(self, name: str, value: dynamic) -> None
-    def __dir__(self) -> list[str]:
+    override def __delattr__(self, name: str) -> None
+    override def __setattr__(self, name: str, value: dynamic) -> None
+    override def __dir__(self) -> list[str]:
         """Filter the output of `dir(mock)` to only useful members."""
 
     def assert_called_with(self, *args: dynamic, **kwargs: dynamic) -> None:
@@ -497,7 +497,7 @@ class _patch[in out Element]:
 #     def bar(..., mock: MagicMock) -> None: ...
 @type_check_only
 class _patch_pass_arg[in out Element](_patch[Element]):
-    def __call__[TT: type[dynamic]](self, func: TT) -> TT
+    override def __call__[TT: type[dynamic]](self, func: TT) -> TT
     # Can't use the following as ParamSpec is only allowed as last parameter:
     #   def __call__(self, func: Callable[_P, _R]) -> Callable[Concatenate[_P, MagicMock], _R]: ...
     def __call__[R](self, func: (...) -> R) -> (...) -> R
@@ -880,7 +880,7 @@ class AsyncMock(AsyncMockMixin, AsyncMagicMixin, Mock):
     # Improving the `reset_mock` signature.
     # It is defined on `AsyncMockMixin` with `*args, **kwargs`, which is not ideal.
     # But, `NonCallableMock` super-class has the better version.
-    def reset_mock(self, visited: dynamic = None, *, return_value: bool = False, side_effect: bool = False) -> None:
+    override def reset_mock(self, visited: dynamic = None, *, return_value: bool = False, side_effect: bool = False) -> None:
         """
         See :func:`.Mock.reset_mock()`
         """
@@ -896,8 +896,8 @@ class MagicProxy(Base):
 class _ANY(dynamic):
     """A helper object that compares equal to everything."""
 
-    def __eq__(self, other: object) -> True
-    def __ne__(self, other: object) -> False
+    override def __eq__(self, other: object) -> True
+    override def __ne__(self, other: object) -> False
     __hash__: ClassVar[None]
 
 ANY: _ANY

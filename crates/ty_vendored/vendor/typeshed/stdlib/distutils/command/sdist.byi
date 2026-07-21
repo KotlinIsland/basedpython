@@ -42,10 +42,10 @@ class sdist(Command):
     metadata_check: int
     owner: Incomplete
     group: Incomplete
-    def initialize_options(self) -> None
-    def finalize_options(self) -> None
+    override def initialize_options(self) -> None
+    override def finalize_options(self) -> None
     filelist: Incomplete
-    def run(self) -> None
+    override def run(self) -> None
     def check_metadata(self) -> None:
         """Deprecated API."""
 

@@ -19,13 +19,13 @@ class error(OSError)
 
 class _Database(MutableMapping[bytes, bytes]):
     init(self, path: StrOrBytesPath, /, *, flag: "r" | "w" | "c" | "n", mode: int)
-    def __len__(self) -> int
-    def __getitem__(self, key: _SqliteData) -> bytes
-    def __setitem__(self, key: _SqliteData, value: _SqliteData) -> None
-    def __delitem__(self, key: _SqliteData) -> None
-    def __iter__(self) -> Generator[bytes]
+    override def __len__(self) -> int
+    override def __getitem__(self, key: _SqliteData) -> bytes
+    override def __setitem__(self, key: _SqliteData, value: _SqliteData) -> None
+    override def __delitem__(self, key: _SqliteData) -> None
+    override def __iter__(self) -> Generator[bytes]
     def close(self) -> None
-    def keys(self) -> list[bytes]
+    override def keys(self) -> list[bytes]
     def __enter__(self) -> Self
     def __exit__(self, *args: Unused) -> None
     if sys.version_info >= (3, 15):

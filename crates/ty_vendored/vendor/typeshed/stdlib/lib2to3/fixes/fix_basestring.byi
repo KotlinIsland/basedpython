@@ -7,4 +7,4 @@ from .. import fixer_base
 class FixBasestring(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar["'basestring'"]
-    def transform(self, node, results)
+    override def transform(self, node, results)

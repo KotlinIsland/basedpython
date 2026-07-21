@@ -34,8 +34,8 @@ class Queue[in out Element]:
             """
 
 class JoinableQueue[in out Element](Queue[Element]):
-    def __getstate__(self) -> _JoinableQueueState
-    def __setstate__(self, state: _JoinableQueueState) -> None
+    override def __getstate__(self) -> _JoinableQueueState
+    override def __setstate__(self, state: _JoinableQueueState) -> None
     def task_done(self) -> None
     def join(self) -> None
 

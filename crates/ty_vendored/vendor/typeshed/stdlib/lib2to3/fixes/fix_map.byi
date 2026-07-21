@@ -24,4 +24,4 @@ class FixMap(fixer_base.ConditionalFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     skip_on: ClassVar["future_builtins.map"]
-    def transform(self, node, results)
+    override def transform(self, node, results)

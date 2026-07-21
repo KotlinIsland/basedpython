@@ -497,7 +497,7 @@ class MIMEPart[out HeaderRegistryT = dynamic, in HeaderRegistryParamT = dynamic]
         match.  Ignore parts with 'Content-Disposition: attachment'.
         """
 
-    def attach(self, payload: Self) -> None:
+    override def attach(self, payload: Self) -> None:
         """Add the given payload to the current payload.
 
         The current payload will always be a list of objects after this method
@@ -536,7 +536,7 @@ class MIMEPart[out HeaderRegistryT = dynamic, in HeaderRegistryParamT = dynamic]
     def add_attachment(self, *args: dynamic, content_manager: ContentManager | None = ..., **kw: dynamic) -> None
     def clear(self) -> None
     def clear_content(self) -> None
-    def as_string(self, unixfrom: bool = False, maxheaderlen: int | None = None, policy: Policy[dynamic] | None = None) -> str:
+    override def as_string(self, unixfrom: bool = False, maxheaderlen: int | None = None, policy: Policy[dynamic] | None = None) -> str:
         """Return the entire formatted message as a string.
 
         Optional 'unixfrom', when true, means include the Unix From_ envelope

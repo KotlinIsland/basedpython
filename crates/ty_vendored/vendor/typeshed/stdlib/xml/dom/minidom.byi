@@ -171,15 +171,15 @@ class DocumentFragment(Node):
     let localName: None
 
     init(self)
-    def insertBefore[DFChildrenPlusFragment: _DocumentFragmentChildren | DocumentFragment](
+    override def insertBefore[DFChildrenPlusFragment: _DocumentFragmentChildren | DocumentFragment](
         self, newChild: DFChildrenPlusFragment, refChild: _DocumentFragmentChildren | None
     ) -> DFChildrenPlusFragment
-    def appendChild[DFChildrenPlusFragment: _DocumentFragmentChildren | DocumentFragment](self, node: DFChildrenPlusFragment) -> DFChildrenPlusFragment
+    override def appendChild[DFChildrenPlusFragment: _DocumentFragmentChildren | DocumentFragment](self, node: DFChildrenPlusFragment) -> DFChildrenPlusFragment
 
-    def replaceChild[DFChildrenVar: _DocumentFragmentChildren](self, newChild: DocumentFragment, oldChild: DFChildrenVar) -> DFChildrenVar | DocumentFragment
+    override def replaceChild[DFChildrenVar: _DocumentFragmentChildren](self, newChild: DocumentFragment, oldChild: DFChildrenVar) -> DFChildrenVar | DocumentFragment
     def replaceChild[DFChildrenVar: _DocumentFragmentChildren](self, newChild: _DocumentFragmentChildren, oldChild: DFChildrenVar) -> DFChildrenVar | None
 
-    def removeChild[DFChildrenVar: _DocumentFragmentChildren](self, oldChild: DFChildrenVar) -> DFChildrenVar
+    override def removeChild[DFChildrenVar: _DocumentFragmentChildren](self, oldChild: DFChildrenVar) -> DFChildrenVar
 
 
 class Attr(Node):
@@ -209,18 +209,18 @@ class Attr(Node):
     init(
         self, qName: str, namespaceURI: str | None = None, localName: str | None = None, prefix: str | None = None
     )
-    def unlink(self) -> None
+    override def unlink(self) -> None
     let isId: bool
 
     let schemaType: TypeInfo
 
-    def insertBefore[AttrChildrenPlusFragment: _AttrChildren | DocumentFragment](self, newChild: AttrChildrenPlusFragment, refChild: _AttrChildren | None) -> AttrChildrenPlusFragment
-    def appendChild[AttrChildrenPlusFragment: _AttrChildren | DocumentFragment](self, node: AttrChildrenPlusFragment) -> AttrChildrenPlusFragment
+    override def insertBefore[AttrChildrenPlusFragment: _AttrChildren | DocumentFragment](self, newChild: AttrChildrenPlusFragment, refChild: _AttrChildren | None) -> AttrChildrenPlusFragment
+    override def appendChild[AttrChildrenPlusFragment: _AttrChildren | DocumentFragment](self, node: AttrChildrenPlusFragment) -> AttrChildrenPlusFragment
 
-    def replaceChild[AttrChildrenVar: _AttrChildren](self, newChild: DocumentFragment, oldChild: AttrChildrenVar) -> AttrChildrenVar | DocumentFragment
+    override def replaceChild[AttrChildrenVar: _AttrChildren](self, newChild: DocumentFragment, oldChild: AttrChildrenVar) -> AttrChildrenVar | DocumentFragment
     def replaceChild[AttrChildrenVar: _AttrChildren](self, newChild: _AttrChildren, oldChild: AttrChildrenVar) -> AttrChildrenVar | None
 
-    def removeChild[AttrChildrenVar: _AttrChildren](self, oldChild: AttrChildrenVar) -> AttrChildrenVar
+    override def removeChild[AttrChildrenVar: _AttrChildren](self, oldChild: AttrChildrenVar) -> AttrChildrenVar
 
 # In the DOM, this interface isn't specific to Attr, but our implementation is
 # because that's the only place we use it.
@@ -247,7 +247,7 @@ class NamedNodeMap:
     def get(self, name: str, value: Attr | None = None) -> Attr | None
     __hash__: ClassVar[None]
     def __len__(self) -> int
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
     def __ge__(self, other: NamedNodeMap) -> bool
     def __gt__(self, other: NamedNodeMap) -> bool
     def __le__(self, other: NamedNodeMap) -> bool
@@ -309,7 +309,7 @@ class Element(Node):
     init(
         self, tagName: str, namespaceURI: str | None = None, prefix: str | None = None, localName: str | None = None
     )
-    def unlink(self) -> None
+    override def unlink(self) -> None
     def getAttribute(self, attname: str) -> str:
         """Returns the value of the specified attribute.
 
@@ -358,17 +358,17 @@ class Element(Node):
     def setIdAttribute(self, name: str) -> None
     def setIdAttributeNS(self, namespaceURI: str | None, localName: str) -> None
     def setIdAttributeNode(self, idAttr: Attr) -> None
-    def insertBefore[ElementChildrenPlusFragment: _ElementChildren | DocumentFragment](
+    override def insertBefore[ElementChildrenPlusFragment: _ElementChildren | DocumentFragment](
         self, newChild: ElementChildrenPlusFragment, refChild: _ElementChildren | None
     ) -> ElementChildrenPlusFragment
-    def appendChild[ElementChildrenPlusFragment: _ElementChildren | DocumentFragment](self, node: ElementChildrenPlusFragment) -> ElementChildrenPlusFragment
+    override def appendChild[ElementChildrenPlusFragment: _ElementChildren | DocumentFragment](self, node: ElementChildrenPlusFragment) -> ElementChildrenPlusFragment
 
-    def replaceChild[ElementChildrenVar: _ElementChildren](
+    override def replaceChild[ElementChildrenVar: _ElementChildren](
         self, newChild: DocumentFragment, oldChild: ElementChildrenVar
     ) -> ElementChildrenVar | DocumentFragment
     def replaceChild[ElementChildrenVar: _ElementChildren](self, newChild: _ElementChildren, oldChild: ElementChildrenVar) -> ElementChildrenVar | None
 
-    def removeChild[ElementChildrenVar: _ElementChildren](self, oldChild: ElementChildrenVar) -> ElementChildrenVar
+    override def removeChild[ElementChildrenVar: _ElementChildren](self, oldChild: ElementChildrenVar) -> ElementChildrenVar
 
 class Childless:
     """Mixin that makes childless-ness easy to implement and avoids
@@ -494,7 +494,7 @@ class CDATASection(Text):
     nextSibling: _DocumentFragmentChildren | _ElementChildren | None
     previousSibling: _DocumentFragmentChildren | _ElementChildren | None
 
-    def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "") -> None
+    override def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "") -> None
 
 class ReadOnlySequentialNamedNodeMap[in out N: Node]:
     __slots__ = ("_seq",)
@@ -540,7 +540,7 @@ class DocumentType(Identified, Childless, Node):
     notations: ReadOnlySequentialNamedNodeMap[Notation]
 
     init(self, qualifiedName: str | None)
-    def cloneNode(self, deep: bool) -> DocumentType | None
+    override def cloneNode(self, deep: bool) -> DocumentType | None
     def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "") -> None
 
 class Entity(Identified, Node):
@@ -567,10 +567,10 @@ class Entity(Identified, Node):
     notationName: str | None
 
     init(self, name: str, publicId: str | None, systemId: str | None, notation: str | None)
-    def appendChild(self, newChild: _EntityChildren) -> NoReturn
-    def insertBefore(self, newChild: _EntityChildren, refChild: _EntityChildren | None) -> NoReturn
-    def removeChild(self, oldChild: _EntityChildren) -> NoReturn
-    def replaceChild(self, newChild: _EntityChildren, oldChild: _EntityChildren) -> NoReturn
+    override def appendChild(self, newChild: _EntityChildren) -> NoReturn
+    override def insertBefore(self, newChild: _EntityChildren, refChild: _EntityChildren | None) -> NoReturn
+    override def removeChild(self, oldChild: _EntityChildren) -> NoReturn
+    override def replaceChild(self, newChild: _EntityChildren, oldChild: _EntityChildren) -> NoReturn
 
 class Notation(Identified, Childless, Node):
     nodeType: ClassVar[12]
@@ -656,10 +656,10 @@ class Document(Node, DocumentLS):
     """Top-level element of this document."""
 
     init(self)
-    def appendChild[DocumentChildrenVar: _DocumentChildren](self, node: DocumentChildrenVar) -> DocumentChildrenVar
-    def removeChild[DocumentChildrenVar: _DocumentChildren](self, oldChild: DocumentChildrenVar) -> DocumentChildrenVar
-    def unlink(self) -> None
-    def cloneNode(self, deep: bool) -> Document | None
+    override def appendChild[DocumentChildrenVar: _DocumentChildren](self, node: DocumentChildrenVar) -> DocumentChildrenVar
+    override def removeChild[DocumentChildrenVar: _DocumentChildren](self, oldChild: DocumentChildrenVar) -> DocumentChildrenVar
+    override def unlink(self) -> None
+    override def cloneNode(self, deep: bool) -> Document | None
     def createDocumentFragment(self) -> DocumentFragment
     def createElement(self, tagName: str) -> Element
     def createTextNode(self, data: str) -> Text
@@ -672,7 +672,7 @@ class Document(Node, DocumentLS):
     def getElementById(self, id: str) -> Element | None
     def getElementsByTagName(self, name: str) -> NodeList[Element]
     def getElementsByTagNameNS(self, namespaceURI: str | None, localName: str) -> NodeList[Element]
-    def isSupported(self, feature: str, version: str | None) -> bool
+    override def isSupported(self, feature: str, version: str | None) -> bool
     def importNode[ImportableNodeVar: DocumentFragment
     | Attr
     | Element
@@ -697,11 +697,11 @@ class Document(Node, DocumentLS):
     def renameNode(self, n: Attr, namespaceURI: str, name: str) -> Attr
     def renameNode(self, n: Element | Attr, namespaceURI: str, name: str) -> Element | Attr
 
-    def insertBefore[DocumentChildrenPlusFragment: _DocumentChildren | DocumentFragment](
+    override def insertBefore[DocumentChildrenPlusFragment: _DocumentChildren | DocumentFragment](
         self, newChild: DocumentChildrenPlusFragment, refChild: _DocumentChildren | None
     ) -> DocumentChildrenPlusFragment
 
-    def replaceChild[DocumentChildrenVar: _DocumentChildren](
+    override def replaceChild[DocumentChildrenVar: _DocumentChildren](
         self, newChild: DocumentFragment, oldChild: DocumentChildrenVar
     ) -> DocumentChildrenVar | DocumentFragment
     def replaceChild[DocumentChildrenVar: _DocumentChildren](self, newChild: _DocumentChildren, oldChild: DocumentChildrenVar) -> DocumentChildrenVar | None

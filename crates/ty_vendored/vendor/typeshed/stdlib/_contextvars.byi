@@ -11,7 +11,7 @@ final class ContextVar[in out Element]:
     def __new__(cls, name: str) -> Self
     def __new__(cls, name: str, *, default: Element) -> Self
 
-    def __hash__(self) -> int
+    override def __hash__(self) -> int
     let name: str
 
     def get(self) -> Element:
@@ -72,7 +72,7 @@ def copy_context() -> Context
 final class Context(Mapping[ContextVar[dynamic], dynamic]):
     init(self)
 
-    def get[Element](self, key: ContextVar[Element], default: None = None, /) -> Element | None:
+    override def get[Element](self, key: ContextVar[Element], default: None = None, /) -> Element | None:
         """Return the value for `key` if `key` has the value in the context object.
 
         If `key` does not exist, return `default`.  If `default` is not
@@ -86,13 +86,13 @@ final class Context(Mapping[ContextVar[dynamic], dynamic]):
         """Return a shallow copy of the context object."""
 
     __hash__: ClassVar[None]
-    def __getitem__[Element](self, key: ContextVar[Element], /) -> Element:
+    override def __getitem__[Element](self, key: ContextVar[Element], /) -> Element:
         """Return self[key]."""
 
-    def __iter__(self) -> Iterator[ContextVar[dynamic]]:
+    override def __iter__(self) -> Iterator[ContextVar[dynamic]]:
         """Implement iter(self)."""
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool

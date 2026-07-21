@@ -133,20 +133,20 @@ class BaseSelector(metaclass=ABCMeta):
 class _BaseSelectorImpl(BaseSelector, metaclass=ABCMeta):
     """Base selector implementation."""
 
-    def register(self, fileobj: FileDescriptorLike, events: int, data: dynamic = None) -> SelectorKey
-    def unregister(self, fileobj: FileDescriptorLike) -> SelectorKey
-    def modify(self, fileobj: FileDescriptorLike, events: int, data: dynamic = None) -> SelectorKey
-    def get_map(self) -> Mapping[FileDescriptorLike, SelectorKey]
+    override def register(self, fileobj: FileDescriptorLike, events: int, data: dynamic = None) -> SelectorKey
+    override def unregister(self, fileobj: FileDescriptorLike) -> SelectorKey
+    override def modify(self, fileobj: FileDescriptorLike, events: int, data: dynamic = None) -> SelectorKey
+    override def get_map(self) -> Mapping[FileDescriptorLike, SelectorKey]
 
 class SelectSelector(_BaseSelectorImpl):
     """Select-based selector."""
 
-    def select(self, timeout: float | None = None) -> list[(SelectorKey, int)]
+    override def select(self, timeout: float | None = None) -> list[(SelectorKey, int)]
 
 class _PollLikeSelector(_BaseSelectorImpl):
     """Base class shared between poll, epoll and devpoll selectors."""
 
-    def select(self, timeout: float | None = None) -> list[(SelectorKey, int)]
+    override def select(self, timeout: float | None = None) -> list[(SelectorKey, int)]
 
 if sys.platform != "win32":
     class PollSelector(_PollLikeSelector):
@@ -168,7 +168,7 @@ if sys.platform != "win32" and sys.platform != "linux":
         """Kqueue-based selector."""
 
         def fileno(self) -> int
-        def select(self, timeout: float | None = None) -> list[(SelectorKey, int)]
+        override def select(self, timeout: float | None = None) -> list[(SelectorKey, int)]
 
 # Not a real class at runtime, it is just a conditional alias to other real selectors.
 # The runtime logic is more fine-grained than a `sys.platform` check;
@@ -176,6 +176,6 @@ if sys.platform != "win32" and sys.platform != "linux":
 class DefaultSelector(_BaseSelectorImpl):
     """Epoll-based selector."""
 
-    def select(self, timeout: float | None = None) -> list[(SelectorKey, int)]
+    override def select(self, timeout: float | None = None) -> list[(SelectorKey, int)]
     if sys.platform != "win32":
         def fileno(self) -> int

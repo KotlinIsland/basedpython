@@ -88,7 +88,7 @@ class SynchronizedBase[in out CT: _CData]:
     acquire: _AcquireFunc
     release: () -> None
     init(self, obj: dynamic, lock: _LockLike | None = None, ctx: dynamic | None = None)
-    def __reduce__(self) -> ((dynamic, _LockLike) -> SynchronizedBase[dynamic], (dynamic, _LockLike))
+    override def __reduce__(self) -> ((dynamic, _LockLike) -> SynchronizedBase[dynamic], (dynamic, _LockLike))
     def get_obj(self) -> CT
     def get_lock(self) -> _LockLike
     def __enter__(self) -> bool
@@ -112,14 +112,14 @@ class SynchronizedArray[in out Element](SynchronizedBase[ctypes.Array[_SimpleCDa
     def __setslice__(self, start: SupportsIndex, stop: SupportsIndex, values: Iterable[Element]) -> None
 
 class SynchronizedString(SynchronizedArray[bytes]):
-    def __getitem__(self, i: slice[SupportsIndex | None]) -> bytes
+    override def __getitem__(self, i: slice[SupportsIndex | None]) -> bytes
     def __getitem__(self, i: SupportsIndex) -> bytes
 
-    def __setitem__(self, i: slice[SupportsIndex | None], value: bytes) -> None
+    override def __setitem__(self, i: slice[SupportsIndex | None], value: bytes) -> None
     def __setitem__(self, i: SupportsIndex, value: bytes) -> None
 
-    def __getslice__(self, start: SupportsIndex, stop: SupportsIndex) -> bytes
-    def __setslice__(self, start: SupportsIndex, stop: SupportsIndex, values: bytes) -> None
+    override def __getslice__(self, start: SupportsIndex, stop: SupportsIndex) -> bytes
+    override def __setslice__(self, start: SupportsIndex, stop: SupportsIndex, values: bytes) -> None
 
     value: bytes
     raw: bytes

@@ -773,12 +773,12 @@ class _Environ(MutableMapping[AnyStr, AnyStr], Generic[AnyStr]):
         decodevalue: _EnvironCodeFunc[AnyStr],
     )
 
-    def get(self, key: AnyStr, default: None = None) -> AnyStr | None:
+    override def get(self, key: AnyStr, default: None = None) -> AnyStr | None:
         """D.get(k[,d]) -> D[k] if k in D, else d.  d defaults to None."""
     def get(self, key: AnyStr, default: AnyStr) -> AnyStr
     def get[Element](self, key: AnyStr, default: Element) -> AnyStr | Element
 
-    def pop(self, key: AnyStr) -> AnyStr:
+    override def pop(self, key: AnyStr) -> AnyStr:
         """D.pop(k[,d]) -> v, remove specified key and return the corresponding
         value.  If key is not found, d is returned if given, otherwise
         KeyError is raised.
@@ -786,13 +786,13 @@ class _Environ(MutableMapping[AnyStr, AnyStr], Generic[AnyStr]):
     def pop(self, key: AnyStr, default: AnyStr) -> AnyStr
     def pop[Element](self, key: AnyStr, default: Element) -> AnyStr | Element
 
-    def setdefault(self, key: AnyStr, value: AnyStr) -> AnyStr
+    override def setdefault(self, key: AnyStr, value: AnyStr) -> AnyStr
     def copy(self) -> dict[AnyStr, AnyStr]
-    def __delitem__(self, key: AnyStr) -> None
-    def __getitem__(self, key: AnyStr) -> AnyStr
-    def __setitem__(self, key: AnyStr, value: AnyStr) -> None
-    def __iter__(self) -> Iterator[AnyStr]
-    def __len__(self) -> int
+    override def __delitem__(self, key: AnyStr) -> None
+    override def __getitem__(self, key: AnyStr) -> AnyStr
+    override def __setitem__(self, key: AnyStr, value: AnyStr) -> None
+    override def __iter__(self) -> Iterator[AnyStr]
+    override def __len__(self) -> int
     def __or__[T1, T2](self, other: Mapping[T1, T2]) -> dict[AnyStr | T1, AnyStr | T2]
     def __ror__[T1, T2](self, other: Mapping[T1, T2]) -> dict[AnyStr | T1, AnyStr | T2]
 

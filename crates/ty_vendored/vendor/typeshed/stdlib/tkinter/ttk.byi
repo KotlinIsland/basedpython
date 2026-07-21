@@ -394,7 +394,7 @@ class Button(Widget):
             command, default, width
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -470,7 +470,7 @@ class Checkbutton(Widget):
             command, offvalue, onvalue, variable
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -560,7 +560,7 @@ class Entry(Widget, tkinter.Entry):
             none, key, focus, focusin, focusout, all
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -596,7 +596,7 @@ class Entry(Widget, tkinter.Entry):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     # config must be copy/pasted, otherwise ttk.Entry().config is mypy error (don't know why)
-    def config(
+    override def config(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -631,12 +631,12 @@ class Entry(Widget, tkinter.Entry):
         """
     def config(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
-    def bbox(self, index) -> (int, int, int, int):
+    override def bbox(self, index) -> (int, int, int, int):
         """Return a tuple of (x, y, width, height) which describes the
         bounding box of the character given by index.
         """
 
-    def identify(self, x: int, y: int) -> str:
+    override def identify(self, x: int, y: int) -> str:
         """Returns the name of the element at position x, y, or the
         empty string if the coordinates are outside the window.
         """
@@ -690,7 +690,7 @@ class Combobox(Entry):
             textvariable, values, width
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -729,7 +729,7 @@ class Combobox(Entry):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     # config must be copy/pasted, otherwise ttk.Combobox().config is mypy error (don't know why)
-    def config(
+    override def config(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -811,7 +811,7 @@ class Frame(Widget):
             borderwidth, relief, padding, width, height
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -884,7 +884,7 @@ class Label(Widget):
             relief, text, wraplength
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -962,7 +962,7 @@ class Labelframe(Widget):
             height
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1035,7 +1035,7 @@ class Menubutton(Widget):
             direction, menu
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1117,7 +1117,7 @@ class Notebook(Widget):
                   valid for method index)
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1163,7 +1163,7 @@ class Notebook(Widget):
         restored to its previous position.
         """
 
-    def forget(self, tab_id) -> None:
+    override def forget(self, tab_id) -> None:
         """Removes the tab specified by tab_id, unmaps and unmanages the
         associated window.
         """
@@ -1176,7 +1176,7 @@ class Notebook(Widget):
         tabs may be restored with the add command.
         """
 
-    def identify(self, x: int, y: int) -> str:
+    override def identify(self, x: int, y: int) -> str:
         """Returns the name of the tab element at position x, y, or the
         empty string if none.
         """
@@ -1270,7 +1270,7 @@ class Panedwindow(Widget, tkinter.PanedWindow):
             weight
         """
 
-    def add(self, child: tkinter.Widget, *, weight: int = ..., **kw) -> None:
+    override def add(self, child: tkinter.Widget, *, weight: int = ..., **kw) -> None:
         """Add a child widget to the panedwindow in a new pane.
 
         The child argument is the name of the child widget
@@ -1279,7 +1279,7 @@ class Panedwindow(Widget, tkinter.PanedWindow):
         are the ones accepted by the paneconfigure method.
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1304,7 +1304,7 @@ class Panedwindow(Widget, tkinter.PanedWindow):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     # config must be copy/pasted, otherwise ttk.Panedwindow().config is mypy error (don't know why)
-    def config(
+    override def config(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1394,7 +1394,7 @@ class Progressbar(Widget):
             orient, length, mode, maximum, value, variable, phase
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1480,7 +1480,7 @@ class Radiobutton(Widget):
             command, value, variable
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1557,7 +1557,7 @@ class Scale(Widget, tkinter.Scale):
             command, from, length, orient, to, value, variable
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1581,7 +1581,7 @@ class Scale(Widget, tkinter.Scale):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     # config must be copy/pasted, otherwise ttk.Scale().config is mypy error (don't know why)
-    def config(
+    override def config(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1611,7 +1611,7 @@ class Scale(Widget, tkinter.Scale):
         """
     def config(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
-    def get(self, x: int | None = None, y: int | None = None) -> float:
+    override def get(self, x: int | None = None, y: int | None = None) -> float:
         """Get the current value of the value option, or the value
         corresponding to the coordinates x, y if they are specified.
 
@@ -1646,7 +1646,7 @@ class Scrollbar(Widget, tkinter.Scrollbar):
             command, orient
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1671,7 +1671,7 @@ class Scrollbar(Widget, tkinter.Scrollbar):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     # config must be copy/pasted, otherwise ttk.Scrollbar().config is mypy error (don't know why)
-    def config(
+    override def config(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1722,7 +1722,7 @@ class Separator(Widget):
             orient
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1769,7 +1769,7 @@ class Sizegrip(Widget):
             class, cursor, state, style, takefocus
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1842,7 +1842,7 @@ class Spinbox(Entry):
             to, from_, increment, values, wrap, format, command
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -1970,7 +1970,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
             foreground, background, font, image
         """
 
-    def configure(
+    override def configure(
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
@@ -2001,7 +2001,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
     def configure(self, cnf: str) -> (str, str, str, dynamic, dynamic)
 
     config = configure
-    def bbox(self, item: str | int, column: str | int | None = None) -> (int, int, int, int) | "":
+    override def bbox(self, item: str | int, column: str | int | None = None) -> (int, int, int, int) | "":
         """Returns the bounding box (relative to the treeview widget's
         window) of the specified item in the form x y width height.
 
@@ -2065,7 +2065,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         False otherwise.
         """
 
-    def focus(self, item: None = None) -> str:  # can return empty string
+    override def focus(self, item: None = None) -> str:  # can return empty string
         """If item is specified, sets the focus item to item. Otherwise,
         returns the current focus item, or '' if there is none.
         """
@@ -2110,7 +2110,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
     ) -> None
 
     # Internal Method. Leave untyped:
-    def identify(self, component, x, y):
+    override def identify(self, component, x, y):
         """Returns a description of the specified component under the
         point given by x and y, or the empty string if no such component
         is present at that position.

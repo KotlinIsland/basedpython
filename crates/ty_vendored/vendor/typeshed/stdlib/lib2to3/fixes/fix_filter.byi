@@ -18,4 +18,4 @@ class FixFilter(fixer_base.ConditionalFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     skip_on: ClassVar["future_builtins.filter"]
-    def transform(self, node, results)
+    override def transform(self, node, results)

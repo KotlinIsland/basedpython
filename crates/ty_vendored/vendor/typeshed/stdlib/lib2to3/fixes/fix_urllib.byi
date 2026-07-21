@@ -13,7 +13,7 @@ final MAPPING: dict[str, list[("urllib.request" | "urllib.parse" | "urllib.error
 def build_pattern() -> Generator[str]
 
 class FixUrllib(FixImports):
-    def build_pattern(self)
+    override def build_pattern(self)
     def transform_import(self, node, results) -> None:
         """Transform for the basic import case. Replaces the old
         import name with a comma separated list of its
@@ -29,4 +29,4 @@ class FixUrllib(FixImports):
     def transform_dot(self, node, results) -> None:
         """Transform for calls to module members in code."""
 
-    def transform(self, node, results) -> None
+    override def transform(self, node, results) -> None

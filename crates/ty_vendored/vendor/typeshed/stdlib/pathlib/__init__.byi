@@ -111,8 +111,8 @@ class PurePath(PathLike[str]):
             new PurePath object.
             """
 
-    def __hash__(self) -> int
-    def __fspath__(self) -> str:
+    override def __hash__(self) -> int
+    override def __fspath__(self) -> str:
         """Return the string representation of the path, suitable for
         passing to system calls.
         """
@@ -722,7 +722,7 @@ class Path(PurePath):
         ) -> Iterator[(Self, list[str], list[str])]:
             """Walk the directory tree from this directory, similar to os.walk()."""
 
-    def as_uri(self) -> str:
+    override def as_uri(self) -> str:
         """Return the path as a URI."""
 
 class PosixPath(Path, PurePosixPath):

@@ -131,7 +131,7 @@ class _SimpleCData[in out Element](_CData, metaclass=_PyCSimpleType):
     # The TypeVar can be unsolved here,
     # but we can't use overloads without creating many, many mypy false-positive errors
     init(self, value: Element = ...)
-    def __ctypes_from_outparam__(self, /) -> Element
+    override def __ctypes_from_outparam__(self, /) -> Element
 
 @type_check_only
 class _CanCastTo(_CData)
@@ -331,7 +331,7 @@ class Union(_CData, metaclass=_UnionType):
 
     init(self, *args: dynamic, **kw: dynamic)
     def __getattr__(self, name: str) -> dynamic
-    def __setattr__(self, name: str, value: dynamic) -> None
+    override def __setattr__(self, name: str, value: dynamic) -> None
 
 # This class is not exposed. It calls itself _ctypes.PyCStructType.
 @type_check_only
@@ -365,7 +365,7 @@ class Structure(_CData, metaclass=_PyCStructType):
 
     init(self, *args: dynamic, **kw: dynamic)
     def __getattr__(self, name: str) -> dynamic
-    def __setattr__(self, name: str, value: dynamic) -> None
+    override def __setattr__(self, name: str, value: dynamic) -> None
 
 # This class is not exposed. It calls itself _ctypes.PyCArrayType.
 @type_check_only

@@ -222,7 +222,7 @@ class Process(BaseProcess):
 class DefaultContext(BaseContext):
     Process: ClassVar[type[Process]]
     init(self, context: BaseContext)
-    def get_start_method(self, allow_none: bool = False) -> str
+    override def get_start_method(self, allow_none: bool = False) -> str
     def get_all_start_methods(self) -> list[str]:
         """Returns a list of the supported start methods, default first."""
 

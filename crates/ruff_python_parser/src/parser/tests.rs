@@ -824,6 +824,44 @@ class C:
 }
 
 #[test]
+fn test_modifier_before_classmethod() {
+    // a modifier keyword before the `class def` classmethod modifier — e.g.
+    // `override class def __prepare__(...)`. the leading `class` must be
+    // recognised as the classmethod modifier, not as a class definition (which
+    // would parse `def` as the class name and drop the method)
+    let parsed = parse_basedpython_module(
+        "\
+class C:
+    override class def f(cls) -> int: ...
+    final class def g(cls) -> int: ...
+",
+    );
+    let Some(Stmt::ClassDef(class)) = parsed.syntax().body.first() else {
+        panic!("expected a class definition");
+    };
+    let methods: Vec<_> = class
+        .body
+        .iter()
+        .filter_map(|stmt| match stmt {
+            Stmt::FunctionDef(func) => Some(func),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        methods.len(),
+        2,
+        "both classmethods must parse as functions"
+    );
+    assert_eq!(methods[0].name.as_str(), "f");
+    assert_eq!(methods[1].name.as_str(), "g");
+    for method in methods {
+        // the outer modifier (`override` / `final`) plus the synthetic
+        // `classmethod` decorator
+        assert_eq!(method.decorator_list.len(), 2);
+    }
+}
+
+#[test]
 fn test_modifier_async_def() {
     // a modifier keyword on an `async def` — e.g. `contextlib`'s
     // `abstract async def __aexit__(...)`. previously the modifier was parsed as

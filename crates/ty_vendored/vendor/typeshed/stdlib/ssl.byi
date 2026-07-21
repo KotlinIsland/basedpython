@@ -410,29 +410,29 @@ class SSLSocket(socket.socket):
     let session_reused: bool | None
 
     init(self, *args: dynamic, **kwargs: dynamic)
-    def connect(self, addr: socket._Address) -> None:
+    override def connect(self, addr: socket._Address) -> None:
         """Connects to remote ADDR, and then wraps the connection in
         an SSL channel.
         """
 
-    def connect_ex(self, addr: socket._Address) -> int:
+    override def connect_ex(self, addr: socket._Address) -> int:
         """Connects to remote ADDR, and then wraps the connection in
         an SSL channel.
         """
 
-    def recv(self, buflen: int = 1024, flags: int = 0) -> bytes
-    def recv_into(self, buffer: WriteableBuffer, nbytes: int | None = None, flags: int = 0) -> int
-    def recvfrom(self, buflen: int = 1024, flags: int = 0) -> (bytes, socket._RetAddress)
-    def recvfrom_into(
+    override def recv(self, buflen: int = 1024, flags: int = 0) -> bytes
+    override def recv_into(self, buffer: WriteableBuffer, nbytes: int | None = None, flags: int = 0) -> int
+    override def recvfrom(self, buflen: int = 1024, flags: int = 0) -> (bytes, socket._RetAddress)
+    override def recvfrom_into(
         self, buffer: WriteableBuffer, nbytes: int | None = None, flags: int = 0
     ) -> (int, socket._RetAddress)
-    def send(self, data: ReadableBuffer, flags: int = 0) -> int
-    def sendall(self, data: ReadableBuffer, flags: int = 0) -> None
+    override def send(self, data: ReadableBuffer, flags: int = 0) -> int
+    override def sendall(self, data: ReadableBuffer, flags: int = 0) -> None
 
-    def sendto(self, data: ReadableBuffer, flags_or_addr: socket._Address, addr: None = None) -> int
+    override def sendto(self, data: ReadableBuffer, flags_or_addr: socket._Address, addr: None = None) -> int
     def sendto(self, data: ReadableBuffer, flags_or_addr: int, addr: socket._Address) -> int
 
-    def shutdown(self, how: int) -> None
+    override def shutdown(self, how: int) -> None
     @deprecated("Deprecated since Python 3.6. Use `SSLSocket.recv` method instead.")
     def read(self, len: int = 1024, buffer: WriteableBuffer | None = None) -> bytes:
         """Read up to LEN bytes and return them.
@@ -502,7 +502,7 @@ class SSLSocket(socket.socket):
         of the peers.
         """
 
-    def accept(self) -> (SSLSocket, socket._RetAddress):
+    override def accept(self) -> (SSLSocket, socket._RetAddress):
         """Accepts a new connection from a remote client, and returns
         a tuple containing that new connection wrapped with a server-side
         SSL channel, and the address of the remote client.
@@ -521,9 +521,9 @@ class SSLSocket(socket.socket):
 
     def verify_client_post_handshake(self) -> None
     # These methods always raise `NotImplementedError`:
-    def recvmsg(self, *args: Never, **kwargs: Never) -> Never
-    def recvmsg_into(self, *args: Never, **kwargs: Never) -> Never
-    def sendmsg(self, *args: Never, **kwargs: Never) -> Never
+    override def recvmsg(self, *args: Never, **kwargs: Never) -> Never
+    override def recvmsg_into(self, *args: Never, **kwargs: Never) -> Never
+    override def sendmsg(self, *args: Never, **kwargs: Never) -> Never
     if sys.version_info >= (3, 13):
         def get_verified_chain(self) -> list[bytes]:
             """Returns verified certificate chain provided by the other
@@ -636,14 +636,14 @@ class SSLContext(_SSLContext):
     def __new__(cls, protocol: None = None, *args: dynamic, **kwargs: dynamic) -> Self
 
     def load_default_certs(self, purpose: Purpose = Purpose.SERVER_AUTH) -> None
-    def load_verify_locations(
+    override def load_verify_locations(
         self,
         cafile: StrOrBytesPath | None = None,
         capath: StrOrBytesPath | None = None,
         cadata: str | ReadableBuffer | None = None,
     ) -> None
 
-    def get_ca_certs(self, binary_form: False = False) -> list[_PeerCertRetDictType]:
+    override def get_ca_certs(self, binary_form: False = False) -> list[_PeerCertRetDictType]:
         """Returns a list of dicts with information of loaded CA certs.
 
         If the optional argument is True, returns a DER-encoded copy of the
@@ -655,7 +655,7 @@ class SSLContext(_SSLContext):
     def get_ca_certs(self, binary_form: True) -> list[bytes]
     def get_ca_certs(self, binary_form: bool = False) -> dynamic
 
-    def get_ciphers(self) -> list[_Cipher]
+    override def get_ciphers(self) -> list[_Cipher]
     if sys.version_info >= (3, 15):
         def set_ciphersuites(self, ciphersuites: str, /) -> None
         def get_groups(self, /, *, include_aliases: bool = False) -> list[str]
@@ -663,14 +663,14 @@ class SSLContext(_SSLContext):
         def set_client_sigalgs(self, sigalgs: str, /) -> None
         def set_server_sigalgs(self, sigalgs: str, /) -> None
 
-    def set_default_verify_paths(self) -> None
-    def set_ciphers(self, cipherlist: str, /) -> None
+    override def set_default_verify_paths(self) -> None
+    override def set_ciphers(self, cipherlist: str, /) -> None
     def set_alpn_protocols(self, alpn_protocols: Iterable[str]) -> None
     @deprecated("Deprecated since Python 3.10. Use ALPN instead.")
     def set_npn_protocols(self, npn_protocols: Iterable[str]) -> None
     def set_servername_callback(self, server_name_callback: _SrvnmeCbType | None) -> None
-    def load_dh_params(self, path: str, /) -> None
-    def set_ecdh_curve(self, name: str, /) -> None
+    override def load_dh_params(self, path: str, /) -> None
+    override def set_ecdh_curve(self, name: str, /) -> None
     def wrap_socket(
         self,
         sock: socket.socket,

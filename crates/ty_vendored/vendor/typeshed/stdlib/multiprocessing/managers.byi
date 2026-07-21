@@ -29,7 +29,7 @@ __all__ = ["BaseManager", "SyncManager", "BaseProxy", "Token", "SharedMemoryMana
 class Namespace:
     init(self, **kwds: dynamic)
     def __getattr__(self, name: str, /) -> dynamic
-    def __setattr__(self, name: str, value: dynamic, /) -> None
+    override def __setattr__(self, name: str, value: dynamic, /) -> None
 
 type _Namespace = Namespace
 
@@ -74,7 +74,7 @@ class BaseProxy:
         Get a copy of the value of the referent
         """
 
-    def __reduce__(self) -> (dynamic, (dynamic, dynamic, str, dict[dynamic, dynamic]))
+    override def __reduce__(self) -> (dynamic, (dynamic, dynamic, str, dict[dynamic, dynamic]))
 
 class ValueProxy[in out Element](BaseProxy):
     def get(self) -> Element
@@ -135,24 +135,24 @@ if sys.version_info >= (3, 13):
 else:
     class DictProxy[in out Key, in out Value](BaseProxy, MutableMapping[Key, Value]):
         __builtins__: ClassVar[dict[str, dynamic]]
-        def __len__(self) -> int
-        def __getitem__(self, key: Key, /) -> Value
-        def __setitem__(self, key: Key, value: Value, /) -> None
-        def __delitem__(self, key: Key, /) -> None
-        def __iter__(self) -> Iterator[Key]
+        override def __len__(self) -> int
+        override def __getitem__(self, key: Key, /) -> Value
+        override def __setitem__(self, key: Key, value: Value, /) -> None
+        override def __delitem__(self, key: Key, /) -> None
+        override def __iter__(self) -> Iterator[Key]
         def copy(self) -> dict[Key, Value]
 
-        def get(self, key: Key, /) -> Value | None
+        override def get(self, key: Key, /) -> Value | None
         def get(self, key: Key, default: Value, /) -> Value
         def get[Element](self, key: Key, default: Element, /) -> Value | Element
 
-        def pop(self, key: Key, /) -> Value
+        override def pop(self, key: Key, /) -> Value
         def pop(self, key: Key, default: Value, /) -> Value
         def pop[Element](self, key: Key, default: Element, /) -> Value | Element
 
-        def keys(self) -> list[Key]
-        def items(self) -> list[(Key, Value)]
-        def values(self) -> list[Value]
+        override def keys(self) -> list[Key]
+        override def items(self) -> list[(Key, Value)]
+        override def values(self) -> list[Value]
 
 if sys.version_info >= (3, 14):
     class _BaseSetProxy[in out Element](BaseProxy, MutableSet[Element]):
@@ -201,27 +201,27 @@ if sys.version_info >= (3, 14):
 
 class BaseListProxy[in out Element](BaseProxy, MutableSequence[Element]):
     __builtins__: ClassVar[dict[str, dynamic]]
-    def __len__(self) -> int
+    override def __len__(self) -> int
     def __add__(self, x: list[Element], /) -> list[Element]
-    def __delitem__(self, i: SupportsIndex | slice[SupportsIndex | None], /) -> None
+    override def __delitem__(self, i: SupportsIndex | slice[SupportsIndex | None], /) -> None
 
-    def __getitem__(self, i: SupportsIndex, /) -> Element
+    override def __getitem__(self, i: SupportsIndex, /) -> Element
     def __getitem__(self, s: slice[SupportsIndex | None], /) -> list[Element]
 
-    def __setitem__(self, i: SupportsIndex, o: Element, /) -> None
+    override def __setitem__(self, i: SupportsIndex, o: Element, /) -> None
     def __setitem__(self, s: slice[SupportsIndex | None], o: Iterable[Element], /) -> None
 
     def __mul__(self, n: SupportsIndex, /) -> list[Element]
     def __rmul__(self, n: SupportsIndex, /) -> list[Element]
     def __imul__(self, value: SupportsIndex, /) -> Self
-    def __reversed__(self) -> Iterator[Element]
-    def append(self, object: Element, /) -> None
-    def extend(self, iterable: Iterable[Element], /) -> None
-    def pop(self, index: SupportsIndex = ..., /) -> Element
-    def index(self, value: Element, start: SupportsIndex = ..., stop: SupportsIndex = ..., /) -> int
-    def count(self, value: Element, /) -> int
-    def insert(self, index: SupportsIndex, object: Element, /) -> None
-    def remove(self, value: Element, /) -> None
+    override def __reversed__(self) -> Iterator[Element]
+    override def append(self, object: Element, /) -> None
+    override def extend(self, iterable: Iterable[Element], /) -> None
+    override def pop(self, index: SupportsIndex = ..., /) -> Element
+    override def index(self, value: Element, start: SupportsIndex = ..., stop: SupportsIndex = ..., /) -> int
+    override def count(self, value: Element, /) -> int
+    override def insert(self, index: SupportsIndex, object: Element, /) -> None
+    override def remove(self, value: Element, /) -> None
     if sys.version_info >= (3, 14):
         # Next methods are copied from builtins.list
         def clear(self) -> None
@@ -233,8 +233,8 @@ class BaseListProxy[in out Element](BaseProxy, MutableSequence[Element]):
     def sort(self, *, key: (Element) -> SupportsRichComparison, reverse: bool = ...) -> None
 
 class ListProxy[in out Element](BaseListProxy[Element]):
-    def __iadd__(self, value: Iterable[Element], /) -> Self
-    def __imul__(self, value: SupportsIndex, /) -> Self
+    override def __iadd__(self, value: Iterable[Element], /) -> Self
+    override def __imul__(self, value: SupportsIndex, /) -> Self
     if sys.version_info >= (3, 13):
         def __class_getitem__(cls, args: dynamic, /) -> dynamic:
             """Represent a PEP 585 generic type
@@ -460,7 +460,7 @@ class SharedMemoryManager(BaseManager):
     locks and semaphores).
     """
 
-    def get_server(self) -> SharedMemoryServer:
+    override def get_server(self) -> SharedMemoryServer:
         """Better than monkeypatching for now; merge into Server ultimately"""
 
     def SharedMemory(self, size: int) -> _SharedMemory:

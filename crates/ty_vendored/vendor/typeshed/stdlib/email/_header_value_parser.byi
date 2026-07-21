@@ -325,7 +325,7 @@ class HeaderLabel(TokenList):
 class MsgID(TokenList):
     token_type: str
     as_ew_allowed: bool
-    def fold(self, policy: Policy) -> str
+    override def fold(self, policy: Policy) -> str
 
 class MessageID(MsgID):
     token_type: str
@@ -353,7 +353,7 @@ class Terminal(str):
     let all_defects: list[MessageDefect]
     def pop_trailing_ws(self) -> None
     let comments: list[str]
-    def __getnewargs__(self) -> (str, str)
+    override def __getnewargs__(self) -> (str, str)
 
 class WhiteSpaceTerminal(Terminal):
     let value: str

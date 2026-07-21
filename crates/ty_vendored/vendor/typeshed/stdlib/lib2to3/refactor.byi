@@ -207,6 +207,6 @@ class MultiprocessingUnsupported(Exception)
 class MultiprocessRefactoringTool(RefactoringTool):
     queue: JoinableQueue[None | (Iterable[str], bool | int)] | None
     output_lock: Lock | None
-    def refactor(
+    override def refactor(
         self, items: Iterable[str], write: bool = False, doctests_only: bool = False, num_processes: int = 1
     ) -> None

@@ -251,7 +251,7 @@ if sys.platform == "win32":
 # specific __call__.
 @type_check_only
 class _MemmoveFunctionType(_CFunctionType):
-    def __call__(self, dst: _CVoidPLike, src: _CVoidConstPLike, count: int) -> int
+    override def __call__(self, dst: _CVoidPLike, src: _CVoidConstPLike, count: int) -> int
 
 memmove: _MemmoveFunctionType
 
@@ -259,7 +259,7 @@ memmove: _MemmoveFunctionType
 # specific __call__.
 @type_check_only
 class _MemsetFunctionType(_CFunctionType):
-    def __call__(self, dst: _CVoidPLike, c: int, count: int) -> int
+    override def __call__(self, dst: _CVoidPLike, c: int, count: int) -> int
 
 memset: _MemsetFunctionType
 

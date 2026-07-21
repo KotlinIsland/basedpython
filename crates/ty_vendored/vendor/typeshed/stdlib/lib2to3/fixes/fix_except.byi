@@ -32,4 +32,4 @@ def find_excepts[N: Base](nodes: Iterable[N]) -> Generator[(N, N)]
 class FixExcept(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
-    def transform(self, node, results)
+    override def transform(self, node, results)

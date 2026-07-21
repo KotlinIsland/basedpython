@@ -337,8 +337,8 @@ final class Pattern(Generic[AnyStr]):
 
     def __copy__(self) -> Pattern[AnyStr]
     def __deepcopy__(self, memo: dynamic, /) -> Pattern[AnyStr]
-    def __eq__(self, value: object, /) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, value: object, /) -> bool
+    override def __hash__(self) -> int
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Patterns are generic over the type of string they handle (str or bytes)"""
 

@@ -23,7 +23,7 @@ class EmptyNodeList(tuple[()]):
     let length: 0
 
     def item(self, index: int) -> None
-    def __add__[Element](self, other: Iterable[Element]) -> NodeList[Element]
+    override def __add__[Element](self, other: Iterable[Element]) -> NodeList[Element]
     def __radd__[Element](self, other: Iterable[Element]) -> NodeList[Element]
 
 def defproperty(klass: type[dynamic], name: str, doc: str) -> None

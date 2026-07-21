@@ -100,17 +100,17 @@ class Shelf[in out Value](MutableMapping[str, Value]):
             keyencoding: str = "utf-8",
         ) -> None
 
-    def __iter__(self) -> Iterator[str]
-    def __len__(self) -> int
+    override def __iter__(self) -> Iterator[str]
+    override def __len__(self) -> int
 
-    def get(self, key: str, default: None = None) -> Value | None
+    override def get(self, key: str, default: None = None) -> Value | None
     def get(self, key: str, default: Value) -> Value
     def get[Element](self, key: str, default: Element) -> Value | Element
 
-    def __getitem__(self, key: str) -> Value
-    def __setitem__(self, key: str, value: Value) -> None
-    def __delitem__(self, key: str) -> None
-    def __contains__(self, key: str) -> bool
+    override def __getitem__(self, key: str) -> Value
+    override def __setitem__(self, key: str, value: Value) -> None
+    override def __delitem__(self, key: str) -> None
+    override def __contains__(self, key: str) -> bool
     def __enter__(self) -> Self
     def __exit__(
         self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None

@@ -22,11 +22,11 @@ class build_py(Command):
     compile: int
     optimize: int
     force: Incomplete
-    def initialize_options(self) -> None
+    override def initialize_options(self) -> None
     packages: Incomplete
     data_files: Incomplete
-    def finalize_options(self) -> None
-    def run(self) -> None
+    override def finalize_options(self) -> None
+    override def run(self) -> None
     def get_data_files(self):
         """Generate list of '(package,src_dir,build_dir,filenames)' tuples"""
 
@@ -73,5 +73,5 @@ class build_py(Command):
 
 class build_py_2to3(build_py, Mixin2to3):
     updated_files: Incomplete
-    def run(self) -> None
-    def build_module(self, module, module_file, package)
+    override def run(self) -> None
+    override def build_module(self, module, module_file, package)

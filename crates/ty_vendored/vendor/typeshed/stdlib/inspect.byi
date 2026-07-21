@@ -697,8 +697,8 @@ class Signature:
             all parameters will be on separate lines.
             """
 
-    def __eq__(self, other: object) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
 
 if sys.version_info >= (3, 14):
     from annotationlib import get_annotations as get_annotations
@@ -843,8 +843,8 @@ class Parameter:
     if sys.version_info >= (3, 13):
         __replace__ = replace
 
-    def __eq__(self, other: object) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
 
 class BoundArguments:
     """Result of `Signature.bind` call.  Holds the mapping of arguments
@@ -879,7 +879,7 @@ class BoundArguments:
         empty dict.
         """
 
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
     __hash__: ClassVar[None]
 
 #

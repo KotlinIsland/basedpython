@@ -96,12 +96,12 @@ class UserDict[in out Key, in out Value](MutableMapping[Key, Value]):
     init(self: UserDict[str, str], iterable: Iterable[list[str]], /)
     init(self: UserDict[bytes, bytes], iterable: Iterable[list[bytes]], /)
 
-    def __len__(self) -> int
-    def __getitem__(self, key: Key) -> Value
-    def __setitem__(self, key: Key, item: Value) -> None
-    def __delitem__(self, key: Key) -> None
-    def __iter__(self) -> Iterator[Key]
-    def __contains__(self, key: object) -> bool
+    override def __len__(self) -> int
+    override def __getitem__(self, key: Key) -> Value
+    override def __setitem__(self, key: Key, item: Value) -> None
+    override def __delitem__(self, key: Key) -> None
+    override def __iter__(self) -> Iterator[Key]
+    override def __contains__(self, key: object) -> bool
     def copy(self) -> Self
     def __copy__(self) -> Self
 
@@ -141,40 +141,40 @@ class UserList[in out Element](MutableSequence[Element]):
     def __le__(self, other: list[Element] | UserList[Element]) -> bool
     def __gt__(self, other: list[Element] | UserList[Element]) -> bool
     def __ge__(self, other: list[Element] | UserList[Element]) -> bool
-    def __eq__(self, other: object) -> bool
-    def __contains__(self, item: object) -> bool
-    def __len__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __contains__(self, item: object) -> bool
+    override def __len__(self) -> int
 
-    def __getitem__(self, i: SupportsIndex) -> Element
+    override def __getitem__(self, i: SupportsIndex) -> Element
     def __getitem__(self, i: slice[SupportsIndex | None]) -> Self
 
-    def __setitem__(self, i: SupportsIndex, item: Element) -> None
+    override def __setitem__(self, i: SupportsIndex, item: Element) -> None
     def __setitem__(self, i: slice[SupportsIndex | None], item: Iterable[Element]) -> None
 
-    def __delitem__(self, i: SupportsIndex | slice[SupportsIndex | None]) -> None
+    override def __delitem__(self, i: SupportsIndex | slice[SupportsIndex | None]) -> None
     def __add__(self, other: Iterable[Element]) -> Self
     def __radd__(self, other: Iterable[Element]) -> Self
-    def __iadd__(self, other: Iterable[Element]) -> Self
+    override def __iadd__(self, other: Iterable[Element]) -> Self
     def __mul__(self, n: int) -> Self
     def __rmul__(self, n: int) -> Self
     def __imul__(self, n: int) -> Self
-    def append(self, item: Element) -> None
-    def insert(self, i: int, item: Element) -> None
-    def pop(self, i: int = -1) -> Element
-    def remove(self, item: Element) -> None
+    override def append(self, item: Element) -> None
+    override def insert(self, i: int, item: Element) -> None
+    override def pop(self, i: int = -1) -> Element
+    override def remove(self, item: Element) -> None
     def copy(self) -> Self
     def __copy__(self) -> Self
-    def count(self, item: Element) -> int
+    override def count(self, item: Element) -> int
     # The runtime signature is "item, *args", and the arguments are then passed
     # to `list.index`. In order to give more precise types, we pretend that the
     # `item` argument is positional-only.
-    def index(self, item: Element, start: SupportsIndex = 0, stop: SupportsIndex = sys.maxsize, /) -> int
+    override def index(self, item: Element, start: SupportsIndex = 0, stop: SupportsIndex = sys.maxsize, /) -> int
 
     # All arguments are passed to `list.sort` at runtime, so the signature should be kept in line with `list.sort`.
     def sort(self: UserList[SupportsRichComparisonT], *, key: None = None, reverse: bool = False) -> None
     def sort(self, *, key: (Element) -> SupportsRichComparison, reverse: bool = False) -> None
 
-    def extend(self, other: Iterable[Element]) -> None
+    override def extend(self, other: Iterable[Element]) -> None
 
 class UserString(Sequence[UserString]):
     data: str
@@ -187,13 +187,13 @@ class UserString(Sequence[UserString]):
     def __le__(self, string: str | UserString) -> bool
     def __gt__(self, string: str | UserString) -> bool
     def __ge__(self, string: str | UserString) -> bool
-    def __eq__(self, string: object) -> bool
-    def __hash__(self) -> int
-    def __contains__(self, char: object) -> bool
-    def __len__(self) -> int
-    def __getitem__(self, index: SupportsIndex | slice[SupportsIndex | None]) -> Self
-    def __iter__(self) -> Iterator[Self]
-    def __reversed__(self) -> Iterator[Self]
+    override def __eq__(self, string: object) -> bool
+    override def __hash__(self) -> int
+    override def __contains__(self, char: object) -> bool
+    override def __len__(self) -> int
+    override def __getitem__(self, index: SupportsIndex | slice[SupportsIndex | None]) -> Self
+    override def __iter__(self) -> Iterator[Self]
+    override def __reversed__(self) -> Iterator[Self]
     def __add__(self, other: object) -> Self
     def __radd__(self, other: object) -> Self
     def __mul__(self, n: int) -> Self
@@ -203,14 +203,14 @@ class UserString(Sequence[UserString]):
     def capitalize(self) -> Self
     def casefold(self) -> Self
     def center(self, width: int, *args: dynamic) -> Self
-    def count(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
+    override def count(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
     def encode(self: UserString, encoding: str | None = "utf-8", errors: str | None = "strict") -> bytes
     def endswith(self, suffix: str | (*: str), start: int | None = 0, end: int | None = sys.maxsize) -> bool
     def expandtabs(self, tabsize: int = 8) -> Self
     def find(self, sub: str | UserString, start: int = 0, end: int = sys.maxsize) -> int
     def format(self, *args: dynamic, **kwds: dynamic) -> str
     def format_map(self, mapping: Mapping[str, dynamic]) -> str
-    def index(self, sub: str, start: int = 0, end: int = sys.maxsize) -> int
+    override def index(self, sub: str, start: int = 0, end: int = sys.maxsize) -> int
     def isalpha(self) -> bool
     def isalnum(self) -> bool
     def isdecimal(self) -> bool
@@ -257,7 +257,7 @@ class deque[in out Element](MutableSequence[Element]):
     init(self, *, maxlen: int | None = None)
     init(self, iterable: Iterable[Element], maxlen: int | None = None)
 
-    def append(self, x: Element, /) -> None:
+    override def append(self, x: Element, /) -> None:
         """Add an element to the right side of the deque."""
 
     def appendleft(self, x: Element, /) -> None:
@@ -266,31 +266,31 @@ class deque[in out Element](MutableSequence[Element]):
     def copy(self) -> Self:
         """Return a shallow copy of a deque."""
 
-    def count(self, x: Element, /) -> int:
+    override def count(self, x: Element, /) -> int:
         """Return number of occurrences of value."""
 
-    def extend(self, iterable: Iterable[Element], /) -> None:
+    override def extend(self, iterable: Iterable[Element], /) -> None:
         """Extend the right side of the deque with elements from the iterable."""
 
     def extendleft(self, iterable: Iterable[Element], /) -> None:
         """Extend the left side of the deque with elements from the iterable."""
 
-    def insert(self, i: int, x: Element, /) -> None:
+    override def insert(self, i: int, x: Element, /) -> None:
         """Insert value before index."""
 
-    def index(self, x: Element, start: int = 0, stop: int = ..., /) -> int:
+    override def index(self, x: Element, start: int = 0, stop: int = ..., /) -> int:
         """Return first index of value.
 
         Raises ValueError if the value is not present.
         """
 
-    def pop(self) -> Element:
+    override def pop(self) -> Element:
         """Remove and return the rightmost element."""
 
     def popleft(self) -> Element:
         """Remove and return the leftmost element."""
 
-    def remove(self, value: Element, /) -> None:
+    override def remove(self, value: Element, /) -> None:
         """Remove first occurrence of value."""
 
     def rotate(self, n: int = 1, /) -> None:
@@ -299,27 +299,27 @@ class deque[in out Element](MutableSequence[Element]):
     def __copy__(self) -> Self:
         """Return a shallow copy of a deque."""
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
     __hash__: ClassVar[None]
     # These methods of deque don't take slices, unlike MutableSequence, hence the type: ignores
-    def __getitem__(self, key: SupportsIndex, /) -> Element:
+    override def __getitem__(self, key: SupportsIndex, /) -> Element:
         """Return self[key]."""
 
-    def __setitem__(self, key: SupportsIndex, value: Element, /) -> None:
+    override def __setitem__(self, key: SupportsIndex, value: Element, /) -> None:
         """Set self[key] to value."""
 
-    def __delitem__(self, key: SupportsIndex, /) -> None:
+    override def __delitem__(self, key: SupportsIndex, /) -> None:
         """Delete self[key]."""
 
-    def __contains__(self, key: object, /) -> bool:
+    override def __contains__(self, key: object, /) -> bool:
         """Return bool(key in self)."""
 
-    def __reduce__(self) -> (type[Self], tuple[()], None, Iterator[Element]):
+    override def __reduce__(self) -> (type[Self], tuple[()], None, Iterator[Element]):
         """Return state information for pickling."""
 
-    def __iadd__(self, value: Iterable[Element], /) -> Self:
+    override def __iadd__(self, value: Iterable[Element], /) -> Self:
         """Implement self+=value."""
 
     def __add__(self, value: Self, /) -> Self:
@@ -335,7 +335,7 @@ class deque[in out Element](MutableSequence[Element]):
     def __le__(self, value: deque[Element], /) -> bool
     def __gt__(self, value: deque[Element], /) -> bool
     def __ge__(self, value: deque[Element], /) -> bool
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """deques are generic over the type of their contents"""
 
@@ -399,7 +399,7 @@ class Counter[in out Element](dict[Element, int]):
     init(self, mapping: SupportsKeysAndGetItem[Element, int], /)
     init(self, iterable: Iterable[Element], /)
 
-    def copy(self) -> Self:
+    override def copy(self) -> Self:
         """Return a shallow copy."""
 
     def elements(self) -> Iterator[Element]:
@@ -430,7 +430,7 @@ class Counter[in out Element](dict[Element, int]):
 
         """
 
-    class def fromkeys(cls, iterable: dynamic, v: int | None = None) -> NoReturn
+    override class def fromkeys(cls, iterable: dynamic, v: int | None = None) -> NoReturn
 
     def subtract(self, iterable: None = None, /) -> None:
         """Like dict.update() but subtracts counts instead of replacing them.
@@ -457,7 +457,7 @@ class Counter[in out Element](dict[Element, int]):
     # The second overload is also deliberately different to dict.update()
     # (if it were `Iterable[_T] | Iterable[tuple[_T, int]]`,
     # the tuples would be added as keys, breaking type safety)
-    def update(self, m: Mapping[Element, int], /, **kwargs: int) -> None:
+    override def update(self, m: Mapping[Element, int], /, **kwargs: int) -> None:
         """Like dict.update() but add counts instead of replacing them.
 
         Source can be an iterable, a dictionary, or another Counter instance.
@@ -479,13 +479,13 @@ class Counter[in out Element](dict[Element, int]):
     def __missing__(self, key: Element) -> int:
         """The count of elements not in the Counter is zero."""
 
-    def __delitem__(self, elem: object) -> None:
+    override def __delitem__(self, elem: object) -> None:
         """Like dict.__delitem__() but does not raise KeyError for missing values."""
 
-    def __eq__(self, other: object) -> bool:
+    override def __eq__(self, other: object) -> bool:
         """True if all counts agree. Missing counts are treated as zero."""
 
-    def __ne__(self, other: object) -> bool:
+    override def __ne__(self, other: object) -> bool:
         """True if any counts disagree. Missing counts are treated as zero."""
 
     def __le__(self, other: Counter[dynamic]) -> bool:
@@ -524,7 +524,7 @@ class Counter[in out Element](dict[Element, int]):
 
         """
 
-    def __or__[Other](self, other: Counter[Other]) -> Counter[Element | Other]:
+    override def __or__[Other](self, other: Counter[Other]) -> Counter[Element | Other]:
         """Union is the maximum of value in either of the input counters.
 
         >>> Counter('abbb') | Counter('bcc')
@@ -589,7 +589,7 @@ class Counter[in out Element](dict[Element, int]):
 
         """
 
-    def __ior__(self, other: SupportsItems[Element, int]) -> Self:
+    override def __ior__(self, other: SupportsItems[Element, int]) -> Self:
         """Inplace union is the maximum of value from either counter.
 
         >>> c = Counter('abbb')
@@ -627,21 +627,21 @@ class _OrderedDictValuesView[out Value](ValuesView[Value]):
 # pyright doesn't have a specific error code for subclassing error!
 @type_check_only
 final class _odict_keys[out Key, out Value](dict_keys[Key, Value]):
-    def __reversed__(self) -> Iterator[Key]
+    override def __reversed__(self) -> Iterator[Key]
 
 @type_check_only
 final class _odict_items[out Key, out Value](dict_items[Key, Value]):
-    def __reversed__(self) -> Iterator[(Key, Value)]
+    override def __reversed__(self) -> Iterator[(Key, Value)]
 
 @type_check_only
 final class _odict_values[out Key, out Value](dict_values[Key, Value]):
-    def __reversed__(self) -> Iterator[Value]
+    override def __reversed__(self) -> Iterator[Value]
 
 @disjoint_base
 class OrderedDict[in out Key, in out Value](dict[Key, Value]):
     """Dictionary that remembers insertion order"""
 
-    def popitem(self, last: bool = True) -> (Key, Value):
+    override def popitem(self, last: bool = True) -> (Key, Value):
         """Remove and return a (key, value) pair from the dictionary.
 
         Pairs are returned in LIFO order if last is true or FIFO order if
@@ -654,27 +654,27 @@ class OrderedDict[in out Key, in out Value](dict[Key, Value]):
         Raise KeyError if the element does not exist.
         """
 
-    def copy(self) -> Self:
+    override def copy(self) -> Self:
         """A shallow copy of ordered dict."""
 
-    def __reversed__(self) -> Iterator[Key]:
+    override def __reversed__(self) -> Iterator[Key]:
         """od.__reversed__() <==> reversed(od)"""
 
-    def keys(self) -> _odict_keys[Key, Value]
-    def items(self) -> _odict_items[Key, Value]
-    def values(self) -> _odict_values[Key, Value]
+    override def keys(self) -> _odict_keys[Key, Value]
+    override def items(self) -> _odict_items[Key, Value]
+    override def values(self) -> _odict_values[Key, Value]
 
     # The signature of OrderedDict.fromkeys should be kept in line with `dict.fromkeys`, modulo positional-only differences.
     # Like dict.fromkeys, its true signature is not expressible in the current type system.
     # See #3800 & https://github.com/python/typing/issues/548#issuecomment-683336963.
     @classmethod
-    def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None) -> OrderedDict[Element, dynamic | None]:
+    override def fromkeys[Element](cls, iterable: Iterable[Element], value: None = None) -> OrderedDict[Element, dynamic | None]:
         """Create a new ordered dictionary with keys from iterable and values set to value."""
     @classmethod
     def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other) -> OrderedDict[Element, Other]
 
     # Keep OrderedDict.setdefault in line with MutableMapping.setdefault, modulo positional-only differences.
-    def setdefault[Element](self: OrderedDict[Key, Element | None], key: Key, default: None = None) -> Element | None:
+    override def setdefault[Element](self: OrderedDict[Key, Element | None], key: Key, default: None = None) -> Element | None:
         """Insert key with a value of default if key is not in the dictionary.
 
         Return the value for key if key is in the dictionary, else default.
@@ -682,7 +682,7 @@ class OrderedDict[in out Key, in out Value](dict[Key, Value]):
     def setdefault(self, key: Key, default: Value) -> Value
 
     # Same as dict.pop, but accepts keyword arguments
-    def pop(self, key: Key) -> Value:
+    override def pop(self, key: Key) -> Value:
         """od.pop(key[,default]) -> v, remove specified key and return the corresponding value.
 
         If the key is not found, return the default if given; otherwise,
@@ -691,7 +691,7 @@ class OrderedDict[in out Key, in out Value](dict[Key, Value]):
     def pop(self, key: Key, default: Value) -> Value
     def pop[Element](self, key: Key, default: Element) -> Value | Element
 
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
 
     if sys.version_info >= (3, 15):
         def __or__(self, value: dict[Key, Value] | frozendict[Key, Value], /) -> Self:
@@ -704,11 +704,11 @@ class OrderedDict[in out Key, in out Value](dict[Key, Value]):
             self, value: dict[T1, T2] | frozendict[T1, T2], /
         ) -> OrderedDict[Key | T1, Value | T2]
     else:
-        def __or__(self, value: dict[Key, Value], /) -> Self:
+        override def __or__(self, value: dict[Key, Value], /) -> Self:
             """Return self|value."""
         def __or__[T1, T2](self, value: dict[T1, T2], /) -> OrderedDict[Key | T1, Value | T2]
 
-        def __ror__(self, value: dict[Key, Value], /) -> Self:
+        override def __ror__(self, value: dict[Key, Value], /) -> Self:
             """Return value|self."""
         def __ror__[T1, T2](self, value: dict[T1, T2], /) -> OrderedDict[Key | T1, Value | T2]
 
@@ -762,16 +762,16 @@ class defaultdict[in out Key, in out Value](dict[Key, Value]):
     def __copy__(self) -> Self:
         """D.copy() -> a shallow copy of D."""
 
-    def copy(self) -> Self:
+    override def copy(self) -> Self:
         """D.copy() -> a shallow copy of D."""
 
     # defaultdict rejects frozendict in its direct __or__/__ror__ methods, even though dict accepts it.
     # See https://github.com/python/cpython/issues/149534.
-    def __or__(self, value: dict[Key, Value], /) -> Self:
+    override def __or__(self, value: dict[Key, Value], /) -> Self:
         """Return self|value."""
     def __or__[T1, T2](self, value: dict[T1, T2], /) -> defaultdict[Key | T1, Value | T2]
 
-    def __ror__(self, value: dict[Key, Value], /) -> Self:
+    override def __ror__(self, value: dict[Key, Value], /) -> Self:
         """Return value|self."""
     def __ror__[T1, T2](self, value: dict[T1, T2], /) -> defaultdict[Key | T1, Value | T2]
 
@@ -804,14 +804,14 @@ class ChainMap[in out Key, in out Value](MutableMapping[Key, Value]):
 
     let parents: Self
 
-    def __setitem__(self, key: Key, value: Value) -> None
-    def __delitem__(self, key: Key) -> None
-    def __getitem__(self, key: Key) -> Value
-    def __iter__(self) -> Iterator[Key]
-    def __len__(self) -> int
-    def __contains__(self, key: object) -> bool
+    override def __setitem__(self, key: Key, value: Value) -> None
+    override def __delitem__(self, key: Key) -> None
+    override def __getitem__(self, key: Key) -> Value
+    override def __iter__(self) -> Iterator[Key]
+    override def __len__(self) -> int
+    override def __contains__(self, key: object) -> bool
 
-    def get(self, key: Key, default: None = None) -> Value | None
+    override def get(self, key: Key, default: None = None) -> Value | None
     def get(self, key: Key, default: Value) -> Value
     def get[Element](self, key: Key, default: Element) -> Value | Element
 
@@ -819,11 +819,11 @@ class ChainMap[in out Key, in out Value](MutableMapping[Key, Value]):
     def __bool__(self) -> bool
 
     # Keep ChainMap.setdefault in line with MutableMapping.setdefault, modulo positional-only differences.
-    def setdefault[Element](self: ChainMap[Key, Element | None], key: Key, default: None = None) -> Element | None:
+    override def setdefault[Element](self: ChainMap[Key, Element | None], key: Key, default: None = None) -> Element | None:
         """D.setdefault(k[,d]) -> D.get(k,d), also set D[k]=d if k not in D"""
     def setdefault(self, key: Key, default: Value) -> Value
 
-    def pop(self, key: Key) -> Value:
+    override def pop(self, key: Key) -> Value:
         """Remove *key* from maps[0] and return its value. Raise KeyError if *key* not in maps[0]."""
     def pop(self, key: Key, default: Value) -> Value
     def pop[Element](self, key: Key, default: Element) -> Value | Element

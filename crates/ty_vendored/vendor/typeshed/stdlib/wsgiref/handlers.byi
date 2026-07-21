@@ -183,11 +183,11 @@ class SimpleHandler(BaseHandler):
         multithread: bool = True,
         multiprocess: bool = False,
     )
-    def get_stdin(self) -> InputStream
-    def get_stderr(self) -> ErrorStream
-    def add_cgi_vars(self) -> None
-    def _write(self, data: bytes) -> None
-    def _flush(self) -> None
+    override def get_stdin(self) -> InputStream
+    override def get_stderr(self) -> ErrorStream
+    override def add_cgi_vars(self) -> None
+    override def _write(self, data: bytes) -> None
+    override def _flush(self) -> None
 
 class BaseCGIHandler(SimpleHandler):
     """CGI-like systems using input/output/error streams and environ mapping

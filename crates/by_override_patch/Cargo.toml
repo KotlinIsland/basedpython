@@ -1,0 +1,27 @@
+[package]
+name = "by_override_patch"
+version = "0.0.0"
+publish = false
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+homepage = { workspace = true }
+documentation = { workspace = true }
+repository = { workspace = true }
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "by_override_patch"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+ruff_db = { workspace = true, features = ["os", "testing"] }
+ruff_ranged_value = { workspace = true }
+ruff_text_size = { workspace = true }
+ty_project = { workspace = true }
+ty_python_semantic = { workspace = true }
+walkdir = { workspace = true }
+
+[lints]
+workspace = true

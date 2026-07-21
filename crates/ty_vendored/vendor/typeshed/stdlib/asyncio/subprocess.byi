@@ -19,7 +19,7 @@ class SubprocessStreamProtocol(streams.FlowControlMixin, protocols.SubprocessPro
     stdout: streams.StreamReader | None
     stderr: streams.StreamReader | None
     init(self, limit: int, loop: events.AbstractEventLoop)
-    def pipe_data_received(self, fd: int, data: bytes | str) -> None
+    override def pipe_data_received(self, fd: int, data: bytes | str) -> None
 
 class Process:
     stdin: streams.StreamWriter | None

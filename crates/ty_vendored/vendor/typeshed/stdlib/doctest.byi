@@ -173,8 +173,8 @@ class Example:
         indent: int = 0,
         options: dict[int, bool] | None = None,
     )
-    def __hash__(self) -> int
-    def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
 
 class DocTest:
     """
@@ -221,9 +221,9 @@ class DocTest:
         DocTest's globals are initialized with a copy of `globs`.
         """
 
-    def __hash__(self) -> int
+    override def __hash__(self) -> int
     def __lt__(self, other: DocTest) -> bool
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
 
 class DocTestParser:
     """
@@ -864,8 +864,8 @@ class DocTestCase(unittest.TestCase):
     )
     def runTest(self) -> None
     def format_failure(self, err: str) -> str
-    def __hash__(self) -> int
-    def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
 
 class SkipDocTestCase(DocTestCase):
     init(self, module: types.ModuleType)

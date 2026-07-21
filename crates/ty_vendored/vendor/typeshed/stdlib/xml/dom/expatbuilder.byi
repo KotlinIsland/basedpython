@@ -127,18 +127,18 @@ class FragmentBuilder(ExpatBuilder):
     originalDocument: Document
     context: Node
     init(self, context: Node, options: Options | None = None)
-    def reset(self) -> None
-    def parseFile(self, file: SupportsRead[ReadableBuffer | str]) -> DocumentFragment:
+    override def reset(self) -> None
+    override def parseFile(self, file: SupportsRead[ReadableBuffer | str]) -> DocumentFragment:
         """Parse a document fragment from a file object, returning the
         fragment node.
         """
 
-    def parseString(self, string: ReadableBuffer | str) -> DocumentFragment:
+    override def parseString(self, string: ReadableBuffer | str) -> DocumentFragment:
         """Parse a document fragment from a string, returning the
         fragment node.
         """
 
-    def external_entity_ref_handler(self, context: str, base: str | None, systemId: str | None, publicId: str | None) -> int
+    override def external_entity_ref_handler(self, context: str, base: str | None, systemId: str | None, publicId: str | None) -> int
 
 class Namespaces:
     """Mix-in class for builders; adds support for namespaces."""
@@ -171,13 +171,13 @@ class InternalSubsetExtractor(ExpatBuilder):
     def getSubset(self) -> str:
         """Return the internal subset as a string."""
 
-    def parseFile(self, file: SupportsRead[ReadableBuffer | str]) -> None
-    def parseString(self, string: str | ReadableBuffer) -> None
-    def start_doctype_decl_handler(
+    override def parseFile(self, file: SupportsRead[ReadableBuffer | str]) -> None
+    override def parseString(self, string: str | ReadableBuffer) -> None
+    override def start_doctype_decl_handler(
         self, name: str, publicId: str | None, systemId: str | None, has_internal_subset: bool
     ) -> None
-    def end_doctype_decl_handler(self) -> NoReturn
-    def start_element_handler(self, name: str, attrs: list[str]) -> NoReturn
+    override def end_doctype_decl_handler(self) -> NoReturn
+    override def start_element_handler(self, name: str, attrs: list[str]) -> NoReturn
 
 def parse(file: str | SupportsRead[ReadableBuffer | str], namespaces: bool = True) -> Document:
     """Parse a document, returning the resulting Document node.

@@ -18,7 +18,7 @@ class BaseSelectorEventLoop(base_events.BaseEventLoop):
     """
 
     init(self, selector: selectors.BaseSelector | None = None)
-    async def sock_recv(self, sock: socket, n: int) -> bytes:
+    override async def sock_recv(self, sock: socket, n: int) -> bytes:
         """Receive data from the socket.
 
         The return value is a bytes object representing the data received.

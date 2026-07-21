@@ -13,19 +13,19 @@ from _typeshed import ReadableBuffer
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
     init(self, errors: str = "strict")
-    def encode(self, input: str, final: bool = False) -> bytes
-    def getstate(self) -> int
-    def setstate(self, state: int) -> None
+    override def encode(self, input: str, final: bool = False) -> bytes
+    override def getstate(self) -> int
+    override def setstate(self, state: int) -> None
 
 class IncrementalDecoder(codecs.BufferedIncrementalDecoder):
     init(self, errors: str = "strict")
-    def _buffer_decode(self, input: ReadableBuffer, errors: str | None, final: bool) -> (str, int)
+    override def _buffer_decode(self, input: ReadableBuffer, errors: str | None, final: bool) -> (str, int)
 
 class StreamWriter(codecs.StreamWriter):
-    def encode(self, input: str, errors: str | None = "strict") -> (bytes, int)
+    override def encode(self, input: str, errors: str | None = "strict") -> (bytes, int)
 
 class StreamReader(codecs.StreamReader):
-    def decode(self, input: ReadableBuffer, errors: str | None = "strict") -> (str, int)
+    override def decode(self, input: ReadableBuffer, errors: str | None = "strict") -> (str, int)
 
 def getregentry() -> codecs.CodecInfo
 def encode(input: str, errors: str | None = "strict") -> (bytes, int)

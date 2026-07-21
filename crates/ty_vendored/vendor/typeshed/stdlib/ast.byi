@@ -2754,7 +2754,7 @@ class NodeTransformer(NodeVisitor):
        node = YourTransformer().visit(node)
     """
 
-    def generic_visit(self, node: AST) -> AST
+    override def generic_visit(self, node: AST) -> AST
     # TODO: Override the visit_* methods with better return types.
     #       The usual return type is AST | None, but Iterable[AST]
     #       is also allowed in some cases -- this needs to be mapped.

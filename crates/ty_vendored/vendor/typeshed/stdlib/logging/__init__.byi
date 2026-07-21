@@ -872,7 +872,7 @@ class LogRecord:
         """
 
     # Allows setting contextual information on LogRecord objects as per the docs, see #7833
-    def __setattr__(self, name: str, value: dynamic, /) -> None
+    override def __setattr__(self, name: str, value: dynamic, /) -> None
 
 
 class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:

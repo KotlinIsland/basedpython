@@ -168,11 +168,11 @@ class HTMLRepr(Repr):
 
     init(self)
     def escape(self, text: str) -> str
-    def repr(self, object: object) -> str
-    def repr1(self, x: object, level: complex) -> str
+    override def repr(self, object: object) -> str
+    override def repr1(self, x: object, level: complex) -> str
     def repr_string(self, x: str, level: complex) -> str
-    def repr_str(self, x: str, level: complex) -> str
-    def repr_instance(self, x: object, level: complex) -> str
+    override def repr_str(self, x: str, level: complex) -> str
+    override def repr_instance(self, x: object, level: complex) -> str
     def repr_unicode(self, x: AnyStr, level: complex) -> str
 
 class HTMLDoc(Doc):
@@ -257,10 +257,10 @@ class HTMLDoc(Doc):
     def formattree(self, tree: list[(type, (*: type)) | list[dynamic]], modname: str, parent: type | None = None) -> str:
         """Produce HTML for a class tree as given by inspect.getclasstree()."""
 
-    def docmodule(self, object: object, name: str | None = None, mod: str | None = None, *ignored: Unused) -> str:
+    override def docmodule(self, object: object, name: str | None = None, mod: str | None = None, *ignored: Unused) -> str:
         """Produce HTML documentation for a module object."""
 
-    def docclass(
+    override def docclass(
         self,
         object: object,
         name: str | None = None,
@@ -274,7 +274,7 @@ class HTMLDoc(Doc):
     def formatvalue(self, object: object) -> str:
         """Format an argument default value as text."""
 
-    def docother(self, object: object, name: str | None = None, mod: dynamic | None = None, *ignored: Unused) -> str:
+    override def docother(self, object: object, name: str | None = None, mod: dynamic | None = None, *ignored: Unused) -> str:
         """Produce HTML documentation for a data object."""
 
     if sys.version_info >= (3, 11):
@@ -302,7 +302,7 @@ class HTMLDoc(Doc):
             """Produce html documentation for a data descriptor."""
 
     else:
-        def docroutine(
+        override def docroutine(
             self,
             object: object,
             name: str | None = None,
@@ -314,10 +314,10 @@ class HTMLDoc(Doc):
         ) -> str:
             """Produce HTML documentation for a function or method object."""
 
-        def docproperty(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:
+        override def docproperty(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:
             """Produce html documentation for a data descriptor."""
 
-        def docdata(self, object: object, name: str | None = None, mod: dynamic | None = None, cl: dynamic | None = None) -> str:
+        override def docdata(self, object: object, name: str | None = None, mod: dynamic | None = None, cl: dynamic | None = None) -> str:
             """Produce html documentation for a data descriptor."""
 
     if sys.version_info >= (3, 11):
@@ -334,10 +334,10 @@ class TextRepr(Repr):
     """Class for safely making a text representation of a Python object."""
 
     init(self)
-    def repr1(self, x: object, level: complex) -> str
+    override def repr1(self, x: object, level: complex) -> str
     def repr_string(self, x: str, level: complex) -> str
-    def repr_str(self, x: str, level: complex) -> str
-    def repr_instance(self, x: object, level: complex) -> str
+    override def repr_str(self, x: str, level: complex) -> str
+    override def repr_instance(self, x: object, level: complex) -> str
 
 class TextDoc(Doc):
     """Formatter class for text documentation."""
@@ -358,7 +358,7 @@ class TextDoc(Doc):
     ) -> str:
         """Render in text a class tree as returned by inspect.getclasstree()."""
 
-    def docclass(self, object: object, name: str | None = None, mod: str | None = None, *ignored: Unused) -> str:
+    override def docclass(self, object: object, name: str | None = None, mod: str | None = None, *ignored: Unused) -> str:
         """Produce text documentation for a given class object."""
 
     def formatvalue(self, object: object) -> str:
@@ -401,19 +401,19 @@ class TextDoc(Doc):
             """Produce text documentation for a data object."""
 
     else:
-        def docroutine(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:
+        override def docroutine(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:
             """Produce text documentation for a function or method object."""
 
-        def docmodule(self, object: object, name: str | None = None, mod: dynamic | None = None) -> str:
+        override def docmodule(self, object: object, name: str | None = None, mod: dynamic | None = None) -> str:
             """Produce text documentation for a given module object."""
 
-        def docproperty(self, object: object, name: str | None = None, mod: dynamic | None = None, cl: dynamic | None = None) -> str:
+        override def docproperty(self, object: object, name: str | None = None, mod: dynamic | None = None, cl: dynamic | None = None) -> str:
             """Produce text documentation for a data descriptor."""
 
-        def docdata(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:
+        override def docdata(self, object: object, name: str | None = None, mod: str | None = None, cl: dynamic | None = None) -> str:
             """Produce text documentation for a data descriptor."""
 
-        def docother(
+        override def docother(
             self,
             object: object,
             name: str | None = None,

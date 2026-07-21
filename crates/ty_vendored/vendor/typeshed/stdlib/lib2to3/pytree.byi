@@ -40,7 +40,7 @@ class Base:
     children: list[_NL]
     was_changed: bool
     was_checked: bool
-    def __eq__(self, other: object) -> bool:
+    override def __eq__(self, other: object) -> bool:
         """
         Compare two nodes for equality.
 
@@ -129,16 +129,16 @@ class Node(Base):
         As a side effect, the parent pointers of the children are updated.
         """
 
-    def _eq(self, other: Base) -> bool:
+    override def _eq(self, other: Base) -> bool:
         """Compare two nodes for equality."""
 
-    def clone(self) -> Node:
+    override def clone(self) -> Node:
         """Return a cloned (deep) copy of self."""
 
-    def post_order(self) -> Iterator[Self]:
+    override def post_order(self) -> Iterator[Self]:
         """Return a post-order iterator for the tree."""
 
-    def pre_order(self) -> Iterator[Self]:
+    override def pre_order(self) -> Iterator[Self]:
         """Return a pre-order iterator for the tree."""
 
     def set_child(self, i: int, child: _NL) -> None:
@@ -188,16 +188,16 @@ class Leaf(Base):
         optional context keyword argument.
         """
 
-    def _eq(self, other: Base) -> bool:
+    override def _eq(self, other: Base) -> bool:
         """Compare two nodes for equality."""
 
-    def clone(self) -> Leaf:
+    override def clone(self) -> Leaf:
         """Return a cloned (deep) copy of self."""
 
-    def post_order(self) -> Iterator[Self]:
+    override def post_order(self) -> Iterator[Self]:
         """Return a post-order iterator for the tree."""
 
-    def pre_order(self) -> Iterator[Self]:
+    override def pre_order(self) -> Iterator[Self]:
         """Return a pre-order iterator for the tree."""
 
     def __unicode__(self) -> str:

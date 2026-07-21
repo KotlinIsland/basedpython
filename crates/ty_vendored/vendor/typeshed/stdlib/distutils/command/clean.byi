@@ -18,6 +18,6 @@ class clean(Command):
     build_scripts: Incomplete
     bdist_base: Incomplete
     all: Incomplete
-    def initialize_options(self) -> None
-    def finalize_options(self) -> None
-    def run(self) -> None
+    override def initialize_options(self) -> None
+    override def finalize_options(self) -> None
+    override def run(self) -> None

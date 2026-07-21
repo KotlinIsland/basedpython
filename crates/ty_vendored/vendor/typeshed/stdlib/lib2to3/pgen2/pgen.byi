@@ -44,7 +44,7 @@ class DFAState:
     init(self, nfaset: dict[NFAState, Incomplete], final: NFAState)
     def addarc(self, next: DFAState, label: str) -> None
     def unifystate(self, old: DFAState, new: DFAState) -> None
-    def __eq__(self, other: DFAState) -> bool
+    override def __eq__(self, other: DFAState) -> bool
     __hash__: ClassVar[None]
 
 def generate_grammar(filename: StrPath = "Grammar.txt") -> PgenGrammar

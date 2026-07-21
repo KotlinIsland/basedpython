@@ -19,8 +19,8 @@ class install_data(Command):
     force: int
     data_files: Incomplete
     warn_dir: int
-    def initialize_options(self) -> None
-    def finalize_options(self) -> None
-    def run(self) -> None
+    override def initialize_options(self) -> None
+    override def finalize_options(self) -> None
+    override def run(self) -> None
     def get_inputs(self)
     def get_outputs(self)

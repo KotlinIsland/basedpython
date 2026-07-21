@@ -10,4 +10,4 @@ context: Incomplete
 class FixInput(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
-    def transform(self, node, results)
+    override def transform(self, node, results)

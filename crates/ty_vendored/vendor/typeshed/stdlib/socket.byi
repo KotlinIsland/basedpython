@@ -1676,7 +1676,7 @@ class SocketIO(RawIOBase):
     """
 
     init(self, sock: socket, mode: "r" | "w" | "rw" | "rb" | "wb" | "rwb")
-    def readinto(self, b: WriteableBuffer) -> int | None:
+    override def readinto(self, b: WriteableBuffer) -> int | None:
         """Read up to len(b) bytes into the writable buffer *b* and return
         the number of bytes read.  If the socket is non-blocking and no bytes
         are available, None is returned.
@@ -1685,7 +1685,7 @@ class SocketIO(RawIOBase):
         was shutdown at the other end.
         """
 
-    def write(self, b: ReadableBuffer) -> int | None:
+    override def write(self, b: ReadableBuffer) -> int | None:
         """Write the given bytes or bytearray object *b* to the socket
         and return the number of bytes written.  This can be less than
         len(b) if not all data could be written.  If the socket is

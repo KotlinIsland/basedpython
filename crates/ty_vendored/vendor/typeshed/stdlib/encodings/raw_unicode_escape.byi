@@ -12,19 +12,19 @@ from _typeshed import ReadableBuffer
 
 class Codec(codecs.Codec):
     # At runtime, this is codecs.raw_unicode_escape_encode
-    static def encode(str: str, errors: str | None = None, /) -> (bytes, int)
+    override static def encode(str: str, errors: str | None = None, /) -> (bytes, int)
     # At runtime, this is codecs.raw_unicode_escape_decode
-    static def decode(data: str | ReadableBuffer, errors: str | None = None, final: bool = True, /) -> (str, int)
+    override static def decode(data: str | ReadableBuffer, errors: str | None = None, final: bool = True, /) -> (str, int)
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
-    def encode(self, input: str, final: bool = False) -> bytes
+    override def encode(self, input: str, final: bool = False) -> bytes
 
 class IncrementalDecoder(codecs.BufferedIncrementalDecoder):
-    def _buffer_decode(self, input: str | ReadableBuffer, errors: str | None, final: bool) -> (str, int)
+    override def _buffer_decode(self, input: str | ReadableBuffer, errors: str | None, final: bool) -> (str, int)
 
 class StreamWriter(Codec, codecs.StreamWriter)
 
 class StreamReader(Codec, codecs.StreamReader):
-    def decode(self, input: str | ReadableBuffer, errors: str = "strict") -> (str, int)
+    override def decode(self, input: str | ReadableBuffer, errors: str = "strict") -> (str, int)
 
 def getregentry() -> codecs.CodecInfo

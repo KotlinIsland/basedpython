@@ -43,8 +43,8 @@ protocol _RealLike(_ComplexLike):
     def __float__(self) -> float
     # Overridden from `_ComplexLike`
     # for a more precise return type:
-    def __neg__(self) -> _RealLike
-    def __pos__(self) -> _RealLike
+    override def __neg__(self) -> _RealLike
+    override def __pos__(self) -> _RealLike
 
 # _IntegralLike is a structural-typing approximation
 # of the `Integral` ABC, which is not (and cannot be) a protocol
@@ -55,11 +55,11 @@ protocol _IntegralLike(_RealLike):
     def __index__(self) -> int
     # Overridden from `_ComplexLike`
     # for a more precise return type:
-    def __abs__(self) -> _IntegralLike
+    override def __abs__(self) -> _IntegralLike
     # Overridden from `RealLike`
     # for a more precise return type:
-    def __neg__(self) -> _IntegralLike
-    def __pos__(self) -> _IntegralLike
+    override def __neg__(self) -> _IntegralLike
+    override def __pos__(self) -> _IntegralLike
 
 #################
 # Module "proper"
@@ -73,7 +73,7 @@ class Number(metaclass=ABCMeta):
     """
 
     __slots__ = ()
-    abstract def __hash__(self) -> int
+    override abstract def __hash__(self) -> int
 
 # See comment at the top of the file
 # for why some of these return types are purposefully vague
@@ -115,10 +115,10 @@ class Complex(Number, _ComplexLike):
     abstract def __radd__(self, other) -> _ComplexLike:
         """other + self"""
 
-    abstract def __neg__(self) -> _ComplexLike:
+    override abstract def __neg__(self) -> _ComplexLike:
         """-self"""
 
-    abstract def __pos__(self) -> _ComplexLike:
+    override abstract def __pos__(self) -> _ComplexLike:
         """+self"""
 
     def __sub__(self, other) -> _ComplexLike:
@@ -145,13 +145,13 @@ class Complex(Number, _ComplexLike):
     abstract def __rpow__(self, base) -> _ComplexLike:
         """base ** self"""
 
-    abstract def __abs__(self) -> _RealLike:
+    override abstract def __abs__(self) -> _RealLike:
         """Returns the Real distance from 0. Called for abs(self)."""
 
     abstract def conjugate(self) -> _ComplexLike:
         """(x+y*i).conjugate() returns (x-y*i)."""
 
-    abstract def __eq__(self, other: object) -> bool:
+    override abstract def __eq__(self, other: object) -> bool:
         """self == other"""
 
     __hash__: ClassVar[None]
@@ -168,13 +168,13 @@ class Real(Complex, _RealLike):
     """
 
     __slots__ = ()
-    abstract def __float__(self) -> float:
+    override abstract def __float__(self) -> float:
         """Any Real can be converted to a native float object.
 
         Called for float(self).
         """
 
-    abstract def __trunc__(self) -> _IntegralLike:
+    override abstract def __trunc__(self) -> _IntegralLike:
         """trunc(self): Truncates self to an Integral.
 
         Returns an Integral i such that:
@@ -185,10 +185,10 @@ class Real(Complex, _RealLike):
         i.e. "truncate towards 0".
         """
 
-    abstract def __floor__(self) -> _IntegralLike:
+    override abstract def __floor__(self) -> _IntegralLike:
         """Finds the greatest Integral <= self."""
 
-    abstract def __ceil__(self) -> _IntegralLike:
+    override abstract def __ceil__(self) -> _IntegralLike:
         """Finds the least Integral >= self."""
 
     @abstractmethod
@@ -236,22 +236,22 @@ class Real(Complex, _RealLike):
     abstract def __le__(self, other) -> bool:
         """self <= other"""
 
-    def __complex__(self) -> complex:
+    override def __complex__(self) -> complex:
         """complex(self) == complex(float(self), 0)"""
 
     let real: _RealLike
 
     let imag: 0
 
-    def conjugate(self) -> _RealLike:
+    override def conjugate(self) -> _RealLike:
         """Conjugate is a no-op for Reals."""
 
     # Not actually overridden at runtime,
     # but we override these in the stub to give them more precise return types:
-    abstract def __pos__(self) -> _RealLike:
+    override abstract def __pos__(self) -> _RealLike:
         """+self"""
 
-    abstract def __neg__(self) -> _RealLike:
+    override abstract def __neg__(self) -> _RealLike:
         """-self"""
 
 # See comment at the top of the file
@@ -275,7 +275,7 @@ class Rational(Real):
         This denominator should be positive.
         """
 
-    def __float__(self) -> float:
+    override def __float__(self) -> float:
         """float(self) = self.numerator / self.denominator
 
         It's important that this conversion use the integer's "true"
@@ -294,13 +294,13 @@ class Integral(Rational, _IntegralLike):
     """
 
     __slots__ = ()
-    abstract def __int__(self) -> int:
+    override abstract def __int__(self) -> int:
         """int(self)"""
 
-    def __index__(self) -> int:
+    override def __index__(self) -> int:
         """Called whenever an index is needed, such as in slicing"""
 
-    abstract def __pow__(self, exponent, modulus=None) -> _IntegralLike:
+    override abstract def __pow__(self, exponent, modulus=None) -> _IntegralLike:
         """self ** exponent % modulus, but maybe faster.
 
         Accept the modulus argument if you want to support the
@@ -339,10 +339,10 @@ class Integral(Rational, _IntegralLike):
     abstract def __ror__(self, other) -> _IntegralLike:
         """other | self"""
 
-    abstract def __invert__(self) -> _IntegralLike:
+    override abstract def __invert__(self) -> _IntegralLike:
         """~self"""
 
-    def __float__(self) -> float:
+    override def __float__(self) -> float:
         """float(self) == float(int(self))"""
 
     let numerator: _IntegralLike
@@ -351,17 +351,17 @@ class Integral(Rational, _IntegralLike):
 
     # Not actually overridden at runtime,
     # but we override these in the stub to give them more precise return types:
-    abstract def __pos__(self) -> _IntegralLike:
+    override abstract def __pos__(self) -> _IntegralLike:
         """+self"""
 
-    abstract def __neg__(self) -> _IntegralLike:
+    override abstract def __neg__(self) -> _IntegralLike:
         """-self"""
 
-    abstract def __abs__(self) -> _IntegralLike:
+    override abstract def __abs__(self) -> _IntegralLike:
         """Returns the Real distance from 0. Called for abs(self)."""
 
     @abstractmethod
-    def __round__(self, ndigits: None = None) -> _IntegralLike:
+    override def __round__(self, ndigits: None = None) -> _IntegralLike:
         """Rounds self to ndigits decimal places, defaulting to 0.
 
         If ndigits is omitted or None, returns an Integral, otherwise

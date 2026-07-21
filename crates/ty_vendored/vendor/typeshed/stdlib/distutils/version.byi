@@ -27,14 +27,14 @@ class Version:
     rich comparisons to _cmp.
     """
 
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
     def __lt__(self, other: Self | str) -> bool
     def __le__(self, other: Self | str) -> bool
     def __gt__(self, other: Self | str) -> bool
     def __ge__(self, other: Self | str) -> bool
     abstract def __init__(self, vstring: str | None = None) -> None
     abstract def parse(self, vstring: str) -> Self
-    abstract def __str__(self) -> str
+    override abstract def __str__(self) -> str
     abstract def _cmp(self, other: Self | str) -> bool
 
 class StrictVersion(Version):
@@ -77,9 +77,9 @@ class StrictVersion(Version):
     version: (int, int, int)
     prerelease: (str, int) | None
     init(self, vstring: str | None = None)
-    def parse(self, vstring: str) -> Self
-    def __str__(self) -> str  # noqa: Y029
-    def _cmp(self, other: Self | str) -> bool
+    override def parse(self, vstring: str) -> Self
+    override def __str__(self) -> str  # noqa: Y029
+    override def _cmp(self, other: Self | str) -> bool
 
 class LooseVersion(Version):
     """Version numbering for anarchists and software realists.
@@ -117,6 +117,6 @@ class LooseVersion(Version):
     vstring: str
     version: (*: str | int)
     init(self, vstring: str | None = None)
-    def parse(self, vstring: str) -> Self
-    def __str__(self) -> str  # noqa: Y029
-    def _cmp(self, other: Self | str) -> bool
+    override def parse(self, vstring: str) -> Self
+    override def __str__(self) -> str  # noqa: Y029
+    override def _cmp(self, other: Self | str) -> bool

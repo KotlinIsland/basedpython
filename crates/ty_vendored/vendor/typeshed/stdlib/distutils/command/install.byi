@@ -44,12 +44,12 @@ class install(Command):
     build_base: Incomplete
     build_lib: Incomplete
     record: Incomplete
-    def initialize_options(self) -> None:
+    override def initialize_options(self) -> None:
         """Initializes options."""
 
     config_vars: Incomplete
     install_libbase: Incomplete
-    def finalize_options(self) -> None:
+    override def finalize_options(self) -> None:
         """Finalizes options."""
 
     def dump_dirs(self, msg) -> None:
@@ -86,7 +86,7 @@ class install(Command):
     def create_home_path(self) -> None:
         """Create directories under ~."""
 
-    def run(self) -> None:
+    override def run(self) -> None:
         """Runs the command."""
 
     def create_path_file(self) -> None:

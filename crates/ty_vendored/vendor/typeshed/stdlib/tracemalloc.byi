@@ -49,8 +49,8 @@ class Statistic:
     size: int
     traceback: Traceback
     init(self, traceback: Traceback, size: int, count: int)
-    def __eq__(self, other: object) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
 
 class StatisticDiff:
     """
@@ -65,8 +65,8 @@ class StatisticDiff:
     size_diff: int
     traceback: Traceback
     init(self, traceback: Traceback, size: int, size_diff: int, count: int, count_diff: int)
-    def __eq__(self, other: object) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
 
 type _FrameTuple = tuple[str, int]
 
@@ -79,8 +79,8 @@ class Frame:
     let filename: str
     let lineno: int
     init(self, frame: _FrameTuple)
-    def __eq__(self, other: object) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
     def __lt__(self, other: Frame) -> bool
     if sys.version_info >= (3, 11):
         def __gt__(self, other: Frame) -> bool:
@@ -114,8 +114,8 @@ class Trace:
     let size: int
     let traceback: Traceback
     init(self, trace: _TraceTuple)
-    def __eq__(self, other: object) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
 
 class Traceback(Sequence[Frame]):
     """
@@ -128,13 +128,13 @@ class Traceback(Sequence[Frame]):
     init(self, frames: Sequence[_FrameTuple], total_nframe: int | None = None)
     def format(self, limit: int | None = None, most_recent_first: bool = False) -> list[str]
 
-    def __getitem__(self, index: SupportsIndex) -> Frame
+    override def __getitem__(self, index: SupportsIndex) -> Frame
     def __getitem__(self, index: slice[SupportsIndex | None]) -> Sequence[Frame]
 
-    def __contains__(self, frame: Frame) -> bool
-    def __len__(self) -> int
-    def __eq__(self, other: object) -> bool
-    def __hash__(self) -> int
+    override def __contains__(self, frame: Frame) -> bool
+    override def __len__(self) -> int
+    override def __eq__(self, other: object) -> bool
+    override def __hash__(self) -> int
     def __lt__(self, other: Traceback) -> bool
     if sys.version_info >= (3, 11):
         def __gt__(self, other: Traceback) -> bool:

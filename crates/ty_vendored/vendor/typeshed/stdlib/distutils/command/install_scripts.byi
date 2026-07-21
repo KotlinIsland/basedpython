@@ -17,9 +17,9 @@ class install_scripts(Command):
     force: int
     build_dir: Incomplete
     skip_build: Incomplete
-    def initialize_options(self) -> None
-    def finalize_options(self) -> None
+    override def initialize_options(self) -> None
+    override def finalize_options(self) -> None
     outfiles: Incomplete
-    def run(self) -> None
+    override def run(self) -> None
     def get_inputs(self)
     def get_outputs(self)

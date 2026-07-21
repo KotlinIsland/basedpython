@@ -45,17 +45,17 @@ final class timezone(tzinfo):
     min: ClassVar[timezone]
     max: ClassVar[timezone]
     def __new__(cls, offset: timedelta, name: str = ...) -> Self
-    def tzname(self, dt: datetime | None, /) -> str:
+    override def tzname(self, dt: datetime | None, /) -> str:
         """If name is specified when timezone is created, returns the name.  Otherwise returns offset as 'UTC(+|-)HH:MM'."""
 
-    def utcoffset(self, dt: datetime | None, /) -> timedelta:
+    override def utcoffset(self, dt: datetime | None, /) -> timedelta:
         """Return fixed offset."""
 
-    def dst(self, dt: datetime | None, /) -> None:
+    override def dst(self, dt: datetime | None, /) -> None:
         """Return None."""
 
-    def __hash__(self) -> int
-    def __eq__(self, value: object, /) -> bool
+    override def __hash__(self) -> int
+    override def __eq__(self, value: object, /) -> bool
 
 if sys.version_info >= (3, 11):
     UTC: timezone
@@ -144,7 +144,7 @@ class date:
         def strftime(self, format: str, /) -> str:
             """format -> strftime() style string."""
 
-    def __format__(self, fmt: str, /) -> str:
+    override def __format__(self, fmt: str, /) -> str:
         """Formats self with strftime."""
 
     def isoformat(self) -> str:
@@ -167,7 +167,7 @@ class date:
     def __lt__(self, value: date, /) -> bool
     def __ge__(self, value: date, /) -> bool
     def __gt__(self, value: date, /) -> bool
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
     def __add__(self, value: timedelta, /) -> Self:
         """Return self+value."""
 
@@ -179,7 +179,7 @@ class date:
     def __sub__(self, value: Self, /) -> timedelta
     def __sub__(self, value: timedelta, /) -> Self
 
-    def __hash__(self) -> int
+    override def __hash__(self) -> int
     def weekday(self) -> int:
         """Return the day of the week represented by the date.
         Monday == 0 ... Sunday == 6
@@ -224,8 +224,8 @@ class time:
     def __lt__(self, value: time, /) -> bool
     def __ge__(self, value: time, /) -> bool
     def __gt__(self, value: time, /) -> bool
-    def __eq__(self, value: object, /) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, value: object, /) -> bool
+    override def __hash__(self) -> int
     def isoformat(self, timespec: str = "auto") -> str:
         """Return the time formatted according to ISO.
 
@@ -274,7 +274,7 @@ class time:
         def strftime(self, format: str, /) -> str:
             """format -> strftime() style string."""
 
-    def __format__(self, fmt: str, /) -> str:
+    override def __format__(self, fmt: str, /) -> str:
         """Formats self with strftime."""
 
     def utcoffset(self) -> timedelta | None:
@@ -390,11 +390,11 @@ class timedelta:
     def __lt__(self, value: timedelta, /) -> bool
     def __ge__(self, value: timedelta, /) -> bool
     def __gt__(self, value: timedelta, /) -> bool
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
     def __bool__(self) -> bool:
         """True if self else False"""
 
-    def __hash__(self) -> int
+    override def __hash__(self) -> int
 
 @disjoint_base
 class datetime(date):
@@ -436,7 +436,7 @@ class datetime(date):
             interpreted as local time.
             """
     else:
-        class def fromtimestamp(cls, timestamp: float, /, tz: _TzInfo | None = None) -> Self:
+        override class def fromtimestamp(cls, timestamp: float, /, tz: _TzInfo | None = None) -> Self:
             """timestamp[, tz] -> tz's local time from POSIX timestamp."""
 
     @classmethod
@@ -497,7 +497,7 @@ class datetime(date):
         ) -> Self:
             """The same as replace()."""
 
-    def replace(
+    override def replace(
         self,
         year: SupportsIndex = ...,
         month: SupportsIndex = ...,
@@ -515,7 +515,7 @@ class datetime(date):
     def astimezone(self, tz: _TzInfo | None = None) -> Self:
         """Convert to local time in new timezone tz."""
 
-    def isoformat(self, sep: str = "T", timespec: str = "auto") -> str:
+    override def isoformat(self, sep: str = "T", timespec: str = "auto") -> str:
         """Return the time formatted according to ISO.
 
         The full format looks like 'YYYY-MM-DD HH:MM:SS.mmmmmm'.
@@ -552,14 +552,14 @@ class datetime(date):
     def dst(self) -> timedelta | None:
         """Return self.tzinfo.dst(self)."""
 
-    def __le__(self, value: datetime, /) -> bool
-    def __lt__(self, value: datetime, /) -> bool
-    def __ge__(self, value: datetime, /) -> bool
-    def __gt__(self, value: datetime, /) -> bool
-    def __eq__(self, value: object, /) -> bool
-    def __hash__(self) -> int
+    override def __le__(self, value: datetime, /) -> bool
+    override def __lt__(self, value: datetime, /) -> bool
+    override def __ge__(self, value: datetime, /) -> bool
+    override def __gt__(self, value: datetime, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
+    override def __hash__(self) -> int
 
-    def __sub__(self, value: Self, /) -> timedelta:
+    override def __sub__(self, value: Self, /) -> timedelta:
         """Return self-value."""
     def __sub__(self, value: timedelta, /) -> Self
 

@@ -14,9 +14,9 @@ class register(PyPIRCCommand):
     sub_commands: ClassVar[list[(str, ((dynamic) -> bool) | None)]]
     list_classifiers: int
     strict: int
-    def initialize_options(self) -> None
-    def finalize_options(self) -> None
-    def run(self) -> None
+    override def initialize_options(self) -> None
+    override def finalize_options(self) -> None
+    override def run(self) -> None
     def check_metadata(self) -> None:
         """Deprecated API."""
 
