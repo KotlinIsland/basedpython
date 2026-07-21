@@ -1674,7 +1674,7 @@ f(**kwargs<CURSOR>)
         info: Found 1 type definition
           --> stdlib/builtins.byi:LL:7
            |
-        LL | class dict[in out Key, in out Value](MutableMapping[Key, Value]):
+        LL | class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
            |       ----
            |
         ");

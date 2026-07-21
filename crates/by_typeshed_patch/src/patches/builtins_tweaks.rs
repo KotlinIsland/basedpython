@@ -3,12 +3,14 @@
 //! - [`FrozendictCovariant`] makes `frozendict` fully covariant (`in out` → `out`)
 //! - [`TypeDictProxyCovariant`] makes `type.__dict__`'s value projection
 //!   covariant (`out dynamic`)
+//! - [`HashableKeyBound`] bounds the key/element typevar of `dict`, `set`,
+//!   `frozendict` and `frozenset` by `Hashable`
 //!
 //! each patch is scoped to a single named symbol and is idempotent
 
 use std::path::Path;
 
-use ruff_python_ast::{Expr, ModModule, Stmt, StmtClassDef};
+use ruff_python_ast::{Expr, ModModule, Stmt, StmtClassDef, TypeParam};
 use ruff_python_parser::Parsed;
 use ruff_text_size::{Ranged, TextRange};
 
@@ -216,6 +218,63 @@ fn subscript_head(expr: &Expr) -> Option<&str> {
     }
 }
 
+// ---------------------------------------------------------------------------
+
+/// bounds the key/element typevar of the hashable-keyed builtin containers by
+/// `Hashable`, matching their runtime constraint (a `dict`/`set` key or a
+/// `frozendict`/`frozenset` element must be hashable). `Hashable` is one of
+/// basedpython's implicit typing names, so no import is needed.
+///
+/// only the *first* typevar of each class is bounded (the key / element); the
+/// value typevar of the mapping types is left unbounded. an unbounded typevar
+/// used as a key still satisfies the bound because its own upper bound is
+/// `object`, which is hashable
+pub struct HashableKeyBound;
+
+/// the container classes whose first typevar is the hashable key / element
+const HASHABLE_KEYED: &[&str] = &["dict", "set", "frozendict", "frozenset"];
+
+impl Patch for HashableKeyBound {
+    fn name(&self) -> &'static str {
+        "hashable-key-bound"
+    }
+    fn target_symbols(&self) -> &'static [&'static str] {
+        &[
+            "builtins.dict",
+            "builtins.set",
+            "builtins.frozendict",
+            "builtins.frozenset",
+        ]
+    }
+    fn rewrite(&self, module_path: &Path, parsed: &Parsed<ModModule>, _source: &str) -> Vec<Edit> {
+        if !in_builtins(module_path) {
+            return Vec::new();
+        }
+        let mut edits = Vec::new();
+        walk_classes(&parsed.syntax().body, &mut |class| {
+            if !HASHABLE_KEYED.contains(&class.name.as_str()) {
+                return;
+            }
+            let Some(type_params) = &class.type_params else {
+                return;
+            };
+            // the key / element is always the first typevar; leave it alone if it
+            // already carries a bound (idempotent on the converted form)
+            if let Some(TypeParam::TypeVar(tv)) = type_params.type_params.first()
+                && tv.bound.is_none()
+            {
+                let at = tv.name.range().end().to_usize();
+                edits.push(Edit {
+                    start: at,
+                    end: at,
+                    replacement: ": Hashable".to_string(),
+                });
+            }
+        });
+        edits
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +322,35 @@ class type:
             PySourceType::BasedPythonStub,
         );
         let edits = FrozendictCovariant.rewrite(Path::new("types.byi"), &parsed, "irrelevant");
+        assert!(edits.is_empty());
+    }
+
+    #[test]
+    fn hashable_key_bounds_dict_and_set() {
+        let src = "\
+class dict[in out Key, in out Value](MutableMapping[Key, Value]): ...
+class set[in out Element](MutableSet[Element]): ...
+class frozendict[out Key, out Value](Mapping[Key, Value]): ...
+class frozenset[out Element](AbstractSet[Element]): ...
+";
+        let expected = "\
+class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]): ...
+class set[in out Element: Hashable](MutableSet[Element]): ...
+class frozendict[out Key: Hashable, out Value](Mapping[Key, Value]): ...
+class frozenset[out Element: Hashable](AbstractSet[Element]): ...
+";
+        assert_eq!(run(&HashableKeyBound, src), expected);
+        // idempotent: the bounded form is left untouched
+        assert_eq!(run(&HashableKeyBound, expected), expected);
+    }
+
+    #[test]
+    fn hashable_key_bound_skips_non_builtins() {
+        let parsed = parse_unchecked_source(
+            "class dict[in out Key, in out Value]: ...\n",
+            PySourceType::BasedPythonStub,
+        );
+        let edits = HashableKeyBound.rewrite(Path::new("types.byi"), &parsed, "irrelevant");
         assert!(edits.is_empty());
     }
 }
