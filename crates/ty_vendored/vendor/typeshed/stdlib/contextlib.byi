@@ -93,8 +93,8 @@ class _GeneratorContextManagerBase[out G: Generator[dynamic, dynamic, dynamic] |
 class _GeneratorContextManager[out Element, in Sent = None, out Return = None](_GeneratorContextManagerBase[Generator[Element, Sent, Return]], AbstractContextManager[Element, bool | None], ContextDecorator):
     """Helper for @contextmanager decorator."""
 
-    def __enter__(self) -> Element
-    def __exit__(
+    override def __enter__(self) -> Element
+    override def __exit__(
         self, typ: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
     ) -> bool | None
 
@@ -142,8 +142,8 @@ class AsyncContextDecorator:
 class _AsyncGeneratorContextManager[out Element, in Sent = None](_GeneratorContextManagerBase[AsyncGenerator[Element, Sent]], AbstractAsyncContextManager[Element, bool | None], AsyncContextDecorator):
     """Helper for @asynccontextmanager decorator."""
 
-    async def __aenter__(self) -> Element
-    async def __aexit__(
+    override async def __aenter__(self) -> Element
+    override async def __aexit__(
         self, typ: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
     ) -> bool | None
 
@@ -204,8 +204,8 @@ class closing[in out SupportsCloseT: _SupportsClose](AbstractContextManager[Supp
     """
 
     init(self, thing: SupportsCloseT)
-    def __enter__(self) -> SupportsCloseT
-    def __exit__(self, *exc_info: Unused) -> None
+    override def __enter__(self) -> SupportsCloseT
+    override def __exit__(self, *exc_info: Unused) -> None
 
 @type_check_only
 protocol _SupportsAclose:
@@ -232,8 +232,8 @@ class aclosing[in out SupportsAcloseT: _SupportsAclose](AbstractAsyncContextMana
     """
 
     init(self, thing: SupportsAcloseT)
-    async def __aenter__(self) -> SupportsAcloseT
-    async def __aexit__(self, *exc_info: Unused) -> None
+    override async def __aenter__(self) -> SupportsAcloseT
+    override async def __aexit__(self, *exc_info: Unused) -> None
 
 class suppress(AbstractContextManager[None, bool]):
     """Context manager to suppress specified exceptions
@@ -247,8 +247,8 @@ class suppress(AbstractContextManager[None, bool]):
     """
 
     init(self, *exceptions: type[BaseException])
-    def __enter__(self) -> None
-    def __exit__(
+    override def __enter__(self) -> None
+    override def __exit__(
         self, exctype: type[BaseException] | None, excinst: BaseException | None, exctb: TracebackType | None
     ) -> bool
 
@@ -263,8 +263,8 @@ protocol _SupportsRedirect:
 
 class _RedirectStream[in out SupportsRedirectT: _SupportsRedirect | None](AbstractContextManager[SupportsRedirectT, None]):
     init(self, new_target: SupportsRedirectT)
-    def __enter__(self) -> SupportsRedirectT
-    def __exit__(
+    override def __enter__(self) -> SupportsRedirectT
+    override def __exit__(
         self, exctype: type[BaseException] | None, excinst: BaseException | None, exctb: TracebackType | None
     ) -> None
 
@@ -403,10 +403,10 @@ class nullcontext[in out Element](AbstractContextManager[Element, None], Abstrac
     init(self: nullcontext[None])
     init(self: nullcontext[Element], enter_result: Element)
 
-    def __enter__(self) -> Element
-    def __exit__(self, *exctype: Unused) -> None
-    async def __aenter__(self) -> Element
-    async def __aexit__(self, *exctype: Unused) -> None
+    override def __enter__(self) -> Element
+    override def __exit__(self, *exctype: Unused) -> None
+    override async def __aenter__(self) -> Element
+    override async def __aexit__(self, *exctype: Unused) -> None
 
 if sys.version_info >= (3, 11):
 

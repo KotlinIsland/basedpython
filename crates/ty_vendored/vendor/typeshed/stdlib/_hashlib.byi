@@ -71,10 +71,10 @@ class HASHXOF(HASH):
     digest_size -- number of bytes in this hashes output
     """
 
-    def digest(self, length: int) -> bytes:
+    override def digest(self, length: int) -> bytes:
         """Return the digest value as a bytes object."""
 
-    def hexdigest(self, length: int) -> str:
+    override def hexdigest(self, length: int) -> str:
         """Return the digest value as a string of hexadecimal digits."""
 
 final class HMAC:

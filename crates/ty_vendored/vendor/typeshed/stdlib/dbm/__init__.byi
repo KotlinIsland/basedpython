@@ -43,11 +43,11 @@ type _TFlags = "r" | "w" | "c" | "n" | "rf" | "wf" | "cf" | "nf" | "rs" | "ws" |
 @type_check_only
 class _Database(MutableMapping[_KeyType, bytes]):
     def close(self) -> None
-    def __getitem__(self, key: _KeyType) -> bytes
-    def __setitem__(self, key: _KeyType, value: _ValueType) -> None
-    def __delitem__(self, key: _KeyType) -> None
-    def __iter__(self) -> Iterator[bytes]
-    def __len__(self) -> int
+    override def __getitem__(self, key: _KeyType) -> bytes
+    override def __setitem__(self, key: _KeyType, value: _ValueType) -> None
+    override def __delitem__(self, key: _KeyType) -> None
+    override def __iter__(self) -> Iterator[bytes]
+    override def __len__(self) -> int
     def __del__(self) -> None
     def __enter__(self) -> Self
     def __exit__(

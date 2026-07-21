@@ -10,15 +10,15 @@ encode = codecs.utf_32_encode
 def decode(input: ReadableBuffer, errors: str | None = "strict") -> (str, int)
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
-    def encode(self, input: str, final: bool = False) -> bytes
+    override def encode(self, input: str, final: bool = False) -> bytes
 
 class IncrementalDecoder(codecs.BufferedIncrementalDecoder):
-    def _buffer_decode(self, input: ReadableBuffer, errors: str, final: bool) -> (str, int)
+    override def _buffer_decode(self, input: ReadableBuffer, errors: str, final: bool) -> (str, int)
 
 class StreamWriter(codecs.StreamWriter):
-    def encode(self, input: str, errors: str = "strict") -> (bytes, int)
+    override def encode(self, input: str, errors: str = "strict") -> (bytes, int)
 
 class StreamReader(codecs.StreamReader):
-    def decode(self, input: ReadableBuffer, errors: str = "strict") -> (str, int)
+    override def decode(self, input: ReadableBuffer, errors: str = "strict") -> (str, int)
 
 def getregentry() -> codecs.CodecInfo

@@ -179,8 +179,8 @@ class IndentedHelpFormatter(HelpFormatter):
         width: int | None = None,
         short_first: bool | 0 | 1 = 1,
     )
-    def format_heading(self, heading: str) -> str
-    def format_usage(self, usage: str) -> str
+    override def format_heading(self, heading: str) -> str
+    override def format_usage(self, usage: str) -> str
 
 class TitledHelpFormatter(HelpFormatter):
     """Format help with underlined section headers."""
@@ -192,8 +192,8 @@ class TitledHelpFormatter(HelpFormatter):
         width: int | None = None,
         short_first: bool | 0 | 1 = 0,
     )
-    def format_heading(self, heading: str) -> str
-    def format_usage(self, usage: str) -> str
+    override def format_heading(self, heading: str) -> str
+    override def format_usage(self, usage: str) -> str
 
 class Option:
     """
@@ -394,8 +394,8 @@ class Values:
     # is set on the instance.
     def __getattr__(self, name: str) -> dynamic
     # TODO: mypy infers -> object for __getattr__ if __setattr__ has `value: object`
-    def __setattr__(self, name: str, value: dynamic, /) -> None
-    def __eq__(self, other: object) -> bool
+    override def __setattr__(self, name: str, value: dynamic, /) -> None
+    override def __eq__(self, other: object) -> bool
 
 class OptionParser(OptionContainer):
     """
@@ -562,8 +562,8 @@ class OptionParser(OptionContainer):
     def exit(self, status: int = 0, msg: str | None = None) -> NoReturn
     def expand_prog_name(self, s: str) -> str
     def format_epilog(self, formatter: HelpFormatter) -> str
-    def format_help(self, formatter: HelpFormatter | None = None) -> str
-    def format_option_help(self, formatter: HelpFormatter | None = None) -> str
+    override def format_help(self, formatter: HelpFormatter | None = None) -> str
+    override def format_option_help(self, formatter: HelpFormatter | None = None) -> str
     def get_default_values(self) -> Values
     def get_option_group(self, opt_str: str) -> OptionGroup | None
     def get_prog_name(self) -> str

@@ -16,28 +16,28 @@ from _typeshed import ReadableBuffer
 
 class Codec(codecs.Codec):
     # At runtime, this is codecs.charmap_encode
-    static def encode(str: str, errors: str | None = None, mapping: _CharMap | None = None, /) -> (bytes, int)
+    override static def encode(str: str, errors: str | None = None, mapping: _CharMap | None = None, /) -> (bytes, int)
     # At runtime, this is codecs.charmap_decode
-    static def decode(data: ReadableBuffer, errors: str | None = None, mapping: _CharMap | None = None, /) -> (str, int)
+    override static def decode(data: ReadableBuffer, errors: str | None = None, mapping: _CharMap | None = None, /) -> (str, int)
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
     mapping: _CharMap | None
     init(self, errors: str = "strict", mapping: _CharMap | None = None)
-    def encode(self, input: str, final: bool = False) -> bytes
+    override def encode(self, input: str, final: bool = False) -> bytes
 
 class IncrementalDecoder(codecs.IncrementalDecoder):
     mapping: _CharMap | None
     init(self, errors: str = "strict", mapping: _CharMap | None = None)
-    def decode(self, input: ReadableBuffer, final: bool = False) -> str
+    override def decode(self, input: ReadableBuffer, final: bool = False) -> str
 
 class StreamWriter(Codec, codecs.StreamWriter):
     mapping: _CharMap | None
     init(self, stream: codecs._WritableStream, errors: str = "strict", mapping: _CharMap | None = None)
-    def encode(self, input: str, errors: str = "strict") -> (bytes, int)
+    override def encode(self, input: str, errors: str = "strict") -> (bytes, int)
 
 class StreamReader(Codec, codecs.StreamReader):
     mapping: _CharMap | None
     init(self, stream: codecs._ReadableStream, errors: str = "strict", mapping: _CharMap | None = None)
-    def decode(self, input: ReadableBuffer, errors: str = "strict") -> (str, int)
+    override def decode(self, input: ReadableBuffer, errors: str = "strict") -> (str, int)
 
 def getregentry() -> codecs.CodecInfo

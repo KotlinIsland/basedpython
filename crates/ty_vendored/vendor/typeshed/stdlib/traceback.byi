@@ -337,7 +337,7 @@ class TracebackException:
         ) -> Self:
             """Create a TracebackException from an exception."""
 
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
     __hash__: ClassVar[None]
     if sys.version_info >= (3, 11):
         def format(self, *, chain: bool = True, _ctx: _ExceptionPrintContext | None = None) -> Generator[str]:
@@ -504,7 +504,7 @@ class FrameSummary:
     def __getitem__(self, pos: slice[SupportsIndex | None]) -> (*: dynamic)
 
     def __iter__(self) -> Iterator[dynamic]
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
     def __len__(self) -> 4
     __hash__: ClassVar[None]
 

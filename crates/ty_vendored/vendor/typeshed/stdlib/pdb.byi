@@ -709,7 +709,7 @@ class Pdb(Bdb, Cmd):
         condition evaluates to true.
         """
 
-    def do_clear(self, arg: str) -> bool | None:
+    override def do_clear(self, arg: str) -> bool | None:
         """cl(ear) [filename:lineno | bpnumber ...]
 
         With a space separated list of breakpoint numbers, clear
@@ -913,7 +913,7 @@ class Pdb(Bdb, Cmd):
         Delete the specified alias.
         """
 
-    def do_help(self, arg: str) -> bool | None:
+    override def do_help(self, arg: str) -> bool | None:
         """h(elp)
 
         Without argument, print the list of available commands.
@@ -1060,4 +1060,4 @@ def lasti2lineno(code: CodeType, lasti: int) -> int
 class _rstr(str):
     """String that doesn't quote its repr."""
 
-    def __repr__(self) -> Self
+    override def __repr__(self) -> Self

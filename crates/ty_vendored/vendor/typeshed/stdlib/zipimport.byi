@@ -109,7 +109,7 @@ class zipimporter(_LoaderBasics):
         contain the module, but has no source for it.
         """
 
-    def is_package(self, fullname: str) -> bool:
+    override def is_package(self, fullname: str) -> bool:
         """is_package(fullname) -> bool.
 
         Return True if the module specified by fullname is a package.
@@ -118,7 +118,7 @@ class zipimporter(_LoaderBasics):
 
     if sys.version_info < (3, 15):
         @deprecated("Deprecated since Python 3.10; removed in Python 3.15. Use `exec_module()` instead.")
-        def load_module(self, fullname: str) -> ModuleType:
+        override def load_module(self, fullname: str) -> ModuleType:
             """load_module(fullname) -> module.
 
             Load the module specified by 'fullname'. 'fullname' must be the
@@ -128,10 +128,10 @@ class zipimporter(_LoaderBasics):
             Deprecated since Python 3.10. Use exec_module() instead.
             """
 
-    def exec_module(self, module: ModuleType) -> None:
+    override def exec_module(self, module: ModuleType) -> None:
         """Execute the module."""
 
-    def create_module(self, spec: ModuleSpec) -> None:
+    override def create_module(self, spec: ModuleSpec) -> None:
         """Use default semantics for module creation."""
 
     def find_spec(self, fullname: str, target: ModuleType | None = None) -> ModuleSpec | None:

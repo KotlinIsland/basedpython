@@ -53,7 +53,7 @@ class bdist_rpm(Command):
     no_autoreq: int
     force_arch: Incomplete
     quiet: int
-    def initialize_options(self) -> None
-    def finalize_options(self) -> None
+    override def initialize_options(self) -> None
+    override def finalize_options(self) -> None
     def finalize_package_data(self) -> None
-    def run(self) -> None
+    override def run(self) -> None

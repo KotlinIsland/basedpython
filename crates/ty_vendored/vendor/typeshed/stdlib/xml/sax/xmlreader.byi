@@ -93,7 +93,7 @@ class IncrementalParser(XMLReader):
     """
 
     init(self, bufsize: int = 65536)
-    def parse(self, source: InputSource | _Source) -> None
+    override def parse(self, source: InputSource | _Source) -> None
     def feed(self, data: str | ReadableBuffer) -> None:
         """This method gives the raw XML data in the data parameter to
         the parser and makes it parse the data, emitting the
@@ -261,15 +261,15 @@ class AttributesNSImpl(AttributesImpl[_NSName]):
         qnames of the form {(ns_uri, lname): qname, ...}.
         """
 
-    def getValue(self, name: _NSName) -> str
-    def getNameByQName(self, name: str) -> _NSName
-    def getQNameByName(self, name: _NSName) -> str
-    def getNames(self) -> list[_NSName]
-    def __getitem__(self, name: _NSName) -> str
-    def keys(self) -> list[_NSName]
-    def __contains__(self, name: _NSName) -> bool
+    override def getValue(self, name: _NSName) -> str
+    override def getNameByQName(self, name: str) -> _NSName
+    override def getQNameByName(self, name: _NSName) -> str
+    override def getNames(self) -> list[_NSName]
+    override def __getitem__(self, name: _NSName) -> str
+    override def keys(self) -> list[_NSName]
+    override def __contains__(self, name: _NSName) -> bool
 
-    def get(self, name: _NSName, alternative: None = None) -> str | None
+    override def get(self, name: _NSName, alternative: None = None) -> str | None
     def get(self, name: _NSName, alternative: str) -> str
 
-    def items(self) -> list[(_NSName, str)]
+    override def items(self) -> list[(_NSName, str)]

@@ -837,7 +837,7 @@ final class ParamSpecArgs:
     else:
         def __init__(self, origin: ParamSpec) -> None
 
-    def __eq__(self, other: object, /) -> bool
+    override def __eq__(self, other: object, /) -> bool
     __hash__: ClassVar[None]
 
 final class ParamSpecKwargs:
@@ -861,7 +861,7 @@ final class ParamSpecKwargs:
     else:
         def __init__(self, origin: ParamSpec) -> None
 
-    def __eq__(self, other: object, /) -> bool
+    override def __eq__(self, other: object, /) -> bool
     __hash__: ClassVar[None]
 
 final class ParamSpec:
@@ -1405,7 +1405,7 @@ protocol Hashable(metaclass=ABCMeta):
     # TODO: This is special, in that a subclass of a hashable class may not be hashable
     #   (for example, list vs. object). It's not obvious how to represent this. This class
     #   is currently mostly useless for static checking.
-    abstract def __hash__(self) -> int
+    override abstract def __hash__(self) -> int
 
 @runtime_checkable
 protocol Iterable[out Element]:
@@ -1416,7 +1416,7 @@ protocol Iterator[out Element](Iterable[Element]):
     abstract def __next__(self) -> Element:
         """Return the next item from the iterator. When exhausted, raise StopIteration"""
 
-    def __iter__(self) -> Iterator[Element]
+    override def __iter__(self) -> Iterator[Element]
 
 @runtime_checkable
 protocol Reversible[out Element](Iterable[Element]):
@@ -1425,7 +1425,7 @@ protocol Reversible[out Element](Iterable[Element]):
 
 @runtime_checkable
 protocol Generator[out Element, in Sent = None, out Return = None](Iterator[Element]):
-    def __next__(self) -> Element:
+    override def __next__(self) -> Element:
         """Return the next item from the generator.
         When exhausted, raise StopIteration.
         """
@@ -1451,7 +1451,7 @@ protocol Generator[out Element, in Sent = None, out Return = None](Iterator[Elem
         def close(self) -> None:
             """Raise GeneratorExit inside generator."""
 
-    def __iter__(self) -> Generator[Element, Sent, Return]
+    override def __iter__(self) -> Generator[Element, Sent, Return]
 
 # NOTE: Prior to Python 3.13 these aliases are lacking the second _ExitT_co parameter
 if sys.version_info >= (3, 13):
@@ -1503,11 +1503,11 @@ protocol AsyncIterator[out Element](AsyncIterable[Element]):
     abstract def __anext__(self) -> Awaitable[Element]:
         """Return the next item or raise StopAsyncIteration when exhausted."""
 
-    def __aiter__(self) -> AsyncIterator[Element]
+    override def __aiter__(self) -> AsyncIterator[Element]
 
 @runtime_checkable
 protocol AsyncGenerator[out Element, in Sent = None](AsyncIterator[Element]):
-    def __anext__(self) -> Coroutine[dynamic, dynamic, Element]:
+    override def __anext__(self) -> Coroutine[dynamic, dynamic, Element]:
         """Return the next item from the asynchronous generator.
         When exhausted, raise StopAsyncIteration.
         """
@@ -1561,9 +1561,9 @@ class Sequence[out Element](Reversible[Element], Collection[Element]):
     def count(self, value: dynamic, /) -> int:
         """S.count(value) -> integer -- return number of occurrences of value"""
 
-    def __contains__(self, value: Overlapping[Element], /) -> bool
-    def __iter__(self) -> Iterator[Element]
-    def __reversed__(self) -> Iterator[Element]
+    override def __contains__(self, value: Overlapping[Element], /) -> bool
+    override def __iter__(self) -> Iterator[Element]
+    override def __reversed__(self) -> Iterator[Element]
 
 class MutableSequence[in out Element](Sequence[Element]):
     """All the operations on a read-write sequence.
@@ -1575,7 +1575,7 @@ class MutableSequence[in out Element](Sequence[Element]):
     abstract def insert(self, index: int, value: Element, /) -> None:
         """S.insert(index, value) -- insert value before index"""
 
-    abstract def __getitem__(self, index: int, /) -> Element
+    override abstract def __getitem__(self, index: int, /) -> Element
     abstract def __getitem__(self, index: slice[int | None], /) -> MutableSequence[Element]
 
     abstract def __setitem__(self, index: int, value: Element, /) -> None
@@ -1622,7 +1622,7 @@ class AbstractSet[out Element](Collection[Element]):
     then the other operations will automatically follow suit.
     """
 
-    abstract def __contains__(self, x: Overlapping[Element], /) -> bool
+    override abstract def __contains__(self, x: Overlapping[Element], /) -> bool
     def _hash(self) -> int:
         """Compute the hash value of a set.
 
@@ -1655,7 +1655,7 @@ class AbstractSet[out Element](Collection[Element]):
     def __or__[T](self, other: AbstractSet[T], /) -> AbstractSet[Element | T]
     def __sub__(self, other: AbstractSet[dynamic], /) -> AbstractSet[Element]
     def __xor__[T](self, other: AbstractSet[T], /) -> AbstractSet[Element | T]
-    def __eq__(self, other: object, /) -> bool
+    override def __eq__(self, other: object, /) -> bool
     def isdisjoint(self, other: Iterable[dynamic], /) -> bool:
         """Return True if two sets have a null intersection."""
 
@@ -1695,40 +1695,40 @@ class MutableSet[in out Element](AbstractSet[Element]):
 class MappingView(Sized):
     __slots__ = ("_mapping",)
     init(self, mapping: Sized)  # undocumented
-    def __len__(self) -> int
+    override def __len__(self) -> int
 
 class ItemsView[out Key, out Value](MappingView, AbstractSet[tuple[Key, Value]]):
     init(self, mapping: SupportsGetItemViewable[Key, Value])  # undocumented
-    class def _from_iterable[Other](cls, it: Iterable[Other], /) -> set[Other]
-    def __and__(self, other: Iterable[dynamic], /) -> set[(Key, Value)]
+    override class def _from_iterable[Other](cls, it: Iterable[Other], /) -> set[Other]
+    override def __and__(self, other: Iterable[dynamic], /) -> set[(Key, Value)]
     def __rand__[Element](self, other: Iterable[Element], /) -> set[Element]
-    def __contains__(self, item: Overlapping[tuple[Key, Value]], /) -> bool
-    def __iter__(self) -> Iterator[(Key, Value)]
-    def __or__[Element](self, other: Iterable[Element], /) -> set[(Key, Value) | Element]
+    override def __contains__(self, item: Overlapping[tuple[Key, Value]], /) -> bool
+    override def __iter__(self) -> Iterator[(Key, Value)]
+    override def __or__[Element](self, other: Iterable[Element], /) -> set[(Key, Value) | Element]
     def __ror__[Element](self, other: Iterable[Element], /) -> set[(Key, Value) | Element]
-    def __sub__(self, other: Iterable[dynamic], /) -> set[(Key, Value)]
+    override def __sub__(self, other: Iterable[dynamic], /) -> set[(Key, Value)]
     def __rsub__[Element](self, other: Iterable[Element], /) -> set[Element]
-    def __xor__[Element](self, other: Iterable[Element], /) -> set[(Key, Value) | Element]
+    override def __xor__[Element](self, other: Iterable[Element], /) -> set[(Key, Value) | Element]
     def __rxor__[Element](self, other: Iterable[Element], /) -> set[(Key, Value) | Element]
 
 class KeysView[out Key](MappingView, AbstractSet[Key]):
     init(self, mapping: Viewable[Key])  # undocumented
-    class def _from_iterable[Other](cls, it: Iterable[Other], /) -> set[Other]
-    def __and__(self, other: Iterable[dynamic], /) -> set[Key]
+    override class def _from_iterable[Other](cls, it: Iterable[Other], /) -> set[Other]
+    override def __and__(self, other: Iterable[dynamic], /) -> set[Key]
     def __rand__[Element](self, other: Iterable[Element], /) -> set[Element]
-    def __contains__(self, key: Overlapping[Key], /) -> bool
-    def __iter__(self) -> Iterator[Key]
-    def __or__[Element](self, other: Iterable[Element], /) -> set[Key | Element]
+    override def __contains__(self, key: Overlapping[Key], /) -> bool
+    override def __iter__(self) -> Iterator[Key]
+    override def __or__[Element](self, other: Iterable[Element], /) -> set[Key | Element]
     def __ror__[Element](self, other: Iterable[Element], /) -> set[Key | Element]
-    def __sub__(self, other: Iterable[dynamic], /) -> set[Key]
+    override def __sub__(self, other: Iterable[dynamic], /) -> set[Key]
     def __rsub__[Element](self, other: Iterable[Element], /) -> set[Element]
-    def __xor__[Element](self, other: Iterable[Element], /) -> set[Key | Element]
+    override def __xor__[Element](self, other: Iterable[Element], /) -> set[Key | Element]
     def __rxor__[Element](self, other: Iterable[Element], /) -> set[Key | Element]
 
 class ValuesView[out Value](MappingView, Collection[Value]):
     init(self, mapping: SupportsGetItemViewable[dynamic, Value])  # undocumented
-    def __contains__(self, value: Overlapping[Value], /) -> bool
-    def __iter__(self) -> Iterator[Value]
+    override def __contains__(self, value: Overlapping[Value], /) -> bool
+    override def __iter__(self) -> Iterator[Value]
 
 # note for Mapping.get and MutableMapping.pop and MutableMapping.setdefault
 # In _collections_abc.py the parameters are positional-or-keyword,
@@ -1762,8 +1762,8 @@ class Mapping[out Key, out Value](Collection[Key]):
     def values(self) -> ValuesView[Value]:
         """D.values() -> an object providing a view on D's values"""
 
-    def __contains__(self, key: Overlapping[Key], /) -> bool
-    def __eq__(self, other: object, /) -> bool
+    override def __contains__(self, key: Overlapping[Key], /) -> bool
+    override def __eq__(self, other: object, /) -> bool
 
 class MutableMapping[in out Key, in out Value](Mapping[Key, Value]):
     """A MutableMapping is a generic container for associating
@@ -1900,7 +1900,7 @@ class BinaryIO(IO[bytes]):
     """Typed approximation of the return of open() in binary mode."""
 
     __slots__ = ()
-    abstract def __enter__(self) -> BinaryIO
+    override abstract def __enter__(self) -> BinaryIO
 
 class TextIO(IO[str]):
     """Typed approximation of the return of open() in text mode."""
@@ -1912,7 +1912,7 @@ class TextIO(IO[str]):
     let errors: str | None
     let line_buffering: int  # int on PyPy, bool on CPython
     let newlines: dynamic  # None, str or tuple
-    abstract def __enter__(self) -> TextIO
+    override abstract def __enter__(self) -> TextIO
 
 type ByteString = bytes | bytearray | memoryview
 
@@ -2255,9 +2255,9 @@ class _TypedDict(Mapping[str, object], metaclass=ABCMeta):
     def pop[Element](self, k: _Never, default: Element = ...) -> object
     def update(self, m: typing_extensions.Self, /) -> None
     def __delitem__(self, k: _Never) -> None
-    def items(self) -> dict_items[str, object]
-    def keys(self) -> dict_keys[str, object]
-    def values(self) -> dict_values[str, object]
+    override def items(self) -> dict_items[str, object]
+    override def keys(self) -> dict_keys[str, object]
+    override def values(self) -> dict_values[str, object]
 
     def __or__(self, value: typing_extensions.Self, /) -> typing_extensions.Self:
         """Return self|value."""
@@ -2356,8 +2356,8 @@ else:
                 self, globalns: dict[str, dynamic] | None, localns: Mapping[str, dynamic] | None, recursive_guard: frozenset[str]
             ) -> dynamic | None  # AnnotationForm
 
-        def __eq__(self, other: object) -> bool
-        def __hash__(self) -> int
+        override def __eq__(self, other: object) -> bool
+        override def __hash__(self) -> int
         if sys.version_info >= (3, 11):
             def __or__(self, other: dynamic) -> _SpecialForm
             def __ror__(self, other: dynamic) -> _SpecialForm

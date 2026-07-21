@@ -16,4 +16,4 @@ class FixWsComma(fixer_base.BaseFix):
     COMMA: Leaf
     COLON: Leaf
     SEPS: (Leaf, Leaf)
-    def transform(self, node, results)
+    override def transform(self, node, results)

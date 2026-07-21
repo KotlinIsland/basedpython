@@ -309,7 +309,7 @@ if sys.version_info < (3, 13):
         Use BasicInterpolation or ExtendedInterpolation instead.
         """
 
-        def before_get(self, parser: _Parser, section: _SectionName, option: str, value: str, vars: _Section) -> str
+        override def before_get(self, parser: _Parser, section: _SectionName, option: str, value: str, vars: _Section) -> str
 
 class RawConfigParser(_Parser):
     """ConfigParser that does not do interpolation."""
@@ -421,12 +421,12 @@ class RawConfigParser(_Parser):
             converters: _ConvertersMap = ...,
         ) -> None
 
-    def __len__(self) -> int
-    def __getitem__(self, key: _SectionName) -> SectionProxy
-    def __setitem__(self, key: _SectionName, value: _Section) -> None
-    def __delitem__(self, key: _SectionName) -> None
-    def __iter__(self) -> Iterator[str]
-    def __contains__(self, key: object) -> bool
+    override def __len__(self) -> int
+    override def __getitem__(self, key: _SectionName) -> SectionProxy
+    override def __setitem__(self, key: _SectionName, value: _Section) -> None
+    override def __delitem__(self, key: _SectionName) -> None
+    override def __iter__(self) -> Iterator[str]
+    override def __contains__(self, key: object) -> bool
     def defaults(self) -> _Section
     def sections(self) -> _SectionNameList:
         """Return a list of section names, excluding [DEFAULT]"""
@@ -529,7 +529,7 @@ class RawConfigParser(_Parser):
     ) -> Element
 
     # This is incompatible with MutableMapping so we ignore the type
-    def get(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None) -> str | MaybeNone:
+    override def get(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None) -> str | MaybeNone:
         """Get an option value for a given section.
 
         If `vars` is provided, it must be a dictionary. The option is looked up
@@ -548,7 +548,7 @@ class RawConfigParser(_Parser):
         self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None, fallback: Element
     ) -> str | Element | MaybeNone
 
-    def items(self, *, raw: bool = False, vars: _Section | None = None) -> ItemsView[str, SectionProxy]:
+    override def items(self, *, raw: bool = False, vars: _Section | None = None) -> ItemsView[str, SectionProxy]:
         """Return a list of (name, value) tuples for each option in a section.
 
         All % interpolations are expanded in the return values, based on the
@@ -587,7 +587,7 @@ class ConfigParser(RawConfigParser):
     """ConfigParser implementing interpolation."""
 
     # This is incompatible with MutableMapping so we ignore the type
-    def get(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None) -> str:
+    override def get(self, section: _SectionName, option: str, *, raw: bool = False, vars: _Section | None = None) -> str:
         """Get an option value for a given section.
 
         If `vars` is provided, it must be a dictionary. The option is looked up
@@ -617,17 +617,17 @@ class SectionProxy(MutableMapping[str, str]):
     init(self, parser: RawConfigParser, name: str):
         """Creates a view on a section of the specified `name` in `parser`."""
 
-    def __getitem__(self, key: str) -> str
-    def __setitem__(self, key: str, value: str) -> None
-    def __delitem__(self, key: str) -> None
-    def __contains__(self, key: object) -> bool
-    def __len__(self) -> int
-    def __iter__(self) -> Iterator[str]
+    override def __getitem__(self, key: str) -> str
+    override def __setitem__(self, key: str, value: str) -> None
+    override def __delitem__(self, key: str) -> None
+    override def __contains__(self, key: object) -> bool
+    override def __len__(self) -> int
+    override def __iter__(self) -> Iterator[str]
     let parser: RawConfigParser
     let name: str
 
     # This is incompatible with MutableMapping so we ignore the type
-    def get(
+    override def get(
         self,
         option: str,
         fallback: None = None,
@@ -678,11 +678,11 @@ class ConverterMapping(MutableMapping[str, _ConverterCallback | None]):
 
     GETTERCRE: ClassVar[Pattern[dynamic]]
     init(self, parser: RawConfigParser)
-    def __getitem__(self, key: str) -> _ConverterCallback
-    def __setitem__(self, key: str, value: _ConverterCallback | None) -> None
-    def __delitem__(self, key: str) -> None
-    def __iter__(self) -> Iterator[str]
-    def __len__(self) -> int
+    override def __getitem__(self, key: str) -> _ConverterCallback
+    override def __setitem__(self, key: str, value: _ConverterCallback | None) -> None
+    override def __delitem__(self, key: str) -> None
+    override def __iter__(self) -> Iterator[str]
+    override def __len__(self) -> int
 
 class Error(Exception):
     """Base class for ConfigParser exceptions."""

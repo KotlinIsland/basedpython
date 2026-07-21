@@ -102,7 +102,7 @@ class ModuleSpec:
     let parent: str | None
 
     has_location: bool
-    def __eq__(self, other: object) -> bool
+    override def __eq__(self, other: object) -> bool
     __hash__: ClassVar[None]
 
 class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
@@ -117,7 +117,7 @@ class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader)
     if sys.version_info < (3, 12):
         @classmethod
         @deprecated("Deprecated since Python 3.4; removed in Python 3.12. Use `find_spec()` instead.")
-        def find_module(cls, fullname: str, path: Sequence[str] | None = None) -> importlib.abc.Loader | None:
+        override def find_module(cls, fullname: str, path: Sequence[str] | None = None) -> importlib.abc.Loader | None:
             """Find the built-in module.
 
             If 'path' is ever specified then the search is considered a failure.
@@ -126,11 +126,11 @@ class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader)
 
             """
 
-    class def find_spec(
+    override class def find_spec(
         cls, fullname: str, path: Sequence[str] | None = None, target: types.ModuleType | None = None
     ) -> ModuleSpec | None
     # InspectLoader
-    class def is_package(cls, fullname: str) -> bool:
+    override class def is_package(cls, fullname: str) -> bool:
         """Return False as built-in modules are never packages."""
 
     class def load_module(cls, fullname: str) -> types.ModuleType:
@@ -140,10 +140,10 @@ class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader)
 
         """
 
-    class def get_code(cls, fullname: str) -> None:
+    override class def get_code(cls, fullname: str) -> None:
         """Return None as built-in modules do not have code objects."""
 
-    class def get_source(cls, fullname: str) -> None:
+    override class def get_source(cls, fullname: str) -> None:
         """Return None as built-in modules do not have source code."""
 
     # Loader
@@ -163,7 +163,7 @@ class BuiltinImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader)
     static def create_module(spec: ModuleSpec) -> types.ModuleType | None:
         """Create a built-in module"""
 
-    static def exec_module(module: types.ModuleType) -> None:
+    override static def exec_module(module: types.ModuleType) -> None:
         """Exec a built-in module"""
 
 class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
@@ -178,18 +178,18 @@ class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
     if sys.version_info < (3, 12):
         @classmethod
         @deprecated("Deprecated since Python 3.4; removed in Python 3.12. Use `find_spec()` instead.")
-        def find_module(cls, fullname: str, path: Sequence[str] | None = None) -> importlib.abc.Loader | None:
+        override def find_module(cls, fullname: str, path: Sequence[str] | None = None) -> importlib.abc.Loader | None:
             """Find a frozen module.
 
             This method is deprecated.  Use find_spec() instead.
 
             """
 
-    class def find_spec(
+    override class def find_spec(
         cls, fullname: str, path: Sequence[str] | None = None, target: types.ModuleType | None = None
     ) -> ModuleSpec | None
     # InspectLoader
-    class def is_package(cls, fullname: str) -> bool:
+    override class def is_package(cls, fullname: str) -> bool:
         """Return True if the frozen module is a package."""
 
     class def load_module(cls, fullname: str) -> types.ModuleType:
@@ -199,10 +199,10 @@ class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
 
         """
 
-    class def get_code(cls, fullname: str) -> None:
+    override class def get_code(cls, fullname: str) -> None:
         """Return the code object for the frozen module."""
 
-    class def get_source(cls, fullname: str) -> None:
+    override class def get_source(cls, fullname: str) -> None:
         """Return None as frozen modules do not have source code."""
 
     # Loader
@@ -222,4 +222,4 @@ class FrozenImporter(importlib.abc.MetaPathFinder, importlib.abc.InspectLoader):
     static def create_module(spec: ModuleSpec) -> types.ModuleType | None:
         """Set __file__, if able."""
 
-    static def exec_module(module: types.ModuleType) -> None
+    override static def exec_module(module: types.ModuleType) -> None

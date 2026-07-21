@@ -16,8 +16,8 @@ class FixImports(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     mapping = MAPPING
     def build_pattern(self)
-    def compile_pattern(self) -> None
-    def match(self, node)
+    override def compile_pattern(self) -> None
+    override def match(self, node)
     replace: dict[str, str]
-    def start_tree(self, tree: Node, filename: StrPath) -> None
-    def transform(self, node, results) -> None
+    override def start_tree(self, tree: Node, filename: StrPath) -> None
+    override def transform(self, node, results) -> None

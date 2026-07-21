@@ -19,5 +19,5 @@ class FixRenames(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     order: ClassVar["pre"]
     PATTERN: ClassVar[str]
-    def match(self, node)
-    def transform(self, node, results) -> None
+    override def match(self, node)
+    override def transform(self, node, results) -> None

@@ -354,6 +354,6 @@ if sys.version_info >= (3, 14):
 class _local:
     """Thread-local data"""
 
-    def __getattribute__(self, name: str, /) -> dynamic
-    def __setattr__(self, name: str, value: dynamic, /) -> None
-    def __delattr__(self, name: str, /) -> None
+    override def __getattribute__(self, name: str, /) -> dynamic
+    override def __setattr__(self, name: str, value: dynamic, /) -> None
+    override def __delattr__(self, name: str, /) -> None

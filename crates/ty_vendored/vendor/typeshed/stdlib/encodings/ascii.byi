@@ -12,15 +12,15 @@ from _typeshed import ReadableBuffer
 
 class Codec(codecs.Codec):
     # At runtime, this is codecs.ascii_encode
-    static def encode(str: str, errors: str | None = None, /) -> (bytes, int)
+    override static def encode(str: str, errors: str | None = None, /) -> (bytes, int)
     # At runtime, this is codecs.ascii_decode
-    static def decode(data: ReadableBuffer, errors: str | None = None, /) -> (str, int)
+    override static def decode(data: ReadableBuffer, errors: str | None = None, /) -> (str, int)
 
 class IncrementalEncoder(codecs.IncrementalEncoder):
-    def encode(self, input: str, final: bool = False) -> bytes
+    override def encode(self, input: str, final: bool = False) -> bytes
 
 class IncrementalDecoder(codecs.IncrementalDecoder):
-    def decode(self, input: ReadableBuffer, final: bool = False) -> str
+    override def decode(self, input: ReadableBuffer, final: bool = False) -> str
 
 class StreamWriter(Codec, codecs.StreamWriter)
 class StreamReader(Codec, codecs.StreamReader)
@@ -28,8 +28,8 @@ class StreamReader(Codec, codecs.StreamReader)
 # Note: encode being a decode function and decode being an encode function is accurate to runtime.
 class StreamConverter(StreamWriter, StreamReader):
     # At runtime, this is codecs.ascii_decode
-    static def encode(data: ReadableBuffer, errors: str | None = None, /) -> (str, int)
+    override static def encode(data: ReadableBuffer, errors: str | None = None, /) -> (str, int)
     # At runtime, this is codecs.ascii_encode
-    static def decode(str: str, errors: str | None = None, /) -> (bytes, int)
+    override static def decode(str: str, errors: str | None = None, /) -> (bytes, int)
 
 def getregentry() -> codecs.CodecInfo

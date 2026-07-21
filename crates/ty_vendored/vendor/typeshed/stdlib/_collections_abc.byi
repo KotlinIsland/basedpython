@@ -72,7 +72,7 @@ if sys.version_info >= (3, 12):
 
 
 final class dict_keys[out Key, out Value](KeysView[Key]):  # undocumented
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
     def __reversed__(self) -> Iterator[Key]:
         """Return a reverse iterator over the dict keys."""
 
@@ -90,7 +90,7 @@ final class dict_values[out Key, out Value](ValuesView[Value]):  # undocumented
     let mapping: MappingProxyType[Key, Value]
 
 final class dict_items[out Key, out Value](ItemsView[Key, Value]):  # undocumented
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
     def __reversed__(self) -> Iterator[(Key, Value)]:
         """Return a reverse iterator over the dict items."""
 

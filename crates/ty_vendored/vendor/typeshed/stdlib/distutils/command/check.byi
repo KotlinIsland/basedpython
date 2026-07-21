@@ -38,14 +38,14 @@ class check(Command):
     restructuredtext: int
     metadata: int
     strict: int
-    def initialize_options(self) -> None:
+    override def initialize_options(self) -> None:
         """Sets default values for options."""
 
-    def finalize_options(self) -> None
-    def warn(self, msg):
+    override def finalize_options(self) -> None
+    override def warn(self, msg):
         """Counts the number of warnings that occurs."""
 
-    def run(self) -> None:
+    override def run(self) -> None:
         """Runs the command."""
 
     def check_metadata(self) -> None:

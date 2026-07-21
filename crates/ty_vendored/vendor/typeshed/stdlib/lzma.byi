@@ -161,7 +161,7 @@ class LZMAFile(BaseStream, IO[bytes]):
         additional entries for options to the filter.
         """
 
-    def __enter__(self) -> Self
+    override def __enter__(self) -> Self
     def peek(self, size: int = -1) -> bytes:
         """Return buffered data without advancing the file position.
 
@@ -169,14 +169,14 @@ class LZMAFile(BaseStream, IO[bytes]):
         The exact number of bytes returned is unspecified.
         """
 
-    def read(self, size: int | None = -1) -> bytes:
+    override def read(self, size: int | None = -1) -> bytes:
         """Read up to size uncompressed bytes from the file.
 
         If size is negative or omitted, read until EOF is reached.
         Returns b"" if the file is already at EOF.
         """
 
-    def read1(self, size: int = -1) -> bytes:
+    override def read1(self, size: int = -1) -> bytes:
         """Read up to size uncompressed bytes, while trying to avoid
         making multiple reads from the underlying stream. Reads up to a
         buffer's worth of data if size is negative.
@@ -184,7 +184,7 @@ class LZMAFile(BaseStream, IO[bytes]):
         Returns b"" if the file is at EOF.
         """
 
-    def readline(self, size: int | None = -1) -> bytes:
+    override def readline(self, size: int | None = -1) -> bytes:
         """Read a line of uncompressed bytes from the file.
 
         The terminating newline (if present) is retained. If size is
@@ -192,7 +192,7 @@ class LZMAFile(BaseStream, IO[bytes]):
         case the line may be incomplete). Returns b'' if already at EOF.
         """
 
-    def write(self, data: ReadableBuffer) -> int:
+    override def write(self, data: ReadableBuffer) -> int:
         """Write a bytes object to the file.
 
         Returns the number of uncompressed bytes written, which is
@@ -201,7 +201,7 @@ class LZMAFile(BaseStream, IO[bytes]):
         is called.
         """
 
-    def seek(self, offset: int, whence: int = 0) -> int:
+    override def seek(self, offset: int, whence: int = 0) -> int:
         """Change the file position.
 
         The new position is specified by offset, relative to the

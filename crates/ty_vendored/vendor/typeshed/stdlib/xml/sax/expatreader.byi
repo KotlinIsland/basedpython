@@ -27,42 +27,42 @@ class ExpatLocator(xmlreader.Locator):
     """
 
     init(self, parser: ExpatParser)
-    def getColumnNumber(self) -> int | None
-    def getLineNumber(self) -> int
-    def getPublicId(self) -> str | None
-    def getSystemId(self) -> str | None
+    override def getColumnNumber(self) -> int | None
+    override def getLineNumber(self) -> int
+    override def getPublicId(self) -> str | None
+    override def getSystemId(self) -> str | None
 
 class ExpatParser(xmlreader.IncrementalParser, xmlreader.Locator):
     """SAX driver for the pyexpat C module."""
 
     init(self, namespaceHandling: _BoolType = 0, bufsize: int = 65516)
-    def parse(self, source: xmlreader.InputSource | _Source) -> None:
+    override def parse(self, source: xmlreader.InputSource | _Source) -> None:
         """Parse an XML document from a URL or an InputSource."""
 
-    def prepareParser(self, source: xmlreader.InputSource) -> None
-    def setContentHandler(self, handler: _ContentHandlerProtocol) -> None
-    def getFeature(self, name: str) -> _BoolType
-    def setFeature(self, name: str, state: _BoolType) -> None
+    override def prepareParser(self, source: xmlreader.InputSource) -> None
+    override def setContentHandler(self, handler: _ContentHandlerProtocol) -> None
+    override def getFeature(self, name: str) -> _BoolType
+    override def setFeature(self, name: str, state: _BoolType) -> None
 
-    def getProperty(self, name: "http://xml.org/sax/properties/lexical-handler") -> LexicalHandler | None
+    override def getProperty(self, name: "http://xml.org/sax/properties/lexical-handler") -> LexicalHandler | None
     def getProperty(self, name: "http://www.python.org/sax/properties/interning-dict") -> dict[str, dynamic] | None
     def getProperty(self, name: "http://xml.org/sax/properties/xml-string") -> bytes | None
     def getProperty(self, name: str) -> object
 
-    def setProperty(self, name: "http://xml.org/sax/properties/lexical-handler", value: LexicalHandler) -> None
+    override def setProperty(self, name: "http://xml.org/sax/properties/lexical-handler", value: LexicalHandler) -> None
     def setProperty(
         self, name: "http://www.python.org/sax/properties/interning-dict", value: dict[str, dynamic]
     ) -> None
     def setProperty(self, name: str, value: object) -> None
 
-    def feed(self, data: str | ReadableBuffer, isFinal: bool = False) -> None
+    override def feed(self, data: str | ReadableBuffer, isFinal: bool = False) -> None
     def flush(self) -> None
-    def close(self) -> None
-    def reset(self) -> None
-    def getColumnNumber(self) -> int | None
-    def getLineNumber(self) -> int
-    def getPublicId(self) -> str | None
-    def getSystemId(self) -> str | None
+    override def close(self) -> None
+    override def reset(self) -> None
+    override def getColumnNumber(self) -> int | None
+    override def getLineNumber(self) -> int
+    override def getPublicId(self) -> str | None
+    override def getSystemId(self) -> str | None
     def start_element(self, name: str, attrs: Mapping[str, str]) -> None
     def end_element(self, name: str) -> None
     def start_element_ns(self, name: str, attrs: Mapping[str, str]) -> None

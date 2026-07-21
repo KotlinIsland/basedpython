@@ -158,7 +158,7 @@ class DatagramProtocol(BaseProtocol):
     """Interface for datagram protocol."""
 
     __slots__ = ()
-    def connection_made(self, transport: transports.DatagramTransport) -> None:
+    override def connection_made(self, transport: transports.DatagramTransport) -> None:
         """Called when a connection is made.
 
         The argument is the transport representing the pipe connection.

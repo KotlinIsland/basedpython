@@ -6,5 +6,5 @@ from .. import fixer_base
 
 class FixNe(fixer_base.BaseFix):
     BM_compatible: ClassVar[False]
-    def match(self, node)
-    def transform(self, node, results)
+    override def match(self, node)
+    override def transform(self, node, results)

@@ -360,8 +360,8 @@ class LocaleHTMLCalendar(HTMLCalendar):
     """
 
     init(self, firstweekday: int = 0, locale: _LocaleType | None = None)
-    def formatweekday(self, day: int) -> str
-    def formatmonthname(self, theyear: int, themonth: int, withyear: bool = True) -> str
+    override def formatweekday(self, day: int) -> str
+    override def formatmonthname(self, theyear: int, themonth: int, withyear: bool = True) -> str
 
 c: TextCalendar
 

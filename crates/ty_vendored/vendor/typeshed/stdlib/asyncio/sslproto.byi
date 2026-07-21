@@ -153,18 +153,18 @@ class _SSLProtocolTransport(transports._FlowControlMixin, transports.Transport):
         _ssl_protocol: SSLProtocol
     _closed: bool
     init(self, loop: events.AbstractEventLoop, ssl_protocol: SSLProtocol)
-    def get_extra_info(self, name: str, default: dynamic | None = None) -> dict[str, dynamic]:
+    override def get_extra_info(self, name: str, default: dynamic | None = None) -> dict[str, dynamic]:
         """Get optional transport information."""
 
     let _protocol_paused: bool
-    def write(self, data: bytes | bytearray | memoryview[dynamic]) -> None:  # any memoryview format or shape
+    override def write(self, data: bytes | bytearray | memoryview[dynamic]) -> None:  # any memoryview format or shape
         """Write some data bytes to the transport.
 
         This does not block; it buffers the data and arranges for it
         to be sent out asynchronously.
         """
 
-    def can_write_eof(self) -> False:
+    override def can_write_eof(self) -> False:
         """Return True if this transport supports write_eof(), False if not."""
 
     if sys.version_info >= (3, 11):
@@ -258,7 +258,7 @@ class SSLProtocol(_SSLProtocolBase):
 
     def _set_app_protocol(self, app_protocol: protocols.BaseProtocol) -> None
     def _wakeup_waiter(self, exc: BaseException | None = None) -> None
-    def connection_lost(self, exc: BaseException | None) -> None:
+    override def connection_lost(self, exc: BaseException | None) -> None:
         """Called when the low-level connection is lost or closed.
 
         The argument is an exception object or None (the latter
@@ -266,7 +266,7 @@ class SSLProtocol(_SSLProtocolBase):
         aborted or closed).
         """
 
-    def eof_received(self) -> None:
+    override def eof_received(self) -> None:
         """Called when the other end of the low-level stream
         is half-closed.
 

@@ -85,7 +85,7 @@ class _EnumDict(dict[str, dynamic]):
     else:
         def __init__(self) -> None
 
-    def __setitem__(self, key: str, value: dynamic) -> None:
+    override def __setitem__(self, key: str, value: dynamic) -> None:
         """
         Changes anything not dundered or not a descriptor.
 
@@ -133,7 +133,7 @@ class EnumMeta(type):
             metacls: type[_typeshed.Self], cls: str, bases: (*: type), classdict: _EnumDict, **kwds: dynamic
         ) -> _typeshed.Self
 
-    class def __prepare__(metacls, cls: str, bases: (*: type), **kwds: dynamic) -> _EnumDict
+    override class def __prepare__(metacls, cls: str, bases: (*: type), **kwds: dynamic) -> _EnumDict
     def __iter__[EnumMemberT](self: type[EnumMemberT]) -> Iterator[EnumMemberT]:
         """
         Return members in definition order.
@@ -191,10 +191,10 @@ class EnumMeta(type):
         classes/types should always be True.
         """
 
-    def __dir__(self) -> list[str]
+    override def __dir__(self) -> list[str]
 
     # Overload 1: Value lookup on an already existing enum class (simple case)
-    def __call__[EnumMemberT](cls: type[EnumMemberT], value: dynamic, names: None = None) -> EnumMemberT:
+    override def __call__[EnumMemberT](cls: type[EnumMemberT], value: dynamic, names: None = None) -> EnumMemberT:
         """
         Either returns an existing member, or creates a new enum class.
 
@@ -436,18 +436,18 @@ class Enum(metaclass=EnumMeta):
     # (see #7752, #2539, mypy/#5788),
     # and in practice using `object` here has the same effect as using `Any`.
     def __new__(cls, value: object) -> Self
-    def __dir__(self) -> list[str]:
+    override def __dir__(self) -> list[str]:
         """
         Returns public methods and other interesting attributes.
         """
 
-    def __hash__(self) -> int
-    def __format__(self, format_spec: str) -> str:
+    override def __hash__(self) -> int
+    override def __format__(self, format_spec: str) -> str:
         """
         Returns format using actual value type unless __str__ has been overridden.
         """
 
-    def __reduce_ex__(self, proto: Unused) -> (*: dynamic)
+    override def __reduce_ex__(self, proto: Unused) -> (*: dynamic)
     if sys.version_info >= (3, 11):
         def __copy__(self) -> Self
         def __deepcopy__(self, memo: dynamic) -> Self
@@ -492,7 +492,7 @@ else:
 
         _value_: int
         @_magic_enum_attr
-        def value(self) -> int:
+        override def value(self) -> int:
             """The value of the Enum member."""
 
         def __new__(cls, value: int) -> Self
@@ -513,11 +513,11 @@ class Flag(Enum):
     _value_: int
     _numeric_repr_: (int) -> str
     @_magic_enum_attr
-    def name(self) -> str | None:
+    override def name(self) -> str | None:
         """The name of the Enum member."""
 
     @_magic_enum_attr
-    def value(self) -> int:
+    override def value(self) -> int:
         """The value of the Enum member."""
 
     def __contains__(self, other: Self) -> bool:
@@ -678,10 +678,10 @@ else:
         """
 
         def __new__(cls, value: int) -> Self
-        def __or__(self, other: int) -> Self
-        def __and__(self, other: int) -> Self
-        def __xor__(self, other: int) -> Self
-        def __invert__(self) -> Self
+        override def __or__(self, other: int) -> Self
+        override def __and__(self, other: int) -> Self
+        override def __xor__(self, other: int) -> Self
+        override def __invert__(self) -> Self
         __ror__ = __or__
         __rand__ = __and__
         __rxor__ = __xor__

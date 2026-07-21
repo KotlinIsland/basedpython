@@ -126,17 +126,17 @@ class ConvertingMixin:  # undocumented
 class ConvertingDict(dict[Hashable, dynamic], ConvertingMixin):  # undocumented
     """A converting dictionary wrapper."""
 
-    def __getitem__(self, key: Hashable) -> dynamic
-    def get(self, key: Hashable, default: dynamic = None) -> dynamic
-    def pop(self, key: Hashable, default: dynamic = None) -> dynamic
+    override def __getitem__(self, key: Hashable) -> dynamic
+    override def get(self, key: Hashable, default: dynamic = None) -> dynamic
+    override def pop(self, key: Hashable, default: dynamic = None) -> dynamic
 
 class ConvertingList(list[dynamic], ConvertingMixin):  # undocumented
     """A converting list wrapper."""
 
-    def __getitem__(self, key: SupportsIndex) -> dynamic
+    override def __getitem__(self, key: SupportsIndex) -> dynamic
     def __getitem__(self, key: slice[SupportsIndex | None]) -> dynamic
 
-    def pop(self, idx: SupportsIndex = -1) -> dynamic
+    override def pop(self, idx: SupportsIndex = -1) -> dynamic
 
 if sys.version_info >= (3, 12):
     class ConvertingTuple((*: dynamic), ConvertingMixin):  # undocumented

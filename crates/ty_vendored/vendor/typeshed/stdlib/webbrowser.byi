@@ -59,7 +59,7 @@ class GenericBrowser(BaseBrowser):
     """
 
     init(self, name: str | Sequence[str])
-    def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
+    override def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
 
 class BackgroundBrowser(GenericBrowser):
     """Class for all browsers which are to be started in the
@@ -69,7 +69,7 @@ class BackgroundBrowser(GenericBrowser):
 class UnixBrowser(BaseBrowser):
     """Parent class for all Unix browsers with remote functionality."""
 
-    def open(self, url: str, new: 0 | 1 | 2 = 0, autoraise: bool = True) -> bool
+    override def open(self, url: str, new: 0 | 1 | 2 = 0, autoraise: bool = True) -> bool
     raise_opts: list[str] | None
     background: bool
     redirect_stdout: bool
@@ -88,7 +88,7 @@ if sys.version_info < (3, 12):
         raise_opts: list[str]
 
     class Grail(BaseBrowser):
-        def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
+        override def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
 
 class Chrome(UnixBrowser):
     """Launcher class for Google Chrome browser."""
@@ -106,7 +106,7 @@ class Konqueror(BaseBrowser):
     for more information on the Konqueror remote-control interface.
     """
 
-    def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
+    override def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
 
 if sys.platform == "win32":
     class WindowsDefault(BaseBrowser):
@@ -127,7 +127,7 @@ if sys.platform == "darwin":
             """
 
             init(self, name: str)
-            def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
+            override def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
 
     class MacOSXOSAScript(BaseBrowser):  # In runtime this class does not have `name` and `basename`
         if sys.version_info >= (3, 11):
@@ -135,4 +135,4 @@ if sys.platform == "darwin":
         else:
             def __init__(self, name: str) -> None
 
-        def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool
+        override def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool

@@ -292,10 +292,10 @@ class _TemporaryFileWrapper(IO[AnyStr]):
     else:
         def __init__(self, file: IO[AnyStr], name: str, delete: bool = True) -> None
 
-    def __enter__(self) -> Self
-    def __exit__(self, exc: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None) -> None
+    override def __enter__(self) -> Self
+    override def __exit__(self, exc: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None) -> None
     def __getattr__(self, name: str) -> dynamic
-    def close(self) -> None:
+    override def close(self) -> None:
         """
         Close the temporary file, possibly deleting it.
         """
@@ -303,7 +303,7 @@ class _TemporaryFileWrapper(IO[AnyStr]):
     # These methods don't exist directly on this object, but
     # are delegated to the underlying IO object through __getattr__.
     # We need to add them here so that this class is concrete.
-    def __iter__(self) -> Iterator[AnyStr]
+    override def __iter__(self) -> Iterator[AnyStr]
     # FIXME: __next__ doesn't actually exist on this class and should be removed:
     #        see also https://github.com/python/typeshed/pull/5456#discussion_r633068648
     # >>> import tempfile
@@ -312,25 +312,25 @@ class _TemporaryFileWrapper(IO[AnyStr]):
     # Traceback (most recent call last):
     #   File "<stdin>", line 1, in <module>
     # TypeError: '_TemporaryFileWrapper' object is not an iterator
-    def __next__(self) -> AnyStr
-    def fileno(self) -> int
-    def flush(self) -> None
-    def isatty(self) -> bool
-    def read(self, n: int = ...) -> AnyStr
-    def readable(self) -> bool
-    def readline(self, limit: int = ...) -> AnyStr
-    def readlines(self, hint: int = ...) -> list[AnyStr]
-    def seek(self, offset: int, whence: int = ...) -> int
-    def seekable(self) -> bool
-    def tell(self) -> int
-    def truncate(self, size: int | None = ...) -> int
-    def writable(self) -> bool
+    override def __next__(self) -> AnyStr
+    override def fileno(self) -> int
+    override def flush(self) -> None
+    override def isatty(self) -> bool
+    override def read(self, n: int = ...) -> AnyStr
+    override def readable(self) -> bool
+    override def readline(self, limit: int = ...) -> AnyStr
+    override def readlines(self, hint: int = ...) -> list[AnyStr]
+    override def seek(self, offset: int, whence: int = ...) -> int
+    override def seekable(self) -> bool
+    override def tell(self) -> int
+    override def truncate(self, size: int | None = ...) -> int
+    override def writable(self) -> bool
 
-    def write(self: _TemporaryFileWrapper[str], s: str, /) -> int
+    override def write(self: _TemporaryFileWrapper[str], s: str, /) -> int
     def write(self: _TemporaryFileWrapper[bytes], s: ReadableBuffer, /) -> int
     def write(self, s: AnyStr, /) -> int
 
-    def writelines(self: _TemporaryFileWrapper[str], lines: Iterable[str]) -> None
+    override def writelines(self: _TemporaryFileWrapper[str], lines: Iterable[str]) -> None
     def writelines(self: _TemporaryFileWrapper[bytes], lines: Iterable[ReadableBuffer]) -> None
     def writelines(self, lines: Iterable[AnyStr]) -> None
 
@@ -422,15 +422,15 @@ class SpooledTemporaryFile(IO[AnyStr], _SpooledTemporaryFileBase):
 
     let errors: str | None
     def rollover(self) -> None
-    def __enter__(self) -> Self
-    def __exit__(self, exc: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None) -> None
+    override def __enter__(self) -> Self
+    override def __exit__(self, exc: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None) -> None
     # These methods are copied from the abstract methods of IO, because
     # SpooledTemporaryFile implements IO.
     # See also https://github.com/python/typeshed/pull/2452#issuecomment-420657918.
-    def close(self) -> None
-    def fileno(self) -> int
-    def flush(self) -> None
-    def isatty(self) -> bool
+    override def close(self) -> None
+    override def fileno(self) -> int
+    override def flush(self) -> None
+    override def isatty(self) -> bool
     if sys.version_info >= (3, 11):
         # These three work only if the SpooledTemporaryFile is opened in binary mode,
         # because the underlying object in text mode does not have these methods.
@@ -439,30 +439,30 @@ class SpooledTemporaryFile(IO[AnyStr], _SpooledTemporaryFileBase):
         def readinto1(self, b: WriteableBuffer) -> int
         def detach(self) -> io.RawIOBase
 
-    def read(self, n: int = ..., /) -> AnyStr
-    def readline(self, limit: int | None = ..., /) -> AnyStr
-    def readlines(self, hint: int = ..., /) -> list[AnyStr]
-    def seek(self, offset: int, whence: int = ...) -> int
-    def tell(self) -> int
+    override def read(self, n: int = ..., /) -> AnyStr
+    override def readline(self, limit: int | None = ..., /) -> AnyStr
+    override def readlines(self, hint: int = ..., /) -> list[AnyStr]
+    override def seek(self, offset: int, whence: int = ...) -> int
+    override def tell(self) -> int
     if sys.version_info >= (3, 11):
         def truncate(self, size: int | None = None) -> int
     else:
-        def truncate(self, size: int | None = None) -> None
+        override def truncate(self, size: int | None = None) -> None
 
-    def write(self: SpooledTemporaryFile[str], s: str) -> int
+    override def write(self: SpooledTemporaryFile[str], s: str) -> int
     def write(self: SpooledTemporaryFile[bytes], s: ReadableBuffer) -> int
     def write(self, s: AnyStr) -> int
 
-    def writelines(self: SpooledTemporaryFile[str], iterable: Iterable[str]) -> None
+    override def writelines(self: SpooledTemporaryFile[str], iterable: Iterable[str]) -> None
     def writelines(self: SpooledTemporaryFile[bytes], iterable: Iterable[ReadableBuffer]) -> None
     def writelines(self, iterable: Iterable[AnyStr]) -> None
 
-    def __iter__(self) -> Iterator[AnyStr]
+    override def __iter__(self) -> Iterator[AnyStr]
     # These exist at runtime only on 3.11+.
-    def readable(self) -> bool
-    def seekable(self) -> bool
-    def writable(self) -> bool
-    def __next__(self) -> AnyStr:
+    override def readable(self) -> bool
+    override def seekable(self) -> bool
+    override def writable(self) -> bool
+    override def __next__(self) -> AnyStr:
         """Implement next(self)."""
 
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:

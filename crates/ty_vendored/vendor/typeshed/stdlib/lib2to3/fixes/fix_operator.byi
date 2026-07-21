@@ -20,4 +20,4 @@ class FixOperator(fixer_base.BaseFix):
     methods: str
     obj: str
     PATTERN: ClassVar[str]
-    def transform(self, node, results)
+    override def transform(self, node, results)

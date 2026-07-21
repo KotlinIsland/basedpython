@@ -118,7 +118,7 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
     def __new__(cls, typecode: str, initializer: Iterable[Element], /) -> Self
     def __new__(cls, typecode: str, initializer: bytes | bytearray = ..., /) -> Self
 
-    def append(self, v: Element, /) -> None:
+    override def append(self, v: Element, /) -> None:
         """Append new value v to the end of the array."""
 
     def buffer_info(self) -> (int, int):
@@ -136,10 +136,10 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
         components (the real part, followed by imaginary part) is preserved.
         """
 
-    def count(self, v: Element, /) -> int:
+    override def count(self, v: Element, /) -> int:
         """Return number of occurrences of v in the array."""
 
-    def extend(self, bb: Iterable[Element], /) -> None:
+    override def extend(self, bb: Iterable[Element], /) -> None:
         """Append items to the end of the array."""
 
     def frombytes(self, buffer: ReadableBuffer, /) -> None:
@@ -159,22 +159,22 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
         data to an array of some other type.
         """
 
-    def index(self, v: Element, start: int = 0, stop: int = sys.maxsize, /) -> int:
+    override def index(self, v: Element, start: int = 0, stop: int = sys.maxsize, /) -> int:
         """Return index of first occurrence of v in the array.
 
         Raise ValueError if the value is not present.
         """
 
-    def insert(self, i: int, v: Element, /) -> None:
+    override def insert(self, i: int, v: Element, /) -> None:
         """Insert a new item v into the array before position i."""
 
-    def pop(self, i: int = -1, /) -> Element:
+    override def pop(self, i: int = -1, /) -> Element:
         """Return the i-th element and delete it from the array.
 
         i defaults to -1.
         """
 
-    def remove(self, v: Element, /) -> None:
+    override def remove(self, v: Element, /) -> None:
         """Remove the first occurrence of v in the array."""
 
     def tobytes(self) -> bytes:
@@ -196,30 +196,30 @@ class array[in out Element: constraints (int, float, str)](MutableSequence[Eleme
         """
 
     __hash__: ClassVar[None]
-    def __contains__(self, value: object, /) -> bool:
+    override def __contains__(self, value: object, /) -> bool:
         """Return bool(key in self)."""
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
-    def __getitem__(self, key: SupportsIndex, /) -> Element:
+    override def __getitem__(self, key: SupportsIndex, /) -> Element:
         """Return self[key]."""
     def __getitem__(self, key: slice[SupportsIndex | None], /) -> array[Element]
 
-    def __setitem__(self, key: SupportsIndex, value: Element, /) -> None:
+    override def __setitem__(self, key: SupportsIndex, value: Element, /) -> None:
         """Set self[key] to value."""
     def __setitem__(self, key: slice[SupportsIndex | None], value: array[Element], /) -> None
 
-    def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> None:
+    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> None:
         """Delete self[key]."""
 
     def __add__(self, value: array[Element], /) -> array[Element]:
         """Return self+value."""
 
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
     def __ge__(self, value: array[Element], /) -> bool
     def __gt__(self, value: array[Element], /) -> bool
-    def __iadd__(self, value: array[Element], /) -> Self:
+    override def __iadd__(self, value: array[Element], /) -> Self:
         """Implement self+=value."""
 
     def __imul__(self, value: int, /) -> Self:

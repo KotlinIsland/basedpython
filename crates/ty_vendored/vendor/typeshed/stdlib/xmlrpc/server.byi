@@ -386,7 +386,7 @@ class CGIXMLRPCRequestHandler(SimpleXMLRPCDispatcher):
 class ServerHTMLDoc(pydoc.HTMLDoc):  # undocumented
     """Class used to generate pydoc HTML document for a server"""
 
-    def docroutine(
+    override def docroutine(
         self,
         object: object,
         name: str,

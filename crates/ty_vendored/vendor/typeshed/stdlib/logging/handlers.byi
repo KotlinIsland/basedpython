@@ -290,7 +290,7 @@ class DatagramHandler(SocketHandler):
 
     """
 
-    def makeSocket(self) -> socket:
+    override def makeSocket(self) -> socket:
         """
         The factory method of SocketHandler is here overridden to create
         a UDP socket (SOCK_DGRAM).

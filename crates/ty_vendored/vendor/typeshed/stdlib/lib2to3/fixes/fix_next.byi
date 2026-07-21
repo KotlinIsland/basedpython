@@ -13,8 +13,8 @@ class FixNext(fixer_base.BaseFix):
     PATTERN: ClassVar[str]
     order: ClassVar["pre"]
     shadowed_next: bool
-    def start_tree(self, tree: Node, filename: StrPath) -> None
-    def transform(self, node, results) -> None
+    override def start_tree(self, tree: Node, filename: StrPath) -> None
+    override def transform(self, node, results) -> None
 
 def is_assign_target(node)
 def find_assign(node)

@@ -365,7 +365,7 @@ class TCPServer(BaseServer):
 
         """
 
-    def get_request(self) -> (_socket, _RetAddress):
+    override def get_request(self) -> (_socket, _RetAddress):
         """Get the request and client address from the socket.
 
         May be overridden.
@@ -383,7 +383,7 @@ class UDPServer(TCPServer):
     """UDP server class."""
 
     max_packet_size: ClassVar[int]
-    def get_request(self) -> ((bytes, _socket), _RetAddress)
+    override def get_request(self) -> ((bytes, _socket), _RetAddress)
 
 if sys.platform != "win32":
     class UnixStreamServer(TCPServer):

@@ -551,8 +551,8 @@ class int:
             """
 
     def __getnewargs__(self) -> (int,)
-    def __eq__(self, value: object, /) -> bool
-    def __ne__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
+    override def __ne__(self, value: object, /) -> bool
     def __lt__(self, value: int, /) -> bool
     def __le__(self, value: int, /) -> bool
     def __gt__(self, value: int, /) -> bool
@@ -566,14 +566,14 @@ class int:
     def __abs__(self) -> int:
         """abs(self)"""
 
-    def __hash__(self) -> int
+    override def __hash__(self) -> int
     def __bool__(self) -> bool:
         """True if self else False"""
 
     def __index__(self) -> int:
         """Return self converted to an integer, if self is suitable for use as an index into a list."""
 
-    def __format__(self, format_spec: str, /) -> str:
+    override def __format__(self, format_spec: str, /) -> str:
         """Convert to a string according to format_spec."""
 
 @disjoint_base
@@ -694,8 +694,8 @@ class float:
         """
     def __round__(self, ndigits: SupportsIndex, /) -> float
 
-    def __eq__(self, value: object, /) -> bool
-    def __ne__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
+    override def __ne__(self, value: object, /) -> bool
     def __lt__(self, value: float, /) -> bool
     def __le__(self, value: float, /) -> bool
     def __gt__(self, value: float, /) -> bool
@@ -715,11 +715,11 @@ class float:
     def __abs__(self) -> float:
         """abs(self)"""
 
-    def __hash__(self) -> int
+    override def __hash__(self) -> int
     def __bool__(self) -> bool:
         """True if self else False"""
 
-    def __format__(self, format_spec: str, /) -> str:
+    override def __format__(self, format_spec: str, /) -> str:
         """Formats the float according to format_spec."""
 
     if sys.version_info >= (3, 14):
@@ -781,8 +781,8 @@ class complex:
     def __rtruediv__(self, value: complex, /) -> complex:
         """Return value/self."""
 
-    def __eq__(self, value: object, /) -> bool
-    def __ne__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
+    override def __ne__(self, value: object, /) -> bool
     def __neg__(self) -> complex:
         """-self"""
 
@@ -792,11 +792,11 @@ class complex:
     def __abs__(self) -> float:
         """abs(self)"""
 
-    def __hash__(self) -> int
+    override def __hash__(self) -> int
     def __bool__(self) -> bool:
         """True if self else False"""
 
-    def __format__(self, format_spec: str, /) -> str:
+    override def __format__(self, format_spec: str, /) -> str:
         """Convert to a string according to format_spec."""
 
     if sys.version_info >= (3, 11):
@@ -852,7 +852,7 @@ class str(Sequence[str]):
         """
     def center(self, width: SupportsIndex, fillchar: str = " ", /) -> str
 
-    def count(self, sub: str, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /) -> int:
+    override def count(self, sub: str, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /) -> int:
         """Return the number of non-overlapping occurrences of substring sub in string S[start:end].
 
         Optional arguments start and end are interpreted as in slice
@@ -910,7 +910,7 @@ class str(Sequence[str]):
         The substitutions are identified by braces ('{' and '}').
         """
 
-    def index(self, sub: str, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /) -> int:
+    override def index(self, sub: str, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /) -> int:
         """Return the lowest index in S where substring sub is found, such that sub is contained within S[start:end].
 
         Optional arguments start and end are interpreted as in slice
@@ -1288,25 +1288,25 @@ class str(Sequence[str]):
     def __add__(self, value: str, /) -> str
 
     # Incompatible with Sequence.__contains__
-    def __contains__(self, key: str, /) -> bool:
+    override def __contains__(self, key: str, /) -> bool:
         """Return bool(key in self)."""
 
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
     def __ge__(self, value: str, /) -> bool
 
-    def __getitem__(self: LiteralString, key: SupportsIndex | slice[SupportsIndex | None], /) -> LiteralString:
+    override def __getitem__(self: LiteralString, key: SupportsIndex | slice[SupportsIndex | None], /) -> LiteralString:
         """Return self[key]."""
     def __getitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> str
 
     def __gt__(self, value: str, /) -> bool
-    def __hash__(self) -> int
+    override def __hash__(self) -> int
 
-    def __iter__(self: LiteralString) -> Iterator[LiteralString]:
+    override def __iter__(self: LiteralString) -> Iterator[LiteralString]:
         """Implement iter(self)."""
     def __iter__(self) -> Iterator[str]
 
     def __le__(self, value: str, /) -> bool
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
     def __lt__(self, value: str, /) -> bool
@@ -1319,14 +1319,14 @@ class str(Sequence[str]):
         """Return self*value."""
     def __mul__(self, value: SupportsIndex, /) -> str
 
-    def __ne__(self, value: object, /) -> bool
+    override def __ne__(self, value: object, /) -> bool
 
     def __rmul__(self: LiteralString, value: SupportsIndex, /) -> LiteralString:
         """Return value*self."""
     def __rmul__(self, value: SupportsIndex, /) -> str
 
     def __getnewargs__(self) -> (str,)
-    def __format__(self, format_spec: str, /) -> str:
+    override def __format__(self, format_spec: str, /) -> str:
         """Return a formatted version of the string as described by format_spec."""
 
 @disjoint_base
@@ -1361,7 +1361,7 @@ class bytes(Sequence[int]):
         Padding is done using the specified fill character.
         """
 
-    def count(
+    override def count(
         self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
     ) -> int:
         """Return the number of non-overlapping occurrences of subsection 'sub' in bytes B[start:end].
@@ -1442,7 +1442,7 @@ class bytes(Sequence[int]):
         'b901:ef'
         """
 
-    def index(
+    override def index(
         self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
     ) -> int:
         """Return the lowest index in B where subsection 'sub' is found, such that 'sub' is contained within B[start,end].
@@ -1761,15 +1761,15 @@ class bytes(Sequence[int]):
         The bytes objects frm and to must be of the same length.
         """
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
-    def __iter__(self) -> Iterator[int]:
+    override def __iter__(self) -> Iterator[int]:
         """Implement iter(self)."""
 
-    def __hash__(self) -> int
+    override def __hash__(self) -> int
 
-    def __getitem__(self, key: SupportsIndex, /) -> int:
+    override def __getitem__(self, key: SupportsIndex, /) -> int:
         """Return self[key]."""
     def __getitem__(self, key: slice[SupportsIndex | None], /) -> bytes
 
@@ -1786,11 +1786,11 @@ class bytes(Sequence[int]):
         """Return self%value."""
 
     # Incompatible with Sequence.__contains__
-    def __contains__(self, key: SupportsIndex | ReadableBuffer, /) -> bool:
+    override def __contains__(self, key: SupportsIndex | ReadableBuffer, /) -> bool:
         """Return bool(key in self)."""
 
-    def __eq__(self, value: object, /) -> bool
-    def __ne__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
+    override def __ne__(self, value: object, /) -> bool
     def __lt__(self, value: bytes, /) -> bool
     def __le__(self, value: bytes, /) -> bool
     def __gt__(self, value: bytes, /) -> bool
@@ -1823,7 +1823,7 @@ class bytearray(MutableSequence[int]):
     init(self, ints: Iterable[SupportsIndex] | SupportsIndex | ReadableBuffer, /)
     init(self, string: str, /, encoding: str, errors: str = "strict")
 
-    def append(self, item: SupportsIndex, /) -> None:
+    override def append(self, item: SupportsIndex, /) -> None:
         """Append a single item to the end of the bytearray.
 
         item
@@ -1843,7 +1843,7 @@ class bytearray(MutableSequence[int]):
         Padding is done using the specified fill character.
         """
 
-    def count(
+    override def count(
         self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
     ) -> int:
         """Return the number of non-overlapping occurrences of subsection 'sub' in bytes B[start:end].
@@ -1893,7 +1893,7 @@ class bytearray(MutableSequence[int]):
         If tabsize is not given, a tab size of 8 characters is assumed.
         """
 
-    def extend(self, iterable_of_ints: Iterable[SupportsIndex], /) -> None:
+    override def extend(self, iterable_of_ints: Iterable[SupportsIndex], /) -> None:
         """Append all the items from the iterator or sequence to the end of the bytearray.
 
         iterable_of_ints
@@ -1934,7 +1934,7 @@ class bytearray(MutableSequence[int]):
         'b901:ef'
         """
 
-    def index(
+    override def index(
         self, sub: ReadableBuffer | SupportsIndex, start: SupportsIndex | None = None, end: SupportsIndex | None = None, /
     ) -> int:
         """Return the lowest index in B where subsection 'sub' is found, such that 'sub' is contained within B[start:end].
@@ -1947,7 +1947,7 @@ class bytearray(MutableSequence[int]):
         Raise ValueError if the subsection is not found.
         """
 
-    def insert(self, index: SupportsIndex, item: SupportsIndex, /) -> None:
+    override def insert(self, index: SupportsIndex, item: SupportsIndex, /) -> None:
         """Insert a single item into the bytearray before the given index.
 
         index
@@ -2053,7 +2053,7 @@ class bytearray(MutableSequence[int]):
         of the original bytearray object and two empty bytearray objects.
         """
 
-    def pop(self, index: int = -1, /) -> int:
+    override def pop(self, index: int = -1, /) -> int:
         """Remove and return a single item from B.
 
           index
@@ -2063,7 +2063,7 @@ class bytearray(MutableSequence[int]):
         If no index argument is given, will pop the last item.
         """
 
-    def remove(self, value: int, /) -> None:
+    override def remove(self, value: int, /) -> None:
         """Remove the first occurrence of a value in the bytearray.
 
         value
@@ -2290,30 +2290,30 @@ class bytearray(MutableSequence[int]):
         The bytes objects frm and to must be of the same length.
         """
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
-    def __iter__(self) -> Iterator[int]:
+    override def __iter__(self) -> Iterator[int]:
         """Implement iter(self)."""
 
     __hash__: ClassVar[None]
 
-    def __getitem__(self, key: SupportsIndex, /) -> int:
+    override def __getitem__(self, key: SupportsIndex, /) -> int:
         """Return self[key]."""
     def __getitem__(self, key: slice[SupportsIndex | None], /) -> bytearray
 
-    def __setitem__(self, key: SupportsIndex, value: SupportsIndex, /) -> None:
+    override def __setitem__(self, key: SupportsIndex, value: SupportsIndex, /) -> None:
         """Set self[key] to value."""
     def __setitem__(self, key: slice[SupportsIndex | None], value: Iterable[SupportsIndex] | bytes, /) -> None
 
-    def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> None:
+    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> None:
         """Delete self[key]."""
 
     def __add__(self, value: ReadableBuffer, /) -> bytearray:
         """Return self+value."""
 
     # The superclass wants us to accept Iterable[int], but that fails at runtime.
-    def __iadd__(self, value: ReadableBuffer, /) -> Self:
+    override def __iadd__(self, value: ReadableBuffer, /) -> Self:
         """Implement self+=value."""
 
     def __mul__(self, value: SupportsIndex, /) -> bytearray:
@@ -2329,11 +2329,11 @@ class bytearray(MutableSequence[int]):
         """Return self%value."""
 
     # Incompatible with Sequence.__contains__
-    def __contains__(self, key: SupportsIndex | ReadableBuffer, /) -> bool:
+    override def __contains__(self, key: SupportsIndex | ReadableBuffer, /) -> bool:
         """Return bool(key in self)."""
 
-    def __eq__(self, value: object, /) -> bool
-    def __ne__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
+    override def __ne__(self, value: object, /) -> bool
     def __lt__(self, value: ReadableBuffer, /) -> bool
     def __le__(self, value: ReadableBuffer, /) -> bool
     def __gt__(self, value: ReadableBuffer, /) -> bool
@@ -2404,19 +2404,19 @@ final class memoryview[in out I = int](Sequence[I]):
     def cast(self, format: "?", shape: list[int] | (*: int) = ...) -> memoryview[bool]
     def cast(self, format: _IntegerFormats, shape: list[int] | (*: int) = ...) -> memoryview
 
-    def __getitem__(self, key: SupportsIndex | (*: SupportsIndex), /) -> I:
+    override def __getitem__(self, key: SupportsIndex | (*: SupportsIndex), /) -> I:
         """Return self[key]."""
     def __getitem__(self, key: slice[SupportsIndex | None], /) -> memoryview[I]
 
-    def __contains__(self, x: object, /) -> bool
-    def __iter__(self) -> Iterator[I]:
+    override def __contains__(self, x: object, /) -> bool
+    override def __iter__(self) -> Iterator[I]:
         """Implement iter(self)."""
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
-    def __eq__(self, value: object, /) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, value: object, /) -> bool
+    override def __hash__(self) -> int
 
     def __setitem__(self, key: slice[SupportsIndex | None], value: ReadableBuffer, /) -> None:
         """Set self[key] to value."""
@@ -2499,33 +2499,33 @@ final class bool(int):
 
     # The following overloads could be represented more elegantly with a TypeVar("_B", bool, int),
     # however mypy has a bug regarding TypeVar constraints (https://github.com/python/mypy/issues/11880).
-    def __and__(self, value: bool, /) -> bool:
+    override def __and__(self, value: bool, /) -> bool:
         """Return self&value."""
     def __and__(self, value: int, /) -> int
 
-    def __or__(self, value: bool, /) -> bool:
+    override def __or__(self, value: bool, /) -> bool:
         """Return self|value."""
     def __or__(self, value: int, /) -> int
 
-    def __xor__(self, value: bool, /) -> bool:
+    override def __xor__(self, value: bool, /) -> bool:
         """Return self^value."""
     def __xor__(self, value: int, /) -> int
 
-    def __rand__(self, value: bool, /) -> bool:
+    override def __rand__(self, value: bool, /) -> bool:
         """Return value&self."""
     def __rand__(self, value: int, /) -> int
 
-    def __ror__(self, value: bool, /) -> bool:
+    override def __ror__(self, value: bool, /) -> bool:
         """Return value|self."""
     def __ror__(self, value: int, /) -> int
 
-    def __rxor__(self, value: bool, /) -> bool:
+    override def __rxor__(self, value: bool, /) -> bool:
         """Return value^self."""
     def __rxor__(self, value: int, /) -> int
 
-    def __getnewargs__(self) -> (int,)
+    override def __getnewargs__(self) -> (int,)
     @deprecated("Will throw an error in Python 3.16. Use `not` for logical negation of bools instead.")
-    def __invert__(self) -> int:
+    override def __invert__(self) -> int:
         """~self"""
 
 final class slice[out StartT = dynamic, out StopT = StartT, out StepT = StartT | StopT]:
@@ -2557,7 +2557,7 @@ final class slice[out StartT = dynamic, out StopT = StartT, out StepT = StartT |
     def __new__[T2, T3](cls, start: None, stop: T2, step: T3, /) -> slice[dynamic, T2, T3]
     def __new__[T1, T2, T3](cls, start: T1, stop: T2, step: T3, /) -> slice[T1, T2, T3]
 
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
     if sys.version_info >= (3, 12):
         def __hash__(self) -> int
     else:
@@ -2587,25 +2587,25 @@ class tuple[out Element](Sequence[Element]):
     """
 
     def __new__(cls, iterable: Iterable[Element] = (), /) -> Self
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
-    def __contains__(self, key: Overlapping[Element], /) -> bool:
+    override def __contains__(self, key: Overlapping[Element], /) -> bool:
         """Return bool(key in self)."""
 
-    def __getitem__(self, key: SupportsIndex, /) -> Element:
+    override def __getitem__(self, key: SupportsIndex, /) -> Element:
         """Return self[key]."""
     def __getitem__(self, key: slice[SupportsIndex | None], /) -> (*: Element)
 
-    def __iter__(self) -> Iterator[Element]:
+    override def __iter__(self) -> Iterator[Element]:
         """Implement iter(self)."""
 
     def __lt__(self, value: (*: Element), /) -> bool
     def __le__(self, value: (*: Element), /) -> bool
     def __gt__(self, value: (*: Element), /) -> bool
     def __ge__(self, value: (*: Element), /) -> bool
-    def __eq__(self, value: object, /) -> bool
-    def __hash__(self) -> int
+    override def __eq__(self, value: object, /) -> bool
+    override def __hash__(self) -> int
 
     def __add__(self, value: (*: Element), /) -> (*: Element):
         """Return self+value."""
@@ -2617,10 +2617,10 @@ class tuple[out Element](Sequence[Element]):
     def __rmul__(self, value: SupportsIndex, /) -> (*: Element):
         """Return value*self."""
 
-    def count(self, value: dynamic, /) -> int:
+    override def count(self, value: dynamic, /) -> int:
         """Return number of occurrences of value."""
 
-    def index(self, value: dynamic, start: SupportsIndex = 0, stop: SupportsIndex = sys.maxsize, /) -> int:
+    override def index(self, value: dynamic, start: SupportsIndex = 0, stop: SupportsIndex = sys.maxsize, /) -> int:
         """Return first index of value.
 
         Raises ValueError if the value is not present.
@@ -2651,13 +2651,13 @@ class list[in out Element](MutableSequence[Element]):
     def copy[WidenElement = Never](self) -> list[Element | WidenElement]:
         """Return a shallow copy of the list."""
 
-    def append(self, object: Element, /) -> None:
+    override def append(self, object: Element, /) -> None:
         """Append object to the end of the list."""
 
-    def extend(self, iterable: Iterable[Element], /) -> None:
+    override def extend(self, iterable: Iterable[Element], /) -> None:
         """Extend list by appending elements from the iterable."""
 
-    def pop(self, index: SupportsIndex = -1, /) -> Element:
+    override def pop(self, index: SupportsIndex = -1, /) -> Element:
         """Remove and return item at index (default last).
 
         Raises IndexError if list is empty or index is out of range.
@@ -2665,19 +2665,19 @@ class list[in out Element](MutableSequence[Element]):
 
     # Signature of `list.index` should be kept in line with `collections.UserList.index()`
     # and multiprocessing.managers.ListProxy.index()
-    def index(self, value: Element, start: SupportsIndex = 0, stop: SupportsIndex = sys.maxsize, /) -> int:
+    override def index(self, value: Element, start: SupportsIndex = 0, stop: SupportsIndex = sys.maxsize, /) -> int:
         """Return first index of value.
 
         Raises ValueError if the value is not present.
         """
 
-    def count(self, value: Element, /) -> int:
+    override def count(self, value: Element, /) -> int:
         """Return number of occurrences of value."""
 
-    def insert(self, index: SupportsIndex, object: Element, /) -> None:
+    override def insert(self, index: SupportsIndex, object: Element, /) -> None:
         """Insert object before index."""
 
-    def remove(self, value: Element, /) -> None:
+    override def remove(self, value: Element, /) -> None:
         """Remove first occurrence of value.
 
         Raises ValueError if the value is not present.
@@ -2701,23 +2701,23 @@ class list[in out Element](MutableSequence[Element]):
         """
     def sort(self, *, key: (Element) -> SupportsRichComparison, reverse: bool = False) -> None
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
-    def __iter__(self) -> Iterator[Element]:
+    override def __iter__(self) -> Iterator[Element]:
         """Implement iter(self)."""
 
     __hash__: ClassVar[None]
 
-    def __getitem__(self, i: SupportsIndex, /) -> Element:
+    override def __getitem__(self, i: SupportsIndex, /) -> Element:
         """Return self[index]."""
     def __getitem__[WidenElement = Never](self, s: slice[SupportsIndex | None], /) -> list[Element | WidenElement]
 
-    def __setitem__(self, key: SupportsIndex, value: Element, /) -> None:
+    override def __setitem__(self, key: SupportsIndex, value: Element, /) -> None:
         """Set self[key] to value."""
     def __setitem__(self, key: slice[SupportsIndex | None], value: Iterable[Element], /) -> None
 
-    def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> None:
+    override def __delitem__(self, key: SupportsIndex | slice[SupportsIndex | None], /) -> None:
         """Delete self[key]."""
 
     # Overloading looks unnecessary, but is needed to work around complex mypy problems
@@ -2725,7 +2725,7 @@ class list[in out Element](MutableSequence[Element]):
         """Return self+value."""
     def __add__[Other, WidenElement = Never](self, value: list[Other], /) -> list[Other | Element | WidenElement]
 
-    def __iadd__(self, value: Iterable[Element], /) -> Self:
+    override def __iadd__(self, value: Iterable[Element], /) -> Self:
         """Implement self+=value."""
 
     def __mul__[WidenElement = Never](self, value: SupportsIndex, /) -> list[Element | WidenElement]:
@@ -2737,17 +2737,17 @@ class list[in out Element](MutableSequence[Element]):
     def __imul__(self, value: SupportsIndex, /) -> Self:
         """Implement self*=value."""
 
-    def __contains__(self, key: Overlapping[Element], /) -> bool:
+    override def __contains__(self, key: Overlapping[Element], /) -> bool:
         """Return bool(key in self)."""
 
-    def __reversed__(self) -> Iterator[Element]:
+    override def __reversed__(self) -> Iterator[Element]:
         """Return a reverse iterator over the list."""
 
     def __gt__(self, value: list[Element], /) -> bool
     def __ge__(self, value: list[Element], /) -> bool
     def __lt__(self, value: list[Element], /) -> bool
     def __le__(self, value: list[Element], /) -> bool
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """lists are generic over the type of their contents"""
 
@@ -2791,13 +2791,13 @@ class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
     def copy[WidenKey = Never, WidenValue = Never](self) -> dict[Key | WidenKey, Value | WidenValue]:
         """Return a shallow copy of the dict."""
 
-    def keys(self) -> dict_keys[Key, Value]:
+    override def keys(self) -> dict_keys[Key, Value]:
         """Return a set-like object providing a view on the dict's keys."""
 
-    def values(self) -> dict_values[Key, Value]:
+    override def values(self) -> dict_values[Key, Value]:
         """Return an object providing a view on the dict's values."""
 
-    def items(self) -> dict_items[Key, Value]:
+    override def items(self) -> dict_items[Key, Value]:
         """Return a set-like object providing a view on the dict's items."""
 
     # Signature of `dict.fromkeys` should be kept identical to
@@ -2811,12 +2811,12 @@ class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
     def fromkeys[Element, Other](cls, iterable: Iterable[Element], value: Other, /) -> dict[Element, Other]
 
     # Positional-only in dict, but not in MutableMapping
-    def get(self, key: Overlapping[Key], default: None = None, /) -> Value | None:
+    override def get(self, key: Overlapping[Key], default: None = None, /) -> Value | None:
         """Return the value for key if key is in the dictionary, else default."""
     def get(self, key: Overlapping[Key], default: Value, /) -> Value
     def get[Element](self, key: Overlapping[Key], default: Element, /) -> Value | Element
 
-    def pop(self, key: Key, /) -> Value:
+    override def pop(self, key: Key, /) -> Value:
         """D.pop(k[,d]) -> v, remove specified key and return the corresponding value.
 
         If the key is not found, return the default if given; otherwise,
@@ -2825,22 +2825,22 @@ class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
     def pop(self, key: object, default: Value, /) -> Value
     def pop[Element](self, key: object, default: Element, /) -> Value | Element
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
-    def __getitem__(self, key: Overlapping[Key], /) -> Value:
+    override def __getitem__(self, key: Overlapping[Key], /) -> Value:
         """Return self[key]."""
 
-    def __setitem__(self, key: Key, value: Value, /) -> None:
+    override def __setitem__(self, key: Key, value: Value, /) -> None:
         """Set self[key] to value."""
 
-    def __delitem__(self, key: Key, /) -> None:
+    override def __delitem__(self, key: Key, /) -> None:
         """Delete self[key]."""
 
-    def __iter__(self) -> Iterator[Key]:
+    override def __iter__(self) -> Iterator[Key]:
         """Implement iter(self)."""
 
-    def __eq__(self, value: object, /) -> bool
+    override def __eq__(self, value: object, /) -> bool
     def __reversed__(self) -> Iterator[Key]:
         """Return a reverse iterator over the dict keys."""
 
@@ -2944,7 +2944,7 @@ class set[in out Element: Hashable](MutableSet[Element]):
     init(self)
     init(self, iterable: Iterable[Element], /)
 
-    def add(self, element: Element, /) -> None:
+    override def add(self, element: Element, /) -> None:
         """Add an element to a set.
 
         This has no effect if the element is already present.
@@ -2959,7 +2959,7 @@ class set[in out Element: Hashable](MutableSet[Element]):
     def difference_update(self, *s: Iterable[object]) -> None:
         """Update the set, removing elements found in others."""
 
-    def discard(self, element: object, /) -> None:
+    override def discard(self, element: object, /) -> None:
         """Remove an element from a set if it is a member.
 
         Unlike set.remove(), the discard() method does not raise
@@ -2972,7 +2972,7 @@ class set[in out Element: Hashable](MutableSet[Element]):
     def intersection_update(self, *s: Iterable[object]) -> None:
         """Update the set, keeping only elements found in it and all others."""
 
-    def isdisjoint(self, s: Iterable[object], /) -> bool:
+    override def isdisjoint(self, s: Iterable[object], /) -> bool:
         """Return True if two sets have a null intersection."""
 
     def issubset(self, s: Iterable[object], /) -> bool:
@@ -2981,7 +2981,7 @@ class set[in out Element: Hashable](MutableSet[Element]):
     def issuperset(self, s: Iterable[object], /) -> bool:
         """Report whether this set contains another set."""
 
-    def remove(self, element: Element, /) -> None:
+    override def remove(self, element: Element, /) -> None:
         """Remove an element from a set; it must be a member.
 
         If the element is not a member, raise a KeyError.
@@ -2999,44 +2999,44 @@ class set[in out Element: Hashable](MutableSet[Element]):
     def update(self, *s: Iterable[Element]) -> None:
         """Update the set, adding elements from all others."""
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
-    def __contains__(self, o: Overlapping[Element], /) -> bool:
+    override def __contains__(self, o: Overlapping[Element], /) -> bool:
         """x.__contains__(y) <==> y in x."""
 
-    def __iter__(self) -> Iterator[Element]:
+    override def __iter__(self) -> Iterator[Element]:
         """Implement iter(self)."""
 
-    def __and__[WidenElement = Never](self, value: AbstractSet[object], /) -> set[Element | WidenElement]:
+    override def __and__[WidenElement = Never](self, value: AbstractSet[object], /) -> set[Element | WidenElement]:
         """Return self&value."""
 
-    def __iand__(self, value: AbstractSet[object], /) -> Self:
+    override def __iand__(self, value: AbstractSet[object], /) -> Self:
         """Return self&=value."""
 
-    def __or__[Other, WidenElement = Never](self, value: AbstractSet[Other], /) -> set[Element | Other | WidenElement]:
+    override def __or__[Other, WidenElement = Never](self, value: AbstractSet[Other], /) -> set[Element | Other | WidenElement]:
         """Return self|value."""
 
-    def __ior__(self, value: AbstractSet[Element], /) -> Self:
+    override def __ior__(self, value: AbstractSet[Element], /) -> Self:
         """Return self|=value."""
 
-    def __sub__[WidenElement = Never](self, value: AbstractSet[object], /) -> set[Element | WidenElement]:
+    override def __sub__[WidenElement = Never](self, value: AbstractSet[object], /) -> set[Element | WidenElement]:
         """Return self-value."""
 
-    def __isub__(self, value: AbstractSet[object], /) -> Self:
+    override def __isub__(self, value: AbstractSet[object], /) -> Self:
         """Return self-=value."""
 
-    def __xor__[Other, WidenElement = Never](self, value: AbstractSet[Other], /) -> set[Element | Other | WidenElement]:
+    override def __xor__[Other, WidenElement = Never](self, value: AbstractSet[Other], /) -> set[Element | Other | WidenElement]:
         """Return self^value."""
 
-    def __ixor__(self, value: AbstractSet[Element], /) -> Self:
+    override def __ixor__(self, value: AbstractSet[Element], /) -> Self:
         """Return self^=value."""
 
-    def __le__(self, value: AbstractSet[object], /) -> bool
-    def __lt__(self, value: AbstractSet[object], /) -> bool
-    def __ge__(self, value: AbstractSet[object], /) -> bool
-    def __gt__(self, value: AbstractSet[object], /) -> bool
-    def __eq__(self, value: object, /) -> bool
+    override def __le__(self, value: AbstractSet[object], /) -> bool
+    override def __lt__(self, value: AbstractSet[object], /) -> bool
+    override def __ge__(self, value: AbstractSet[object], /) -> bool
+    override def __gt__(self, value: AbstractSet[object], /) -> bool
+    override def __eq__(self, value: object, /) -> bool
     __hash__: ClassVar[None]
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """sets are generic over the type of their elements"""
@@ -3057,7 +3057,7 @@ class frozenset[out Element: Hashable](AbstractSet[Element]):
     def intersection(self, *s: Iterable[object]) -> frozenset[Element]:
         """Return a new set with elements common to the set and all others."""
 
-    def isdisjoint(self, s: Iterable[object], /) -> bool:
+    override def isdisjoint(self, s: Iterable[object], /) -> bool:
         """Return True if two sets have a null intersection."""
 
     def issubset(self, s: Iterable[object], /) -> bool:
@@ -3072,33 +3072,33 @@ class frozenset[out Element: Hashable](AbstractSet[Element]):
     def union[Other](self, *s: Iterable[Other]) -> frozenset[Element | Other]:
         """Return a new set with elements from the set and all others."""
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
-    def __contains__(self, o: Overlapping[Element], /) -> bool:
+    override def __contains__(self, o: Overlapping[Element], /) -> bool:
         """x.__contains__(y) <==> y in x."""
 
-    def __iter__(self) -> Iterator[Element]:
+    override def __iter__(self) -> Iterator[Element]:
         """Implement iter(self)."""
 
-    def __and__(self, value: AbstractSet[object], /) -> frozenset[Element]:
+    override def __and__(self, value: AbstractSet[object], /) -> frozenset[Element]:
         """Return self&value."""
 
-    def __or__[Other](self, value: AbstractSet[Other], /) -> frozenset[Element | Other]:
+    override def __or__[Other](self, value: AbstractSet[Other], /) -> frozenset[Element | Other]:
         """Return self|value."""
 
-    def __sub__(self, value: AbstractSet[object], /) -> frozenset[Element]:
+    override def __sub__(self, value: AbstractSet[object], /) -> frozenset[Element]:
         """Return self-value."""
 
-    def __xor__[Other](self, value: AbstractSet[Other], /) -> frozenset[Element | Other]:
+    override def __xor__[Other](self, value: AbstractSet[Other], /) -> frozenset[Element | Other]:
         """Return self^value."""
 
-    def __le__(self, value: AbstractSet[object], /) -> bool
-    def __lt__(self, value: AbstractSet[object], /) -> bool
-    def __ge__(self, value: AbstractSet[object], /) -> bool
-    def __gt__(self, value: AbstractSet[object], /) -> bool
-    def __eq__(self, value: object, /) -> bool
-    def __hash__(self) -> int
+    override def __le__(self, value: AbstractSet[object], /) -> bool
+    override def __lt__(self, value: AbstractSet[object], /) -> bool
+    override def __ge__(self, value: AbstractSet[object], /) -> bool
+    override def __gt__(self, value: AbstractSet[object], /) -> bool
+    override def __eq__(self, value: object, /) -> bool
+    override def __hash__(self) -> int
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """frozensets are generic over the type of their elements"""
 
@@ -3144,30 +3144,30 @@ final class range(Sequence[int]):
     def __new__(cls, stop: SupportsIndex, /) -> Self
     def __new__(cls, start: SupportsIndex, stop: SupportsIndex, step: SupportsIndex = 1, /) -> Self
 
-    def count(self, value: int, /) -> int:
+    override def count(self, value: int, /) -> int:
         """rangeobject.count(value) -> integer -- return number of occurrences of value"""
 
-    def index(self, value: int, /) -> int:
+    override def index(self, value: int, /) -> int:
         """rangeobject.index(value) -> integer -- return index of value.
         Raise ValueError if the value is not present.
         """
 
-    def __len__(self) -> int:
+    override def __len__(self) -> int:
         """Return len(self)."""
 
-    def __eq__(self, value: object, /) -> bool
-    def __hash__(self) -> int
-    def __contains__(self, key: object, /) -> bool:
+    override def __eq__(self, value: object, /) -> bool
+    override def __hash__(self) -> int
+    override def __contains__(self, key: object, /) -> bool:
         """Return bool(key in self)."""
 
-    def __iter__(self) -> Iterator[int]:
+    override def __iter__(self) -> Iterator[int]:
         """Implement iter(self)."""
 
-    def __getitem__(self, key: SupportsIndex, /) -> int:
+    override def __getitem__(self, key: SupportsIndex, /) -> int:
         """Return self[key]."""
     def __getitem__(self, key: slice[SupportsIndex | None], /) -> range
 
-    def __reversed__(self) -> Iterator[int]:
+    override def __reversed__(self) -> Iterator[int]:
         """Return a reverse iterator."""
 
 @disjoint_base
@@ -4411,8 +4411,8 @@ class BaseException:
 
     # Necessary for security-focused static analyzers (e.g, pysa)
     # See https://github.com/python/typeshed/pull/14900
-    def __str__(self) -> str  # noqa: Y029
-    def __repr__(self) -> str  # noqa: Y029
+    override def __str__(self) -> str  # noqa: Y029
+    override def __repr__(self) -> str  # noqa: Y029
     if sys.version_info >= (3, 11):
         # only present after add_note() is called
         __notes__: list[str]

@@ -112,7 +112,7 @@ class Future[in out Element](Awaitable[Element]):
     def __iter__(self) -> Generator[dynamic, None, Element]:
         """Implement iter(self)."""
 
-    def __await__(self) -> Generator[dynamic, None, Element]:
+    override def __await__(self) -> Generator[dynamic, None, Element]:
         """Return an iterator to be used in await expression."""
 
     let _loop: AbstractEventLoop
@@ -215,7 +215,7 @@ class Task[out Element](Future[Element]):
             Returns the remaining number of cancellation requests.
             """
 
-    def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
+    override def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Tasks are generic over the return type of their wrapped coroutines"""
 
 def get_event_loop() -> AbstractEventLoop:

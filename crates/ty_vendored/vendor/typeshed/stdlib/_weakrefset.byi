@@ -10,38 +10,38 @@ class WeakSet[in out Element](MutableSet[Element]):
     init(self, data: None = None)
     init(self, data: Iterable[Element])
 
-    def add(self, item: Element) -> None
-    def discard(self, item: Element) -> None
+    override def add(self, item: Element) -> None
+    override def discard(self, item: Element) -> None
     def copy(self) -> Self
-    def remove(self, item: Element) -> None
+    override def remove(self, item: Element) -> None
     def update(self, other: Iterable[Element]) -> None
     __hash__: ClassVar[None]
-    def __contains__(self, item: object) -> bool
-    def __len__(self) -> int
-    def __iter__(self) -> Iterator[Element]
-    def __ior__(self, other: Iterable[Element]) -> Self
+    override def __contains__(self, item: object) -> bool
+    override def __len__(self) -> int
+    override def __iter__(self) -> Iterator[Element]
+    override def __ior__(self, other: Iterable[Element]) -> Self
     def difference(self, other: Iterable[Element]) -> Self
-    def __sub__(self, other: Iterable[dynamic]) -> Self
+    override def __sub__(self, other: Iterable[dynamic]) -> Self
     def difference_update(self, other: Iterable[dynamic]) -> None
-    def __isub__(self, other: Iterable[dynamic]) -> Self
+    override def __isub__(self, other: Iterable[dynamic]) -> Self
     def intersection(self, other: Iterable[Element]) -> Self
-    def __and__(self, other: Iterable[dynamic]) -> Self
+    override def __and__(self, other: Iterable[dynamic]) -> Self
     def intersection_update(self, other: Iterable[dynamic]) -> None
-    def __iand__(self, other: Iterable[dynamic]) -> Self
+    override def __iand__(self, other: Iterable[dynamic]) -> Self
     def issubset(self, other: Iterable[Element]) -> bool
-    def __le__(self, other: Iterable[Element]) -> bool
-    def __lt__(self, other: Iterable[Element]) -> bool
+    override def __le__(self, other: Iterable[Element]) -> bool
+    override def __lt__(self, other: Iterable[Element]) -> bool
     def issuperset(self, other: Iterable[Element]) -> bool
-    def __ge__(self, other: Iterable[Element]) -> bool
-    def __gt__(self, other: Iterable[Element]) -> bool
-    def __eq__(self, other: object) -> bool
+    override def __ge__(self, other: Iterable[Element]) -> bool
+    override def __gt__(self, other: Iterable[Element]) -> bool
+    override def __eq__(self, other: object) -> bool
     def symmetric_difference[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
-    def __xor__[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
+    override def __xor__[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
     def symmetric_difference_update(self, other: Iterable[Element]) -> None
-    def __ixor__(self, other: Iterable[Element]) -> Self
+    override def __ixor__(self, other: Iterable[Element]) -> Self
     def union[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
-    def __or__[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
-    def isdisjoint(self, other: Iterable[Element]) -> bool
+    override def __or__[Other](self, other: Iterable[Other]) -> WeakSet[Other | Element]
+    override def isdisjoint(self, other: Iterable[Element]) -> bool
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 
