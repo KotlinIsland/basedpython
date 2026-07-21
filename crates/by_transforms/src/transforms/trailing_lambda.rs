@@ -96,12 +96,15 @@ impl<'ast> Visitor<'ast> for BlockReturns<'ast> {
 
 impl TrailingLambdaLower<'_, '_> {
     /// a function name that is unbound at the statement's scope and unused by
-    /// earlier lowerings in this run
+    /// earlier lowerings in this run. The derived `{name}_return` cell (used to
+    /// carry a `once` block's return value) must be free too, so both are checked
     fn fresh_name(&mut self, anchor: &Expr) -> String {
         loop {
             let name = format!("_trailing_lambda_{}", self.counter);
             self.counter += 1;
-            if self.types.is_unbound_at(&name, anchor) {
+            if self.types.is_unbound_at(&name, anchor)
+                && self.types.is_unbound_at(&format!("{name}_return"), anchor)
+            {
                 return name;
             }
         }

@@ -183,6 +183,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.try_expression_type(expr)
         });
 
+        // basedpython: a trailing-lambda block in a loop that captures a loop
+        // variable is a late-binding trap unless its callee confines it
+        // (`local` / `once`) — the type-aware complement to ruff's `B023`
+        crate::types::lifetimes::check_loop_variable_capture(
+            &self.context,
+            &function.body,
+            |expr| self.try_expression_type(expr),
+        );
+
         let enclosing_function_for_return_check =
             nearest_enclosing_function(db, self.index, self.scope());
 

@@ -1828,6 +1828,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
     fn infer_module(&mut self, module: &ast::ModModule) {
         self.infer_body(&module.body);
+
+        // basedpython: a trailing-lambda block in a module-level loop that
+        // captures a loop variable is a late-binding trap unless its callee
+        // confines it (`local` / `once`) — the type-aware complement to `B023`
+        crate::types::lifetimes::check_loop_variable_capture(&self.context, &module.body, |expr| {
+            self.try_expression_type(expr)
+        });
     }
 
     fn infer_type_alias_type_params(&mut self, type_alias: &ast::StmtTypeAlias) {

@@ -1,0 +1,11 @@
+---
+source: crates/ruff_linter/src/rules/flake8_bugbear/mod.rs
+---
+B023 Function definition does not bind loop variable `x`
+  --> B023_basedpython.by:18:24
+   |
+16 | fns = []
+17 | for x in [1, 2, 3]:
+18 |     fns.append(lambda: x)
+   |                        ^
+   |

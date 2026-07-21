@@ -567,6 +567,16 @@
             }
           ]
         },
+        "escaping-loop-variable": {
+          "title": "detects a trailing-lambda block capturing a loop variable with a non-borrow callee",
+          "description": "## What it does\nChecks for a trailing-lambda block inside a loop that captures a loop\nvariable while its callee's callback parameter is **not** a borrow\n(`local` / `once`).\n\n## Why is this bad?\nA trailing-lambda block lowers to a closure that captures the loop variable\nby reference. If the callee is a borrow (`local` / `once`), it runs the\nblock synchronously — the variable still holds this iteration's value. But\na non-borrow callee may store the block and call it after the loop has\nadvanced, at which point every deferred call sees the loop variable's final\nvalue — the classic late-binding trap.\n\nThis is the type-aware complement to ruff's syntactic `B023`, which cannot\nresolve the callee's marker. An opaque callee (not a resolvable function or\nbound method) is left alone.\n\n## Example\n\n```by\ndef defer(fn: () -> None):  # not a borrow — may keep `fn`\n    _saved.append(fn)\n\nfor x in [1, 2, 3]:\n    defer:\n        print(x)  # error: captures loop variable `x`\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "experimental-syntax": {
           "title": "detects experimental syntax",
           "description": "## What it does\n\nChecks for experimental syntax that is not part of the Python typing specification.\n\n## Why is this bad?\n\nExperimental syntax is specific to ty. It may be rejected by other type checkers and may never be\nstandardized, or be subject to breaking changes.\n\n## Examples\n\n```toml\n[environment]\npython-version = \"3.14\"\n```\n\n```python\nclass A: ...\n\n\nclass B: ...\n\n\ndef f(value: A & B) -> None: ...  # error: [experimental-syntax]\ndef g(value: ~A) -> None: ...  # error: [experimental-syntax]\n```",
@@ -1578,8 +1588,8 @@
           ]
         },
         "trailing-lambda-return-type": {
-          "title": "detects a trailing-lambda callback whose return type is not `None`",
-          "description": "## What it does\nChecks for a trailing-lambda block whose callback is declared to return a\ntype other than `None`.\n\n## Why is this bad?\nA trailing-lambda block lowers to a function that returns `None` (in a\n`once` block a `return` targets the *enclosing* function, not the block).\nA callback declared to return anything else can never be satisfied by the\nblock. Callbacks with non-`None` return types are not yet supported.\n\n## Example\n\n```by\ndef f(a: (int) -> str):  # callback returns `str`\n    print(a(1))\n\nf:  # error: the block returns `None`, not `str`\n    print(it)\n```",
+          "title": "detects a trailing-lambda callback whose return type does not accept `None`",
+          "description": "## What it does\nChecks for a trailing-lambda block whose callback's declared return type\ndoes not accept `None`.\n\n## Why is this bad?\nA trailing-lambda block lowers to a function that returns `None` (in a\n`once` block a `return` targets the *enclosing* function, not the block).\nA callback whose return type does not accept `None` — `int`, `str`, … —\ncan never be satisfied by the block. A return type that merely accepts\n`None` (`None` itself, `int | None`, `object`) is fine; other non-`None`\nreturn types are not yet supported.\n\n## Example\n\n```by\ndef f(a: (int) -> str):  # callback returns `str`\n    print(a(1))\n\nf:  # error: the block returns `None`, not `str`\n    print(it)\n```",
           "default": "error",
           "oneOf": [
             {

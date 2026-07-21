@@ -29,8 +29,14 @@ appended as the last positional argument instead
 
 `it` is context-typed from the callee: the sole positional parameter of the
 callable the last parameter is declared as. in the example above `a` is
-`(int) -> str`, so `it` is `int`. the block's return value is deliberately
-unchecked — blocks are written for effect
+`(int) -> str`, so `it` is `int`.
+
+the block itself always returns `None` — in a `once` block a `return` targets
+the *enclosing* function, not the block (see [once blocks](#once-blocks)) — so
+the callee's callback must be declared to return a type that accepts `None`
+(`None`, `int | None`, `object`). a callback declared to return anything else is
+rejected with `trailing-lambda-return-type`; those return types are not yet
+supported
 
 the call is type-checked with the block counted as an argument: missing
 earlier arguments, an over-supplied last parameter, or a non-callable target
@@ -87,12 +93,13 @@ with `nonlocal`. a name bound in no enclosing scope stays a plain block local,
 and an attribute or item target (`obj.x = …`) rebinds no name, so neither is
 declared
 
-ty's flow analysis reflects the write too: because the block runs inline at the
-call site, its assignments narrow the enclosing binding, so a `reveal_type`
-after the block sees the block's value, not the value before it:
+ty's flow analysis reflects the write too. a `once` block runs exactly once at
+the call site (like a `with` body), so an unconditional assignment narrows the
+enclosing binding definitely — a `reveal_type` after the block sees the block's
+value, not the value before it:
 
 ```by
-def f(fn: () -> None):
+def f(once fn: () -> None):
     fn()
 
 def main():
@@ -102,12 +109,45 @@ def main():
     reveal_type(a)  # 2, not 1
 ```
 
-this treats the block as running once at the `f:` point (like a `with` body).
 a *conditional* assignment unions with the prior value — `if c(): a = 2` leaves
 `a` as `1 | 2`, because the block runs but the write itself might not; only a
-write that happens on every branch drops the prior. a callback the callee never
-actually calls is the same accepted imprecision as a `nonlocal` write ty can't
-prove happens
+write that happens on every branch drops the prior.
+
+a **non-`once`** callback may run any number of times (including zero), so even
+an unconditional write unions with the prior value (`a` stays `1 | 2`). the
+`once`-ness that drives this narrowing is resolved syntactically while the
+semantic index is built — before type inference — so it is recognised only for a
+**same-file** callee whose `def` is visible; an imported `once` callee is treated
+conservatively as non-`once` for narrowing (the union is sound, just wider),
+though the runtime lowering, which runs after inference, still honours it. a
+callback the callee never actually calls is the same accepted imprecision as a
+`nonlocal` write ty can't prove happens
+
+## once blocks
+
+when the callee marks its callback parameter [`once`](local-lifetimes.md#once-callbacks),
+the block runs exactly once, with `with`-body semantics. that unlocks three
+behaviours a non-`once` block (an ordinary closure, run any number of times)
+does not get:
+
+- a `return` in the block targets the **enclosing** function. the lowering
+    carries the returned value out in a one-element cell and re-returns it after
+    the call: `return it` becomes `cell.append(it); return`, and the enclosing
+    function runs `if cell: return cell[0]` once the call comes back. a non-`once`
+    block's `return` would only leave the closure, so it is rejected with
+    `trailing-lambda-control-flow`
+- a name the block unconditionally binds but no enclosing scope binds **survives**
+    the block as an enclosing local; from a non-`once` block it stays a block local
+    (it might never be bound)
+- an enclosing `let` / `final` may not be assigned from a non-`once` block
+    (`invalid-assignment`), since a repeated run would rebind the `Final`
+
+> **caveat** — because the block is a real closure passed to the callee, the
+> return is not a true stack unwind: the callee still finishes its own body after
+> invoking the callback (this is what runs a resource manager's cleanup, matching
+> `with`), and a callee that swallows the callback's control flow — or never
+> calls it — defeats the propagation. tightening `return` / `break` / `continue`
+> out of a `once` block into a guaranteed unwind is tracked as future work
 
 ## required parameters after defaulted ones
 

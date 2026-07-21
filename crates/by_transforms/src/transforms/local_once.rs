@@ -115,6 +115,26 @@ mod tests {
     }
 
     #[test]
+    fn let_local_prefix_strips_cleanly() {
+        // `let` (an init-method modifier, kept for that transform) and `local`
+        // (stripped here) edit the same parameter prefix; the two strips compose
+        // without clobbering each other. (the combination is itself contradictory
+        // — `let` stores on `self`, `local` forbids escape — so ty separately
+        // reports `escaping-local`; that is a diagnostic, not a lowering concern)
+        check(
+            indoc! {"
+                class A:
+                    init(self, let local x: int)
+            "},
+            indoc! {"
+                class A:
+                    def __init__(self, x: int):
+                        self.x: int = x
+            "},
+        );
+    }
+
+    #[test]
     fn modifiers_on_multiple_params() {
         check(
             "def f(local a: int, b: int, once cb: () -> None):\n    cb()\n",

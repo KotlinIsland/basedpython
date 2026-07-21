@@ -75,14 +75,51 @@ def f(once fn: (local int) -> None):
     fn(1)
 ```
 
-## passing the callback on is not "never called"
+## passing the callback on to another `once` is not "never called"
 
-`run` might call it, so `once-not-called` stays silent.
+A `once` callback is a borrow, so it may only be handed to another `once` parameter. That still
+counts as a use, so `once-not-called` stays silent.
 
 ```by
-def run(cb: () -> None):
+def run(once cb: () -> None):
     cb()
 
 def f(once done: () -> None):
     run(done)
+```
+
+## a `once` callback cannot escape the call
+
+`once` is a `local` borrow with an extra "exactly once" obligation — it cannot escape, since a
+callback that outlives the call can no longer be guaranteed to run exactly once.
+
+```by
+_saved: object = None
+
+def f(once done: () -> None) -> object:
+    global _saved
+    _saved = done  # error: [escaping-local] "once `done` cannot escape the call: it is stored where it outlives the call"
+    return done  # error: [escaping-local] "once `done` cannot escape the call: it is returned from the call"
+```
+
+## a `once` callback may only be passed to another `once`
+
+Handing it to a plain (non-`once`) parameter would delegate the exactly-once obligation to code that
+is not required to discharge it, so it is rejected — even a `local` recipient, which could call it
+zero or many times.
+
+```by
+def sink(cb: () -> None):
+    cb()
+
+def borrow(local cb: () -> None):
+    cb()
+
+def keep(once cb: () -> None):
+    cb()
+
+def f(once done: () -> None):
+    sink(done)  # error: [escaping-local] "once `done` cannot escape the call: it is passed as a non-`once` argument"
+    borrow(done)  # error: [escaping-local]
+    keep(done)  # ok — the obligation is preserved
 ```
