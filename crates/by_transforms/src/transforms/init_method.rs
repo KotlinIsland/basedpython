@@ -15,10 +15,12 @@
 use std::cell::RefCell;
 
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
-use ruff_python_ast::{Expr, ModModule, Parameter, Stmt, StmtFunctionDef};
+use ruff_python_ast::{Expr, Parameter, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
-use super::ast_driver::{AstPass, PassContext};
+use super::ast_driver::{PassContext, TypeAwarePass};
+use super::callable::lower_type_expr_full;
+use crate::type_info::TypeInfo;
 
 pub(crate) struct InitMethod<'src> {
     source: &'src str,
@@ -30,13 +32,14 @@ impl<'src> InitMethod<'src> {
     }
 }
 
-impl AstPass for InitMethod<'_> {
-    fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
+impl TypeAwarePass for InitMethod<'_> {
+    fn run(&self, stmts: &[Stmt], types: &dyn TypeInfo, ctx: &mut PassContext) {
         let mut state = State {
             source: self.source,
+            types,
             edits: RefCell::new(Vec::new()),
         };
-        for stmt in &module.body {
+        for stmt in stmts {
             state.visit_stmt(stmt);
         }
         ctx.text_edits.extend(state.edits.into_inner());
@@ -45,6 +48,7 @@ impl AstPass for InitMethod<'_> {
 
 struct State<'src> {
     source: &'src str,
+    types: &'src dyn TypeInfo,
     edits: RefCell<Vec<(TextRange, String)>>,
 }
 
@@ -68,6 +72,21 @@ impl State<'_> {
 
     fn push(&self, range: TextRange, repl: String) {
         self.edits.borrow_mut().push((range, repl));
+    }
+
+    /// The annotation text for the synthesized `self.<name>: <ann> = <name>`
+    /// line. That line is fresh output, so any type-position lowering the
+    /// parameter's own annotation gets — a callable arrow `() -> None`, a `T?`
+    /// optional, a bare `float` — has to be re-applied here rather than copied
+    /// verbatim, or the invalid basedpython surface leaks into the `.py` output.
+    /// the required imports and any hoisted `Protocol` class come from the
+    /// sibling passes' visit of the same parameter annotation, so this only
+    /// needs to reproduce the lowered text. falls back to the source verbatim
+    /// when nothing lowers
+    fn lower_annotation(&self, ann: &Expr) -> String {
+        lower_type_expr_full(self.source, self.types, ann).unwrap_or_else(|| {
+            self.source[usize::from(ann.range().start())..usize::from(ann.range().end())].to_owned()
+        })
     }
 
     fn process_function(&mut self, func: &StmtFunctionDef) {
@@ -113,8 +132,7 @@ impl State<'_> {
             self.push(prefix, String::new());
             let name = param.name.as_str();
             let line = if let Some(ann) = &param.annotation {
-                let ann_src =
-                    &self.source[usize::from(ann.range().start())..usize::from(ann.range().end())];
+                let ann_src = self.lower_annotation(ann);
                 format!("self.{name}: {ann_src} = {name}")
             } else {
                 format!("self.{name} = {name}")
@@ -186,6 +204,45 @@ mod tests {
 
     fn check(input: &str, expected: &str) {
         assert_eq!(transpile(input, &Config::test_default()).unwrap(), expected);
+    }
+
+    // a `let` parameter whose annotation is a callable arrow lowers in both
+    // the parameter position and the synthesized `self.<name>: <ann> = <name>`
+    // — the arrow is invalid python and must not leak into either
+    #[test]
+    fn let_param_callable_annotation_lowers() {
+        check(
+            indoc! {"
+                class A:
+                    init(self, let fn: () -> None)
+            "},
+            indoc! {"
+                from typing import Callable
+                class A:
+                    def __init__(self, fn: Callable[[], None]):
+                        self.fn: Callable[[], None] = fn
+            "},
+        );
+    }
+
+    // same lowering on the with-body path, where the assignment is prepended
+    // before the first user statement rather than into a synthesized body
+    #[test]
+    fn let_param_callable_annotation_lowers_with_body() {
+        check(
+            indoc! {"
+                class A:
+                    init(self, let fn: (int) -> str):
+                        print(\"hi\")
+            "},
+            indoc! {"
+                from typing import Callable
+                class A:
+                    def __init__(self, fn: Callable[[int], str]):
+                        self.fn: Callable[[int], str] = fn
+                        print(\"hi\")
+            "},
+        );
     }
 
     #[test]

@@ -514,7 +514,6 @@ pub(crate) fn run_against_source<'a>(
         &super_keyword_pass,
         &postfix_await_pass,
         &auto_quote_pass,
-        &init_method_pass,
         // strip `local` / `once` parameter modifiers (source-span deletions,
         // like init_method's `let` handling — must read ranges before any
         // AST-mutation pass zeroes them)
@@ -552,6 +551,13 @@ pub(crate) fn run_against_source<'a>(
         // order-independent; first, so a hard incompatibility surfaces
         // before any edit-conflict noise
         &frameworks_pass,
+        // `init(...)` shorthand: rewrite to `def __init__`, strip `let`, and
+        // synthesize `self.<name>: <ann> = <name>`. type-aware because the
+        // synthesized annotation is fresh output that must reproduce whatever
+        // lowering the parameter's own annotation gets (a callable arrow, a
+        // `T?`, a bare `float`); the imports / hoisted classes those need are
+        // requested by the sibling passes' visit of the same parameter
+        &init_method_pass,
         // soundness wraps whole gated expressions in `_soundness_check(...)`
         // template edits; it runs first so an equal-span template from a
         // later pass (e.g. coalesce on a wrapped iterable) is claimed and
