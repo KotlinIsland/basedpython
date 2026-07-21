@@ -6,14 +6,15 @@ use smallvec::SmallVec;
 use crate::{
     Db,
     types::{
-        BoundMethodType, BoundSuperType, BoundTypeVarInstance, CallableType, EnumComplementType,
-        GenericAlias, IntersectionType, KnownBoundMethodType, KnownInstanceType,
-        NominalInstanceType, OverlappingType, PropertyInstanceType, ProtocolInstanceType,
-        SubclassOfType, Type, TypeAliasType, TypeFormType, TypeGuardType, TypeIsType,
-        TypedDictType, UnionType,
+        BoundMethodType, BoundSuperType, BoundTypeVarInstance, CallableType, DeferredType,
+        EnumComplementType, GenericAlias, IntersectionType, KnownBoundMethodType,
+        KnownInstanceType, NominalInstanceType, OverlappingType, PropertyInstanceType,
+        ProtocolInstanceType, SubclassOfType, Type, TypeAliasType, TypeFormType, TypeGuardType,
+        TypeIsType, TypedDictType, UnionType,
         bound_super::walk_bound_super_type,
         callable::walk_callable_type,
         class::walk_generic_alias,
+        deferred::walk_deferred_type,
         function::{FunctionType, walk_function_type},
         instance::{walk_nominal_instance_type, walk_protocol_instance_type},
         known_instance::walk_known_instance_type,
@@ -132,6 +133,10 @@ pub(crate) trait TypeVisitor<'db> {
         walk_type_alias_type(db, type_alias, self);
     }
 
+    fn visit_deferred_type(&self, db: &'db dyn Db, deferred: DeferredType<'db>) {
+        walk_deferred_type(db, deferred, self);
+    }
+
     fn visit_typed_dict_type(&self, db: &'db dyn Db, typed_dict: TypedDictType<'db>) {
         walk_typed_dict_type(db, typed_dict, self);
     }
@@ -165,6 +170,7 @@ pub(super) enum NonAtomicType<'db> {
     ProtocolInstance(ProtocolInstanceType<'db>),
     TypedDict(TypedDictType<'db>),
     TypeAlias(TypeAliasType<'db>),
+    Deferred(DeferredType<'db>),
     NewTypeInstance(NewType<'db>),
 }
 
@@ -239,6 +245,7 @@ impl<'db> From<Type<'db>> for TypeKind<'db> {
                 TypeKind::NonAtomic(NonAtomicType::TypedDict(typed_dict))
             }
             Type::TypeAlias(alias) => TypeKind::NonAtomic(NonAtomicType::TypeAlias(alias)),
+            Type::Deferred(deferred) => TypeKind::NonAtomic(NonAtomicType::Deferred(deferred)),
             Type::NewTypeInstance(newtype) => {
                 TypeKind::NonAtomic(NonAtomicType::NewTypeInstance(newtype))
             }
@@ -290,6 +297,9 @@ pub(super) fn walk_non_atomic_type<'db, V: TypeVisitor<'db> + ?Sized>(
         NonAtomicType::TypedDict(typed_dict) => visitor.visit_typed_dict_type(db, typed_dict),
         NonAtomicType::TypeAlias(alias) => {
             visitor.visit_type_alias_type(db, alias);
+        }
+        NonAtomicType::Deferred(deferred) => {
+            visitor.visit_deferred_type(db, deferred);
         }
         NonAtomicType::NewTypeInstance(newtype) => {
             visitor.visit_newtype_instance_type(db, newtype);

@@ -310,6 +310,7 @@ impl<'db> Type<'db> {
             | Type::TypeGuard(_)
             | Type::TypeForm(_)
             | Type::Overlapping(_)
+            | Type::Deferred(_)
             | Type::TypedDict(_)
             | Type::TypeAlias(_)
             | Type::NewTypeInstance(_) => false,
@@ -1166,6 +1167,14 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
 
             (_, Type::Overlapping(target_overlapping)) => {
                 self.check_type_pair(db, source, target_overlapping.type_argument(db))
+            }
+
+            (Type::Deferred(source_deferred), _) => {
+                self.check_type_pair(db, source_deferred.reduced(db), target)
+            }
+
+            (_, Type::Deferred(target_deferred)) => {
+                self.check_type_pair(db, source, target_deferred.reduced(db))
             }
 
             // Annotation unions retain type aliases so recursive aliases can be represented.
@@ -2644,6 +2653,10 @@ impl<'a, 'c, 'db> DisjointnessChecker<'a, 'c, 'db> {
             (_, Type::Overlapping(overlapping)) => {
                 self.check_type_pair(db, left, overlapping.type_argument(db))
             }
+
+            (Type::Deferred(deferred), _) => self.check_type_pair(db, deferred.reduced(db), right),
+
+            (_, Type::Deferred(deferred)) => self.check_type_pair(db, left, deferred.reduced(db)),
 
             (Type::EnumComplement(complement), other) => {
                 self.check_type_pair(db, complement.remaining_literal_union(db), other)

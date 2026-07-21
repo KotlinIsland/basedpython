@@ -747,6 +747,9 @@ impl<'db> BoundSuperType<'db> {
             Type::Overlapping(overlapping) => {
                 return delegate_to(overlapping.value_type(db));
             }
+            Type::Deferred(deferred) => {
+                return delegate_to(deferred.reduced(db));
+            }
             Type::TypeVar(bound_typevar) => {
                 let typevar = bound_typevar.typevar(db);
                 match typevar.bound_or_constraints(db) {

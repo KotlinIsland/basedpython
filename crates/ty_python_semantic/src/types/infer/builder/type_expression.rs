@@ -24,11 +24,11 @@ use crate::types::tuple::{TupleSpecBuilder, TupleType};
 use ty_python_core::scope::ScopeKind;
 
 use crate::types::{
-    BindingContext, CallableType, DynamicType, GenericContext, InternedType, IntersectionBuilder,
-    IntersectionType, KnownClass, KnownInstanceType, LintDiagnosticGuard, LiteralValueTypeKind,
-    OverlappingType, Parameter, Parameters, SpecialFormType, SubclassOfType, Type, TypeAliasType,
-    TypeContext, TypeFormType, TypeGuardType, TypeIsType, TypeMapping, TypeVarKind, UnionBuilder,
-    UnionType, any_over_type, todo_type,
+    BindingContext, CallableType, DeferredOperation, DeferredType, DynamicType, GenericContext,
+    InternedType, IntersectionBuilder, IntersectionType, KnownClass, KnownInstanceType,
+    LintDiagnosticGuard, LiteralValueTypeKind, OverlappingType, Parameter, Parameters,
+    SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeContext, TypeFormType, TypeGuardType,
+    TypeIsType, TypeMapping, TypeVarKind, UnionBuilder, UnionType, any_over_type, todo_type,
 };
 use crate::{FxOrderSet, Program, add_inferred_python_version_hint_to_diagnostic};
 
@@ -558,8 +558,21 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         // alias/typevar handling for free via
                         // `infer_binary_expression_type`
                         if self.is_basedpython_file() {
+                            let db = self.db();
                             let left_ty = self.infer_type_expression(&binary.left);
                             let right_ty = self.infer_type_expression(&binary.right);
+                            // an operation that still mentions a type parameter (e.g.
+                            // `Dim + 1`) can't be evaluated until the parameter is
+                            // specialized. keep it symbolic so `Array[Dim + 1]`
+                            // re-evaluates to `Array[6]` at the call site
+                            let operands = [left_ty, right_ty];
+                            if DeferredType::is_deferred(db, &operands) {
+                                return DeferredType::build(
+                                    db,
+                                    DeferredOperation::Binary(op),
+                                    Box::new(operands),
+                                );
+                            }
                             if let Some(result) = self.infer_binary_expression_type(
                                 binary.into(),
                                 false,
@@ -1017,7 +1030,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         ast::UnaryOp::USub | ast::UnaryOp::UAdd | ast::UnaryOp::Invert
                     )
                 {
+                    let db = self.db();
                     let operand_ty = self.infer_type_expression(&unary.operand);
+                    let operands = [operand_ty];
+                    if DeferredType::is_deferred(db, &operands) {
+                        return DeferredType::build(
+                            db,
+                            DeferredOperation::Unary(unary.op),
+                            Box::new(operands),
+                        );
+                    }
                     return self.infer_unary_expression_type(unary.op, operand_ty, unary);
                 }
                 if !self.in_string_annotation() {
@@ -1253,6 +1275,32 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     }
                     return crate::types::TypeIsType::from_type_expression(self.db(), narrowed);
                 }
+                // basedpython: a rich comparison in a type expression folds like it
+                // does on values (`1 < 2` → `Literal[True]`), and is kept symbolic
+                // while an operand still mentions a type parameter so `I < 2` can
+                // re-fold once `I` is specialized
+                if self.is_basedpython_file()
+                    && compare.ops.len() == 1
+                    && matches!(
+                        compare.ops[0],
+                        ast::CmpOp::Eq
+                            | ast::CmpOp::NotEq
+                            | ast::CmpOp::Lt
+                            | ast::CmpOp::LtE
+                            | ast::CmpOp::Gt
+                            | ast::CmpOp::GtE
+                    )
+                    && let [comparator] = compare.comparators.as_ref()
+                {
+                    let db = self.db();
+                    let left_ty = self.infer_type_expression(&compare.left);
+                    let right_ty = self.infer_type_expression(comparator);
+                    return DeferredType::build(
+                        db,
+                        DeferredOperation::Compare(compare.ops[0]),
+                        Box::new([left_ty, right_ty]),
+                    );
+                }
                 if !self.in_string_annotation() {
                     self.infer_compare_expression(compare);
                 }
@@ -1267,6 +1315,44 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             }
 
             ast::Expr::Call(call_expr) => {
+                // basedpython: a method call in a type expression folds like it does on
+                // values (`"ab".startswith("a")` → `Literal[True]`), and is kept symbolic
+                // while the receiver still mentions a type parameter, so
+                // `S.startswith("foo")` (with `S: str`) re-folds once `S` is specialized.
+                // the receiver is inferred as a type expression, so a bare type parameter
+                // denotes an instance of its bound (`Type::TypeVar`), the same view a
+                // method body has of a value of that type. only plain positional method
+                // calls take this path
+                if self.is_basedpython_file()
+                    && !self.in_string_annotation()
+                    && call_expr.arguments.keywords.is_empty()
+                    && call_expr
+                        .arguments
+                        .args
+                        .iter()
+                        .all(|arg| !arg.is_starred_expr())
+                    && let ast::Expr::Attribute(method) = &*call_expr.func
+                {
+                    let db = self.db();
+                    let receiver_ty = self.infer_type_expression(&method.value);
+                    let callee_ty = receiver_ty
+                        .member(db, method.attr.as_str())
+                        .ignore_possibly_undefined()
+                        .unwrap_or_else(Type::unknown);
+                    // record a type for the method-access node so the expression map
+                    // stays complete (the receiver and arguments store themselves)
+                    self.store_expression_type(&call_expr.func, callee_ty);
+                    let mut operands = Vec::with_capacity(call_expr.arguments.args.len() + 1);
+                    operands.push(callee_ty);
+                    for arg in &call_expr.arguments.args {
+                        operands.push(self.infer_type_expression(arg));
+                    }
+                    return DeferredType::build(
+                        db,
+                        DeferredOperation::Call,
+                        operands.into_boxed_slice(),
+                    );
+                }
                 if !self.in_string_annotation() {
                     self.infer_call_expression(call_expr, TypeContext::default());
                 }

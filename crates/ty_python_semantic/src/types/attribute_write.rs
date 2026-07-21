@@ -158,6 +158,9 @@ pub(super) fn attribute_write_requirement<'db>(
         Type::Overlapping(overlapping) => {
             attribute_write_requirement(db, overlapping.value_type(db), attribute)
         }
+        Type::Deferred(deferred) => {
+            attribute_write_requirement(db, deferred.reduced(db), attribute)
+        }
         Type::Union(union) => AttributeWriteRequirement::All {
             object_ty,
             element_tys: union.elements(db),
@@ -553,6 +556,7 @@ pub(super) fn assignment_attribute_members<'db>(
             | Type::TypeGuard(_)
             | Type::TypeForm(_)
             | Type::Overlapping(_)
+            | Type::Deferred(_)
             | Type::TypedDict(_)
             | Type::NewTypeInstance(_) => object_ty.instance_member(db, attribute),
             Type::ClassLiteral(..) | Type::GenericAlias(..) | Type::SubclassOf(..) => {

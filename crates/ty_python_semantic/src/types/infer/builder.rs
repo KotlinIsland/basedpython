@@ -116,11 +116,11 @@ use crate::types::unpacker::UnpackResult;
 use crate::types::{
     BoundTypeVarInstance, CallDunderError, CallableBinding, CallableType, CallableTypes, ClassType,
     DynamicType, InferenceFlags, InternedConstraintSet, InternedType, IntersectionBuilder,
-    IntersectionType, KnownClass, KnownInstanceType, KnownUnion, LiteralValueTypeKind,
-    MemberLookupPolicy, ParamSpecAttrKind, Parameter, Parameters, SentinelInstance, Signature,
-    SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeAndQualifiers, TypeContext,
-    TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, TypedDictModule,
-    TypedDictType, UnionAccumulator, UnionBuilder, UnionType, any_over_type, binding_type,
+    IntersectionType, KnownClass, KnownInstanceType, KnownUnion, MemberLookupPolicy,
+    ParamSpecAttrKind, Parameter, Parameters, SentinelInstance, Signature, SpecialFormType,
+    SubclassOfType, Type, TypeAliasType, TypeAndQualifiers, TypeContext, TypeQualifiers,
+    TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, TypedDictModule, TypedDictType,
+    UnionAccumulator, UnionBuilder, UnionType, any_over_type, binding_type,
     extract_fixed_length_iterable_element_types, infer_complete_scope_types, infer_scope_types,
     is_discarded_dict_key_assignment, report_iteration_over_character, todo_type,
 };
@@ -149,6 +149,7 @@ use ty_python_core::{ExpressionNodeKey, Statement};
 mod annotation_expression;
 mod attribute_assignment;
 mod binary_expressions;
+pub(crate) use binary_expressions::{literal_binary_op, literal_unary_op};
 mod class;
 mod dict;
 mod dynamic_class;
@@ -2947,6 +2948,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 attribute,
                 emit_diagnostics,
             ),
+            Type::Deferred(deferred) => self.validate_attribute_deletion(
+                target,
+                deferred.reduced(db),
+                attribute,
+                emit_diagnostics,
+            ),
             Type::Union(union) => {
                 for element_ty in union.elements(db) {
                     if !self.validate_attribute_deletion(
@@ -5108,6 +5115,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // parameter-only marker; behaves as the type a body sees (bound of `Key`)
                 Type::Overlapping(overlapping) => {
                     propagate_callable_kind(db, overlapping.value_type(db), kind, provenance)
+                }
+                Type::Deferred(deferred) => {
+                    propagate_callable_kind(db, deferred.reduced(db), kind, provenance)
                 }
                 Type::Callable(callable) => Some(Type::Callable(CallableType::new(
                     db,
@@ -11327,6 +11337,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         match (op, operand_type) {
             // parameter-only marker; behaves as the type a body sees (bound of `Key`)
             (_, Type::Overlapping(overlapping)) => overlapping.value_type(self.db()),
+            (_, Type::Deferred(deferred)) => deferred.reduced(self.db()),
             (ast::UnaryOp::Invert | ast::UnaryOp::UAdd | ast::UnaryOp::USub, Type::Dynamic(_))
             | (_, Type::Divergent(_)) => operand_type,
             (_, Type::Never) => Type::Never,
@@ -11373,31 +11384,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 todo_type!("basedpython wrapped-type operator")
             }
 
-            (ast::UnaryOp::UAdd, Type::LiteralValue(literal)) => match literal.kind() {
-                LiteralValueTypeKind::Int(value) => Type::int_literal(value.as_i64()),
-                LiteralValueTypeKind::Bool(value) => Type::int_literal(i64::from(value)),
-                _ => fallback_unary_expression_type(),
-            },
-
-            (ast::UnaryOp::USub, Type::LiteralValue(literal)) => match literal.kind() {
-                LiteralValueTypeKind::Int(value) => value
-                    .as_i64()
-                    .checked_neg()
-                    .map(Type::int_literal)
-                    .unwrap_or_else(|| KnownClass::Int.to_instance(self.db())),
-                LiteralValueTypeKind::Bool(value) => Type::int_literal(-i64::from(value)),
-                LiteralValueTypeKind::Float(value) => Type::float_literal(-value.as_f64()),
-                LiteralValueTypeKind::Complex(c) => {
-                    Type::complex_literal(self.db(), -c.re(self.db()), -c.im(self.db()))
-                }
-                _ => fallback_unary_expression_type(),
-            },
-
-            (ast::UnaryOp::Invert, Type::LiteralValue(literal)) => match literal.kind() {
-                LiteralValueTypeKind::Int(value) => Type::int_literal(!value.as_i64()),
-                LiteralValueTypeKind::Bool(value) => Type::int_literal(!i64::from(value)),
-                _ => fallback_unary_expression_type(),
-            },
+            (
+                ast::UnaryOp::UAdd | ast::UnaryOp::USub | ast::UnaryOp::Invert,
+                Type::LiteralValue(literal),
+            ) => binary_expressions::literal_unary_op(self.db(), op, literal)
+                .unwrap_or_else(fallback_unary_expression_type),
 
             (ast::UnaryOp::Invert, Type::KnownInstance(KnownInstanceType::ConstraintSet(set))) => {
                 let constraints = ConstraintSetBuilder::new();

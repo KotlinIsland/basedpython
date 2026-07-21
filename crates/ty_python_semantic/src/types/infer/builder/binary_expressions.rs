@@ -381,6 +381,28 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     )
                 })
             }
+            (Type::Deferred(deferred), _, _) => visitor.visit((left_ty, op, right_ty), || {
+                self.infer_binary_expression_type_impl(
+                    node,
+                    emitted_division_by_zero_diagnostic,
+                    deferred.reduced(db),
+                    right_ty,
+                    op,
+                    visitor,
+                    tcx,
+                )
+            }),
+            (_, Type::Deferred(deferred), _) => visitor.visit((left_ty, op, right_ty), || {
+                self.infer_binary_expression_type_impl(
+                    node,
+                    emitted_division_by_zero_diagnostic,
+                    left_ty,
+                    deferred.reduced(db),
+                    op,
+                    visitor,
+                    tcx,
+                )
+            }),
             (Type::Union(lhs_union), rhs, _) => lhs_union.try_map(db, |lhs_element| {
                 self.infer_binary_expression_type_impl(
                     node,
@@ -625,342 +647,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 } else {
                     RecursivelyDefined::No
                 };
-                let result = match (left.kind(), right.kind(), op) {
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::Add,
-                    ) => Some(
-                        n.as_i64()
-                            .checked_add(m.as_i64())
-                            .map(Type::int_literal)
-                            .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
-                    ),
-
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::Sub,
-                    ) => Some(
-                        n.as_i64()
-                            .checked_sub(m.as_i64())
-                            .map(Type::int_literal)
-                            .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
-                    ),
-
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::Mult,
-                    ) => Some(
-                        n.as_i64()
-                            .checked_mul(m.as_i64())
-                            .map(Type::int_literal)
-                            .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
-                    ),
-
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::Div,
-                    ) => Some({
-                        // basedpython: int/int true division produces a float literal when the
-                        // divisor is non-zero. for `.py` files (or div-by-zero) fall back to the
-                        // float instance to preserve typeshed's `int|float` widening behaviour
-                        #[expect(clippy::cast_precision_loss)]
-                        let computed = if self.is_basedpython_file() && m.as_i64() != 0 {
-                            Some(Type::float_literal(n.as_i64() as f64 / m.as_i64() as f64))
-                        } else {
-                            None
-                        };
-                        computed.unwrap_or_else(|| KnownClass::Float.to_instance(db))
-                    }),
-
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::FloorDiv,
-                    ) => Some({
-                        let mut q = n.as_i64().checked_div(m.as_i64());
-                        let r = n.as_i64().checked_rem(m.as_i64());
-                        // Division works differently in Python than in Rust. If the result is negative and
-                        // there is a remainder, the division rounds down (instead of towards zero):
-                        if n.as_i64().is_negative() != m.as_i64().is_negative()
-                            && r.unwrap_or(0) != 0
-                        {
-                            q = q.map(|q| q - 1);
-                        }
-                        q.map(Type::int_literal)
-                            .unwrap_or_else(|| KnownClass::Int.to_instance(db))
-                    }),
-
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::Mod,
-                    ) => Some({
-                        let mut r = n.as_i64().checked_rem(m.as_i64());
-                        // Division works differently in Python than in Rust. If the result is negative and
-                        // there is a remainder, the division rounds down (instead of towards zero). Adjust
-                        // the remainder to compensate so that q * m + r == n:
-                        if n.as_i64().is_negative() != m.as_i64().is_negative()
-                            && r.unwrap_or(0) != 0
-                        {
-                            r = r.map(|x| x + m.as_i64());
-                        }
-                        r.map(Type::int_literal)
-                            .unwrap_or_else(|| KnownClass::Int.to_instance(db))
-                    }),
-
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::Pow,
-                    ) => Some({
-                        if m.as_i64() < 0 {
-                            KnownClass::Float.to_instance(db)
-                        } else {
-                            u32::try_from(m.as_i64())
-                                .ok()
-                                .and_then(|m| n.as_i64().checked_pow(m))
-                                .map(Type::int_literal)
-                                .unwrap_or_else(|| KnownClass::Int.to_instance(db))
-                        }
-                    }),
-
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::BitOr,
-                    ) => Some(Type::int_literal(n.as_i64() | m.as_i64())),
-
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::BitAnd,
-                    ) => Some(Type::int_literal(n.as_i64() & m.as_i64())),
-
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::BitXor,
-                    ) => Some(Type::int_literal(n.as_i64() ^ m.as_i64())),
-
-                    (
-                        LiteralValueTypeKind::Bytes(lhs),
-                        LiteralValueTypeKind::Bytes(rhs),
-                        ast::Operator::Add,
-                    ) => {
-                        let bytes = [lhs.value(db), rhs.value(db)].concat();
-                        Some(Type::bytes_literal(db, &bytes))
-                    }
-
-                    (
-                        LiteralValueTypeKind::String(lhs),
-                        LiteralValueTypeKind::String(rhs),
-                        ast::Operator::Add,
-                    ) => {
-                        let lhs_value = lhs.value(db);
-                        let rhs_value = rhs.value(db);
-                        let new_length = lhs_value.len() + rhs_value.len();
-                        let ty = if new_length <= Self::MAX_STRING_LITERAL_SIZE {
-                            let mut value = CompactString::with_capacity(new_length);
-                            value.push_str(lhs_value);
-                            value.push_str(rhs_value);
-                            Type::string_literal(db, value)
-                        } else {
-                            Type::literal_string()
-                        };
-                        Some(ty)
-                    }
-
-                    (
-                        LiteralValueTypeKind::String(_) | LiteralValueTypeKind::LiteralString,
-                        LiteralValueTypeKind::String(_) | LiteralValueTypeKind::LiteralString,
-                        ast::Operator::Add,
-                    ) => Some(Type::literal_string()),
-
-                    (
-                        LiteralValueTypeKind::String(s),
-                        LiteralValueTypeKind::Int(n),
-                        ast::Operator::Mult,
-                    )
-                    | (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::String(s),
-                        ast::Operator::Mult,
-                    ) => {
-                        let ty = if n.as_i64() < 1 {
-                            Type::string_literal(db, "")
-                        } else if let Ok(n) = usize::try_from(n.as_i64())
-                            && n.checked_mul(s.value(db).len()).is_some_and(|new_length| {
-                                new_length <= Self::MAX_STRING_LITERAL_SIZE
-                            })
-                        {
-                            let new_literal = s.value(db).repeat(n);
-                            Type::string_literal(db, &*new_literal)
-                        } else {
-                            Type::literal_string()
-                        };
-                        Some(ty)
-                    }
-
-                    (
-                        LiteralValueTypeKind::LiteralString,
-                        LiteralValueTypeKind::Int(n),
-                        ast::Operator::Mult,
-                    )
-                    | (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::LiteralString,
-                        ast::Operator::Mult,
-                    ) => {
-                        let ty = if n.as_i64() < 1 {
-                            Type::string_literal(db, "")
-                        } else {
-                            Type::literal_string()
-                        };
-                        Some(ty)
-                    }
-
-                    (
-                        LiteralValueTypeKind::Bool(b1),
-                        LiteralValueTypeKind::Bool(b2),
-                        ast::Operator::BitOr,
-                    ) => Some(Type::bool_literal(b1 | b2)),
-
-                    (
-                        LiteralValueTypeKind::Bool(b1),
-                        LiteralValueTypeKind::Bool(b2),
-                        ast::Operator::BitAnd,
-                    ) => Some(Type::bool_literal(b1 & b2)),
-
-                    (
-                        LiteralValueTypeKind::Bool(b1),
-                        LiteralValueTypeKind::Bool(b2),
-                        ast::Operator::BitXor,
-                    ) => Some(Type::bool_literal(b1 ^ b2)),
-
-                    (
-                        LiteralValueTypeKind::Bool(b1),
-                        LiteralValueTypeKind::Bool(_) | LiteralValueTypeKind::Int(_),
-                        op,
-                    ) => self.infer_binary_expression_type(
-                        node,
-                        emitted_division_by_zero_diagnostic,
-                        Type::int_literal(i64::from(b1)),
-                        right_ty,
-                        op,
-                        tcx,
-                    ),
-
-                    (LiteralValueTypeKind::Int(_), LiteralValueTypeKind::Bool(b2), op) => self
-                        .infer_binary_expression_type(
-                            node,
-                            emitted_division_by_zero_diagnostic,
-                            left_ty,
-                            Type::int_literal(i64::from(b2)),
-                            op,
-                            tcx,
-                        ),
-
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::LShift,
-                    ) if n.as_i64() == 0 && m.as_i64() >= 0 => Some(Type::int_literal(0)),
-
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::LShift,
-                    ) => {
-                        let n = n.as_i64();
-
-                        // An additional overflow check beyond `checked_shl` is necessary
-                        // here, because `checked_shl` only rejects shift amounts >= 64;
-                        // it does not detect when significant bits are shifted into (or
-                        // past) the sign bit. For example, `1i64.checked_shl(63)` returns
-                        // `Some(i64::MIN)`, but Python's `1 << 63` is a large positive int.
-                        //
-                        // We compute the "headroom": the number of redundant sign-extension
-                        // bits minus one (for the sign bit itself). A shift is safe iff
-                        // `m <= headroom`.
-                        let headroom = if n >= 0 {
-                            n.leading_zeros().saturating_sub(1)
-                        } else {
-                            n.leading_ones().saturating_sub(1)
-                        };
-                        Some(
-                            u32::try_from(m.as_i64())
-                                .ok()
-                                .filter(|&m| m <= headroom)
-                                .and_then(|m| n.checked_shl(m))
-                                .map(Type::int_literal)
-                                .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
-                        )
-                    }
-
-                    (
-                        LiteralValueTypeKind::Int(n),
-                        LiteralValueTypeKind::Int(m),
-                        ast::Operator::RShift,
-                    ) => {
-                        let n = n.as_i64();
-                        let result = match u32::try_from(m.as_i64()) {
-                            Ok(m) => Type::int_literal(n >> m.clamp(0, 63)),
-                            Err(_) if m.as_i64() > 0 => {
-                                Type::int_literal(if n >= 0 { 0 } else { -1 })
-                            }
-                            Err(_) => KnownClass::Int.to_instance(db),
-                        };
-                        Some(result)
-                    }
-
-                    (l, r, op) => {
-                        // basedpython: literal arithmetic on float/complex (and mixed numeric).
-                        // f64 arithmetic preserves IEEE 754 semantics — `0.1 + 0.2` becomes
-                        // `Literal[0.30000000000000004]`, not `Literal[0.3]`. Division by zero
-                        // and NaN results fall through to the dunder path so they don't surface
-                        // as `Literal[inf]` / `Literal[NaN]`
-                        let complex_involved = matches!(l, LiteralValueTypeKind::Complex(_))
-                            || matches!(r, LiteralValueTypeKind::Complex(_));
-                        let float_involved = matches!(l, LiteralValueTypeKind::Float(_))
-                            || matches!(r, LiteralValueTypeKind::Float(_));
-
-                        let outcome = if complex_involved {
-                            as_complex_components(db, l)
-                                .zip(as_complex_components(db, r))
-                                .map(|(a, b)| complex_binary_op_result(db, a, b, op))
-                        } else if float_involved {
-                            as_f64_value(l)
-                                .zip(as_f64_value(r))
-                                .map(|(a, b)| float_binary_op_result(a, b, op))
-                        } else {
-                            None
-                        };
-
-                        match outcome {
-                            Some(LiteralArithOutcome::Literal(ty)) => Some(ty),
-                            Some(LiteralArithOutcome::Widen) => {
-                                // basedpython: widen to the typing-spec union form so the
-                                // result mirrors how `float` / `complex` annotations are
-                                // interpreted in `.py` files (`int | float`,
-                                // `int | float | complex`). this gives callers something
-                                // they can use without losing all type info
-                                let widened = if complex_involved {
-                                    crate::types::set_theoretic::KnownUnion::Complex.to_type(db)
-                                } else {
-                                    crate::types::set_theoretic::KnownUnion::Float.to_type(db)
-                                };
-                                Some(widened)
-                            }
-                            Some(LiteralArithOutcome::Unsupported) | None => {
-                                Type::try_call_bin_op_return_type(db, left_ty, op, right_ty)
-                            }
-                        }
-                    }
-                };
+                let result =
+                    literal_binary_op(db, left_ty, right_ty, op, self.is_basedpython_file());
 
                 result.map(|result| match result {
                     Type::LiteralValue(literal) => {
@@ -1390,4 +1078,337 @@ fn complex_binary_op_result(
         return LiteralArithOutcome::Widen;
     }
     LiteralArithOutcome::Literal(Type::complex_literal(db, re, im))
+}
+
+/// basedpython: evaluate a binary operation on two literal operands, reusing the
+/// exact literal/type logic the value-expression inferrer uses (so `1 + 1` folds to
+/// `Literal[2]`, `0.1 + 0.2` keeps IEEE-754 semantics, and so on). returns `None`
+/// when neither operand is a literal or the operator isn't supported between them.
+/// shared with the symbolic type-arithmetic path, where a specialized `Dim + 1`
+/// re-evaluates to `Literal[6]`
+/// basedpython: fold a unary operation on a literal operand (`-3` → `Literal[-3]`,
+/// `~0` → `Literal[-1]`). Returns `None` when the operand isn't a numeric literal or
+/// the operator isn't `+`/`-`/`~`, so callers fall back to dunder dispatch. Shared
+/// between value inference and the deferred type-operation path.
+pub(crate) fn literal_unary_op<'db>(
+    db: &'db dyn Db,
+    op: ast::UnaryOp,
+    literal: crate::types::LiteralValueType<'db>,
+) -> Option<Type<'db>> {
+    match (op, literal.kind()) {
+        (ast::UnaryOp::UAdd, LiteralValueTypeKind::Int(value)) => {
+            Some(Type::int_literal(value.as_i64()))
+        }
+        (ast::UnaryOp::UAdd, LiteralValueTypeKind::Bool(value)) => {
+            Some(Type::int_literal(i64::from(value)))
+        }
+        (ast::UnaryOp::USub, LiteralValueTypeKind::Int(value)) => Some(
+            value
+                .as_i64()
+                .checked_neg()
+                .map(Type::int_literal)
+                .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
+        ),
+        (ast::UnaryOp::USub, LiteralValueTypeKind::Bool(value)) => {
+            Some(Type::int_literal(-i64::from(value)))
+        }
+        (ast::UnaryOp::USub, LiteralValueTypeKind::Float(value)) => {
+            Some(Type::float_literal(-value.as_f64()))
+        }
+        (ast::UnaryOp::USub, LiteralValueTypeKind::Complex(c)) => {
+            Some(Type::complex_literal(db, -c.re(db), -c.im(db)))
+        }
+        (ast::UnaryOp::Invert, LiteralValueTypeKind::Int(value)) => {
+            Some(Type::int_literal(!value.as_i64()))
+        }
+        (ast::UnaryOp::Invert, LiteralValueTypeKind::Bool(value)) => {
+            Some(Type::int_literal(!i64::from(value)))
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn literal_binary_op<'db>(
+    db: &'db dyn Db,
+    left_ty: Type<'db>,
+    right_ty: Type<'db>,
+    op: ast::Operator,
+    is_basedpython: bool,
+) -> Option<Type<'db>> {
+    let (Type::LiteralValue(left), Type::LiteralValue(right)) = (left_ty, right_ty) else {
+        return None;
+    };
+    match (left.kind(), right.kind(), op) {
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::Add) => Some(
+            n.as_i64()
+                .checked_add(m.as_i64())
+                .map(Type::int_literal)
+                .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
+        ),
+
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::Sub) => Some(
+            n.as_i64()
+                .checked_sub(m.as_i64())
+                .map(Type::int_literal)
+                .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
+        ),
+
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::Mult) => Some(
+            n.as_i64()
+                .checked_mul(m.as_i64())
+                .map(Type::int_literal)
+                .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
+        ),
+
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::Div) => Some({
+            // basedpython: int/int true division produces a float literal when the
+            // divisor is non-zero. for `.py` files (or div-by-zero) fall back to the
+            // float instance to preserve typeshed's `int|float` widening behaviour
+            #[expect(clippy::cast_precision_loss)]
+            let computed = if is_basedpython && m.as_i64() != 0 {
+                Some(Type::float_literal(n.as_i64() as f64 / m.as_i64() as f64))
+            } else {
+                None
+            };
+            computed.unwrap_or_else(|| KnownClass::Float.to_instance(db))
+        }),
+
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::FloorDiv) => {
+            Some({
+                let mut q = n.as_i64().checked_div(m.as_i64());
+                let r = n.as_i64().checked_rem(m.as_i64());
+                // Division works differently in Python than in Rust. If the result is negative and
+                // there is a remainder, the division rounds down (instead of towards zero):
+                if n.as_i64().is_negative() != m.as_i64().is_negative() && r.unwrap_or(0) != 0 {
+                    q = q.map(|q| q - 1);
+                }
+                q.map(Type::int_literal)
+                    .unwrap_or_else(|| KnownClass::Int.to_instance(db))
+            })
+        }
+
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::Mod) => Some({
+            let mut r = n.as_i64().checked_rem(m.as_i64());
+            // Division works differently in Python than in Rust. If the result is negative and
+            // there is a remainder, the division rounds down (instead of towards zero). Adjust
+            // the remainder to compensate so that q * m + r == n:
+            if n.as_i64().is_negative() != m.as_i64().is_negative() && r.unwrap_or(0) != 0 {
+                r = r.map(|x| x + m.as_i64());
+            }
+            r.map(Type::int_literal)
+                .unwrap_or_else(|| KnownClass::Int.to_instance(db))
+        }),
+
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::Pow) => Some({
+            if m.as_i64() < 0 {
+                KnownClass::Float.to_instance(db)
+            } else {
+                u32::try_from(m.as_i64())
+                    .ok()
+                    .and_then(|m| n.as_i64().checked_pow(m))
+                    .map(Type::int_literal)
+                    .unwrap_or_else(|| KnownClass::Int.to_instance(db))
+            }
+        }),
+
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::BitOr) => {
+            Some(Type::int_literal(n.as_i64() | m.as_i64()))
+        }
+
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::BitAnd) => {
+            Some(Type::int_literal(n.as_i64() & m.as_i64()))
+        }
+
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::BitXor) => {
+            Some(Type::int_literal(n.as_i64() ^ m.as_i64()))
+        }
+
+        (
+            LiteralValueTypeKind::Bytes(lhs),
+            LiteralValueTypeKind::Bytes(rhs),
+            ast::Operator::Add,
+        ) => {
+            let bytes = [lhs.value(db), rhs.value(db)].concat();
+            Some(Type::bytes_literal(db, &bytes))
+        }
+
+        (
+            LiteralValueTypeKind::String(lhs),
+            LiteralValueTypeKind::String(rhs),
+            ast::Operator::Add,
+        ) => {
+            let lhs_value = lhs.value(db);
+            let rhs_value = rhs.value(db);
+            let new_length = lhs_value.len() + rhs_value.len();
+            let ty = if new_length <= TypeInferenceBuilder::MAX_STRING_LITERAL_SIZE {
+                let mut value = CompactString::with_capacity(new_length);
+                value.push_str(lhs_value);
+                value.push_str(rhs_value);
+                Type::string_literal(db, value)
+            } else {
+                Type::literal_string()
+            };
+            Some(ty)
+        }
+
+        (
+            LiteralValueTypeKind::String(_) | LiteralValueTypeKind::LiteralString,
+            LiteralValueTypeKind::String(_) | LiteralValueTypeKind::LiteralString,
+            ast::Operator::Add,
+        ) => Some(Type::literal_string()),
+
+        (LiteralValueTypeKind::String(s), LiteralValueTypeKind::Int(n), ast::Operator::Mult)
+        | (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::String(s), ast::Operator::Mult) => {
+            let ty = if n.as_i64() < 1 {
+                Type::string_literal(db, "")
+            } else if let Ok(n) = usize::try_from(n.as_i64())
+                && n.checked_mul(s.value(db).len()).is_some_and(|new_length| {
+                    new_length <= TypeInferenceBuilder::MAX_STRING_LITERAL_SIZE
+                })
+            {
+                let new_literal = s.value(db).repeat(n);
+                Type::string_literal(db, &*new_literal)
+            } else {
+                Type::literal_string()
+            };
+            Some(ty)
+        }
+
+        (
+            LiteralValueTypeKind::LiteralString,
+            LiteralValueTypeKind::Int(n),
+            ast::Operator::Mult,
+        )
+        | (
+            LiteralValueTypeKind::Int(n),
+            LiteralValueTypeKind::LiteralString,
+            ast::Operator::Mult,
+        ) => {
+            let ty = if n.as_i64() < 1 {
+                Type::string_literal(db, "")
+            } else {
+                Type::literal_string()
+            };
+            Some(ty)
+        }
+
+        (LiteralValueTypeKind::Bool(b1), LiteralValueTypeKind::Bool(b2), ast::Operator::BitOr) => {
+            Some(Type::bool_literal(b1 | b2))
+        }
+
+        (LiteralValueTypeKind::Bool(b1), LiteralValueTypeKind::Bool(b2), ast::Operator::BitAnd) => {
+            Some(Type::bool_literal(b1 & b2))
+        }
+
+        (LiteralValueTypeKind::Bool(b1), LiteralValueTypeKind::Bool(b2), ast::Operator::BitXor) => {
+            Some(Type::bool_literal(b1 ^ b2))
+        }
+
+        (
+            LiteralValueTypeKind::Bool(b1),
+            LiteralValueTypeKind::Bool(_) | LiteralValueTypeKind::Int(_),
+            op,
+        ) => literal_binary_op(
+            db,
+            Type::int_literal(i64::from(b1)),
+            right_ty,
+            op,
+            is_basedpython,
+        ),
+
+        (LiteralValueTypeKind::Int(_), LiteralValueTypeKind::Bool(b2), op) => literal_binary_op(
+            db,
+            left_ty,
+            Type::int_literal(i64::from(b2)),
+            op,
+            is_basedpython,
+        ),
+
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::LShift)
+            if n.as_i64() == 0 && m.as_i64() >= 0 =>
+        {
+            Some(Type::int_literal(0))
+        }
+
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::LShift) => {
+            let n = n.as_i64();
+
+            // An additional overflow check beyond `checked_shl` is necessary
+            // here, because `checked_shl` only rejects shift amounts >= 64;
+            // it does not detect when significant bits are shifted into (or
+            // past) the sign bit. For example, `1i64.checked_shl(63)` returns
+            // `Some(i64::MIN)`, but Python's `1 << 63` is a large positive int.
+            //
+            // We compute the "headroom": the number of redundant sign-extension
+            // bits minus one (for the sign bit itself). A shift is safe iff
+            // `m <= headroom`.
+            let headroom = if n >= 0 {
+                n.leading_zeros().saturating_sub(1)
+            } else {
+                n.leading_ones().saturating_sub(1)
+            };
+            Some(
+                u32::try_from(m.as_i64())
+                    .ok()
+                    .filter(|&m| m <= headroom)
+                    .and_then(|m| n.checked_shl(m))
+                    .map(Type::int_literal)
+                    .unwrap_or_else(|| KnownClass::Int.to_instance(db)),
+            )
+        }
+
+        (LiteralValueTypeKind::Int(n), LiteralValueTypeKind::Int(m), ast::Operator::RShift) => {
+            let n = n.as_i64();
+            let result = match u32::try_from(m.as_i64()) {
+                Ok(m) => Type::int_literal(n >> m.clamp(0, 63)),
+                Err(_) if m.as_i64() > 0 => Type::int_literal(if n >= 0 { 0 } else { -1 }),
+                Err(_) => KnownClass::Int.to_instance(db),
+            };
+            Some(result)
+        }
+
+        (l, r, op) => {
+            // basedpython: literal arithmetic on float/complex (and mixed numeric).
+            // f64 arithmetic preserves IEEE 754 semantics — `0.1 + 0.2` becomes
+            // `Literal[0.30000000000000004]`, not `Literal[0.3]`. Division by zero
+            // and NaN results fall through to the dunder path so they don't surface
+            // as `Literal[inf]` / `Literal[NaN]`
+            let complex_involved = matches!(l, LiteralValueTypeKind::Complex(_))
+                || matches!(r, LiteralValueTypeKind::Complex(_));
+            let float_involved = matches!(l, LiteralValueTypeKind::Float(_))
+                || matches!(r, LiteralValueTypeKind::Float(_));
+
+            let outcome = if complex_involved {
+                as_complex_components(db, l)
+                    .zip(as_complex_components(db, r))
+                    .map(|(a, b)| complex_binary_op_result(db, a, b, op))
+            } else if float_involved {
+                as_f64_value(l)
+                    .zip(as_f64_value(r))
+                    .map(|(a, b)| float_binary_op_result(a, b, op))
+            } else {
+                None
+            };
+
+            match outcome {
+                Some(LiteralArithOutcome::Literal(ty)) => Some(ty),
+                Some(LiteralArithOutcome::Widen) => {
+                    // basedpython: widen to the typing-spec union form so the
+                    // result mirrors how `float` / `complex` annotations are
+                    // interpreted in `.py` files (`int | float`,
+                    // `int | float | complex`). this gives callers something
+                    // they can use without losing all type info
+                    let widened = if complex_involved {
+                        crate::types::set_theoretic::KnownUnion::Complex.to_type(db)
+                    } else {
+                        crate::types::set_theoretic::KnownUnion::Float.to_type(db)
+                    };
+                    Some(widened)
+                }
+                Some(LiteralArithOutcome::Unsupported) | None => {
+                    Type::try_call_bin_op_return_type(db, left_ty, op, right_ty)
+                }
+            }
+        }
+    }
 }

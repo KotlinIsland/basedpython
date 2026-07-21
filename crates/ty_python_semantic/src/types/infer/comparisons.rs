@@ -113,6 +113,80 @@ pub(crate) struct UnsupportedComparisonError<'db> {
     pub(crate) right_ty: Type<'db>,
 }
 
+/// basedpython: fold a rich comparison (`==`, `!=`, `<`, `<=`, `>`, `>=`) between two
+/// types with no surrounding inference context, for the deferred type-operation path.
+/// Literal operands fold to a `Literal[bool]`; anything else falls back to the
+/// rich-comparison dunder result (`bool`). Returns `None` only for the non-rich
+/// operators, which the deferred path never produces.
+///
+/// The literal cases mirror the `(LiteralValue, LiteralValue)` arm of
+/// [`infer_binary_type_comparison`]; that arm is context-bound (it reports
+/// `in`/`not in` runtime errors and handles identity operators), so it can't be shared
+/// directly, but the rich-comparison results are identical.
+pub(crate) fn deferred_comparison<'db>(
+    db: &'db dyn Db,
+    left: Type<'db>,
+    op: ast::CmpOp,
+    right: Type<'db>,
+) -> Option<Type<'db>> {
+    let rich = match op {
+        ast::CmpOp::Eq => RichCompareOperator::Eq,
+        ast::CmpOp::NotEq => RichCompareOperator::Ne,
+        ast::CmpOp::Lt => RichCompareOperator::Lt,
+        ast::CmpOp::LtE => RichCompareOperator::Le,
+        ast::CmpOp::Gt => RichCompareOperator::Gt,
+        ast::CmpOp::GtE => RichCompareOperator::Ge,
+        ast::CmpOp::Is | ast::CmpOp::IsNot | ast::CmpOp::In | ast::CmpOp::NotIn => return None,
+    };
+
+    if let (Type::LiteralValue(left_literal), Type::LiteralValue(right_literal)) = (left, right)
+        && let Some(folded) = fold_literal_rich_comparison(db, left_literal, op, right_literal)
+    {
+        return Some(folded);
+    }
+
+    infer_rich_comparison(db, left, right, rich, MemberLookupPolicy::default()).ok()
+}
+
+/// Fold a rich comparison of two literal operands to a `Literal[bool]`, mirroring the
+/// same numeric/string/bytes ordering the value-level literal comparison uses. `bool`
+/// operands are treated as `0`/`1`. Returns `None` for operand pairs that don't fold
+/// to a definite result (e.g. mixed numeric/string ordering).
+fn fold_literal_rich_comparison<'db>(
+    db: &'db dyn Db,
+    left: LiteralValueType<'db>,
+    op: ast::CmpOp,
+    right: LiteralValueType<'db>,
+) -> Option<Type<'db>> {
+    let int_like = |kind: LiteralValueTypeKind<'db>| match kind {
+        LiteralValueTypeKind::Int(value) => Some(value.as_i64()),
+        LiteralValueTypeKind::Bool(value) => Some(i64::from(value)),
+        _ => None,
+    };
+    let apply = |ordering: std::cmp::Ordering| match op {
+        ast::CmpOp::Eq => ordering.is_eq(),
+        ast::CmpOp::NotEq => ordering.is_ne(),
+        ast::CmpOp::Lt => ordering.is_lt(),
+        ast::CmpOp::LtE => ordering.is_le(),
+        ast::CmpOp::Gt => ordering.is_gt(),
+        ast::CmpOp::GtE => ordering.is_ge(),
+        _ => unreachable!("caller restricts to rich comparison operators"),
+    };
+
+    if let (Some(n), Some(m)) = (int_like(left.kind()), int_like(right.kind())) {
+        return Some(Type::bool_literal(apply(n.cmp(&m))));
+    }
+    match (left.kind(), right.kind()) {
+        (LiteralValueTypeKind::String(a), LiteralValueTypeKind::String(b)) => {
+            Some(Type::bool_literal(apply(a.value(db).cmp(b.value(db)))))
+        }
+        (LiteralValueTypeKind::Bytes(a), LiteralValueTypeKind::Bytes(b)) => {
+            Some(Type::bool_literal(apply(a.value(db).cmp(b.value(db)))))
+        }
+        _ => None,
+    }
+}
+
 /// Infers the type of a binary comparison (e.g. 'left == right'). See
 /// `TypeInferenceBuilder::infer_compare_expression` for the higher level logic dealing with
 /// multi-comparison expressions.
