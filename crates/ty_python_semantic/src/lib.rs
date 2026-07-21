@@ -50,7 +50,9 @@ pub use types::ide_support::{
     definitions_for_unary_op, map_stub_definition, type_hierarchy_prepare, type_hierarchy_subtypes,
     type_hierarchy_supertypes,
 };
-pub use types::reified_infer::{ArgVariance, ErasedTargetReason, ParametricIsPlan};
+pub use types::reified_infer::{
+    ArgVariance, ErasedTargetReason, ParametricIsPlan, ProtocolMemberCheck,
+};
 pub use types::visibility::private_symbols;
 pub use types::{DisplaySettings, TypeQualifiers};
 

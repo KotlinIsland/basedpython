@@ -6,8 +6,12 @@ mixed union — the last resort is a runtime probe that unwinds the value: its r
 `__orig_class__` (stamped on a user generic by `A[int](…)`) and every generic base declared across
 `type(value).__mro__` (`__orig_bases__`). A concrete subclass that fixes its arguments
 (`class B(list[int])`) is checkable this way, even against a builtin or abc target. A bare `list`
-records nothing and answers `False`; the narrowing is positive-only, so that `False` is sound. Only
-a protocol target has no runtime residue at all and stays an error.
+records nothing and answers `False`; the narrowing is positive-only, so that `False` is sound.
+
+A protocol target has no `__orig_class__` to unwind, but basedpython reifies class attribute
+annotations, so a protocol whose members are all data members is checked structurally against those
+annotations instead. Only a protocol with a *method* member — whose specialization can't be
+recovered from a reified attribute annotation — has no runtime residue and stays an error.
 
 ## statically decided tests are silent
 
@@ -203,12 +207,13 @@ def g(x: object) -> bool:
     return x is A[int]
 ```
 
-## a protocol target cannot be checked at runtime
+## a method-bearing protocol target cannot be checked at runtime
 
 A protocol's instances record their own concrete class in `__orig_class__`, never the protocol, so a
 probe could never match — and a structural `isinstance` check sees no type arguments (it raises
-outright unless the protocol is `@runtime_checkable`). So an undecidable protocol target is an
-error, exactly like a builtin.
+outright unless the protocol is `@runtime_checkable`). A *method* member's specialization can't be
+recovered from a reified attribute annotation either, so a protocol that has one is an undecidable
+target and an error, exactly like a builtin.
 
 ```by
 from typing import Protocol
@@ -218,6 +223,71 @@ class P[T](Protocol):
 
 def f(x: object) -> bool:
     return x is P[int]  # error: [erased-type-check]
+```
+
+## a data-member protocol target is checked structurally
+
+A protocol whose members are all data members *can* be checked: basedpython reifies class attribute
+annotations, so the value's class is inspected member by member at runtime — each reified annotation
+against the member's specialized type. No error, and the test is a plain `bool`.
+
+```by
+from typing import Protocol
+
+class HasA[T](Protocol):
+    a: T
+
+def f(x: object) -> bool:
+    reveal_type(x is HasA[int])  # revealed: bool
+    return x is HasA[bool]
+```
+
+A concrete value is still decided statically — the structural runtime check is only the residue for
+an undecidable value.
+
+```by
+from typing import Protocol
+
+class HasA[T](Protocol):
+    a: T
+
+class C:
+    a: bool
+
+def f(c: C) -> bool:
+    reveal_type(c is HasA[bool])  # revealed: bool
+    return c is HasA[bool]
+```
+
+## a protocol mixing data and method members stays an error
+
+One method member is enough to make the whole protocol uncheckable — the data members alone can't
+confirm the specialization.
+
+```by
+from typing import Protocol
+
+class Mixed[T](Protocol):
+    a: T
+    def get(self) -> T: ...
+
+def f(x: object) -> bool:
+    return x is Mixed[int]  # error: [erased-type-check]
+```
+
+## a data-member protocol arm of a union is checked structurally
+
+A data-member protocol is a legitimate arm of a union target — it contributes its structural check,
+not an error.
+
+```by
+from typing import Protocol
+
+class HasA[T](Protocol):
+    a: T
+
+def f(a: object) -> bool:
+    return a is HasA[int] | int
 ```
 
 ## a decidable protocol target folds silently

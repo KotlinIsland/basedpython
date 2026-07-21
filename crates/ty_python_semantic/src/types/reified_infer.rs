@@ -315,10 +315,31 @@ pub enum ParametricIsPlan {
     /// matching each argument by the target's effective variance (one entry
     /// per type parameter). a legitimate, unwarned runtime test
     Probe(Box<[ArgVariance]>),
+    /// basedpython: not decidable from static types, and the target is a
+    /// protocol — but every data member's specialized type has a runtime
+    /// spelling, so the value's reified annotations can be checked structurally
+    /// against the protocol's members. one entry per member to verify
+    ProtocolStructural(Box<[ProtocolMemberCheck]>),
     /// not decidable from static types, and the target's instances never carry
     /// a usable `__orig_class__`, so no sound runtime probe exists — the test
     /// is an error. the reason picks the diagnostic wording
     ErasedTarget(ErasedTargetReason),
+}
+
+/// basedpython: one protocol member a parametric `is`-test checks structurally
+/// at runtime, against the value's reified class annotation for that member
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProtocolMemberCheck {
+    /// the member's attribute name
+    pub name: String,
+    /// a python expression that evaluates, in the checked module's scope, to
+    /// the member's specialized type (`int`, `list[str]`) — what the value's
+    /// annotation is compared against
+    pub expected: String,
+    /// how the value's annotation must relate to `expected`: an invariant
+    /// (read-write) member demands equality, a read-only member a subtype, a
+    /// write-only member a supertype
+    pub variance: ArgVariance,
 }
 
 /// why a parametric test's target cannot be probed at runtime
@@ -414,6 +435,7 @@ pub(crate) fn parametric_is_target<'db>(
 /// back to the static fold or the runtime probe.
 pub(crate) fn classify_parametric_is<'db>(
     db: &'db dyn Db,
+    file: File,
     lhs_ty: Type<'db>,
     rhs_alias: crate::types::class::GenericAlias<'db>,
     rhs_node: &ast::Expr,
@@ -437,15 +459,51 @@ pub(crate) fn classify_parametric_is<'db>(
     // the runtime probe unwinds the value's `__orig_class__` and its class's
     // generic bases across the mro, so a builtin-collection target is checkable
     // after all: a concrete subclass that fixes the arguments (`class B(list[int])`)
-    // records `list[int]` in `__orig_bases__`. only a protocol stays an error —
-    // its `isinstance` raises unless `@runtime_checkable`, and even then sees no
-    // arguments, so no sound runtime residue exists
+    // records `list[int]` in `__orig_bases__`. a protocol's instances never
+    // record the protocol, so `__orig_class__` can't answer it — but basedpython
+    // reifies class attribute annotations, so a protocol whose members are all
+    // spellable data members can still be checked structurally against those
+    // annotations. only a protocol that also has a method member (unrecoverable
+    // from an annotation) stays an error
     if let ParametricIsPlan::Probe(_) = plan
-        && let Some(reason @ ErasedTargetReason::Protocol) = erased_target_reason(db, target_origin)
+        && let Some(ErasedTargetReason::Protocol) = erased_target_reason(db, target_origin)
     {
-        return ParametricIsPlan::ErasedTarget(reason);
+        return protocol_structural_plan(db, file, rhs_alias)
+            .unwrap_or(ParametricIsPlan::ErasedTarget(ErasedTargetReason::Protocol));
     }
     plan
+}
+
+/// basedpython: the structural runtime check for a protocol target whose data
+/// members can all be verified against a value's reified class annotations, or
+/// `None` when the protocol has a member that can't be — a method (its shape
+/// isn't recoverable from an annotation) or a data member whose specialized
+/// type has no runtime spelling.
+fn protocol_structural_plan<'db>(
+    db: &'db dyn Db,
+    file: File,
+    rhs_alias: GenericAlias<'db>,
+) -> Option<ParametricIsPlan> {
+    let protocol_class = ClassType::Generic(rhs_alias).into_protocol_class(db)?;
+    let mut checks = Vec::new();
+    for member in protocol_class.interface(db).members(db) {
+        let (member_ty, readable, writable) = member.reified_annotation_check(db)?;
+        let expected = runtime_spelling(db, file, member_ty)?;
+        let variance = match (readable, writable) {
+            (true, true) => ArgVariance::Invariant,
+            (true, false) => ArgVariance::Covariant,
+            (false, true) => ArgVariance::Contravariant,
+            (false, false) => return None,
+        };
+        checks.push(ProtocolMemberCheck {
+            name: member.name().to_owned(),
+            expected,
+            variance,
+        });
+    }
+    Some(ParametricIsPlan::ProtocolStructural(
+        checks.into_boxed_slice(),
+    ))
 }
 
 fn classify_value<'db>(

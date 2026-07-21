@@ -11798,6 +11798,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(_) =
                     crate::types::reified_infer::classify_parametric_is(
                         self.db(),
+                        self.file(),
                         left_ty,
                         alias,
                         arm,
@@ -11824,8 +11825,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // must not apply
             return Some(bool_ty);
         };
-        let plan =
-            crate::types::reified_infer::classify_parametric_is(self.db(), left_ty, alias, right);
+        let plan = crate::types::reified_infer::classify_parametric_is(
+            self.db(),
+            self.file(),
+            left_ty,
+            alias,
+            right,
+        );
         // only a probe against a runtime-erased target is an error; every
         // other plan (fold, reified-cell equality, witness, or a probe of a
         // user generic that carries `__orig_class__`) is a valid test
