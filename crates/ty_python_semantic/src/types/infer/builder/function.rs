@@ -1205,6 +1205,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     } else {
                         UnionType::from_two_elements(db, base, default_ty)
                     }
+                } else if self.settings().infer_parameter_type_from_default {
+                    // basedpython: give the parameter the default's (promoted) type instead of
+                    // folding an implicit gradual `Unknown` in. deliberately breaks the gradual
+                    // guarantee (`def f(a=1)` sees `a: int` in the body)
+                    default_ty.promote(db)
                 } else {
                     UnionType::from_two_elements(db, Type::unknown(), default_ty)
                 }

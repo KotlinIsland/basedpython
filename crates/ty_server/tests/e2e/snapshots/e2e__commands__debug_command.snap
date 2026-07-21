@@ -171,6 +171,7 @@ Settings: Settings {
             globs: [],
         },
         disable_fluid_specializations: false,
+        infer_parameter_type_from_default: false,
     },
     overrides: [],
 }

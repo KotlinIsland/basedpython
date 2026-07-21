@@ -118,6 +118,41 @@ Defaults to `false`.
 
 ---
 
+### `infer-parameter-type-from-default`
+
+Whether an unannotated parameter that has a default value should be given the (promoted)
+type of that default, rather than an implicit gradual type. This is a basedpython feature.
+
+When set to `true`, this deliberately breaks the gradual guarantee: `def f(a=1)` declares
+`a` as `int` instead of leaving it unannotated, so passing a `str` at a call site is an
+error.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Infer unannotated parameter types from their defaults
+    infer-parameter-type-from-default = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Infer unannotated parameter types from their defaults
+    infer-parameter-type-from-default = true
+    ```
+
+---
+
 ### `replace-imports-with-any`
 
 A list of module glob patterns whose imports should be replaced with `typing.Any`.
@@ -643,6 +678,41 @@ Defaults to `false`.
     [overrides.analysis]
     # Turn off fluid specializations
     disable-fluid-specializations = true
+    ```
+
+---
+
+#### `infer-parameter-type-from-default`
+
+Whether an unannotated parameter that has a default value should be given the (promoted)
+type of that default, rather than an implicit gradual type. This is a basedpython feature.
+
+When set to `true`, this deliberately breaks the gradual guarantee: `def f(a=1)` declares
+`a` as `int` instead of leaving it unannotated, so passing a `str` at a call site is an
+error.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # Infer unannotated parameter types from their defaults
+    infer-parameter-type-from-default = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # Infer unannotated parameter types from their defaults
+    infer-parameter-type-from-default = true
     ```
 
 ---
