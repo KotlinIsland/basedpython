@@ -2752,7 +2752,7 @@ class list[in out Element](MutableSequence[Element]):
         """lists are generic over the type of their contents"""
 
 @disjoint_base
-class dict[in out Key, in out Value](MutableMapping[Key, Value]):
+class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
     """dict() -> new empty dictionary
     dict(mapping) -> new dictionary initialized from a mapping object's
         (key, value) pairs
@@ -2869,7 +2869,7 @@ class dict[in out Key, in out Value](MutableMapping[Key, Value]):
 
 if sys.version_info >= (3, 15):
     @disjoint_base
-    class frozendict[out Key, out Value](Mapping[Key, Value]):
+    class frozendict[out Key: Hashable, out Value](Mapping[Key, Value]):
         """dict() -> new empty dictionary
         dict(mapping) -> new dictionary initialized from a mapping object's
             (key, value) pairs
@@ -2938,7 +2938,7 @@ if sys.version_info >= (3, 15):
         def __ror__[T1, T2](self, value: frozendict[T1, T2], /) -> frozendict[Key | T1, Value | T2]
 
 @disjoint_base
-class set[in out Element](MutableSet[Element]):
+class set[in out Element: Hashable](MutableSet[Element]):
     """Build an unordered collection of unique elements."""
 
     init(self)
@@ -3042,7 +3042,7 @@ class set[in out Element](MutableSet[Element]):
         """sets are generic over the type of their elements"""
 
 @disjoint_base
-class frozenset[out Element](AbstractSet[Element]):
+class frozenset[out Element: Hashable](AbstractSet[Element]):
     """Build an immutable unordered collection of unique elements."""
 
     def __new__(cls) -> Self

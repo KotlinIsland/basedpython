@@ -7718,7 +7718,7 @@ Source with applied edits:
         info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/builtins.byi:LL:7
            |
-        LL | class dict[in out Key, in out Value](MutableMapping[Key, Value]):
+        LL | class dict[in out Key: Hashable, in out Value](MutableMapping[Key, Value]):
            |       ^^^^
            |
         info: Source

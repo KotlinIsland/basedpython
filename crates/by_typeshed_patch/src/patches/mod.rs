@@ -7,6 +7,7 @@ pub mod arrow_callable;
 pub mod builtins_tweaks;
 pub mod cleanup;
 pub mod container_overlapping;
+pub mod context_manager_abstract;
 pub mod dead_symbols;
 pub mod dead_typevars;
 pub mod final_annotation;

@@ -40,7 +40,7 @@ protocol AbstractContextManager[out Element, out ExitT: bool | None = bool | Non
     """An abstract base class for context managers."""
 
     __slots__ = ()
-    def __enter__(self) -> Element:
+    abstract def __enter__(self) -> Element:
         """Return `self` upon entering the runtime context."""
 
     abstract def __exit__(
@@ -56,7 +56,7 @@ protocol AbstractAsyncContextManager[out Element, out ExitT: bool | None = bool 
     """An abstract base class for asynchronous context managers."""
 
     __slots__ = ()
-    async def __aenter__(self) -> Element:
+    abstract async def __aenter__(self) -> Element:
         """Return `self` upon entering the runtime context."""
 
     abstract async def __aexit__(
@@ -93,6 +93,7 @@ class _GeneratorContextManagerBase[out G: Generator[dynamic, dynamic, dynamic] |
 class _GeneratorContextManager[out Element, in Sent = None, out Return = None](_GeneratorContextManagerBase[Generator[Element, Sent, Return]], AbstractContextManager[Element, bool | None], ContextDecorator):
     """Helper for @contextmanager decorator."""
 
+    def __enter__(self) -> Element
     def __exit__(
         self, typ: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
     ) -> bool | None
@@ -141,6 +142,7 @@ class AsyncContextDecorator:
 class _AsyncGeneratorContextManager[out Element, in Sent = None](_GeneratorContextManagerBase[AsyncGenerator[Element, Sent]], AbstractAsyncContextManager[Element, bool | None], AsyncContextDecorator):
     """Helper for @asynccontextmanager decorator."""
 
+    async def __aenter__(self) -> Element
     async def __aexit__(
         self, typ: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
     ) -> bool | None
@@ -202,6 +204,7 @@ class closing[in out SupportsCloseT: _SupportsClose](AbstractContextManager[Supp
     """
 
     init(self, thing: SupportsCloseT)
+    def __enter__(self) -> SupportsCloseT
     def __exit__(self, *exc_info: Unused) -> None
 
 @type_check_only
@@ -229,6 +232,7 @@ class aclosing[in out SupportsAcloseT: _SupportsAclose](AbstractAsyncContextMana
     """
 
     init(self, thing: SupportsAcloseT)
+    async def __aenter__(self) -> SupportsAcloseT
     async def __aexit__(self, *exc_info: Unused) -> None
 
 class suppress(AbstractContextManager[None, bool]):
@@ -243,6 +247,7 @@ class suppress(AbstractContextManager[None, bool]):
     """
 
     init(self, *exceptions: type[BaseException])
+    def __enter__(self) -> None
     def __exit__(
         self, exctype: type[BaseException] | None, excinst: BaseException | None, exctb: TracebackType | None
     ) -> bool
@@ -258,6 +263,7 @@ protocol _SupportsRedirect:
 
 class _RedirectStream[in out SupportsRedirectT: _SupportsRedirect | None](AbstractContextManager[SupportsRedirectT, None]):
     init(self, new_target: SupportsRedirectT)
+    def __enter__(self) -> SupportsRedirectT
     def __exit__(
         self, exctype: type[BaseException] | None, excinst: BaseException | None, exctb: TracebackType | None
     ) -> None
