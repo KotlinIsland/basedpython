@@ -134,10 +134,11 @@ x: tuple[list[Literal[1]]] = (list1(1),)
 reveal_type(x)  # revealed: tuple[list[Literal[1]]]
 
 x: tuple[list[Literal[1]], ...] = (list1(1),) * 3
-reveal_type(x)  # revealed: tuple[list[Literal[1]], ...]
+reveal_type(x)  # revealed: tuple[list[Literal[1]], list[Literal[1]], list[Literal[1]]]
 
 x: tuple[list[Literal[1]], ...] = 3 * ((list1(1),) + (list1(1),))
-reveal_type(x)  # revealed: tuple[list[Literal[1]], ...]
+# revealed: tuple[list[Literal[1]], list[Literal[1]], list[Literal[1]], list[Literal[1]], list[Literal[1]], list[Literal[1]]]
+reveal_type(x)
 
 x: set[int | str] = {1, 2} | {3, 4}
 reveal_type(x)  # revealed: set[int | str]
