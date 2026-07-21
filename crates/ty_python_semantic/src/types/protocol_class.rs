@@ -985,6 +985,33 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
             .member_types()
             .any(|ty| matches!(ty, ProtocolMemberType::Value { ty, .. } if ty.is_todo()))
     }
+
+    /// basedpython: the instance-access data type of this member, plus whether
+    /// that access is readable and writable — the shape a parametric protocol
+    /// test (`x is A[int]`) checks against a value's reified annotation.
+    ///
+    /// `None` for a method member: a method's specialization can't be recovered
+    /// from a reified attribute annotation, so a protocol that has one can't be
+    /// verified structurally at runtime this way.
+    pub(super) fn reified_annotation_check(
+        &self,
+        db: &'db dyn Db,
+    ) -> Option<(Type<'db>, bool, bool)> {
+        if self.is_method() {
+            return None;
+        }
+        let instance = self.capabilities(db).instance;
+        let read = instance
+            .read
+            .and_then(|member| member.resolve(db))
+            .map(ProtocolMemberType::ty);
+        let write = instance
+            .write
+            .and_then(|member| member.resolve(db))
+            .map(ProtocolMemberType::ty);
+        let ty = read.or(write)?;
+        Some((ty, read.is_some(), write.is_some()))
+    }
 }
 
 fn property_get_member_type<'db>(

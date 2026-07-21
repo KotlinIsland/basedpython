@@ -39,7 +39,7 @@ use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, CmpOp, Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 use ty_python_semantic::reified::is_keyword_comparison;
-use ty_python_semantic::{ArgVariance, ParametricIsPlan};
+use ty_python_semantic::{ArgVariance, ParametricIsPlan, ProtocolMemberCheck};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
@@ -129,11 +129,87 @@ def _parametric_is_sub(a, b):
     return a == b
 ";
 
+/// runtime residue for a parametric test against a *protocol* target
+/// (`value is A[int]`). a protocol's instances never record which
+/// specialization they satisfy, so `__orig_class__` can't answer it — but
+/// basedpython reifies class attribute annotations, so the value's class can be
+/// checked structurally: for each protocol member, its reified annotation must
+/// match the member's specialized type. `members` is a list of `(name,
+/// expected_type, variance)`, with `variance` matching [`ArgVariance`]'s codes
+/// (0 invariant → equality, 1 covariant → subtype, 2 contravariant →
+/// supertype, 3 bivariant → any). the annotation is read with
+/// `typing.get_type_hints` (resolving string annotations and inherited members),
+/// falling back to a raw `__mro__` walk when that raises
+pub(crate) const PROTOCOL_IS_RUNTIME: &str = "\
+_by_proto_missing = object()
+
+def _by_member_annotation(klass, name):
+    try:
+        import typing
+        hints = typing.get_type_hints(klass)
+    except Exception:
+        hints = None
+    if hints is not None and name in hints:
+        return hints[name]
+    for base in klass.__mro__:
+        annotations = base.__dict__.get(\"__annotations__\", {})
+        if name in annotations:
+            return annotations[name]
+    return _by_proto_missing
+
+def _by_proto_sub(a, b):
+    if a is b or b is object:
+        return True
+    a_origin = getattr(a, \"__origin__\", a)
+    b_origin = getattr(b, \"__origin__\", b)
+    if isinstance(a_origin, type) and isinstance(b_origin, type) and not getattr(b, \"__args__\", ()):
+        try:
+            return issubclass(a_origin, b_origin)
+        except TypeError:
+            return False
+    return a == b
+
+def _by_protocol_is(value, members):
+    klass = type(value)
+    for name, expected, variance in members:
+        actual = _by_member_annotation(klass, name)
+        if actual is _by_proto_missing:
+            return False
+        if variance == 3 or actual == expected:
+            continue
+        if variance == 1 and _by_proto_sub(actual, expected):
+            continue
+        if variance == 2 and _by_proto_sub(expected, actual):
+            continue
+        return False
+    return True
+";
+
+/// render a protocol member list as the python list-of-tuples literal
+/// `_by_protocol_is` takes as its `members` argument
+fn protocol_members_literal(checks: &[ProtocolMemberCheck]) -> String {
+    let entries = checks
+        .iter()
+        .map(|check| {
+            let code = match check.variance {
+                ArgVariance::Invariant => 0,
+                ArgVariance::Covariant => 1,
+                ArgVariance::Contravariant => 2,
+                ArgVariance::Bivariant => 3,
+            };
+            format!("({:?}, {}, {code})", check.name, check.expected)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{entries}]")
+}
+
 struct ParametricIs<'src, 'ti> {
     source: &'src str,
     types: &'ti dyn TypeInfo,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     needs_probe: bool,
+    needs_protocol: bool,
 }
 
 impl ParametricIs<'_, '_> {
@@ -224,6 +300,23 @@ impl ParametricIs<'_, '_> {
                     Fragment::Lit(format!(", {tuple})")),
                 ]
             }
+            // a protocol target carries no `__orig_class__`, but its members'
+            // reified annotations can be checked structurally on the value's
+            // class
+            ParametricIsPlan::ProtocolStructural(checks) => {
+                self.needs_protocol = true;
+                let members = protocol_members_literal(&checks);
+                let open = if negate {
+                    "not _by_protocol_is("
+                } else {
+                    "_by_protocol_is("
+                };
+                vec![
+                    Fragment::Lit(open.to_owned()),
+                    Fragment::Src(lhs.range()),
+                    Fragment::Lit(format!(", {members})")),
+                ]
+            }
         }
     }
 
@@ -282,6 +375,15 @@ impl ParametricIs<'_, '_> {
                     Fragment::Lit(", ".to_owned()),
                     Fragment::Src(arm.range()),
                     Fragment::Lit(format!(", {})", variance_tuple(&codes))),
+                ]
+            }
+            ParametricIsPlan::ProtocolStructural(checks) => {
+                self.needs_protocol = true;
+                let members = protocol_members_literal(&checks);
+                vec![
+                    Fragment::Lit("_by_protocol_is(".to_owned()),
+                    value(),
+                    Fragment::Lit(format!(", {members})")),
                 ]
             }
         }
@@ -414,6 +516,7 @@ impl TypeAwarePass for ParametricIsPass<'_> {
             types,
             edits: Vec::new(),
             needs_probe: false,
+            needs_protocol: false,
         };
         for stmt in stmts {
             inner.visit_stmt(stmt);
@@ -425,6 +528,9 @@ impl TypeAwarePass for ParametricIsPass<'_> {
         // on any target
         if inner.needs_probe {
             ctx.required_imports.push(PARAMETRIC_IS_RUNTIME.to_owned());
+        }
+        if inner.needs_protocol {
+            ctx.required_imports.push(PROTOCOL_IS_RUNTIME.to_owned());
         }
         ctx.template_edits.extend(inner.edits);
     }
@@ -669,10 +775,11 @@ mod tests {
     }
 
     #[test]
-    fn protocol_target_probe_becomes_false() {
-        // a protocol target can't be probed (its instances never carry a
-        // matching `__orig_class__`); ty reports the error and the lowering is
-        // the constant it always is, with no polyfill
+    fn protocol_with_method_member_becomes_false() {
+        // a protocol whose interface has a *method* member can't be checked at
+        // runtime — a method's specialization isn't recoverable from a reified
+        // attribute annotation — so ty reports the error and the lowering is
+        // the constant it always is, with no runtime residue
         let out = out(indoc! {"
             from typing import Protocol
             class P[T](Protocol):
@@ -682,6 +789,118 @@ mod tests {
         "});
         assert!(out.contains("return False"), "protocol target folds: {out}");
         assert!(!out.contains("_parametric_is"), "no probe emitted: {out}");
+        assert!(
+            !out.contains("_by_protocol_is"),
+            "no structural check: {out}"
+        );
+    }
+
+    #[test]
+    fn protocol_data_member_checks_reified_annotation() {
+        // the headline case: a protocol whose members are all data members can
+        // be checked structurally against the value's reified class annotations
+        let out = out(indoc! {"
+            from typing import Protocol
+            class A[T](Protocol):
+                a: T
+            def f(x: object) -> bool:
+                return x is A[int]
+        "});
+        assert!(
+            out.contains("return _by_protocol_is(x, [(\"a\", int, 0)])"),
+            "data-member protocol checks reified annotation: {out}"
+        );
+        assert!(
+            out.contains("def _by_protocol_is(value, members):"),
+            "structural-check runtime emitted: {out}"
+        );
+    }
+
+    #[test]
+    fn protocol_is_not_negates_structural_check() {
+        let out = out(indoc! {"
+            from typing import Protocol
+            class A[T](Protocol):
+                a: T
+            def f(x: object) -> bool:
+                return x is not A[bool]
+        "});
+        assert!(
+            out.contains("return not _by_protocol_is(x, [(\"a\", bool, 0)])"),
+            "is not negates the structural check: {out}"
+        );
+    }
+
+    #[test]
+    fn protocol_multiple_data_members() {
+        let out = out(indoc! {"
+            from typing import Protocol
+            class A[T, U](Protocol):
+                a: T
+                b: U
+            def f(x: object) -> bool:
+                return x is A[int, str]
+        "});
+        assert!(
+            out.contains("return _by_protocol_is(x, [(\"a\", int, 0), (\"b\", str, 0)])"),
+            "each data member is checked: {out}"
+        );
+    }
+
+    #[test]
+    fn protocol_nested_generic_member_spells_specialized_type() {
+        let out = out(indoc! {"
+            from typing import Protocol
+            class A[T](Protocol):
+                a: list[T]
+            def f(x: object) -> bool:
+                return x is A[int]
+        "});
+        assert!(
+            out.contains("return _by_protocol_is(x, [(\"a\", list[int], 0)])"),
+            "member type is spelled with the specialization applied: {out}"
+        );
+    }
+
+    #[test]
+    fn protocol_readonly_property_member_is_covariant() {
+        // a read-only property member is covariant, so the value's annotation
+        // need only be a subtype (variance code 1)
+        let out = out(indoc! {"
+            from typing import Protocol
+            class A[T](Protocol):
+                @property
+                def a(self) -> T: ...
+            def f(x: object) -> bool:
+                return x is A[int]
+        "});
+        assert!(
+            out.contains("return _by_protocol_is(x, [(\"a\", int, 1)])"),
+            "read-only property member is covariant: {out}"
+        );
+    }
+
+    #[test]
+    fn protocol_concrete_value_folds_statically() {
+        // a value whose static type already answers the structural question is
+        // resolved at compile time, with no runtime residue
+        let out = out(indoc! {"
+            from typing import Protocol
+            class A[T](Protocol):
+                a: T
+            class C:
+                a: bool
+            def f(c: C) -> bool:
+                return c is A[bool]
+        "});
+        assert!(
+            out.contains("return True"),
+            "concrete value structurally satisfies the protocol: {out}"
+        );
+        assert!(
+            !out.contains("_by_protocol_is"),
+            "no runtime residue for a statically decided test: {out}"
+        );
     }
 
     #[test]

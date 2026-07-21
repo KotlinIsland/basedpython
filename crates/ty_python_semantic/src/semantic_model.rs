@@ -209,7 +209,7 @@ impl<'db> SemanticModel<'db> {
             crate::types::reified_infer::parametric_is_target(self.db, rhs.inferred_type(self)?)?;
         let lhs_ty = lhs.inferred_type(self)?;
         Some(crate::types::reified_infer::classify_parametric_is(
-            self.db, lhs_ty, alias, rhs,
+            self.db, self.file, lhs_ty, alias, rhs,
         ))
     }
 
