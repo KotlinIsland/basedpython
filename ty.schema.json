@@ -89,6 +89,13 @@
             "null"
           ]
         },
+        "infer-parameter-type-from-default": {
+          "description": "Whether an unannotated parameter that has a default value should be given the (promoted)\ntype of that default, rather than an implicit gradual type. This is a basedpython feature.\n\nWhen set to `true`, this deliberately breaks the gradual guarantee: `def f(a=1)` declares\n`a` as `int` instead of leaving it unannotated, so passing a `str` at a call site is an\nerror.\n\nDefaults to `false`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "replace-imports-with-any": {
           "description": "A list of module glob patterns whose imports should be replaced with `typing.Any`.\n\nUnlike `allowed-unresolved-imports`, this setting replaces the module's type information\nwith `typing.Any` even if the module can be resolved. Import diagnostics are\nunconditionally suppressed for matching modules.\n\n- Prefix a pattern with `!` to exclude matching modules\n\nWhen multiple patterns match, later entries take precedence.\n\nGlob patterns can be used in combinations with each other. For example, to suppress errors for\nany module where the first component contains the substring `test`, use `*test*.**`.\n\nWhen multiple patterns match, later entries take precedence.",
           "type": [

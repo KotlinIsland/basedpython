@@ -1505,6 +1505,25 @@ pub struct AnalysisOptions {
     )]
     pub disable_fluid_specializations: Option<bool>,
 
+    /// Whether an unannotated parameter that has a default value should be given the (promoted)
+    /// type of that default, rather than an implicit gradual type. This is a basedpython feature.
+    ///
+    /// When set to `true`, this deliberately breaks the gradual guarantee: `def f(a=1)` declares
+    /// `a` as `int` instead of leaving it unannotated, so passing a `str` at a call site is an
+    /// error.
+    ///
+    /// Defaults to `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"false"#,
+        value_type = "bool",
+        example = r#"
+        # Infer unannotated parameter types from their defaults
+        infer-parameter-type-from-default = true
+        "#
+    )]
+    pub infer_parameter_type_from_default: Option<bool>,
+
     /// A list of module glob patterns for which `unresolved-import` diagnostics should be suppressed.
     ///
     /// Details on supported glob patterns:
@@ -1566,6 +1585,7 @@ impl AnalysisOptions {
             allowed_unresolved_imports,
             replace_imports_with_any,
             disable_fluid_specializations,
+            infer_parameter_type_from_default,
         } = self;
 
         let AnalysisSettings {
@@ -1573,6 +1593,7 @@ impl AnalysisOptions {
             allowed_unresolved_imports: allowed_unresolved_imports_default,
             replace_imports_with_any: replace_imports_with_any_default,
             disable_fluid_specializations: disable_fluid_specializations_default,
+            infer_parameter_type_from_default: infer_parameter_type_from_default_default,
         } = AnalysisSettings::default();
 
         let allowed_unresolved_imports =
@@ -1604,6 +1625,8 @@ impl AnalysisOptions {
             replace_imports_with_any,
             disable_fluid_specializations: disable_fluid_specializations
                 .unwrap_or(disable_fluid_specializations_default),
+            infer_parameter_type_from_default: infer_parameter_type_from_default
+                .unwrap_or(infer_parameter_type_from_default_default),
         }
     }
 }

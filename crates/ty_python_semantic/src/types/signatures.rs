@@ -4318,6 +4318,15 @@ impl<'db> Parameter<'db> {
                     false,
                     annotation.is_starred_expr(),
                 )
+            } else if let Some(default_type) = kind.default_type()
+                && db
+                    .analysis_settings(function_definition.file(db))
+                    .infer_parameter_type_from_default
+            {
+                // basedpython: an unannotated parameter with a default is declared with the
+                // default's promoted type, so call sites are checked against it. deliberately
+                // breaks the gradual guarantee
+                (default_type.promote(db), false, false)
             } else {
                 (Type::unknown(), true, false)
             };
@@ -4463,12 +4472,7 @@ impl<'db> Parameter<'db> {
 
     /// Default-value type of the parameter, if any.
     pub(crate) fn default_type(&self) -> Option<Type<'db>> {
-        match self.kind {
-            ParameterKind::PositionalOnly { default_type, .. }
-            | ParameterKind::PositionalOrKeyword { default_type, .. }
-            | ParameterKind::KeywordOnly { default_type, .. } => default_type,
-            ParameterKind::Variadic { .. } | ParameterKind::KeywordVariadic { .. } => None,
-        }
+        self.kind.default_type()
     }
 
     /// Rewrites a positional-or-keyword parameter as keyword-only while preserving its metadata.
@@ -4524,6 +4528,15 @@ pub enum ParameterKind<'db> {
 }
 
 impl<'db> ParameterKind<'db> {
+    fn default_type(&self) -> Option<Type<'db>> {
+        match self {
+            ParameterKind::PositionalOnly { default_type, .. }
+            | ParameterKind::PositionalOrKeyword { default_type, .. }
+            | ParameterKind::KeywordOnly { default_type, .. } => *default_type,
+            ParameterKind::Variadic { .. } | ParameterKind::KeywordVariadic { .. } => None,
+        }
+    }
+
     #[expect(clippy::ref_option)]
     fn cycle_normalized_default(
         db: &'db dyn Db,
