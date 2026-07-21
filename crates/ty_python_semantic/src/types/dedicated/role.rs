@@ -13,8 +13,10 @@
 //! `docs/basedpython/frameworks/index.md`
 
 use crate::Db;
+use crate::types::class::CodeGeneratorKind;
 use crate::types::dedicated::{django, pydantic, pytest, sqlalchemy};
-use crate::types::{ClassLiteral, FunctionType, StaticClassLiteral};
+use crate::types::enums::is_enum_class;
+use crate::types::{ClassLiteral, FunctionType, StaticClassLiteral, Type};
 
 /// the kind of framework class-transformer that applies to a class
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update, get_size2::GetSize)]
@@ -52,6 +54,18 @@ fn static_class_framework_role<'db>(
         return Some(FrameworkRole::SqlalchemyDeclarative);
     }
     None
+}
+
+/// whether adding a type annotation to a bare `name = value` assignment in
+/// `class`'s body would change the class's runtime semantics. true for
+/// dataclass-like classes and framework models (pydantic / django /
+/// sqlalchemy), `NamedTuple`s and `TypedDict`s — where an annotated
+/// assignment turns a plain class variable into a field — and for enums,
+/// where a bare assignment defines a member. the inferred-annotation
+/// transform must leave such classes' body assignments alone
+pub fn class_body_annotation_is_semantic<'db>(db: &'db dyn Db, class: ClassLiteral<'db>) -> bool {
+    CodeGeneratorKind::from_class(db, class).is_some()
+        || is_enum_class(db, Type::ClassLiteral(class))
 }
 
 /// the kind of pytest function whose parameters pytest fills from the fixture

@@ -251,6 +251,20 @@ pub(crate) trait TypeInfo {
     /// `docs/basedpython/frameworks/index.md`
     fn framework_class_role(&self, class_def: &StmtClassDef) -> Option<FrameworkRole>;
 
+    /// the inferred annotation to synthesize for a bare class-body assignment
+    /// `<name> = <value>` — the promoted display of `value`'s type (`1` →
+    /// `"int"`, `[1]` → `"list[int]"`), or `None` when ty resolves no concrete
+    /// type or the promoted type carries a dynamic part (`Unknown` / `Any`)
+    /// with no faithful spelling
+    fn inferred_annotation(&self, expr: &Expr) -> Option<String>;
+
+    /// whether adding a type annotation to a bare `name = value` assignment in
+    /// `class_def`'s body would change the class's runtime semantics — true for
+    /// dataclass-like classes, framework models, `NamedTuple`s, `TypedDict`s
+    /// (annotated assignment becomes a field) and enums (bare assignment is a
+    /// member). the inferred-annotation transform must leave these alone
+    fn class_body_annotation_is_semantic(&self, class_def: &StmtClassDef) -> bool;
+
     /// whether `expr` is a field-specifier call — `pydantic.Field(...)`,
     /// `dataclasses.field(...)`, `attrs.field(...)`, and the like. the checker
     /// models these as assignable to the field's declared type, but their
@@ -599,6 +613,28 @@ impl TypeInfo for SemanticModel<'_> {
         let ty = class_def.inferred_type(self)?;
         let class = ty.as_class_literal()?;
         ty_python_semantic::types::class_framework_role(self.db(), class)
+    }
+
+    fn inferred_annotation(&self, expr: &Expr) -> Option<String> {
+        let ty = expr.inferred_type(self)?;
+        // a dynamic part (`Unknown` from an empty `[]`, an unresolved import,
+        // `Any`) has no faithful annotation — leave the assignment bare
+        if ty.has_dynamic(self.db()) {
+            return None;
+        }
+        let promoted = ty.promote(self.db());
+        Some(strip_binding_context_suffix(
+            &promoted.display(self.db()).to_string(),
+        ))
+    }
+
+    fn class_body_annotation_is_semantic(&self, class_def: &StmtClassDef) -> bool {
+        class_def
+            .inferred_type(self)
+            .and_then(Type::as_class_literal)
+            .is_some_and(|class| {
+                ty_python_semantic::types::class_body_annotation_is_semantic(self.db(), class)
+            })
     }
 
     fn is_field_specifier(&self, expr: &Expr) -> bool {
