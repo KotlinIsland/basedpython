@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use except_handlers::TryNodeContextStackManager;
 use itertools::Itertools;
-use ruff_python_ast::helpers::{Truthiness, any_over_expr, is_dotted_name, parameter_modifiers};
+use ruff_python_ast::helpers::{
+    Truthiness, any_over_expr, is_dotted_name, last_bound_parameter, parameter_modifiers,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use ruff_db::files::File;
@@ -1854,11 +1856,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 if let ast::Stmt::FunctionDef(def) = stmt
                     && def.name.as_str() == target
                 {
-                    return def
-                        .parameters
-                        .args
-                        .last()
-                        .is_some_and(|last| parameter_modifiers(source, &last.parameter).once);
+                    return last_bound_parameter(&def.parameters)
+                        .is_some_and(|last| parameter_modifiers(source, last).once);
                 }
             }
         }
@@ -1895,7 +1894,6 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
     /// basedpython: record shadowing write-backs for the enclosing-scope names a
     /// trailing-lambda block assigns.
     ///
-    /// A trailing-lambda block (`f:` + suite) runs inline at its call site — the
     /// A trailing-lambda block (`f:` + suite) runs inline at its call site — the
     /// lowering inserts a matching `global` / `nonlocal` — so a name it binds that
     /// is already bound in an enclosing scope should read as the block's value

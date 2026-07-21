@@ -1011,6 +1011,30 @@ fn leading_whitespace_len(s: &str) -> usize {
     s.len() - s.trim_start().len()
 }
 
+/// basedpython: the parameter a trailing-lambda block binds to — the last
+/// declared parameter in signature order (keyword-only included), skipping a
+/// trailing `*args` / `**kwargs` (a block is never bound to a variadic).
+///
+/// This mirrors the signature-level "last parameter" that the `it` typing and
+/// keyword binding use (`parameters().iter().next_back()`), so `local` / `once`
+/// modifier detection agrees with where the block actually binds. Reading only
+/// `args.last()` would miss a keyword-only callback (`def f(*, once cb)`).
+pub fn last_bound_parameter(parameters: &ast::Parameters) -> Option<&ast::Parameter> {
+    if parameters.kwarg.is_some() {
+        return None;
+    }
+    if let Some(last) = parameters.kwonlyargs.last() {
+        return Some(&last.parameter);
+    }
+    if parameters.vararg.is_some() {
+        return None;
+    }
+    if let Some(last) = parameters.args.last() {
+        return Some(&last.parameter);
+    }
+    parameters.posonlyargs.last().map(|param| &param.parameter)
+}
+
 /// basedpython: returns `true` if `expr` is a single parser-synthesized
 /// `[*]` marker — `Starred(Name(id="", ctx=Invalid))`. An empty-id `Name`
 /// with `Invalid` context is unique to this synthesis and cannot appear from
