@@ -116,6 +116,14 @@ pub struct AnalysisSettings {
     /// When disabled, inferred generic specializations are not widened flow-sensitively by
     /// later uses of a binding; each binding keeps its creation-time specialization.
     pub disable_fluid_specializations: bool,
+
+    /// Whether an unannotated parameter with a default value is given the (promoted) type of
+    /// that default, rather than an implicit gradual type.
+    ///
+    /// This deliberately breaks the gradual guarantee: with it enabled, `def f(a=1)` declares
+    /// `a` as `int` instead of leaving it unannotated, so passing a `str` at the call site is
+    /// an error.
+    pub infer_parameter_type_from_default: bool,
 }
 
 impl Default for AnalysisSettings {
@@ -125,6 +133,7 @@ impl Default for AnalysisSettings {
             allowed_unresolved_imports: ModuleGlobSet::empty(),
             replace_imports_with_any: ModuleGlobSet::empty(),
             disable_fluid_specializations: false,
+            infer_parameter_type_from_default: false,
         }
     }
 }

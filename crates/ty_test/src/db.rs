@@ -64,6 +64,7 @@ impl Db {
                 allowed_unresolved_imports: allowed_unresolved_imports_default,
                 replace_imports_with_any: replace_imports_with_any_default,
                 disable_fluid_specializations: disable_fluid_specializations_default,
+                infer_parameter_type_from_default: infer_parameter_type_from_default_default,
             } = AnalysisSettings::default();
 
             let allowed_unresolved_imports = if let Some(allowed_unresolved_imports) =
@@ -103,6 +104,9 @@ impl Db {
                 disable_fluid_specializations: options
                     .disable_fluid_specializations
                     .unwrap_or(disable_fluid_specializations_default),
+                infer_parameter_type_from_default: options
+                    .infer_parameter_type_from_default
+                    .unwrap_or(infer_parameter_type_from_default_default),
             }
         } else {
             AnalysisSettings::default()

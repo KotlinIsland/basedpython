@@ -129,6 +129,8 @@ pub(crate) struct Analysis {
     pub(crate) replace_imports_with_any: Option<Vec<String>>,
 
     pub(crate) disable_fluid_specializations: Option<bool>,
+
+    pub(crate) infer_parameter_type_from_default: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
