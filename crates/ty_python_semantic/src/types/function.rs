@@ -58,6 +58,7 @@ use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_db::source::source_text;
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::find_node::covering_node;
+use ruff_python_ast::helpers::{last_bound_parameter, parameter_modifiers};
 use ruff_python_ast::{self as ast, OperatorPrecedence, ParameterWithDefault};
 use ruff_text_size::Ranged;
 use salsa::plumbing::AsId;
@@ -341,6 +342,41 @@ pub struct OverloadLiteral<'db> {
 // The Salsa heap is tracked separately.
 impl get_size2::GetSize for OverloadLiteral<'_> {}
 
+/// basedpython: the `local` / `once` parameter modifiers of a function, laid out
+/// for argument binding. Produced by [`OverloadLiteral::callback_parameter_modifiers`],
+/// a tracked query, so the callee's AST / source dependency is memoized rather
+/// than re-read (via `.node()` + `source_text`) at every call site that inspects
+/// a `local` / `once` argument or a trailing block's `once`-ness.
+///
+/// A `once` parameter is a `local` borrow with an extra "called exactly once"
+/// obligation, so "borrowed" means `local` *or* `once`; the separate `once`
+/// flags let the strict `once` → `once` propagation rule distinguish them.
+#[derive(Debug, Default, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+pub(crate) struct CallbackParameterModifiers {
+    /// `once` on the parameter a trailing block binds to — the last declared
+    /// parameter, keyword-only included (see [`last_bound_parameter`])
+    pub(crate) last_bound_once: bool,
+    /// whether that last-bound parameter is a borrow (`local` or `once`) — a
+    /// trailing block bound to it is confined to the call
+    pub(crate) last_bound_borrowed: bool,
+    /// borrow flags for positional-only then positional-or-keyword parameters,
+    /// in positional order — a positional argument indexes straight into these
+    pub(crate) positional_borrowed: Box<[bool]>,
+    /// `once` flags, aligned with `positional_borrowed`
+    pub(crate) positional_once: Box<[bool]>,
+    /// `Some(borrowed)` / `Some(once)` when a `*args` catches overflow positionals
+    pub(crate) vararg_borrowed: Option<bool>,
+    pub(crate) vararg_once: Option<bool>,
+    /// names of the positional-or-keyword then keyword-only parameters, for
+    /// matching a keyword argument (aligned with `keyword_borrowed` / `keyword_once`)
+    pub(crate) keyword_names: Box<[ast::name::Name]>,
+    pub(crate) keyword_borrowed: Box<[bool]>,
+    pub(crate) keyword_once: Box<[bool]>,
+    /// `Some(borrowed)` / `Some(once)` when a `**kwargs` catches unknown keywords
+    pub(crate) kwarg_borrowed: Option<bool>,
+    pub(crate) kwarg_once: Option<bool>,
+}
+
 #[salsa::tracked]
 impl<'db> OverloadLiteral<'db> {
     fn with_deprecated(self, db: &'db dyn Db, deprecated: DeprecatedInstance<'db>) -> Self {
@@ -475,6 +511,81 @@ impl<'db> OverloadLiteral<'db> {
             .filter(|param| param.default().is_none() && reified.contains(&param.name().id))
             .map(|param| param.name().id.clone())
             .collect()
+    }
+
+    /// basedpython: the `local` / `once` modifiers on this function's parameters,
+    /// read from its source span. Tracked so the AST / source dependency is
+    /// memoized once per function rather than recomputed at each call site that
+    /// inspects a `local` argument or a trailing block's `once`-ness.
+    #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+    pub(crate) fn callback_parameter_modifiers(
+        self,
+        db: &'db dyn Db,
+    ) -> CallbackParameterModifiers {
+        let file = self.file(db);
+        let module = parsed_module(db, file).load(db);
+        let parameters = &self.node(db, file, &module).parameters;
+        let source = source_text(db, file);
+
+        // a `once` parameter is a `local` borrow with an extra obligation, so it
+        // is "borrowed" too
+        let borrowed = |parameter: &ast::Parameter| {
+            let modifiers = parameter_modifiers(&source, parameter);
+            modifiers.local || modifiers.once
+        };
+        let is_once = |parameter: &ast::Parameter| parameter_modifiers(&source, parameter).once;
+
+        let last_bound = last_bound_parameter(parameters);
+        let last_bound_once = last_bound.is_some_and(is_once);
+        let last_bound_borrowed = last_bound.is_some_and(borrowed);
+        let positional_borrowed = parameters
+            .posonlyargs
+            .iter()
+            .chain(parameters.args.iter())
+            .map(|param| borrowed(&param.parameter))
+            .collect();
+        let positional_once = parameters
+            .posonlyargs
+            .iter()
+            .chain(parameters.args.iter())
+            .map(|param| is_once(&param.parameter))
+            .collect();
+        let vararg_borrowed = parameters.vararg.as_deref().map(&borrowed);
+        let vararg_once = parameters.vararg.as_deref().map(&is_once);
+        let keyword_names = parameters
+            .args
+            .iter()
+            .chain(parameters.kwonlyargs.iter())
+            .map(|param| param.parameter.name.id.clone())
+            .collect();
+        let keyword_borrowed = parameters
+            .args
+            .iter()
+            .chain(parameters.kwonlyargs.iter())
+            .map(|param| borrowed(&param.parameter))
+            .collect();
+        let keyword_once = parameters
+            .args
+            .iter()
+            .chain(parameters.kwonlyargs.iter())
+            .map(|param| is_once(&param.parameter))
+            .collect();
+        let kwarg_borrowed = parameters.kwarg.as_deref().map(&borrowed);
+        let kwarg_once = parameters.kwarg.as_deref().map(&is_once);
+
+        CallbackParameterModifiers {
+            last_bound_once,
+            last_bound_borrowed,
+            positional_borrowed,
+            positional_once,
+            vararg_borrowed,
+            vararg_once,
+            keyword_names,
+            keyword_borrowed,
+            keyword_once,
+            kwarg_borrowed,
+            kwarg_once,
+        }
     }
 
     /// Returns true if this overload is decorated with `@staticmethod`, or if it is implicitly a

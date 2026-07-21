@@ -5,21 +5,24 @@
 //!
 //! - **`local`** — a borrowed parameter must not outlive the call. Reports
 //!   [`ESCAPING_LOCAL`] when it is returned, stored on a parameter-rooted object
-//!   (`self.cb = fn`), or bound to a `global` / `nonlocal` name.
-//! - **`once`** — a callback must be called exactly once. Reports
-//!   [`ONCE_NOT_CALLED`] when it is never called and [`ONCE_CALLED_TWICE`] on two
-//!   unconditional calls or a call inside a loop.
+//!   (`self.cb = fn`), bound to a `global` / `nonlocal` name, or handed to a
+//!   parameter that is not itself a borrow.
+//! - **`once`** — a callback must be called exactly once. It is a `local` borrow
+//!   with that extra obligation, so it is *also* escape-checked (and may only be
+//!   passed on to another `once`). Reports [`ONCE_NOT_CALLED`] when it is never
+//!   called and [`ONCE_CALLED_TWICE`] on two unconditional calls or a call inside
+//!   a loop.
 //!
 //! Both are deliberately conservative — they flag only what they can see
 //! directly, never guessing through opaque calls, aliasing, or closures. See
 //! `docs/basedpython/features/local-lifetimes.md`.
 
-use ruff_db::parsed::{ParsedModuleRef, parsed_module};
+use ruff_db::parsed::ParsedModuleRef;
 use ruff_db::source::source_text;
 use ruff_python_ast::helpers::parameter_modifiers;
 use ruff_python_ast::statement_visitor::{StatementVisitor, walk_stmt};
 use ruff_python_ast::visitor::{Visitor, walk_expr};
-use ruff_python_ast::{self as ast, Expr, ExprName, Stmt};
+use ruff_python_ast::{self as ast, Expr, ExprContext, ExprName, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_python_core::SemanticIndex;
@@ -30,7 +33,7 @@ use crate::Db;
 use super::Type;
 use super::context::InferContext;
 use super::diagnostic::{
-    ESCAPING_LOCAL, INVALID_ASSIGNMENT, ONCE_CALLED_TWICE, ONCE_NOT_CALLED,
+    ESCAPING_LOCAL, ESCAPING_LOOP_VARIABLE, INVALID_ASSIGNMENT, ONCE_CALLED_TWICE, ONCE_NOT_CALLED,
     TRAILING_LAMBDA_CONTROL_FLOW,
 };
 
@@ -68,7 +71,9 @@ pub(super) fn check_local_lifetimes<'db, 'ast>(
         let param = param.as_parameter();
         params.insert(param.name.as_str());
         let modifiers = parameter_modifiers(&source, param);
-        if modifiers.local {
+        // a `once` callback is a `local` borrow with an extra "called exactly
+        // once" obligation, so it is escape-checked exactly like a `local`
+        if modifiers.local || modifiers.once {
             locals.insert(param.name.as_str(), param.name.range());
         }
         if modifiers.once {
@@ -87,6 +92,7 @@ pub(super) fn check_local_lifetimes<'db, 'ast>(
         EscapeChecker {
             context,
             locals: &locals,
+            once: &once,
             params: &params,
             outer_names: &outer_names,
         }
@@ -125,7 +131,10 @@ impl<'ast> StatementVisitor<'ast> for OuterNameCollector<'_, 'ast> {
 
 struct EscapeChecker<'a, 'db, 'ast> {
     context: &'a InferContext<'db, 'ast>,
+    /// every borrowed parameter (`local` or `once`) → its declaration range
     locals: &'a FxHashMap<&'ast str, TextRange>,
+    /// the subset that is `once`, so a diagnostic names the right modifier
+    once: &'a FxHashMap<&'ast str, TextRange>,
     params: &'a FxHashSet<&'ast str>,
     outer_names: &'a FxHashSet<&'ast str>,
 }
@@ -153,6 +162,9 @@ impl<'ast> StatementVisitor<'ast> for EscapeChecker<'_, '_, 'ast> {
                     self.check_store(&ann.target, value);
                 }
             }
+            // `self.items += [fn]` mutates a parameter-rooted container in place,
+            // so the local reaches storage that outlives the call
+            Stmt::AugAssign(aug) => self.check_store(&aug.target, &aug.value),
             _ => {}
         }
         walk_stmt(self, stmt);
@@ -173,9 +185,10 @@ impl<'ast> EscapeChecker<'_, '_, 'ast> {
     /// when its value carries a `local`.
     fn check_store(&mut self, target: &'ast Expr, value: &'ast Expr) {
         let outlives = match target {
-            Expr::Attribute(_) | Expr::Subscript(_) => {
-                root_name(target).is_some_and(|root| self.params.contains(root))
-            }
+            // a store into an attribute / item of a parameter, or of a
+            // `global` / `nonlocal` name, reaches state that outlives the call
+            Expr::Attribute(_) | Expr::Subscript(_) => root_name(target)
+                .is_some_and(|root| self.params.contains(root) || self.outer_names.contains(root)),
             Expr::Name(name) => self.outer_names.contains(name.id.as_str()),
             _ => false,
         };
@@ -186,18 +199,23 @@ impl<'ast> EscapeChecker<'_, '_, 'ast> {
 
     fn report(&self, name: &ExprName, route: EscapeRoute) {
         let id = name.id.as_str();
+        let kind = if self.once.contains_key(id) {
+            "once"
+        } else {
+            "local"
+        };
         let Some(builder) = self.context.report_lint(&ESCAPING_LOCAL, name) else {
             return;
         };
         let mut diagnostic = builder.into_diagnostic(format_args!(
-            "local `{id}` cannot escape the call: it is {}",
+            "{kind} `{id}` cannot escape the call: it is {}",
             route.describe()
         ));
         if let Some(&decl) = self.locals.get(id) {
             diagnostic.annotate(
                 self.context
                     .secondary(decl)
-                    .message(format_args!("`{id}` is declared `local` here")),
+                    .message(format_args!("`{id}` is declared `{kind}` here")),
             );
         }
     }
@@ -230,12 +248,19 @@ fn surface_local<'ast>(
             .items
             .iter()
             .find_map(|item| surface_local(&item.value, locals)),
+        // both arms of a ternary hand the value straight on (`fn if c else other`)
+        Expr::If(if_exp) => {
+            surface_local(&if_exp.body, locals).or_else(|| surface_local(&if_exp.orelse, locals))
+        }
+        // `fn or fallback` / `a and fn` — any operand may be the surfaced value
+        Expr::BoolOp(bool_op) => bool_op.values.iter().find_map(|v| surface_local(v, locals)),
         _ => None,
     }
 }
 
 // ---------------------------------------------------------------------------
-// `local` propagation: a borrow may only be passed to another `local` parameter.
+// borrow propagation: a `local` may only be passed to another borrow, a `once`
+// only to another `once`.
 // ---------------------------------------------------------------------------
 
 /// The parameter an argument binds to.
@@ -247,11 +272,12 @@ enum ArgTarget<'a> {
     Keyword(&'a str),
 }
 
-/// basedpython: a `local` parameter is a borrow that must not escape, so it may
-/// only be passed on to another `local` parameter. Report each argument that
-/// hands a `local` to a parameter that is not itself `local`. The callee's
-/// signature must be resolvable (a plain function or bound method); an opaque
-/// callee is left alone, since we cannot see the parameter's declaration.
+/// basedpython: a borrow must not escape by being handed onward. A `local` value
+/// may only be passed to another borrow (`local` or `once`); a `once` value may
+/// only be passed to another `once` parameter (a plain `local` recipient could
+/// call it zero or many times, breaking the exactly-once count). Report each
+/// argument that violates this. The callee's signature must be resolvable (a
+/// plain function or bound method); an opaque callee is left alone.
 pub(super) fn check_local_argument_passing<'db, 'ast>(
     context: &InferContext<'db, 'ast>,
     function: &'ast ast::StmtFunctionDef,
@@ -259,10 +285,15 @@ pub(super) fn check_local_argument_passing<'db, 'ast>(
 ) {
     let source = source_text(context.db(), context.file());
     let mut locals: FxHashMap<&'ast str, TextRange> = FxHashMap::default();
+    let mut once: FxHashMap<&'ast str, TextRange> = FxHashMap::default();
     for param in &function.parameters {
         let param = param.as_parameter();
-        if parameter_modifiers(&source, param).local {
+        let modifiers = parameter_modifiers(&source, param);
+        if modifiers.local || modifiers.once {
             locals.insert(param.name.as_str(), param.name.range());
+        }
+        if modifiers.once {
+            once.insert(param.name.as_str(), param.name.range());
         }
     }
     if locals.is_empty() {
@@ -272,6 +303,7 @@ pub(super) fn check_local_argument_passing<'db, 'ast>(
     LocalArgChecker {
         context,
         locals: &locals,
+        once: &once,
         callee_type: &callee_type,
     }
     .visit_body(&function.body);
@@ -279,7 +311,10 @@ pub(super) fn check_local_argument_passing<'db, 'ast>(
 
 struct LocalArgChecker<'a, 'db, 'ast, F> {
     context: &'a InferContext<'db, 'ast>,
+    /// every borrowed parameter (`local` or `once`) → its declaration range
     locals: &'a FxHashMap<&'ast str, TextRange>,
+    /// the subset that is `once`
+    once: &'a FxHashMap<&'ast str, TextRange>,
     callee_type: &'a F,
 }
 
@@ -320,35 +355,39 @@ impl<'db, 'ast, F> LocalArgChecker<'_, 'db, 'ast, F> {
         let Some(callee) = callee else {
             return;
         };
-        if !argument_binds_to_non_local(self.context.db(), callee, target) {
+        let id = name.id.as_str();
+        let source_is_once = self.once.contains_key(id);
+        if !argument_escapes(self.context.db(), callee, target, source_is_once) {
             return;
         }
-        let id = name.id.as_str();
+        let kind = if source_is_once { "once" } else { "local" };
         let Some(builder) = self.context.report_lint(&ESCAPING_LOCAL, name) else {
             return;
         };
         let mut diagnostic = builder.into_diagnostic(format_args!(
-            "local `{id}` cannot escape the call: it is passed as a non-`local` argument"
+            "{kind} `{id}` cannot escape the call: it is passed as a non-`{kind}` argument"
         ));
         if let Some(&decl) = self.locals.get(id) {
             diagnostic.annotate(
                 self.context
                     .secondary(decl)
-                    .message(format_args!("`{id}` is declared `local` here")),
+                    .message(format_args!("`{id}` is declared `{kind}` here")),
             );
         }
     }
 }
 
-/// Whether an argument bound to `target` of `callee` reaches a parameter that is
-/// *not* `local`. `false` (leave it alone) when the callee is not a resolvable
+/// Whether a borrowed argument bound to `target` of `callee` escapes. A `once`
+/// source (`source_is_once`) escapes unless the target parameter is itself
+/// `once`; a plain `local` source escapes unless the target is a borrow (`local`
+/// or `once`). `false` (leave it alone) when the callee is not a resolvable
 /// function / bound method, or the target parameter cannot be found (`*args` past
-/// the declared parameters is an arity concern handled elsewhere), or that
-/// parameter is itself `local`.
-fn argument_binds_to_non_local<'db>(
+/// the declared parameters is an arity concern handled elsewhere).
+fn argument_escapes<'db>(
     db: &'db dyn Db,
     callee: Type<'db>,
     target: ArgTarget<'_>,
+    source_is_once: bool,
 ) -> bool {
     // resolve to a single function definition and the offset of bound parameters
     // (a bound method has already consumed `self`)
@@ -357,37 +396,51 @@ fn argument_binds_to_non_local<'db>(
         Type::BoundMethod(method) => (method.function(db), 1usize),
         _ => return false,
     };
-    let overload = function.literal(db).last_definition;
-    let file = overload.file(db);
-    let module = parsed_module(db, file).load(db);
-    let parameters = &overload.node(db, file, &module).parameters;
-    let source = source_text(db, file);
+    let modifiers = function
+        .literal(db)
+        .last_definition
+        .callback_parameter_modifiers(db);
 
-    let parameter: Option<&ast::Parameter> = match target {
+    // `Some((borrowed, once))` for the resolved parameter; `None` when the
+    // argument binds to nothing declared (wrong arity, unknown keyword)
+    let target: Option<(bool, bool)> = match target {
         ArgTarget::Positional(index) => {
             let index = index + bound;
-            let positional = parameters.posonlyargs.len() + parameters.args.len();
-            if index < parameters.posonlyargs.len() {
-                Some(&parameters.posonlyargs[index].parameter)
-            } else if index < positional {
-                Some(&parameters.args[index - parameters.posonlyargs.len()].parameter)
+            if let (Some(&borrowed), Some(&once)) = (
+                modifiers.positional_borrowed.get(index),
+                modifiers.positional_once.get(index),
+            ) {
+                Some((borrowed, once))
             } else {
                 // beyond the declared positionals, the argument feeds `*args`
-                parameters.vararg.as_deref()
+                modifiers.vararg_borrowed.zip(modifiers.vararg_once)
             }
         }
-        ArgTarget::Keyword(name) => parameters
-            .args
+        ArgTarget::Keyword(name) => modifiers
+            .keyword_names
             .iter()
-            .chain(parameters.kwonlyargs.iter())
-            .map(|param| &param.parameter)
-            .find(|param| param.name.as_str() == name)
-            .or(parameters.kwarg.as_deref()),
+            .position(|param| param.as_str() == name)
+            .map(|position| {
+                (
+                    modifiers.keyword_borrowed[position],
+                    modifiers.keyword_once[position],
+                )
+            })
+            .or(modifiers.kwarg_borrowed.zip(modifiers.kwarg_once)),
     };
 
-    // an unresolved target (wrong arity, unknown keyword) is not our concern; a
-    // parameter that is itself `local` correctly accepts the borrow
-    parameter.is_some_and(|parameter| !parameter_modifiers(&source, parameter).local)
+    // an unresolved target is not our concern; otherwise a `once` value needs a
+    // `once` recipient, a plain `local` value needs any borrow recipient
+    match target {
+        Some((borrowed, once)) => {
+            if source_is_once {
+                !once
+            } else {
+                !borrowed
+            }
+        }
+        None => false,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -798,4 +851,226 @@ fn final_declaration_range(body: &[ast::Stmt], name: &str) -> Option<TextRange> 
             && matches!(marker(&ann.annotation), Some("__let__" | "__final__")))
         .then(|| target.range())
     })
+}
+
+// ---------------------------------------------------------------------------
+// loop-variable capture: a trailing-lambda block that may outlive its loop.
+// ---------------------------------------------------------------------------
+
+/// basedpython: the type-aware complement to ruff's `B023`. A trailing-lambda
+/// block inside a loop that captures a loop variable is a late-binding trap only
+/// when the callee can defer the block past the loop; a `local` / `once` callee
+/// runs it synchronously, so those are safe. Report each captured loop variable
+/// when the callee resolves to a non-borrow function / bound method. Runs over a
+/// module or function body (`body`), with `callee_type` resolving a callee's type.
+pub(super) fn check_loop_variable_capture<'db, 'ast>(
+    context: &InferContext<'db, 'ast>,
+    body: &'ast [Stmt],
+    callee_type: impl Fn(&'ast Expr) -> Option<Type<'db>>,
+) {
+    walk_for_blocks(context, body, &FxHashSet::default(), false, &callee_type);
+}
+
+/// Walks `stmts`, tracking the names assigned by every enclosing loop, and checks
+/// each trailing-lambda block that appears inside one.
+fn walk_for_blocks<'db, 'ast, F>(
+    context: &InferContext<'db, 'ast>,
+    stmts: &'ast [Stmt],
+    loop_assigned: &FxHashSet<&'ast str>,
+    in_loop: bool,
+    callee_type: &F,
+) where
+    F: Fn(&'ast Expr) -> Option<Type<'db>>,
+{
+    for stmt in stmts {
+        match stmt {
+            Stmt::For(for_) => {
+                let mut assigned = loop_assigned.clone();
+                collect_target_names(&for_.target, &mut assigned);
+                collect_loop_assignments(&for_.body, &mut assigned);
+                walk_for_blocks(context, &for_.body, &assigned, true, callee_type);
+                walk_for_blocks(context, &for_.orelse, loop_assigned, in_loop, callee_type);
+            }
+            Stmt::While(while_) => {
+                let mut assigned = loop_assigned.clone();
+                collect_loop_assignments(&while_.body, &mut assigned);
+                walk_for_blocks(context, &while_.body, &assigned, true, callee_type);
+                walk_for_blocks(context, &while_.orelse, loop_assigned, in_loop, callee_type);
+            }
+            // a trailing-lambda block is the case we check; its own body is a
+            // separate scope, so we do not descend into it here
+            Stmt::FunctionDef(func) if func.is_trailing_lambda => {
+                if in_loop {
+                    check_block_capture(context, func, loop_assigned, callee_type);
+                }
+            }
+            // an ordinary nested function / class is its own scope
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+            Stmt::If(if_) => {
+                walk_for_blocks(context, &if_.body, loop_assigned, in_loop, callee_type);
+                for clause in &if_.elif_else_clauses {
+                    walk_for_blocks(context, &clause.body, loop_assigned, in_loop, callee_type);
+                }
+            }
+            Stmt::With(with) => {
+                walk_for_blocks(context, &with.body, loop_assigned, in_loop, callee_type);
+            }
+            Stmt::Try(try_) => {
+                walk_for_blocks(context, &try_.body, loop_assigned, in_loop, callee_type);
+                for handler in &try_.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    walk_for_blocks(context, &handler.body, loop_assigned, in_loop, callee_type);
+                }
+                walk_for_blocks(context, &try_.orelse, loop_assigned, in_loop, callee_type);
+                walk_for_blocks(
+                    context,
+                    &try_.finalbody,
+                    loop_assigned,
+                    in_loop,
+                    callee_type,
+                );
+            }
+            Stmt::Match(match_) => {
+                for case in &match_.cases {
+                    walk_for_blocks(context, &case.body, loop_assigned, in_loop, callee_type);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Reports each loop variable a trailing-lambda block captures, unless its callee
+/// confines the block (a `local` / `once` callee) or cannot be resolved.
+fn check_block_capture<'db, 'ast, F>(
+    context: &InferContext<'db, 'ast>,
+    block: &'ast ast::StmtFunctionDef,
+    loop_assigned: &FxHashSet<&'ast str>,
+    callee_type: &F,
+) where
+    F: Fn(&'ast Expr) -> Option<Type<'db>>,
+{
+    // a `local` / `once` callee runs the block synchronously (safe); an opaque
+    // callee is left alone. only a resolved non-borrow callee is a concern
+    let resolved_non_borrow = block
+        .trailing_lambda_callee()
+        .and_then(callee_type)
+        .and_then(|callee| {
+            crate::types::trailing_lambda::callee_callback_is_borrowed(context.db(), callee)
+        })
+        .is_some_and(|borrowed| !borrowed);
+    if !resolved_non_borrow {
+        return;
+    }
+
+    let mut names = CapturedNames::default();
+    names.visit_body(&block.body);
+    for name in &names.loaded {
+        let id = name.id.as_str();
+        // a name the block also binds is a block local, not a capture
+        if names.stored.iter().any(|stored| stored.id == name.id) {
+            continue;
+        }
+        if block.parameters.includes(&name.id) {
+            continue;
+        }
+        if loop_assigned.contains(id)
+            && let Some(builder) = context.report_lint(&ESCAPING_LOOP_VARIABLE, *name)
+        {
+            builder.into_diagnostic(format_args!(
+                "trailing-lambda block captures loop variable `{id}`: its callee is not \
+                 `local` / `once`, so it may run the block after the loop advances, when \
+                 `{id}` holds its final value"
+            ));
+        }
+    }
+}
+
+/// Collects the `Name` expressions loaded and stored within a body, for finding a
+/// block's captured (loaded-but-not-bound) free variables.
+#[derive(Default)]
+struct CapturedNames<'ast> {
+    loaded: Vec<&'ast ExprName>,
+    stored: Vec<&'ast ExprName>,
+}
+
+impl<'ast> Visitor<'ast> for CapturedNames<'ast> {
+    fn visit_expr(&mut self, expr: &'ast Expr) {
+        match expr {
+            Expr::Name(name) => match name.ctx {
+                ExprContext::Load => self.loaded.push(name),
+                ExprContext::Store => self.stored.push(name),
+                ExprContext::Invalid | ExprContext::Del => {}
+            },
+            _ => walk_expr(self, expr),
+        }
+    }
+}
+
+/// Inserts the bare `Name`s bound by an assignment target (`a`, `a, b`, `[a, *b]`).
+fn collect_target_names<'ast>(target: &'ast Expr, out: &mut FxHashSet<&'ast str>) {
+    match target {
+        Expr::Name(name) => {
+            out.insert(name.id.as_str());
+        }
+        Expr::Tuple(tuple) => tuple
+            .elts
+            .iter()
+            .for_each(|elt| collect_target_names(elt, out)),
+        Expr::List(list) => list
+            .elts
+            .iter()
+            .for_each(|elt| collect_target_names(elt, out)),
+        Expr::Starred(starred) => collect_target_names(&starred.value, out),
+        _ => {}
+    }
+}
+
+/// Collects every name assigned within a loop body — assignment targets and
+/// nested `for` targets — without descending into a nested scope's own bindings.
+fn collect_loop_assignments<'ast>(body: &'ast [Stmt], out: &mut FxHashSet<&'ast str>) {
+    for stmt in body {
+        match stmt {
+            // a nested scope's assignments are its own
+            Stmt::FunctionDef(_) | Stmt::ClassDef(_) => {}
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    collect_target_names(target, out);
+                }
+            }
+            Stmt::AnnAssign(ann) => collect_target_names(&ann.target, out),
+            Stmt::AugAssign(aug) => collect_target_names(&aug.target, out),
+            Stmt::For(for_) => {
+                collect_target_names(&for_.target, out);
+                collect_loop_assignments(&for_.body, out);
+                collect_loop_assignments(&for_.orelse, out);
+            }
+            Stmt::While(while_) => {
+                collect_loop_assignments(&while_.body, out);
+                collect_loop_assignments(&while_.orelse, out);
+            }
+            Stmt::If(if_) => {
+                collect_loop_assignments(&if_.body, out);
+                for clause in &if_.elif_else_clauses {
+                    collect_loop_assignments(&clause.body, out);
+                }
+            }
+            Stmt::With(with) => collect_loop_assignments(&with.body, out),
+            Stmt::Try(try_) => {
+                collect_loop_assignments(&try_.body, out);
+                for handler in &try_.handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    collect_loop_assignments(&handler.body, out);
+                }
+                collect_loop_assignments(&try_.orelse, out);
+                collect_loop_assignments(&try_.finalbody, out);
+            }
+            Stmt::Match(match_) => {
+                for case in &match_.cases {
+                    collect_loop_assignments(&case.body, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }

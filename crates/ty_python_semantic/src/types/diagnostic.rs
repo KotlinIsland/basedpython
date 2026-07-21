@@ -144,6 +144,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&ONCE_CALLED_TWICE);
     registry.register_lint(&TRAILING_LAMBDA_CONTROL_FLOW);
     registry.register_lint(&TRAILING_LAMBDA_RETURN_TYPE);
+    registry.register_lint(&ESCAPING_LOOP_VARIABLE);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&NON_OVERLAPPING_CAST);
     registry.register_lint(&OPTIONAL_OBJECT_CONVERSION);
@@ -1270,14 +1271,16 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
-    /// Checks for a trailing-lambda block whose callback is declared to return a
-    /// type other than `None`.
+    /// Checks for a trailing-lambda block whose callback's declared return type
+    /// does not accept `None`.
     ///
     /// ## Why is this bad?
     /// A trailing-lambda block lowers to a function that returns `None` (in a
     /// `once` block a `return` targets the *enclosing* function, not the block).
-    /// A callback declared to return anything else can never be satisfied by the
-    /// block. Callbacks with non-`None` return types are not yet supported.
+    /// A callback whose return type does not accept `None` — `int`, `str`, … —
+    /// can never be satisfied by the block. A return type that merely accepts
+    /// `None` (`None` itself, `int | None`, `object`) is fine; other non-`None`
+    /// return types are not yet supported.
     ///
     /// ## Example
     ///
@@ -1289,7 +1292,42 @@ declare_lint! {
     ///     print(it)
     /// ```
     pub(crate) static TRAILING_LAMBDA_RETURN_TYPE = {
-        summary: "detects a trailing-lambda callback whose return type is not `None`",
+        summary: "detects a trailing-lambda callback whose return type does not accept `None`",
+        status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a trailing-lambda block inside a loop that captures a loop
+    /// variable while its callee's callback parameter is **not** a borrow
+    /// (`local` / `once`).
+    ///
+    /// ## Why is this bad?
+    /// A trailing-lambda block lowers to a closure that captures the loop variable
+    /// by reference. If the callee is a borrow (`local` / `once`), it runs the
+    /// block synchronously — the variable still holds this iteration's value. But
+    /// a non-borrow callee may store the block and call it after the loop has
+    /// advanced, at which point every deferred call sees the loop variable's final
+    /// value — the classic late-binding trap.
+    ///
+    /// This is the type-aware complement to ruff's syntactic `B023`, which cannot
+    /// resolve the callee's marker. An opaque callee (not a resolvable function or
+    /// bound method) is left alone.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def defer(fn: () -> None):  # not a borrow — may keep `fn`
+    ///     _saved.append(fn)
+    ///
+    /// for x in [1, 2, 3]:
+    ///     defer:
+    ///         print(x)  # error: captures loop variable `x`
+    /// ```
+    pub(crate) static ESCAPING_LOOP_VARIABLE = {
+        summary: "detects a trailing-lambda block capturing a loop variable with a non-borrow callee",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
     }

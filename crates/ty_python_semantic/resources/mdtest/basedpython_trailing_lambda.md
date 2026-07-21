@@ -175,6 +175,66 @@ def main():
     reveal_type(a)  # revealed: 1 | 2
 ```
 
+## a keyword-only `once` callback is recognised
+
+The block binds the callee's last declared parameter even when it is keyword-only, so the `once`
+marker there is still honoured — the write narrows definitely rather than unioning.
+
+```by
+from typing_extensions import reveal_type
+
+def run(items: list[int], *, once fn: (int) -> None):
+    fn(items[0])
+
+def main():
+    a: int = 1
+    run([1]):
+        a = 2
+    reveal_type(a)  # revealed: 2
+```
+
+## a `return` in a keyword-only `once` block is allowed
+
+Because the keyword-only callback is `once`, its block runs exactly once, so a `return` targeting
+the enclosing function is permitted — no `trailing-lambda-control-flow`.
+
+```by
+def run(items: list[int], *, once fn: (int) -> None):
+    fn(items[0])
+
+def find(items: list[int]) -> int:
+    run(items):
+        return it
+    return -1
+```
+
+## an imported `once` callee narrows conservatively
+
+The `once`-ness driving write-back narrowing is resolved syntactically while the semantic index is
+built, before imports are followed, so an *imported* `once` callee reads as non-`once` here and the
+write unions. This is sound (the union is wider); the runtime lowering, which runs after inference,
+still honours the marker.
+
+`callee.by`:
+
+```by
+def run(once fn: () -> None):
+    fn()
+```
+
+`main.by`:
+
+```by
+from typing_extensions import reveal_type
+from callee import run
+
+def main():
+    a: int = 1
+    run:
+        a = 2
+    reveal_type(a)  # revealed: 1 | 2
+```
+
 ## a module-level binding is captured the same way
 
 ```by

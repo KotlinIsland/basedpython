@@ -88,6 +88,50 @@ def f(local fn: () -> None) -> object:
     return [fn]  # error: [escaping-local]
 ```
 
+## returning a local through a ternary escapes
+
+Both arms of a conditional expression hand the value straight to the caller.
+
+```by
+def f(local fn: () -> None, c: bool) -> object:
+    return fn if c else None  # error: [escaping-local]
+```
+
+## returning a local through a boolean escapes
+
+```by
+def f(local fn: () -> None, fallback: object) -> object:
+    return fn or fallback  # error: [escaping-local]
+```
+
+## augmented-assigning a local into a parameter's attribute escapes
+
+`self.items += [fn]` mutates a parameter-rooted container in place, so the local reaches storage
+that outlives the call.
+
+```by
+class Registry:
+    items: list[object]
+
+    def add(self, local fn: () -> None):
+        self.items += [fn]  # error: [escaping-local]
+```
+
+## storing a local on a global's attribute escapes
+
+A store into an attribute of a `global` name outlives the call just as a bare store does.
+
+```by
+class Box:
+    fn: object = None
+
+_box: Box = Box()
+
+def f(local fn: () -> None):
+    global _box
+    _box.fn = fn  # error: [escaping-local]
+```
+
 ## storing a local on `self` escapes
 
 ```by

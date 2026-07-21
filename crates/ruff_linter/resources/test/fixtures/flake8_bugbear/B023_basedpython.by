@@ -1,0 +1,18 @@
+def run(fn: () -> None):
+    fn()
+
+
+# OK: a trailing-lambda block (`run:` + suite) lowers to a closure, but whether
+# it can outlive the loop depends on the callee's `local` / `once` marker — type
+# information this syntactic rule cannot resolve. It is left to the type-aware ty
+# lint, so B023 does not fire here even though `x` is a loop variable.
+for x in [1, 2, 3]:
+    run:
+        print(x)
+
+
+# Not OK: a genuine closure captured into a list is the real late-binding bug
+# B023 exists to catch, and it is still flagged.
+fns = []
+for x in [1, 2, 3]:
+    fns.append(lambda: x)

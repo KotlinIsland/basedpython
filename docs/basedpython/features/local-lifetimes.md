@@ -1,8 +1,9 @@
 # local lifetimes
 
 > **status: partially implemented.** `local` and `once` parameters parse, lower
-> to clean python, and are enforced by ty today — `escaping-local`,
-> `once-not-called`, and `once-called-twice`. still design sketches: the opt-in
+> to clean python, and are enforced by ty today — `escaping-local` (with `once`
+> treated as a borrow), `once-not-called`, `once-called-twice`, and
+> `escaping-loop-variable`. still design sketches: the opt-in
 > `once` runtime guard, `local` inside a callable type (`(local ) -> None`), and
 > the `T_{x}` lifetime notation. those sections are marked below
 
@@ -193,10 +194,35 @@ the static check counts direct calls of `commit` with their control-flow
 context, and reports two failures:
 
 - `once-not-called` — the callback is never called (it is not mentioned anywhere
-    in the body). a callback that is merely passed on is left alone, since the
-    receiver might call it
+    in the body). a callback that is passed on to another `once` parameter is
+    left alone, since that receiver must call it exactly once
 - `once-called-twice` — two **unconditional** calls, or a call inside a **loop**
     (which may run any number of times)
+
+`once` is a **borrow**: a callback you can only guarantee to run exactly once is
+one you have not let escape your control. so `once` is `local` plus the count
+obligation — it is escape-checked exactly like a `local` (returning it, storing
+it, or binding it to a `global` is `escaping-local`), and it may only be passed
+on to another **`once`** parameter. handing it to a plain `local` (which could
+call it zero or many times) or a non-borrow parameter would drop the guarantee,
+so both are rejected:
+
+```by
+def keep(once cb: () -> None): cb()
+def borrow(local cb: () -> None): cb()
+
+def f(once done: () -> None):
+    keep(done)      # ok — the obligation is preserved
+    borrow(done)    # error[escaping-local] — a `local` need not call it once
+    return done     # error[escaping-local] — cannot escape at all
+```
+
+because a `once` block is confined to its call, it is also safe to capture a loop
+variable in a [trailing-lambda block](trailing-lambdas.md) bound to a `once` (or
+`local`) callee — the block runs synchronously, so the variable still holds this
+iteration's value. a block bound to a non-borrow callee that captures a loop
+variable is the late-binding trap, reported as `escaping-loop-variable` (the
+type-aware companion to ruff's `B023`)
 
 the check is deliberately conservative — it flags only what it can prove, so it
 never fires on correct code. two calls in mutually-exclusive branches are one
@@ -294,8 +320,9 @@ the visibility and binding modifiers:
     parameter inside a [callable type](callable.md) (`(local T) -> R`,
     `(local ) -> R`)
 - `once` precedes a callback parameter (`def f(once fn: () -> R)`). it is only
-    meaningful on a callable-typed parameter — `once` on a non-callable is
-    `once-on-non-callable`
+    meaningful on a callable-typed parameter; a planned `once-on-non-callable`
+    check will flag `once` on a non-callable (today such a parameter simply reads
+    as never-called)
 - both may apply to one parameter as `once local fn` when a callback both must
     run exactly once and must not itself be retained
 - `T_{x}` is a postfix on any type expression, where `x` names a parameter (or
@@ -349,21 +376,25 @@ type is identical either way
 
 ## limits
 
-the escape analysis is intraprocedural and conservative. it reasons within one
-function body and across signatures, never by inlining a callee — a function's
-contract is what its `local` / `T_{x}` annotations say, not what its body
-happens to do. two consequences:
+the escape analysis is intraprocedural and **best-effort** — it reasons within
+one function body and across signatures, never by inlining a callee. it flags an
+escape only where it can see the local reach the exit directly: a bare name (or
+one held in a surface container / ternary / boolean) that is returned, stored on
+a parameter-rooted or `global` / `nonlocal` target, or handed to a resolvable
+non-`local` parameter. that leaves it biased toward **false negatives**, not
+false positives — three consequences:
 
 - an **unannotated** return is assumed free-standing. `def f(local x: R) -> V`
     with no `_{x}` is taken at its word — if the body actually returns a view of
     `x`, that is a missing annotation, reported at the `return` inside `f`, not
     at `f`'s call sites
-- aliasing through **opaque data structures** is approximated. a value built
-    from a local is treated as carrying the local's lifetime; when the checker
-    cannot follow the aliasing it errs toward flagging, since a spurious
-    `escaping-local` is safe-but-annoying while a missed one is unsound. the
-    escape hatch is an explicit copy (which severs the tie) or a suppression
-    comment
+- a local **captured by a closure** (`return lambda: fn()`) or routed through an
+    **opaque call** that retains it is not currently detected — the `return   lambda: fn()` row above is the intended contract, not yet enforced. tightening
+    these toward soundness is future work; the escape hatch meanwhile is an
+    explicit copy (which severs the tie) or a suppression comment
+- an escape through a callee is caught only when the callee's signature is
+    **resolvable**. `schedule(fn)` is flagged when `schedule`'s parameter can be
+    inspected and is not `local`; an opaque callee is left alone
 
 `once` is checked on paths that **return normally**. a path that propagates an
 exception is exempt from the static count — any line in python may raise, so

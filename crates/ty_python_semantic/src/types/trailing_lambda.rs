@@ -7,9 +7,6 @@
 //! are defaulted. the implicit `it` parameter takes its type from that
 //! parameter's declared callable type
 
-use ruff_db::parsed::parsed_module;
-use ruff_db::source::source_text;
-use ruff_python_ast::helpers::parameter_modifiers;
 use ruff_python_ast::name::Name;
 
 use crate::Db;
@@ -22,20 +19,40 @@ use crate::types::soundness::single_signature;
 ///
 /// A `once` block runs exactly once (`with`-like); a non-`once` one runs an
 /// unknown number of times, which restricts what it may do. Resolving the marker
-/// means reaching the callee's function definition to read its source span, so
-/// this is conservatively `false` for anything not a single function literal (a
-/// callable-typed value carries no such marker).
+/// means reaching the callee's function definition, so this is `false` for
+/// anything but a function literal or a bound method (a callable-typed value
+/// carries no such marker).
 pub(crate) fn callee_callback_is_once<'db>(db: &'db dyn Db, callee: Type<'db>) -> bool {
-    let Type::FunctionLiteral(function) = callee else {
-        return false;
+    let function = match callee {
+        Type::FunctionLiteral(function) => function,
+        Type::BoundMethod(method) => method.function(db),
+        _ => return false,
     };
-    let overload = function.literal(db).last_definition;
-    let file = overload.file(db);
-    let module = parsed_module(db, file).load(db);
-    let Some(last) = overload.node(db, file, &module).parameters.args.last() else {
-        return false;
+    function
+        .literal(db)
+        .last_definition
+        .callback_parameter_modifiers(db)
+        .last_bound_once
+}
+
+/// basedpython: whether the callee's callback parameter is a borrow (`local` or
+/// `once`) — the block is then confined to the call, so a captured loop variable
+/// cannot dangle. `Some(true)` = borrowed, `Some(false)` = resolved but not a
+/// borrow, `None` = the callee is not a resolvable function / bound method (an
+/// opaque callee is left alone, like elsewhere in the borrow analysis).
+pub(crate) fn callee_callback_is_borrowed<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<bool> {
+    let function = match callee {
+        Type::FunctionLiteral(function) => function,
+        Type::BoundMethod(method) => method.function(db),
+        _ => return None,
     };
-    parameter_modifiers(&source_text(db, file), &last.parameter).once
+    Some(
+        function
+            .literal(db)
+            .last_definition
+            .callback_parameter_modifiers(db)
+            .last_bound_borrowed,
+    )
 }
 
 /// the callee's last declared parameter, when the callee has a single

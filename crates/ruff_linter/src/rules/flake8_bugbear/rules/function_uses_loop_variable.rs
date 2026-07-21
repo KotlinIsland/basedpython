@@ -87,8 +87,23 @@ impl<'a> Visitor<'a> for SuspiciousVariablesVisitor<'a> {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
         match stmt {
             Stmt::FunctionDef(ast::StmtFunctionDef {
-                parameters, body, ..
+                parameters,
+                body,
+                is_trailing_lambda,
+                ..
             }) => {
+                // basedpython: a trailing-lambda block (`f:` + suite) lowers to a
+                // closure, but whether it can outlive the loop depends on the
+                // callee's `local` / `once` marker — type information this
+                // syntactic rule cannot resolve. The type-aware ty lint
+                // `escaping-loop-variable` handles it precisely (suppressing the
+                // safe `local` / `once` case and flagging the rest); skip here so
+                // this rule does not produce a false positive on the common
+                // synchronous case.
+                if *is_trailing_lambda {
+                    return;
+                }
+
                 // Collect all loaded variable names.
                 let mut visitor = LoadedNamesVisitor::default();
                 visitor.visit_body(body);
