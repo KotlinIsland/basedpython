@@ -1866,6 +1866,9 @@ pub(crate) fn extract_unpacked_typed_dict_from_value_type<'db>(
         Type::Overlapping(overlapping) => {
             extract_unpacked_typed_dict_from_value_type(db, overlapping.value_type(db))
         }
+        Type::Deferred(deferred) => {
+            extract_unpacked_typed_dict_from_value_type(db, deferred.reduced(db))
+        }
         // All other types cannot contain a TypedDict
         Type::Dynamic(_)
         | Type::Divergent(_)

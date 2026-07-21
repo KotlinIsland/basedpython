@@ -216,7 +216,9 @@ impl<'db> Type<'db> {
             | Type::TypeGuard(_)
             | Type::TypeForm(_)
             // parameter-only marker; a value never actually has this type
-            | Type::Overlapping(_) => Truthiness::Ambiguous,
+            | Type::Overlapping(_)
+            // a deferred operation is never itself a runtime value
+            | Type::Deferred(_) => Truthiness::Ambiguous,
 
             Type::TypedDict(td) => {
                 if td.items(db).values().any(TypedDictField::is_required) {

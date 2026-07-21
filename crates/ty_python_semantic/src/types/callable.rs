@@ -89,6 +89,10 @@ impl<'db> Type<'db> {
                 .value_type(db)
                 .try_upcast_to_callable_with_policy_and_context(db, policy, context),
 
+            Type::Deferred(deferred) => deferred
+                .reduced(db)
+                .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+
             Type::Dynamic(_) => Some(CallableTypes::one(CallableType::function_like(
                 db,
                 Signature::dynamic(self),

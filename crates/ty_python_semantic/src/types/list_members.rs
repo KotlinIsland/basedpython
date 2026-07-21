@@ -167,6 +167,9 @@ impl<'db> AllMembers<'db> {
             Type::Overlapping(overlapping) => {
                 self.extend_with_type(db, overlapping.value_type(db));
             }
+            Type::Deferred(deferred) => {
+                self.extend_with_type(db, deferred.reduced(db));
+            }
             Type::Union(union) => {
                 fn is_dynamic(db: &dyn Db, ty: Type<'_>) -> bool {
                     // We don't need to use recursion here because

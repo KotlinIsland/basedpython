@@ -1470,6 +1470,13 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                     .fmt_detailed(f)?;
                 f.write_char(']')
             }
+            // an unspecialized deferred operation displays as its reduced form (e.g.
+            // `Array[Dim + 1]` shows as `Array[int]`); once specialized it has folded
+            // to a concrete type and this arm is not reached
+            Type::Deferred(deferred) => deferred
+                .reduced(self.db)
+                .display_with(self.db, self.settings.clone())
+                .fmt_detailed(f),
             Type::TypedDict(TypedDictType::Class(defining_class)) => match defining_class {
                 ClassType::NonGeneric(class) => class
                     .display_with(self.db, self.settings.clone())

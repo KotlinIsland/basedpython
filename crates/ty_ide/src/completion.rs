@@ -3115,7 +3115,9 @@ fn completion_kind_from_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Comp
             | Type::TypeGuard(_)
             | Type::TypeForm(_)
             // parameter-only marker; never actually a completion target
-            | Type::Overlapping(_) => {
+            | Type::Overlapping(_)
+            // a deferred type-level operation, treated as a value
+            | Type::Deferred(_) => {
                 CompletionKind::Value
             }
             Type::ProtocolInstance(_) => CompletionKind::Interface,
