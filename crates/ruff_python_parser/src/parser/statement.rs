@@ -146,12 +146,15 @@ fn synth_self_parameter(at: TextSize) -> ast::ParameterWithDefault {
     }
 }
 
-/// Builds a synthetic marker [`Decorator`](ast::Decorator) (a zero-width `Name`
-/// with [`ExprContext::Invalid`]) used to tag a based-enum variant `ClassDef`
-/// with its kind. The lowering phase reads the marker; it never appears in
-/// output and is hidden from name resolution.
-fn synthetic_variant_decorator(marker: &'static str, at: TextSize) -> ast::Decorator {
-    let range = TextRange::empty(at);
+/// Builds a synthetic marker [`Decorator`](ast::Decorator) (a `Name` with
+/// [`ExprContext::Invalid`]) used to tag a based-enum variant `ClassDef` with
+/// its kind. The lowering phase reads the marker; it never appears in output
+/// and is hidden from name resolution.
+///
+/// `range` spans the `case` keyword for the first variant on a line (so the
+/// language server can highlight it, mirroring the `enum_def` marker) and is
+/// zero-width at the variant name for the rest.
+fn synthetic_variant_decorator(marker: &'static str, range: TextRange) -> ast::Decorator {
     ast::Decorator {
         expression: Expr::Name(ast::ExprName {
             id: Name::new_static(marker),
@@ -1362,12 +1365,20 @@ impl<'src> Parser<'src> {
     ///
     /// [`ClassDef`]: ast::StmtClassDef
     fn parse_case_variants(&mut self, statements: &mut Suite) {
+        let case_start = self.current_token_range().start();
         self.bump(TokenKind::Case);
+        // the first variant on a `case` line owns the keyword range; the rest
+        // get a zero-width marker at their name
+        let mut keyword_start = Some(case_start);
         loop {
             let start = self.node_start();
             let name = self.parse_identifier();
+            let marker_range = match keyword_start.take() {
+                Some(kw_start) => TextRange::new(kw_start, name.range.start()),
+                None => TextRange::empty(name.range.start()),
+            };
             let stmt = match self.current_token_kind() {
-                TokenKind::Lpar => self.parse_tuple_variant(start, name),
+                TokenKind::Lpar => self.parse_tuple_variant(start, name, marker_range),
                 _ => {
                     // a brace payload would otherwise parse as a stray dict
                     // display after a unit variant, surfacing as a confusing
@@ -1382,7 +1393,7 @@ impl<'src> Parser<'src> {
                         );
                         self.skip_brace_group();
                     }
-                    let decorator = synthetic_variant_decorator("variant_unit", name.range.start());
+                    let decorator = synthetic_variant_decorator("variant_unit", marker_range);
                     Stmt::ClassDef(ast::StmtClassDef {
                         range: self.node_range(start),
                         decorator_list: vec![decorator].into(),
@@ -1425,7 +1436,12 @@ impl<'src> Parser<'src> {
     /// `Node(T, Tree[T])` — positional construction. Fields may be named
     /// (`radius: float`) or anonymous (`T`), in which case they take the
     /// synthetic names `_0`, `_1`, …
-    fn parse_tuple_variant(&mut self, start: TextSize, name: ast::Identifier) -> Stmt {
+    fn parse_tuple_variant(
+        &mut self,
+        start: TextSize,
+        name: ast::Identifier,
+        marker_range: TextRange,
+    ) -> Stmt {
         self.bump(TokenKind::Lpar);
         let mut body = Suite::new();
         let mut index = 0usize;
@@ -1461,7 +1477,7 @@ impl<'src> Parser<'src> {
             }
         }
         self.expect(TokenKind::Rpar);
-        let decorator = synthetic_variant_decorator("variant_tuple", name.range.start());
+        let decorator = synthetic_variant_decorator("variant_tuple", marker_range);
         Stmt::ClassDef(ast::StmtClassDef {
             range: self.node_range(start),
             decorator_list: vec![decorator].into(),
