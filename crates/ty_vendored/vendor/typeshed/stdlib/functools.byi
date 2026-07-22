@@ -75,7 +75,7 @@ class _CacheParameters(TypedDict):
     maxsize: int
     typed: bool
 
-final class _lru_cache_wrapper[out Element]:
+final class _lru_cache_wrapper[Fn: (...) -> object]:
     """Create a cached callable that wraps another function.
 
     user_function:      the function being cached
@@ -91,9 +91,12 @@ final class _lru_cache_wrapper[out Element]:
                             hits misses currsize maxsize
     """
 
-    __wrapped__: (...) -> Element
-    def __call__(self, *args: Hashable, **kwargs: Hashable) -> Element:
+    __wrapped__: Fn
+    def __call__[**P, R](self: _lru_cache_wrapper[(**P) -> R], *args: P.args, **kwargs: P.kwargs) -> R:
         """Call self as a function."""
+
+    def __get__(self, instance: None, owner: type | None = None) -> Self
+    def __get__[S, **P, R](self: _lru_cache_wrapper[(S, **P) -> R], instance: S, owner: type | None = None) -> _lru_cache_wrapper[(**P) -> R]
 
     def cache_info(self) -> _CacheInfo:
         """Report cache statistics"""
@@ -102,14 +105,14 @@ final class _lru_cache_wrapper[out Element]:
         """Clear the cache and cache statistics"""
 
     def cache_parameters(self) -> _CacheParameters
-    def __copy__(self) -> _lru_cache_wrapper[Element]
-    def __deepcopy__(self, memo: dynamic, /) -> _lru_cache_wrapper[Element]
+    def __copy__(self) -> Self
+    def __deepcopy__(self, memo: dynamic, /) -> Self
 
     # as with ``Callable``, we'll assume that these attributes exist
     __name__: str
     __qualname__: str
 
-def lru_cache[Element](maxsize: int | None = 128, typed: bool = False) -> ((...) -> Element) -> _lru_cache_wrapper[Element]:
+def lru_cache[Fn: (...) -> object](maxsize: int | None = 128, typed: bool = False) -> (Fn) -> _lru_cache_wrapper[Fn]:
     """Least-recently-used cache decorator.
 
     If *maxsize* is set to None, the LRU features are disabled and the cache
@@ -129,7 +132,7 @@ def lru_cache[Element](maxsize: int | None = 128, typed: bool = False) -> ((...)
     See:  https://en.wikipedia.org/wiki/Cache_replacement_policies#Least_recently_used_(LRU)
 
     """
-def lru_cache[Element](maxsize: (...) -> Element, typed: bool = False) -> _lru_cache_wrapper[Element]
+def lru_cache[Fn: (...) -> object](maxsize: Fn, typed: bool = False) -> _lru_cache_wrapper[Fn]
 
 if sys.version_info >= (3, 14):
     final WRAPPER_ASSIGNMENTS: ("__module__", "__name__", "__qualname__", "__doc__", "__annotate__", "__type_params__")
@@ -382,7 +385,7 @@ class cached_property[out Element]:
         is (int,).
         """
 
-def cache[Element](user_function: (...) -> Element, /) -> _lru_cache_wrapper[Element]:
+def cache[Fn: (...) -> object](user_function: Fn, /) -> _lru_cache_wrapper[Fn]:
     """Simple lightweight unbounded cache.  Sometimes called "memoize"."""
 
 def _make_key(
