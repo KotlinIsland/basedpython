@@ -5067,6 +5067,35 @@ abstract class B:
     }
 
     #[test]
+    fn semantic_tokens_enum_case_keywords() {
+        // `enum class` highlights through its wide `enum_def` marker; each `case`
+        // line highlights through the keyword range carried on its first
+        // variant's marker (a second variant on the same line shares it and
+        // emits no `case` token)
+        let test = SemanticTokenTest::new_by(
+            "
+enum class Color:
+    case Red, Green
+    case Circle(radius: int)
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "enum class" @ 1..11: Keyword
+        "Color" @ 12..17: Class [definition]
+        "case" @ 23..27: Keyword
+        "Red" @ 28..31: Class [definition]
+        "Green" @ 33..38: Class [definition]
+        "case" @ 43..47: Keyword
+        "Circle" @ 48..54: Class [definition]
+        "radius" @ 55..61: Variable [definition]
+        "int" @ 63..66: Class
+        "#);
+    }
+
+    #[test]
     fn semantic_tokens_dynamic_keyword() {
         let test = SemanticTokenTest::new_by(
             "
