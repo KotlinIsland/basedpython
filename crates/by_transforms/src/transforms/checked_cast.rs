@@ -38,8 +38,10 @@ use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
-use super::parametric_is::{PARAMETRIC_IS_RUNTIME, variance_tuple};
-use crate::type_info::{SoundnessCheck, TypeInfo};
+use super::parametric_is::{
+    PARAMETRIC_IS_RUNTIME, PROTOCOL_IS_RUNTIME, protocol_members_literal, variance_tuple,
+};
+use crate::type_info::{CastCheck, SoundnessCheck, TypeInfo};
 
 // `<value> cast <type>` with checks on: verify at runtime, raise on mismatch.
 const CHECKED_CAST_HELPER: &str = "\
@@ -87,6 +89,34 @@ def _try_cast_p(_v, _alias, _variances):
     return _v
 ";
 
+// structural forms, for a *protocol* target whose data members are checked
+// against the value's reified class annotations (a protocol has no
+// `__orig_class__` to probe). `_members` is the list `_by_protocol_is` takes;
+// reuses `_by_protocol_is` from `PROTOCOL_IS_RUNTIME`
+const CHECKED_CAST_PROTO_HELPER: &str = "\
+def _checked_cast_proto(_v, _members):
+    if not _by_protocol_is(_v, _members):
+        raise TypeError(
+            f\"cast failed: {type(_v).__name__} does not structurally match the protocol\"
+        )
+    return _v
+";
+
+const TRY_CAST_PROTO_HELPER: &str = "\
+def _try_cast_proto(_v, _members):
+    return _v if _by_protocol_is(_v, _members) else None
+";
+
+/// how deeply a checked cast validates: the shallow `isinstance` target, a deep
+/// `__orig_class__` probe (user generic), or a structural annotation check
+/// (protocol)
+#[derive(Clone, Copy)]
+enum Depth {
+    Shallow,
+    Parametric,
+    Protocol,
+}
+
 /// the runtime helper a `cast` / `cast?` occurrence lowers to
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Helper {
@@ -98,19 +128,32 @@ enum Helper {
     CheckedParametric,
     /// `_try_cast_p(value, alias, variances)` — deep, yields `None`
     TryParametric,
+    /// `_checked_cast_proto(value, members)` — structural, raises on mismatch
+    CheckedProtocol,
+    /// `_try_cast_proto(value, members)` — structural, yields `None`
+    TryProtocol,
     /// `cast(type, value)` — unchecked `typing.cast`
     TypingCast,
 }
 
 impl Helper {
-    /// the shallow or deep variant of this raising/yielding pair
-    fn with_depth(self, parametric: bool) -> Self {
-        match (self, parametric) {
-            (Self::Checked | Self::CheckedParametric, true) => Self::CheckedParametric,
-            (Self::Checked | Self::CheckedParametric, false) => Self::Checked,
-            (Self::Try | Self::TryParametric, true) => Self::TryParametric,
-            (Self::Try | Self::TryParametric, false) => Self::Try,
-            (Self::TypingCast, _) => Self::TypingCast,
+    /// whether this helper yields `None` on mismatch (the `cast?` family) rather
+    /// than raising (the `cast` family)
+    fn is_yielding(self) -> bool {
+        matches!(self, Self::Try | Self::TryParametric | Self::TryProtocol)
+    }
+
+    /// the variant of this raising/yielding pair at the given depth. only ever
+    /// called on the checked (`Checked` / `Try`) helpers — `TypingCast` never
+    /// reaches a depth decision
+    fn at_depth(self, depth: Depth) -> Self {
+        match (depth, self.is_yielding()) {
+            (Depth::Shallow, false) => Self::Checked,
+            (Depth::Shallow, true) => Self::Try,
+            (Depth::Parametric, false) => Self::CheckedParametric,
+            (Depth::Parametric, true) => Self::TryParametric,
+            (Depth::Protocol, false) => Self::CheckedProtocol,
+            (Depth::Protocol, true) => Self::TryProtocol,
         }
     }
 
@@ -120,6 +163,8 @@ impl Helper {
             Self::Try => "_try_cast(",
             Self::CheckedParametric => "_checked_cast_p(",
             Self::TryParametric => "_try_cast_p(",
+            Self::CheckedProtocol => "_checked_cast_proto(",
+            Self::TryProtocol => "_try_cast_proto(",
             Self::TypingCast => "cast(",
         }
     }
@@ -131,6 +176,8 @@ impl Helper {
             Self::Try => TRY_CAST_HELPER,
             Self::CheckedParametric => CHECKED_CAST_P_HELPER,
             Self::TryParametric => TRY_CAST_P_HELPER,
+            Self::CheckedProtocol => CHECKED_CAST_PROTO_HELPER,
+            Self::TryProtocol => TRY_CAST_PROTO_HELPER,
             Self::TypingCast => "from typing import cast",
         }
     }
@@ -138,6 +185,11 @@ impl Helper {
     /// deep helpers call `_parametric_is`, so they pull in its runtime too
     fn is_parametric(self) -> bool {
         matches!(self, Self::CheckedParametric | Self::TryParametric)
+    }
+
+    /// structural helpers call `_by_protocol_is`, so they pull in its runtime too
+    fn is_protocol(self) -> bool {
+        matches!(self, Self::CheckedProtocol | Self::TryProtocol)
     }
 }
 
@@ -170,18 +222,25 @@ impl<'a> CastLower<'a> {
     /// through unchanged
     fn target(&self, type_arg: &Expr, helper: Helper) -> (Helper, Vec<Fragment>) {
         match self.types.cast_check_plan(type_arg) {
-            Some(SoundnessCheck::Parametric { alias, variances }) => (
-                helper.with_depth(true),
+            Some(CastCheck::Kind(SoundnessCheck::Parametric { alias, variances })) => (
+                helper.at_depth(Depth::Parametric),
                 vec![Fragment::Lit(format!(
                     "{alias}, {}",
                     variance_tuple(&variances)
                 ))],
             ),
-            Some(SoundnessCheck::Isinstance(target)) => {
-                (helper.with_depth(false), vec![Fragment::Lit(target)])
+            Some(CastCheck::Kind(SoundnessCheck::Isinstance(target))) => {
+                (helper.at_depth(Depth::Shallow), vec![Fragment::Lit(target)])
             }
-            None => (
-                helper.with_depth(false),
+            Some(CastCheck::Protocol { members }) => (
+                helper.at_depth(Depth::Protocol),
+                vec![Fragment::Lit(protocol_members_literal(&members))],
+            ),
+            // `Unchecked` never reaches here — `visit_expr` degrades an
+            // unverifiable-protocol target to `typing.cast` before emit — so a
+            // target with no faithful check is a plain shallow passthrough
+            Some(CastCheck::Unchecked) | None => (
+                helper.at_depth(Depth::Shallow),
                 vec![Fragment::Src(type_arg.range())],
             ),
         }
@@ -226,8 +285,12 @@ impl<'ast> Visitor<'ast> for CastLower<'_> {
             // a statically-proven upcast needs no runtime check — the probe
             // would always pass, and for a subscripted protocol or builtin
             // target it cannot even run — so it degrades to a plain
-            // `typing.cast`, exactly as a disabled checked cast does
-            let redundant = self.types.cast_is_redundant(value_arg, type_arg);
+            // `typing.cast`, exactly as a disabled checked cast does. a
+            // method-bearing protocol target has no faithful runtime check at
+            // all, so it degrades the same way rather than emit an `isinstance`
+            // against the protocol (a runtime error)
+            let redundant = self.types.cast_is_redundant(value_arg, type_arg)
+                || self.types.cast_target_is_unverifiable(type_arg);
             let helper = if call.is_checked_cast && !redundant {
                 Helper::Try
             } else if self.checked && !redundant {
@@ -260,9 +323,13 @@ impl TypeAwarePass for CheckedCastPass {
         if inner.edits.is_empty() {
             return;
         }
-        // `_parametric_is` must precede the deep helpers that call it
+        // `_parametric_is` / `_by_protocol_is` must precede the helpers that
+        // call them
         if inner.used.iter().any(|helper| helper.is_parametric()) {
             ctx.required_imports.push(PARAMETRIC_IS_RUNTIME.to_owned());
+        }
+        if inner.used.iter().any(|helper| helper.is_protocol()) {
+            ctx.required_imports.push(PROTOCOL_IS_RUNTIME.to_owned());
         }
         for helper in &inner.used {
             ctx.required_imports.push(helper.runtime().to_owned());
@@ -490,6 +557,71 @@ mod tests {
     fn non_redundant_cast_keeps_probe() {
         let out = check("def f(a: object):\n    b = a cast list[int]\n");
         assert!(out.contains("b = _checked_cast(a, list)"), "got:\n{out}");
+    }
+
+    /// a data-member protocol target has no `__orig_class__` to probe, but its
+    /// members are checked structurally against the value's reified annotations
+    #[test]
+    fn data_member_protocol_cast_checks_structurally() {
+        let out = check(
+            "from typing import Protocol\n\nclass A[T](Protocol):\n    a: T\n\ndef f(x: object):\n    b = x cast A[int]\n",
+        );
+        assert!(
+            out.contains("b = _checked_cast_proto(x, [(\"a\", int, 0)])"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("def _checked_cast_proto"), "got:\n{out}");
+        // the structural helper calls `_by_protocol_is`, so its runtime comes along
+        assert!(out.contains("def _by_protocol_is"), "got:\n{out}");
+    }
+
+    #[test]
+    fn data_member_protocol_try_cast_checks_structurally() {
+        let out = check(
+            "from typing import Protocol\n\nclass A[T](Protocol):\n    a: T\n\ndef f(x: object):\n    b = x cast? A[bool]\n",
+        );
+        assert!(
+            out.contains("b = _try_cast_proto(x, [(\"a\", bool, 0)])"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("def _try_cast_proto"), "got:\n{out}");
+    }
+
+    /// a method-bearing protocol has no runtime residue — an `isinstance`
+    /// against it would raise — so the checked cast degrades to `typing.cast`
+    #[test]
+    fn method_protocol_cast_degrades_to_typing_cast() {
+        let out = check(
+            "from typing import Protocol\n\nclass M[T](Protocol):\n    def get(self) -> T: ...\n\ndef f(x: object):\n    b = x cast M[int]\n",
+        );
+        assert!(out.contains("b = cast(M[int], x)"), "got:\n{out}");
+        assert!(
+            !out.contains("_checked_cast") && !out.contains("_by_protocol_is"),
+            "no runtime probe against a method protocol:\n{out}"
+        );
+    }
+
+    /// the same method-protocol degradation applies to `cast?`
+    #[test]
+    fn method_protocol_try_cast_degrades_to_typing_cast() {
+        let out = check(
+            "from typing import Protocol\n\nclass M[T](Protocol):\n    def get(self) -> T: ...\n\ndef f(x: object):\n    b = x cast? M[int]\n",
+        );
+        assert!(out.contains("b = cast(M[int], x)"), "got:\n{out}");
+        assert!(!out.contains("_try_cast"), "no probe:\n{out}");
+    }
+
+    /// an unchecked config keeps a data-member protocol cast as a plain
+    /// `typing.cast` — no structural probe is emitted
+    #[test]
+    fn data_member_protocol_unchecked_is_typing_cast() {
+        let out = transpile(
+            "from typing import Protocol\n\nclass A[T](Protocol):\n    a: T\n\ndef f(x: object):\n    b = x cast A[int]\n",
+            &unchecked_config(),
+        )
+        .unwrap();
+        assert!(out.contains("b = cast(A[int], x)"), "got:\n{out}");
+        assert!(!out.contains("_by_protocol_is"), "got:\n{out}");
     }
 
     #[test]

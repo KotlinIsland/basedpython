@@ -193,11 +193,13 @@ pub(crate) trait TypeInfo {
     /// the runtime check for a type expression used as a checked cast target,
     /// or `None` when the type has no faithful runtime test. a user generic
     /// whose instances carry `__orig_class__` yields a deep
-    /// [`SoundnessCheck::Parametric`] (`A[int]`); anything else collapses to a
-    /// shallow [`SoundnessCheck::Isinstance`] (`list[object]` → `list`,
+    /// [`CastCheck::Kind`]`(`[`SoundnessCheck::Parametric`]`)` (`A[int]`); a
+    /// data-member protocol yields a [`CastCheck::Protocol`] structural check;
+    /// anything else collapses to a shallow
+    /// [`SoundnessCheck::Isinstance`] (`list[object]` → `list`,
     /// `int | str` → `(int, str)`), since `isinstance(x, list[object])` is
     /// itself a runtime error
-    fn cast_check_plan(&self, type_expr: &Expr) -> Option<SoundnessCheck>;
+    fn cast_check_plan(&self, type_expr: &Expr) -> Option<CastCheck>;
 
     /// whether a `cast`'s value is already statically the target type, so its
     /// runtime check is redundant and the value passes through unchecked. this
@@ -205,6 +207,12 @@ pub(crate) trait TypeInfo {
     /// static type subclasses a subscripted protocol (`A[int]() cast
     /// Sequence[object]`) or a subscripted builtin (`B[int]() cast list[int]`)
     fn cast_is_redundant(&self, value: &Expr, target: &Expr) -> bool;
+
+    /// whether a checked cast to this target has no faithful runtime residue —
+    /// a protocol with a method member — so it must degrade to an unchecked
+    /// `typing.cast` rather than an `isinstance` against the protocol, which
+    /// raises at runtime. a data-member protocol is checkable and returns `false`
+    fn cast_target_is_unverifiable(&self, type_expr: &Expr) -> bool;
 
     /// the keyword a trailing lambda block is passed with — the name of the
     /// callee's last declared parameter. `None` means the lambda is appended
@@ -276,6 +284,10 @@ pub(crate) trait TypeInfo {
 
 /// re-export of the ty-side check plan so transforms name a single type
 pub(crate) use ty_python_semantic::types::soundness::CheckKind as SoundnessCheck;
+
+/// re-export of the ty-side checked-cast plan (a superset of [`SoundnessCheck`]
+/// that also carries protocol-structural and unchecked cases)
+pub(crate) use ty_python_semantic::types::soundness::CastCheck;
 
 /// re-export of the ty-side framework role so transforms name a single type
 pub(crate) use ty_python_semantic::types::FrameworkRole;
@@ -553,9 +565,9 @@ impl TypeInfo for SemanticModel<'_> {
         )
     }
 
-    fn cast_check_plan(&self, type_expr: &Expr) -> Option<SoundnessCheck> {
+    fn cast_check_plan(&self, type_expr: &Expr) -> Option<CastCheck> {
         let ty = type_expr.inferred_type(self)?;
-        ty_python_semantic::types::soundness::runtime_check_plan(self.db(), self.file(), ty)
+        ty_python_semantic::types::soundness::cast_check_plan(self.db(), self.file(), ty)
     }
 
     fn cast_is_redundant(&self, value: &Expr, target: &Expr) -> bool {
@@ -565,6 +577,17 @@ impl TypeInfo for SemanticModel<'_> {
             return false;
         };
         ty_python_semantic::types::soundness::cast_is_redundant(self.db(), value_ty, target_ty)
+    }
+
+    fn cast_target_is_unverifiable(&self, type_expr: &Expr) -> bool {
+        let Some(ty) = type_expr.inferred_type(self) else {
+            return false;
+        };
+        ty_python_semantic::types::soundness::cast_target_is_unverifiable_protocol(
+            self.db(),
+            self.file(),
+            ty,
+        )
     }
 
     fn trailing_lambda_keyword(&self, callee: &Expr) -> Option<String> {

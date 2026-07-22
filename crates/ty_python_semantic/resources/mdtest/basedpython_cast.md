@@ -178,6 +178,62 @@ assert f(A("")) is None  # right base, wrong argument
 assert f(1) is None  # wrong base
 ```
 
+## a data-member protocol target is checked structurally
+
+A protocol has no `__orig_class__` to probe, but basedpython reifies class attribute annotations, so
+a protocol whose members are all data members is validated structurally against those annotations —
+no `erased-cast-argument`, and the cast is checked in full.
+
+```by
+from typing import Protocol
+
+class HasA[T](Protocol):
+    a: T
+
+def f(x: object):
+    b = x cast HasA[int]  # no erased-cast-argument: checked structurally
+    reveal_type(b)  # revealed: HasA[int]
+```
+
+These assertions run for real — `a` is invariant, so a `bool` annotation is not an `int`:
+
+```by
+from typing import Protocol
+
+class HasA[T](Protocol):
+    a: T
+
+class IntAttr:
+    a: int
+
+class BoolAttr:
+    a: bool
+
+def f(x: object) -> HasA[int] | None:
+    return x cast? HasA[int]
+
+assert f(IntAttr()) is not None
+assert f(BoolAttr()) is None  # right member, wrong annotation
+```
+
+## a method-bearing protocol target cannot be checked
+
+A method member's specialization isn't recoverable from a reified annotation, so the whole cast has
+no runtime residue. The transpiler degrades it to an unchecked `typing.cast`; ty warns that it is
+unchecked.
+
+```by
+from typing import Protocol
+
+class HasGet[T](Protocol):
+    def get(self) -> T: ...
+
+def f(x: object):
+    # error: [erased-cast-argument] "`HasGet[int]` cannot be checked at runtime"
+    b = x cast HasGet[int]
+    reveal_type(b)  # revealed: HasGet[int]
+```
+
 ## not valid in `.py` files
 
 `cast` as an infix soft keyword is basedpython-only. A `.py` file using it gets a parse error from

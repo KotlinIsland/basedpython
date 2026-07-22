@@ -16,7 +16,9 @@ use ruff_db::files::File;
 use crate::Db;
 use crate::place::{Place, explicit_global_symbol};
 use crate::types::instance::Protocol;
-use crate::types::reified_infer::{ArgVariance, parametric_soundness_spelling};
+use crate::types::reified_infer::{
+    ArgVariance, ProtocolMemberCheck, parametric_soundness_spelling, protocol_structural_members,
+};
 use crate::types::signatures::CallableSignature;
 use crate::types::visitor::any_over_type;
 use crate::types::{ClassLiteral, ClassType, FunctionType, KnownClass, Type};
@@ -33,6 +35,63 @@ pub enum CheckKind {
     /// spelling of the specialization (`A[int]`); `variances` is one code per
     /// type parameter (0 invariant, 1 covariant, 2 contravariant, 3 bivariant)
     Parametric { alias: String, variances: Vec<u8> },
+}
+
+/// How a checked `cast` / `cast?` validates its value against the target type.
+///
+/// A superset of [`CheckKind`]: a cast target may be a *protocol*, which a
+/// general soundness check simply skips but a cast must handle without emitting
+/// a runtime `isinstance` against a subscripted (or non-`@runtime_checkable`)
+/// protocol — which would raise `TypeError` at runtime.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CastCheck {
+    /// a shallow or deep soundness check, exactly as a soundness insertion uses
+    Kind(CheckKind),
+    /// basedpython: a data-member protocol target, validated structurally
+    /// against the value's reified class annotations (member by member)
+    Protocol { members: Vec<ProtocolMemberCheck> },
+    /// a protocol target with no faithful runtime check — a method member (its
+    /// shape isn't recoverable from a reified annotation) or an unspellable data
+    /// member. no sound residue exists, so the checked cast degrades to an
+    /// unchecked `typing.cast` rather than a crashing `isinstance`
+    Unchecked,
+}
+
+/// The runtime check a checked `cast` / `cast?` applies to validate its value
+/// against target type `ty`.
+///
+/// Unlike a general soundness check, a protocol target is not skipped: a
+/// data-member protocol is checked structurally ([`CastCheck::Protocol`]) and a
+/// protocol with no faithful check degrades to [`CastCheck::Unchecked`]. This
+/// keeps the emitted code from ever running `isinstance` against a subscripted
+/// or non-`@runtime_checkable` protocol, which raises at runtime.
+pub fn cast_check_plan<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<CastCheck> {
+    if let Type::ProtocolInstance(instance) = ty {
+        if let Protocol::FromClass(protocol_class) = instance.inner
+            && let Some(members) = protocol_structural_members(db, file, *protocol_class)
+        {
+            return Some(CastCheck::Protocol { members });
+        }
+        // a protocol with a method member, an unspellable data member, or a
+        // synthesized structural protocol has no annotation to check against
+        return Some(CastCheck::Unchecked);
+    }
+    runtime_check_plan(db, file, ty).map(CastCheck::Kind)
+}
+
+/// whether a checked cast to `target` has no faithful runtime residue and must
+/// degrade to an unchecked `typing.cast`: a protocol target that
+/// [`cast_check_plan`] cannot validate structurally. this is what stops the
+/// transpiler emitting `isinstance(value, <protocol>)`, which raises at runtime
+pub fn cast_target_is_unverifiable_protocol<'db>(
+    db: &'db dyn Db,
+    file: File,
+    target: Type<'db>,
+) -> bool {
+    matches!(
+        cast_check_plan(db, file, target),
+        Some(CastCheck::Unchecked)
+    )
 }
 
 /// whether a call through `callee` produces a result whose type was derived

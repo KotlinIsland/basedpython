@@ -1,13 +1,16 @@
-//! Runtime divergence test for parametric protocol `is`-tests.
+//! Runtime divergence test for parametric protocol checks — both `is`-tests
+//! (`value is A[int]`) and checked casts (`value cast A[int]`, `value cast?
+//! A[int]`).
 //!
-//! The unit tests in `parametric_is.rs` verify the *lowered text* and the
-//! mdtest checker verifies the *types*; this test closes the loop by running
-//! the structural protocol check (`value is A[int]`) on a real interpreter. A
-//! protocol target carries no `__orig_class__`, so the runtime residue reads
-//! the value's *reified class annotations* — the whole point of the feature —
-//! and a broken annotation walk, a wrong variance direction, or a
-//! `get_type_hints` failure would fail here even though the text-level tests
-//! pass.
+//! The unit tests verify the *lowered text* and the mdtest checker verifies the
+//! *types*; this test closes the loop by running the structural protocol check
+//! on a real interpreter. A protocol target carries no `__orig_class__`, so the
+//! runtime residue reads the value's *reified class annotations* — the whole
+//! point of the feature — and a broken annotation walk, a wrong variance
+//! direction, or a `get_type_hints` failure would fail here even though the
+//! text-level tests pass. The cast cases additionally confirm that a
+//! method-bearing protocol degrades to an unchecked pass-through rather than
+//! raising a `TypeError` from an `isinstance` against the protocol.
 //!
 //! PEP 695 class syntax needs a 3.13 interpreter; if none is found the test
 //! skips rather than fails.
@@ -103,6 +106,29 @@ assert (OnlyA() is Pair[int, str]) is False, "missing second member fails"
 # `is not` negates the whole check
 assert (C() is not HasA[int]) is True, "is not negates a non-match"
 assert (C() is not HasA[bool]) is False, "is not negates a match"
+
+# a checked `cast` to a data-member protocol validates the same structural
+# claim: it returns the value on a match and raises on a mismatch
+assert (C() cast HasA[bool]) is not None, "checked cast to a matching protocol returns the value"
+
+_raised = False
+try:
+    D() cast HasA[str]
+except TypeError:
+    _raised = True
+assert _raised, "checked cast to a non-matching protocol raises"
+
+# `cast?` yields the value on a match and `None` on a mismatch
+assert (D() cast? HasA[int]) is not None, "safe cast to a matching protocol returns the value"
+assert (D() cast? HasA[str]) is None, "safe cast to a non-matching protocol yields None"
+
+# a method-bearing protocol has no runtime residue, so the checked cast degrades
+# to an unchecked pass-through (it must never raise a `TypeError` from an
+# `isinstance` against the protocol)
+class HasGet[T](Protocol):
+    def get(self) -> T: ...
+
+assert (C() cast HasGet[int]) is not None, "method-protocol cast degrades, never raises"
 
 print("ok")
 "#;
