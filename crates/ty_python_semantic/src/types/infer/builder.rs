@@ -103,7 +103,10 @@ use crate::types::newtype::NewType;
 use crate::types::reified_infer::{self, ReifiedInferenceError};
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope};
-use crate::types::soundness::{cast_is_redundant, erases_type_arguments, runtime_check_target};
+use crate::types::soundness::{
+    cast_is_redundant, cast_target_is_unverifiable_protocol, erases_type_arguments,
+    runtime_check_target,
+};
 use crate::types::special_form::TypeQualifier;
 use crate::types::subclass_of::SubclassOfInner;
 use crate::types::trailing_lambda::trailing_lambda_keyword;
@@ -8554,7 +8557,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// a checked cast validates its value with `isinstance`, which can only
     /// test a class — so a target whose type arguments are erased at runtime
     /// (`list[int]`, unlike a user generic's `A[int]`) narrows to a claim that
-    /// nothing verifies.
+    /// nothing verifies. a protocol target whose members can't be checked
+    /// structurally (a method member) has no runtime residue at all, so the
+    /// whole cast — not just its arguments — is unverified.
     ///
     /// the wording describes what a runtime check *can* test rather than what
     /// the transpiler emits, since ty cannot see whether checked casts are
@@ -8571,13 +8576,29 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         if cast_is_redundant(self.db(), value_ty, target) {
             return;
         }
-        if !erases_type_arguments(self.db(), self.file(), target) {
+        let db = self.db();
+        // a data-member protocol *is* checked structurally, so it never reaches
+        // here; only a method-bearing (or synthesized) protocol does, and it has
+        // no runtime residue — the cast degrades to an unchecked `typing.cast`
+        if cast_target_is_unverifiable_protocol(db, self.file(), target) {
+            let Some(builder) = self.context.report_lint(&ERASED_CAST_ARGUMENT, type_arg) else {
+                return;
+            };
+            let mut diagnostic = builder.into_diagnostic(format_args!(
+                "`{}` cannot be checked at runtime",
+                target.display(db)
+            ));
+            diagnostic.info(
+                "a protocol with a method member has no runtime residue; the cast is unchecked",
+            );
+            return;
+        }
+        if !erases_type_arguments(db, self.file(), target) {
             return;
         }
         let Some(builder) = self.context.report_lint(&ERASED_CAST_ARGUMENT, type_arg) else {
             return;
         };
-        let db = self.db();
         let mut diagnostic = builder.into_diagnostic(format_args!(
             "Type arguments of `{}` are erased at runtime",
             target.display(db)

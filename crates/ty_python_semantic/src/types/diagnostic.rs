@@ -1373,11 +1373,17 @@ declare_lint! {
     /// exactly the assumption a checked cast exists to rule out.
     ///
     /// A *user* generic does not have this problem: its instances carry
-    /// `__orig_class__`, so `A[int]` is checked in full.
+    /// `__orig_class__`, so `A[int]` is checked in full. A *protocol* whose
+    /// members are all data members is checked structurally against the value's
+    /// reified class annotations; only a protocol with a *method* member has no
+    /// runtime residue at all, so the whole cast — not just its arguments — is
+    /// left unchecked.
     ///
     /// ## Example
     ///
     /// ```by
+    /// from typing import Protocol
+    ///
     /// def f(x: object):
     ///     a = x cast list[int]   # warning: only `list` is checked
     ///     b = x cast list        # ok — no argument claimed
@@ -1387,6 +1393,12 @@ declare_lint! {
     ///
     /// def g(x: object):
     ///     a = x cast A[int]      # ok — checked in full via `__orig_class__`
+    ///
+    /// class HasGet[T](Protocol):
+    ///     def get(self) -> T: ...
+    ///
+    /// def h(x: object):
+    ///     a = x cast HasGet[int]  # warning: a method protocol has no runtime check
     /// ```
     pub(crate) static ERASED_CAST_ARGUMENT = {
         summary: "detects casts whose type arguments cannot be checked at runtime",

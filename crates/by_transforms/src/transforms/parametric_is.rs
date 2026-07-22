@@ -186,8 +186,9 @@ def _by_protocol_is(value, members):
 ";
 
 /// render a protocol member list as the python list-of-tuples literal
-/// `_by_protocol_is` takes as its `members` argument
-fn protocol_members_literal(checks: &[ProtocolMemberCheck]) -> String {
+/// `_by_protocol_is` takes as its `members` argument. shared with the checked
+/// cast, which validates the same structural claim
+pub(crate) fn protocol_members_literal(checks: &[ProtocolMemberCheck]) -> String {
     let entries = checks
         .iter()
         .map(|check| {

@@ -468,7 +468,8 @@ pub(crate) fn classify_parametric_is<'db>(
     if let ParametricIsPlan::Probe(_) = plan
         && let Some(ErasedTargetReason::Protocol) = erased_target_reason(db, target_origin)
     {
-        return protocol_structural_plan(db, file, rhs_alias)
+        return protocol_structural_members(db, file, ClassType::Generic(rhs_alias))
+            .map(|checks| ParametricIsPlan::ProtocolStructural(checks.into_boxed_slice()))
             .unwrap_or(ParametricIsPlan::ErasedTarget(ErasedTargetReason::Protocol));
     }
     plan
@@ -479,12 +480,16 @@ pub(crate) fn classify_parametric_is<'db>(
 /// `None` when the protocol has a member that can't be — a method (its shape
 /// isn't recoverable from an annotation) or a data member whose specialized
 /// type has no runtime spelling.
-fn protocol_structural_plan<'db>(
+///
+/// shared by the parametric `is`-test (`x is A[int]`) and the checked cast
+/// (`x cast A[int]`): both validate the same structural claim against the same
+/// reified annotations, so both consult one source of truth.
+pub(crate) fn protocol_structural_members<'db>(
     db: &'db dyn Db,
     file: File,
-    rhs_alias: GenericAlias<'db>,
-) -> Option<ParametricIsPlan> {
-    let protocol_class = ClassType::Generic(rhs_alias).into_protocol_class(db)?;
+    class: ClassType<'db>,
+) -> Option<Vec<ProtocolMemberCheck>> {
+    let protocol_class = class.into_protocol_class(db)?;
     let mut checks = Vec::new();
     for member in protocol_class.interface(db).members(db) {
         let (member_ty, readable, writable) = member.reified_annotation_check(db)?;
@@ -501,9 +506,7 @@ fn protocol_structural_plan<'db>(
             variance,
         });
     }
-    Some(ParametricIsPlan::ProtocolStructural(
-        checks.into_boxed_slice(),
-    ))
+    Some(checks)
 }
 
 fn classify_value<'db>(
