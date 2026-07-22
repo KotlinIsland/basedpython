@@ -153,6 +153,9 @@ reveal_type(f)  # revealed: (int, /) -> str
 
 ### `functools.cache`
 
+basedpython's `_lru_cache_wrapper` captures the whole wrapped signature, so the cached callable
+keeps its parameters (not just its return type):
+
 ```py
 from functools import cache
 
@@ -160,10 +163,28 @@ from functools import cache
 def f(x: int) -> int:
     return x**2
 
-# revealed: _lru_cache_wrapper[int]
+# revealed: _lru_cache_wrapper[def f(x: int) -> int]
 reveal_type(f)
 # revealed: int
 reveal_type(f(1))
+
+# the wrapped signature is enforced
+f("wrong")  # error: [invalid-argument-type]
+f(1, 2)  # error: [too-many-positional-arguments]
+```
+
+Decorating a method strips `self` on access, so the bound call is still checked:
+
+```py
+from functools import cache
+
+class C:
+    @cache
+    def m(self, x: int) -> str:
+        return "a"
+
+reveal_type(C().m(1))  # revealed: str
+C().m("wrong")  # error: [invalid-argument-type]
 ```
 
 ### `functools.cached_property`

@@ -47,7 +47,7 @@ impl Patch for ContextManagerAbstractEnter {
             &parsed.syntax().body,
             &mut |class| match class.name.as_str() {
                 "AbstractContextManager" => {
-                    make_entry_abstract(class, "__enter__", source, &mut edits)
+                    make_entry_abstract(class, "__enter__", source, &mut edits);
                 }
                 "AbstractAsyncContextManager" => {
                     make_entry_abstract(class, "__aenter__", source, &mut edits);
