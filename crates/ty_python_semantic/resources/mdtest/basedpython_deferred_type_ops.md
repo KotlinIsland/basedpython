@@ -9,8 +9,7 @@ re-evaluated when the parameter is specialized at a call site.
 ## arithmetic on a type parameter
 
 ```by
-class Array[Dim: int]:
-    pass
+class Array[Dim: int]
 
 def extend[Dim: int](a: Array[Dim]) -> Array[Dim + 1]:
     return a

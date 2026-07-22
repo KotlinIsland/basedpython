@@ -72,7 +72,7 @@ pub use crate::types::dedicated::role::{
     FrameworkRole, FunctionFrameworkRole, class_body_annotation_is_semantic, class_framework_role,
     function_framework_role,
 };
-pub(crate) use crate::types::deferred::{DeferredOperation, DeferredType};
+pub use crate::types::deferred::{DeferredOperation, DeferredType};
 use crate::types::diagnostic::{INVALID_AWAIT, INVALID_TYPE_FORM};
 pub use crate::types::display::{DisplaySettings, TypeDetail, TypeDisplayDetails};
 pub use crate::types::enums::basedpython_is_keeps_identity;
