@@ -45,7 +45,10 @@ contravariant → `in`, invariant → `in out` (basedpython has no bivariant
 spelling — `in out` *is* explicit invariance). names come from a curated table
 for the core containers and a mechanical fallback (strip the leading underscore
 and the `_co`/`_contra` suffix) for everything else; within one class colliding
-names get a numeric suffix
+names get a numeric suffix. a candidate is also rejected when the module already
+binds it — an import, a class/function definition, an assignment — so a type
+parameter never shadows a name the stub's own annotations refer to
+(`xml.etree.ElementPath` imports `Element`, so its `_T` becomes `T`)
 
 it is deliberately conservative. a class is only rewritten when every type
 parameter resolves to a known module-level typevar — anything it can't fully

@@ -127,11 +127,11 @@ def canonicalize(
 
 # The tag for Element can be set to the Comment or ProcessingInstruction
 # functions defined in this module.
-_ElementCallable: TypeAlias = (...) -> Element[_ElementCallable]
+private type ElementCallable = (...) -> Element[ElementCallable]
 
 
 @disjoint_base
-class Element[in out Tag: str | _ElementCallable = str]:
+class Element[in out Tag: str | ElementCallable = str]:
     tag: Tag
     """A string identifying what kind of data this element represents"""
 
@@ -152,10 +152,10 @@ class Element[in out Tag: str | _ElementCallable = str]:
     def findall(self, path: str, namespaces: dict[str, str] | None = None) -> list[Element]
 
     def findtext(self, path: str, default: None = None, namespaces: dict[str, str] | None = None) -> str | None
-    def findtext[Element](self, path: str, default: Element, namespaces: dict[str, str] | None = None) -> Element | str
+    def findtext[T](self, path: str, default: T, namespaces: dict[str, str] | None = None) -> T | str
 
     def get(self, key: str, default: None = None) -> str | None
-    def get[Element](self, key: str, default: Element) -> str | Element
+    def get[T](self, key: str, default: T) -> str | T
 
     def insert(self, index: int, subelement: Element[dynamic], /) -> None
     def items(self) -> ItemsView[str, str]
@@ -167,7 +167,7 @@ class Element[in out Tag: str | _ElementCallable = str]:
     def itertext(self) -> Generator[str]
     def keys(self) -> dict_keys[str, str]
     # makeelement returns the type of self in Python impl, but not in C impl
-    def makeelement[OtherTag: str | _ElementCallable = str](self, tag: OtherTag, attrib: dict[str, str], /) -> Element[OtherTag]
+    def makeelement[OtherTag: str | ElementCallable = str](self, tag: OtherTag, attrib: dict[str, str], /) -> Element[OtherTag]
     def remove(self, subelement: Element[dynamic], /) -> None
     def set(self, key: str, value: str, /) -> None
     def __copy__(self) -> Element[Tag]  # returns the type of self in Python impl, but not in C impl
@@ -195,7 +195,7 @@ class Element[in out Tag: str | _ElementCallable = str]:
         """True if self else False"""
 
 def SubElement(parent: Element[dynamic], tag: str, attrib: dict[str, str] = ..., **extra: str) -> Element
-def Comment(text: str | None = None) -> Element[_ElementCallable]:
+def Comment(text: str | None = None) -> Element[ElementCallable]:
     """Comment element factory.
 
     This function creates a special element which the standard serializer
@@ -205,7 +205,7 @@ def Comment(text: str | None = None) -> Element[_ElementCallable]:
 
     """
 
-def ProcessingInstruction(target: str, text: str | None = None) -> Element[_ElementCallable]:
+def ProcessingInstruction(target: str, text: str | None = None) -> Element[ElementCallable]:
     """Processing Instruction element factory.
 
     This function creates a special element which the standard serializer
@@ -315,7 +315,7 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
         Return the first matching element, or None if no element was found.
 
         """
-    def findtext[Element](self, path: str, default: Element, namespaces: dict[str, str] | None = None) -> Element | str
+    def findtext[T](self, path: str, default: T, namespaces: dict[str, str] | None = None) -> T | str
 
     def findall(self, path: str, namespaces: dict[str, str] | None = None) -> list[Element]:
         """Find all matching subelements by tag name or path.
@@ -505,14 +505,14 @@ def parse(source: FileRead, parser: XMLParser[dynamic] | None = None) -> Element
 # The type of the second element of the tuple yielded by iterparse depends
 # on the event type in the first element of the tuple:
 #  * start, end: Element[str]
-#  * comment, pi: Element[_ElementCallable]
+#  * comment, pi: Element[ElementCallable]
 #  * start-ns: tuple[str, str] (prefix, uri)
 #  * end-ns: None
 private type EventType = "start" | "end" | "comment" | "pi" | "start-ns" | "end-ns"
 
 # This class is defined inside the body of iterparse.
 @type_check_only
-private protocol IterParseIterator[out EventT: Element[str] | Element[_ElementCallable] | tuple[str, str] | None](Iterator[tuple[EventType, EventT]]):
+private protocol IterParseIterator[out EventT: Element[str] | Element[ElementCallable] | tuple[str, str] | None](Iterator[tuple[EventType, EventT]]):
     if sys.version_info >= (3, 13):
         def close(self) -> None
     if sys.version_info >= (3, 11):
@@ -544,7 +544,7 @@ def iterparse(source: FileRead, events: Iterable[EventType], parser: XMLParser |
 
 private type EventQueue = tuple[str] | tuple[str, tuple[str, str]] | tuple[str, None]
 
-class XMLPullParser[out EventT: Element[str] | Element[_ElementCallable] | tuple[str, str] | None]:
+class XMLPullParser[out EventT: Element[str] | Element[ElementCallable] | tuple[str, str] | None]:
     init(self, events: Iterable[EventType] | None = None, *, _parser: XMLParser[EventT] | None = None)
     def feed(self, data: str | ReadableBuffer) -> None:
         """Feed encoded data to parser."""

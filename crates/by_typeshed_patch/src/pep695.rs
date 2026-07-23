@@ -33,6 +33,12 @@
 //! mechanically by stripping the leading underscore and the `_co`/`_contra`
 //! variance suffix. within one class, colliding names get a numeric suffix
 //!
+//! a candidate name is also rejected when the module already binds it — an
+//! import, a class/function definition, an assignment. `xml.etree.ElementPath`
+//! imports `Element`, so `_T` there must not become `Element`: the type
+//! parameter would shadow the class and `Element[dynamic]` would subscript the
+//! type parameter instead
+//!
 //! ## variance
 //!
 //! covariant -> `out`, contravariant -> `in`, invariant -> `in out`.
@@ -112,6 +118,7 @@ pub fn convert_module(parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
     let mut ctx = Ctx {
         table: &table,
         source,
+        module_names: collect_module_names(&module.body, &table),
         edits: Vec::new(),
         renamed: Vec::new(),
         covered: Vec::new(),
@@ -156,6 +163,9 @@ pub fn convert_module(parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
 struct Ctx<'a> {
     table: &'a Table<'a>,
     source: &'a str,
+    /// every name the module itself binds, which a type-parameter name must not
+    /// shadow
+    module_names: HashSet<String>,
     edits: Vec<Edit>,
     /// (legacy name, original span) for every reference a conversion renamed —
     /// used to decide whether a declaration is now dead
@@ -267,7 +277,7 @@ fn convert_function<'a>(
         return (Vec::new(), Vec::new());
     }
 
-    let mut used = enclosing_names(bound);
+    let mut used = claimed_names(&ctx.module_names, bound);
     let mut new_names = Vec::with_capacity(params.len());
     for legacy in &params {
         new_names.push(pick_name(legacy, &mut used));
@@ -312,13 +322,17 @@ fn convert_function<'a>(
     (params, new_names)
 }
 
-/// the rendered pep 695 names already claimed by enclosing scopes, used to seed
-/// the de-collision set so a nested scope never reuses an outer name
-fn enclosing_names(bound: &[Scope]) -> HashSet<String> {
-    bound
-        .iter()
-        .flat_map(|scope| scope.rendered.iter().cloned())
-        .collect()
+/// the names a new type parameter must not take: everything the module binds
+/// plus the rendered pep 695 names already claimed by enclosing scopes, so a
+/// nested scope never reuses an outer name
+fn claimed_names(module_names: &HashSet<String>, bound: &[Scope]) -> HashSet<String> {
+    let mut claimed = module_names.clone();
+    claimed.extend(
+        bound
+            .iter()
+            .flat_map(|scope| scope.rendered.iter().cloned()),
+    );
+    claimed
 }
 
 /// the annotation expressions of a function signature, in source order:
@@ -378,9 +392,10 @@ fn convert_class<'a>(
         return None;
     }
 
-    // assign each parameter a unique nice/mechanical name, avoiding names an
-    // enclosing scope already uses as well as collisions within this class
-    let mut used = enclosing_names(bound);
+    // assign each parameter a unique nice/mechanical name, avoiding names the
+    // module binds or an enclosing scope already uses as well as collisions
+    // within this class
+    let mut used = claimed_names(&ctx.module_names, bound);
     let mut new_names = Vec::with_capacity(params.len());
     for legacy in &params {
         new_names.push(pick_name(legacy, &mut used));
@@ -673,9 +688,9 @@ impl<'a> SourceOrderVisitor<'a> for RefRenamer<'_, 'a> {
 
 /// pick a fresh pep 695 name for `legacy`, recording it in `used`. tries the
 /// curated nice name first, then the mechanical name, then a numeric suffix —
-/// so a collision with an enclosing scope's name (e.g. a method's element type
-/// vs its class's `Element`) degrades to a clean alternative rather than
-/// `Element2`
+/// so a collision with a module binding or an enclosing scope's name (e.g. a
+/// method's element type vs its class's `Element`) degrades to a clean
+/// alternative rather than `Element2`
 fn pick_name(legacy: &str, used: &mut HashSet<String>) -> String {
     let nice = nice_name(legacy);
     let mechanical = mechanical_name(legacy);
@@ -725,6 +740,103 @@ fn mechanical_name(legacy: &str) -> String {
         trimmed.to_string()
     } else {
         stripped.to_string()
+    }
+}
+
+/// every name bound at module level — imports, class/function definitions,
+/// assignment targets — that a type-parameter name would shadow
+///
+/// the typevar declarations themselves are excluded: a public typevar like
+/// `AnyStr` keeps its declaration and lends its own name to the parameter it
+/// becomes, which is a deliberate reuse rather than a shadow
+fn collect_module_names<'a>(body: &'a [Stmt], table: &Table<'a>) -> HashSet<String> {
+    let mut names = HashSet::new();
+    walk_module_names(body, &mut names);
+    names.retain(|name| !table.contains_key(name.as_str()));
+    names
+}
+
+fn walk_module_names(body: &[Stmt], names: &mut HashSet<String>) {
+    for stmt in body {
+        match stmt {
+            Stmt::Import(node) => {
+                for alias in &node.names {
+                    // `import a.b` binds `a`; `import a.b as c` binds `c`
+                    let bound = match &alias.asname {
+                        Some(asname) => asname.as_str(),
+                        None => alias.name.split('.').next().unwrap_or(&alias.name),
+                    };
+                    names.insert(bound.to_string());
+                }
+            }
+            Stmt::ImportFrom(node) => {
+                for alias in &node.names {
+                    let bound = alias.asname.as_ref().unwrap_or(&alias.name);
+                    if bound.as_str() != "*" {
+                        names.insert(bound.to_string());
+                    }
+                }
+            }
+            Stmt::ClassDef(class) => {
+                names.insert(class.name.to_string());
+            }
+            Stmt::FunctionDef(func) => {
+                names.insert(func.name.to_string());
+            }
+            Stmt::TypeAlias(alias) => bind_target(&alias.name, names),
+            Stmt::Assign(assign) => {
+                for target in &assign.targets {
+                    bind_target(target, names);
+                }
+            }
+            Stmt::AnnAssign(assign) => bind_target(&assign.target, names),
+            Stmt::AugAssign(assign) => bind_target(&assign.target, names),
+            Stmt::If(node) => {
+                walk_module_names(&node.body, names);
+                for clause in &node.elif_else_clauses {
+                    walk_module_names(&clause.body, names);
+                }
+            }
+            Stmt::Try(node) => {
+                walk_module_names(&node.body, names);
+                for handler in &node.handlers {
+                    let ruff_python_ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    walk_module_names(&handler.body, names);
+                }
+                walk_module_names(&node.orelse, names);
+                walk_module_names(&node.finalbody, names);
+            }
+            Stmt::With(node) => {
+                for item in &node.items {
+                    if let Some(target) = &item.optional_vars {
+                        bind_target(target, names);
+                    }
+                }
+                walk_module_names(&node.body, names);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// record the names an assignment target binds
+fn bind_target(target: &Expr, names: &mut HashSet<String>) {
+    match target {
+        Expr::Name(name) => {
+            names.insert(name.id.to_string());
+        }
+        Expr::Tuple(tuple) => {
+            for elt in &tuple.elts {
+                bind_target(elt, names);
+            }
+        }
+        Expr::List(list) => {
+            for elt in &list.elts {
+                bind_target(elt, names);
+            }
+        }
+        Expr::Starred(starred) => bind_target(&starred.value, names),
+        _ => {}
     }
 }
 
@@ -1165,6 +1277,75 @@ class tuple(Sequence[_T_co]):
         let expected = "\
 class tuple[out Element](Sequence[Element]):
     def __add__[T](self, value: tuple[T, ...], /) -> tuple[Element | T, ...]: ...
+";
+        assert_eq!(convert(src), expected);
+    }
+
+    #[test]
+    fn nice_name_avoids_an_imported_module_binding() {
+        // xml.etree.ElementPath: `Element` is imported, so `_T` must not take
+        // that name or `Element[Any]` would subscript the type parameter
+        let src = "\
+from xml.etree.ElementTree import Element
+_T = TypeVar(\"_T\")
+def findtext(elem: Element[Any], default: _T) -> _T | str: ...
+";
+        let expected = "\
+from xml.etree.ElementTree import Element
+def findtext[T](elem: Element[Any], default: T) -> T | str: ...
+";
+        assert_eq!(convert(src), expected);
+    }
+
+    #[test]
+    fn mechanical_name_avoids_a_module_binding_too() {
+        // both `Element` (nice) and `T` (mechanical) are taken, so the numeric
+        // suffix is the only way out
+        let src = "\
+from a import Element, T
+_T = TypeVar(\"_T\")
+def f(x: _T) -> _T: ...
+";
+        let expected = "\
+from a import Element, T
+def f[Element2](x: Element2) -> Element2: ...
+";
+        assert_eq!(convert(src), expected);
+    }
+
+    #[test]
+    fn class_and_assignment_bindings_are_avoided() {
+        let src = "\
+class Key: ...
+Value: int
+_KT = TypeVar(\"_KT\")
+_VT = TypeVar(\"_VT\")
+class d(Generic[_KT, _VT]):
+    def get(self, key: _KT) -> _VT: ...
+";
+        let expected = "\
+class Key: ...
+Value: int
+class d[in out KT, in out VT]:
+    def get(self, key: KT) -> VT: ...
+";
+        assert_eq!(convert(src), expected);
+    }
+
+    #[test]
+    fn binding_under_a_version_guard_is_avoided() {
+        let src = "\
+if sys.version_info >= (3, 12):
+    from a import Element
+_T = TypeVar(\"_T\")
+class Box(Generic[_T]):
+    value: _T
+";
+        let expected = "\
+if sys.version_info >= (3, 12):
+    from a import Element
+class Box[in out T]:
+    value: T
 ";
         assert_eq!(convert(src), expected);
     }
