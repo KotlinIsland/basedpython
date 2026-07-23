@@ -22,12 +22,13 @@
 //! `newtype Foo = int`     → `Foo = NewType("Foo", int)` (from `typing`)
 //! `export`/`public`       → modifier deleted; symbol name added to auto-generated `__all__`
 //! `private`               → modifier deleted; symbol renamed with `_` prefix and excluded from `__all__`
+//! `private type X = V`    → `type _X = V` (the modifier is a node flag, not a synthetic decorator)
 
 use std::collections::HashMap;
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef};
+use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtClassDef, StmtFunctionDef, StmtTypeAlias};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
@@ -319,6 +320,35 @@ impl<'src> Modifiers<'src> {
         &self.source[usize::from(range.start())..usize::from(range.end())]
     }
 
+    /// `private type X = V` → `type _X = V`. the modifier keyword is not a
+    /// synthetic decorator here (a type alias has no decorator list), it is a
+    /// flag on the node, so the prefix is erased from the source directly. the
+    /// definition site is renamed by [`NameRenamer`] along with every reference.
+    ///
+    /// unlike a `private` method, a nested alias gets the same `_` prefix rather
+    /// than `__` name-mangling: an alias is a type, not a member, and mangling
+    /// would not survive the `TypeAliasType` polyfill's whole-statement rewrite
+    fn process_type_alias(&mut self, alias: &StmtTypeAlias) {
+        if !alias.is_private {
+            return;
+        }
+        let start = alias.range().start();
+        let Some(after_kw) = self.source[usize::from(start)..].strip_prefix("private") else {
+            return;
+        };
+        let gap = after_kw.len() - after_kw.trim_start().len();
+        let Ok(prefix_len) = TextSize::try_from("private".len() + gap) else {
+            return;
+        };
+        self.edits.push(Fix::safe_edit(Edit::range_deletion(TextRange::new(
+            start,
+            start + prefix_len,
+        ))));
+
+        self.private_renames
+            .push(self.src(alias.name.range()).to_owned());
+    }
+
     fn process_ann_assign(&mut self, node: &StmtAnnAssign) {
         let name = self.src(node.target.range()).to_owned();
 
@@ -493,6 +523,9 @@ impl<'ast> Visitor<'ast> for Modifiers<'_> {
             }
             Stmt::AnnAssign(a) => {
                 self.process_ann_assign(a);
+            }
+            Stmt::TypeAlias(a) => {
+                self.process_type_alias(a);
             }
             _ => {}
         }
@@ -674,10 +707,22 @@ impl AstPass for ModifiersPass<'_> {
 mod tests {
     use crate::{Config, transpile};
     use indoc::indoc;
+    use ruff_python_ast::PythonVersion;
 
     fn check(input: &str, expected: &str) {
         assert_eq!(
             transpile(input, &Config::test_default()).unwrap(),
+            crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    fn check_at(input: &str, expected: &str, version: PythonVersion) {
+        let config = Config {
+            min_version: version,
+            ..Config::test_default()
+        };
+        assert_eq!(
+            transpile(input, &config).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
         );
     }
@@ -1193,6 +1238,91 @@ mod tests {
                 def _helper(): ...
 
                 _helper()
+            "},
+        );
+    }
+
+    #[test]
+    fn private_type_alias() {
+        check_at(
+            "private type Alias = int\n",
+            "type _Alias = int\n",
+            PythonVersion::PY312,
+        );
+    }
+
+    #[test]
+    fn private_type_alias_references_renamed() {
+        check_at(
+            indoc! {"
+                private type Alias = int | str
+                type Pair = tuple[Alias, Alias]
+
+                def f(x: Alias) -> Alias:
+                    return x
+            "},
+            indoc! {"
+                type _Alias = int | str
+                type Pair = tuple[_Alias, _Alias]
+
+                def f(x: _Alias) -> _Alias:
+                    return x
+            "},
+            PythonVersion::PY312,
+        );
+    }
+
+    #[test]
+    fn private_generic_type_alias() {
+        check_at(
+            "private type Pair[T] = tuple[T, T]\n",
+            "type _Pair[T] = tuple[T, T]\n",
+            PythonVersion::PY312,
+        );
+    }
+
+    #[test]
+    fn public_type_alias_untouched() {
+        check_at(
+            "type Alias = int\n",
+            "type Alias = int\n",
+            PythonVersion::PY312,
+        );
+    }
+
+    #[test]
+    fn private_type_alias_polyfilled() {
+        // below 3.12 the alias lowers to `TypeAliasType`, whose whole-statement
+        // replacement subsumes the `private ` deletion and the definition-site
+        // rename — both have to come out of the polyfill instead
+        check(
+            indoc! {"
+                private type Alias = int | str
+                type Pair = tuple[Alias, Alias]
+
+                def f(x: Alias) -> Alias:
+                    return x
+            "},
+            indoc! {"
+                from typing_extensions import TypeAliasType
+                _Alias = TypeAliasType(\"_Alias\", int | str)
+                Pair = TypeAliasType(\"Pair\", tuple[_Alias, _Alias])
+
+                def f(x: _Alias) -> _Alias:
+                    return x
+            "},
+        );
+    }
+
+    #[test]
+    fn private_generic_type_alias_polyfilled() {
+        check(
+            "private type Pair[T] = tuple[T, T]\n",
+            indoc! {"
+                from typing import TypeVar
+                from typing_extensions import TypeAliasType
+                _T = TypeVar(\"_T\")
+                _Pair = TypeAliasType(\"_Pair\", tuple[_T, _T], type_params=(_T,))
             "},
         );
     }
