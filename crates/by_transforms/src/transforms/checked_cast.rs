@@ -567,7 +567,7 @@ mod tests {
             "from typing import Protocol\n\nclass A[T](Protocol):\n    a: T\n\ndef f(x: object):\n    b = x cast A[int]\n",
         );
         assert!(
-            out.contains("b = _checked_cast_proto(x, [(\"a\", int, 0)])"),
+            out.contains("b = _checked_cast_proto(x, [(\"attr\", \"a\", int, 0)])"),
             "got:\n{out}"
         );
         assert!(out.contains("def _checked_cast_proto"), "got:\n{out}");
@@ -581,31 +581,46 @@ mod tests {
             "from typing import Protocol\n\nclass A[T](Protocol):\n    a: T\n\ndef f(x: object):\n    b = x cast? A[bool]\n",
         );
         assert!(
-            out.contains("b = _try_cast_proto(x, [(\"a\", bool, 0)])"),
+            out.contains("b = _try_cast_proto(x, [(\"attr\", \"a\", bool, 0)])"),
             "got:\n{out}"
         );
         assert!(out.contains("def _try_cast_proto"), "got:\n{out}");
     }
 
-    /// a method-bearing protocol has no runtime residue — an `isinstance`
-    /// against it would raise — so the checked cast degrades to `typing.cast`
+    /// a method member is checkable too — its return type is validated against
+    /// the value method's reified return annotation
     #[test]
-    fn method_protocol_cast_degrades_to_typing_cast() {
+    fn method_protocol_cast_checks_structurally() {
         let out = check(
             "from typing import Protocol\n\nclass M[T](Protocol):\n    def get(self) -> T: ...\n\ndef f(x: object):\n    b = x cast M[int]\n",
+        );
+        assert!(
+            out.contains("b = _checked_cast_proto(x, [(\"method\", \"get\", [], (int, 1))])"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("def _by_method_matches"), "got:\n{out}");
+    }
+
+    /// a protocol whose member has no runtime spelling (a callable attribute)
+    /// still has no runtime residue, so the checked cast degrades to
+    /// `typing.cast` rather than an `isinstance` against the protocol
+    #[test]
+    fn unspellable_protocol_cast_degrades_to_typing_cast() {
+        let out = check(
+            "from typing import Protocol\nfrom collections.abc import Callable\n\nclass M[T](Protocol):\n    cb: Callable[[T], T]\n\ndef f(x: object):\n    b = x cast M[int]\n",
         );
         assert!(out.contains("b = cast(M[int], x)"), "got:\n{out}");
         assert!(
             !out.contains("_checked_cast") && !out.contains("_by_protocol_is"),
-            "no runtime probe against a method protocol:\n{out}"
+            "no runtime probe against an unspellable protocol:\n{out}"
         );
     }
 
-    /// the same method-protocol degradation applies to `cast?`
+    /// the same degradation applies to `cast?`
     #[test]
-    fn method_protocol_try_cast_degrades_to_typing_cast() {
+    fn unspellable_protocol_try_cast_degrades_to_typing_cast() {
         let out = check(
-            "from typing import Protocol\n\nclass M[T](Protocol):\n    def get(self) -> T: ...\n\ndef f(x: object):\n    b = x cast? M[int]\n",
+            "from typing import Protocol\nfrom collections.abc import Callable\n\nclass M[T](Protocol):\n    cb: Callable[[T], T]\n\ndef f(x: object):\n    b = x cast? M[int]\n",
         );
         assert!(out.contains("b = cast(M[int], x)"), "got:\n{out}");
         assert!(!out.contains("_try_cast"), "no probe:\n{out}");

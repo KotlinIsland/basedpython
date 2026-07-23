@@ -29,6 +29,7 @@ use crate::types::call::{Argument, CallArguments};
 use crate::types::class::{ClassLiteral, ClassType, GenericAlias};
 use crate::types::function::FunctionType;
 use crate::types::generics::{Specialization, combine_use_site_projections};
+use crate::types::protocol_class::ReifiedMember;
 use crate::types::tuple::Tuple;
 use crate::types::typevar::TypeVarBoundOrConstraints;
 use crate::types::variance::TypeVarVariance;
@@ -327,19 +328,31 @@ pub enum ParametricIsPlan {
 }
 
 /// basedpython: one protocol member a parametric `is`-test checks structurally
-/// at runtime, against the value's reified class annotation for that member
+/// at runtime, against the value's reified annotations for that member
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProtocolMemberCheck {
-    /// the member's attribute name
-    pub name: String,
-    /// a python expression that evaluates, in the checked module's scope, to
-    /// the member's specialized type (`int`, `list[str]`) — what the value's
-    /// annotation is compared against
-    pub expected: String,
-    /// how the value's annotation must relate to `expected`: an invariant
-    /// (read-write) member demands equality, a read-only member a subtype, a
-    /// write-only member a supertype
-    pub variance: ArgVariance,
+pub enum ProtocolMemberCheck {
+    /// a data member: the value's class annotation for `name` must relate to
+    /// `expected` per `variance` — an invariant (read-write) member demands
+    /// equality, a read-only member a subtype, a write-only member a supertype
+    Attribute {
+        name: String,
+        /// a python expression evaluating, in the checked module's scope, to the
+        /// member's specialized type (`int`, `list[str]`)
+        expected: String,
+        variance: ArgVariance,
+    },
+    /// a method member: each declared positional parameter (contravariant) and,
+    /// when the method declares a meaningful return, the return type (covariant)
+    /// checked against the value method's reified parameter/return annotations
+    Method {
+        name: String,
+        /// per-parameter `(specialized type spelling, variance)`, in declaration
+        /// order after `self` — always contravariant
+        params: Vec<(String, ArgVariance)>,
+        /// the return `(specialized type spelling, variance)` — covariant, or
+        /// `None` when the method declares no meaningful return to check
+        ret: Option<(String, ArgVariance)>,
+    },
 }
 
 /// why a parametric test's target cannot be probed at runtime
@@ -492,21 +505,77 @@ pub(crate) fn protocol_structural_members<'db>(
     let protocol_class = class.into_protocol_class(db)?;
     let mut checks = Vec::new();
     for member in protocol_class.interface(db).members(db) {
-        let (member_ty, readable, writable) = member.reified_annotation_check(db)?;
-        let expected = runtime_spelling(db, file, member_ty)?;
-        let variance = match (readable, writable) {
-            (true, true) => ArgVariance::Invariant,
-            (true, false) => ArgVariance::Covariant,
-            (false, true) => ArgVariance::Contravariant,
-            (false, false) => return None,
+        let name = member.name().to_owned();
+        let check = match member.reified_member_shape(db)? {
+            ReifiedMember::Attribute {
+                ty,
+                readable,
+                writable,
+            } => {
+                let expected = runtime_spelling(db, file, ty)?;
+                let variance = match (readable, writable) {
+                    (true, true) => ArgVariance::Invariant,
+                    (true, false) => ArgVariance::Covariant,
+                    (false, true) => ArgVariance::Contravariant,
+                    (false, false) => return None,
+                };
+                ProtocolMemberCheck::Attribute {
+                    name,
+                    expected,
+                    variance,
+                }
+            }
+            ReifiedMember::Method { params, ret } => {
+                // each parameter is contravariant; an unspellable parameter type
+                // means the method can't be checked, so the whole protocol falls
+                // back to the erased-target error
+                let mut param_checks = Vec::with_capacity(params.len());
+                for param_ty in params {
+                    let expected = runtime_spelling(db, file, param_ty)?;
+                    param_checks.push((expected, ArgVariance::Contravariant));
+                }
+                let ret = match reified_return_check(db, file, ret) {
+                    ReturnCheck::Skip => None,
+                    ReturnCheck::Check(expected) => Some((expected, ArgVariance::Covariant)),
+                    ReturnCheck::Unspellable => return None,
+                };
+                ProtocolMemberCheck::Method {
+                    name,
+                    params: param_checks,
+                    ret,
+                }
+            }
         };
-        checks.push(ProtocolMemberCheck {
-            name: member.name().to_owned(),
-            expected,
-            variance,
-        });
+        checks.push(check);
     }
     Some(checks)
+}
+
+/// the covariant/skip/unspellable classification of a protocol method's return
+/// type for a structural runtime check
+enum ReturnCheck {
+    /// the return imposes no runtime-checkable constraint (`None`, dynamic, or
+    /// `object`) — nothing to verify
+    Skip,
+    /// check the value method's return annotation against this spelling
+    Check(String),
+    /// a meaningful return with no runtime spelling — the method can't be checked
+    Unspellable,
+}
+
+fn reified_return_check<'db>(db: &'db dyn Db, file: File, ret: Type<'db>) -> ReturnCheck {
+    if ret.is_none(db) || ret.is_dynamic() || is_object_instance(db, ret) {
+        return ReturnCheck::Skip;
+    }
+    match runtime_spelling(db, file, ret) {
+        Some(expected) => ReturnCheck::Check(expected),
+        None => ReturnCheck::Unspellable,
+    }
+}
+
+fn is_object_instance<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    matches!(ty, Type::NominalInstance(instance)
+        if instance.class(db).class_literal(db).is_known(db, KnownClass::Object))
 }
 
 fn classify_value<'db>(

@@ -8,10 +8,11 @@ mixed union — the last resort is a runtime probe that unwinds the value: its r
 (`class B(list[int])`) is checkable this way, even against a builtin or abc target. A bare `list`
 records nothing and answers `False`; the narrowing is positive-only, so that `False` is sound.
 
-A protocol target has no `__orig_class__` to unwind, but basedpython reifies class attribute
-annotations, so a protocol whose members are all data members is checked structurally against those
-annotations instead. Only a protocol with a *method* member — whose specialization can't be
-recovered from a reified attribute annotation — has no runtime residue and stays an error.
+A protocol target has no `__orig_class__` to unwind, but basedpython reifies annotations, so a
+protocol is checked structurally against them instead: a data member against the value class's
+annotation, a method member against the value method's reified parameter (contravariant) and return
+(covariant) annotations. Only a protocol with a member whose specialized type has no runtime
+spelling (a callable attribute, a dynamic type) has no runtime residue and stays an error.
 
 ## statically decided tests are silent
 
@@ -207,13 +208,12 @@ def g(x: object) -> bool:
     return x is A[int]
 ```
 
-## a method-bearing protocol target cannot be checked at runtime
+## a method-bearing protocol target is checked structurally
 
 A protocol's instances record their own concrete class in `__orig_class__`, never the protocol, so a
-probe could never match — and a structural `isinstance` check sees no type arguments (it raises
-outright unless the protocol is `@runtime_checkable`). A *method* member's specialization can't be
-recovered from a reified attribute annotation either, so a protocol that has one is an undecidable
-target and an error, exactly like a builtin.
+probe could never match. But basedpython reifies method annotations too, so a *method* member is
+checked against the value method's reified parameters (contravariant) and return (covariant) — no
+error, and the test is a plain `bool`.
 
 ```by
 from typing import Protocol
@@ -222,7 +222,8 @@ class P[T](Protocol):
     def get(self) -> T: ...
 
 def f(x: object) -> bool:
-    return x is P[int]  # error: [erased-type-check]
+    reveal_type(x is P[int])  # revealed: bool
+    return x is P[int]
 ```
 
 ## a data-member protocol target is checked structurally
@@ -259,10 +260,10 @@ def f(c: C) -> bool:
     return c is HasA[bool]
 ```
 
-## a protocol mixing data and method members stays an error
+## a protocol mixing data and method members is checked
 
-One method member is enough to make the whole protocol uncheckable — the data members alone can't
-confirm the specialization.
+A protocol with both data and method members is checked member by member — each contributes its own
+structural check.
 
 ```by
 from typing import Protocol
@@ -272,7 +273,24 @@ class Mixed[T](Protocol):
     def get(self) -> T: ...
 
 def f(x: object) -> bool:
-    return x is Mixed[int]  # error: [erased-type-check]
+    reveal_type(x is Mixed[int])  # revealed: bool
+    return x is Mixed[int]
+```
+
+Only a member whose specialized type has no runtime spelling makes the whole protocol uncheckable: a
+callable attribute erases to nothing a reified annotation could pin down, so the test stays an
+error.
+
+```by
+from typing import Protocol
+from collections.abc import Callable
+
+class WithCallable[T](Protocol):
+    a: T
+    cb: Callable[[T], T]
+
+def f(x: object) -> bool:
+    return x is WithCallable[int]  # error: [erased-type-check]
 ```
 
 ## a data-member protocol arm of a union is checked structurally
@@ -485,19 +503,32 @@ def f(a: object) -> bool:
     return a is list[int] | int
 ```
 
-## a protocol arm of a union is still rejected
+## an uncheckable protocol arm of a union is still rejected
 
-A protocol arm has no runtime residue, so it remains an error inside a disjunction — it may not
-silently fold to `False`.
+A protocol arm with no runtime residue — a member whose specialized type has no runtime spelling —
+remains an error inside a disjunction; it may not silently fold to `False`.
+
+```by
+from typing import Protocol
+from collections.abc import Callable
+
+class P[T](Protocol):
+    cb: Callable[[T], T]
+
+def f(a: object) -> bool:
+    return a is P[int] | int  # error: [erased-type-check]
+```
+
+A *checkable* protocol arm, by contrast, contributes its structural check rather than an error.
 
 ```by
 from typing import Protocol
 
-class P[T](Protocol):
+class Q[T](Protocol):
     def get(self) -> T: ...
 
 def f(a: object) -> bool:
-    return a is P[int] | int  # error: [erased-type-check]
+    return a is Q[int] | int
 ```
 
 ## positive narrowing

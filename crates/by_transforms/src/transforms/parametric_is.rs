@@ -23,9 +23,12 @@
 //!   so a False never narrows unsoundly. no element-witness heuristic is used:
 //!   the arguments come from the class's declared bases, never from peeking at a
 //!   runtime element
-//! - the value is undecidable and the target is a *protocol* → still an error
-//!   (`erased-type-check`): its `isinstance` raises unless `@runtime_checkable`,
-//!   and even then carries no arguments, so no sound runtime residue exists
+//! - the value is undecidable and the target is a *protocol* → its members are
+//!   checked structurally against the value's reified annotations
+//!   ([`PROTOCOL_IS_RUNTIME`]): a data member against the value's class
+//!   annotation, a method member against the value method's parameter and
+//!   return annotations. only a protocol with a member whose specialized type
+//!   has no runtime spelling stays an error (`erased-type-check`)
 //!
 //! a union rhs (`x is A[int] | object`) is the disjunction of its arms — each
 //! arm lowered by its own kind — never a runtime `isinstance(x, A[int] |
@@ -132,14 +135,21 @@ def _parametric_is_sub(a, b):
 /// runtime residue for a parametric test against a *protocol* target
 /// (`value is A[int]`). a protocol's instances never record which
 /// specialization they satisfy, so `__orig_class__` can't answer it — but
-/// basedpython reifies class attribute annotations, so the value's class can be
-/// checked structurally: for each protocol member, its reified annotation must
-/// match the member's specialized type. `members` is a list of `(name,
-/// expected_type, variance)`, with `variance` matching [`ArgVariance`]'s codes
-/// (0 invariant → equality, 1 covariant → subtype, 2 contravariant →
-/// supertype, 3 bivariant → any). the annotation is read with
-/// `typing.get_type_hints` (resolving string annotations and inherited members),
-/// falling back to a raw `__mro__` walk when that raises
+/// basedpython reifies annotations, so the value's class is checked
+/// structurally: each protocol member's reified annotation must match the
+/// member's specialized type. `members` is a list of kind-tagged tuples:
+///
+/// - `("attr", name, expected_type, variance)` — a data member, checked against
+///   the value class's annotation for `name`
+/// - `("method", name, [(type, variance), …], return_or_None)` — a method
+///   member, whose parameters (contravariant) and return (covariant) are checked
+///   against the value method's reified parameter/return annotations; a
+///   parameter with no annotation but a default falls back to `type(default)`
+///
+/// `variance` matches [`ArgVariance`]'s codes (0 invariant → equality, 1
+/// covariant → subtype, 2 contravariant → supertype, 3 bivariant → any).
+/// annotations are read with `typing.get_type_hints` (resolving string
+/// annotations and inherited members), falling back to a raw `__mro__` walk
 pub(crate) const PROTOCOL_IS_RUNTIME: &str = "\
 _by_proto_missing = object()
 
@@ -169,36 +179,115 @@ def _by_proto_sub(a, b):
             return False
     return a == b
 
+def _by_variance_ok(actual, expected, variance):
+    # 0 invariant (equality), 1 covariant (actual <: expected),
+    # 2 contravariant (expected <: actual), 3 bivariant (any)
+    if variance == 3 or actual == expected:
+        return True
+    if variance == 1 and _by_proto_sub(actual, expected):
+        return True
+    if variance == 2 and _by_proto_sub(expected, actual):
+        return True
+    return False
+
+def _by_method_matches(klass, name, params, ret):
+    method = getattr(klass, name, None)
+    if not callable(method):
+        return False
+    import inspect, typing
+    try:
+        signature = inspect.signature(method)
+        hints = typing.get_type_hints(method)
+    except Exception:
+        return False
+    positional = [
+        p for p in signature.parameters.values()
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    # drop the receiver (`self` / `cls`) an unbound method still carries
+    positional = positional[1:]
+    if len(positional) < len(params):
+        return False
+    # extra positional parameters the protocol doesn't supply must be optional,
+    # else a caller matching the protocol would fail to provide them
+    for p in positional[len(params):]:
+        if p.default is inspect.Parameter.empty:
+            return False
+    # likewise any required keyword-only parameter would break a protocol call
+    for p in signature.parameters.values():
+        if p.kind == inspect.Parameter.KEYWORD_ONLY and p.default is inspect.Parameter.empty:
+            return False
+    for (expected, variance), p in zip(params, positional):
+        if p.name in hints:
+            actual = hints[p.name]
+        elif p.default is not inspect.Parameter.empty:
+            # a reified default gives the parameter's inferred type at runtime
+            actual = type(p.default)
+        else:
+            return False
+        if not _by_variance_ok(actual, expected, variance):
+            return False
+    if ret is not None:
+        expected, variance = ret
+        if \"return\" not in hints or not _by_variance_ok(hints[\"return\"], expected, variance):
+            return False
+    return True
+
 def _by_protocol_is(value, members):
     klass = type(value)
-    for name, expected, variance in members:
-        actual = _by_member_annotation(klass, name)
-        if actual is _by_proto_missing:
-            return False
-        if variance == 3 or actual == expected:
-            continue
-        if variance == 1 and _by_proto_sub(actual, expected):
-            continue
-        if variance == 2 and _by_proto_sub(expected, actual):
-            continue
-        return False
+    for member in members:
+        kind = member[0]
+        if kind == \"attr\":
+            _, name, expected, variance = member
+            actual = _by_member_annotation(klass, name)
+            if actual is _by_proto_missing or not _by_variance_ok(actual, expected, variance):
+                return False
+        else:
+            _, name, params, ret = member
+            if not _by_method_matches(klass, name, params, ret):
+                return False
     return True
 ";
 
-/// render a protocol member list as the python list-of-tuples literal
-/// `_by_protocol_is` takes as its `members` argument. shared with the checked
-/// cast, which validates the same structural claim
+/// the runtime variance code `_by_variance_ok` expects
+fn variance_code(variance: ArgVariance) -> u8 {
+    match variance {
+        ArgVariance::Invariant => 0,
+        ArgVariance::Covariant => 1,
+        ArgVariance::Contravariant => 2,
+        ArgVariance::Bivariant => 3,
+    }
+}
+
+/// render a protocol member list as the python list literal `_by_protocol_is`
+/// takes as its `members` argument. shared with the checked cast, which
+/// validates the same structural claim. each entry is a kind-tagged tuple:
+/// `(\"attr\", name, type, variance)` or `(\"method\", name, [(type, variance),
+/// …], return_or_None)`
 pub(crate) fn protocol_members_literal(checks: &[ProtocolMemberCheck]) -> String {
+    let type_variance = |(expected, variance): &(String, ArgVariance)| {
+        format!("({expected}, {})", variance_code(*variance))
+    };
     let entries = checks
         .iter()
-        .map(|check| {
-            let code = match check.variance {
-                ArgVariance::Invariant => 0,
-                ArgVariance::Covariant => 1,
-                ArgVariance::Contravariant => 2,
-                ArgVariance::Bivariant => 3,
-            };
-            format!("({:?}, {}, {code})", check.name, check.expected)
+        .map(|check| match check {
+            ProtocolMemberCheck::Attribute {
+                name,
+                expected,
+                variance,
+            } => format!(
+                "(\"attr\", {name:?}, {expected}, {})",
+                variance_code(*variance)
+            ),
+            ProtocolMemberCheck::Method { name, params, ret } => {
+                let params = params
+                    .iter()
+                    .map(type_variance)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let ret = ret.as_ref().map_or("None".to_owned(), type_variance);
+                format!("(\"method\", {name:?}, [{params}], {ret})")
+            }
         })
         .collect::<Vec<_>>()
         .join(", ");
@@ -776,11 +865,10 @@ mod tests {
     }
 
     #[test]
-    fn protocol_with_method_member_becomes_false() {
-        // a protocol whose interface has a *method* member can't be checked at
-        // runtime — a method's specialization isn't recoverable from a reified
-        // attribute annotation — so ty reports the error and the lowering is
-        // the constant it always is, with no runtime residue
+    fn protocol_method_return_is_covariant() {
+        // a method member is checkable too: its return type is checked
+        // covariantly against the value method's reified return annotation. an
+        // empty parameter list, then the return `(int, 1)`
         let out = out(indoc! {"
             from typing import Protocol
             class P[T](Protocol):
@@ -788,11 +876,51 @@ mod tests {
             def f(x: object) -> bool:
                 return x is P[int]
         "});
+        assert!(
+            out.contains("return _by_protocol_is(x, [(\"method\", \"get\", [], (int, 1))])"),
+            "method return checked covariantly: {out}"
+        );
+        assert!(
+            out.contains("def _by_method_matches"),
+            "method-check runtime emitted: {out}"
+        );
+    }
+
+    #[test]
+    fn protocol_method_parameter_is_contravariant() {
+        // a method parameter is checked contravariantly (`in out T` keeps `T`
+        // invariant so the example is unambiguous); the method declares no
+        // meaningful return, so `ret` is `None`
+        let out = out(indoc! {"
+            from typing import Protocol
+            class A[in out T](Protocol):
+                def f(self, other: T): ...
+            def f(x: object) -> bool:
+                return x is A[int]
+        "});
+        assert!(
+            out.contains("return _by_protocol_is(x, [(\"method\", \"f\", [(int, 2)], None)])"),
+            "method parameter checked contravariantly: {out}"
+        );
+    }
+
+    #[test]
+    fn protocol_with_unspellable_member_becomes_false() {
+        // a member whose specialized type has no runtime spelling (a callable
+        // attribute) can't be checked, so the whole protocol falls back to the
+        // erased-target error and the lowering is the constant it always is
+        let out = out(indoc! {"
+            from typing import Protocol
+            from collections.abc import Callable
+            class P[T](Protocol):
+                cb: Callable[[T], T]
+            def f(x: object) -> bool:
+                return x is P[int]
+        "});
         assert!(out.contains("return False"), "protocol target folds: {out}");
-        assert!(!out.contains("_parametric_is"), "no probe emitted: {out}");
         assert!(
             !out.contains("_by_protocol_is"),
-            "no structural check: {out}"
+            "no structural check for an unspellable member: {out}"
         );
     }
 
@@ -808,7 +936,7 @@ mod tests {
                 return x is A[int]
         "});
         assert!(
-            out.contains("return _by_protocol_is(x, [(\"a\", int, 0)])"),
+            out.contains("return _by_protocol_is(x, [(\"attr\", \"a\", int, 0)])"),
             "data-member protocol checks reified annotation: {out}"
         );
         assert!(
@@ -827,7 +955,7 @@ mod tests {
                 return x is not A[bool]
         "});
         assert!(
-            out.contains("return not _by_protocol_is(x, [(\"a\", bool, 0)])"),
+            out.contains("return not _by_protocol_is(x, [(\"attr\", \"a\", bool, 0)])"),
             "is not negates the structural check: {out}"
         );
     }
@@ -843,7 +971,9 @@ mod tests {
                 return x is A[int, str]
         "});
         assert!(
-            out.contains("return _by_protocol_is(x, [(\"a\", int, 0), (\"b\", str, 0)])"),
+            out.contains(
+                "return _by_protocol_is(x, [(\"attr\", \"a\", int, 0), (\"attr\", \"b\", str, 0)])"
+            ),
             "each data member is checked: {out}"
         );
     }
@@ -858,7 +988,7 @@ mod tests {
                 return x is A[int]
         "});
         assert!(
-            out.contains("return _by_protocol_is(x, [(\"a\", list[int], 0)])"),
+            out.contains("return _by_protocol_is(x, [(\"attr\", \"a\", list[int], 0)])"),
             "member type is spelled with the specialization applied: {out}"
         );
     }
@@ -876,7 +1006,7 @@ mod tests {
                 return x is A[int]
         "});
         assert!(
-            out.contains("return _by_protocol_is(x, [(\"a\", int, 1)])"),
+            out.contains("return _by_protocol_is(x, [(\"attr\", \"a\", int, 1)])"),
             "read-only property member is covariant: {out}"
         );
     }
