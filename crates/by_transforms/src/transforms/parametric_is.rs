@@ -85,29 +85,97 @@ pub(crate) fn variance_tuple(variances: &[u8]) -> String {
 }
 
 pub(crate) const PARAMETRIC_IS_RUNTIME: &str = "\
+def _by_type_param_defaults(args):
+    # a class records its generic bases *unsubstituted* — `class L[T = Never]
+    # (list[T])` stores `list[T]`, never `list[Never]` — so a type parameter
+    # left at its pep 696 default resolves to that default rather than staying a
+    # bare TypeVar that matches nothing
+    resolved = []
+    substituted = False
+    for arg in args:
+        has_default = getattr(arg, \"has_default\", None)
+        if has_default is not None and has_default():
+            resolved.append(arg.__default__)
+            substituted = True
+        else:
+            resolved.append(arg)
+    return tuple(resolved) if substituted else args
+
+def _by_subst(annotation, mapping):
+    # replace type parameters with the arguments bound to them, rebuilding
+    # nested aliases (`list[dict[str, T]]` with `T = int` → `list[dict[str, int]]`)
+    try:
+        if annotation in mapping:
+            return mapping[annotation]
+    except TypeError:
+        pass
+    args = getattr(annotation, \"__args__\", ())
+    if not args:
+        return annotation
+    replaced = tuple(_by_subst(arg, mapping) for arg in args)
+    if replaced == args:
+        return annotation
+    origin = getattr(annotation, \"__origin__\", None)
+    if origin is None:
+        return annotation
+    try:
+        return origin[replaced]
+    except TypeError:
+        return annotation
+
+def _by_specialize(alias, origin, depth=0):
+    # the arguments with which `alias` satisfies `origin`, resolved *down the
+    # declared base chain* rather than assumed to line up positionally. a base
+    # that fixes or reorders its arguments is then followed faithfully:
+    # `class Odd[T](list[int])` is a `list[int]` whatever `T` is, and
+    # `class Swap[A, B](dict[B, A])` specializes `dict` in the other order
+    if depth > 16:
+        return None
+    klass = getattr(alias, \"__origin__\", alias)
+    if not isinstance(klass, type):
+        return None
+    args = getattr(alias, \"__args__\", ())
+    params = getattr(klass, \"__type_params__\", ())
+    if not args:
+        defaulted = _by_type_param_defaults(params)
+        if defaulted is not params:
+            args = defaulted
+    if klass is origin:
+        return args or None
+    mapping = {}
+    for param, arg in zip(params, args):
+        try:
+            mapping[param] = arg
+        except TypeError:
+            pass
+    bases = klass.__dict__.get(\"__orig_bases__\")
+    if bases is None:
+        # a class inheriting only plain classes records no `__orig_bases__`
+        bases = getattr(klass, \"__bases__\", ())
+    for base in bases:
+        found = _by_specialize(_by_subst(base, mapping) if mapping else base, origin, depth + 1)
+        if found is not None:
+            return found
+    # the declared bases don't reach `origin`: a builtin registered as a *virtual*
+    # subclass of an abc (`list` for `Sequence`) has no base to walk. its
+    # arguments do line up positionally once membership is established. this runs
+    # only after resolution has failed, so it applies to the already-resolved base
+    # (`list[int]`), never to a subclass that fixes or reorders arguments
+    if args and isinstance(origin, type):
+        try:
+            if issubclass(klass, origin):
+                return args
+        except TypeError:
+            pass
+    return None
+
 def _by_generic_args(value, origin):
-    found = []
-    def consider(alias):
-        base_origin = getattr(alias, \"__origin__\", None)
-        if base_origin is origin:
-            found.append(getattr(alias, \"__args__\", ()))
-        elif isinstance(base_origin, type) and isinstance(origin, type):
-            # a specialization of a sub-origin (`list[int]` for a `Sequence`
-            # target) carries the arguments through inheritance, matched by
-            # position once membership is established
-            try:
-                is_sub = issubclass(base_origin, origin)
-            except TypeError:
-                is_sub = False
-            if is_sub:
-                found.append(getattr(alias, \"__args__\", ()))
+    # an explicit `A[int]()` records its specialization on the instance;
+    # otherwise the class itself is the starting point and any pep 696 defaults
+    # stand in for the arguments it was constructed with
     reified = getattr(value, \"__orig_class__\", None)
-    if reified is not None:
-        consider(reified)
-    for klass in type(value).__mro__:
-        for base in klass.__dict__.get(\"__orig_bases__\", ()):
-            consider(base)
-    return found
+    found = _by_specialize(reified if reified is not None else type(value), origin)
+    return [found] if found is not None else []
 
 def _parametric_is(value, alias, variances):
     alias = getattr(alias, \"__value__\", alias)
