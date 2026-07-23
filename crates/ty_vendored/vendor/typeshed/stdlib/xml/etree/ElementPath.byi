@@ -34,4 +34,4 @@ def find(elem: Element[dynamic], path: str, namespaces: dict[str, str] | None = 
 def findall(elem: Element[dynamic], path: str, namespaces: dict[str, str] | None = None) -> list[Element]
 
 def findtext(elem: Element[dynamic], path: str, default: None = None, namespaces: dict[str, str] | None = None) -> str | None
-def findtext[Element](elem: Element[dynamic], path: str, default: Element, namespaces: dict[str, str] | None = None) -> Element | str
+def findtext[T](elem: Element[dynamic], path: str, default: T, namespaces: dict[str, str] | None = None) -> T | str
