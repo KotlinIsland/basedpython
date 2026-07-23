@@ -926,6 +926,74 @@ mod tests {
     }
 
     #[test]
+    fn var_decl() {
+        // `var` is the mutable counterpart of `let`: the keyword is stripped and
+        // nothing is declared beyond the assignment itself — no `Final`
+        check("var a = 1\n", "a = 1\n");
+    }
+
+    #[test]
+    fn var_decl_typed() {
+        check("var a: int = 1\n", "a: int = 1\n");
+    }
+
+    #[test]
+    fn var_decl_valueless_typed() {
+        check("var a: int\n", "a: int\n");
+    }
+
+    #[test]
+    fn var_decl_in_class() {
+        check(
+            indoc! {"
+                class A:
+                    var a = 1
+                    var b: int = 2
+                    var c: str
+            "},
+            indoc! {"
+                class A:
+                    a = 1
+                    b: int = 2
+                    c: str
+            "},
+        );
+    }
+
+    #[test]
+    fn var_decl_in_function() {
+        check(
+            indoc! {"
+                def f():
+                    var a = 1
+                    return a
+            "},
+            indoc! {"
+                def f():
+                    a = 1
+                    return a
+            "},
+        );
+    }
+
+    #[test]
+    fn var_decl_with_modifier_chain() {
+        // a visibility modifier ahead of `var` is stripped with it, matching the
+        // bare-assignment modifier forms
+        check("private var a = 1\n", "a = 1\n");
+    }
+
+    #[test]
+    fn var_as_identifier_is_not_a_declaration() {
+        // as with `let`, `var` only introduces a declaration when shaped like
+        // `var NAME =` or `var NAME :` — otherwise it is an ordinary identifier
+        check("var = 5\n", "var = 5\n");
+        check("var: int = 5\n", "var: int = 5\n");
+        check("print(var)\n", "print(var)\n");
+        check("var, y = 1, 2\n", "var, y = 1, 2\n");
+    }
+
+    #[test]
     fn let_decl_in_class() {
         check(
             indoc! {"

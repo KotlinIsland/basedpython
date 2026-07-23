@@ -360,8 +360,8 @@ impl<'src> Parser<'src> {
         }
 
         // The current token must itself be a modifier or an introducer
-        // (`let` and bare `abstract a: T`) for a chain or introducer to be possible.
-        if !is_modifier_kw(kw) && kw != "let" {
+        // (`let` / `var` and bare `abstract a: T`) for a chain or introducer to be possible.
+        if !is_modifier_kw(kw) && !matches!(kw, "let" | "var") {
             return None;
         }
 
@@ -418,6 +418,50 @@ impl<'src> Parser<'src> {
                             self.bump(TokenKind::Name);
                         }
                         return Some(self.parse_let_decl(start));
+                    }
+                    if text == "var" {
+                        // `var` is the mutable counterpart of `let`. it declares
+                        // nothing beyond what the surface already says, so it
+                        // lowers through the modifier-assignment path: the
+                        // keyword is stripped and `NAME [: T] = value` is left
+                        // behind. shape-gated exactly like `let` so an ordinary
+                        // identifier named `var` is never hijacked
+                        let following = self.peek_nth(idx + 1).0;
+                        if self.peek_nth(idx).0 != TokenKind::Name
+                            || !matches!(
+                                following,
+                                TokenKind::Colon
+                                    | TokenKind::Equal
+                                    | TokenKind::Newline
+                                    | TokenKind::Semi
+                                    | TokenKind::EndOfFile
+                            )
+                        {
+                            return None;
+                        }
+                        self.error_if_not_basedpython(
+                            "`var` declarations are not valid in .py files".to_string(),
+                        );
+                        if following == TokenKind::Colon {
+                            return Some(
+                                self.parse_modifier_annot_decl(start, "__modifier_annot__"),
+                            );
+                        }
+                        if following != TokenKind::Equal {
+                            // a bare `var x` carries neither a type nor a value,
+                            // so there is nothing for it to declare — unlike
+                            // `let x`, which declares an uninitialized `Final`.
+                            // parse it anyway so the rest of the file still
+                            // parses; the error blocks any output
+                            self.add_error(
+                                ParseErrorType::OtherError(
+                                    "`var` declaration requires a type or an initializer"
+                                        .to_string(),
+                                ),
+                                range,
+                            );
+                        }
+                        return Some(self.parse_modifier_assign_decl(start));
                     }
                     if is_modifier_kw(text) {
                         idx += 1;
@@ -821,8 +865,9 @@ impl<'src> Parser<'src> {
     /// Parses `final x = 5` → produces a synthetic `AnnAssign` that the
     /// `modifiers` transform rewrites to `x: Final = 5` at module scope or `x = 5` inside a class.
     /// Parses a basedpython modifier-chain assignment such as `final a = 1`,
-    /// `override a = 1`, or `final override a = 1` — any non-empty sequence of
-    /// modifier keywords (see [`is_modifier_kw`]) followed by `name = value`.
+    /// `override a = 1`, `final override a = 1`, or the `var a = 1` declaration —
+    /// any non-empty sequence of modifier keywords (see [`is_modifier_kw`])
+    /// followed by `name = value`.
     ///
     /// Produces a synthetic [`AnnAssign`] whose annotation is a `Name` with id
     /// `"__modifier_assign__"` and a range covering the modifier prefix in the
@@ -835,19 +880,23 @@ impl<'src> Parser<'src> {
     fn parse_modifier_assign_decl(&mut self, start: TextSize) -> Stmt {
         let modifier_start = self.current_token_range().start();
         // consume modifier keywords until we reach the variable name (the Name
-        // token immediately followed by `=`).
+        // token immediately followed by `=`, or by the end of the statement for
+        // the initializer-less `var x` the caller has already rejected).
         loop {
             let (next_kind, _) = self.peek_nth(0);
-            if next_kind == TokenKind::Equal {
+            if matches!(
+                next_kind,
+                TokenKind::Equal | TokenKind::Newline | TokenKind::Semi | TokenKind::EndOfFile
+            ) {
                 break;
             }
             self.bump(TokenKind::Name);
         }
         let name = self.parse_identifier();
-        self.bump(TokenKind::Equal);
-        let value = self
-            .parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
-            .expr;
+        let value = self.eat(TokenKind::Equal).then(|| {
+            self.parse_expression_list(ExpressionContext::yield_or_starred_bitwise_or())
+                .expr
+        });
         let target = Expr::Name(ast::ExprName {
             id: name.id.clone(),
             ctx: ExprContext::Store,
@@ -865,7 +914,7 @@ impl<'src> Parser<'src> {
         Stmt::AnnAssign(ast::StmtAnnAssign {
             target: Box::new(target),
             annotation: Box::new(annotation),
-            value: Some(Box::new(value)),
+            value: value.map(Box::new),
             simple: true,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,

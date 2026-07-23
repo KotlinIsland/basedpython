@@ -101,6 +101,90 @@ fn basedpython_valueless_untyped_let_parses_cleanly() {
 }
 
 #[test]
+fn basedpython_var_declaration_shapes() {
+    // `var NAME = v` and `var NAME: T [= v]` are mutable declarations: the
+    // keyword is carried by a synthetic marker annotation and the statement
+    // means exactly `NAME [: T] = v`
+    for (source, has_value) in [
+        ("var x = 5", true),
+        ("var x: int = 5", true),
+        ("var x: int", false),
+        ("private var x = 5", true),
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::AnnAssign(assign)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single AnnAssign for `{source}`");
+        };
+        assert_eq!(
+            assign.value.is_some(),
+            has_value,
+            "wrong initializer for `{source}`"
+        );
+        let Expr::Name(target) = assign.target.as_ref() else {
+            panic!("expected a name target for `{source}`");
+        };
+        assert_eq!(target.id.as_str(), "x");
+    }
+}
+
+#[test]
+fn basedpython_bare_var_is_rejected() {
+    // unlike `let x` (an uninitialized `Final`), `var x` declares nothing —
+    // neither a type nor a value — so it is a parse error rather than a
+    // statement that lowers to nothing
+    let error = parse(
+        "var x\n",
+        ParseOptions::from(Mode::Module).with_basedpython(true),
+    )
+    .expect_err("bare `var` must be rejected");
+    assert!(
+        matches!(
+            &error.error,
+            ParseErrorType::OtherError(message)
+                if message == "`var` declaration requires a type or an initializer"
+        ),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn basedpython_var_keyword_never_panics() {
+    // as with `let`, `var` is only the declaration keyword in the declaration
+    // shapes; every other use is an ordinary identifier and must parse
+    for source in [
+        "var",
+        "var = 5",
+        "var: int = 5",
+        "var(x)",
+        "x = var + 1",
+        "var, y = 1, 2",
+        "for var in items:\n    pass",
+        "var x = 5",
+        "var x: int = 5",
+    ] {
+        // success here is simply not panicking
+        let _ = parse(
+            source,
+            ParseOptions::from(Mode::Module).with_basedpython(true),
+        );
+    }
+}
+
+#[test]
+fn basedpython_var_as_identifier_is_not_a_declaration() {
+    // `var = 5` binds a variable named `var`; the declaration path must not
+    // claim it
+    let parsed = parse_basedpython_module("var = 5\n");
+    let [Stmt::Assign(assign)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a plain assignment");
+    };
+    let [Expr::Name(target)] = assign.targets.as_slice() else {
+        panic!("expected a single name target");
+    };
+    assert_eq!(target.id.as_str(), "var");
+}
+
+#[test]
 fn basedpython_local_once_param_modifiers() {
     // `local` / `once` before a parameter name are lifetime modifiers that the
     // parser consumes (no AST field). the parameter keeps its real name, and the
