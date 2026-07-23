@@ -29,7 +29,7 @@ use crate::types::{
     ApplyTypeMappingVisitor, CallableType, ClassBase, ClassLiteral, ClassType, CycleDetector,
     IntersectionType, KnownBoundMethodType, KnownClass, KnownInstanceType, LiteralValueTypeKind,
     MemberLookupPolicy, PropertyInstanceType, ProtocolInstanceType, SubclassOfInner,
-    SubclassOfType, TypeVarBoundOrConstraints, UnionType, UpcastPolicy,
+    SubclassOfType, TypeVarBoundOrConstraints, UnionType, UnsafeUnionType, UpcastPolicy,
 };
 use crate::{
     Db,
@@ -300,6 +300,7 @@ impl<'db> Type<'db> {
             | Type::SubclassOf(_)
             | Type::Union(_)
             | Type::Intersection(_)
+            | Type::UnsafeUnion(_)
             | Type::EnumComplement(_)
             | Type::Callable(_)
             | Type::KnownBoundMethod(
@@ -1071,6 +1072,31 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
     /// upper bound normalizes to this exact class object. That can only happen for a final class,
     /// so the exact object is the only valid specialization of the type variable.
     ///
+    /// Return a constraint set for two unsafe unions offering the same menu of
+    /// materializations: every element of each must be redundant with an element of the other.
+    ///
+    /// Requiring both directions keeps redundancy symmetric for unsafe unions, so that they are
+    /// equivalent exactly when their menus match, and one is never simplified out of a union or
+    /// intersection in favour of a different one.
+    fn check_unsafe_union_menus_match(
+        &self,
+        db: &'db dyn Db,
+        left: UnsafeUnionType<'db>,
+        right: UnsafeUnionType<'db>,
+    ) -> ConstraintSet<'db, 'c> {
+        let covered_by = |menu: &'db [Type<'db>], elements: &'db [Type<'db>]| {
+            elements.iter().when_all(db, self.constraints, |&element| {
+                menu.iter().when_any(db, self.constraints, |&candidate| {
+                    self.check_type_pair(db, element, candidate)
+                })
+            })
+        };
+
+        covered_by(right.elements(db), left.elements(db)).and(db, self.constraints, || {
+            covered_by(left.elements(db), right.elements(db))
+        })
+    }
+
     /// Return `None` for targets without a `.to_instance()` projection, allowing other type-pair
     /// branches to decide their relation.
     fn check_typevar_subclass_relation_to_target(
@@ -1435,6 +1461,48 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                     },
                 },
             ),
+
+            // An unsafe union is a union on the way *in* and an intersection on the way *out*.
+            //
+            // Out (source position): the value is treated as some one of its materializations,
+            // so it can go anywhere any single materialization can go. That is the intersection
+            // face, and it is what makes `UnsafeUnion[int, str]` usable as an `int`.
+            //
+            // In (target position): every materialization is a valid thing to store, so the type
+            // accepts whatever the plain union `A | B` accepts. That is the union face, and it is
+            // what makes both `f(1)` and `f("s")` valid for `f(a: UnsafeUnion[int, str])`.
+            //
+            // Neither face is a subtype relation: like every gradual type, an unsafe union is a
+            // subtype only of `object` (handled above). For redundancy — which drives union and
+            // intersection simplification, and equivalence — we require the two menus to match,
+            // so that `UnsafeUnion[int, str]` and `UnsafeUnion[str, int]` are equivalent but no
+            // unsafe union is ever silently simplified away.
+            (Type::UnsafeUnion(source_unsafe_union), _) => match self.relation {
+                TypeRelation::Subtyping | TypeRelation::SubtypingAssuming => self.never(),
+                TypeRelation::Assignability => source_unsafe_union.elements(db).iter().when_any(
+                    db,
+                    self.constraints,
+                    |&element| self.check_type_pair(db, element, target),
+                ),
+                TypeRelation::Redundancy { .. } => {
+                    let Type::UnsafeUnion(target_unsafe_union) = target else {
+                        return self.never();
+                    };
+                    self.check_unsafe_union_menus_match(
+                        db,
+                        source_unsafe_union,
+                        target_unsafe_union,
+                    )
+                }
+            },
+
+            (_, Type::UnsafeUnion(target_unsafe_union)) => match self.relation {
+                TypeRelation::Subtyping | TypeRelation::SubtypingAssuming => self.never(),
+                TypeRelation::Assignability => {
+                    self.check_type_pair(db, source, target_unsafe_union.to_union(db))
+                }
+                TypeRelation::Redundancy { .. } => self.never(),
+            },
 
             // In general, a TypeVar `T` is not redundant with a type `S` unless one of the two conditions is satisfied:
             // 1. `T` is a bound TypeVar and `T`'s upper bound is a subtype of `S`.
@@ -2849,6 +2917,17 @@ impl<'a, 'c, 'db> DisjointnessChecker<'a, 'c, 'db> {
                 .when_all(db, self.constraints, |e| {
                     self.check_type_pair(db, *e, other)
                 }),
+
+            // An unsafe union overlaps a type as soon as *one* of its materializations does,
+            // so it is disjoint only when every materialization is.
+            (Type::UnsafeUnion(unsafe_union), other) | (other, Type::UnsafeUnion(unsafe_union)) => {
+                unsafe_union
+                    .elements(db)
+                    .iter()
+                    .when_all(db, self.constraints, |element| {
+                        self.check_type_pair(db, *element, other)
+                    })
+            }
 
             // If we have two intersections, we test the positive elements of each one against the other intersection
             // Negative elements need a positive element on the other side in order to be disjoint.

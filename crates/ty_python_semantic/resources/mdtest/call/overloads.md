@@ -1320,6 +1320,10 @@ This is the step 5 of the overload call evaluation algorithm which specifies tha
 
 This is only performed if the previous step resulted in more than one matching overload.
 
+Where the spec then evaluates an ambiguous call as `Any`, ty evaluates it as the
+[`UnsafeUnion`](../unsafe_union.md) of the remaining overloads' return types: a gradual type whose
+materializations are exactly the possible results.
+
 ### Single list argument
 
 `overloaded.pyi`:
@@ -1427,8 +1431,8 @@ def _(list_int: list[int], list_any: list[Any]):
     # All materializations of `list[Any]` are assignable to `list[int]` and `list[Any]`, but the
     # return type of first and second overloads are not equivalent, so the overload matching
     # is ambiguous.
-    reveal_type(f(list_any))  # revealed: Unknown
-    reveal_type(f(*(list_any,)))  # revealed: Unknown
+    reveal_type(f(list_any))  # revealed: UnsafeUnion[int, str]
+    reveal_type(f(*(list_any,)))  # revealed: UnsafeUnion[int, str]
 ```
 
 ### Single tuple argument
@@ -1473,8 +1477,8 @@ def _(int_str: tuple[int, str], int_any: tuple[int, Any], any_any: tuple[Any, An
 
     # All materializations of `tuple[Any, Any]` are assignable to the parameters of all the
     # overloads, but the return types aren't equivalent, so the overload matching is ambiguous
-    reveal_type(f(any_any))  # revealed: Unknown
-    reveal_type(f(*(any_any,)))  # revealed: Unknown
+    reveal_type(f(any_any))  # revealed: UnsafeUnion[int, str]
+    reveal_type(f(*(any_any,)))  # revealed: UnsafeUnion[int, str]
 ```
 
 ### `Unknown` passed into an overloaded function annotated with protocols
@@ -1514,7 +1518,7 @@ def f(a: Foo, b: list[str], c: list[LiteralString], e):
     # specified currently), `(str | LiteralString) & Unknown` might also be a reasonable type
     # here (the union of all overload returns, intersected with `Unknown`) -- here that would
     # simplify to `str & Unknown`.
-    reveal_type(a.join(e))  # revealed: Unknown
+    reveal_type(a.join(e))  # revealed: UnsafeUnion[LiteralString, str]
 ```
 
 ### Multiple arguments
@@ -1564,8 +1568,8 @@ def _(list_int: list[int], list_any: list[Any], int_str: tuple[int, str], int_an
     # All materializations of first argument is assignable to the second overload and for the second
     # argument, they're assignable to the third overload, so no overloads are filtered out; the
     # return types of the remaining overloads are not equivalent, so overload matching is ambiguous
-    reveal_type(f(list_int, any_any))  # revealed: Unknown
-    reveal_type(f(*(list_int, any_any)))  # revealed: Unknown
+    reveal_type(f(list_int, any_any))  # revealed: UnsafeUnion[A, B]
+    reveal_type(f(*(list_int, any_any)))  # revealed: UnsafeUnion[A, B]
 ```
 
 ### `LiteralString` and `str`
@@ -1597,8 +1601,8 @@ def _(literal: LiteralString, string: str, any: Any):
 
     # `Any` matches both overloads, but the return types are not equivalent.
     # Pyright and mypy both reveal `str` here, contrary to the spec.
-    reveal_type(f(any))  # revealed: Unknown
-    reveal_type(f(*(any,)))  # revealed: Unknown
+    reveal_type(f(any))  # revealed: UnsafeUnion[LiteralString, str]
+    reveal_type(f(*(any,)))  # revealed: UnsafeUnion[LiteralString, str]
 ```
 
 ### Generics
@@ -1710,7 +1714,7 @@ def _(a_int: A[int], a_str: A[str], a_any: A[Any]):
 def _(b_int: B[int], b_str: B[str], b_any: B[Any]):
     reveal_type(b_int.method())  # revealed: int
     reveal_type(b_str.method())  # revealed: str
-    reveal_type(b_any.method())  # revealed: Unknown
+    reveal_type(b_any.method())  # revealed: UnsafeUnion[int, str]
 ```
 
 ### Variadic argument
@@ -1754,11 +1758,11 @@ def _(arg: list[Any]):
     # Matches both overload and the return types are equivalent
     reveal_type(f1(*arg))  # revealed: A
     # Matches both overload but the return types aren't equivalent
-    reveal_type(f2(*arg))  # revealed: Unknown
+    reveal_type(f2(*arg))  # revealed: UnsafeUnion[A, B]
     # Filters out the final overload and the return types are equivalent
     reveal_type(f3(*arg))  # revealed: A
     # Filters out the final overload but the return types aren't equivalent
-    reveal_type(f4(*arg))  # revealed: Unknown
+    reveal_type(f4(*arg))  # revealed: UnsafeUnion[A, B]
 ```
 
 ### Variadic argument with generics
@@ -2016,8 +2020,8 @@ from typing import Any
 from overloaded import A, B, C, f
 
 def _(arg: tuple[A | B, Any]):
-    reveal_type(f(arg))  # revealed: A | Unknown
-    reveal_type(f(*(arg,)))  # revealed: A | Unknown
+    reveal_type(f(arg))  # revealed: A | UnsafeUnion[B, C]
+    reveal_type(f(*(arg,)))  # revealed: A | UnsafeUnion[B, C]
 ```
 
 #### Both argument lists ambiguous
@@ -2050,8 +2054,8 @@ from typing import Any
 from overloaded import A, B, C, f
 
 def _(arg: tuple[A | B, Any]):
-    reveal_type(f(arg))  # revealed: Unknown
-    reveal_type(f(*(arg,)))  # revealed: Unknown
+    reveal_type(f(arg))  # revealed: UnsafeUnion[A, C] | UnsafeUnion[B, C]
+    reveal_type(f(*(arg,)))  # revealed: UnsafeUnion[A, C] | UnsafeUnion[B, C]
 ```
 
 ### Unknown argument with TypeVar overload

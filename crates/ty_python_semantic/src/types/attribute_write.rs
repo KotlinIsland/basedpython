@@ -11,9 +11,7 @@ use ty_module_resolver::KnownModule;
 
 use super::call::CallArguments;
 use super::callable::CallableTypeKind;
-use super::{
-    IntersectionType, KnownClass, KnownInstanceType, MemberLookupPolicy, Type, TypeQualifiers,
-};
+use super::{KnownClass, KnownInstanceType, MemberLookupPolicy, Type, TypeQualifiers};
 use crate::Db;
 use crate::place::{DefinedPlace, Definedness, Place, PlaceAndQualifiers, builtins_symbol};
 
@@ -29,10 +27,11 @@ pub(super) enum AttributeWriteRequirement<'db> {
         object_ty: Type<'db>,
         element_tys: &'db [Type<'db>],
     },
-    /// A write to an intersection may target any positive intersection element.
+    /// A write that may target any one of several element types: the positive elements of an
+    /// intersection, or the materializations of an unsafe union.
     Any {
         object_ty: Type<'db>,
-        intersection: IntersectionType<'db>,
+        element_tys: Vec<Type<'db>>,
     },
     /// A value may be assigned without an attribute-specific constraint.
     Unconstrained,
@@ -242,9 +241,16 @@ pub(super) fn attribute_write_requirement<'db>(
             // TODO: Handle negative intersection elements.
             AttributeWriteRequirement::Any {
                 object_ty,
-                intersection,
+                element_tys: intersection.positive(db).iter().copied().collect(),
             }
         }
+
+        // A write succeeds if it succeeds for some materialization, the same any-arm rule as an
+        // intersection.
+        Type::UnsafeUnion(unsafe_union) => AttributeWriteRequirement::Any {
+            object_ty,
+            element_tys: unsafe_union.elements(db).to_vec(),
+        },
 
         Type::EnumComplement(complement) => {
             attribute_write_requirement(db, complement.remaining_literal_union(db), attribute)
@@ -698,6 +704,7 @@ pub(super) fn assignment_attribute_members<'db>(
             }
             Type::Union(..)
             | Type::Intersection(..)
+            | Type::UnsafeUnion(..)
             | Type::TypeAlias(..)
             | Type::Dynamic(..)
             | Type::Divergent(_)

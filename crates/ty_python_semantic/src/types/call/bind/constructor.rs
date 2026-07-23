@@ -5,7 +5,9 @@ use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::dedicated::django;
 use crate::types::generics::Specialization;
 use crate::types::signatures::Parameter;
-use crate::types::{BoundTypeVarInstance, ClassLiteral, DynamicType, Type, TypeContext};
+use crate::types::{
+    BoundTypeVarInstance, ClassLiteral, DynamicType, Type, TypeContext, UnsafeUnionType,
+};
 
 /// Bindings for a constructor call.
 ///
@@ -209,8 +211,6 @@ impl<'db> ConstructorBinding<'db> {
 
     /// Compute the overall effective return type of this `ConstructorBinding`.
     pub(super) fn return_type(&self, db: &'db dyn Db) -> Type<'db> {
-        let constructed_instance_type = self.constructed_instance_type();
-
         // If we are checking downstream constructors, and the downstream constructor resolves to a
         // non-instance return, that becomes the effective constructor return. This can only happen
         // if we are a metaclass `__call__` returning an instance of the constructed class, but
@@ -240,7 +240,13 @@ impl<'db> ConstructorBinding<'db> {
             return pinned;
         }
 
-        constructed_instance_type
+        self.instance_return_type(db)
+    }
+
+    /// The type of the constructed instance itself, used when no overload dictates a more
+    /// specific return type.
+    fn instance_return_type(&self, db: &'db dyn Db) -> Type<'db> {
+        self.constructed_instance_type()
             .apply_optional_specialization(db, self.instance_return_specialization(db))
     }
 
@@ -404,24 +410,28 @@ impl<'db> ConstructorBinding<'db> {
         // consider all overloads' return types. (This increases the chances of an `Unknown`
         // return, but still preserves more precise returns in unambiguous cases.)
         if matching_overloads.clone().next().is_none() {
-            self.analyze_overload_returns(db, self.callable().overloads().iter())
+            self.analyze_overload_returns(db, self.callable().overloads().iter(), false)
         } else {
-            self.analyze_overload_returns(db, matching_overloads)
+            self.analyze_overload_returns(db, matching_overloads, true)
         }
     }
 
     /// Combine return types from an iterator of overloads to determine the effective explicit
     /// return type of the constructor call. See `explicit_return_type` for details.
+    ///
+    /// `matched` records whether these are the overloads that matched the call. When several of
+    /// them disagree, the call could produce any one of their returns, which is exactly an unsafe
+    /// union. When no overload matched at all we are recovering from an error instead, so we fall
+    /// back to `Unknown` rather than letting a speculative menu cause follow-on diagnostics.
     fn analyze_overload_returns<'a>(
         &self,
         db: &'db dyn Db,
         overloads: impl IntoIterator<Item = &'a Binding<'db>>,
+        matched: bool,
     ) -> Option<Type<'db>>
     where
         'db: 'a,
     {
-        // If we see both instance and non-instance returns, we return Unknown.
-        // If we see multiple different non-instance returns, we also return Unknown.
         // If we see multiple instance returns, we return `None` (we know we are constructing an
         // instance of the constructed class, but we don't have more precise information.)
         // Otherwise, we return the single non-instance return if present, or the single
@@ -429,7 +439,7 @@ impl<'db> ConstructorBinding<'db> {
         // could be a specific subclass of the constructed class.)
         let mut sole_instance_return = None;
         let mut saw_instance_return = false;
-        let mut non_instance_return = None;
+        let mut non_instance_returns: Vec<Type<'db>> = Vec::new();
         for overload in overloads {
             let (return_ty, is_instance_return) = self.single_overload_return(db, overload);
             if is_instance_return {
@@ -439,22 +449,25 @@ impl<'db> ConstructorBinding<'db> {
                     sole_instance_return = Some(return_ty);
                     saw_instance_return = true;
                 }
-            } else {
-                non_instance_return = Some(match non_instance_return {
-                    None => return_ty,
-                    Some(previous) if previous == return_ty => return_ty,
-                    Some(_) => Type::unknown(),
-                });
+            } else if !non_instance_returns.contains(&return_ty) {
+                non_instance_returns.push(return_ty);
             }
         }
-        if let Some(non_instance_return) = non_instance_return {
-            if saw_instance_return {
-                Some(Type::unknown())
-            } else {
-                Some(non_instance_return)
+
+        match non_instance_returns.as_slice() {
+            [] => sole_instance_return,
+            [sole_non_instance_return] if !saw_instance_return => Some(*sole_non_instance_return),
+            _ => {
+                if !matched {
+                    return Some(Type::unknown());
+                }
+                if saw_instance_return {
+                    non_instance_returns.push(
+                        sole_instance_return.unwrap_or_else(|| self.instance_return_type(db)),
+                    );
+                }
+                Some(UnsafeUnionType::from_elements(db, non_instance_returns))
             }
-        } else {
-            sole_instance_return
         }
     }
 

@@ -291,6 +291,20 @@ impl<'db> Type<'db> {
                     })
             }
 
+            // Only the materializations that are callable can be the one at hand; a
+            // non-callable materialization does not disqualify the others.
+            Type::UnsafeUnion(unsafe_union) => {
+                let mut callables = SmallVec::new();
+                for element in unsafe_union.elements(db) {
+                    if let Some(element_callable) =
+                        element.try_upcast_to_callable_with_policy_and_context(db, policy, context)
+                    {
+                        callables.extend(element_callable.into_inner());
+                    }
+                }
+                (!callables.is_empty()).then(|| CallableTypes::new(callables))
+            }
+
             Type::EnumComplement(complement) => complement
                 .remaining_literal_union(db)
                 .try_upcast_to_callable_with_policy_and_context(db, policy, context),

@@ -2122,9 +2122,9 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
                 }
                 result
             }
-            AttributeWriteRequirement::Any { intersection, .. } => {
+            AttributeWriteRequirement::Any { element_tys, .. } => {
                 let mut result = self.never();
-                for element_ty in intersection.positive(db) {
+                for element_ty in element_tys {
                     let requirement = attribute_write_requirement(db, *element_ty, member_name);
                     let element_result = self.check_property_write_requirement(
                         db,

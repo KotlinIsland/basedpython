@@ -71,7 +71,8 @@ use crate::types::{
     InternedConstraintSet, IntersectionType, KnownBoundMethodType, KnownClass, KnownInstanceType,
     LiteralValueTypeKind, NominalInstanceType, PropertyInstanceType, SpecialFormType,
     TypeAliasType, TypeContext, TypeMapping, TypeVarBoundOrConstraints, TypeVarVariance,
-    UnionAccumulator, UnionBuilder, UnionType, WrapperDescriptorKind, enums, list_members,
+    UnionAccumulator, UnionBuilder, UnionType, UnsafeUnionType, WrapperDescriptorKind, enums,
+    list_members,
 };
 use crate::{DisplaySettings, FxOrderSet, Program};
 use ruff_db::diagnostic::{Annotation, Diagnostic, Span, SubDiagnostic, SubDiagnosticSeverity};
@@ -357,11 +358,38 @@ impl<'db> CallableItem<'db> {
 }
 
 /// A single element in a union of callables.
-/// This could be a single callable or an intersection of callables.
-/// If there are multiple items, they form an intersection.
+/// This could be a single callable or several callables combined by [`ItemCombination`].
 #[derive(Debug, Clone)]
 struct BindingsElement<'db> {
     items: SmallVec<[CallableItem<'db>; 1]>,
+    combination: ItemCombination,
+}
+
+/// How the multiple items of a [`BindingsElement`] combine into one result.
+///
+/// Both kinds bind the same way — the call succeeds if *some* item does — and differ only in
+/// how the successful items' types are recombined.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ItemCombination {
+    /// The items are the elements of an intersection.
+    Intersection,
+    /// The items are the materializations of an [`UnsafeUnion`].
+    ///
+    /// [`UnsafeUnion`]: Type::UnsafeUnion
+    UnsafeUnion,
+}
+
+impl ItemCombination {
+    /// Recombine per-item types (return types, callable types) the way this combination does.
+    fn combine<'db, I>(self, db: &'db dyn Db, types: I) -> Type<'db>
+    where
+        I: IntoIterator<Item = Type<'db>>,
+    {
+        match self {
+            ItemCombination::Intersection => IntersectionType::from_elements(db, types),
+            ItemCombination::UnsafeUnion => UnsafeUnionType::from_elements(db, types),
+        }
+    }
 }
 
 impl<'db> BindingsElement<'db> {
@@ -388,7 +416,7 @@ impl<'db> BindingsElement<'db> {
 
     fn return_type(&self, db: &'db dyn Db) -> Type<'db> {
         if self.is_callable() {
-            IntersectionType::from_elements(
+            self.combination.combine(
                 db,
                 self.items
                     .iter()
@@ -674,7 +702,28 @@ impl<'db> Bindings<'db> {
     where
         I: IntoIterator<Item = Bindings<'db>>,
     {
-        // Flatten all input bindings into a single intersection element
+        Self::from_combined(callable_type, bindings_iter, ItemCombination::Intersection)
+    }
+
+    /// Creates a new `Bindings` from an iterator of [`Bindings`]s for the materializations of
+    /// an unsafe union. All input bindings are combined into a single element.
+    /// Panics if the iterator is empty.
+    pub(crate) fn from_unsafe_union<I>(callable_type: Type<'db>, bindings_iter: I) -> Self
+    where
+        I: IntoIterator<Item = Bindings<'db>>,
+    {
+        Self::from_combined(callable_type, bindings_iter, ItemCombination::UnsafeUnion)
+    }
+
+    fn from_combined<I>(
+        callable_type: Type<'db>,
+        bindings_iter: I,
+        combination: ItemCombination,
+    ) -> Self
+    where
+        I: IntoIterator<Item = Bindings<'db>>,
+    {
+        // Flatten all input bindings into a single element
         let mut implicit_dunder_new_is_possibly_unbound = true;
         let mut implicit_dunder_init_is_possibly_unbound = true;
         let mut inner_items_acc = SmallVec::new();
@@ -690,6 +739,7 @@ impl<'db> Bindings<'db> {
         assert!(!inner_items_acc.is_empty());
         let elements = smallvec![BindingsElement {
             items: inner_items_acc,
+            combination,
         }];
         Self {
             callable_type,
@@ -1055,6 +1105,7 @@ impl<'db> Bindings<'db> {
                 .into_iter()
                 .map(|elem| BindingsElement {
                     items: elem.items.into_iter().map(|item| item.map(f)).collect(),
+                    combination: elem.combination,
                 })
                 .collect(),
         }
@@ -1372,8 +1423,8 @@ impl<'db> Bindings<'db> {
             // Find the highest priority error among bindings in this element
             let max_priority = element.error_priority(context.db());
 
-            // Construct the intersection type from the bindings
-            let intersection_type = IntersectionType::from_elements(
+            // Reconstruct the combined callable type from the bindings
+            let intersection_type = element.combination.combine(
                 context.db(),
                 element.items.iter().map(CallableItem::callable_type),
             );
@@ -3093,6 +3144,7 @@ impl<'db> From<CallableBinding<'db>> for Bindings<'db> {
             callable_type: from.callable_type,
             elements: smallvec_inline![BindingsElement {
                 items: smallvec_inline![CallableItem::Regular(from)],
+                combination: ItemCombination::Intersection,
             }],
             implicit_dunder_new_is_possibly_unbound: false,
             implicit_dunder_init_is_possibly_unbound: false,
@@ -3118,6 +3170,7 @@ impl<'db> From<Binding<'db>> for Bindings<'db> {
             callable_type,
             elements: smallvec_inline![BindingsElement {
                 items: smallvec_inline![CallableItem::Regular(callable_binding)],
+                combination: ItemCombination::Intersection,
             }],
             implicit_dunder_new_is_possibly_unbound: false,
             implicit_dunder_init_is_possibly_unbound: false,
@@ -4101,8 +4154,22 @@ impl<'db> CallableBinding<'db> {
         };
 
         if !are_return_types_equivalent_for_all_matching_overloads {
-            // Overload matching is ambiguous.
-            self.overload_call_return_type = Some(OverloadCallReturnType::Ambiguous);
+            // Overload matching is ambiguous: the call resolves to one of the remaining
+            // overloads, but which one depends on how the gradual argument materializes. The
+            // possible results are exactly those overloads' return types, which is what an
+            // unsafe union describes.
+            let possible_return_types = self
+                .matching_overloads()
+                .map(|(_, overload)| overload.return_type())
+                .collect::<Vec<_>>();
+            let return_type = match UnsafeUnionType::from_elements(db, possible_return_types) {
+                // A dynamic return type admits every materialization, so the menu is no longer
+                // finite. Keep the marker type instead, which records that this `Unknown` came
+                // from a degraded overload match.
+                Type::Dynamic(_) => Type::Dynamic(DynamicType::AmbiguousOverload),
+                return_type => return_type,
+            };
+            self.overload_call_return_type = Some(OverloadCallReturnType::Ambiguous(return_type));
         }
     }
 
@@ -4240,7 +4307,7 @@ impl<'db> CallableBinding<'db> {
             return match overload_call_return_type {
                 OverloadCallReturnType::ArgumentTypeExpansion(return_type) => return_type,
                 OverloadCallReturnType::ArgumentTypeExpansionLimitReached(_) => Type::unknown(),
-                OverloadCallReturnType::Ambiguous => Type::Dynamic(DynamicType::AmbiguousOverload),
+                OverloadCallReturnType::Ambiguous(return_type) => return_type,
             };
         }
         if let Some((_, first_overload)) = self.matching_overloads().next() {
@@ -4491,7 +4558,9 @@ impl<'db> IntoIterator for CallableBinding<'db> {
 enum OverloadCallReturnType<'db> {
     ArgumentTypeExpansion(Type<'db>),
     ArgumentTypeExpansionLimitReached(usize),
-    Ambiguous,
+    /// The call matched several overloads with differing return types, because an argument was
+    /// gradual. The type is the unsafe union of the possible return types.
+    Ambiguous(Type<'db>),
 }
 
 #[derive(Debug)]

@@ -1478,6 +1478,20 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                     .fmt_detailed(f)?;
                 f.write_char(']')
             }
+            Type::UnsafeUnion(unsafe_union) => {
+                f.with_type(Type::SpecialForm(SpecialFormType::UnsafeUnion))
+                    .write_str("UnsafeUnion")?;
+                f.write_char('[')?;
+                for (index, element) in unsafe_union.elements(self.db).iter().enumerate() {
+                    if index > 0 {
+                        f.write_str(", ")?;
+                    }
+                    element
+                        .display_with(self.db, self.settings.clone())
+                        .fmt_detailed(f)?;
+                }
+                f.write_char(']')
+            }
             Type::Overlapping(overlapping) => {
                 f.with_type(Type::SpecialForm(SpecialFormType::Overlapping))
                     .write_str("Overlapping")?;

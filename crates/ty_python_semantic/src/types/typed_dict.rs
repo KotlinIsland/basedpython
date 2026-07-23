@@ -1864,6 +1864,11 @@ pub(crate) fn extract_unpacked_typed_dict_from_value_type<'db>(
                 openness,
             })
         }
+        // Unpacking has to be valid whichever materialization this turns out to be, so the
+        // union face is the right shape here.
+        Type::UnsafeUnion(unsafe_union) => {
+            extract_unpacked_typed_dict_from_value_type(db, unsafe_union.to_union(db))
+        }
         Type::TypeAlias(alias) => {
             extract_unpacked_typed_dict_from_value_type(db, alias.value_type(db))
         }

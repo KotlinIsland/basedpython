@@ -11,7 +11,7 @@ use crate::{
         EnumComplementType, GenericAlias, IntersectionType, KnownBoundMethodType,
         KnownInstanceType, NominalInstanceType, OverlappingType, PropertyInstanceType,
         ProtocolInstanceType, StaticClassLiteral, SubclassOfType, Type, TypeAliasType,
-        TypeFormType, TypeGuardType, TypeIsType, TypedDictType, UnionType,
+        TypeFormType, TypeGuardType, TypeIsType, TypedDictType, UnionType, UnsafeUnionType,
         bound_super::walk_bound_super_type,
         callable::walk_callable_type,
         class::walk_generic_alias,
@@ -30,6 +30,7 @@ use crate::{
         type_form::walk_typeform_type,
         typed_dict::walk_typed_dict_type,
         typevar::{TypeVarInstance, walk_bound_type_var_type, walk_type_var_type},
+        unsafe_union::walk_unsafe_union,
         walk_property_instance_type, walk_typeguard_type, walk_typeis_type,
     },
 };
@@ -47,6 +48,10 @@ pub(crate) trait TypeVisitor<'db> {
 
     fn visit_union_type(&self, db: &'db dyn Db, union: UnionType<'db>) {
         walk_union(db, union, self);
+    }
+
+    fn visit_unsafe_union_type(&self, db: &'db dyn Db, unsafe_union: UnsafeUnionType<'db>) {
+        walk_unsafe_union(db, unsafe_union, self);
     }
 
     fn visit_intersection_type(&self, db: &'db dyn Db, intersection: IntersectionType<'db>) {
@@ -152,6 +157,7 @@ pub(crate) trait TypeVisitor<'db> {
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub(super) enum NonAtomicType<'db> {
     Union(UnionType<'db>),
+    UnsafeUnion(UnsafeUnionType<'db>),
     Intersection(IntersectionType<'db>),
     EnumComplement(EnumComplementType<'db>),
     FunctionLiteral(FunctionType<'db>),
@@ -208,6 +214,9 @@ impl<'db> From<Type<'db>> for TypeKind<'db> {
                 TypeKind::NonAtomic(NonAtomicType::EnumComplement(complement))
             }
             Type::Union(union) => TypeKind::NonAtomic(NonAtomicType::Union(union)),
+            Type::UnsafeUnion(unsafe_union) => {
+                TypeKind::NonAtomic(NonAtomicType::UnsafeUnion(unsafe_union))
+            }
             Type::BoundMethod(method) => TypeKind::NonAtomic(NonAtomicType::BoundMethod(method)),
             Type::BoundSuper(bound_super) => {
                 TypeKind::NonAtomic(NonAtomicType::BoundSuper(bound_super))
@@ -269,6 +278,9 @@ pub(super) fn walk_non_atomic_type<'db, V: TypeVisitor<'db> + ?Sized>(
             visitor.visit_enum_complement_type(db, complement);
         }
         NonAtomicType::Union(union) => visitor.visit_union_type(db, union),
+        NonAtomicType::UnsafeUnion(unsafe_union) => {
+            visitor.visit_unsafe_union_type(db, unsafe_union);
+        }
         NonAtomicType::BoundMethod(method) => visitor.visit_bound_method_type(db, method),
         NonAtomicType::BoundSuper(bound_super) => visitor.visit_bound_super_type(db, bound_super),
         NonAtomicType::MethodWrapper(method_wrapper) => {

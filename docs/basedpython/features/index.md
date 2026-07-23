@@ -24,6 +24,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [intersection types](intersection.md)
 - [`or` / `and` type operators](or-and-types.md)
 - [negation types (`not T`)](not-type.md)
+- [unsafe unions](unsafe-union.md)
 - [`dynamic` type](dynamic.md)
 - [`typeof` keyword](typeof.md)
 - [star projections (`X[*]`)](star-projection.md)

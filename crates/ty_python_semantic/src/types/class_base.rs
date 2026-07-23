@@ -162,6 +162,12 @@ impl<'db> ClassBase<'db> {
                     Some(valid_element)
                 }
             }
+            // Any one materialization could be the actual base, so the first valid one stands
+            // in for the whole type — the same rule as an intersection.
+            Type::UnsafeUnion(unsafe_union) => unsafe_union
+                .elements(db)
+                .iter()
+                .find_map(|element| ClassBase::try_from_type(db, *element, subclass)),
             Type::Union(union) => {
                 if let Some(module) = TypedDictModule::from_type(db, ty) {
                     return Some(ClassBase::TypedDict(module));
@@ -285,6 +291,7 @@ impl<'db> ClassBase<'db> {
                 | SpecialFormType::Top
                 | SpecialFormType::Bottom
                 | SpecialFormType::Intersection
+                | SpecialFormType::UnsafeUnion
                 | SpecialFormType::TypeOf
                 | SpecialFormType::CallableTypeOf
                 | SpecialFormType::RegularCallableTypeOf

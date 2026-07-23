@@ -276,7 +276,10 @@ impl<'db> Type<'db> {
                 | Type::TypeIs(_)
                 | Type::TypeGuard(_)
                 | Type::TypeForm(_)
-                | Type::TypedDict(_) => None
+                | Type::TypedDict(_)
+                // No fast path: fall through to `__iter__`/`__getitem__` resolution, which
+                // already looks members up across the materializations.
+                | Type::UnsafeUnion(_) => None
             }
         }
 

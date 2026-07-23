@@ -24,7 +24,7 @@ use super::instance::SliceLiteral;
 use super::special_form::SpecialFormType;
 use super::{
     IntersectionBuilder, IntersectionType, KnownInstanceType, Type, TypeAliasType, TypedDictType,
-    UnionBuilder, UnionType, todo_type,
+    UnionBuilder, UnionType, UnsafeUnionType, todo_type,
 };
 
 /// The kind of subscriptable type that had an out-of-bounds index.
@@ -415,35 +415,79 @@ where
 fn map_intersection_subscript<'db, F>(
     db: &'db dyn Db,
     intersection: IntersectionType<'db>,
-    mut map_fn: F,
+    map_fn: F,
 ) -> Result<Type<'db>, SubscriptError<'db>>
 where
     F: FnMut(Type<'db>) -> Result<Type<'db>, SubscriptError<'db>>,
 {
     if let Some(alternatives) = intersection.finite_alternative_union(db) {
+        let mut map_fn = map_fn;
         return map_fn(alternatives);
     }
-
-    let mut results = Vec::new();
-    let mut errors = Vec::new();
 
     // Use `positive_elements_or_object` to ensure we always have at least one element.
     // An intersection with only negative elements (e.g., `~int & ~str`) is implicitly
     // `object & ~int & ~str`, so we fall back to `object`.
-    for element in intersection.positive_elements_or_object(db) {
+    map_any_element_subscript(
+        db,
+        intersection.positive_elements_or_object(db),
+        Type::Intersection(intersection),
+        |db, results| {
+            results
+                .into_iter()
+                .fold(IntersectionBuilder::new(db), |builder, result| {
+                    builder.add_positive(result)
+                })
+                .build()
+        },
+        map_fn,
+    )
+}
+
+fn map_unsafe_union_subscript<'db, F>(
+    db: &'db dyn Db,
+    unsafe_union: UnsafeUnionType<'db>,
+    map_fn: F,
+) -> Result<Type<'db>, SubscriptError<'db>>
+where
+    F: FnMut(Type<'db>) -> Result<Type<'db>, SubscriptError<'db>>,
+{
+    map_any_element_subscript(
+        db,
+        unsafe_union.elements(db).iter().copied(),
+        Type::UnsafeUnion(unsafe_union),
+        UnsafeUnionType::from_elements,
+        map_fn,
+    )
+}
+
+/// Subscript a type whose elements are alternatives of which only one need succeed: the positive
+/// elements of an intersection, or the materializations of an unsafe union.
+fn map_any_element_subscript<'db, E, C, F>(
+    db: &'db dyn Db,
+    elements: E,
+    full_object_ty: Type<'db>,
+    combine: C,
+    mut map_fn: F,
+) -> Result<Type<'db>, SubscriptError<'db>>
+where
+    E: IntoIterator<Item = Type<'db>>,
+    C: Fn(&'db dyn Db, Vec<Type<'db>>) -> Type<'db>,
+    F: FnMut(Type<'db>) -> Result<Type<'db>, SubscriptError<'db>>,
+{
+    let mut results = Vec::new();
+    let mut errors = Vec::new();
+
+    for element in elements {
         match map_fn(element) {
             Ok(result) => results.push(result),
             Err(error) => errors.push(error),
         }
     }
 
-    // If any element succeeded, return the intersection of successful results.
+    // If any element succeeded, return the combination of the successful results.
     if !results.is_empty() {
-        let mut builder = IntersectionBuilder::new(db);
-        for result in results {
-            builder = builder.add_positive(result);
-        }
-        return Ok(builder.build());
+        return Ok(combine(db, results));
     }
 
     // All elements failed. Check if any element has the method available
@@ -451,13 +495,12 @@ where
     // for elements that lack the method.
     let any_has_method = errors.iter().any(SubscriptError::any_method_available);
 
-    let mut builder = IntersectionBuilder::new(db);
+    let mut result_types = Vec::new();
     let mut collected_errors = Vec::new();
-    let full_object_ty = Type::Intersection(intersection);
 
     for error in errors {
         if !any_has_method || error.any_method_available() {
-            builder = builder.add_positive(error.result_type());
+            result_types.push(error.result_type());
             let error_iter = error.into_errors().into_iter();
             if any_has_method {
                 collected_errors.extend(
@@ -473,7 +516,7 @@ where
     }
 
     Err(SubscriptError::with_errors(
-        builder.build(),
+        combine(db, result_types),
         collected_errors,
     ))
 }
@@ -610,6 +653,18 @@ impl<'db> Type<'db> {
 
             (_, Type::Intersection(intersection)) => {
                 Some(map_intersection_subscript(db, intersection, |element| {
+                    value_ty.subscript(db, element, expr_context, tcx)
+                }))
+            }
+
+            (Type::UnsafeUnion(unsafe_union), _) => {
+                Some(map_unsafe_union_subscript(db, unsafe_union, |element| {
+                    element.subscript(db, slice_ty, expr_context, tcx)
+                }))
+            }
+
+            (_, Type::UnsafeUnion(unsafe_union)) => {
+                Some(map_unsafe_union_subscript(db, unsafe_union, |element| {
                     value_ty.subscript(db, element, expr_context, tcx)
                 }))
             }

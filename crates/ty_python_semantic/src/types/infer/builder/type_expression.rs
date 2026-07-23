@@ -29,7 +29,8 @@ use crate::types::{
     InternedType, IntersectionBuilder, IntersectionType, KnownClass, KnownInstanceType,
     LintDiagnosticGuard, LiteralValueTypeKind, OverlappingType, Parameter, Parameters,
     SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeContext, TypeFormType, TypeGuardType,
-    TypeIsType, TypeMapping, TypeVarKind, UnionBuilder, UnionType, any_over_type, todo_type,
+    TypeIsType, TypeMapping, TypeVarKind, UnionBuilder, UnionType, UnsafeUnionType, any_over_type,
+    todo_type,
 };
 use crate::{FxOrderSet, Program, add_inferred_python_version_hint_to_diagnostic};
 
@@ -2905,6 +2906,24 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         builder.add_positive(self.infer_type_expression(element))
                     })
                     .build();
+
+                if matches!(arguments_slice, ast::Expr::Tuple(_)) {
+                    self.store_expression_type(arguments_slice, ty);
+                }
+                ty
+            }
+            SpecialFormType::UnsafeUnion => {
+                let elements = match arguments_slice {
+                    ast::Expr::Tuple(tuple) => Either::Left(tuple.iter()),
+                    element => Either::Right(std::iter::once(element)),
+                };
+
+                let ty = UnsafeUnionType::from_elements(
+                    db,
+                    elements
+                        .map(|element| self.infer_type_expression(element))
+                        .collect::<Vec<_>>(),
+                );
 
                 if matches!(arguments_slice, ast::Expr::Tuple(_)) {
                     self.store_expression_type(arguments_slice, ty);

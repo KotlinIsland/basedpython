@@ -2106,6 +2106,10 @@ fn is_instance_truthiness<'db>(
             Truthiness::Ambiguous
         }
 
+        // Which materialization is at hand is unknown, so an `isinstance()` check against any
+        // one of them can never be statically true.
+        Type::UnsafeUnion(_) => Truthiness::Ambiguous,
+
         // Create a new intersection that maps type variables to their upper bounds,
         // and evaluate the truthiness of the `isinstance()` check with that type.
         // Along the way, short-circuit to `AlwaysTrue` if we find any positive element

@@ -267,13 +267,13 @@ reveal_type(Foo())  # revealed: Unknown
 
 def _(a: Any):
     # error: [too-many-positional-arguments]
-    reveal_type(Foo(a))  # revealed: Unknown
+    reveal_type(Foo(a))  # revealed: UnsafeUnion[int, Foo]
 ```
 
 ### Mixed metaclass `__call__` overloads should not become declaration-order dependent
 
 Reversing the declaration order of the same mixed overload set should not change the result when
-overload resolution falls back to `Unknown`.
+overload resolution stays ambiguous.
 
 ```py
 from typing import Any, TypeVar, overload
@@ -294,10 +294,10 @@ class ReverseMetaTarget(metaclass=ReverseMeta):
 
 def _(a: Any, u: Unknown):
     # error: [too-many-positional-arguments]
-    reveal_type(ReverseMetaTarget(a))  # revealed: Unknown
+    reveal_type(ReverseMetaTarget(a))  # revealed: UnsafeUnion[str, ReverseMetaTarget]
 
     # error: [too-many-positional-arguments]
-    reveal_type(ReverseMetaTarget(u))  # revealed: Unknown
+    reveal_type(ReverseMetaTarget(u))  # revealed: UnsafeUnion[str, ReverseMetaTarget]
 ```
 
 ### Overloaded metaclass `__call__` preserving strict-subclass return

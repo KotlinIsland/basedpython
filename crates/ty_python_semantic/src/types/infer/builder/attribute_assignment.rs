@@ -200,10 +200,10 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
             }
             AttributeWriteRequirement::Any {
                 object_ty,
-                intersection,
+                element_tys,
             } => {
                 let mut valid = false;
-                for element_ty in intersection.positive(self.builder.db()) {
+                for element_ty in element_tys {
                     let requirement =
                         attribute_write_requirement(self.builder.db(), *element_ty, self.attribute);
                     if self.evaluate(&requirement, false) {

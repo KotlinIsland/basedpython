@@ -2483,7 +2483,7 @@ def _(payload: Payload | Payload2) -> None:
 ```
 
 With a gradual default, the specialized known-key overload and generic default overload both match,
-so we currently fall back to `Unknown`:
+so the result is the unsafe union of both overloads' returns:
 
 ```py
 from typing import Any, TypedDict
@@ -2492,7 +2492,7 @@ class GradualDefault(TypedDict, total=False):
     x: int
 
 def _(td: GradualDefault, default: Any) -> None:
-    reveal_type(td.get("x", default))  # revealed: Unknown
+    reveal_type(td.get("x", default))  # revealed: UnsafeUnion[int, int | Any]
 ```
 
 Synthesized `get()` on unions falls back to generic resolution when a key is missing from one arm:

@@ -298,6 +298,12 @@ impl<'db> Type<'db> {
 
             Type::Union(union) => try_union(*union)?,
 
+            // Which materialization this is, is unknown, so the truthiness is only certain when
+            // every materialization agrees: exactly the union face's answer.
+            Type::UnsafeUnion(unsafe_union) => unsafe_union
+                .to_union(db)
+                .try_bool_impl(db, allow_short_circuit, visitor)?,
+
             Type::Intersection(intersection) => {
                 if let Some(alternatives) = intersection.finite_alternative_union(db) {
                     alternatives.try_bool_impl(db, allow_short_circuit, visitor)?

@@ -207,6 +207,17 @@ impl<'db> AllMembers<'db> {
                     .unwrap_or_default(),
             ),
 
+            // Completions offer the members of every materialization, since a member of any one
+            // of them resolves on the unsafe union.
+            Type::UnsafeUnion(unsafe_union) => self.members.extend(
+                unsafe_union
+                    .elements(db)
+                    .iter()
+                    .map(|ty| AllMembers::of(db, *ty).members)
+                    .reduce(|acc, members| acc.union(&members).cloned().collect())
+                    .unwrap_or_default(),
+            ),
+
             Type::EnumComplement(complement) => {
                 self.extend_with_type(db, complement.to_intersection(db));
             }

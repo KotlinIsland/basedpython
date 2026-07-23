@@ -3149,6 +3149,10 @@ fn completion_kind_from_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Comp
             Type::Intersection(intersection) => intersection
                 .iter_positive(db)
                 .find_map(|ty| imp(db, ty, visitor))?,
+            Type::UnsafeUnion(unsafe_union) => unsafe_union
+                .elements(db)
+                .iter()
+                .find_map(|&ty| imp(db, ty, visitor))?,
             Type::Dynamic(_)
             | Type::Divergent(_)
             | Type::Never
@@ -10624,6 +10628,42 @@ def f(x: Intersection[int, Any] | str):
             @"
         removeprefix
         removesuffix
+        ",
+        );
+    }
+
+    /// Tests that an unsafe union offers the members of *every* materialization,
+    /// where a plain `int | str` union would only offer the ones they share.
+    #[test]
+    fn unsafe_union_type_annotation() {
+        let builder = completion_test_builder(
+            r#"
+from ty_extensions import UnsafeUnion
+
+def f(x: UnsafeUnion[int, str]):
+    x.is<CURSOR>
+"#,
+        );
+        assert_snapshot!(
+            builder.build().snapshot(),
+            @"
+        is_integer
+        isalnum
+        isalpha
+        isascii
+        isdecimal
+        isdigit
+        isidentifier
+        islower
+        isnumeric
+        isprintable
+        isspace
+        istitle
+        isupper
+        splitlines
+        __annotations__
+        __contains__
+        __init_subclass__
         ",
         );
     }
