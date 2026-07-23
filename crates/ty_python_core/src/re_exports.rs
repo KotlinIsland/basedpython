@@ -237,6 +237,7 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
                 value: _,
                 range: _,
                 node_index: _,
+                is_private: _,
             }) => {
                 self.visit_expr(name);
                 // Neither walrus expressions nor statements cannot appear in type aliases;

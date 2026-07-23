@@ -1452,6 +1452,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 name,
                 type_params,
                 value,
+                is_private: _,
             }) => {
                 self.semantic.push_scope(ScopeKind::Type);
                 if let Some(type_params) = type_params {
