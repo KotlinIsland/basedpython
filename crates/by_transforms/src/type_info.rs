@@ -203,7 +203,7 @@ pub(crate) trait TypeInfo {
     /// or `None` when the type has no faithful runtime test. a user generic
     /// whose instances carry `__orig_class__` yields a deep
     /// [`CastCheck::Kind`]`(`[`SoundnessCheck::Parametric`]`)` (`A[int]`); a
-    /// data-member protocol yields a [`CastCheck::Protocol`] structural check;
+    /// protocol target yields [`CastCheck::Protocol`] (checkable structurally);
     /// anything else collapses to a shallow
     /// [`SoundnessCheck::Isinstance`] (`list[object]` → `list`,
     /// `int | str` → `(int, str)`), since `isinstance(x, list[object])` is

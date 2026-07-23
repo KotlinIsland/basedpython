@@ -29,6 +29,7 @@ use crate::types::call::{Argument, CallArguments};
 use crate::types::class::{ClassLiteral, ClassType, GenericAlias};
 use crate::types::function::FunctionType;
 use crate::types::generics::{Specialization, combine_use_site_projections};
+use crate::types::literal::LiteralValueTypeKind;
 use crate::types::protocol_class::ReifiedMember;
 use crate::types::tuple::Tuple;
 use crate::types::typevar::TypeVarBoundOrConstraints;
@@ -537,7 +538,7 @@ pub(crate) fn protocol_structural_members<'db>(
                 readable,
                 writable,
             } => {
-                let expected = runtime_spelling(db, file, ty)?;
+                let expected = protocol_member_spelling(db, file, ty)?;
                 let variance = match (readable, writable) {
                     (true, true) => ArgVariance::Invariant,
                     (true, false) => ArgVariance::Covariant,
@@ -556,7 +557,7 @@ pub(crate) fn protocol_structural_members<'db>(
                 // back to the erased-target error
                 let mut param_checks = Vec::with_capacity(params.len());
                 for param_ty in params {
-                    let expected = runtime_spelling(db, file, param_ty)?;
+                    let expected = protocol_member_spelling(db, file, param_ty)?;
                     param_checks.push((expected, ArgVariance::Contravariant));
                 }
                 let ret = match reified_return_check(db, file, ret) {
@@ -576,6 +577,42 @@ pub(crate) fn protocol_structural_members<'db>(
     Some(checks)
 }
 
+/// [`runtime_spelling`] for a protocol member's specialized type, which may be a
+/// *literal* (`A[True]` specializes `T` to `Literal[True]`).
+///
+/// A literal has no bare runtime spelling, so it is rendered as a call to the
+/// structural check's own `_by_lit` helper, which rebuilds `typing.Literal[…]`.
+/// That keeps the check exact — an invariant member typed `Literal[True]` must
+/// not match a `bool` annotation — and, because the helper ships with the
+/// protocol runtime, needs no import at the use site.
+///
+/// This deliberately does *not* widen [`runtime_spelling`] itself: that spelling
+/// is also injected into reified calls (`f[int](…)`) and constructor
+/// specializations (`A[int](1)`), where `_by_lit` is not in scope.
+fn protocol_member_spelling<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<String> {
+    if let Type::LiteralValue(literal) = ty {
+        let value = match literal.kind() {
+            LiteralValueTypeKind::Bool(boolean) => {
+                (if boolean { "True" } else { "False" }).to_owned()
+            }
+            LiteralValueTypeKind::Int(int) => int.as_i64().to_string(),
+            // only a plain-ascii string round-trips through rust's escaping as
+            // valid python; anything else has no faithful spelling here
+            LiteralValueTypeKind::String(string) => {
+                let value = string.value(db);
+                if value.is_ascii() && !value.contains(|c: char| c.is_ascii_control()) {
+                    format!("{value:?}")
+                } else {
+                    return None;
+                }
+            }
+            _ => return None,
+        };
+        return Some(format!("_by_lit({value})"));
+    }
+    runtime_spelling(db, file, ty)
+}
+
 /// the covariant/skip/unspellable classification of a protocol method's return
 /// type for a structural runtime check
 enum ReturnCheck {
@@ -592,7 +629,7 @@ fn reified_return_check<'db>(db: &'db dyn Db, file: File, ret: Type<'db>) -> Ret
     if ret.is_none(db) || ret.is_dynamic() || is_object_instance(db, ret) {
         return ReturnCheck::Skip;
     }
-    match runtime_spelling(db, file, ret) {
+    match protocol_member_spelling(db, file, ret) {
         Some(expected) => ReturnCheck::Check(expected),
         None => ReturnCheck::Unspellable,
     }

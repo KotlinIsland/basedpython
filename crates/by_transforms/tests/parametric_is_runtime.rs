@@ -24,7 +24,7 @@ use by_transforms::{Config, PythonVersion, transpile};
 /// annotation, a covariant read-only member, a nested-generic member, a missing
 /// member, and an inheriting subclass.
 const PROGRAM: &str = r#"
-from typing import Protocol
+from typing import Literal, Protocol
 
 class HasA[T](Protocol):
     a: T
@@ -158,6 +158,48 @@ class GetBool:
 assert (GetBool() is Get[bool]) is True, "return matches bool"
 assert (GetBool() is Get[int]) is True, "return covariant: bool <: int"
 assert (GetBool() is Get[str]) is False, "return bool is not str"
+
+# a *literal* type argument (`A[True]`) specializes the member to
+# `Literal[True]`, rebuilt at runtime by `_by_lit`. an invariant data member
+# stays exact — a `bool` annotation is not a `Literal[True]`
+class Lit[in out T](Protocol):
+    a: T
+
+class BoolAttr2:
+    a: bool
+
+class TrueAttr:
+    a: Literal[True]
+
+assert (BoolAttr2() is Lit[True]) is False, "invariant member: bool is not Literal[True]"
+assert (TrueAttr() is Lit[True]) is True, "invariant member: exact literal matches"
+assert (TrueAttr() is Lit[False]) is False, "a different literal does not match"
+
+# in a covariant position a literal *is* a subtype of the class of its values
+class GetLit[in out T](Protocol):
+    def get(self) -> T: ...
+
+class GetTrue:
+    def get(self) -> Literal[True]:
+        return True
+
+assert (GetTrue() is GetLit[bool]) is True, "Literal[True] <: bool"
+assert (GetTrue() is GetLit[int]) is True, "Literal[True] <: int (bool subclasses int)"
+assert (GetTrue() is GetLit[str]) is False, "Literal[True] is not a str"
+assert (GetTrue() is GetLit[True]) is True, "the same literal matches"
+
+# a method *parameter* is contravariant, so a wider annotation accepts the
+# literal the protocol asks for — this is the reported case
+class Feed2[in out T](Protocol):
+    def f(self, other: T): ...
+
+class FeedBoolAnn:
+    def f(self, other: bool):
+        pass
+
+assert (FeedBoolAnn() is Feed2[int]) is False, "bool does not accept int"
+assert (FeedBoolAnn() is Feed2[bool]) is True, "bool accepts bool"
+assert (FeedBoolAnn() is Feed2[True]) is True, "bool accepts Literal[True]"
 
 # a checked cast to a method protocol validates the same claim
 assert (GetBool() cast Get[int]) is not None, "method-protocol cast returns the value on a match"

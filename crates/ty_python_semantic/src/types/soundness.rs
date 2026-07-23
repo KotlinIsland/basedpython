@@ -17,7 +17,7 @@ use crate::Db;
 use crate::place::{Place, explicit_global_symbol};
 use crate::types::instance::Protocol;
 use crate::types::reified_infer::{
-    ArgVariance, ProtocolMemberCheck, parametric_soundness_spelling, protocol_structural_members,
+    ArgVariance, parametric_soundness_spelling, protocol_structural_members,
 };
 use crate::types::signatures::CallableSignature;
 use crate::types::visitor::any_over_type;
@@ -47,9 +47,11 @@ pub enum CheckKind {
 pub enum CastCheck {
     /// a shallow or deep soundness check, exactly as a soundness insertion uses
     Kind(CheckKind),
-    /// basedpython: a protocol target, validated structurally against the
-    /// value's reified annotations (data and method members, member by member)
-    Protocol { members: Vec<ProtocolMemberCheck> },
+    /// basedpython: a protocol target the structural check can validate against
+    /// the value's reified annotations. the member list itself comes from the
+    /// shared parametric engine at lowering time, so this only records *that*
+    /// the target is checkable
+    Protocol,
     /// a protocol target with no faithful runtime check — a member whose
     /// specialized type has no runtime spelling (a callable attribute). no sound
     /// residue exists, so the checked cast degrades to an unchecked
@@ -68,9 +70,9 @@ pub enum CastCheck {
 pub fn cast_check_plan<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<CastCheck> {
     if let Type::ProtocolInstance(instance) = ty {
         if let Protocol::FromClass(protocol_class) = instance.inner
-            && let Some(members) = protocol_structural_members(db, file, *protocol_class)
+            && protocol_structural_members(db, file, *protocol_class).is_some()
         {
-            return Some(CastCheck::Protocol { members });
+            return Some(CastCheck::Protocol);
         }
         // a protocol with a method member, an unspellable data member, or a
         // synthesized structural protocol has no annotation to check against
