@@ -83,6 +83,79 @@ assert g(B())
 assert not g([1, 2])
 ```
 
+## a base's arguments are resolved, not assumed positional
+
+A subclass's type arguments are resolved *down the declared base chain*, so a base that fixes or
+reorders its arguments is followed faithfully. `Odd` is a `list[int]` whatever `T` is.
+
+```by
+class Odd[T](list[int]): ...
+
+class Swap[A, B](dict[B, A]): ...
+
+def is_list_int(x: object) -> bool:
+    return x is list[int]
+
+def is_list_str(x: object) -> bool:
+    return x is list[str]
+
+def is_dict_str_int(x: object) -> bool:
+    return x is dict[str, int]
+
+def is_dict_int_str(x: object) -> bool:
+    return x is dict[int, str]
+
+assert is_list_int(Odd[str]())  # the base fixes `int`
+assert not is_list_str(Odd[str]())  # `T` is not list's argument
+assert is_dict_str_int(Swap[int, str]())  # the base reorders
+assert not is_dict_int_str(Swap[int, str]())
+```
+
+## a pep 696 default fixes the arguments
+
+A class records its generic bases *unsubstituted* — `class L[T = Never](list[T])` stores `list[T]`,
+never `list[Never]` — so the probe resolves a type parameter left at its default to that default. An
+explicit specialization wins over the default, which must never be read over the top of it.
+
+```by
+class L[T = Never](list[T]): ...
+
+class M[T = int](list[T]): ...
+
+def f(x: object) -> bool:
+    return x is list[Never]
+
+def g(x: object) -> bool:
+    return x is list[int]
+
+def h(x: object) -> bool:
+    return x is list[str]
+
+assert f(L())  # `T` defaults to `Never`, so `L()` is a `list[Never]`
+assert not g(L())
+assert g(M())  # the same for a non-`Never` default
+assert h(M[str]())  # an explicit argument is used as written
+assert not g(M[str]())  # and the default does not leak in over it
+```
+
+A parameter that appears *only* in the class's own identity is recorded in no base, so it is read
+straight off the class. This is the case type reification cannot cover: `Never` has no runtime
+spelling, so the constructor is left bare and there is nothing else to read.
+
+```by
+class Own[T = Never]:
+    a: T
+
+def f(x: object) -> bool:
+    return x is Own[Never]
+
+def g(x: object) -> bool:
+    return x is Own[int]
+
+assert f(Own())
+assert not g(Own())
+```
+
 ## variance is respected
 
 `a is C[args]` means `type(a) <: C[args]`, so it follows `C`'s declared variance. With a covariant

@@ -24,7 +24,7 @@ use by_transforms::{Config, PythonVersion, transpile};
 /// annotation, a covariant read-only member, a nested-generic member, a missing
 /// member, and an inheriting subclass.
 const PROGRAM: &str = r#"
-from typing import Literal, Protocol
+from typing import Literal, Never, Protocol
 
 class HasA[T](Protocol):
     a: T
@@ -158,6 +158,67 @@ class GetBool:
 assert (GetBool() is Get[bool]) is True, "return matches bool"
 assert (GetBool() is Get[int]) is True, "return covariant: bool <: int"
 assert (GetBool() is Get[str]) is False, "return bool is not str"
+
+# a class records its generic bases *unsubstituted* (`class L[T = Never]
+# (list[T])` stores `list[T]`), so a type parameter left at its pep 696 default
+# must resolve to that default — otherwise the probe compares a bare TypeVar and
+# never matches
+class DefaultNever[T = Never](list[T]): ...
+
+class DefaultInt[T = int](list[T]): ...
+
+assert (DefaultNever() is list[Never]) is True, "a defaulted parameter resolves to its default"
+assert (DefaultNever() is list[int]) is False, "the default is not some other argument"
+assert (DefaultInt() is list[int]) is True, "a non-Never default resolves too"
+
+# an *explicit* specialization wins over the default: reading the default over
+# the top of it would report an argument the value never had
+assert (DefaultInt[str]() is list[str]) is True, "the explicit argument matches"
+assert (DefaultInt[str]() is list[int]) is False, "the default must not leak in"
+
+# a parameter with no default stays unknown, so it matches nothing
+class NoDefault[T](list[T]): ...
+
+assert (NoDefault() is list[int]) is False, "an unknown argument matches nothing"
+
+# a parameter that appears *only* in the class's own identity is recorded in no
+# base at all, so it is read straight off `__type_params__`. `Never` has no
+# runtime spelling, so the constructor is left bare — this is exactly the case
+# type reification cannot cover
+class OwnNever[T = Never]:
+    a: T
+
+assert (OwnNever() is OwnNever[Never]) is True, "an own-identity default resolves"
+assert (OwnNever() is OwnNever[int]) is False, "and is not some other argument"
+
+# a subclass's arguments are resolved *down the declared base chain*, never
+# assumed to line up positionally with the base's. `Odd` is a `list[int]`
+# whatever `T` is, so `T` must never be reported as list's argument
+class Odd[T = str](list[int]): ...
+
+assert (Odd() is list[int]) is True, "the base's written argument stands"
+assert (Odd() is list[str]) is False, "the subclass's own argument is not the base's"
+assert (Odd[str]() is list[int]) is True, "explicit argument, base still fixed"
+assert (Odd[str]() is list[str]) is False, "an explicit argument is not the base's either"
+
+# a base may also *reorder* its arguments
+class Swap[A, B](dict[B, A]): ...
+
+assert (Swap[int, str]() is dict[str, int]) is True, "the base's order is followed"
+assert (Swap[int, str]() is dict[int, str]) is False, "not the subclass's order"
+
+# a base may nest the parameter
+class Wrap[T](list[dict[str, T]]): ...
+
+assert (Wrap[int]() is list[dict[str, int]]) is True, "a nested parameter substitutes"
+assert (Wrap[int]() is list[dict[str, bool]]) is False, "and stays exact"
+
+# plain (non-generic) inheritance is still followed to the generic base
+class Plain(list[int]): ...
+
+class Deeper(Plain): ...
+
+assert (Deeper() is list[int]) is True, "a plain subclass inherits the specialization"
 
 # a *literal* type argument (`A[True]`) specializes the member to
 # `Literal[True]`, rebuilt at runtime by `_by_lit`. an invariant data member
