@@ -64,6 +64,7 @@ if [[ "$SKIP_PATCHES" -eq 0 ]]; then
 
     # phase 3 needs the final `.byi` form: it type-checks the whole typeshed with
     # ty and marks every genuine override, so it must run after the ast patches
+    # shellcheck disable=SC2016
     echo '==> phase 3: mark overriding methods with `override`'
     "$OVERRIDE_PATCH" "$TYPESHED"
 fi
