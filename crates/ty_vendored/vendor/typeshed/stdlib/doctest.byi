@@ -332,7 +332,7 @@ class DocTestFinder:
 
         """
 
-type _Out = (str) -> object
+private type Out = (str) -> object
 
 class DocTestRunner:
     """
@@ -423,30 +423,30 @@ class DocTestRunner:
         more information.
         """
 
-    def report_start(self, out: _Out, test: DocTest, example: Example) -> None:
+    def report_start(self, out: Out, test: DocTest, example: Example) -> None:
         """
         Report that the test runner is about to process the given
         example.  (Only displays a message if verbose=True)
         """
 
-    def report_success(self, out: _Out, test: DocTest, example: Example, got: str) -> None:
+    def report_success(self, out: Out, test: DocTest, example: Example, got: str) -> None:
         """
         Report that the given example ran successfully.  (Only
         displays a message if verbose=True)
         """
 
-    def report_failure(self, out: _Out, test: DocTest, example: Example, got: str) -> None:
+    def report_failure(self, out: Out, test: DocTest, example: Example, got: str) -> None:
         """
         Report that the given example failed.
         """
 
-    def report_unexpected_exception(self, out: _Out, test: DocTest, example: Example, exc_info: ExcInfo) -> None:
+    def report_unexpected_exception(self, out: Out, test: DocTest, example: Example, exc_info: ExcInfo) -> None:
         """
         Report that the given example raised an unexpected exception.
         """
 
     def run(
-        self, test: DocTest, compileflags: int | None = None, out: _Out | None = None, clear_globs: bool = True
+        self, test: DocTest, compileflags: int | None = None, out: Out | None = None, clear_globs: bool = True
     ) -> TestResults:
         """
         Run the examples in `test`, and display the results using the

@@ -10,7 +10,7 @@ from distutils.file_util import _BytesPathT, _StrPathT
 from typing import Literal, TypeAlias
 from typing_extensions import TypeVarTuple, Unpack
 
-type _Macro = tuple[str] | tuple[str, str | None]
+private type Macro = tuple[str] | tuple[str, str | None]
 
 def gen_lib_options(
     compiler: CCompiler, library_dirs: list[str], runtime_library_dirs: list[str], libraries: list[str]
@@ -22,7 +22,7 @@ def gen_lib_options(
     with some compiler (depending on the two format strings passed in).
     """
 
-def gen_preprocess_options(macros: list[_Macro], include_dirs: list[str]) -> list[str]:
+def gen_preprocess_options(macros: list[Macro], include_dirs: list[str]) -> list[str]:
     """Generate C pre-processor options (-D, -U, -I) as used by at least
     two types of compilers: the typical Unix compiler and Visual C++.
     'macros' is the usual thing, a list of 1- or 2-tuples, where (name,)
@@ -85,7 +85,7 @@ class CCompiler:
     force: bool
     verbose: bool
     output_dir: str | None
-    macros: list[_Macro]
+    macros: list[Macro]
     include_dirs: list[str]
     libraries: list[str]
     library_dirs: list[str]
@@ -252,7 +252,7 @@ class CCompiler:
         self,
         sources: Sequence[StrPath],
         output_dir: str | None = None,
-        macros: list[_Macro] | None = None,
+        macros: list[Macro] | None = None,
         include_dirs: list[str] | None = None,
         debug: bool | 0 | 1 = 0,
         extra_preargs: list[str] | None = None,
@@ -446,7 +446,7 @@ class CCompiler:
         self,
         source: str,
         output_file: str | None = None,
-        macros: list[_Macro] | None = None,
+        macros: list[Macro] | None = None,
         include_dirs: list[str] | None = None,
         extra_preargs: list[str] | None = None,
         extra_postargs: list[str] | None = None,

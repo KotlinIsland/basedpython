@@ -20,7 +20,7 @@ class Arena:
         fd: int
         def __init__(self, size: int, fd: int = -1) -> None
 
-type _Block = tuple[Arena, int, int]
+private type Block = tuple[Arena, int, int]
 
 if sys.platform != "win32":
     @type_check_only
@@ -34,8 +34,8 @@ if sys.platform != "win32":
 
 class Heap:
     init(self, size: int = ...)
-    def free(self, block: _Block) -> None
-    def malloc(self, size: int) -> _Block
+    def free(self, block: Block) -> None
+    def malloc(self, size: int) -> Block
 
 class BufferWrapper:
     init(self, size: int)

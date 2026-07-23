@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Literal, ParamSpec, Protocol, TypeAlias, type_check_only
 from typing_extensions import Self, TypeVar, TypeVarTuple, Unpack
 
-type _Task = tuple[bytes, "function" | "script"]
+private type Task = tuple[bytes, "function" | "script"]
 
 @type_check_only
 protocol _TaskFunc:
@@ -28,9 +28,9 @@ if sys.version_info >= (3, 14):
         ) -> (() -> Self, _TaskFunc)
         class def prepare(cls, initializer: () -> object, initargs: tuple[()]) -> (() -> Self, _TaskFunc)
 
-        init(self, initdata: _Task)
+        init(self, initdata: Task)
         def __del__(self) -> None
-        def run(self, task: _Task) -> None
+        def run(self, task: Task) -> None
 
     class BrokenInterpreterPool(BrokenThreadPool):
         """

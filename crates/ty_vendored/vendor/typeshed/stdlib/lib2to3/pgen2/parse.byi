@@ -15,7 +15,7 @@ from ..pytree import _NL, _RawNode
 from . import _Convert
 from .grammar import _DFAS, Grammar
 
-type _Context = Sequence[Incomplete]
+private type Context = Sequence[Incomplete]
 
 class ParseError(Exception):
     """Exception to signal the parser is stuck."""
@@ -23,8 +23,8 @@ class ParseError(Exception):
     msg: str
     type: int
     value: str | None
-    context: _Context
-    init(self, msg: str, type: int, value: str | None, context: _Context)
+    context: Context
+    init(self, msg: str, type: int, value: str | None, context: Context)
 
 class Parser:
     """Parser engine.
@@ -105,16 +105,16 @@ class Parser:
 
         """
 
-    def addtoken(self, type: int, value: str | None, context: _Context) -> bool:
+    def addtoken(self, type: int, value: str | None, context: Context) -> bool:
         """Add a token; return True iff this is the end of the program."""
 
-    def classify(self, type: int, value: str | None, context: _Context) -> int:
+    def classify(self, type: int, value: str | None, context: Context) -> int:
         """Turn a token into a label.  (Internal)"""
 
-    def shift(self, type: int, value: str | None, newstate: int, context: _Context) -> None:
+    def shift(self, type: int, value: str | None, newstate: int, context: Context) -> None:
         """Shift a token.  (Internal)"""
 
-    def push(self, type: int, newdfa: _DFAS, newstate: int, context: _Context) -> None:
+    def push(self, type: int, newdfa: _DFAS, newstate: int, context: Context) -> None:
         """Push a nonterminal.  (Internal)"""
 
     def pop(self) -> None:

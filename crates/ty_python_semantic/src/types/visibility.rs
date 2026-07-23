@@ -25,7 +25,7 @@ use crate::Db;
 
 /// The module-level names `file` declares `private`.
 #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
-pub(crate) fn private_symbols(db: &dyn Db, file: File) -> FxHashSet<Name> {
+pub fn private_symbols(db: &dyn Db, file: File) -> FxHashSet<Name> {
     let _span = tracing::trace_span!("private_symbols", file=?file.path(db)).entered();
 
     let parsed = parsed_module(db, file).load(db);

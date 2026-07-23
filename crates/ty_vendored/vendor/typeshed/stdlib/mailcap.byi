@@ -3,13 +3,13 @@
 from collections.abc import Mapping, Sequence
 from typing import TypeAlias
 
-type _Cap = dict[str, str | int]
+private type Cap = dict[str, str | int]
 
 __all__ = ["getcaps", "findmatch"]
 
 def findmatch(
-    caps: Mapping[str, list[_Cap]], MIMEtype: str, key: str = "view", filename: str = "/dev/null", plist: Sequence[str] = []
-) -> (str | None, _Cap | None):
+    caps: Mapping[str, list[Cap]], MIMEtype: str, key: str = "view", filename: str = "/dev/null", plist: Sequence[str] = []
+) -> (str | None, Cap | None):
     """Find a match for a mailcap entry.
 
     Return a tuple containing the command line, and the mailcap entry
@@ -19,7 +19,7 @@ def findmatch(
 
     """
 
-def getcaps() -> dict[str, list[_Cap]]:
+def getcaps() -> dict[str, list[Cap]]:
     """Return a dictionary containing the mailcap database.
 
     The dictionary maps a MIME type (in all lowercase, e.g. 'text/plain')

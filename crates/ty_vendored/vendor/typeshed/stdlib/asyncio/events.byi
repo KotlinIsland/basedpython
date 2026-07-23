@@ -63,7 +63,7 @@ else:
     )
 
 type _Context = dict[str, dynamic]
-type _ExceptionHandler = (AbstractEventLoop, _Context) -> object
+private type ExceptionHandler = (AbstractEventLoop, _Context) -> object
 type _ProtocolFactory = () -> BaseProtocol
 type _SSLContext = bool | None | ssl.SSLContext
 
@@ -863,8 +863,8 @@ class AbstractEventLoop:
     abstract def add_signal_handler[*Ts](self, sig: int, callback: Callable[[Unpack[Ts]], object], *args: *Ts) -> None
     abstract def remove_signal_handler(self, sig: int) -> bool
     # Error handlers.
-    abstract def set_exception_handler(self, handler: _ExceptionHandler | None) -> None
-    abstract def get_exception_handler(self) -> _ExceptionHandler | None
+    abstract def set_exception_handler(self, handler: ExceptionHandler | None) -> None
+    abstract def get_exception_handler(self) -> ExceptionHandler | None
     abstract def default_exception_handler(self, context: _Context) -> None
     abstract def call_exception_handler(self, context: _Context) -> None
     # Debug flag management.

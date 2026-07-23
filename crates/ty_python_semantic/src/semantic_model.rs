@@ -7,7 +7,7 @@ use ruff_python_ast::{Expr, ExprRef, name::Name};
 use ruff_python_parser::Parsed;
 use ruff_source_file::LineIndex;
 use ruff_text_size::Ranged;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{
     KnownModule, Module, ModuleName, list_modules, resolve_module, resolve_real_shadowable_module,
 };
@@ -326,6 +326,7 @@ impl<'db> SemanticModel<'db> {
         };
         let ty = Type::module_literal(self.db, self.file, module);
         let builtin = module.is_known(self.db, KnownModule::Builtins);
+        let private = self.foreign_private_symbols(ty);
 
         let mut completions = vec![];
         #[expect(
@@ -333,6 +334,9 @@ impl<'db> SemanticModel<'db> {
             reason = "completion order is determined later by relevance ranking"
         )]
         for Member { name, ty } in all_members(self.db, ty) {
+            if private.is_some_and(|names| names.contains(&name)) {
+                continue;
+            }
             completions.push(Completion {
                 name,
                 ty: Some(ty),
@@ -360,14 +364,30 @@ impl<'db> SemanticModel<'db> {
         completions
     }
 
+    /// basedpython: the `private` symbols of `ty`, when `ty` is another file's
+    /// module. they are the module's implementation, not its interface, so an
+    /// IDE must not offer them here.
+    fn foreign_private_symbols(&self, ty: Type<'db>) -> Option<&'db FxHashSet<Name>> {
+        let Type::ModuleLiteral(module) = ty else {
+            return None;
+        };
+        let file = module.module(self.db).file(self.db)?;
+        if file == self.file {
+            return None;
+        }
+        Some(crate::types::visibility::private_symbols(self.db, file))
+    }
+
     /// Returns completions for symbols available in a `object.<CURSOR>` context.
     pub fn attribute_completions(&self, node: &ast::ExprAttribute) -> Vec<Completion<'db>> {
         let Some(ty) = node.value.inferred_type(self) else {
             return Vec::new();
         };
+        let private = self.foreign_private_symbols(ty);
 
         all_members(self.db, ty)
             .into_iter()
+            .filter(|member| !private.is_some_and(|names| names.contains(&member.name)))
             .map(|member| Completion {
                 name: member.name,
                 ty: Some(member.ty),

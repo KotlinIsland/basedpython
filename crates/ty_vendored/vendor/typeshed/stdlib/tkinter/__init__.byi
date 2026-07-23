@@ -5210,7 +5210,7 @@ class Scrollbar(Widget):
         lower ends as value between 0 and 1).
         """
 
-type _WhatToCount = "chars" | "displaychars" | "displayindices" | "displaylines" | "indices" | "lines" | "xpixels" | "ypixels"
+private type WhatToCount = "chars" | "displaychars" | "displayindices" | "displaylines" | "indices" | "lines" | "xpixels" | "ypixels"
 
 class Text(Widget, XView, YView):
     """Text widget which can display text in various forms."""
@@ -5402,7 +5402,7 @@ class Text(Widget, XView, YView):
             self,
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
-            arg: _WhatToCount | "update",
+            arg: WhatToCount | "update",
             /,
             *,
             return_ints: True,
@@ -5412,7 +5412,7 @@ class Text(Widget, XView, YView):
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
             arg1: "update",
-            arg2: _WhatToCount,
+            arg2: WhatToCount,
             /,
             *,
             return_ints: True,
@@ -5421,7 +5421,7 @@ class Text(Widget, XView, YView):
             self,
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
-            arg1: _WhatToCount,
+            arg1: WhatToCount,
             arg2: "update",
             /,
             *,
@@ -5431,8 +5431,8 @@ class Text(Widget, XView, YView):
             self,
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
-            arg1: _WhatToCount,
-            arg2: _WhatToCount,
+            arg1: WhatToCount,
+            arg2: WhatToCount,
             /,
             *,
             return_ints: True,
@@ -5441,11 +5441,11 @@ class Text(Widget, XView, YView):
             self,
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
-            arg1: _WhatToCount | "update",
-            arg2: _WhatToCount | "update",
-            arg3: _WhatToCount | "update",
+            arg1: WhatToCount | "update",
+            arg2: WhatToCount | "update",
+            arg3: WhatToCount | "update",
             /,
-            *args: _WhatToCount | "update",
+            *args: WhatToCount | "update",
             return_ints: True,
         ) -> (*: int)
         def count(
@@ -5459,7 +5459,7 @@ class Text(Widget, XView, YView):
             self,
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
-            arg: _WhatToCount | "update",
+            arg: WhatToCount | "update",
             /,
             *,
             return_ints: False = False,
@@ -5469,7 +5469,7 @@ class Text(Widget, XView, YView):
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
             arg1: "update",
-            arg2: _WhatToCount,
+            arg2: WhatToCount,
             /,
             *,
             return_ints: False = False,
@@ -5478,7 +5478,7 @@ class Text(Widget, XView, YView):
             self,
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
-            arg1: _WhatToCount,
+            arg1: WhatToCount,
             arg2: "update",
             /,
             *,
@@ -5488,8 +5488,8 @@ class Text(Widget, XView, YView):
             self,
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
-            arg1: _WhatToCount,
-            arg2: _WhatToCount,
+            arg1: WhatToCount,
+            arg2: WhatToCount,
             /,
             *,
             return_ints: False = False,
@@ -5498,11 +5498,11 @@ class Text(Widget, XView, YView):
             self,
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
-            arg1: _WhatToCount | "update",
-            arg2: _WhatToCount | "update",
-            arg3: _WhatToCount | "update",
+            arg1: WhatToCount | "update",
+            arg2: WhatToCount | "update",
+            arg3: WhatToCount | "update",
             /,
-            *args: _WhatToCount | "update",
+            *args: WhatToCount | "update",
             return_ints: False = False,
         ) -> (*: int)
     else:
@@ -5525,7 +5525,7 @@ class Text(Widget, XView, YView):
             self,
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
-            arg: _WhatToCount | "update",
+            arg: WhatToCount | "update",
             /,
         ) -> (int,) | None
         def count(
@@ -5533,14 +5533,14 @@ class Text(Widget, XView, YView):
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
             arg1: "update",
-            arg2: _WhatToCount,
+            arg2: WhatToCount,
             /,
         ) -> int | None
         def count(
             self,
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
-            arg1: _WhatToCount,
+            arg1: WhatToCount,
             arg2: "update",
             /,
         ) -> int | None
@@ -5548,19 +5548,19 @@ class Text(Widget, XView, YView):
             self,
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
-            arg1: _WhatToCount,
-            arg2: _WhatToCount,
+            arg1: WhatToCount,
+            arg2: WhatToCount,
             /,
         ) -> (int, int)
         def count(
             self,
             index1: str | float | _tkinter.Tcl_Obj | Widget,
             index2: str | float | _tkinter.Tcl_Obj | Widget,
-            arg1: _WhatToCount | "update",
-            arg2: _WhatToCount | "update",
-            arg3: _WhatToCount | "update",
+            arg1: WhatToCount | "update",
+            arg2: WhatToCount | "update",
+            arg3: WhatToCount | "update",
             /,
-            *args: _WhatToCount | "update",
+            *args: WhatToCount | "update",
         ) -> (*: int)
 
     def debug(self, boolean: None = None) -> bool:

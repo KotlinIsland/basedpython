@@ -23,7 +23,7 @@ else:
         "start_unix_server",
     )
 
-type _ClientConnectedCallback = (StreamReader, StreamWriter) -> (Awaitable[None] | None)
+private type ClientConnectedCallback = (StreamReader, StreamWriter) -> (Awaitable[None] | None)
 
 @type_check_only
 protocol _ReaduntilBuffer(ReadableBuffer, Sized)
@@ -55,7 +55,7 @@ async def open_connection(
     """
 
 async def start_server(
-    client_connected_cb: _ClientConnectedCallback,
+    client_connected_cb: ClientConnectedCallback,
     host: str | Sequence[str] | None = None,
     port: int | str | None = None,
     *,
@@ -91,7 +91,7 @@ if sys.platform != "win32":
         """Similar to `open_connection` but works with UNIX Domain Sockets."""
 
     async def start_unix_server(
-        client_connected_cb: _ClientConnectedCallback, path: StrPath | None = None, *, limit: int = 65536, **kwds: dynamic
+        client_connected_cb: ClientConnectedCallback, path: StrPath | None = None, *, limit: int = 65536, **kwds: dynamic
     ) -> Server:
         """Similar to `start_server` but works with UNIX Domain Sockets."""
 
@@ -119,7 +119,7 @@ protocol StreamReaderProtocol(FlowControlMixin):
     init(
         self,
         stream_reader: StreamReader,
-        client_connected_cb: _ClientConnectedCallback | None = None,
+        client_connected_cb: ClientConnectedCallback | None = None,
         loop: events.AbstractEventLoop | None = None,
     )
     def __del__(self) -> None

@@ -12,23 +12,23 @@ from typing_extensions import Self
 from weakref import ReferenceType
 
 __all__ = ["local"]
-type _LocalDict = dict[dynamic, dynamic]
+private type LocalDict = dict[dynamic, dynamic]
 
 class _localimpl:
     """A class managing thread-local dicts"""
 
     __slots__ = ("key", "dicts", "localargs", "locallock", "__weakref__")
     key: str
-    dicts: dict[int, (ReferenceType[dynamic], _LocalDict)]
+    dicts: dict[int, (ReferenceType[dynamic], LocalDict)]
     # Keep localargs in sync with the *args, **kwargs annotation on local.__new__
     localargs: (list[dynamic], dict[str, dynamic])
     locallock: RLock
-    def get_dict(self) -> _LocalDict:
+    def get_dict(self) -> LocalDict:
         """Return the dict for the current thread. Raises KeyError if none
         defined.
         """
 
-    def create_dict(self) -> _LocalDict:
+    def create_dict(self) -> LocalDict:
         """Create a new dict for the current thread, and return it."""
 
 class local:

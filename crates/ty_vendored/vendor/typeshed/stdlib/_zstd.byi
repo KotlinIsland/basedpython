@@ -38,7 +38,7 @@ ZSTD_greedy: Final = 3
 ZSTD_lazy: Final = 4
 ZSTD_lazy2: Final = 5
 
-type _ZstdCompressorContinue = 0
+private type ZstdCompressorContinue = 0
 type _ZstdCompressorFlushBlock = 1
 type _ZstdCompressorFlushFrame = 2
 
@@ -66,7 +66,7 @@ final class ZstdCompressor:
         zstd_dict: ZstdDict | (ZstdDict, int) | None = None,
     ) -> Self
     def compress(
-        self, /, data: ReadableBuffer, mode: _ZstdCompressorContinue | _ZstdCompressorFlushBlock | _ZstdCompressorFlushFrame = 0
+        self, /, data: ReadableBuffer, mode: ZstdCompressorContinue | _ZstdCompressorFlushBlock | _ZstdCompressorFlushFrame = 0
     ) -> bytes:
         """Provide data to the compressor object.
 
@@ -107,7 +107,7 @@ final class ZstdCompressor:
         may be corrupted and the final chunk written may be lost.
         """
 
-    let last_mode: _ZstdCompressorContinue | _ZstdCompressorFlushBlock | _ZstdCompressorFlushFrame
+    let last_mode: ZstdCompressorContinue | _ZstdCompressorFlushBlock | _ZstdCompressorFlushFrame
 
 final class ZstdDecompressor:
     """Create a decompressor object for decompressing data incrementally.

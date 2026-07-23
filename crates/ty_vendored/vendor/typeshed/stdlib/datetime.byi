@@ -36,7 +36,7 @@ class tzinfo:
         """datetime in UTC -> datetime in local time."""
 
 # Alias required to avoid name conflicts with date(time).tzinfo.
-type _TzInfo = tzinfo
+private type TzInfo = tzinfo
 
 final class timezone(tzinfo):
     """Fixed offset from UTC implementation of tzinfo."""
@@ -210,7 +210,7 @@ class time:
         minute: SupportsIndex = 0,
         second: SupportsIndex = 0,
         microsecond: SupportsIndex = 0,
-        tzinfo: _TzInfo | None = None,
+        tzinfo: TzInfo | None = None,
         *,
         fold: int = 0,
     ) -> Self
@@ -218,7 +218,7 @@ class time:
     let minute: int
     let second: int
     let microsecond: int
-    let tzinfo: _TzInfo | None
+    let tzinfo: TzInfo | None
     let fold: int
     def __le__(self, value: time, /) -> bool
     def __lt__(self, value: time, /) -> bool
@@ -295,7 +295,7 @@ class time:
             minute: SupportsIndex = ...,
             second: SupportsIndex = ...,
             microsecond: SupportsIndex = ...,
-            tzinfo: _TzInfo | None = ...,
+            tzinfo: TzInfo | None = ...,
             fold: int = ...,
         ) -> Self:
             """The same as replace()."""
@@ -306,13 +306,13 @@ class time:
         minute: SupportsIndex = ...,
         second: SupportsIndex = ...,
         microsecond: SupportsIndex = ...,
-        tzinfo: _TzInfo | None = ...,
+        tzinfo: TzInfo | None = ...,
         *,
         fold: int = ...,
     ) -> Self:
         """Return time with new specified fields."""
 
-type _Date = date
+private type Date = date
 type _Time = time
 
 @disjoint_base
@@ -415,7 +415,7 @@ class datetime(date):
         minute: SupportsIndex = 0,
         second: SupportsIndex = 0,
         microsecond: SupportsIndex = 0,
-        tzinfo: _TzInfo | None = None,
+        tzinfo: TzInfo | None = None,
         *,
         fold: int = 0,
     ) -> Self
@@ -423,20 +423,20 @@ class datetime(date):
     let minute: int
     let second: int
     let microsecond: int
-    let tzinfo: _TzInfo | None
+    let tzinfo: TzInfo | None
     let fold: int
     # On <3.12, the name of the first parameter in the pure-Python implementation
     # didn't match the name in the C implementation,
     # meaning it is only *safe* to pass it as a keyword argument on 3.12+
     if sys.version_info >= (3, 12):
-        class def fromtimestamp(cls, timestamp: float, tz: _TzInfo | None = None) -> Self:
+        class def fromtimestamp(cls, timestamp: float, tz: TzInfo | None = None) -> Self:
             """Create a datetime from a POSIX timestamp.
 
             The timestamp is a number, e.g. created via time.time(), that is
             interpreted as local time.
             """
     else:
-        override class def fromtimestamp(cls, timestamp: float, /, tz: _TzInfo | None = None) -> Self:
+        override class def fromtimestamp(cls, timestamp: float, /, tz: TzInfo | None = None) -> Self:
             """timestamp[, tz] -> tz's local time from POSIX timestamp."""
 
     @classmethod
@@ -444,7 +444,7 @@ class datetime(date):
     def utcfromtimestamp(cls, t: float, /) -> Self:
         """Create a naive UTC datetime from a POSIX timestamp."""
 
-    class def now(cls, tz: _TzInfo | None = None) -> Self:
+    class def now(cls, tz: TzInfo | None = None) -> Self:
         """Returns new datetime object representing current time local to tz.
 
           tz
@@ -458,7 +458,7 @@ class datetime(date):
     def utcnow(cls) -> Self:
         """Return a new datetime representing UTC day and time."""
 
-    class def combine(cls, date: _Date, time: _Time, tzinfo: _TzInfo | None = ...) -> Self:
+    class def combine(cls, date: Date, time: _Time, tzinfo: TzInfo | None = ...) -> Self:
         """Construct a datetime from a given date and a given time."""
 
     if sys.version_info >= (3, 15):
@@ -471,7 +471,7 @@ class datetime(date):
     def utctimetuple(self) -> struct_time:
         """Return UTC time tuple, compatible with time.localtime()."""
 
-    def date(self) -> _Date:
+    def date(self) -> Date:
         """Return date object with same year, month and day."""
 
     def time(self) -> _Time:
@@ -492,7 +492,7 @@ class datetime(date):
             minute: SupportsIndex = ...,
             second: SupportsIndex = ...,
             microsecond: SupportsIndex = ...,
-            tzinfo: _TzInfo | None = ...,
+            tzinfo: TzInfo | None = ...,
             fold: int = ...,
         ) -> Self:
             """The same as replace()."""
@@ -506,13 +506,13 @@ class datetime(date):
         minute: SupportsIndex = ...,
         second: SupportsIndex = ...,
         microsecond: SupportsIndex = ...,
-        tzinfo: _TzInfo | None = ...,
+        tzinfo: TzInfo | None = ...,
         *,
         fold: int = ...,
     ) -> Self:
         """Return datetime with new specified fields."""
 
-    def astimezone(self, tz: _TzInfo | None = None) -> Self:
+    def astimezone(self, tz: TzInfo | None = None) -> Self:
         """Convert to local time in new timezone tz."""
 
     override def isoformat(self, sep: str = "T", timespec: str = "auto") -> str:

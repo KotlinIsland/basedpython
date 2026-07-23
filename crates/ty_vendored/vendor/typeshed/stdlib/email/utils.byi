@@ -27,7 +27,7 @@ __all__ = [
     "unquote",
 ]
 
-type _PDTZ = tuple[int, int, int, int, int, int, int, int, int, int | None]
+private type PDTZ = tuple[int, int, int, int, int, int, int, int, int, int | None]
 
 def quote(str: str) -> str:
     """Prepare string to be used in a quoted string.
@@ -84,10 +84,10 @@ def parsedate_tz(data: None) -> None:
 
     Accounts for military timezones.
     """
-def parsedate_tz(data: str) -> _PDTZ | None
+def parsedate_tz(data: str) -> PDTZ | None
 
 def parsedate_to_datetime(data: str) -> datetime.datetime
-def mktime_tz(data: _PDTZ) -> int:
+def mktime_tz(data: PDTZ) -> int:
     """Turn a 10-tuple as returned by parsedate_tz() into a POSIX timestamp."""
 
 def formatdate(timeval: float | None = None, localtime: bool = False, usegmt: bool = False) -> str:

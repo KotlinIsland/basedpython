@@ -137,7 +137,7 @@ protocol _DispatchArity4:
 protocol _DispatchArityN:
     def __call__(self, *args: _Marshallable) -> _Marshallable
 
-type _DispatchProtocol = (
+private type DispatchProtocol = (
     _DispatchArity0 | _DispatchArity1 | _DispatchArity2 | _DispatchArity3 | _DispatchArity4 | _DispatchArityN
 )
 
@@ -165,7 +165,7 @@ class SimpleXMLRPCDispatcher:  # undocumented
     can be instanced when used by the MultiPathXMLRPCServer
     """
 
-    funcs: dict[str, _DispatchProtocol]
+    funcs: dict[str, DispatchProtocol]
     instance: dynamic | None
     allow_none: bool
     encoding: str
@@ -204,7 +204,7 @@ class SimpleXMLRPCDispatcher:  # undocumented
 
         """
 
-    def register_function(self, function: _DispatchProtocol | None = None, name: str | None = None) -> (...) -> dynamic:
+    def register_function(self, function: DispatchProtocol | None = None, name: str | None = None) -> (...) -> dynamic:
         """Registers a function to respond to XML-RPC requests.
 
         The optional name argument can be used to set a Unicode name

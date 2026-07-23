@@ -139,12 +139,12 @@ if sys.version_info >= (3, 13):
     __all__ += ["kde", "kde_random"]
 
 # Most functions in this module accept homogeneous collections of one of these types
-type _Number = float | Decimal | Fraction
+private type Number = float | Decimal | Fraction
 
 # Used in mode, multimode
 
 # Used in NormalDist.samples and kde_random
-type _Seed = int | float | str | bytes | bytearray  # noqa: Y041
+private type Seed = int | float | str | bytes | bytearray  # noqa: Y041
 
 # Used in linear_regression
 
@@ -210,7 +210,7 @@ def mean[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT
 
     """
 
-def harmonic_mean[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT], weights: Iterable[_Number] | None = None) -> NumberT:
+def harmonic_mean[NumberT: constraints (float, Decimal, Fraction)](data: Iterable[NumberT], weights: Iterable[Number] | None = None) -> NumberT:
     """Return the harmonic mean of data.
 
     The harmonic mean is the reciprocal of the arithmetic mean of the
@@ -520,7 +520,7 @@ class NormalDist:
     class def from_samples(cls, data: Iterable[SupportsFloat]) -> Self:
         """Make a normal distribution instance from sample data."""
 
-    def samples(self, n: SupportsIndex, *, seed: _Seed | None = None) -> list[float]:
+    def samples(self, n: SupportsIndex, *, seed: Seed | None = None) -> list[float]:
         """Generate *n* samples for a given mean and standard deviation."""
 
     def pdf(self, x: float) -> float:
@@ -624,7 +624,7 @@ class NormalDist:
         """NormalDist objects hash equal if their mu and sigma are both equal."""
 
 if sys.version_info >= (3, 12):
-    def correlation(x: Sequence[_Number], y: Sequence[_Number], /, *, method: "linear" | "ranked" = "linear") -> float:
+    def correlation(x: Sequence[Number], y: Sequence[Number], /, *, method: "linear" | "ranked" = "linear") -> float:
         """Pearson's correlation coefficient
 
         Return the Pearson's correlation coefficient for two inputs. Pearson's
@@ -650,7 +650,7 @@ if sys.version_info >= (3, 12):
         """
 
 else:
-    def correlation(x: Sequence[_Number], y: Sequence[_Number], /) -> float:
+    def correlation(x: Sequence[Number], y: Sequence[Number], /) -> float:
         """Pearson's correlation coefficient
 
         Return the Pearson's correlation coefficient for two inputs. Pearson's
@@ -668,7 +668,7 @@ else:
 
         """
 
-def covariance(x: Sequence[_Number], y: Sequence[_Number], /) -> float:
+def covariance(x: Sequence[Number], y: Sequence[Number], /) -> float:
     """Covariance
 
     Return the sample covariance of two inputs *x* and *y*. Covariance
@@ -694,7 +694,7 @@ class LinearRegression(NamedTuple):
 
 if sys.version_info >= (3, 11):
     def linear_regression(
-        regressor: _SizedIterable[_Number], dependent_variable: _SizedIterable[_Number], /, *, proportional: bool = False
+        regressor: _SizedIterable[Number], dependent_variable: _SizedIterable[Number], /, *, proportional: bool = False
     ) -> LinearRegression:
         """Slope and intercept for simple linear regression.
 
@@ -735,7 +735,7 @@ if sys.version_info >= (3, 11):
         """
 
 else:
-    def linear_regression(regressor: _SizedIterable[_Number], dependent_variable: _SizedIterable[_Number], /) -> LinearRegression:
+    def linear_regression(regressor: _SizedIterable[Number], dependent_variable: _SizedIterable[Number], /) -> LinearRegression:
         """Slope and intercept for simple linear regression.
 
         Return the slope and intercept of simple linear regression
@@ -864,7 +864,7 @@ if sys.version_info >= (3, 13):
         """
 
     def kde_random(
-        data: Sequence[float], h: float, kernel: _Kernel = "normal", *, seed: _Seed | None = None
+        data: Sequence[float], h: float, kernel: _Kernel = "normal", *, seed: Seed | None = None
     ) -> () -> float:
         """Return a function that makes a random selection from the estimated
         probability density function created by kde(data, h, kernel).

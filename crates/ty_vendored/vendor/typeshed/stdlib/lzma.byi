@@ -93,10 +93,10 @@ __all__ = [
     "is_check_supported",
 ]
 
-type _OpenBinaryWritingMode = "w" | "wb" | "x" | "xb" | "a" | "ab"
-type _OpenTextWritingMode = "wt" | "xt" | "at"
+private type OpenBinaryWritingMode = "w" | "wb" | "x" | "xb" | "a" | "ab"
+private type OpenTextWritingMode = "wt" | "xt" | "at"
 
-type _PathOrFile = StrOrBytesPath | IO[bytes]
+private type PathOrFile = StrOrBytesPath | IO[bytes]
 
 class LZMAFile(BaseStream, IO[bytes]):
     """A file object providing transparent LZMA (de)compression.
@@ -110,7 +110,7 @@ class LZMAFile(BaseStream, IO[bytes]):
 
     init(
         self,
-        filename: _PathOrFile | None = None,
+        filename: PathOrFile | None = None,
         mode: str = "r",
         *,
         format: int | None = None,
@@ -218,7 +218,7 @@ class LZMAFile(BaseStream, IO[bytes]):
         """
 
 def open(
-    filename: _PathOrFile,
+    filename: PathOrFile,
     mode: "r" | "rb" = "rb",
     *,
     format: int | None = None,
@@ -253,8 +253,8 @@ def open(
 
     """
 def open(
-    filename: _PathOrFile,
-    mode: _OpenBinaryWritingMode,
+    filename: PathOrFile,
+    mode: OpenBinaryWritingMode,
     *,
     format: int | None = None,
     check: int = -1,
@@ -278,7 +278,7 @@ def open(
 ) -> TextIOWrapper
 def open(
     filename: StrOrBytesPath,
-    mode: _OpenTextWritingMode,
+    mode: OpenTextWritingMode,
     *,
     format: int | None = None,
     check: int = -1,
@@ -289,7 +289,7 @@ def open(
     newline: str | None = None,
 ) -> TextIOWrapper
 def open(
-    filename: _PathOrFile,
+    filename: PathOrFile,
     mode: str,
     *,
     format: int | None = None,

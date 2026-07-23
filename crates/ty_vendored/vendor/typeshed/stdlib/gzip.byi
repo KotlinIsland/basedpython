@@ -18,9 +18,9 @@ else:
 
 __all__ = ["BadGzipFile", "GzipFile", "open", "compress", "decompress"]
 
-type _ReadBinaryMode = "r" | "rb"
-type _WriteBinaryMode = "a" | "ab" | "w" | "wb" | "x" | "xb"
-type _OpenTextMode = "rt" | "at" | "wt" | "xt"
+private type ReadBinaryMode = "r" | "rb"
+private type WriteBinaryMode = "a" | "ab" | "w" | "wb" | "x" | "xb"
+private type OpenTextMode = "rt" | "at" | "wt" | "xt"
 
 final READ: object  # undocumented
 final WRITE: object  # undocumented
@@ -51,7 +51,7 @@ protocol _WritableFileobj:
 
 def open(
     filename: StrOrBytesPath | _ReadableFileobj,
-    mode: _ReadBinaryMode = "rb",
+    mode: ReadBinaryMode = "rb",
     compresslevel: int = 9,
     encoding: None = None,
     errors: None = None,
@@ -77,7 +77,7 @@ def open(
     """
 def open(
     filename: StrOrBytesPath | _WritableFileobj,
-    mode: _WriteBinaryMode,
+    mode: WriteBinaryMode,
     compresslevel: int = 9,
     encoding: None = None,
     errors: None = None,
@@ -85,7 +85,7 @@ def open(
 ) -> GzipFile
 def open(
     filename: StrOrBytesPath | _ReadableFileobj | _WritableFileobj,
-    mode: _OpenTextMode,
+    mode: OpenTextMode,
     compresslevel: int = 9,
     encoding: str | None = None,
     errors: str | None = None,
@@ -134,7 +134,7 @@ class GzipFile(BaseStream):
     init(
         self,
         filename: StrOrBytesPath | None,
-        mode: _ReadBinaryMode,
+        mode: ReadBinaryMode,
         compresslevel: int = 9,
         fileobj: _ReadableFileobj | None = None,
         mtime: float | None = None,
@@ -178,7 +178,7 @@ class GzipFile(BaseStream):
     init(
         self,
         *,
-        mode: _ReadBinaryMode,
+        mode: ReadBinaryMode,
         compresslevel: int = 9,
         fileobj: _ReadableFileobj | None = None,
         mtime: float | None = None,
@@ -186,7 +186,7 @@ class GzipFile(BaseStream):
     init(
         self,
         filename: StrOrBytesPath | None,
-        mode: _WriteBinaryMode,
+        mode: WriteBinaryMode,
         compresslevel: int = 9,
         fileobj: _WritableFileobj | None = None,
         mtime: float | None = None,
@@ -194,7 +194,7 @@ class GzipFile(BaseStream):
     init(
         self,
         *,
-        mode: _WriteBinaryMode,
+        mode: WriteBinaryMode,
         compresslevel: int = 9,
         fileobj: _WritableFileobj | None = None,
         mtime: float | None = None,

@@ -69,7 +69,7 @@ fn run() -> Result<()> {
     }
 
     let patches = all_patches();
-    let post_patches = all_post_patches();
+    let post_patches = all_post_patches(&root);
     if patches.is_empty() && post_patches.is_empty() {
         eprintln!("no patches registered; nothing to do");
         return Ok(());

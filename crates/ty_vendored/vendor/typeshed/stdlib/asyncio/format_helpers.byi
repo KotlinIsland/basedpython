@@ -9,9 +9,9 @@ from typing import TypeAlias, type_check_only
 class _HasWrapper:
     __wrapper__: _HasWrapper | FunctionType
 
-type _FuncType = FunctionType | _HasWrapper | functools.partial[dynamic] | functools.partialmethod[dynamic]
+private type FuncType = FunctionType | _HasWrapper | functools.partial[dynamic] | functools.partialmethod[dynamic]
 
-def _get_function_source(func: _FuncType) -> (str, int)
+def _get_function_source(func: FuncType) -> (str, int)
 def _get_function_source(func: object) -> (str, int) | None
 
 if sys.version_info >= (3, 13):

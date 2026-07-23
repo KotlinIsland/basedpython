@@ -135,9 +135,9 @@ if sys.version_info >= (3, 15):
     from _decimal import SPEC_VERSION as SPEC_VERSION
 
 type _Decimal = Decimal | int
-type _DecimalNew = Decimal | float | str | tuple[int, Sequence[int], int]
-type _ComparableNum = Decimal | float | numbers.Rational
-type _TrapType = type[DecimalException]
+private type DecimalNew = Decimal | float | str | tuple[int, Sequence[int], int]
+private type ComparableNum = Decimal | float | numbers.Rational
+private type TrapType = type[DecimalException]
 
 # At runtime, these classes are implemented in C as part of "_decimal".
 # However, they consider themselves to live in "decimal", so we'll put them here.
@@ -181,7 +181,7 @@ class Decimal:
     trap is active.
     """
 
-    def __new__(cls, value: _DecimalNew = "0", context: Context | None = None) -> Self
+    def __new__(cls, value: DecimalNew = "0", context: Context | None = None) -> Self
     if sys.version_info >= (3, 14):
         class def from_number(cls, number: Decimal | float, /) -> Self:
             """Class method that converts a real number to a decimal number, exactly.
@@ -260,10 +260,10 @@ class Decimal:
     def __floordiv__(self, value: _Decimal, /) -> Decimal:
         """Return self//value."""
 
-    def __ge__(self, value: _ComparableNum, /) -> bool
-    def __gt__(self, value: _ComparableNum, /) -> bool
-    def __le__(self, value: _ComparableNum, /) -> bool
-    def __lt__(self, value: _ComparableNum, /) -> bool
+    def __ge__(self, value: ComparableNum, /) -> bool
+    def __gt__(self, value: ComparableNum, /) -> bool
+    def __le__(self, value: ComparableNum, /) -> bool
+    def __lt__(self, value: ComparableNum, /) -> bool
     def __mod__(self, value: _Decimal, /) -> Decimal:
         """Return self%value."""
 
@@ -734,8 +734,8 @@ class Context:
     Emax: int
     capitals: int
     clamp: int
-    traps: dict[_TrapType, bool]
-    flags: dict[_TrapType, bool]
+    traps: dict[TrapType, bool]
+    flags: dict[TrapType, bool]
     init(
         self,
         prec: int | None = None,
@@ -744,8 +744,8 @@ class Context:
         Emax: int | None = None,
         capitals: int | None = None,
         clamp: int | None = None,
-        flags: dict[_TrapType, bool] | Container[_TrapType] | None = None,
-        traps: dict[_TrapType, bool] | Container[_TrapType] | None = None,
+        flags: dict[TrapType, bool] | Container[TrapType] | None = None,
+        traps: dict[TrapType, bool] | Container[TrapType] | None = None,
     )
     override def __reduce__(self) -> (type[Self], (*: dynamic))
     def clear_flags(self) -> None:
@@ -776,7 +776,7 @@ class Context:
         set to 1 (IEEE clamp mode).  Etop() must not be negative.
         """
 
-    def create_decimal(self, num: _DecimalNew = "0", /) -> Decimal:
+    def create_decimal(self, num: DecimalNew = "0", /) -> Decimal:
         """Create a new Decimal instance from num, using self as the context.
 
         Unlike the Decimal constructor, this function observes the context

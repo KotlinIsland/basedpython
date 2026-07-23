@@ -52,7 +52,7 @@ if sys.version_info >= (3, 15):
 # <enum 'Foo'>
 # >>> Enum('Foo', names={'RED': 1, 'YELLOW': 2})
 # <enum 'Foo'>
-type _EnumNames = str | Iterable[str] | Iterable[Iterable[str | dynamic]] | Mapping[str, dynamic]
+private type EnumNames = str | Iterable[str] | Iterable[Iterable[str | dynamic]] | Mapping[str, dynamic]
 type _Signature = dynamic  # TODO: Unable to import Signature from inspect module
 
 if sys.version_info >= (3, 11):
@@ -228,7 +228,7 @@ class EnumMeta(type):
         def __call__(
             cls,
             value: str,
-            names: _EnumNames,
+            names: EnumNames,
             *,
             module: str | None = None,
             qualname: str | None = None,
@@ -267,7 +267,7 @@ class EnumMeta(type):
         def __call__(
             cls,
             value: str,
-            names: _EnumNames,
+            names: EnumNames,
             *,
             module: str | None = None,
             qualname: str | None = None,

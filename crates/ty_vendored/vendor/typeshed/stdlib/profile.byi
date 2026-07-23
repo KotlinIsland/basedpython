@@ -28,7 +28,7 @@ def runctx(
     statement and filename have the same semantics as profile.run
     """
 
-type _Label = tuple[str, int, str]
+private type Label = tuple[str, int, str]
 
 class Profile:
     """Profiler class.
@@ -70,7 +70,7 @@ class Profile:
     """
 
     bias: int
-    stats: dict[_Label, (int, int, int, int, dict[_Label, (int, int, int, int)])]  # undocumented
+    stats: dict[Label, (int, int, int, int, dict[Label, (int, int, int, int)])]  # undocumented
     init(self, timer: (() -> float) | None = None, bias: int | None = None)
     def set_cmd(self, cmd: str) -> None
     def simulate_call(self, name: str) -> None

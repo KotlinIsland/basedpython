@@ -169,7 +169,7 @@ class _CFunctionType(_CFuncPtr):
     _flags_: ClassVar[int]
 
 # Alias for either function pointer type
-type _FuncPointer = _CDLLFuncPointer | _CFunctionType  # noqa: Y047  # not used here
+private type FuncPointer = _CDLLFuncPointer | _CFunctionType  # noqa: Y047  # not used here
 
 def CFUNCTYPE(
     restype: type[_CData | _CDataType] | None,
@@ -205,12 +205,12 @@ def PYFUNCTYPE(restype: type[_CData | _CDataType] | None, *argtypes: type[_CData
 
 # Any type that can be implicitly converted to c_void_p when passed as a C function argument.
 # (bytes is not included here, see below.)
-type _CVoidPLike = _PointerLike | Array[dynamic] | _CArgObject | int
+private type CVoidPLike = _PointerLike | Array[dynamic] | _CArgObject | int
 # Same as above, but including types known to be read-only (i. e. bytes).
 # This distinction is not strictly necessary (ctypes doesn't differentiate between const
 # and non-const pointers), but it catches errors like memmove(b'foo', buf, 4)
 # when memmove(buf, b'foo', 4) was intended.
-type _CVoidConstPLike = _CVoidPLike | bytes
+private type CVoidConstPLike = CVoidPLike | bytes
 
 
 def cast[CastT: _CanCastTo](obj: _CData | _CDataType | _CArgObject | int, typ: type[CastT]) -> CastT
@@ -251,7 +251,7 @@ if sys.platform == "win32":
 # specific __call__.
 @type_check_only
 class _MemmoveFunctionType(_CFunctionType):
-    override def __call__(self, dst: _CVoidPLike, src: _CVoidConstPLike, count: int) -> int
+    override def __call__(self, dst: CVoidPLike, src: CVoidConstPLike, count: int) -> int
 
 memmove: _MemmoveFunctionType
 
@@ -259,11 +259,11 @@ memmove: _MemmoveFunctionType
 # specific __call__.
 @type_check_only
 class _MemsetFunctionType(_CFunctionType):
-    override def __call__(self, dst: _CVoidPLike, c: int, count: int) -> int
+    override def __call__(self, dst: CVoidPLike, c: int, count: int) -> int
 
 memset: _MemsetFunctionType
 
-def string_at(ptr: _CVoidConstPLike, size: int = -1) -> bytes:
+def string_at(ptr: CVoidConstPLike, size: int = -1) -> bytes:
     """string_at(ptr[, size]) -> string
 
     Return the byte string at void *ptr.
@@ -272,14 +272,14 @@ def string_at(ptr: _CVoidConstPLike, size: int = -1) -> bytes:
 if sys.platform == "win32":
     def WinError(code: int | None = None, descr: str | None = None) -> OSError
 
-def wstring_at(ptr: _CVoidConstPLike, size: int = -1) -> str:
+def wstring_at(ptr: CVoidConstPLike, size: int = -1) -> str:
     """wstring_at(ptr[, size]) -> string
 
     Return the wide-character string at void *ptr.
     """
 
 if sys.version_info >= (3, 14):
-    def memoryview_at(ptr: _CVoidConstPLike, size: int, readonly: bool = False) -> memoryview:
+    def memoryview_at(ptr: CVoidConstPLike, size: int, readonly: bool = False) -> memoryview:
         """memoryview_at(ptr, size[, readonly]) -> memoryview
 
         Return a memoryview representing the memory at void *ptr.

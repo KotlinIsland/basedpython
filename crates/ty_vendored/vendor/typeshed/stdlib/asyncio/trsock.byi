@@ -10,8 +10,8 @@ from typing_extensions import deprecated
 # These are based in socket, maybe move them out into _typeshed.pyi or such
 type _Address = socket._Address
 type _RetAddress = dynamic
-type _WriteBuffer = bytearray | memoryview
-type _CMSG = tuple[int, int, bytes]
+private type WriteBuffer = bytearray | memoryview
+private type CMSG = tuple[int, int, bytes]
 
 class TransportSocket:
     """A socket-like wrapper for exposing real transport sockets.
@@ -88,7 +88,7 @@ class TransportSocket:
         def sendmsg(
             self,
             buffers: Iterable[ReadableBuffer],
-            ancdata: Iterable[_CMSG] = ...,
+            ancdata: Iterable[CMSG] = ...,
             flags: int = 0,
             address: _Address | None = None,
             /,
@@ -114,15 +114,15 @@ class TransportSocket:
             def share(self, process_id: int) -> NoReturn
 
         @deprecated("Removed in Python 3.11.")
-        def recv_into(self, buffer: _WriteBuffer, nbytes: int = 0, flags: int = 0) -> int
+        def recv_into(self, buffer: WriteBuffer, nbytes: int = 0, flags: int = 0) -> int
         @deprecated("Removed in Python 3.11.")
-        def recvfrom_into(self, buffer: _WriteBuffer, nbytes: int = 0, flags: int = 0) -> (int, _RetAddress)
+        def recvfrom_into(self, buffer: WriteBuffer, nbytes: int = 0, flags: int = 0) -> (int, _RetAddress)
         @deprecated("Removed in Python 3.11.")
         def recvmsg_into(
-            self, buffers: Iterable[_WriteBuffer], ancbufsize: int = 0, flags: int = 0, /
-        ) -> (int, list[_CMSG], int, dynamic)
+            self, buffers: Iterable[WriteBuffer], ancbufsize: int = 0, flags: int = 0, /
+        ) -> (int, list[CMSG], int, dynamic)
         @deprecated("Removed in Python 3.11.")
-        def recvmsg(self, bufsize: int, ancbufsize: int = 0, flags: int = 0, /) -> (bytes, list[_CMSG], int, dynamic)
+        def recvmsg(self, bufsize: int, ancbufsize: int = 0, flags: int = 0, /) -> (bytes, list[CMSG], int, dynamic)
         @deprecated("Removed in Python 3.11.")
         def recvfrom(self, bufsize: int, flags: int = 0) -> (bytes, _RetAddress)
         @deprecated("Removed in Python 3.11.")

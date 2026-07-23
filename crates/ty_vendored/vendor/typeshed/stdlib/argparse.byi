@@ -89,7 +89,7 @@ __all__ = [
     "ZERO_OR_MORE",
 ]
 
-type _ActionType = ((str) -> dynamic) | FileType | str
+private type ActionType = ((str) -> dynamic) | FileType | str
 
 ONE_OR_MORE: Final = "+"
 OPTIONAL: Final = "?"
@@ -155,7 +155,7 @@ class _ActionsContainer:
         nargs: int | str | None = None,
         const: dynamic = ...,
         default: dynamic = ...,
-        type: _ActionType = ...,
+        type: ActionType = ...,
         choices: Iterable[dynamic] | None = ...,  # choices must match the type specified
         required: bool = ...,
         help: str | None = ...,
@@ -566,7 +566,7 @@ class Action(_AttributeHolder):
     nargs: int | str | None
     const: dynamic
     default: dynamic
-    type: _ActionType | None
+    type: ActionType | None
     choices: Iterable[dynamic] | None
     required: bool
     help: str | None

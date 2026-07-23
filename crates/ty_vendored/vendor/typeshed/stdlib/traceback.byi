@@ -32,7 +32,7 @@ __all__ = [
 if sys.version_info >= (3, 14):
     __all__ += ["print_list"]
 
-type _FrameSummaryTuple = tuple[str, int, str, str | None]
+private type FrameSummaryTuple = tuple[str, int, str, str | None]
 
 def print_tb(tb: TracebackType | None, limit: int | None = None, file: SupportsWrite[str] | None = None) -> None:
     """Print up to 'limit' stack trace entries from the traceback 'tb'.
@@ -121,7 +121,7 @@ def extract_stack(f: FrameType | None = None, limit: int | None = None) -> Stack
     and the entries are in order from oldest to newest stack frame.
     """
 
-def format_list(extracted_list: Iterable[FrameSummary | _FrameSummaryTuple]) -> list[str]:
+def format_list(extracted_list: Iterable[FrameSummary | FrameSummaryTuple]) -> list[str]:
     """Format a list of tuples or FrameSummary objects for printing.
 
     Given a list of tuples or FrameSummary objects as returned by
@@ -134,7 +134,7 @@ def format_list(extracted_list: Iterable[FrameSummary | _FrameSummaryTuple]) -> 
     whose source text line is not None.
     """
 
-def print_list(extracted_list: Iterable[FrameSummary | _FrameSummaryTuple], file: SupportsWrite[str] | None = None) -> None:
+def print_list(extracted_list: Iterable[FrameSummary | FrameSummaryTuple], file: SupportsWrite[str] | None = None) -> None:
     """Print the list of tuples as returned by extract_tb() or
     extract_stack() as a formatted stack trace to the given file.
     """
@@ -531,7 +531,7 @@ class StackSummary(list[FrameSummary]):
             be captured as object representations into the FrameSummary.
         """
 
-    class def from_list(cls, a_list: Iterable[FrameSummary | _FrameSummaryTuple]) -> StackSummary:
+    class def from_list(cls, a_list: Iterable[FrameSummary | FrameSummaryTuple]) -> StackSummary:
         """
         Create a StackSummary object from a supplied list of
         FrameSummary objects or old-style list of tuples.

@@ -124,15 +124,15 @@ if sys.version_info >= (3, 14):
 final cookie_re: Pattern[str]
 final blank_re: Pattern[bytes]
 
-type _Position = tuple[int, int]
+private type Position = tuple[int, int]
 
 # This class is not exposed. It calls itself tokenize.TokenInfo.
 @type_check_only
 class _TokenInfo(NamedTuple):
     type: int
     string: str
-    start: _Position
-    end: _Position
+    start: Position
+    end: Position
     line: str
 
 if sys.version_info >= (3, 12):
@@ -145,7 +145,7 @@ else:
         let exact_type: int
 
 # Backwards compatible tokens can be sequences of a shorter length too
-type _Token = TokenInfo | Sequence[int | str | _Position]
+type _Token = TokenInfo | Sequence[int | str | Position]
 
 class TokenError(Exception)
 
@@ -157,9 +157,9 @@ class Untokenizer:
     prev_row: int
     prev_col: int
     encoding: str | None
-    def add_whitespace(self, start: _Position) -> None
+    def add_whitespace(self, start: Position) -> None
     if sys.version_info >= (3, 12):
-        def add_backslash_continuation(self, start: _Position) -> None:
+        def add_backslash_continuation(self, start: Position) -> None:
             """Add backslash continuation characters if the row has increased
             without encountering a newline token.
 

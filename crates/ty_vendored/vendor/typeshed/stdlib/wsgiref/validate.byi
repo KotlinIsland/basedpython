@@ -144,11 +144,11 @@ class ErrorWrapper:
     def writelines(self, seq: Iterable[str]) -> None
     def close(self) -> NoReturn
 
-type _WriterCallback = (bytes) -> dynamic
+private type WriterCallback = (bytes) -> dynamic
 
 class WriteWrapper:
-    writer: _WriterCallback
-    init(self, wsgi_writer: _WriterCallback)
+    writer: WriterCallback
+    init(self, wsgi_writer: WriterCallback)
     def __call__(self, s: bytes) -> None
 
 class PartialIteratorWrapper:

@@ -9,7 +9,7 @@ from typing import Literal, TypeAlias, TypeVar
 from typing_extensions import Self, disjoint_base
 
 _T_co = TypeVar("_T_co", covariant=True)
-type _TaskYieldType = Future[object] | None
+private type TaskYieldType = Future[object] | None
 
 @disjoint_base
 class Future[in out Element](Awaitable[Element]):
@@ -122,7 +122,7 @@ class Future[in out Element](Awaitable[Element]):
 if sys.version_info >= (3, 12):
     _TaskCompatibleCoro: TypeAlias = Coroutine[dynamic, dynamic, _T_co]
 else:
-    _TaskCompatibleCoro: TypeAlias = Generator[_TaskYieldType, None, _T_co] | Coroutine[dynamic, dynamic, _T_co]
+    _TaskCompatibleCoro: TypeAlias = Generator[TaskYieldType, None, _T_co] | Coroutine[dynamic, dynamic, _T_co]
 
 # mypy and pyright complain that a subclass of an invariant class shouldn't be covariant.
 # While this is true in general, here it's sort-of okay to have a covariant subclass,

@@ -210,7 +210,7 @@ modulesbyfile: dict[str, dynamic]
 
 _GetMembersPredicateTypeGuard: TypeAlias = (dynamic) -> TypeGuard[_T]
 _GetMembersPredicateTypeIs: TypeAlias = (dynamic) -> TypeIs[_T]
-type _GetMembersPredicate = (dynamic) -> bool
+private type GetMembersPredicate = (dynamic) -> bool
 _GetMembersReturn: TypeAlias = list[tuple[str, _T]]
 
 def getmembers[Element](object: object, predicate: _GetMembersPredicateTypeGuard[Element]) -> _GetMembersReturn[Element]:
@@ -218,7 +218,7 @@ def getmembers[Element](object: object, predicate: _GetMembersPredicateTypeGuard
     Optionally, only return members that satisfy a given predicate.
     """
 def getmembers[Element](object: object, predicate: _GetMembersPredicateTypeIs[Element]) -> _GetMembersReturn[Element]
-def getmembers(object: object, predicate: _GetMembersPredicate | None = None) -> _GetMembersReturn[dynamic]
+def getmembers(object: object, predicate: GetMembersPredicate | None = None) -> _GetMembersReturn[dynamic]
 
 if sys.version_info >= (3, 11):
     def getmembers_static[Element](object: object, predicate: _GetMembersPredicateTypeGuard[Element]) -> _GetMembersReturn[Element]:
@@ -234,7 +234,7 @@ if sys.version_info >= (3, 11):
            instead of instance members in some cases.
         """
     def getmembers_static[Element](object: object, predicate: _GetMembersPredicateTypeIs[Element]) -> _GetMembersReturn[Element]
-    def getmembers_static(object: object, predicate: _GetMembersPredicate | None = None) -> _GetMembersReturn[dynamic]
+    def getmembers_static(object: object, predicate: GetMembersPredicate | None = None) -> _GetMembersReturn[dynamic]
 
 def getmodulename(path: StrPath) -> str | None:
     """Return the module name for a given file, or None."""
@@ -471,11 +471,11 @@ def isdatadescriptor(object: object) -> object is _SupportsSet[Never, Never] | _
 #
 # Retrieving source code
 #
-type _SourceObjectType = (
+private type SourceObjectType = (
     ModuleType | type[dynamic] | MethodType | FunctionType | TracebackType | FrameType | CodeType | ((...) -> dynamic)
 )
 
-def findsource(object: _SourceObjectType) -> (list[str], int):
+def findsource(object: SourceObjectType) -> (list[str], int):
     """Return the entire source file and starting line number for an object.
 
     The argument may be a module, class, method, function, traceback, frame,
@@ -484,7 +484,7 @@ def findsource(object: _SourceObjectType) -> (list[str], int):
     is raised if the source code cannot be retrieved.
     """
 
-def getabsfile(object: _SourceObjectType, _filename: str | None = None) -> str:
+def getabsfile(object: SourceObjectType, _filename: str | None = None) -> str:
     """Return an absolute path to the source or compiled file for an object.
 
     The idea is for each object to have a unique origin, so this routine
@@ -522,18 +522,18 @@ def getcomments(object: object) -> str | None:
     Returns None when source can't be found.
     """
 
-def getfile(object: _SourceObjectType) -> str:
+def getfile(object: SourceObjectType) -> str:
     """Work out which source or compiled file an object was defined in."""
 
 def getmodule(object: object, _filename: str | None = None) -> ModuleType | None:
     """Return the module an object was defined in, or None if not found."""
 
-def getsourcefile(object: _SourceObjectType) -> str | None:
+def getsourcefile(object: SourceObjectType) -> str | None:
     """Return the filename that can be used to locate an object's source.
     Return None if no way can be identified to get the source.
     """
 
-def getsourcelines(object: _SourceObjectType) -> (list[str], int):
+def getsourcelines(object: SourceObjectType) -> (list[str], int):
     """Return a list of source lines and starting line number for an object.
 
     The argument may be a module, class, method, function, traceback, frame,
@@ -543,7 +543,7 @@ def getsourcelines(object: _SourceObjectType) -> (list[str], int):
     raised if the source code cannot be retrieved.
     """
 
-def getsource(object: _SourceObjectType) -> str:
+def getsource(object: SourceObjectType) -> str:
     """Return the text of the source code for an object.
 
     The argument may be a module, class, method, function, traceback, frame,
@@ -561,14 +561,14 @@ def cleandoc(doc: str) -> str:
 def indentsize(line: str) -> int:
     """Return the indent size, in spaces, at the start of a line of text."""
 
-type _IntrospectableCallable = (...) -> dynamic
+private type IntrospectableCallable = (...) -> dynamic
 
 #
 # Introspecting callables with the Signature object
 #
 if sys.version_info >= (3, 14):
     def signature(
-        obj: _IntrospectableCallable,
+        obj: IntrospectableCallable,
         *,
         follow_wrapped: bool = True,
         globals: Mapping[str, dynamic] | None = None,
@@ -580,7 +580,7 @@ if sys.version_info >= (3, 14):
 
 else:
     def signature(
-        obj: _IntrospectableCallable,
+        obj: IntrospectableCallable,
         *,
         follow_wrapped: bool = True,
         globals: Mapping[str, dynamic] | None = None,
@@ -651,7 +651,7 @@ class Signature:
     if sys.version_info >= (3, 14):
         class def from_callable(
             cls,
-            obj: _IntrospectableCallable,
+            obj: IntrospectableCallable,
             *,
             follow_wrapped: bool = True,
             globals: Mapping[str, dynamic] | None = None,
@@ -663,7 +663,7 @@ class Signature:
     else:
         class def from_callable(
             cls,
-            obj: _IntrospectableCallable,
+            obj: IntrospectableCallable,
             *,
             follow_wrapped: bool = True,
             globals: Mapping[str, dynamic] | None = None,
@@ -886,9 +886,9 @@ class BoundArguments:
 # Classes and functions
 #
 
-type _ClassTreeItem = list[(*: type)] | list[_ClassTreeItem]
+private type ClassTreeItem = list[(*: type)] | list[ClassTreeItem]
 
-def getclasstree(classes: list[type], unique: bool = False) -> _ClassTreeItem:
+def getclasstree(classes: list[type], unique: bool = False) -> ClassTreeItem:
     """Arrange the given list of classes into a hierarchy of nested lists.
 
     Where a nested list appears, it contains classes derived from the class
@@ -899,7 +899,7 @@ def getclasstree(classes: list[type], unique: bool = False) -> _ClassTreeItem:
     inheritance and their descendants will appear multiple times.
     """
 
-def walktree(classes: list[type], children: Mapping[type[dynamic], list[type]], parent: type[dynamic] | None) -> _ClassTreeItem:
+def walktree(classes: list[type], children: Mapping[type[dynamic], list[type]], parent: type[dynamic] | None) -> ClassTreeItem:
     """Recursive helper function for getclasstree()."""
 
 class Arguments(NamedTuple):
@@ -1093,7 +1093,7 @@ class ClosureVars(NamedTuple):
     builtins: Mapping[str, dynamic]
     unbound: AbstractSet[str]
 
-def getclosurevars(func: _IntrospectableCallable) -> ClosureVars:
+def getclosurevars(func: IntrospectableCallable) -> ClosureVars:
     """
     Get the mapping of free variables to their current values.
 

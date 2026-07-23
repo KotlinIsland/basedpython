@@ -9,8 +9,8 @@ from types import ModuleType
 from typing import Final, TypeAlias
 from typing_extensions import deprecated
 
-type _SortComparisonMethod = (str, str) -> int
-type _SuiteClass = (list[unittest.case.TestCase]) -> unittest.suite.TestSuite
+private type SortComparisonMethod = (str, str) -> int
+private type SuiteClass = (list[unittest.case.TestCase]) -> unittest.suite.TestSuite
 
 final VALID_MODULE_NAME: Pattern[str]
 
@@ -22,9 +22,9 @@ class TestLoader:
 
     errors: list[type[BaseException]]
     testMethodPrefix: str
-    sortTestMethodsUsing: _SortComparisonMethod
+    sortTestMethodsUsing: SortComparisonMethod
     testNamePatterns: list[str] | None
-    suiteClass: _SuiteClass
+    suiteClass: SuiteClass
     def loadTestsFromTestCase(self, testCaseClass: type[unittest.case.TestCase]) -> unittest.suite.TestSuite:
         """Return a suite of all test cases contained in testCaseClass"""
 
@@ -92,17 +92,17 @@ if sys.version_info < (3, 13):
     def getTestCaseNames(
         testCaseClass: type[unittest.case.TestCase],
         prefix: str,
-        sortUsing: _SortComparisonMethod = ...,
+        sortUsing: SortComparisonMethod = ...,
         testNamePatterns: list[str] | None = None,
     ) -> Sequence[str]
     @deprecated("Deprecated since Python 3.11; removed in Python 3.13.")
     def makeSuite(
         testCaseClass: type[unittest.case.TestCase],
         prefix: str = "test",
-        sortUsing: _SortComparisonMethod = ...,
-        suiteClass: _SuiteClass = ...,
+        sortUsing: SortComparisonMethod = ...,
+        suiteClass: SuiteClass = ...,
     ) -> unittest.suite.TestSuite
     @deprecated("Deprecated since Python 3.11; removed in Python 3.13.")
     def findTestCases(
-        module: ModuleType, prefix: str = "test", sortUsing: _SortComparisonMethod = ..., suiteClass: _SuiteClass = ...
+        module: ModuleType, prefix: str = "test", sortUsing: SortComparisonMethod = ..., suiteClass: SuiteClass = ...
     ) -> unittest.suite.TestSuite

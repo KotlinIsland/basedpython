@@ -69,9 +69,9 @@ if sys.version_info >= (3, 11):
 if sys.version_info >= (3, 12):
     __all__ += ["getHandlerByName", "getHandlerNames"]
 
-type _SysExcInfoType = tuple[type[BaseException], BaseException, TracebackType | None] | tuple[None, None, None]
-type _ExcInfoType = None | bool | _SysExcInfoType | BaseException
-type _ArgsType = (*: object) | Mapping[str, object]
+private type SysExcInfoType = tuple[type[BaseException], BaseException, TracebackType | None] | tuple[None, None, None]
+type _ExcInfoType = None | bool | SysExcInfoType | BaseException
+private type ArgsType = (*: object) | Mapping[str, object]
 type _Level = int | str
 type _FormatStyle = "%" | "{" | "$"
 
@@ -399,7 +399,7 @@ class Logger(Filterer):
         self,
         level: int,
         msg: object,
-        args: _ArgsType,
+        args: ArgsType,
         exc_info: _ExcInfoType | None = None,
         extra: Mapping[str, object] | None = None,
         stack_info: bool = False,
@@ -442,8 +442,8 @@ class Logger(Filterer):
         fn: str,
         lno: int,
         msg: object,
-        args: _ArgsType,
-        exc_info: _SysExcInfoType | None,
+        args: ArgsType,
+        exc_info: SysExcInfoType | None,
         func: str | None = None,
         extra: Mapping[str, object] | None = None,
         sinfo: str | None = None,
@@ -712,7 +712,7 @@ class Formatter:
         set the 'converter' attribute in the Formatter class.
         """
 
-    def formatException(self, ei: _SysExcInfoType) -> str:
+    def formatException(self, ei: SysExcInfoType) -> str:
         """
         Format and return the specified exception information as a string.
 
@@ -821,10 +821,10 @@ class LogRecord:
 
     # args can be set to None by logging.handlers.QueueHandler
     # (see https://bugs.python.org/issue44473)
-    args: _ArgsType | None
+    args: ArgsType | None
     asctime: str
     created: float
-    exc_info: _SysExcInfoType | None
+    exc_info: SysExcInfoType | None
     exc_text: str | None
     filename: str
     funcName: str
@@ -854,8 +854,8 @@ class LogRecord:
         pathname: str,
         lineno: int,
         msg: object,
-        args: _ArgsType | None,
-        exc_info: _SysExcInfoType | None,
+        args: ArgsType | None,
+        exc_info: SysExcInfoType | None,
         func: str | None = None,
         sinfo: str | None = None,
     ):
@@ -1071,7 +1071,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
             self,
             level: int,
             msg: object,
-            args: _ArgsType,
+            args: ArgsType,
             *,
             exc_info: _ExcInfoType | None = None,
             extra: Mapping[str, object] | None = None,
@@ -1086,7 +1086,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
             self,
             level: int,
             msg: object,
-            args: _ArgsType,
+            args: ArgsType,
             exc_info: _ExcInfoType | None = None,
             extra: Mapping[str, object] | None = None,
             stack_info: bool = False,

@@ -388,7 +388,7 @@ if sys.version_info < (3, 13):
     TEMPLATE: Final = RegexFlag.TEMPLATE
 if sys.version_info >= (3, 11):
     NOFLAG: Final = RegexFlag.NOFLAG
-type _FlagsType = int | RegexFlag
+private type FlagsType = int | RegexFlag
 
 # Type-wise the compile() overloads are unnecessary, they could also be modeled using
 # unions in the parameter types. However mypy has a bug regarding TypeVar
@@ -397,36 +397,36 @@ type _FlagsType = int | RegexFlag
 
 # pattern arguments do *not* accept arbitrary buffers such as bytearray,
 # because the pattern must be hashable.
-def compile(pattern: AnyStr, flags: _FlagsType = 0) -> Pattern[AnyStr]:
+def compile(pattern: AnyStr, flags: FlagsType = 0) -> Pattern[AnyStr]:
     """Compile a regular expression pattern, returning a Pattern object."""
-def compile(pattern: Pattern[AnyStr], flags: _FlagsType = 0) -> Pattern[AnyStr]
+def compile(pattern: Pattern[AnyStr], flags: FlagsType = 0) -> Pattern[AnyStr]
 
-def search(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> Match[str] | None:
+def search(pattern: str | Pattern[str], string: str, flags: FlagsType = 0) -> Match[str] | None:
     """Scan through string looking for a match to the pattern, returning
     a Match object, or None if no match was found.
     """
-def search(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: _FlagsType = 0) -> Match[bytes] | None
+def search(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: FlagsType = 0) -> Match[bytes] | None
 
-def match(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> Match[str] | None:
+def match(pattern: str | Pattern[str], string: str, flags: FlagsType = 0) -> Match[str] | None:
     """Try to apply the pattern at the start of the string, returning
     a Match object, or None if no match was found.
     """
-def match(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: _FlagsType = 0) -> Match[bytes] | None
+def match(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: FlagsType = 0) -> Match[bytes] | None
 
 if sys.version_info >= (3, 15):
-    def prefixmatch(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> Match[str] | None:
+    def prefixmatch(pattern: str | Pattern[str], string: str, flags: FlagsType = 0) -> Match[str] | None:
         """Try to apply the pattern at the start of the string, returning
         a Match object, or None if no match was found.
         """
-    def prefixmatch(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: _FlagsType = 0) -> Match[bytes] | None
+    def prefixmatch(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: FlagsType = 0) -> Match[bytes] | None
 
-def fullmatch(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> Match[str] | None:
+def fullmatch(pattern: str | Pattern[str], string: str, flags: FlagsType = 0) -> Match[str] | None:
     """Try to apply the pattern to all of the string, returning
     a Match object, or None if no match was found.
     """
-def fullmatch(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: _FlagsType = 0) -> Match[bytes] | None
+def fullmatch(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: FlagsType = 0) -> Match[bytes] | None
 
-def split(pattern: str | Pattern[str], string: str, maxsplit: int = 0, flags: _FlagsType = 0) -> list[str | MaybeNone]:
+def split(pattern: str | Pattern[str], string: str, maxsplit: int = 0, flags: FlagsType = 0) -> list[str | MaybeNone]:
     """Split the source string by the occurrences of the pattern,
     returning a list containing the resulting substrings.  If
     capturing parentheses are used in pattern, then the text of all
@@ -436,10 +436,10 @@ def split(pattern: str | Pattern[str], string: str, maxsplit: int = 0, flags: _F
     of the list.
     """
 def split(
-    pattern: bytes | Pattern[bytes], string: ReadableBuffer, maxsplit: int = 0, flags: _FlagsType = 0
+    pattern: bytes | Pattern[bytes], string: ReadableBuffer, maxsplit: int = 0, flags: FlagsType = 0
 ) -> list[bytes | MaybeNone]
 
-def findall(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> list[dynamic]:
+def findall(pattern: str | Pattern[str], string: str, flags: FlagsType = 0) -> list[dynamic]:
     """Return a list of all non-overlapping matches in the string.
 
     If one or more capturing groups are present in the pattern, return
@@ -448,18 +448,18 @@ def findall(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> 
 
     Empty matches are included in the result.
     """
-def findall(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: _FlagsType = 0) -> list[dynamic]
+def findall(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: FlagsType = 0) -> list[dynamic]
 
-def finditer(pattern: str | Pattern[str], string: str, flags: _FlagsType = 0) -> Iterator[Match[str]]:
+def finditer(pattern: str | Pattern[str], string: str, flags: FlagsType = 0) -> Iterator[Match[str]]:
     """Return an iterator over all non-overlapping matches in the
     string.  For each match, the iterator returns a Match object.
 
     Empty matches are included in the result.
     """
-def finditer(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: _FlagsType = 0) -> Iterator[Match[bytes]]
+def finditer(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: FlagsType = 0) -> Iterator[Match[bytes]]
 
 def sub(
-    pattern: str | Pattern[str], repl: str | ((Match[str]) -> str), string: str, count: int = 0, flags: _FlagsType = 0
+    pattern: str | Pattern[str], repl: str | ((Match[str]) -> str), string: str, count: int = 0, flags: FlagsType = 0
 ) -> str:
     """Return the string obtained by replacing the leftmost
     non-overlapping occurrences of the pattern in string by the
@@ -473,11 +473,11 @@ def sub(
     repl: ReadableBuffer | ((Match[bytes]) -> ReadableBuffer),
     string: ReadableBuffer,
     count: int = 0,
-    flags: _FlagsType = 0,
+    flags: FlagsType = 0,
 ) -> bytes
 
 def subn(
-    pattern: str | Pattern[str], repl: str | ((Match[str]) -> str), string: str, count: int = 0, flags: _FlagsType = 0
+    pattern: str | Pattern[str], repl: str | ((Match[str]) -> str), string: str, count: int = 0, flags: FlagsType = 0
 ) -> (str, int):
     """Return a 2-tuple containing (new_string, number).
     new_string is the string obtained by replacing the leftmost
@@ -493,7 +493,7 @@ def subn(
     repl: ReadableBuffer | ((Match[bytes]) -> ReadableBuffer),
     string: ReadableBuffer,
     count: int = 0,
-    flags: _FlagsType = 0,
+    flags: FlagsType = 0,
 ) -> (bytes, int)
 
 def escape(pattern: AnyStr) -> AnyStr:
@@ -506,5 +506,5 @@ def purge() -> None:
 
 if sys.version_info < (3, 13):
     @deprecated("Deprecated since Python 3.11; removed in Python 3.13. Use `re.compile()` instead.")
-    def template(pattern: AnyStr | Pattern[AnyStr], flags: _FlagsType = 0) -> Pattern[AnyStr]:  # undocumented
+    def template(pattern: AnyStr | Pattern[AnyStr], flags: FlagsType = 0) -> Pattern[AnyStr]:  # undocumented
         """Compile a template pattern, returning a Pattern object, deprecated"""

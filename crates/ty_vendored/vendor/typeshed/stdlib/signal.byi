@@ -69,8 +69,8 @@ class Handlers(IntEnum):
 SIG_DFL: Final = Handlers.SIG_DFL
 SIG_IGN: Final = Handlers.SIG_IGN
 
-type _SIGNUM = int | Signals
-type _HANDLER = ((int, FrameType | None) -> dynamic) | int | Handlers | None
+private type SIGNUM = int | Signals
+private type HANDLER = ((int, FrameType | None) -> dynamic) | int | Handlers | None
 
 def default_int_handler(signalnum: int, frame: FrameType | None, /) -> Never:
     """The default handler for SIGINT installed by Python.
@@ -78,7 +78,7 @@ def default_int_handler(signalnum: int, frame: FrameType | None, /) -> Never:
     It raises KeyboardInterrupt.
     """
 
-def getsignal(signalnum: _SIGNUM) -> _HANDLER:
+def getsignal(signalnum: SIGNUM) -> HANDLER:
     """Return the current action for the given signal.
 
     The return value can be:
@@ -88,7 +88,7 @@ def getsignal(signalnum: _SIGNUM) -> _HANDLER:
       anything else -- the callable Python object used as a handler
     """
 
-def signal(signalnum: _SIGNUM, handler: _HANDLER) -> _HANDLER:
+def signal(signalnum: SIGNUM, handler: HANDLER) -> HANDLER:
     """Set the action for the given signal.
 
     The action can be SIG_DFL, SIG_IGN, or a callable Python object.
@@ -167,7 +167,7 @@ else:
     def pthread_kill(thread_id: int, signalnum: int, /) -> None:
         """Send a signal to a thread."""
 
-    def pthread_sigmask(how: int, mask: Iterable[int]) -> set[_SIGNUM]:
+    def pthread_sigmask(how: int, mask: Iterable[int]) -> set[SIGNUM]:
         """Fetch and/or change the signal mask of the calling thread."""
 
     def setitimer(which: int, seconds: float, interval: float = 0.0, /) -> (float, float):
@@ -193,7 +193,7 @@ else:
         the calling thread.
         """
 
-    def sigwait(sigset: Iterable[int]) -> _SIGNUM:
+    def sigwait(sigset: Iterable[int]) -> SIGNUM:
         """Wait for a signal.
 
         Suspend execution of the calling thread until the delivery of one of the
@@ -246,7 +246,7 @@ else:
             Returns a struct_siginfo containing information about the signal.
             """
 
-def strsignal(signalnum: _SIGNUM, /) -> str | None:
+def strsignal(signalnum: SIGNUM, /) -> str | None:
     """Return the system description of the given signal.
 
     Returns the description of signal *signalnum*, such as "Interrupt"
@@ -261,7 +261,7 @@ def valid_signals() -> set[Signals]:
     functions like `pthread_sigmask`.
     """
 
-def raise_signal(signalnum: _SIGNUM, /) -> None:
+def raise_signal(signalnum: SIGNUM, /) -> None:
     """Send a signal to the executing process."""
 
 def set_wakeup_fd(fd: int, /, *, warn_on_full_buffer: bool = True) -> int:

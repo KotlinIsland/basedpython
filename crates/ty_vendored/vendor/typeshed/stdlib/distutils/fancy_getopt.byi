@@ -13,7 +13,7 @@ from getopt import _SliceableT, _StrSequenceT_co
 from re import Pattern
 from typing import Final, TypeAlias
 
-type _Option = tuple[str, str | None, str]
+private type Option = tuple[str, str | None, str]
 
 longopt_pat: Final = r"[a-zA-Z](?:[a-zA-Z0-9-]*)"
 final longopt_re: Pattern[str]
@@ -32,7 +32,7 @@ class FancyGetopt:
         on the command line sets 'verbose' to false
     """
 
-    init(self, option_table: list[_Option] | None = None)
+    init(self, option_table: list[Option] | None = None)
 
     # TODO: kinda wrong, `getopt(object=object())` is invalid
     def getopt(
@@ -65,10 +65,10 @@ class FancyGetopt:
 
 # Same note as FancyGetopt.getopt
 def fancy_getopt(
-    options: list[_Option], negative_opt: Mapping[_Option, _Option], object: None, args: _SliceableT[_StrSequenceT_co] | None
+    options: list[Option], negative_opt: Mapping[Option, Option], object: None, args: _SliceableT[_StrSequenceT_co] | None
 ) -> (_StrSequenceT_co, OptionDummy)
 def fancy_getopt(
-    options: list[_Option], negative_opt: Mapping[_Option, _Option], object: dynamic, args: _SliceableT[_StrSequenceT_co] | None
+    options: list[Option], negative_opt: Mapping[Option, Option], object: dynamic, args: _SliceableT[_StrSequenceT_co] | None
 ) -> _StrSequenceT_co
 
 final WS_TRANS: dict[int, str]

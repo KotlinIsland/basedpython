@@ -267,9 +267,9 @@ class super:
     init(self, t: dynamic, /)
     init(self)
 
-type _PositiveInteger = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25
-type _NegativeInteger = -1 | -2 | -3 | -4 | -5 | -6 | -7 | -8 | -9 | -10 | -11 | -12 | -13 | -14 | -15 | -16 | -17 | -18 | -19 | -20
-type _LiteralInteger = _PositiveInteger | _NegativeInteger | 0
+private type PositiveInteger = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25
+private type NegativeInteger = -1 | -2 | -3 | -4 | -5 | -6 | -7 | -8 | -9 | -10 | -11 | -12 | -13 | -14 | -15 | -16 | -17 | -18 | -19 | -20
+private type LiteralInteger = PositiveInteger | NegativeInteger | 0
 
 @disjoint_base
 class int:
@@ -478,8 +478,8 @@ class int:
     def __pow__(self, x: 0, /) -> 1:
         """Return pow(self, value, mod)."""
     def __pow__(self, value: 0, mod: None, /) -> 1
-    def __pow__(self, value: _PositiveInteger, mod: None = None, /) -> int
-    def __pow__(self, value: _NegativeInteger, mod: None = None, /) -> float
+    def __pow__(self, value: PositiveInteger, mod: None = None, /) -> int
+    def __pow__(self, value: NegativeInteger, mod: None = None, /) -> float
     # positive __value -> int; negative __value -> float
     # return type must be Any as `int | float` causes too many false-positive errors
     def __pow__(self, value: int, mod: None = None, /) -> dynamic
@@ -671,9 +671,9 @@ class float:
     def __rdivmod__(self, value: float, /) -> (float, float):
         """Return divmod(value, self)."""
 
-    def __rpow__(self, value: _PositiveInteger, mod: None = None, /) -> float:
+    def __rpow__(self, value: PositiveInteger, mod: None = None, /) -> float:
         """Return pow(value, self, mod)."""
-    def __rpow__(self, value: _NegativeInteger, mod: None = None, /) -> complex
+    def __rpow__(self, value: NegativeInteger, mod: None = None, /) -> complex
     # Returning `complex` for the general case gives too many false-positive errors.
     def __rpow__(self, value: float, mod: None = None, /) -> dynamic
 
@@ -2358,7 +2358,7 @@ class bytearray(MutableSequence[int]):
               New size to resize to.
             """
 
-type _IntegerFormats = "b" | "B" | "@b" | "@B" | "h" | "H" | "@h" | "@H" | "i" | "I" | "@i" | "@I" | "l" | "L" | "@l" | "@L" | "q" | "Q" | "@q" | "@Q" | "P" | "@P"
+private type IntegerFormats = "b" | "B" | "@b" | "@B" | "h" | "H" | "@h" | "@H" | "i" | "I" | "@i" | "@I" | "l" | "L" | "@l" | "@L" | "q" | "Q" | "@q" | "@Q" | "P" | "@P"
 
 final class memoryview[in out I = int](Sequence[I]):
     """Create a new memoryview object which references the given object."""
@@ -2402,7 +2402,7 @@ final class memoryview[in out I = int](Sequence[I]):
         """Cast a memoryview to a new format or shape."""
     def cast(self, format: "f" | "@f" | "d" | "@d", shape: list[int] | (*: int) = ...) -> memoryview[float]
     def cast(self, format: "?", shape: list[int] | (*: int) = ...) -> memoryview[bool]
-    def cast(self, format: _IntegerFormats, shape: list[int] | (*: int) = ...) -> memoryview
+    def cast(self, format: IntegerFormats, shape: list[int] | (*: int) = ...) -> memoryview
 
     override def __getitem__(self, key: SupportsIndex | (*: SupportsIndex), /) -> I:
         """Return self[key]."""
@@ -4140,7 +4140,7 @@ protocol _SupportsPow3NoneOnly[in E, out Element]:
 protocol _SupportsPow3[in E, in M, out Element]:
     def __pow__(self, other: E, modulo: M, /) -> Element
 
-type _SupportsSomeKindOfPow = (
+private type SupportsSomeKindOfPow = (
     _SupportsPow2[dynamic, dynamic] | _SupportsPow3NoneOnly[dynamic, dynamic] | _SupportsPow3[dynamic, dynamic, dynamic]
 )
 
@@ -4153,26 +4153,26 @@ def pow(base: int, exp: int, mod: int) -> int:
     when invoked using the three argument form.
     """
 def pow(base: int, exp: 0, mod: None = None) -> 1
-def pow(base: int, exp: _PositiveInteger, mod: None = None) -> int
-def pow(base: int, exp: _NegativeInteger, mod: None = None) -> float
+def pow(base: int, exp: PositiveInteger, mod: None = None) -> int
+def pow(base: int, exp: NegativeInteger, mod: None = None) -> float
 
 # int base & positive-int exp -> int; int base & negative-int exp -> float
 # return type must be Any as `int | float` causes too many false-positive errors
 def pow(base: int, exp: int, mod: None = None) -> dynamic
-def pow(base: _PositiveInteger, exp: float, mod: None = None) -> float
-def pow(base: _NegativeInteger, exp: float, mod: None = None) -> complex
+def pow(base: PositiveInteger, exp: float, mod: None = None) -> float
+def pow(base: NegativeInteger, exp: float, mod: None = None) -> complex
 def pow(base: float, exp: int, mod: None = None) -> float
 
 # float base & float exp could return float or complex
 # return type must be Any (same as complex base, complex exp),
 # as `float | complex` causes too many false-positive errors
-def pow(base: float, exp: complex | _SupportsSomeKindOfPow, mod: None = None) -> dynamic
-def pow(base: complex, exp: complex | _SupportsSomeKindOfPow, mod: None = None) -> complex
+def pow(base: float, exp: complex | SupportsSomeKindOfPow, mod: None = None) -> dynamic
+def pow(base: complex, exp: complex | SupportsSomeKindOfPow, mod: None = None) -> complex
 def pow[E, Element](base: _SupportsPow2[E, Element], exp: E, mod: None = None) -> Element
 def pow[E, Element](base: _SupportsPow3NoneOnly[E, Element], exp: E, mod: None = None) -> Element
 def pow[E, M, Element](base: _SupportsPow3[E, M, Element], exp: E, mod: M) -> Element
-def pow(base: _SupportsSomeKindOfPow, exp: float, mod: None = None) -> dynamic
-def pow(base: _SupportsSomeKindOfPow, exp: complex, mod: None = None) -> complex
+def pow(base: SupportsSomeKindOfPow, exp: float, mod: None = None) -> dynamic
+def pow(base: SupportsSomeKindOfPow, exp: complex, mod: None = None) -> complex
 
 quit: _sitebuiltins.Quitter
 
@@ -4263,7 +4263,7 @@ protocol _SupportsSumWithNoDefaultGiven(SupportsAdd[dynamic, dynamic], SupportsR
 # However, we can't express that in the stub for `sum()`
 # without creating many false-positive errors (see #7578).
 # Instead, we special-case the most common examples of this: bool and literal integers.
-def sum(iterable: Iterable[bool | _LiteralInteger], /, start: int = 0) -> int:
+def sum(iterable: Iterable[bool | LiteralInteger], /, start: int = 0) -> int:
     """Return the sum of a 'start' value (default: 0) plus an iterable of numbers
 
     When the iterable is empty, return the start value.

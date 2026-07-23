@@ -18,7 +18,7 @@ XML_PARAM_ENTITY_PARSING_NEVER: Final = 0
 XML_PARAM_ENTITY_PARSING_UNLESS_STANDALONE: Final = 1
 XML_PARAM_ENTITY_PARSING_ALWAYS: Final = 2
 
-type _Model = tuple[int, int, str | None, (*: dynamic)]
+private type Model = tuple[int, int, str | None, (*: dynamic)]
 
 final class XMLParserType:
     """XML parser"""
@@ -154,7 +154,7 @@ final class XMLParserType:
     XmlDeclHandler: ((str, str | None, int) -> dynamic) | None
     StartDoctypeDeclHandler: ((str, str | None, str | None, bool) -> dynamic) | None
     EndDoctypeDeclHandler: (() -> dynamic) | None
-    ElementDeclHandler: ((str, _Model) -> dynamic) | None
+    ElementDeclHandler: ((str, Model) -> dynamic) | None
     AttlistDeclHandler: ((str, str, str, str | None, bool) -> dynamic) | None
     StartElementHandler: (
         ((str, dict[str, str]) -> dynamic)
