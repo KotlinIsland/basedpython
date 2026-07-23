@@ -6993,6 +6993,25 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         Some(Type::tuple(tt))
     }
 
+    /// basedpython: whether `expr` names a keyword-variadic pack, as `{**Kwargs}` does.
+    ///
+    /// Inferred without storing, so the caller's diagnostic is the only one reported.
+    fn is_keyword_pack_reference(&mut self, expr: &ast::Expr) -> bool {
+        if !matches!(expr, ast::Expr::Name(_)) {
+            return false;
+        }
+        let previously_allowed_paramspec = self
+            .context
+            .inference_flags
+            .replace(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, true);
+        let ty = self.infer_type_expression_no_store(expr);
+        self.context.inference_flags.set(
+            InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR,
+            previously_allowed_paramspec,
+        );
+        matches!(ty, Type::TypeVar(typevar) if typevar.is_keyword_variadic(self.db()))
+    }
+
     /// basedpython: synthesize a `TypedDict` class from a `{"key": T, ...}`
     /// dict-literal type expression. Returns `None` if any key is not a
     /// string-literal expression — in that case the caller falls through
@@ -7025,6 +7044,23 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     let _ = self.infer_type_expression(&inner.value);
                     "**".hash(&mut hasher);
                     continue;
+                }
+                // basedpython `{**Kwargs}`: splicing a keyword-variadic pack's fields into a
+                // dict-literal type. a synthesized `TypedDict` is a `ClassType::NonGeneric` by
+                // construction, so a specialization never reaches its schema — supporting this
+                // needs synthesized `TypedDict`s to become generic-aware first (the same gap
+                // makes `{"a": T}` leave `T` unsubstituted)
+                if self.is_keyword_pack_reference(&item.value) {
+                    if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, &item.value)
+                    {
+                        let mut diagnostic = builder.into_diagnostic(
+                            "Unpacking a keyword-variadic pack into a dict literal type is not \
+                             yet supported",
+                        );
+                        diagnostic
+                            .info("A synthesized `TypedDict` cannot yet depend on a type variable");
+                    }
+                    return Some(Type::unknown());
                 }
                 return None;
             };

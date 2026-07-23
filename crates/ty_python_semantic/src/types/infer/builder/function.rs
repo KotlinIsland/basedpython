@@ -747,7 +747,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     if let Some(other_typevar) = enclosing.binds_named_typevar(db, &param_name.id) {
                         let kind = match type_param {
                             ast::TypeParam::TypeVar(_) => TypeVarKind::Pep695TypeVar,
-                            ast::TypeParam::ParamSpec(_) => TypeVarKind::Pep695ParamSpec,
+                            ast::TypeParam::ParamSpec(_) => {
+                                TypeVarKind::double_starred_type_param(self.source_type())
+                            }
                             ast::TypeParam::TypeVarTuple(_) => TypeVarKind::Pep695TypeVarTuple,
                         };
                         report_shadowed_type_variable(
@@ -979,6 +981,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         let annotated_type = self.file_expression_type(annotation);
+        // basedpython: `**kwargs: *Kwargs` unpacks a keyword-variadic pack, not a `TypedDict`
+        if matches!(
+            annotated_type,
+            Type::TypeVar(typevar) if typevar.is_keyword_variadic(self.db())
+        ) {
+            return;
+        }
         let Some(unpacked_keys) = extract_unpacked_typed_dict_keys_from_kwargs_annotation(
             self.db(),
             annotated_type,

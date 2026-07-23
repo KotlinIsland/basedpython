@@ -36,7 +36,11 @@ use ty_python_core::{
 
 impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     pub(super) fn is_basedpython_file(&self) -> bool {
-        self.file().source_type(self.db()).is_basedpython()
+        self.source_type().is_basedpython()
+    }
+
+    pub(super) fn source_type(&self) -> ast::PySourceType {
+        self.file().source_type(self.db())
     }
 
     /// basedpython: the innermost `extension` declaration enclosing the
@@ -712,8 +716,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         if default.is_some() {
             self.deferred.insert(definition);
         }
-        let identity =
-            TypeVarIdentity::new(db, &name.id, Some(definition), TypeVarKind::Pep695ParamSpec);
+        let identity = TypeVarIdentity::new(
+            db,
+            &name.id,
+            Some(definition),
+            TypeVarKind::double_starred_type_param(self.source_type()),
+        );
         let ty = Type::KnownInstance(KnownInstanceType::TypeVar(TypeVarInstance::new(
             db,
             identity,

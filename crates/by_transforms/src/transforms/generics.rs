@@ -964,6 +964,14 @@ fn rename_in_expr(expr: &Expr, renames: &HashMap<String, String>, edits: &mut Ve
         }
         Expr::UnaryOp(u) => rename_in_expr(&u.operand, renames, edits),
         Expr::Starred(s) => rename_in_expr(&s.value, renames, edits),
+        // an arrow callable `(**P) -> None` lowers to `Callable[P, None]` via a template edit
+        // that passes its operand source through, so a rename on the inner name still lands
+        Expr::CallableType(c) => {
+            c.args
+                .iter()
+                .for_each(|a| rename_in_expr(a, renames, edits));
+            rename_in_expr(&c.returns, renames, edits);
+        }
         _ => {}
     }
 }
@@ -985,6 +993,17 @@ fn rename_in_stmt(stmt: &Stmt, renames: &HashMap<String, String>, edits: &mut Ve
                 .chain(f.parameters.kwonlyargs.iter())
             {
                 if let Some(ann) = &p.parameter.annotation {
+                    rename_in_expr(ann, renames, edits);
+                }
+            }
+            for variadic in [
+                f.parameters.vararg.as_deref(),
+                f.parameters.kwarg.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if let Some(ann) = &variadic.annotation {
                     rename_in_expr(ann, renames, edits);
                 }
             }

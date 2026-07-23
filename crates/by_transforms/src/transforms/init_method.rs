@@ -92,11 +92,19 @@ impl State<'_> {
     /// node start to its name, together with the whitespace-separated modifier
     /// keywords the parser consumed there. `None` for an ordinary parameter
     /// (empty prefix). The parser only ever leaves recognised modifier keywords
-    /// in this span, so the words are always a subset of the modifier set
+    /// in this span, so the words are always a subset of the modifier set.
+    ///
+    /// A variadic parameter's span opens on its `*` / `**`, which is syntax rather than a
+    /// modifier — the stars are excluded from both the words and the strippable range
     fn modifier_prefix(&self, param: &Parameter) -> Option<(TextRange, Vec<&str>)> {
-        let range = TextRange::new(param.range.start(), param.name.range.start());
-        let text = &self.source[usize::from(range.start())..usize::from(range.end())];
-        let words: Vec<&str> = text.split_whitespace().collect();
+        let start = param.range.start();
+        let full = &self.source[usize::from(start)..usize::from(param.name.range.start())];
+        let stars = full.len() - full.trim_start_matches('*').len();
+        let range = TextRange::new(
+            start + TextSize::try_from(stars).ok()?,
+            param.name.range.start(),
+        );
+        let words: Vec<&str> = full[stars..].split_whitespace().collect();
         (!words.is_empty()).then_some((range, words))
     }
 
@@ -288,6 +296,37 @@ mod tests {
 
     fn check(input: &str, expected: &str) {
         assert_eq!(transpile(input, &Config::test_default()).unwrap(), expected);
+    }
+
+    /// a variadic parameter's span opens on its `*` / `**`, which is syntax and not a modifier
+    #[test]
+    fn variadic_params_are_not_modifiers() {
+        check(
+            indoc! {"
+                class A:
+                    init(*args: int, **kwargs: str)
+            "},
+            indoc! {"
+                class A:
+                    def __init__(self, *args: int, **kwargs: str): ...
+            "},
+        );
+    }
+
+    /// a real modifier still applies on the parameters either side of a variadic
+    #[test]
+    fn modifier_survives_alongside_a_variadic() {
+        check(
+            indoc! {"
+                class A:
+                    init(let a: int, *args: str)
+            "},
+            indoc! {"
+                class A:
+                    def __init__(self, a: int, *args: str):
+                        self.a: int = a
+            "},
+        );
     }
 
     // `var` is accepted as the mutable counterpart of `let`; for an init

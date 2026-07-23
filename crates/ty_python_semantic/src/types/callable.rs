@@ -1,3 +1,4 @@
+use ruff_python_ast::name::Name;
 use rustc_hash::FxHashSet;
 use smallvec::{SmallVec, smallvec_inline};
 
@@ -38,6 +39,37 @@ impl<'db> Type<'db> {
         parameters: Parameters<'db>,
     ) -> Type<'db> {
         Type::Callable(CallableType::paramspec_value(db, parameters))
+    }
+
+    /// If this is the value bound to a basedpython keyword-variadic pack, returns its
+    /// `name`/`type` fields in declaration order.
+    ///
+    /// Returns `None` for anything that is not a fully specialized pack — a value that isn't a
+    /// parameter-list callable at all, or one whose parameters aren't all keyword-only (an
+    /// unspecialized, gradual, or unknown pack).
+    pub(crate) fn keyword_pack_fields(
+        self,
+        db: &'db dyn Db,
+    ) -> Option<Vec<(&'db Name, Type<'db>)>> {
+        let Type::Callable(callable) = self else {
+            return None;
+        };
+        if !matches!(callable.kind(db), CallableTypeKind::ParamSpecValue) {
+            return None;
+        }
+        let [signature] = callable.signatures(db).overloads.as_slice() else {
+            return None;
+        };
+        signature
+            .parameters()
+            .iter()
+            .map(|parameter| {
+                let name = parameter.name()?;
+                parameter
+                    .is_keyword_only()
+                    .then(|| (name, parameter.annotated_type()))
+            })
+            .collect()
     }
 
     pub(crate) fn try_upcast_to_callable(self, db: &'db dyn Db) -> Option<CallableTypes<'db>> {

@@ -4,6 +4,10 @@
 //! `def f(*args: *tuple[int, ...])` → `def f(*args: Unpack[tuple[int, ...]])`
 //! `tuple[*Ts]`                     → `tuple[Unpack[Ts]]`
 //! `class Stack(Generic[*Ts]):`     → `class Stack(Generic[Unpack[Ts]]):`
+//!
+//! Also lowers basedpython's keyword-pack unpacking, which no python version accepts:
+//!
+//! `def f(**kwargs: **Kwargs)`      → `def f(**kwargs: Kwargs.kwargs)`
 
 use std::cell::RefCell;
 
@@ -28,6 +32,16 @@ impl UnpackSyntax {
 
 impl AstPass for UnpackSyntax {
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
+        // a keyword pack is a `ParamSpec` at runtime, and `**kwargs: *Pack` is invalid python at
+        // every version, so this lowering is not version-gated like the `Unpack` polyfill below
+        let mut keyword_pack = KeywordPackKwargs {
+            edits: RefCell::new(Vec::new()),
+        };
+        for stmt in &module.body {
+            keyword_pack.visit_stmt(stmt);
+        }
+        ctx.text_edits.extend(keyword_pack.edits.into_inner());
+
         if self.config.min_version >= PythonVersion::PY311 {
             return;
         }
@@ -43,6 +57,32 @@ impl AstPass for UnpackSyntax {
                 .push("from typing import Unpack".to_owned());
         }
         ctx.text_edits.extend(state.edits.into_inner());
+    }
+}
+
+/// Lowers `**kwargs: *Pack` to the `ParamSpec` spelling `**kwargs: Pack.kwargs`.
+///
+/// The star is dropped and the suffix appended as two edits *around* the pack's name rather than
+/// one replacement of the whole annotation, so the pep695 polyfill's typevar rename — which
+/// rewrites that name in place — still lands.
+struct KeywordPackKwargs {
+    edits: RefCell<Vec<(TextRange, String)>>,
+}
+
+impl<'ast> Visitor<'ast> for KeywordPackKwargs {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        if let Stmt::FunctionDef(f) = stmt
+            && let Some(kwarg) = &f.parameters.kwarg
+            && let Some(Expr::Starred(starred)) = kwarg.annotation.as_deref()
+        {
+            let star = TextRange::new(starred.range().start(), starred.value.range().start());
+            let end = starred.range().end();
+            self.edits.borrow_mut().push((star, String::new()));
+            self.edits
+                .borrow_mut()
+                .push((TextRange::new(end, end), ".kwargs".to_owned()));
+        }
+        walk_stmt(self, stmt);
     }
 }
 
@@ -134,6 +174,39 @@ mod tests {
                 from typing_extensions import Unpack
                 def f(*args: Unpack[tuple[int, ...]]): ...
             "},
+        );
+    }
+
+    /// a keyword pack is a `ParamSpec` at runtime, so `**kwargs: **Kwargs` takes its `.kwargs`
+    /// spelling. the pep695 polyfill's rename must still reach the pack's name
+    #[test]
+    fn rewrites_keyword_pack_kwargs_annotation() {
+        check(
+            "class A[**Kwargs]:\n    def __init__(self, **kwargs: **Kwargs) -> None: ...\n",
+            indoc! {"
+                from typing import ParamSpec, Generic
+                _Kwargs = ParamSpec(\"_Kwargs\")
+                class A(Generic[_Kwargs]):
+                    def __init__(self, **kwargs: _Kwargs.kwargs) -> None: ...
+            "},
+        );
+    }
+
+    /// the lowering is not version-gated: no python version accepts `**kwargs: *Pack`
+    #[test]
+    fn rewrites_keyword_pack_kwargs_annotation_on_311() {
+        let config = Config {
+            min_version: PythonVersion::PY311,
+            ..Config::test_default()
+        };
+        let output = transpile(
+            "def f[**Kwargs](**kwargs: **Kwargs) -> None: ...\n",
+            &config,
+        )
+        .expect("transpile failed");
+        assert!(
+            output.contains("**kwargs: _Kwargs.kwargs"),
+            "unexpected output:\n{output}"
         );
     }
 

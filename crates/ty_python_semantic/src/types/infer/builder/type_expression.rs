@@ -1471,10 +1471,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             }
             ast::Expr::CallableType(callable) => {
                 let db = self.db();
-                // basedpython: a trailing bare `**ParamSpec` marks the
-                // ParamSpec/Concatenate callable forms — `(**P) -> R` is
-                // `Callable[P, R]` and `(T1, …, **P) -> R` is
-                // `Callable[Concatenate[T1, …, P], R]`. `**P` parses to
+                // basedpython: a trailing bare `**P` unpacks a parameter pack —
+                // `(**P) -> R` is `Callable[P, R]` and `(T1, …, **P) -> R` is
+                // `Callable[Concatenate[T1, …, P], R]`. the same spelling unpacks a
+                // keyword-variadic pack, whose value contributes keyword-only
+                // parameters instead of positional ones. `**P` parses to
                 // `Starred(Starred(Name))`; an annotated `**kwargs: T` is a
                 // `Named` node and is left to the ordinary variadic handling
                 if let Some((last, prefix)) = callable.args.split_last()
@@ -1483,7 +1484,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     && matches!(inner.value.as_ref(), ast::Expr::Name(_))
                 {
                     let paramspec_expr = inner.value.as_ref();
-                    // resolve the bare name; only a `ParamSpec` takes this path (a
+                    // resolve the bare name; only a parameter pack takes this path (a
                     // plain `**kwargs` that isn't one falls through to the ordinary
                     // variadic handling below)
                     let prev = self
@@ -1495,11 +1496,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         .inference_flags
                         .set(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, prev);
                     if let Type::TypeVar(tv) = ps_ty
-                        && tv.is_paramspec(db)
+                        && tv.is_parameter_pack(db)
                     {
                         let return_type = self.infer_type_expression(&callable.returns);
                         let parameters = if prefix.is_empty() {
-                            // pure ParamSpec `(**P)` — identical to `Callable[P, R]`
+                            // pure pack `(**P)` — identical to `Callable[P, R]`
                             Parameters::paramspec(db, tv)
                         } else {
                             // `(T1, …, **P)` — `Callable[Concatenate[T1, …, P], R]`
@@ -1635,6 +1636,30 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         }
 
         self.store_type_expression_flags(ast::ExprRef::from(starred), TypeExpressionFlags::UNPACK);
+
+        // basedpython: `**kwargs: **Kwargs` unpacks a keyword-variadic pack into the keyword
+        // parameters, the way `*args: *Ts` unpacks a `TypeVarTuple` into the positional ones —
+        // the star count follows the pack's declaration. the double star parses to
+        // `Starred(Starred(_))`; the pack is named bare inside, so it needs the same allowance a
+        // bare `ParamSpec` gets
+        if self.is_basedpython_file()
+            && self
+                .context
+                .inference_flags
+                .contains(InferenceFlags::IN_KWARG_ANNOTATION)
+            && let ast::Expr::Starred(inner) = value.as_ref()
+        {
+            let previously_allowed_paramspec = self
+                .context
+                .inference_flags
+                .replace(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, true);
+            let pack_type = self.infer_type_expression(&inner.value);
+            self.context.inference_flags.set(
+                InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR,
+                previously_allowed_paramspec,
+            );
+            return pack_type;
+        }
 
         let previously_in_unpack_type_argument = self
             .context
@@ -3947,7 +3972,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     }
                     return None;
                 };
-                if !typevar.is_paramspec(self.db()) {
+                if !typevar.is_parameter_pack(self.db()) {
                     report_invalid_concatenate_last_arg(&self.context, expr, expr_type);
                     return None;
                 }
