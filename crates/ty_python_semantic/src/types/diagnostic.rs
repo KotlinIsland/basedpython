@@ -1372,13 +1372,16 @@ declare_lint! {
     /// `list[int]`, but nothing verifies the `int` claim at runtime, which is
     /// exactly the assumption a checked cast exists to rule out.
     ///
-    /// A *user* generic does not have this problem: its instances carry
-    /// `__orig_class__`, so `A[int]` is checked in full. A *protocol* is checked
-    /// structurally against the value's reified annotations — data members
-    /// against class annotations, method members against parameter/return
-    /// annotations. Only a protocol member whose specialized type has no runtime
-    /// spelling (a callable attribute) leaves the cast with no runtime residue,
-    /// so the whole cast — not just its arguments — is left unchecked.
+    /// This only fires where the claim really is assumed. A *user* generic
+    /// carries `__orig_class__`, so `A[int]` is checked in full. A value typed by
+    /// a *reified* type parameter carries the answer in a runtime cell, so
+    /// casting `list[T]` to `list[int]` compares `T == int` exactly. A *protocol*
+    /// is checked structurally against the value's reified annotations — data
+    /// members against class annotations, method members against
+    /// parameter/return annotations. Only a protocol member whose specialized
+    /// type has no runtime spelling (a callable attribute) leaves the cast with
+    /// no runtime residue, so the whole cast — not just its arguments — is left
+    /// unchecked.
     ///
     /// ## Example
     ///
@@ -1395,6 +1398,9 @@ declare_lint! {
     ///
     /// def g(x: object):
     ///     a = x cast A[int]      # ok — checked in full via `__orig_class__`
+    ///
+    /// def r[T](data: list[T]):
+    ///     a = data cast list[int]  # ok — the reified `T` cell decides it
     ///
     /// class HasCb[T](Protocol):
     ///     cb: Callable[[T], T]
