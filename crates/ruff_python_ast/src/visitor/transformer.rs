@@ -183,6 +183,7 @@ pub fn walk_stmt<V: Transformer + ?Sized>(visitor: &V, stmt: &mut Stmt) {
             name,
             type_params,
             value,
+            is_private: _,
         }) => {
             visitor.visit_expr(value);
             if let Some(type_params) = type_params {

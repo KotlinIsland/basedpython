@@ -2234,6 +2234,7 @@ mod tests {
             value: Box::new(constant_three.clone()),
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
+            is_private: false,
         });
         assert!(!any_over_stmt(&type_alias, |expr| {
             seen.borrow_mut().push(expr.clone());

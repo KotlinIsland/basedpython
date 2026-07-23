@@ -390,6 +390,38 @@ impl<'src> Parser<'src> {
                     ));
                     return Some(self.parse_with_modifier(start, DecoratorList::new()));
                 }
+                TokenKind::Type => {
+                    // `private type X = V`. only `private` is accepted: a type
+                    // alias is public by default, so the remaining modifiers
+                    // would be inert, and accepting-then-dropping them would
+                    // lose data on a format round-trip
+                    if idx != 1 || kw != "private" {
+                        return None;
+                    }
+                    // `type` is a soft keyword — require a real alias shape
+                    // (`NAME [` or `NAME =`), otherwise it is an identifier and
+                    // `private type` is not a declaration at all
+                    let (name_kind, after_name) = (self.peek_nth(idx).0, self.peek_nth(idx + 1).0);
+                    if !(name_kind == TokenKind::Name || name_kind.is_soft_keyword())
+                        || !matches!(after_name, TokenKind::Lsqb | TokenKind::Equal)
+                    {
+                        return None;
+                    }
+                    self.error_if_not_basedpython(
+                        "`private` type aliases are not valid in .py files".to_string(),
+                    );
+                    self.bump(TokenKind::Name);
+                    let mut alias = self.parse_type_alias_statement();
+                    alias.is_private = true;
+                    alias.range = self.node_range(start);
+                    // a type alias is a *simple* statement, so unlike the
+                    // compound `parse_with_modifier` path it must consume its
+                    // own terminator here — the caller only does that for the
+                    // fallback path
+                    self.eat(TokenKind::Semi);
+                    self.eat(TokenKind::Newline);
+                    return Some(Stmt::TypeAlias(alias));
+                }
                 TokenKind::Name => {
                     let text = self.src_text(range);
                     if text == "let" {
@@ -2552,6 +2584,7 @@ impl<'src> Parser<'src> {
             value: Box::new(value.expr),
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
+            is_private: false,
         }
     }
 

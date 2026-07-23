@@ -19,7 +19,12 @@ impl FormatNodeRule<StmtTypeAlias> for FormatStmtTypeAlias {
             value,
             range: _,
             node_index: _,
+            is_private,
         } = item;
+
+        if *is_private {
+            write!(f, [token("private"), space()])?;
+        }
 
         write!(f, [token("type"), space(), name.as_ref().format()])?;
 

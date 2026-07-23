@@ -70,6 +70,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    is_private: false,
                 },
             ),
             TypeAlias(
@@ -132,6 +133,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    is_private: false,
                 },
             ),
             TypeAlias(
@@ -192,6 +194,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    is_private: false,
                 },
             ),
             TypeAlias(
@@ -252,6 +255,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    is_private: false,
                 },
             ),
             TypeAlias(
@@ -284,6 +288,7 @@ Module(
                             ),
                         },
                     ),
+                    is_private: false,
                 },
             ),
             TypeAlias(
@@ -322,6 +327,7 @@ Module(
                             ),
                         },
                     ),
+                    is_private: false,
                 },
             ),
             TypeAlias(
@@ -383,6 +389,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    is_private: false,
                 },
             ),
             TypeAlias(
@@ -414,6 +421,7 @@ Module(
                             postfix: false,
                         },
                     ),
+                    is_private: false,
                 },
             ),
         ],

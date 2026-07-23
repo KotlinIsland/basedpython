@@ -50,6 +50,7 @@ Module(
                             ctx: Invalid,
                         },
                     ),
+                    is_private: false,
                 },
             ),
             Expr(

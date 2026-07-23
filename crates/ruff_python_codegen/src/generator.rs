@@ -75,7 +75,8 @@ pub enum Mode {
     /// `(args) -> returns` for `ExprCallableType`, `(field: type, ...)`
     /// anon NT literal for `ExprTuple` with `is_anon_named_tuple`,
     /// `typeof X` for `ExprSubscript` with `is_typeof`, `<value> cast
-    /// <type>` for `ExprCall` with `is_cast`. Modifier-keyword
+    /// <type>` for `ExprCall` with `is_cast`, `private type X = V` for
+    /// `StmtTypeAlias` with `is_private`. Modifier-keyword
     /// decorators (whose source range does not start with `@`) are
     /// preserved as-is when this mode is active. Use when re-rendering an
     /// AST that may carry basedpython-only nodes / flags
@@ -639,8 +640,12 @@ impl<'a> Generator<'a> {
                 node_index: _,
                 type_params,
                 value,
+                is_private,
             }) => {
                 statement!({
+                    if self.mode == Mode::BasedPython && *is_private {
+                        self.p("private ");
+                    }
                     self.p("type ");
                     self.unparse_expr(name, precedence::MAX);
                     if let Some(type_params) = type_params {

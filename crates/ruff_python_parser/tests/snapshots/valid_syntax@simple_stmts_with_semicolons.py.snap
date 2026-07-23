@@ -98,6 +98,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    is_private: false,
                 },
             ),
         ],
