@@ -17,10 +17,10 @@ PROCESSING_INSTRUCTION: Final = "PROCESSING_INSTRUCTION"
 IGNORABLE_WHITESPACE: Final = "IGNORABLE_WHITESPACE"
 CHARACTERS: Final = "CHARACTERS"
 
-type _NSName = tuple[str | None, str]
-type _DocumentFactory = DOMImplementation | None
+private type NSName = tuple[str | None, str]
+private type DocumentFactory = DOMImplementation | None
 
-type _Event = (
+private type Event = (
     tuple["START_ELEMENT", Element]
     | tuple["END_ELEMENT", Element]
     | tuple["COMMENT", Comment]
@@ -33,17 +33,17 @@ type _Event = (
 
 class PullDOM(ContentHandler):
     document: Document | None
-    documentFactory: _DocumentFactory
+    documentFactory: DocumentFactory
 
     # firstEvent is a list of length 2
     # firstEvent[0] is always None
     # firstEvent[1] is None prior to any events, after which it's a
-    # list of length 2, where the first item is of type _Event
+    # list of length 2, where the first item is of type Event
     # and the second item is None.
     firstEvent: list[Incomplete]
 
     # lastEvent is also a list of length 2. The second item is always None,
-    # and the first item is of type _Event
+    # and the first item is of type Event
     # This is a slight lie: The second item is sometimes temporarily what was just
     # described for the type of lastEvent, after which lastEvent is always updated
     # with `self.lastEvent = self.lastEvent[1]`.
@@ -53,13 +53,13 @@ class PullDOM(ContentHandler):
     pending_events: (
         list[Sequence[("COMMENT", str) | ("PROCESSING_INSTRUCTION", str, str) | None]] | None
     )
-    init(self, documentFactory: _DocumentFactory = None)
+    init(self, documentFactory: DocumentFactory = None)
     def pop(self) -> Element | Document
     override def setDocumentLocator(self, locator: Locator) -> None
     override def startPrefixMapping(self, prefix: str | None, uri: str) -> None
     override def endPrefixMapping(self, prefix: str | None) -> None
-    override def startElementNS(self, name: _NSName, tagName: str | None, attrs: AttributesNSImpl) -> None
-    override def endElementNS(self, name: _NSName, tagName: str | None) -> None
+    override def startElementNS(self, name: NSName, tagName: str | None, attrs: AttributesNSImpl) -> None
+    override def endElementNS(self, name: NSName, tagName: str | None) -> None
     override def startElement(self, name: str, attrs: AttributesImpl) -> None
     override def endElement(self, name: str) -> None
     def comment(self, s: str) -> None
@@ -84,18 +84,18 @@ class DOMEventStream:
     pulldom: PullDOM
     init(self, stream: _SupportsReadClose[bytes] | _SupportsReadClose[str], parser: XMLReader, bufsize: int)
     if sys.version_info < (3, 11):
-        def __getitem__(self, pos: Unused) -> _Event
+        def __getitem__(self, pos: Unused) -> Event
 
-    def __next__(self) -> _Event
+    def __next__(self) -> Event
     def __iter__(self) -> Self
-    def getEvent(self) -> _Event | None
+    def getEvent(self) -> Event | None
     def expandNode(self, node: Document) -> None
     def reset(self) -> None
     def clear(self) -> None:
         """clear(): Explicitly release parsing objects"""
 
 class SAX2DOM(PullDOM):
-    override def startElementNS(self, name: _NSName, tagName: str | None, attrs: AttributesNSImpl) -> None
+    override def startElementNS(self, name: NSName, tagName: str | None, attrs: AttributesNSImpl) -> None
     override def startElement(self, name: str, attrs: AttributesImpl) -> None
     override def processingInstruction(self, target: str, data: str) -> None
     override def ignorableWhitespace(self, chars: str) -> None

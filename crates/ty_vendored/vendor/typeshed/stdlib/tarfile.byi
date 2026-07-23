@@ -46,8 +46,8 @@ if sys.version_info >= (3, 12):
 if sys.version_info >= (3, 13):
     __all__ += ["LinkFallbackError"]
 
-type _FilterFunction = (TarInfo, str) -> (TarInfo | None)
-type _TarfileFilter = "fully_trusted" | "tar" | "data" | _FilterFunction
+private type FilterFunction = (TarInfo, str) -> (TarInfo | None)
+type _TarfileFilter = "fully_trusted" | "tar" | "data" | FilterFunction
 
 @type_check_only
 protocol _Fileobj:
@@ -97,7 +97,7 @@ XHDTYPE: Final = b"x"
 XGLTYPE: Final = b"g"
 SOLARIS_XHDTYPE: Final = b"X"
 
-type _TarFormat = 0 | 1 | 2  # does not exist at runtime
+private type TarFormat = 0 | 1 | 2  # does not exist at runtime
 USTAR_FORMAT: Final = 0
 GNU_FORMAT: Final = 1
 PAX_FORMAT: Final = 2
@@ -124,7 +124,7 @@ class TarFile:
     name: StrOrBytesPath | None
     mode: "r" | "a" | "w" | "x"
     fileobj: _Fileobj
-    format: _TarFormat
+    format: TarFormat
     tarinfo: type[TarInfo]
     dereference: bool
     ignore_zeros: bool
@@ -135,7 +135,7 @@ class TarFile:
     debug: 0 | 1 | 2 | 3
     errorlevel: 0 | 1 | 2
     offset: int  # undocumented
-    extraction_filter: _FilterFunction | None
+    extraction_filter: FilterFunction | None
     if sys.version_info >= (3, 13):
         stream: bool
     if sys.version_info >= (3, 15):
@@ -871,7 +871,7 @@ class TarFile:
         set_attrs: bool = True,
         numeric_owner: bool = False,
         *,
-        filter_function: _FilterFunction | None = None,
+        filter_function: FilterFunction | None = None,
         extraction_root: str | None = None,
     ) -> None:  # undocumented
         """Extract the filtered TarInfo object tarinfo to a physical
@@ -913,7 +913,7 @@ class TarFile:
         """
 
     def makelink_with_filter(
-        self, tarinfo: TarInfo, targetpath: StrOrBytesPath, filter_function: _FilterFunction, extraction_root: str
+        self, tarinfo: TarInfo, targetpath: StrOrBytesPath, filter_function: FilterFunction, extraction_root: str
     ) -> None:  # undocumented
         """Make a (symbolic) link called targetpath. If it cannot be created
         (platform limitation), we try to make a copy of the referenced file
@@ -1172,7 +1172,7 @@ class TarInfo:
     def get_info(self) -> Mapping[str, str | int | bytes | Mapping[str, str]]:
         """Return the TarInfo's attributes as a dictionary."""
 
-    def tobuf(self, format: _TarFormat | None = 2, encoding: str | None = "utf-8", errors: str = "surrogateescape") -> bytes:
+    def tobuf(self, format: TarFormat | None = 2, encoding: str | None = "utf-8", errors: str = "surrogateescape") -> bytes:
         """Return a tar header as a string of 512 byte blocks."""
 
     def create_ustar_header(self, info: Mapping[str, str | int | bytes | Mapping[str, str]], encoding: str, errors: str) -> bytes:

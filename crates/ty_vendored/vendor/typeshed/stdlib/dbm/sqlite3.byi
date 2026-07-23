@@ -13,16 +13,16 @@ final ITER_KEYS: LiteralString
 if sys.version_info >= (3, 15):
     final REORGANIZE: LiteralString
 
-type _SqliteData = str | ReadableBuffer | int | float
+private type SqliteData = str | ReadableBuffer | int | float
 
 class error(OSError)
 
 class _Database(MutableMapping[bytes, bytes]):
     init(self, path: StrOrBytesPath, /, *, flag: "r" | "w" | "c" | "n", mode: int)
     override def __len__(self) -> int
-    override def __getitem__(self, key: _SqliteData) -> bytes
-    override def __setitem__(self, key: _SqliteData, value: _SqliteData) -> None
-    override def __delitem__(self, key: _SqliteData) -> None
+    override def __getitem__(self, key: SqliteData) -> bytes
+    override def __setitem__(self, key: SqliteData, value: SqliteData) -> None
+    override def __delitem__(self, key: SqliteData) -> None
     override def __iter__(self) -> Generator[bytes]
     def close(self) -> None
     override def keys(self) -> list[bytes]

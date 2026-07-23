@@ -7,9 +7,9 @@ from typing_extensions import deprecated
 
 # Many functions in binascii accept buffer objects
 # or ASCII-only strings.
-type _AsciiBuffer = str | ReadableBuffer
+private type AsciiBuffer = str | ReadableBuffer
 
-def a2b_uu(data: _AsciiBuffer, /) -> bytes:
+def a2b_uu(data: AsciiBuffer, /) -> bytes:
     """Decode a line of uuencoded data."""
 
 def b2a_uu(data: ReadableBuffer, /, *, backtick: bool = False) -> bytes:
@@ -27,7 +27,7 @@ if sys.version_info >= (3, 15):
     BASE85_ALPHABET: bytes
     Z85_ALPHABET: bytes
     def a2b_base64(
-        data: _AsciiBuffer,
+        data: AsciiBuffer,
         /,
         *,
         strict_mode: bool = False,
@@ -68,7 +68,7 @@ if sys.version_info >= (3, 15):
         """
 
     def a2b_base32(
-        data: _AsciiBuffer,
+        data: AsciiBuffer,
         /,
         *,
         alphabet: bytes = ...,
@@ -102,7 +102,7 @@ if sys.version_info >= (3, 15):
         """
 
     def a2b_ascii85(
-        data: _AsciiBuffer,
+        data: AsciiBuffer,
         /,
         *,
         foldspaces: bool = False,
@@ -131,7 +131,7 @@ if sys.version_info >= (3, 15):
         """
 
     def a2b_base85(
-        data: _AsciiBuffer, /, *, alphabet: bytes = ..., ignorechars: ReadableBuffer = b"", canonical: bool = False
+        data: AsciiBuffer, /, *, alphabet: bytes = ..., ignorechars: ReadableBuffer = b"", canonical: bool = False
     ) -> bytes:
         """Decode a line of Base85 data.
 
@@ -142,7 +142,7 @@ if sys.version_info >= (3, 15):
         """
 
 elif sys.version_info >= (3, 11):
-    def a2b_base64(data: _AsciiBuffer, /, *, strict_mode: bool = False) -> bytes:
+    def a2b_base64(data: AsciiBuffer, /, *, strict_mode: bool = False) -> bytes:
         """Decode a line of base64 data.
 
         strict_mode
@@ -151,14 +151,14 @@ elif sys.version_info >= (3, 11):
         """
 
 else:
-    def a2b_base64(data: _AsciiBuffer, /) -> bytes:
+    def a2b_base64(data: AsciiBuffer, /) -> bytes:
         """Decode a line of base64 data."""
 
 if sys.version_info < (3, 15):
     def b2a_base64(data: ReadableBuffer, /, *, newline: bool = True) -> bytes:
         """Base64-code line of data."""
 
-def a2b_qp(data: _AsciiBuffer, header: bool = False) -> bytes:
+def a2b_qp(data: AsciiBuffer, header: bool = False) -> bytes:
     """Decode a string of qp-encoded data."""
 
 def b2a_qp(data: ReadableBuffer, quotetabs: bool = False, istext: bool = True, header: bool = False) -> bytes:
@@ -171,7 +171,7 @@ def b2a_qp(data: ReadableBuffer, quotetabs: bool = False, istext: bool = True, h
 
 if sys.version_info < (3, 11):
     @deprecated("Deprecated since Python 3.9; removed in Python 3.11.")
-    def a2b_hqx(data: _AsciiBuffer, /) -> bytes:
+    def a2b_hqx(data: AsciiBuffer, /) -> bytes:
         """Decode .hqx coding."""
 
     @deprecated("Deprecated since Python 3.9; removed in Python 3.11.")
@@ -227,7 +227,7 @@ def hexlify(data: ReadableBuffer, sep: str | bytes = ..., bytes_per_sep: int = 1
     """
 
 if sys.version_info >= (3, 15):
-    def a2b_hex(hexstr: _AsciiBuffer, /, *, ignorechars: ReadableBuffer = b"") -> bytes:
+    def a2b_hex(hexstr: AsciiBuffer, /, *, ignorechars: ReadableBuffer = b"") -> bytes:
         """Binary data of hexadecimal representation.
 
           ignorechars
@@ -237,7 +237,7 @@ if sys.version_info >= (3, 15):
         This function is also available as "unhexlify()".
         """
 
-    def unhexlify(hexstr: _AsciiBuffer, /, *, ignorechars: ReadableBuffer = b"") -> bytes:
+    def unhexlify(hexstr: AsciiBuffer, /, *, ignorechars: ReadableBuffer = b"") -> bytes:
         """Binary data of hexadecimal representation.
 
           ignorechars
@@ -247,14 +247,14 @@ if sys.version_info >= (3, 15):
         """
 
 else:
-    def a2b_hex(hexstr: _AsciiBuffer, /) -> bytes:
+    def a2b_hex(hexstr: AsciiBuffer, /) -> bytes:
         """Binary data of hexadecimal representation.
 
         hexstr must contain an even number of hex digits (upper or lower case).
         This function is also available as "unhexlify()".
         """
 
-    def unhexlify(hexstr: _AsciiBuffer, /) -> bytes:
+    def unhexlify(hexstr: AsciiBuffer, /) -> bytes:
         """Binary data of hexadecimal representation.
 
         hexstr must contain an even number of hex digits (upper or lower case).

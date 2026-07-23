@@ -10,8 +10,8 @@ from socket import error as error, gaierror as gaierror, herror as herror, timeo
 from typing import Final, TypeAlias
 from typing_extensions import CapsuleType, disjoint_base
 
-type _CMSG = tuple[int, int, bytes]
-type _CMSGArg = tuple[int, int, ReadableBuffer]
+private type CMSG = tuple[int, int, bytes]
+private type CMSGArg = tuple[int, int, ReadableBuffer]
 
 # Addresses can be either tuples of varying lengths (AF_INET, AF_INET6,
 # AF_NETLINK, AF_TIPC) or strings/buffers (AF_UNIX).
@@ -1019,7 +1019,7 @@ class socket:
         """
 
     if sys.platform != "win32":
-        def recvmsg(self, bufsize: int, ancbufsize: int = 0, flags: int = 0, /) -> (bytes, list[_CMSG], int, dynamic):
+        def recvmsg(self, bufsize: int, ancbufsize: int = 0, flags: int = 0, /) -> (bytes, list[CMSG], int, dynamic):
             """recvmsg(bufsize[, ancbufsize[, flags]]) -> (data, ancdata, msg_flags, address)
 
             Receive normal data (up to bufsize bytes) and ancillary data from the
@@ -1051,7 +1051,7 @@ class socket:
 
         def recvmsg_into(
             self, buffers: Iterable[WriteableBuffer], ancbufsize: int = 0, flags: int = 0, /
-        ) -> (int, list[_CMSG], int, dynamic):
+        ) -> (int, list[CMSG], int, dynamic):
             """recvmsg_into(buffers[, ancbufsize[, flags]]) -> (nbytes, ancdata, msg_flags, address)
 
             Receive normal data and ancillary data from the socket, scattering the
@@ -1130,7 +1130,7 @@ class socket:
         def sendmsg(
             self,
             buffers: Iterable[ReadableBuffer],
-            ancdata: Iterable[_CMSGArg] = ...,
+            ancdata: Iterable[CMSGArg] = ...,
             flags: int = 0,
             address: _Address | None = None,
             /,

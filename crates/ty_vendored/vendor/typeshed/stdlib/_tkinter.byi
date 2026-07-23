@@ -32,7 +32,7 @@ final class Tcl_Obj:
 
 class TclError(Exception)
 
-type _TkinterTraceFunc = (tuple[str, ...]) -> object
+private type TkinterTraceFunc = (tuple[str, ...]) -> object
 
 # This class allows running Tcl code. Tkinter uses it internally a lot, and
 # it's often handy to drop a piece of Tcl code into a tkinter program. Example:
@@ -99,10 +99,10 @@ final class TkappType:
 
     def willdispatch(self) -> None
     if sys.version_info >= (3, 12):
-        def gettrace(self, /) -> _TkinterTraceFunc | None:
+        def gettrace(self, /) -> TkinterTraceFunc | None:
             """Get the tracing function."""
 
-        def settrace(self, func: _TkinterTraceFunc | None, /) -> None:
+        def settrace(self, func: TkinterTraceFunc | None, /) -> None:
             """Set the tracing function."""
 
 # These should be kept in sync with tkinter.tix constants, except ALL_EVENTS which doesn't match TCL_ALL_EVENTS

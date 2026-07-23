@@ -7,7 +7,7 @@ from numbers import Rational, Real
 from typing import Literal, Protocol, TypeAlias, type_check_only
 from typing_extensions import Self
 
-type _ComparableNum = int | float | Decimal | Real
+private type ComparableNum = int | float | Decimal | Real
 
 __all__ = ["Fraction"]
 
@@ -265,16 +265,16 @@ class Fraction(Rational):
     override def __eq__(a, b: object) -> bool:
         """a == b"""
 
-    override def __lt__(a, b: _ComparableNum) -> bool:
+    override def __lt__(a, b: ComparableNum) -> bool:
         """a < b"""
 
-    def __gt__(a, b: _ComparableNum) -> bool:
+    def __gt__(a, b: ComparableNum) -> bool:
         """a > b"""
 
-    override def __le__(a, b: _ComparableNum) -> bool:
+    override def __le__(a, b: ComparableNum) -> bool:
         """a <= b"""
 
-    def __ge__(a, b: _ComparableNum) -> bool:
+    def __ge__(a, b: ComparableNum) -> bool:
         """a >= b"""
 
     override def __bool__(a) -> bool:

@@ -216,19 +216,19 @@ if sys.version_info >= (3, 12):
 if sys.version_info < (3, 13):
     __all__ += ["settiltangle"]
 
-# Note: '_Color' is the alias we use for arguments and _AnyColor is the
+# Note: 'Color' is the alias we use for arguments and AnyColor is the
 # alias we use for return types. Really, these two aliases should be the
 # same, but as per the "no union returns" typeshed policy, we'll return
 # Any instead.
-type _Color = str | tuple[float, float, float]
-type _AnyColor = dynamic
+private type Color = str | tuple[float, float, float]
+private type AnyColor = dynamic
 
 @type_check_only
 class _PenState(TypedDict):
     shown: bool
     pendown: bool
-    pencolor: _Color
-    fillcolor: _Color
+    pencolor: Color
+    fillcolor: Color
     pensize: int
     speed: int
     resizemode: "auto" | "user" | "noresize"
@@ -237,8 +237,8 @@ class _PenState(TypedDict):
     outline: int
     tilt: float
 
-type _Speed = str | float
-type _PolygonCoords = Sequence[tuple[float, float]]
+private type Speed = str | float
+private type PolygonCoords = Sequence[tuple[float, float]]
 
 if sys.version_info >= (3, 12):
     class Vec2D(tuple[float, float]):
@@ -400,9 +400,9 @@ class Shape:
     """
 
     init(
-        self, type_: "polygon" | "image" | "compound", data: _PolygonCoords | PhotoImage | None = None
+        self, type_: "polygon" | "image" | "compound", data: PolygonCoords | PhotoImage | None = None
     )
-    def addcomponent(self, poly: _PolygonCoords, fill: _Color, outline: _Color | None = None) -> None:
+    def addcomponent(self, poly: PolygonCoords, fill: Color, outline: Color | None = None) -> None:
         """Add component to a shape of type compound.
 
         Arguments: poly is a polygon, i. e. a tuple of number pairs.
@@ -491,7 +491,7 @@ class TurtleScreen(TurtleScreenBase):
         ...     forward(0.5)
         """
 
-    def register_shape(self, name: str, shape: _PolygonCoords | Shape | None = None) -> None:
+    def register_shape(self, name: str, shape: PolygonCoords | Shape | None = None) -> None:
         """Adds a turtle shape to TurtleScreen's shapelist.
 
         Arguments:
@@ -552,7 +552,7 @@ class TurtleScreen(TurtleScreenBase):
         [<turtle.Turtle object at 0x00E11FB0>]
         """
 
-    def bgcolor(self) -> _AnyColor:
+    def bgcolor(self) -> AnyColor:
         """Set or return backgroundcolor of the TurtleScreen.
 
         Four input formats are allowed:
@@ -582,7 +582,7 @@ class TurtleScreen(TurtleScreenBase):
         >>> screen.bgcolor()
         (128.0, 0.0, 128.0)
         """
-    def bgcolor(self, color: _Color) -> None
+    def bgcolor(self, color: Color) -> None
     def bgcolor(self, r: float, g: float, b: float) -> None
 
     def tracer(self, n: None = None) -> int:
@@ -782,7 +782,7 @@ class TurtleScreen(TurtleScreenBase):
         >>> # e.g. to search for an erroneously escaped turtle ;-)
         """
     # Looks like if self.cv is not a ScrolledCanvas, this could return a tuple as well
-    def screensize(self, canvwidth: int, canvheight: int, bg: _Color | None = None) -> None
+    def screensize(self, canvwidth: int, canvheight: int, bg: Color | None = None) -> None
 
     if sys.version_info >= (3, 14):
         def save(self, filename: StrPath, *, overwrite: bool = False) -> None:
@@ -1327,9 +1327,9 @@ class TPen:
         Example (for a Turtle instance named turtle):
         >>> turtle.speed(3)
         """
-    def speed(self, speed: _Speed) -> None
+    def speed(self, speed: Speed) -> None
 
-    def pencolor(self) -> _AnyColor:
+    def pencolor(self) -> AnyColor:
         """Return or set the pencolor.
 
         Arguments:
@@ -1362,10 +1362,10 @@ class TPen:
         >>> turtle.pencolor()
         (50.0, 193.0, 143.0)
         """
-    def pencolor(self, color: _Color) -> None
+    def pencolor(self, color: Color) -> None
     def pencolor(self, r: float, g: float, b: float) -> None
 
-    def fillcolor(self) -> _AnyColor:
+    def fillcolor(self) -> AnyColor:
         """Return or set the fillcolor.
 
         Arguments:
@@ -1398,10 +1398,10 @@ class TPen:
         >>> turtle.fillcolor()
         (255.0, 255.0, 255.0)
         """
-    def fillcolor(self, color: _Color) -> None
+    def fillcolor(self, color: Color) -> None
     def fillcolor(self, r: float, g: float, b: float) -> None
 
-    def color(self) -> (_AnyColor, _AnyColor):
+    def color(self) -> (AnyColor, AnyColor):
         """Return or set the pencolor and fillcolor.
 
         Arguments:
@@ -1431,9 +1431,9 @@ class TPen:
         >>> color()
         ((40.0, 80.0, 120.0), (160.0, 200.0, 240.0))
         """
-    def color(self, color: _Color) -> None
+    def color(self, color: Color) -> None
     def color(self, r: float, g: float, b: float) -> None
-    def color(self, color1: _Color, color2: _Color) -> None
+    def color(self, color1: Color, color2: Color) -> None
 
     if sys.version_info >= (3, 12):
         def teleport(self, x: float | None = None, y: float | None = None, *, fill_gap: bool = False) -> None:
@@ -1533,8 +1533,8 @@ class TPen:
         *,
         shown: bool = ...,
         pendown: bool = ...,
-        pencolor: _Color = ...,
-        fillcolor: _Color = ...,
+        pencolor: Color = ...,
+        fillcolor: Color = ...,
         pensize: int = ...,
         speed: int = ...,
         resizemode: "auto" | "user" | "noresize" = ...,
@@ -1731,7 +1731,7 @@ class RawTurtle(TPen, TNavigator):
         self, t11: float | None = None, t12: float | None = None, t21: float | None = None, t22: float | None = None
     ) -> None
 
-    def get_shapepoly(self) -> _PolygonCoords | None:
+    def get_shapepoly(self) -> PolygonCoords | None:
         """Return the current shape polygon as tuple of coordinate pairs.
 
         No argument.
@@ -1918,7 +1918,7 @@ class RawTurtle(TPen, TNavigator):
         >>> turtle.end_fill()
         """
 
-    def dot(self, size: int | _Color | None = None) -> None:
+    def dot(self, size: int | Color | None = None) -> None:
         """Draw a dot with diameter size, using color.
 
         Optional arguments:
@@ -1932,7 +1932,7 @@ class RawTurtle(TPen, TNavigator):
         >>> turtle.dot()
         >>> turtle.fd(50); turtle.dot(20, "blue"); turtle.fd(50)
         """
-    def dot(self, size: int | None, color: _Color, /) -> None
+    def dot(self, size: int | None, color: Color, /) -> None
     def dot(self, size: int | None, r: float, g: float, b: float, /) -> None
 
     def write(
@@ -1998,7 +1998,7 @@ class RawTurtle(TPen, TNavigator):
         >>> turtle.end_poly()
         """
 
-    def get_poly(self) -> _PolygonCoords | None:
+    def get_poly(self) -> PolygonCoords | None:
         """Return the lastly recorded polygon.
 
         No argument.
@@ -2334,7 +2334,7 @@ def setworldcoordinates(llx: float, lly: float, urx: float, ury: float) -> None:
     ...     forward(0.5)
     """
 
-def register_shape(name: str, shape: _PolygonCoords | Shape | None = None) -> None:
+def register_shape(name: str, shape: PolygonCoords | Shape | None = None) -> None:
     """Adds a turtle shape to TurtleScreen's shapelist.
 
     Arguments:
@@ -2406,7 +2406,7 @@ def turtles() -> list[Turtle]:
     [<turtle.Turtle object at 0x00E11FB0>]
     """
 
-def bgcolor() -> _AnyColor:
+def bgcolor() -> AnyColor:
     """Set or return backgroundcolor of the TurtleScreen.
 
     Four input formats are allowed:
@@ -2436,7 +2436,7 @@ def bgcolor() -> _AnyColor:
     >>> bgcolor()
     (128.0, 0.0, 128.0)
     """
-def bgcolor(color: _Color) -> None
+def bgcolor(color: Color) -> None
 def bgcolor(r: float, g: float, b: float) -> None
 
 def tracer(n: None = None) -> int:
@@ -2638,7 +2638,7 @@ def screensize(canvwidth: None = None, canvheight: None = None, bg: None = None)
     >>> turtle.screensize(2000,1500)
     >>> # e.g. to search for an erroneously escaped turtle ;-)
     """
-def screensize(canvwidth: int, canvheight: int, bg: _Color | None = None) -> None
+def screensize(canvwidth: int, canvheight: int, bg: Color | None = None) -> None
 
 if sys.version_info >= (3, 14):
     def save(filename: StrPath, *, overwrite: bool = False) -> None:
@@ -3229,9 +3229,9 @@ def speed(speed: None = None) -> int:
     Example:
     >>> speed(3)
     """
-def speed(speed: _Speed) -> None
+def speed(speed: Speed) -> None
 
-def pencolor() -> _AnyColor:
+def pencolor() -> AnyColor:
     """Return or set the pencolor.
 
     Arguments:
@@ -3264,10 +3264,10 @@ def pencolor() -> _AnyColor:
     >>> pencolor()
     (50.0, 193.0, 143.0)
     """
-def pencolor(color: _Color) -> None
+def pencolor(color: Color) -> None
 def pencolor(r: float, g: float, b: float) -> None
 
-def fillcolor() -> _AnyColor:
+def fillcolor() -> AnyColor:
     """Return or set the fillcolor.
 
     Arguments:
@@ -3300,10 +3300,10 @@ def fillcolor() -> _AnyColor:
     >>> fillcolor()
     (255.0, 255.0, 255.0)
     """
-def fillcolor(color: _Color) -> None
+def fillcolor(color: Color) -> None
 def fillcolor(r: float, g: float, b: float) -> None
 
-def color() -> (_AnyColor, _AnyColor):
+def color() -> (AnyColor, AnyColor):
     """Return or set the pencolor and fillcolor.
 
     Arguments:
@@ -3333,9 +3333,9 @@ def color() -> (_AnyColor, _AnyColor):
     >>> color()
     ((40.0, 80.0, 120.0), (160.0, 200.0, 240.0))
     """
-def color(color: _Color) -> None
+def color(color: Color) -> None
 def color(r: float, g: float, b: float) -> None
-def color(color1: _Color, color2: _Color) -> None
+def color(color1: Color, color2: Color) -> None
 
 def showturtle() -> None:
     """Makes the turtle visible.
@@ -3428,8 +3428,8 @@ def pen(
     *,
     shown: bool = ...,
     pendown: bool = ...,
-    pencolor: _Color = ...,
-    fillcolor: _Color = ...,
+    pencolor: Color = ...,
+    fillcolor: Color = ...,
     pensize: int = ...,
     speed: int = ...,
     resizemode: "auto" | "user" | "noresize" = ...,
@@ -3602,7 +3602,7 @@ def shapetransform(
     t11: float | None = None, t12: float | None = None, t21: float | None = None, t22: float | None = None
 ) -> None
 
-def get_shapepoly() -> _PolygonCoords | None:
+def get_shapepoly() -> PolygonCoords | None:
     """Return the current shape polygon as tuple of coordinate pairs.
 
     No argument.
@@ -3789,7 +3789,7 @@ def end_fill() -> None:
     >>> end_fill()
     """
 
-def dot(size: int | _Color | None = None) -> None:
+def dot(size: int | Color | None = None) -> None:
     """Draw a dot with diameter size, using color.
 
     Optional arguments:
@@ -3803,7 +3803,7 @@ def dot(size: int | _Color | None = None) -> None:
     >>> dot()
     >>> fd(50); dot(20, "blue"); fd(50)
     """
-def dot(size: int | None, color: _Color, /) -> None
+def dot(size: int | None, color: Color, /) -> None
 def dot(size: int | None, r: float, g: float, b: float, /) -> None
 
 def write(arg: object, move: bool = False, align: str = "left", font: (str, int, str) = ("Arial", 8, "normal")) -> None:
@@ -3867,7 +3867,7 @@ def end_poly() -> None:
     >>> end_poly()
     """
 
-def get_poly() -> _PolygonCoords | None:
+def get_poly() -> PolygonCoords | None:
     """Return the lastly recorded polygon.
 
     No argument.

@@ -16,7 +16,7 @@ ucd_3_2_0: UCD
 final unidata_version: str
 
 
-type _NormalizationForm = "NFC" | "NFD" | "NFKC" | "NFKD"
+private type NormalizationForm = "NFC" | "NFD" | "NFKC" | "NFKD"
 
 def bidirectional(chr: str, /) -> str:
     """Returns the bidirectional class assigned to the character chr as string.
@@ -57,12 +57,12 @@ def digit(chr: str, /) -> int:
     """
 def digit[Element](chr: str, default: Element, /) -> int | Element
 
-type _EastAsianWidth = "F" | "H" | "W" | "Na" | "A" | "N"
+private type EastAsianWidth = "F" | "H" | "W" | "Na" | "A" | "N"
 
-def east_asian_width(chr: str, /) -> _EastAsianWidth:
+def east_asian_width(chr: str, /) -> EastAsianWidth:
     """Returns the east asian width assigned to the character chr as string."""
 
-def is_normalized(form: _NormalizationForm, unistr: str, /) -> bool:
+def is_normalized(form: NormalizationForm, unistr: str, /) -> bool:
     """Return whether the Unicode string unistr is in the normal form 'form'.
 
     Valid values for form are 'NFC', 'NFKC', 'NFD', and 'NFKD'.
@@ -115,7 +115,7 @@ def name(chr: str, /) -> str:
     """
 def name[Element](chr: str, default: Element, /) -> str | Element
 
-def normalize(form: _NormalizationForm, unistr: str, /) -> str:
+def normalize(form: NormalizationForm, unistr: str, /) -> str:
     """Return the normal form 'form' for the Unicode string unistr.
 
     Valid values for form are 'NFC', 'NFKC', 'NFD', and 'NFKD'.
@@ -173,10 +173,10 @@ final class UCD:
         """
     def digit[Element](self, chr: str, default: Element, /) -> int | Element
 
-    def east_asian_width(self, chr: str, /) -> _EastAsianWidth:
+    def east_asian_width(self, chr: str, /) -> EastAsianWidth:
         """Returns the east asian width assigned to the character chr as string."""
 
-    def is_normalized(self, form: _NormalizationForm, unistr: str, /) -> bool:
+    def is_normalized(self, form: NormalizationForm, unistr: str, /) -> bool:
         """Return whether the Unicode string unistr is in the normal form 'form'.
 
         Valid values for form are 'NFC', 'NFKC', 'NFD', and 'NFKD'.
@@ -204,7 +204,7 @@ final class UCD:
         """
     def name[Element](self, chr: str, default: Element, /) -> str | Element
 
-    def normalize(self, form: _NormalizationForm, unistr: str, /) -> str:
+    def normalize(self, form: NormalizationForm, unistr: str, /) -> str:
         """Return the normal form 'form' for the Unicode string unistr.
 
         Valid values for form are 'NFC', 'NFKC', 'NFD', and 'NFKD'.

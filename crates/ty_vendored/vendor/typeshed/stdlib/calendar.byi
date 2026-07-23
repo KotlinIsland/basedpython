@@ -68,7 +68,7 @@ if sys.version_info >= (3, 12):
 if sys.version_info >= (3, 15):
     __all__ += ["standalone_month_name", "standalone_month_abbr"]
 
-type _LocaleType = tuple[str | None, str | None]
+private type LocaleType = tuple[str | None, str | None]
 
 class IllegalMonthError(ValueError, IndexError):
     month: int
@@ -341,7 +341,7 @@ class HTMLCalendar(Calendar):
         """
 
 class different_locale:
-    init(self, locale: _LocaleType)
+    init(self, locale: LocaleType)
     def __enter__(self) -> None
     def __exit__(self, *args: Unused) -> None
 
@@ -351,7 +351,7 @@ class LocaleTextCalendar(TextCalendar):
     month and weekday names in the specified locale.
     """
 
-    init(self, firstweekday: int = 0, locale: _LocaleType | None = None)
+    init(self, firstweekday: int = 0, locale: LocaleType | None = None)
 
 class LocaleHTMLCalendar(HTMLCalendar):
     """
@@ -359,7 +359,7 @@ class LocaleHTMLCalendar(HTMLCalendar):
     month and weekday names in the specified locale.
     """
 
-    init(self, firstweekday: int = 0, locale: _LocaleType | None = None)
+    init(self, firstweekday: int = 0, locale: LocaleType | None = None)
     override def formatweekday(self, day: int) -> str
     override def formatmonthname(self, theyear: int, themonth: int, withyear: bool = True) -> str
 

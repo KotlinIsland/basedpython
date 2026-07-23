@@ -10,6 +10,6 @@ from typing import TypeAlias
 
 __all__ = ("run", "runctx", "Profile")
 
-type _Label = tuple[str, int, str]
+private type Label = tuple[str, int, str]
 
-def label(code: str | CodeType) -> _Label  # undocumented
+def label(code: str | CodeType) -> Label  # undocumented

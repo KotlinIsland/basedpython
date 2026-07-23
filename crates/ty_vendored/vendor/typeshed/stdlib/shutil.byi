@@ -183,8 +183,8 @@ def copytree[StrPathT: StrPath](
     `src` tree.
     """
 
-type _OnErrorCallback = ((...) -> dynamic, str, ExcInfo) -> object
-type _OnExcCallback = ((...) -> dynamic, str, BaseException) -> object
+private type OnErrorCallback = ((...) -> dynamic, str, ExcInfo) -> object
+private type OnExcCallback = ((...) -> dynamic, str, BaseException) -> object
 
 @type_check_only
 protocol _RmtreeType:
@@ -195,7 +195,7 @@ protocol _RmtreeType:
             self,
             path: StrOrBytesPath,
             ignore_errors: bool,
-            onerror: _OnErrorCallback | None,
+            onerror: OnErrorCallback | None,
             *,
             onexc: None = None,
             dir_fd: int | None = None,
@@ -206,7 +206,7 @@ protocol _RmtreeType:
             path: StrOrBytesPath,
             ignore_errors: bool = False,
             *,
-            onerror: _OnErrorCallback | None,
+            onerror: OnErrorCallback | None,
             onexc: None = None,
             dir_fd: int | None = None,
         ) -> None
@@ -215,7 +215,7 @@ protocol _RmtreeType:
             path: StrOrBytesPath,
             ignore_errors: bool = False,
             *,
-            onexc: _OnExcCallback | None = None,
+            onexc: OnExcCallback | None = None,
             dir_fd: int | None = None,
         ) -> None
     elif sys.version_info >= (3, 11):
@@ -223,14 +223,14 @@ protocol _RmtreeType:
             self,
             path: StrOrBytesPath,
             ignore_errors: bool = False,
-            onerror: _OnErrorCallback | None = None,
+            onerror: OnErrorCallback | None = None,
             *,
             dir_fd: int | None = None,
         ) -> None
 
     else:
         def __call__(
-            self, path: StrOrBytesPath, ignore_errors: bool = False, onerror: _OnErrorCallback | None = None
+            self, path: StrOrBytesPath, ignore_errors: bool = False, onerror: OnErrorCallback | None = None
         ) -> None
 
 rmtree: _RmtreeType
@@ -254,12 +254,12 @@ onerror is deprecated and only remains for backwards compatibility.
 If both onerror and onexc are set, onerror is ignored and onexc is used.
 """
 
-type _CopyFn = ((str, str) -> object) | ((StrPath, StrPath) -> object)
+private type CopyFn = ((str, str) -> object) | ((StrPath, StrPath) -> object)
 
 # N.B. shutil.move appears to take bytes arguments, however,
 # this does not work when dst is (or is within) an existing directory.
 # (#6832)
-def move[StrPathT: StrPath](src: StrPath, dst: StrPathT, copy_function: _CopyFn = ...) -> StrPathT | str | MaybeNone:
+def move[StrPathT: StrPath](src: StrPath, dst: StrPathT, copy_function: CopyFn = ...) -> StrPathT | str | MaybeNone:
     """Recursively move a file or directory to another location. This is
     similar to the Unix "mv" command. Return the file or directory's
     destination.

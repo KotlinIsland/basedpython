@@ -298,9 +298,9 @@ def perm(n: SupportsIndex, k: SupportsIndex | None = None, /) -> int:
 def pow(x: _SupportsFloatOrIndex, y: _SupportsFloatOrIndex, /) -> float:
     """Return x**y (x to the power of y)."""
 
-type _PositiveInteger = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25
-type _NegativeInteger = -1 | -2 | -3 | -4 | -5 | -6 | -7 | -8 | -9 | -10 | -11 | -12 | -13 | -14 | -15 | -16 | -17 | -18 | -19 | -20
-type _LiteralInteger = _PositiveInteger | _NegativeInteger | 0
+private type PositiveInteger = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20 | 21 | 22 | 23 | 24 | 25
+private type NegativeInteger = -1 | -2 | -3 | -4 | -5 | -6 | -7 | -8 | -9 | -10 | -11 | -12 | -13 | -14 | -15 | -16 | -17 | -18 | -19 | -20
+private type LiteralInteger = PositiveInteger | NegativeInteger | 0
 
 
 @type_check_only
@@ -312,7 +312,7 @@ protocol _SupportsProdWithNoDefaultGiven(SupportsMul[dynamic, dynamic], Supports
 # without introducing many false positives.
 # For more details on its limitations and false positives, see #13572.
 # Instead, just like `builtins.sum`, we explicitly handle several useful cases.
-def prod(iterable: Iterable[bool | _LiteralInteger], /, *, start: int = 1) -> int:
+def prod(iterable: Iterable[bool | LiteralInteger], /, *, start: int = 1) -> int:
     """Calculate the product of all the elements in the input iterable.
 
     The default start value for the product is 1.

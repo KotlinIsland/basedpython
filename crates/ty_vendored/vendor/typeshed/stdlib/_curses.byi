@@ -7,7 +7,7 @@ from typing import Final, TypeAlias, final
 # package makes it available on Windows as well with the same contents.
 
 # Handled by PyCurses_ConvertToChtype in _cursesmodule.c.
-type _ChType = str | bytes | int
+private type ChType = str | bytes | int
 
 # ACS codes are only initialized after initscr is called
 final ACS_BBSS: int
@@ -850,7 +850,7 @@ def typeahead(fd: int, /) -> None:
     If fd is -1, then no typeahead checking is done.
     """
 
-def unctrl(ch: _ChType, /) -> bytes:
+def unctrl(ch: ChType, /) -> bytes:
     """Return a string which is a printable representation of the character ch.
 
     Control characters are displayed as a caret followed by the character,
@@ -860,7 +860,7 @@ def unctrl(ch: _ChType, /) -> bytes:
 def unget_wch(ch: int | str, /) -> None:
     """Push ch so the next get_wch() will return it."""
 
-def ungetch(ch: _ChType, /) -> None:
+def ungetch(ch: ChType, /) -> None:
     """Push ch so the next getch() will return it."""
 
 def ungetmouse(id: int, x: int, y: int, z: int, bstate: int, /) -> None:
@@ -897,7 +897,7 @@ final class window:  # undocumented
     encoding: str
     """the typecode character used to create the array"""
 
-    def addch(self, ch: _ChType, attr: int = ...) -> None:
+    def addch(self, ch: ChType, attr: int = ...) -> None:
         """addch([y, x,] ch, [attr=_curses.A_NORMAL])
         Paint the character.
 
@@ -915,7 +915,7 @@ final class window:  # undocumented
         By default, the character position and attributes are the
         current settings for the window object.
         """
-    def addch(self, y: int, x: int, ch: _ChType, attr: int = ...) -> None
+    def addch(self, y: int, x: int, ch: ChType, attr: int = ...) -> None
 
     def addnstr(self, str: str, n: int, attr: int = ...) -> None:
         """addnstr([y, x,] str, n, [attr])
@@ -968,7 +968,7 @@ final class window:  # undocumented
     def attrset(self, attr: int, /) -> None:
         """Set the "background" set of attributes."""
 
-    def bkgd(self, ch: _ChType, attr: int = 0, /) -> None:
+    def bkgd(self, ch: ChType, attr: int = 0, /) -> None:
         """Set the background property of the window.
 
         ch
@@ -977,7 +977,7 @@ final class window:  # undocumented
           Background attributes.
         """
 
-    def bkgdset(self, ch: _ChType, attr: int = 0, /) -> None:
+    def bkgdset(self, ch: ChType, attr: int = 0, /) -> None:
         """Set the window's background.
 
         ch
@@ -988,14 +988,14 @@ final class window:  # undocumented
 
     def border(
         self,
-        ls: _ChType = ...,
-        rs: _ChType = ...,
-        ts: _ChType = ...,
-        bs: _ChType = ...,
-        tl: _ChType = ...,
-        tr: _ChType = ...,
-        bl: _ChType = ...,
-        br: _ChType = ...,
+        ls: ChType = ...,
+        rs: ChType = ...,
+        ts: ChType = ...,
+        bs: ChType = ...,
+        tl: ChType = ...,
+        tr: ChType = ...,
+        bl: ChType = ...,
+        br: ChType = ...,
     ) -> None:
         """Draw a border around the edges of the window.
 
@@ -1035,7 +1035,7 @@ final class window:  # undocumented
         are horch.  The default corner characters are always used by this
         function.
         """
-    def box(self, vertch: _ChType = 0, horch: _ChType = 0) -> None
+    def box(self, vertch: ChType = 0, horch: ChType = 0) -> None
 
     def chgat(self, attr: int) -> None:
         """chgat([y, x,] [n=-1,] attr)
@@ -1112,7 +1112,7 @@ final class window:  # undocumented
         """
     def derwin(self, nlines: int, ncols: int, begin_y: int, begin_x: int) -> window
 
-    def echochar(self, ch: _ChType, attr: int = 0, /) -> None:
+    def echochar(self, ch: ChType, attr: int = 0, /) -> None:
         """Add character ch with attribute attr, and refresh.
 
         ch
@@ -1209,7 +1209,7 @@ final class window:  # undocumented
     def getyx(self) -> (int, int):
         """Return a tuple (y, x) of the current cursor position."""
 
-    def hline(self, ch: _ChType, n: int) -> None:
+    def hline(self, ch: ChType, n: int) -> None:
         """hline([y, x,] ch, n, [attr=_curses.A_NORMAL])
         Display a horizontal line.
 
@@ -1224,7 +1224,7 @@ final class window:  # undocumented
           attr
             Attributes for the characters.
         """
-    def hline(self, y: int, x: int, ch: _ChType, n: int) -> None
+    def hline(self, y: int, x: int, ch: ChType, n: int) -> None
 
     def idcok(self, flag: bool, /) -> None:
         """Enable or disable the hardware insert/delete character feature."""
@@ -1249,7 +1249,7 @@ final class window:  # undocumented
         """
     def inch(self, y: int, x: int) -> int
 
-    def insch(self, ch: _ChType, attr: int = ...) -> None:
+    def insch(self, ch: ChType, attr: int = ...) -> None:
         """insch([y, x,] ch, [attr=_curses.A_NORMAL])
         Insert a character before the current or specified position.
 
@@ -1265,7 +1265,7 @@ final class window:  # undocumented
         All characters to the right of the cursor are shifted one position
         right, with the rightmost characters on the line being lost.
         """
-    def insch(self, y: int, x: int, ch: _ChType, attr: int = ...) -> None
+    def insch(self, y: int, x: int, ch: ChType, attr: int = ...) -> None
 
     def insdelln(self, nlines: int, /) -> None:
         """Insert (nlines > 0) or delete (nlines < 0) lines above the cursor."""
@@ -1555,7 +1555,7 @@ final class window:  # undocumented
     def untouchwin(self) -> None:
         """Mark all lines in the window as unchanged since last refresh()."""
 
-    def vline(self, ch: _ChType, n: int) -> None:
+    def vline(self, ch: ChType, n: int) -> None:
         """vline([y, x,] ch, n, [attr=_curses.A_NORMAL])
         Display a vertical line.
 
@@ -1570,6 +1570,6 @@ final class window:  # undocumented
           attr
             Attributes for the character.
         """
-    def vline(self, y: int, x: int, ch: _ChType, n: int) -> None
+    def vline(self, y: int, x: int, ch: ChType, n: int) -> None
 
 ncurses_version: _ncurses_version

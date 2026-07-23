@@ -8,14 +8,14 @@ written by Barry Warsaw.
 from re import Pattern
 from typing import Final, TypeAlias
 
-type _HeaderList = list[tuple[str, str]]
+private type HeaderList = list[tuple[str, str]]
 
 final tspecials: Pattern[str]  # undocumented
 
 class Headers:
     """Manage a collection of HTTP response headers"""
 
-    init(self, headers: _HeaderList | None = None)
+    init(self, headers: HeaderList | None = None)
     def __len__(self) -> int:
         """Return the total number of headers, including duplicates."""
 
@@ -72,7 +72,7 @@ class Headers:
         list.
         """
 
-    def items(self) -> _HeaderList:
+    def items(self) -> HeaderList:
         """Get all the header fields and values.
 
         These will be sorted in the order they were in the original header

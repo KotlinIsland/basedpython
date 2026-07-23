@@ -1324,36 +1324,36 @@ if sys.version_info >= (3, 14):
         ) -> Self:
             """Return a copy of the AST node with new values for the specified fields."""
 
-type _ConstantValue = str | bytes | bool | int | float | complex | None | EllipsisType
+private type ConstantValue = str | bytes | bool | int | float | complex | None | EllipsisType
 
 class Constant(expr):
     """Constant(constant value, string? kind)"""
 
     __match_args__ = ("value", "kind")
-    value: _ConstantValue
+    value: ConstantValue
     kind: str | None
     if sys.version_info < (3, 14):
         # Aliases for value, for backwards compatibility
         @property
         @deprecated("Removed in Python 3.14. Use `value` instead.")
-        def n(self) -> _ConstantValue:
+        def n(self) -> ConstantValue:
             """Deprecated. Use value instead."""
         @n.setter
         @deprecated("Removed in Python 3.14. Use `value` instead.")
-        def n(self, value: _ConstantValue) -> None
+        def n(self, value: ConstantValue) -> None
 
         @property
         @deprecated("Removed in Python 3.14. Use `value` instead.")
-        def s(self) -> _ConstantValue:
+        def s(self) -> ConstantValue:
             """Deprecated. Use value instead."""
         @s.setter
         @deprecated("Removed in Python 3.14. Use `value` instead.")
-        def s(self, value: _ConstantValue) -> None
+        def s(self, value: ConstantValue) -> None
 
-    init(self, value: _ConstantValue, kind: str | None = None, **kwargs: Unpack[_Attributes])
+    init(self, value: ConstantValue, kind: str | None = None, **kwargs: Unpack[_Attributes])
 
     if sys.version_info >= (3, 14):
-        def __replace__(self, *, value: _ConstantValue = ..., kind: str | None = ..., **kwargs: Unpack[_Attributes]) -> Self:
+        def __replace__(self, *, value: ConstantValue = ..., kind: str | None = ..., **kwargs: Unpack[_Attributes]) -> Self:
             """Return a copy of the AST node with new values for the specified fields."""
 
 class Attribute(expr):
@@ -2130,7 +2130,7 @@ if sys.version_info < (3, 14):
     class NameConstant(Constant, metaclass=_ABC):
         """Deprecated AST node class. Use ast.Constant instead"""
 
-        def __new__(cls, value: _ConstantValue, kind: str | None, **kwargs: Unpack[_Attributes]) -> Constant
+        def __new__(cls, value: ConstantValue, kind: str | None, **kwargs: Unpack[_Attributes]) -> Constant
 
     @deprecated("Removed in Python 3.14. Use `ast.Constant` instead.")
     class Ellipsis(Constant, metaclass=_ABC):

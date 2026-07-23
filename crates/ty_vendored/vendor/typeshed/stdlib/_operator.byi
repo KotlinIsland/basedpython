@@ -44,7 +44,7 @@ protocol _SupportsDunderLE:
 protocol _SupportsDunderGE:
     def __ge__(self, other: dynamic, /) -> dynamic
 
-type _SupportsComparison = _SupportsDunderLE | _SupportsDunderGE | _SupportsDunderGT | _SupportsDunderLT
+private type SupportsComparison = _SupportsDunderLE | _SupportsDunderGE | _SupportsDunderGT | _SupportsDunderLT
 
 @type_check_only
 protocol _SupportsInversion[out Element]:
@@ -59,10 +59,10 @@ protocol _SupportsPos[out Element]:
     def __pos__(self) -> Element
 
 # All four comparison functions must have the same signature, or we get false-positive errors
-def lt(a: _SupportsComparison, b: _SupportsComparison, /) -> dynamic:
+def lt(a: SupportsComparison, b: SupportsComparison, /) -> dynamic:
     """Same as a < b."""
 
-def le(a: _SupportsComparison, b: _SupportsComparison, /) -> dynamic:
+def le(a: SupportsComparison, b: SupportsComparison, /) -> dynamic:
     """Same as a <= b."""
 
 def eq(a: object, b: object, /) -> dynamic:
@@ -71,10 +71,10 @@ def eq(a: object, b: object, /) -> dynamic:
 def ne(a: object, b: object, /) -> dynamic:
     """Same as a != b."""
 
-def ge(a: _SupportsComparison, b: _SupportsComparison, /) -> dynamic:
+def ge(a: SupportsComparison, b: SupportsComparison, /) -> dynamic:
     """Same as a >= b."""
 
-def gt(a: _SupportsComparison, b: _SupportsComparison, /) -> dynamic:
+def gt(a: SupportsComparison, b: SupportsComparison, /) -> dynamic:
     """Same as a > b."""
 
 def not_(a: object, /) -> bool:

@@ -9,7 +9,7 @@ from typing import Final, Literal, TypeAlias
 from xml.sax import _Source, xmlreader
 from xml.sax.handler import LexicalHandler, _ContentHandlerProtocol
 
-type _BoolType = 0 | 1 | bool
+private type BoolType = 0 | 1 | bool
 
 final version: str
 AttributesImpl = xmlreader.AttributesImpl
@@ -35,14 +35,14 @@ class ExpatLocator(xmlreader.Locator):
 class ExpatParser(xmlreader.IncrementalParser, xmlreader.Locator):
     """SAX driver for the pyexpat C module."""
 
-    init(self, namespaceHandling: _BoolType = 0, bufsize: int = 65516)
+    init(self, namespaceHandling: BoolType = 0, bufsize: int = 65516)
     override def parse(self, source: xmlreader.InputSource | _Source) -> None:
         """Parse an XML document from a URL or an InputSource."""
 
     override def prepareParser(self, source: xmlreader.InputSource) -> None
     override def setContentHandler(self, handler: _ContentHandlerProtocol) -> None
-    override def getFeature(self, name: str) -> _BoolType
-    override def setFeature(self, name: str, state: _BoolType) -> None
+    override def getFeature(self, name: str) -> BoolType
+    override def setFeature(self, name: str, state: BoolType) -> None
 
     override def getProperty(self, name: "http://xml.org/sax/properties/lexical-handler") -> LexicalHandler | None
     def getProperty(self, name: "http://www.python.org/sax/properties/interning-dict") -> dict[str, dynamic] | None

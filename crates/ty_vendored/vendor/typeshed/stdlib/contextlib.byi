@@ -30,7 +30,7 @@ if sys.version_info >= (3, 11):
 
 
 
-type _ExitFunc = (type[BaseException] | None, BaseException | None, TracebackType | None) -> (bool | None)
+private type ExitFunc = (type[BaseException] | None, BaseException | None, TracebackType | None) -> (bool | None)
 
 # mypy and pyright object to this being both ABC and Protocol.
 # At runtime it inherits from ABC and is not a Protocol, but it is on the
@@ -294,7 +294,7 @@ class _BaseExitStack[out ExitT: bool | None = bool | None]:
         returns the result of the __enter__ method.
         """
 
-    def push[CM_EF: AbstractContextManager[dynamic, dynamic] | _ExitFunc](self, exit: CM_EF) -> CM_EF:
+    def push[CM_EF: AbstractContextManager[dynamic, dynamic] | ExitFunc](self, exit: CM_EF) -> CM_EF:
         """Registers a callback with the standard __exit__ method signature.
 
         Can suppress exceptions the same way __exit__ method can.
@@ -338,7 +338,7 @@ class ExitStack[out ExitT: bool | None = bool | None](_BaseExitStackAbstract[Exi
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None, /
     ) -> ExitT
 
-type _ExitCoroFunc = (type[BaseException] | None, BaseException | None, TracebackType | None) -> Awaitable[bool | None]
+private type ExitCoroFunc = (type[BaseException] | None, BaseException | None, TracebackType | None) -> Awaitable[bool | None]
 
 # In reality this is a subclass of `AbstractContextManager`, but we can't provide `Self` as the argument for `__enter__`
 #  https://discuss.python.org/t/self-as-typevar-default/90939
@@ -362,7 +362,7 @@ class AsyncExitStack[out ExitT: bool | None = bool | None](_BaseExitStackAbstrac
         returns the result of the __aenter__ method.
         """
 
-    def push_async_exit[ACM_EF: AbstractAsyncContextManager[dynamic, dynamic] | _ExitCoroFunc](self, exit: ACM_EF) -> ACM_EF:
+    def push_async_exit[ACM_EF: AbstractAsyncContextManager[dynamic, dynamic] | ExitCoroFunc](self, exit: ACM_EF) -> ACM_EF:
         """Registers a coroutine function with the standard __aexit__ method
         signature.
 

@@ -23,7 +23,7 @@ from decimal import (
 )
 from typing import Final, TypeAlias
 
-type _TrapType = type[DecimalException]
+private type TrapType = type[DecimalException]
 
 final __version__: str
 final __libmpdec_version__: str
@@ -63,8 +63,8 @@ if sys.version_info >= (3, 11):
         Emax: int | None = None,
         capitals: int | None = None,
         clamp: int | None = None,
-        traps: dict[_TrapType, bool] | None = None,
-        flags: dict[_TrapType, bool] | None = None,
+        traps: dict[TrapType, bool] | None = None,
+        flags: dict[TrapType, bool] | None = None,
     ) -> _ContextManager:
         """Return a context manager for a copy of the supplied context.
 

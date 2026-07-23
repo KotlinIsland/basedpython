@@ -141,8 +141,7 @@ impl<'src> GenericPolyfill<'src> {
                     && alias.is_private
                     && let Expr::Name(name) = alias.name.as_ref()
                 {
-                    self.0
-                        .insert(name.id.to_string(), format!("_{}", name.id));
+                    self.0.insert(name.id.to_string(), format!("_{}", name.id));
                 }
                 ruff_python_ast::visitor::walk_stmt(self, stmt);
             }

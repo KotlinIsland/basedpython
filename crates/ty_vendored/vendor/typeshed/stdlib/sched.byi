@@ -29,7 +29,7 @@ from typing import NamedTuple, TypeAlias
 
 __all__ = ["scheduler"]
 
-type _ActionCallback = (...) -> dynamic
+private type ActionCallback = (...) -> dynamic
 
 class Event(NamedTuple):
     """Event(time, priority, sequence, action, argument, kwargs)"""
@@ -37,7 +37,7 @@ class Event(NamedTuple):
     time: float
     priority: dynamic
     sequence: int
-    action: _ActionCallback
+    action: ActionCallback
     argument: (*: dynamic)
     kwargs: dict[str, dynamic]
 
@@ -51,7 +51,7 @@ class scheduler:
         """
 
     def enterabs(
-        self, time: float, priority: dynamic, action: _ActionCallback, argument: (*: dynamic) = (), kwargs: dict[str, dynamic] = ...
+        self, time: float, priority: dynamic, action: ActionCallback, argument: (*: dynamic) = (), kwargs: dict[str, dynamic] = ...
     ) -> Event:
         """Enter a new event in the queue at an absolute time.
 
@@ -61,7 +61,7 @@ class scheduler:
         """
 
     def enter(
-        self, delay: float, priority: dynamic, action: _ActionCallback, argument: (*: dynamic) = (), kwargs: dict[str, dynamic] = ...
+        self, delay: float, priority: dynamic, action: ActionCallback, argument: (*: dynamic) = (), kwargs: dict[str, dynamic] = ...
     ) -> Event:
         """A variant that specifies the time as a relative time.
 

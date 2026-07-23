@@ -32,7 +32,7 @@ from typing import ClassVar, Literal, TypeAlias, TypeVar
 
 command_re: Pattern[str]
 
-type _OptionsList = list[tuple[str, str | None, str, int] | tuple[str, str | None, str]]
+private type OptionsList = list[tuple[str, str | None, str, int] | tuple[str, str | None, str]]
 
 class DistributionMetadata:
     """Dummy class to hold the distribution meta-data: name, version,
@@ -126,9 +126,9 @@ class Distribution:
         """
 
     def parse_config_files(self, filenames: Iterable[str] | None = None) -> None
-    global_options: ClassVar[_OptionsList]
+    global_options: ClassVar[OptionsList]
     common_usage: ClassVar[str]
-    display_options: ClassVar[_OptionsList]
+    display_options: ClassVar[OptionsList]
     display_option_names: ClassVar[list[str]]
     negative_opt: ClassVar[dict[str, str]]
     verbose: bool | 0 | 1

@@ -62,7 +62,11 @@ pub fn all_patches() -> Vec<Box<dyn Patch>> {
 ///
 /// each post-patch is applied on its own re-parse so two patches never have to
 /// coordinate disjoint edits; they run in declared order
-pub fn all_post_patches() -> Vec<Box<dyn Patch>> {
+///
+/// `root` is the typeshed `stdlib/` directory; a patch whose decision depends on
+/// the rest of the tree (currently only `private_type_aliases`) scans it here,
+/// once, before any file is rewritten
+pub fn all_post_patches(root: &Path) -> Vec<Box<dyn Patch>> {
     vec![
         // widens invariant list/set/dict output typevars over the explicit-variance
         // form; runs first so later idiom patches (e.g. `any_to_dynamic`) still see
@@ -87,6 +91,11 @@ pub fn all_post_patches() -> Vec<Box<dyn Patch>> {
         Box::new(patches::arrow_callable::ArrowCallable),
         Box::new(patches::literal_unwrap::UnwrapLiteral),
         Box::new(patches::type_aliases::TypeAliasStatements),
+        // runs after the alias statements exist, so an alias promoted from
+        // `_X: TypeAlias = …` this pass is a candidate on the next sync
+        Box::new(patches::private_type_aliases::PrivateTypeAliases::scan(
+            root,
+        )),
         Box::new(patches::homogeneous_tuple::HomogeneousTuple),
         Box::new(patches::any_to_dynamic::AnyToDynamic),
         Box::new(patches::strip_typing_imports::StripTypingImports),

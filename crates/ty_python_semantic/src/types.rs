@@ -186,7 +186,7 @@ mod typed_dict;
 mod typevar;
 mod unpacker;
 mod variance;
-mod visibility;
+pub(crate) mod visibility;
 mod visitor;
 
 mod definition;

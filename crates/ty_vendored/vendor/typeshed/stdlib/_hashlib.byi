@@ -7,7 +7,7 @@ from types import ModuleType
 from typing import Protocol, TypeAlias, final, type_check_only
 from typing_extensions import Self, disjoint_base
 
-type _DigestMod = str | (() -> _HashObject) | ModuleType | None
+private type DigestMod = str | (() -> _HashObject) | ModuleType | None
 
 openssl_md_meth_names: frozenset[str]
 
@@ -138,7 +138,7 @@ def get_fips_mode() -> int:
     values other than 1 may have additional significance.
     """
 
-def hmac_new(key: ReadableBuffer, msg: ReadableBuffer = b"", digestmod: _DigestMod = None) -> HMAC:
+def hmac_new(key: ReadableBuffer, msg: ReadableBuffer = b"", digestmod: DigestMod = None) -> HMAC:
     """Return a new hmac object."""
 
 if sys.version_info >= (3, 13):

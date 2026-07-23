@@ -251,25 +251,25 @@ class AttributesImpl[in out AttrKey = str]:
     def items(self) -> list[(AttrKey, str)]
     def values(self) -> list[str]
 
-type _NSName = tuple[str | None, str]
+private type NSName = tuple[str | None, str]
 
-class AttributesNSImpl(AttributesImpl[_NSName]):
-    init(self, attrs: Mapping[_NSName, str], qnames: Mapping[_NSName, str]):
+class AttributesNSImpl(AttributesImpl[NSName]):
+    init(self, attrs: Mapping[NSName, str], qnames: Mapping[NSName, str]):
         """NS-aware implementation.
 
         attrs should be of the form {(ns_uri, lname): value, ...}.
         qnames of the form {(ns_uri, lname): qname, ...}.
         """
 
-    override def getValue(self, name: _NSName) -> str
-    override def getNameByQName(self, name: str) -> _NSName
-    override def getQNameByName(self, name: _NSName) -> str
-    override def getNames(self) -> list[_NSName]
-    override def __getitem__(self, name: _NSName) -> str
-    override def keys(self) -> list[_NSName]
-    override def __contains__(self, name: _NSName) -> bool
+    override def getValue(self, name: NSName) -> str
+    override def getNameByQName(self, name: str) -> NSName
+    override def getQNameByName(self, name: NSName) -> str
+    override def getNames(self) -> list[NSName]
+    override def __getitem__(self, name: NSName) -> str
+    override def keys(self) -> list[NSName]
+    override def __contains__(self, name: NSName) -> bool
 
-    override def get(self, name: _NSName, alternative: None = None) -> str | None
-    def get(self, name: _NSName, alternative: str) -> str
+    override def get(self, name: NSName, alternative: None = None) -> str | None
+    def get(self, name: NSName, alternative: str) -> str
 
-    override def items(self) -> list[(_NSName, str)]
+    override def items(self) -> list[(NSName, str)]

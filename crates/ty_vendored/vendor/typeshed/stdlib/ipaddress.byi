@@ -15,10 +15,10 @@ IPV4LENGTH: Final = 32
 IPV6LENGTH: Final = 128
 
 
-type _RawIPAddress = int | str | bytes | IPv4Address | IPv6Address
-type _RawNetworkPart = IPv4Network | IPv6Network | IPv4Interface | IPv6Interface
+private type RawIPAddress = int | str | bytes | IPv4Address | IPv6Address
+private type RawNetworkPart = IPv4Network | IPv6Network | IPv4Interface | IPv6Interface
 
-def ip_address(address: _RawIPAddress) -> IPv4Address | IPv6Address:
+def ip_address(address: RawIPAddress) -> IPv4Address | IPv6Address:
     """Take an IP string/int and return an object of the correct type.
 
     Args:
@@ -36,7 +36,7 @@ def ip_address(address: _RawIPAddress) -> IPv4Address | IPv6Address:
     """
 
 def ip_network(
-    address: _RawIPAddress | _RawNetworkPart | (_RawIPAddress,) | (_RawIPAddress, int), strict: bool = True
+    address: RawIPAddress | RawNetworkPart | (RawIPAddress,) | (RawIPAddress, int), strict: bool = True
 ) -> IPv4Network | IPv6Network:
     """Take an IP string/int and return an object of the correct type.
 
@@ -55,7 +55,7 @@ def ip_network(
     """
 
 def ip_interface(
-    address: _RawIPAddress | _RawNetworkPart | (_RawIPAddress,) | (_RawIPAddress, int),
+    address: RawIPAddress | RawNetworkPart | (RawIPAddress,) | (RawIPAddress, int),
 ) -> IPv4Interface | IPv6Interface:
     """Take an IP string/int and return an object of the correct type.
 

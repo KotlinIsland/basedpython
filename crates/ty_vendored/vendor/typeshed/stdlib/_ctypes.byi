@@ -205,8 +205,8 @@ else:
         as function argument
         """
 
-type _ECT = (_CData | _CDataType | None, CFuncPtr, tuple[_CData | _CDataType, ...]) -> _CDataType
-type _PF = tuple[int] | tuple[int, str | None] | tuple[int, str | None, dynamic]
+private type ECT = (_CData | _CDataType | None, CFuncPtr, tuple[_CData | _CDataType, ...]) -> _CDataType
+private type PF = tuple[int] | tuple[int, str | None] | tuple[int, str | None, dynamic]
 
 # This class is not exposed. It calls itself _ctypes.PyCFuncPtrType.
 @type_check_only
@@ -230,7 +230,7 @@ class CFuncPtr(_PointerLike, _CData, metaclass=_PyCFuncPtrType):
     argtypes: Sequence[type[_CDataType]]
     """specify the argument types"""
 
-    errcheck: _ECT
+    errcheck: ECT
     """a function to check for errors"""
 
     # Abstract attribute that must be defined on subclasses
@@ -239,10 +239,10 @@ class CFuncPtr(_PointerLike, _CData, metaclass=_PyCFuncPtrType):
     def __new__(cls) -> Self
     def __new__(cls, address: int, /) -> Self
     def __new__(cls, callable: (...) -> dynamic, /) -> Self
-    def __new__(cls, func_spec: (str | int, CDLL), paramflags: (*: _PF) | None = ..., /) -> Self
+    def __new__(cls, func_spec: (str | int, CDLL), paramflags: (*: PF) | None = ..., /) -> Self
     if sys.platform == "win32":
         def __new__(
-            cls, vtbl_index: int, name: str, paramflags: (*: _PF) | None = ..., iid: _CData | _CDataType | None = ..., /
+            cls, vtbl_index: int, name: str, paramflags: (*: PF) | None = ..., iid: _CData | _CDataType | None = ..., /
         ) -> Self
 
     def __call__(self, *args: dynamic, **kwargs: dynamic) -> dynamic:

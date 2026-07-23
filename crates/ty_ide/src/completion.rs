@@ -9166,6 +9166,22 @@ if foo:
     }
 
     #[test]
+    fn private_module_members_are_not_completed() {
+        let snapshot = CursorTest::builder()
+            .source(
+                "helpers.by",
+                "private type Zqzq = int\ntype Zqzq_open = str\n",
+            )
+            .source("main.by", "import helpers\nhelpers.Zq<CURSOR>")
+            .completion_test_builder()
+            .filter(|c| c.name.starts_with("Zq"))
+            .build()
+            .snapshot();
+
+        assert_snapshot!(snapshot, @"Zqzq_open");
+    }
+
+    #[test]
     fn from_import_i_suggests_import() {
         let builder = completion_test_builder("from typing i<CURSOR>");
         assert_snapshot!(builder.build().snapshot(), @"import");

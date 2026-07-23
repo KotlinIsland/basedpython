@@ -29,9 +29,9 @@ DEBUG_SAVEALL: Final = 32
 DEBUG_STATS: Final = 1
 DEBUG_UNCOLLECTABLE: Final = 4
 
-type _CallbackType = (Literal["start", "stop"], dict[str, int]) -> object
+private type CallbackType = (Literal["start", "stop"], dict[str, int]) -> object
 
-callbacks: list[_CallbackType]
+callbacks: list[CallbackType]
 garbage: list[dynamic]
 
 def collect(generation: int = 2) -> int:

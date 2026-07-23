@@ -33,7 +33,7 @@ from typing_extensions import TypeVarTuple, Unpack
 __all__ = ("BaseEventLoop", "Server")
 
 type _Context = dict[str, dynamic]
-type _ExceptionHandler = (AbstractEventLoop, _Context) -> object
+private type ExceptionHandler = (AbstractEventLoop, _Context) -> object
 type _ProtocolFactory = () -> BaseProtocol
 type _SSLContext = bool | None | ssl.SSLContext
 
@@ -715,7 +715,7 @@ class BaseEventLoop(AbstractEventLoop):
     override def add_signal_handler[*Ts](self, sig: int, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
     override def remove_signal_handler(self, sig: int) -> bool
     # Error handlers.
-    override def set_exception_handler(self, handler: _ExceptionHandler | None) -> None:
+    override def set_exception_handler(self, handler: ExceptionHandler | None) -> None:
         """Set handler as the new event loop exception handler.
 
         If handler is None, the default exception handler will
@@ -728,7 +728,7 @@ class BaseEventLoop(AbstractEventLoop):
         documentation for details about context).
         """
 
-    override def get_exception_handler(self) -> _ExceptionHandler | None:
+    override def get_exception_handler(self) -> ExceptionHandler | None:
         """Return an exception handler, or None if the default one is in use."""
 
     override def default_exception_handler(self, context: _Context) -> None:

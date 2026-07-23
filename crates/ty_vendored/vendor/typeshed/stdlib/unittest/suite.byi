@@ -5,23 +5,23 @@ import unittest.result
 from collections.abc import Iterable, Iterator
 from typing import ClassVar, TypeAlias
 
-type _TestType = unittest.case.TestCase | TestSuite
+private type TestType = unittest.case.TestCase | TestSuite
 
 class BaseTestSuite:
     """A simple test suite that doesn't provide class or module shared fixtures."""
 
     _tests: list[unittest.case.TestCase]
     _removed_tests: int
-    init(self, tests: Iterable[_TestType] = ())
+    init(self, tests: Iterable[TestType] = ())
     def __call__(self, result: unittest.result.TestResult) -> unittest.result.TestResult
-    def addTest(self, test: _TestType) -> None
-    def addTests(self, tests: Iterable[_TestType]) -> None
+    def addTest(self, test: TestType) -> None
+    def addTests(self, tests: Iterable[TestType]) -> None
     def run(self, result: unittest.result.TestResult) -> unittest.result.TestResult
     def debug(self) -> None:
         """Run the tests without collecting errors in a TestResult"""
 
     def countTestCases(self) -> int
-    def __iter__(self) -> Iterator[_TestType]
+    def __iter__(self) -> Iterator[TestType]
     override def __eq__(self, other: object) -> bool
     __hash__: ClassVar[None]
 

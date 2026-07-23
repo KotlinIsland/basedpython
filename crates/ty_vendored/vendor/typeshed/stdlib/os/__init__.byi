@@ -757,20 +757,20 @@ R_OK: Final = 4
 W_OK: Final = 2
 X_OK: Final = 1
 
-type _EnvironCodeFunc = (AnyStr) -> AnyStr
+private type EnvironCodeFunc = (AnyStr) -> AnyStr
 
 class _Environ(MutableMapping[AnyStr, AnyStr], Generic[AnyStr]):
-    encodekey: _EnvironCodeFunc[AnyStr]
-    decodekey: _EnvironCodeFunc[AnyStr]
-    encodevalue: _EnvironCodeFunc[AnyStr]
-    decodevalue: _EnvironCodeFunc[AnyStr]
+    encodekey: EnvironCodeFunc[AnyStr]
+    decodekey: EnvironCodeFunc[AnyStr]
+    encodevalue: EnvironCodeFunc[AnyStr]
+    decodevalue: EnvironCodeFunc[AnyStr]
     init(
         self,
         data: MutableMapping[AnyStr, AnyStr],
-        encodekey: _EnvironCodeFunc[AnyStr],
-        decodekey: _EnvironCodeFunc[AnyStr],
-        encodevalue: _EnvironCodeFunc[AnyStr],
-        decodevalue: _EnvironCodeFunc[AnyStr],
+        encodekey: EnvironCodeFunc[AnyStr],
+        decodekey: EnvironCodeFunc[AnyStr],
+        encodevalue: EnvironCodeFunc[AnyStr],
+        decodevalue: EnvironCodeFunc[AnyStr],
     )
 
     override def get(self, key: AnyStr, default: None = None) -> AnyStr | None:
@@ -2193,10 +2193,10 @@ def utime(
     If they are unavailable, using them will raise a NotImplementedError.
     """
 
-type _OnError = (OSError) -> object
+private type OnError = (OSError) -> object
 
 def walk(
-    top: GenericPath[AnyStr], topdown: bool = True, onerror: _OnError | None = None, followlinks: bool = False
+    top: GenericPath[AnyStr], topdown: bool = True, onerror: OnError | None = None, followlinks: bool = False
 ) -> Iterator[(AnyStr, list[AnyStr], list[AnyStr])]:
     """Directory tree generator.
 
@@ -2262,7 +2262,7 @@ if sys.platform != "win32":
     def fwalk(
         top: StrPath = ".",
         topdown: bool = True,
-        onerror: _OnError | None = None,
+        onerror: OnError | None = None,
         *,
         follow_symlinks: bool = False,
         dir_fd: int | None = None,
@@ -2302,7 +2302,7 @@ if sys.platform != "win32":
     def fwalk(
         top: BytesPath,
         topdown: bool = True,
-        onerror: _OnError | None = None,
+        onerror: OnError | None = None,
         *,
         follow_symlinks: bool = False,
         dir_fd: int | None = None,
@@ -2380,14 +2380,14 @@ def execlp(file: StrOrBytesPath, *args: *tuple[StrOrBytesPath, Unpack[tuple[StrO
     """
 
 # These are: execle(file, *args, env) but env is pulled from the last element of the args.
-def execle(file: StrOrBytesPath, *args: *tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], _ExecEnv]) -> NoReturn:
+def execle(file: StrOrBytesPath, *args: *tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], ExecEnv]) -> NoReturn:
     """execle(file, *args, env)
 
     Execute the executable file with argument list args and
     environment env, replacing the current process.
     """
 
-def execlpe(file: StrOrBytesPath, *args: *tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], _ExecEnv]) -> NoReturn:
+def execlpe(file: StrOrBytesPath, *args: *tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], ExecEnv]) -> NoReturn:
     """execlpe(file, *args, env)
 
     Execute the executable file (which is searched for along $PATH)
@@ -2400,7 +2400,7 @@ def execlpe(file: StrOrBytesPath, *args: *tuple[StrOrBytesPath, Unpack[tuple[Str
 # Not separating out PathLike[str] and PathLike[bytes] here because it doesn't make much difference
 # in practice, and doing so would explode the number of combinations in this already long union.
 # All these combinations are necessary due to list being invariant.
-type _ExecVArgs = (
+private type ExecVArgs = (
     (*: StrOrBytesPath)
     | list[bytes]
     | list[str]
@@ -2414,9 +2414,9 @@ type _ExecVArgs = (
 # PyUnicode_FSDecoder (which accepts str | ReadableBuffer) or to
 # PyUnicode_FSConverter (which accepts StrOrBytesPath). For simplicity,
 # we limit to str | bytes.
-type _ExecEnv = Mapping[bytes, bytes | str] | Mapping[str, bytes | str]
+private type ExecEnv = Mapping[bytes, bytes | str] | Mapping[str, bytes | str]
 
-def execv(path: StrOrBytesPath, argv: _ExecVArgs, /) -> NoReturn:
+def execv(path: StrOrBytesPath, argv: ExecVArgs, /) -> NoReturn:
     """Execute an executable path with arguments, replacing current process.
 
     path
@@ -2425,7 +2425,7 @@ def execv(path: StrOrBytesPath, argv: _ExecVArgs, /) -> NoReturn:
       Tuple or list of strings.
     """
 
-def execve(path: FileDescriptorOrPath, argv: _ExecVArgs, env: _ExecEnv) -> NoReturn:
+def execve(path: FileDescriptorOrPath, argv: ExecVArgs, env: ExecEnv) -> NoReturn:
     """Execute an executable path with arguments, replacing current process.
 
     path
@@ -2436,7 +2436,7 @@ def execve(path: FileDescriptorOrPath, argv: _ExecVArgs, env: _ExecEnv) -> NoRet
       Dictionary of strings mapping to strings.
     """
 
-def execvp(file: StrOrBytesPath, args: _ExecVArgs) -> NoReturn:
+def execvp(file: StrOrBytesPath, args: ExecVArgs) -> NoReturn:
     """execvp(file, args)
 
     Execute the executable file (which is searched for along $PATH)
@@ -2444,7 +2444,7 @@ def execvp(file: StrOrBytesPath, args: _ExecVArgs) -> NoReturn:
     args may be a list or tuple of strings.
     """
 
-def execvpe(file: StrOrBytesPath, args: _ExecVArgs, env: _ExecEnv) -> NoReturn:
+def execvpe(file: StrOrBytesPath, args: ExecVArgs, env: ExecEnv) -> NoReturn:
     """execvpe(file, args, env)
 
     Execute the executable file (which is searched for along $PATH)
@@ -2531,7 +2531,7 @@ def spawnle(mode: int, file: StrOrBytesPath, arg0: StrOrBytesPath, *args: dynami
 
 if sys.platform != "win32":
     @deprecated("Soft deprecated. Use the subprocess module instead.")
-    def spawnv(mode: int, file: StrOrBytesPath, args: _ExecVArgs) -> int:
+    def spawnv(mode: int, file: StrOrBytesPath, args: ExecVArgs) -> int:
         """spawnv(mode, file, args) -> integer
 
         Execute file with arguments from args in a subprocess.
@@ -2541,7 +2541,7 @@ if sys.platform != "win32":
         """
 
     @deprecated("Soft deprecated. Use the subprocess module instead.")
-    def spawnve(mode: int, file: StrOrBytesPath, args: _ExecVArgs, env: _ExecEnv) -> int:
+    def spawnve(mode: int, file: StrOrBytesPath, args: ExecVArgs, env: ExecEnv) -> int:
         """spawnve(mode, file, args, env) -> integer
 
         Execute file with arguments from args in a subprocess with the
@@ -2552,7 +2552,7 @@ if sys.platform != "win32":
         """
 else:
     @deprecated("Soft deprecated. Use the subprocess module instead.")
-    def spawnv(mode: int, path: StrOrBytesPath, argv: _ExecVArgs, /) -> int:
+    def spawnv(mode: int, path: StrOrBytesPath, argv: ExecVArgs, /) -> int:
         """Execute the program specified by path in a new process.
 
         mode
@@ -2564,7 +2564,7 @@ else:
         """
 
     @deprecated("Soft deprecated. Use the subprocess module instead.")
-    def spawnve(mode: int, path: StrOrBytesPath, argv: _ExecVArgs, env: _ExecEnv, /) -> int:
+    def spawnve(mode: int, path: StrOrBytesPath, argv: ExecVArgs, env: ExecEnv, /) -> int:
         """Execute the program specified by path in a new process.
 
         mode
@@ -2677,7 +2677,7 @@ else:
         """
 
     @deprecated("Soft deprecated. Use the subprocess module instead.")
-    def spawnvp(mode: int, file: StrOrBytesPath, args: _ExecVArgs) -> int:
+    def spawnvp(mode: int, file: StrOrBytesPath, args: ExecVArgs) -> int:
         """spawnvp(mode, file, args) -> integer
 
         Execute file (which is looked for along $PATH) with arguments from
@@ -2688,7 +2688,7 @@ else:
         """
 
     @deprecated("Soft deprecated. Use the subprocess module instead.")
-    def spawnvpe(mode: int, file: StrOrBytesPath, args: _ExecVArgs, env: _ExecEnv) -> int:
+    def spawnvpe(mode: int, file: StrOrBytesPath, args: ExecVArgs, env: ExecEnv) -> int:
         """spawnvpe(mode, file, args, env) -> integer
 
         Execute file (which is looked for along $PATH) with arguments from
@@ -2787,8 +2787,8 @@ else:
     if sys.version_info >= (3, 15):
         def posix_spawn(
             path: StrOrBytesPath,
-            argv: _ExecVArgs,
-            env: _ExecEnv | None,
+            argv: ExecVArgs,
+            env: ExecEnv | None,
             /,
             *,
             file_actions: Sequence[(*: dynamic)] | None = (),
@@ -2826,8 +2826,8 @@ else:
 
         def posix_spawnp(
             path: StrOrBytesPath,
-            argv: _ExecVArgs,
-            env: _ExecEnv | None,
+            argv: ExecVArgs,
+            env: ExecEnv | None,
             /,
             *,
             file_actions: Sequence[(*: dynamic)] | None = (),
@@ -2866,8 +2866,8 @@ else:
     elif sys.version_info >= (3, 13):
         def posix_spawn(
             path: StrOrBytesPath,
-            argv: _ExecVArgs,
-            env: _ExecEnv | None,  # None allowed starting in 3.13
+            argv: ExecVArgs,
+            env: ExecEnv | None,  # None allowed starting in 3.13
             /,
             *,
             file_actions: Sequence[(*: dynamic)] | None = (),
@@ -2905,8 +2905,8 @@ else:
 
         def posix_spawnp(
             path: StrOrBytesPath,
-            argv: _ExecVArgs,
-            env: _ExecEnv | None,  # None allowed starting in 3.13
+            argv: ExecVArgs,
+            env: ExecEnv | None,  # None allowed starting in 3.13
             /,
             *,
             file_actions: Sequence[(*: dynamic)] | None = (),
@@ -2945,8 +2945,8 @@ else:
     else:
         def posix_spawn(
             path: StrOrBytesPath,
-            argv: _ExecVArgs,
-            env: _ExecEnv,
+            argv: ExecVArgs,
+            env: ExecEnv,
             /,
             *,
             file_actions: Sequence[(*: dynamic)] | None = (),
@@ -2983,8 +2983,8 @@ else:
 
         def posix_spawnp(
             path: StrOrBytesPath,
-            argv: _ExecVArgs,
-            env: _ExecEnv,
+            argv: ExecVArgs,
+            env: ExecEnv,
             /,
             *,
             file_actions: Sequence[(*: dynamic)] | None = (),

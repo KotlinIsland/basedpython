@@ -284,7 +284,7 @@ class partial[in out Element]:
         """partial is generic over the wrapped function's return type"""
 
 # With protocols, this could change into a generic protocol that defines __get__ and returns _T
-type _Descriptor = dynamic
+private type Descriptor = dynamic
 
 class partialmethod[in out Element]:
     """Method descriptor with partial application of the given arguments
@@ -294,15 +294,15 @@ class partialmethod[in out Element]:
     callables as instance methods.
     """
 
-    func: (...) -> Element | _Descriptor
+    func: (...) -> Element | Descriptor
     args: (*: dynamic)
     keywords: dict[str, dynamic]
     if sys.version_info >= (3, 14):
         def __new__(self, func: (...) -> Element, /, *args: dynamic, **keywords: dynamic) -> Self
-        def __new__(self, func: _Descriptor, /, *args: dynamic, **keywords: dynamic) -> Self
+        def __new__(self, func: Descriptor, /, *args: dynamic, **keywords: dynamic) -> Self
     else:
         def __init__(self, func: (...) -> Element, /, *args: dynamic, **keywords: dynamic) -> None
-        def __init__(self, func: _Descriptor, /, *args: dynamic, **keywords: dynamic) -> None
+        def __init__(self, func: Descriptor, /, *args: dynamic, **keywords: dynamic) -> None
 
     def __get__(self, obj: dynamic, cls: type[dynamic] | None = None) -> (...) -> Element
     let __isabstractmethod__: bool

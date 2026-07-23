@@ -21,10 +21,10 @@ class FInfo:
     Creator: str
     Flags: int
 
-type _FileInfoTuple = tuple[str, FInfo, int, int]
-type _FileHandleUnion = str | IO[bytes]
+private type FileInfoTuple = tuple[str, FInfo, int, int]
+private type FileHandleUnion = str | IO[bytes]
 
-def getfileinfo(name: str) -> _FileInfoTuple
+def getfileinfo(name: str) -> FileInfoTuple
 
 class openrsrc:
     init(self, *args: dynamic)
@@ -33,7 +33,7 @@ class openrsrc:
     def close(self) -> None
 
 class BinHex:
-    init(self, name_finfo_dlen_rlen: _FileInfoTuple, ofp: _FileHandleUnion)
+    init(self, name_finfo_dlen_rlen: FileInfoTuple, ofp: FileHandleUnion)
     def write(self, data: SizedBuffer) -> None
     def close_data(self) -> None
     def write_rsrc(self, data: SizedBuffer) -> None
@@ -43,7 +43,7 @@ def binhex(inp: str, out: str) -> None:
     """binhex(infilename, outfilename): create binhex-encoded copy of a file"""
 
 class HexBin:
-    init(self, ifp: _FileHandleUnion)
+    init(self, ifp: FileHandleUnion)
     def read(self, *n: int) -> bytes
     def close_data(self) -> None
     def read_rsrc(self, *n: int) -> bytes

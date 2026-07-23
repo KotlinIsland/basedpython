@@ -265,8 +265,8 @@ else:
 
 type _Section = Mapping[str, str]
 _Parser: TypeAlias = MutableMapping[str, _Section]
-type _ConverterCallback = (str) -> dynamic
-type _ConvertersMap = dict[str, _ConverterCallback]
+private type ConverterCallback = (str) -> dynamic
+private type ConvertersMap = dict[str, ConverterCallback]
 
 DEFAULTSECT: Final = "DEFAULT"
 MAX_INTERPOLATION_DEPTH: Final = 10
@@ -339,7 +339,7 @@ class RawConfigParser(_Parser):
             empty_lines_in_values: bool = True,
             default_section: str = "DEFAULT",
             interpolation: Interpolation | None = ...,
-            converters: _ConvertersMap = ...,
+            converters: ConvertersMap = ...,
             allow_unnamed_section: bool = False,
         ) -> None
         def __init__(
@@ -355,7 +355,7 @@ class RawConfigParser(_Parser):
             empty_lines_in_values: bool = True,
             default_section: str = "DEFAULT",
             interpolation: Interpolation | None = ...,
-            converters: _ConvertersMap = ...,
+            converters: ConvertersMap = ...,
             allow_unnamed_section: bool = False,
         ) -> None
         def __init__(
@@ -371,7 +371,7 @@ class RawConfigParser(_Parser):
             empty_lines_in_values: bool = True,
             default_section: str = "DEFAULT",
             interpolation: Interpolation | None = ...,
-            converters: _ConvertersMap = ...,
+            converters: ConvertersMap = ...,
             allow_unnamed_section: bool = False,
         ) -> None
     else:
@@ -388,7 +388,7 @@ class RawConfigParser(_Parser):
             empty_lines_in_values: bool = True,
             default_section: str = "DEFAULT",
             interpolation: Interpolation | None = ...,
-            converters: _ConvertersMap = ...,
+            converters: ConvertersMap = ...,
         ) -> None
         def __init__(
             self,
@@ -403,7 +403,7 @@ class RawConfigParser(_Parser):
             empty_lines_in_values: bool = True,
             default_section: str = "DEFAULT",
             interpolation: Interpolation | None = ...,
-            converters: _ConvertersMap = ...,
+            converters: ConvertersMap = ...,
         ) -> None
         def __init__(
             self,
@@ -418,7 +418,7 @@ class RawConfigParser(_Parser):
             empty_lines_in_values: bool = True,
             default_section: str = "DEFAULT",
             interpolation: Interpolation | None = ...,
-            converters: _ConvertersMap = ...,
+            converters: ConvertersMap = ...,
         ) -> None
 
     override def __len__(self) -> int
@@ -668,7 +668,7 @@ class SectionProxy(MutableMapping[str, str]):
     # SectionProxy can have arbitrary attributes when custom converters are used
     def __getattr__(self, key: str) -> (...) -> dynamic
 
-class ConverterMapping(MutableMapping[str, _ConverterCallback | None]):
+class ConverterMapping(MutableMapping[str, ConverterCallback | None]):
     """Enables reuse of get*() methods between the parser and section proxies.
 
     If a parser class implements a getter directly, the value for the given
@@ -678,8 +678,8 @@ class ConverterMapping(MutableMapping[str, _ConverterCallback | None]):
 
     GETTERCRE: ClassVar[Pattern[dynamic]]
     init(self, parser: RawConfigParser)
-    override def __getitem__(self, key: str) -> _ConverterCallback
-    override def __setitem__(self, key: str, value: _ConverterCallback | None) -> None
+    override def __getitem__(self, key: str) -> ConverterCallback
+    override def __setitem__(self, key: str, value: ConverterCallback | None) -> None
     override def __delitem__(self, key: str) -> None
     override def __iter__(self) -> Iterator[str]
     override def __len__(self) -> int

@@ -55,7 +55,7 @@ from typing_extensions import Self
 protocol _SupportsTimeTuple:
     def timetuple(self) -> time.struct_time
 
-type _DateTimeComparable = DateTime | datetime | str | _SupportsTimeTuple
+private type DateTimeComparable = DateTime | datetime | str | _SupportsTimeTuple
 type _Marshallable = (
     bool
     | int
@@ -72,8 +72,8 @@ type _Marshallable = (
     | DateTime
     | Binary
 )
-type _XMLDate = int | datetime | (*: int) | time.struct_time
-type _HostType = tuple[str, dict[str, str]] | str
+private type XMLDate = int | datetime | (*: int) | time.struct_time
+private type HostType = tuple[str, dict[str, str]] | str
 
 def escape(s: str) -> str  # undocumented
 
@@ -120,7 +120,7 @@ boolean = bool
 Boolean = bool
 
 def _iso8601_format(value: datetime) -> str  # undocumented
-def _strftime(value: _XMLDate) -> str  # undocumented
+def _strftime(value: XMLDate) -> str  # undocumented
 
 class DateTime:
     """DateTime wrapper for an ISO 8601 string or time tuple or
@@ -131,12 +131,12 @@ class DateTime:
     value: str  # undocumented
     init(self, value: int | str | datetime | time.struct_time | (*: int) = 0)
     __hash__: ClassVar[None]
-    def __lt__(self, other: _DateTimeComparable) -> bool
-    def __le__(self, other: _DateTimeComparable) -> bool
-    def __gt__(self, other: _DateTimeComparable) -> bool
-    def __ge__(self, other: _DateTimeComparable) -> bool
-    override def __eq__(self, other: _DateTimeComparable) -> bool
-    def make_comparable(self, other: _DateTimeComparable) -> (str, str)  # undocumented
+    def __lt__(self, other: DateTimeComparable) -> bool
+    def __le__(self, other: DateTimeComparable) -> bool
+    def __gt__(self, other: DateTimeComparable) -> bool
+    def __ge__(self, other: DateTimeComparable) -> bool
+    override def __eq__(self, other: DateTimeComparable) -> bool
+    def make_comparable(self, other: DateTimeComparable) -> (str, str)  # undocumented
     def timetuple(self) -> time.struct_time  # undocumented
     def decode(self, data: dynamic) -> None
     def encode(self, out: SupportsWrite[str]) -> None
@@ -163,7 +163,7 @@ class ExpatParser:  # undocumented
     def feed(self, data: str | ReadableBuffer) -> None
     def close(self) -> None
 
-type _WriteCallback = (str) -> object
+private type WriteCallback = (str) -> object
 
 class Marshaller:
     """Generate an XML-RPC params chunk from a Python data structure.
@@ -175,27 +175,27 @@ class Marshaller:
     function for this purpose.
     """
 
-    dispatch: dict[type[_Marshallable] | "_arbitrary_instance", (Marshaller, dynamic, _WriteCallback) -> None]
+    dispatch: dict[type[_Marshallable] | "_arbitrary_instance", (Marshaller, dynamic, WriteCallback) -> None]
     memo: dict[dynamic, None]
     data: None
     encoding: str | None
     allow_none: bool
     init(self, encoding: str | None = None, allow_none: bool = False)
     def dumps(self, values: Fault | Iterable[_Marshallable]) -> str
-    def __dump(self, value: _Marshallable, write: _WriteCallback) -> None  # undocumented
-    def dump_nil(self, value: None, write: _WriteCallback) -> None
-    def dump_bool(self, value: bool, write: _WriteCallback) -> None
-    def dump_long(self, value: int, write: _WriteCallback) -> None
-    def dump_int(self, value: int, write: _WriteCallback) -> None
-    def dump_double(self, value: float, write: _WriteCallback) -> None
-    def dump_unicode(self, value: str, write: _WriteCallback, escape: (str) -> str = ...) -> None
-    def dump_bytes(self, value: ReadableBuffer, write: _WriteCallback) -> None
-    def dump_array(self, value: Iterable[_Marshallable], write: _WriteCallback) -> None
+    def __dump(self, value: _Marshallable, write: WriteCallback) -> None  # undocumented
+    def dump_nil(self, value: None, write: WriteCallback) -> None
+    def dump_bool(self, value: bool, write: WriteCallback) -> None
+    def dump_long(self, value: int, write: WriteCallback) -> None
+    def dump_int(self, value: int, write: WriteCallback) -> None
+    def dump_double(self, value: float, write: WriteCallback) -> None
+    def dump_unicode(self, value: str, write: WriteCallback, escape: (str) -> str = ...) -> None
+    def dump_bytes(self, value: ReadableBuffer, write: WriteCallback) -> None
+    def dump_array(self, value: Iterable[_Marshallable], write: WriteCallback) -> None
     def dump_struct(
-        self, value: Mapping[str, _Marshallable], write: _WriteCallback, escape: (str) -> str = ...
+        self, value: Mapping[str, _Marshallable], write: WriteCallback, escape: (str) -> str = ...
     ) -> None
-    def dump_datetime(self, value: _XMLDate, write: _WriteCallback) -> None
-    def dump_instance(self, value: object, write: _WriteCallback) -> None
+    def dump_datetime(self, value: XMLDate, write: WriteCallback) -> None
+    def dump_instance(self, value: object, write: WriteCallback) -> None
 
 class Unmarshaller:
     """Unmarshal an XML-RPC response, based on incoming XML event
@@ -368,7 +368,7 @@ class Transport:
 
     _use_datetime: bool
     _use_builtin_types: bool
-    _connection: (_HostType | None, http.client.HTTPConnection | None)
+    _connection: (HostType | None, http.client.HTTPConnection | None)
     _headers: list[(str, str)]
     _extra_headers: list[(str, str)]
 
@@ -376,17 +376,17 @@ class Transport:
         self, use_datetime: bool = False, use_builtin_types: bool = False, *, headers: Iterable[(str, str)] = ()
     )
     def request(
-        self, host: _HostType, handler: str, request_body: SizedBuffer, verbose: bool = False
+        self, host: HostType, handler: str, request_body: SizedBuffer, verbose: bool = False
     ) -> (*: _Marshallable)
     def single_request(
-        self, host: _HostType, handler: str, request_body: SizedBuffer, verbose: bool = False
+        self, host: HostType, handler: str, request_body: SizedBuffer, verbose: bool = False
     ) -> (*: _Marshallable)
     def getparser(self) -> (ExpatParser, Unmarshaller)
-    def get_host_info(self, host: _HostType) -> (str, list[(str, str)], dict[str, str])
-    def make_connection(self, host: _HostType) -> http.client.HTTPConnection
+    def get_host_info(self, host: HostType) -> (str, list[(str, str)], dict[str, str])
+    def make_connection(self, host: HostType) -> http.client.HTTPConnection
     def close(self) -> None
     def send_request(
-        self, host: _HostType, handler: str, request_body: SizedBuffer, debug: bool
+        self, host: HostType, handler: str, request_body: SizedBuffer, debug: bool
     ) -> http.client.HTTPConnection
     def send_headers(self, connection: http.client.HTTPConnection, headers: list[(str, str)]) -> None
     def send_content(self, connection: http.client.HTTPConnection, request_body: SizedBuffer) -> None
@@ -403,7 +403,7 @@ class SafeTransport(Transport):
         headers: Iterable[(str, str)] = (),
         context: dynamic | None = None,
     )
-    override def make_connection(self, host: _HostType) -> http.client.HTTPSConnection
+    override def make_connection(self, host: HostType) -> http.client.HTTPSConnection
 
 class ServerProxy:
     """uri [,options] -> a logical connection to an XML-RPC server

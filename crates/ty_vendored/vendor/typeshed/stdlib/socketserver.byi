@@ -153,9 +153,9 @@ if sys.platform != "win32":
         __all__ += ["ForkingUnixStreamServer", "ForkingUnixDatagramServer"]
 
 type _RequestType = _socket | tuple[bytes, _socket]
-type _AfUnixAddress = str | ReadableBuffer  # address acceptable for an AF_UNIX socket
+private type AfUnixAddress = str | ReadableBuffer  # address acceptable for an AF_UNIX socket
 type _AfInetAddress = tuple[str | bytes | bytearray, int]  # address acceptable for an AF_INET socket
-type _AfInet6Address = tuple[str | bytes | bytearray, int, int, int]  # address acceptable for an AF_INET6 socket
+private type AfInet6Address = tuple[str | bytes | bytearray, int, int, int]  # address acceptable for an AF_INET6 socket
 
 # This can possibly be generic at some point:
 class BaseServer:
@@ -349,10 +349,10 @@ class TCPServer(BaseServer):
     socket_type: int
     if sys.version_info >= (3, 11):
         allow_reuse_port: bool
-    server_address: _AfInetAddress | _AfInet6Address
+    server_address: _AfInetAddress | AfInet6Address
     init(
         self,
-        server_address: _AfInetAddress | _AfInet6Address,
+        server_address: _AfInetAddress | AfInet6Address,
         RequestHandlerClass: (dynamic, _RetAddress, Self) -> BaseRequestHandler,
         bind_and_activate: bool = True,
     ):
@@ -387,20 +387,20 @@ class UDPServer(TCPServer):
 
 if sys.platform != "win32":
     class UnixStreamServer(TCPServer):
-        server_address: _AfUnixAddress
+        server_address: AfUnixAddress
         init(
             self,
-            server_address: _AfUnixAddress,
+            server_address: AfUnixAddress,
             RequestHandlerClass: (dynamic, _RetAddress, Self) -> BaseRequestHandler,
             bind_and_activate: bool = True,
         ):
             """Constructor.  May be extended, do not override."""
 
     class UnixDatagramServer(UDPServer):
-        server_address: _AfUnixAddress
+        server_address: AfUnixAddress
         init(
             self,
-            server_address: _AfUnixAddress,
+            server_address: AfUnixAddress,
             RequestHandlerClass: (dynamic, _RetAddress, Self) -> BaseRequestHandler,
             bind_and_activate: bool = True,
         ):
