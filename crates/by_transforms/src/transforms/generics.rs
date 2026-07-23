@@ -49,6 +49,11 @@ pub(crate) struct GenericPolyfill<'src> {
     /// reference the enum's type params in their field annotations; those refs
     /// sit outside the enum body, so they are renamed here using the enum's map
     generic_class_renames: HashMap<String, HashMap<String, String>>,
+    /// `private type X = …` aliases in the module, as `X` → `_X`. `modifiers`
+    /// renames these globally, but a reference sitting inside a polyfilled
+    /// alias value is subsumed by this pass's whole-statement replacement, so
+    /// the rename has to be reapplied there
+    private_aliases: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -122,6 +127,29 @@ impl<'src> GenericPolyfill<'src> {
             parameters_targets: HashSet::new(),
             needed_imports_any: false,
             generic_class_renames: HashMap::new(),
+            private_aliases: HashMap::new(),
+        }
+    }
+
+    /// pre-scan for `private type` aliases so a reference inside a later
+    /// alias's value can be renamed as the value is re-rendered
+    fn collect_private_aliases(&mut self, stmts: &[Stmt]) {
+        struct Collect<'a>(&'a mut HashMap<String, String>);
+        impl<'ast> Visitor<'ast> for Collect<'_> {
+            fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+                if let Stmt::TypeAlias(alias) = stmt
+                    && alias.is_private
+                    && let Expr::Name(name) = alias.name.as_ref()
+                {
+                    self.0
+                        .insert(name.id.to_string(), format!("_{}", name.id));
+                }
+                ruff_python_ast::visitor::walk_stmt(self, stmt);
+            }
+        }
+        let mut collect = Collect(&mut self.private_aliases);
+        for stmt in stmts {
+            collect.visit_stmt(stmt);
         }
     }
 
@@ -638,32 +666,27 @@ impl<'src> GenericPolyfill<'src> {
             return;
         }
 
-        let name_src = self.src(alias.name.range()).to_owned();
+        // this replacement subsumes `modifiers`' `private ` deletion and the
+        // rename of the definition site, so the private name has to be applied
+        // here instead
+        let name_src = if alias.is_private {
+            format!("_{}", self.src(alias.name.range()))
+        } else {
+            self.src(alias.name.range()).to_owned()
+        };
         let raw_value_src = self.src(alias.value.range()).to_owned();
         // Pull in the literal-types + just-float rewrite for the RHS — our
         // `alias.range()` edit subsumes anything those emitted on the value
         // alone, so we have to splice the rewrite into our output.
         let literal_rewrite = lower_type_expr_full(self.source, self.types, &alias.value);
 
-        let (type_params_arg, defs, value_src) = if let Some(tp) = &alias.type_params {
-            let (generic_args, type_defs, rename_map) = self.process_type_params(&tp.type_params);
+        // references to a `private type` alias declared elsewhere in the module
+        // also sit inside the subsumed value, so they are renamed here too
+        let mut rename_map = self.private_aliases.clone();
 
-            // Apply renames inside the value expression inline (value is
-            // subsumed by the alias.range() edit so can't be emitted globally).
-            //
-            // Combining renames with the literal rewrite needs care: the
-            // literal rewrite emits a single replacement covering the whole
-            // value, so any rename edits inside its range would overlap and
-            // be lost. For now we use the literal rewrite when one exists
-            // (typical case: the value has no type-param references), and
-            // fall back to renames-only otherwise.
-            let value_src = if let Some(rewrite) = &literal_rewrite {
-                rewrite.clone()
-            } else {
-                let mut value_renames: Vec<Fix> = Vec::new();
-                rename_in_expr(&alias.value, &rename_map, &mut value_renames);
-                apply_renames_in_slice(&raw_value_src, alias.value.range().start(), &value_renames)
-            };
+        let (type_params_arg, defs) = if let Some(tp) = &alias.type_params {
+            let (generic_args, type_defs, tp_renames) = self.process_type_params(&tp.type_params);
+            rename_map.extend(tp_renames);
 
             // TypeVarTuple entries have a leading `*` in generic_args (for
             // Generic[*_Ts]) but `type_params=` wants the bare name.
@@ -674,13 +697,30 @@ impl<'src> GenericPolyfill<'src> {
             let trailing = if param_names.len() == 1 { "," } else { "" };
             let tps = format!(", type_params=({}{})", param_names.join(", "), trailing);
 
-            (tps, type_defs, value_src)
+            (tps, type_defs)
         } else {
-            (
-                String::new(),
-                Vec::new(),
-                literal_rewrite.unwrap_or(raw_value_src),
-            )
+            (String::new(), Vec::new())
+        };
+
+        // Apply renames inside the value expression inline (value is subsumed
+        // by the alias.range() edit so can't be emitted globally).
+        //
+        // Combining renames with the literal rewrite needs care: the literal
+        // rewrite emits a single replacement covering the whole value, so any
+        // rename edits inside its range would overlap and be lost. For now we
+        // use the literal rewrite when one exists (typical case: the value has
+        // no type-param or private-alias references), and fall back to
+        // renames-only otherwise.
+        let value_src = if let Some(rewrite) = literal_rewrite {
+            rewrite
+        } else {
+            let mut value_renames: Vec<Fix> = Vec::new();
+            rename_in_expr(&alias.value, &rename_map, &mut value_renames);
+            if value_renames.is_empty() {
+                raw_value_src
+            } else {
+                apply_renames_in_slice(&raw_value_src, alias.value.range().start(), &value_renames)
+            }
         };
 
         self.needed_imports.typealias_type = true;
@@ -1045,6 +1085,7 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
         ctx: &mut super::ast_driver::PassContext,
     ) {
         let mut inner = GenericPolyfill::new(self.source, types, self.config.clone());
+        inner.collect_private_aliases(stmts);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
