@@ -187,7 +187,7 @@ private type OnErrorCallback = ((...) -> dynamic, str, ExcInfo) -> object
 private type OnExcCallback = ((...) -> dynamic, str, BaseException) -> object
 
 @type_check_only
-protocol _RmtreeType:
+private protocol RmtreeType:
     avoids_symlink_attacks: bool
     if sys.version_info >= (3, 12):
         @deprecated("The `onerror` parameter is deprecated. Use `onexc` instead.")
@@ -233,7 +233,7 @@ protocol _RmtreeType:
             self, path: StrOrBytesPath, ignore_errors: bool = False, onerror: OnErrorCallback | None = None
         ) -> None
 
-rmtree: _RmtreeType
+rmtree: RmtreeType
 """Recursively delete a directory tree.
 
 If dir_fd is not None, it should be a file descriptor open to a directory;

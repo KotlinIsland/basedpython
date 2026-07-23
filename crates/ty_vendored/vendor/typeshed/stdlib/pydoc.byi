@@ -55,7 +55,7 @@ final __version__: str
 final __credits__: str
 
 @type_check_only
-protocol _Pager:
+private protocol Pager:
     def __call__(self, text: str, title: str = "") -> None
 
 def pathdirs() -> list[str]:
@@ -442,7 +442,7 @@ def locate(path: str, forceload: bool = ...) -> object:
     """Locate an object by name or dotted path, importing as necessary."""
 
 if sys.version_info >= (3, 13):
-    def get_pager() -> _Pager:
+    def get_pager() -> Pager:
         """Decide what method to use for paging through text."""
 
     def pipe_pager(text: str, cmd: str, title: str = "") -> None:

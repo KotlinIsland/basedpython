@@ -597,7 +597,7 @@ class HTTPHandler(Handler):
         """
 
 @type_check_only
-protocol _QueueLike[in out Element]:
+private protocol QueueLike[in out Element]:
     def get(self) -> Element
     def put_nowait(self, item: Element, /) -> None
 
@@ -612,8 +612,8 @@ class QueueHandler(Handler):
     user code for use with earlier Python versions.
     """
 
-    queue: _QueueLike[dynamic]
-    init(self, queue: _QueueLike[dynamic]):
+    queue: QueueLike[dynamic]
+    init(self, queue: QueueLike[dynamic]):
         """
         Initialise an instance, using the passed queue.
         """
@@ -656,9 +656,9 @@ class QueueListener:
 
     handlers: (*: Handler)  # undocumented
     respect_handler_level: bool  # undocumented
-    queue: _QueueLike[dynamic]  # undocumented
+    queue: QueueLike[dynamic]  # undocumented
     _thread: Thread | None  # undocumented
-    init(self, queue: _QueueLike[dynamic], *handlers: Handler, respect_handler_level: bool = False):
+    init(self, queue: QueueLike[dynamic], *handlers: Handler, respect_handler_level: bool = False):
         """
         Initialise an instance with the specified queue and
         handlers.

@@ -504,7 +504,7 @@ class ProxyDigestAuthHandler(BaseHandler, AbstractDigestAuthHandler):
     def http_error_407(self, req: Request, fp: IO[bytes], code: int, msg: str, headers: HTTPMessage) -> UrlopenRet | None
 
 @type_check_only
-protocol _HTTPConnectionProtocol:
+private protocol HTTPConnectionProtocol:
     def __call__(
         self,
         host: str,
@@ -524,7 +524,7 @@ class AbstractHTTPHandler(BaseHandler):  # undocumented
 
     def set_http_debuglevel(self, level: int) -> None
     def do_request_(self, request: Request) -> Request
-    def do_open(self, http_class: _HTTPConnectionProtocol, req: Request, **http_conn_args: dynamic) -> HTTPResponse:
+    def do_open(self, http_class: HTTPConnectionProtocol, req: Request, **http_conn_args: dynamic) -> HTTPResponse:
         """Return an HTTPResponse object for the request, using http_class.
 
         http_class must implement the HTTPConnection API from http.client.

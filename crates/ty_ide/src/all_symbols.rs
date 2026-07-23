@@ -1141,6 +1141,8 @@ def test_helper_xyzxyzxyz():
 private type Zqzqzqzq = int
 private def zqzqzqzq_helper() -> int: ...
 type Zqzqzqzq_open = str
+private protocol Zqzqzqzq_reader:
+    def read(self) -> int: ...
 ",
             )
             .source("main.by", "<CURSOR>")

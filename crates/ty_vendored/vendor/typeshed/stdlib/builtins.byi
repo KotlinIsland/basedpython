@@ -808,11 +808,11 @@ class complex:
             """Convert number to a complex floating-point number."""
 
 @type_check_only
-protocol _FormatMapMapping:
+private protocol FormatMapMapping:
     def __getitem__(self, key: str, /) -> dynamic
 
 @type_check_only
-protocol _TranslateTable:
+private protocol TranslateTable:
     def __getitem__(self, key: int, /) -> str | int | None
 
 @disjoint_base
@@ -905,7 +905,7 @@ class str(Sequence[str]):
         """
     def format(self, *args: object, **kwargs: object) -> str
 
-    def format_map(self, mapping: _FormatMapMapping, /) -> str:
+    def format_map(self, mapping: FormatMapMapping, /) -> str:
         """Return a formatted version of the string, using substitutions from mapping.
         The substitutions are identified by braces ('{' and '}').
         """
@@ -1204,7 +1204,7 @@ class str(Sequence[str]):
         """
     def title(self) -> str
 
-    def translate(self, table: _TranslateTable, /) -> str:
+    def translate(self, table: TranslateTable, /) -> str:
         """Replace each character in the string using the given translation table.
 
           table
@@ -3300,10 +3300,10 @@ def aiter[SupportsAnextT: SupportsAnext[dynamic]](async_iterable: SupportsAiter[
     """Return an AsyncIterator for an AsyncIterable object."""
 
 @type_check_only
-protocol _SupportsSynchronousAnext[out AwaitableT: Awaitable[dynamic]]:
+private protocol SupportsSynchronousAnext[out AwaitableT: Awaitable[dynamic]]:
     def __anext__(self) -> AwaitableT
 
-def anext[AwaitableT: Awaitable[dynamic]](i: _SupportsSynchronousAnext[AwaitableT], /) -> AwaitableT:
+def anext[AwaitableT: Awaitable[dynamic]](i: SupportsSynchronousAnext[AwaitableT], /) -> AwaitableT:
     """Return the next item from the async iterator.
 
     If default is given and the async iterator is exhausted,
@@ -3684,7 +3684,7 @@ def input(prompt: object = "", /) -> str:
     """
 
 @type_check_only
-protocol _GetItemIterable[out Element]:
+private protocol GetItemIterable[out Element]:
     def __getitem__(self, i: int, /) -> Element
 
 def iter[SupportsNextT: SupportsNext[dynamic]](object: SupportsIter[SupportsNextT], /) -> SupportsNextT:
@@ -3696,7 +3696,7 @@ def iter[SupportsNextT: SupportsNext[dynamic]](object: SupportsIter[SupportsNext
     In the second form, the callable is called until it returns the
     sentinel.
     """
-def iter[Element](object: _GetItemIterable[Element], /) -> Iterator[Element]
+def iter[Element](object: GetItemIterable[Element], /) -> Iterator[Element]
 def iter[Element](object: () -> (Element | None), sentinel: None, /) -> Iterator[Element]
 def iter[Element](object: () -> Element, sentinel: object, /) -> Iterator[Element]
 
@@ -4103,7 +4103,7 @@ def ord(c: str | bytes | bytearray, /) -> int:
     """
 
 @type_check_only
-protocol _SupportsWriteAndFlush[in Input](SupportsWrite[Input], SupportsFlush)
+private protocol SupportsWriteAndFlush[in Input](SupportsWrite[Input], SupportsFlush)
 
 def print(
     *values: object,
@@ -4124,24 +4124,24 @@ def print(
       whether to forcibly flush the stream.
     """
 def print(
-    *values: object, sep: str | None = " ", end: str | None = "\n", file: _SupportsWriteAndFlush[str] | None = None, flush: bool
+    *values: object, sep: str | None = " ", end: str | None = "\n", file: SupportsWriteAndFlush[str] | None = None, flush: bool
 ) -> None
 
 
 @type_check_only
-protocol _SupportsPow2[in E, out Element]:
+private protocol SupportsPow2[in E, out Element]:
     def __pow__(self, other: E, /) -> Element
 
 @type_check_only
-protocol _SupportsPow3NoneOnly[in E, out Element]:
+private protocol SupportsPow3NoneOnly[in E, out Element]:
     def __pow__(self, other: E, modulo: None = None, /) -> Element
 
 @type_check_only
-protocol _SupportsPow3[in E, in M, out Element]:
+private protocol SupportsPow3[in E, in M, out Element]:
     def __pow__(self, other: E, modulo: M, /) -> Element
 
 private type SupportsSomeKindOfPow = (
-    _SupportsPow2[dynamic, dynamic] | _SupportsPow3NoneOnly[dynamic, dynamic] | _SupportsPow3[dynamic, dynamic, dynamic]
+    SupportsPow2[dynamic, dynamic] | SupportsPow3NoneOnly[dynamic, dynamic] | SupportsPow3[dynamic, dynamic, dynamic]
 )
 
 # TODO: `pow(int, int, Literal[0])` fails at runtime,
@@ -4168,9 +4168,9 @@ def pow(base: float, exp: int, mod: None = None) -> float
 # as `float | complex` causes too many false-positive errors
 def pow(base: float, exp: complex | SupportsSomeKindOfPow, mod: None = None) -> dynamic
 def pow(base: complex, exp: complex | SupportsSomeKindOfPow, mod: None = None) -> complex
-def pow[E, Element](base: _SupportsPow2[E, Element], exp: E, mod: None = None) -> Element
-def pow[E, Element](base: _SupportsPow3NoneOnly[E, Element], exp: E, mod: None = None) -> Element
-def pow[E, M, Element](base: _SupportsPow3[E, M, Element], exp: E, mod: M) -> Element
+def pow[E, Element](base: SupportsPow2[E, Element], exp: E, mod: None = None) -> Element
+def pow[E, Element](base: SupportsPow3NoneOnly[E, Element], exp: E, mod: None = None) -> Element
+def pow[E, M, Element](base: SupportsPow3[E, M, Element], exp: E, mod: M) -> Element
 def pow(base: SupportsSomeKindOfPow, exp: float, mod: None = None) -> dynamic
 def pow(base: SupportsSomeKindOfPow, exp: complex, mod: None = None) -> complex
 
@@ -4203,21 +4203,21 @@ def repr(obj: object, /) -> str:
 # on why we don't use `SupportsRound` from `typing.pyi`
 
 @type_check_only
-protocol _SupportsRound1[out Element]:
+private protocol SupportsRound1[out Element]:
     def __round__(self) -> Element
 
 @type_check_only
-protocol _SupportsRound2[out Element]:
+private protocol SupportsRound2[out Element]:
     def __round__(self, ndigits: int, /) -> Element
 
-def round[Element](number: _SupportsRound1[Element], ndigits: None = None) -> Element:
+def round[Element](number: SupportsRound1[Element], ndigits: None = None) -> Element:
     """Round a number to a given precision in decimal digits.
 
     The return value is an integer if ndigits is omitted or None.
     Otherwise the return value has the same type as the number.  ndigits
     may be negative.
     """
-def round[Element](number: _SupportsRound2[Element], ndigits: SupportsIndex) -> Element
+def round[Element](number: SupportsRound2[Element], ndigits: SupportsIndex) -> Element
 
 # See https://github.com/python/typeshed/pull/6292#discussion_r748875189
 # for why arg 3 of `setattr` should be annotated with `Any` and not `object`
@@ -4256,7 +4256,7 @@ def sorted[Element](iterable: Iterable[Element], /, *, key: (Element) -> Support
 
 
 @type_check_only
-protocol _SupportsSumWithNoDefaultGiven(SupportsAdd[dynamic, dynamic], SupportsRAdd[int, dynamic])
+private protocol SupportsSumWithNoDefaultGiven(SupportsAdd[dynamic, dynamic], SupportsRAdd[int, dynamic])
 
 
 # In general, the return type of `x + x` is *not* guaranteed to be the same type as x.
@@ -4270,7 +4270,7 @@ def sum(iterable: Iterable[bool | LiteralInteger], /, start: int = 0) -> int:
     This function is intended specifically for use with numeric values and
     may reject non-numeric types.
     """
-def sum[SupportsSumNoDefaultT: _SupportsSumWithNoDefaultGiven](iterable: Iterable[SupportsSumNoDefaultT], /) -> SupportsSumNoDefaultT | 0
+def sum[SupportsSumNoDefaultT: SupportsSumWithNoDefaultGiven](iterable: Iterable[SupportsSumNoDefaultT], /) -> SupportsSumNoDefaultT | 0
 def sum[AddableT1: SupportsAdd[dynamic, dynamic], AddableT2: SupportsAdd[dynamic, dynamic]](iterable: Iterable[AddableT1], /, start: AddableT2) -> AddableT1 | AddableT2
 
 # The argument to `vars()` has to have a `__dict__` attribute, so the second overload can't be annotated with `object`

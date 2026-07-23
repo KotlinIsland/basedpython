@@ -29,33 +29,33 @@ from typing import ParamSpec, Protocol, TypeAlias, TypeVar, type_check_only
 # the numpy.array comparison dunders return another numpy.array.
 
 @type_check_only
-protocol _SupportsDunderLT:
+private protocol SupportsDunderLT:
     def __lt__(self, other: dynamic, /) -> dynamic
 
 @type_check_only
-protocol _SupportsDunderGT:
+private protocol SupportsDunderGT:
     def __gt__(self, other: dynamic, /) -> dynamic
 
 @type_check_only
-protocol _SupportsDunderLE:
+private protocol SupportsDunderLE:
     def __le__(self, other: dynamic, /) -> dynamic
 
 @type_check_only
-protocol _SupportsDunderGE:
+private protocol SupportsDunderGE:
     def __ge__(self, other: dynamic, /) -> dynamic
 
-private type SupportsComparison = _SupportsDunderLE | _SupportsDunderGE | _SupportsDunderGT | _SupportsDunderLT
+private type SupportsComparison = SupportsDunderLE | SupportsDunderGE | SupportsDunderGT | SupportsDunderLT
 
 @type_check_only
-protocol _SupportsInversion[out Element]:
+private protocol SupportsInversion[out Element]:
     def __invert__(self) -> Element
 
 @type_check_only
-protocol _SupportsNeg[out Element]:
+private protocol SupportsNeg[out Element]:
     def __neg__(self) -> Element
 
 @type_check_only
-protocol _SupportsPos[out Element]:
+private protocol SupportsPos[out Element]:
     def __pos__(self) -> Element
 
 # All four comparison functions must have the same signature, or we get false-positive errors
@@ -105,10 +105,10 @@ def floordiv(a, b, /):
 def index(a: SupportsIndex, /) -> int:
     """Same as a.__index__()"""
 
-def inv[Element](a: _SupportsInversion[Element], /) -> Element:
+def inv[Element](a: SupportsInversion[Element], /) -> Element:
     """Same as ~a."""
 
-def invert[Element](a: _SupportsInversion[Element], /) -> Element:
+def invert[Element](a: SupportsInversion[Element], /) -> Element:
     """Same as ~a."""
 
 def lshift(a, b, /):
@@ -125,13 +125,13 @@ def mul[Input, Element](a: Input, b: SupportsRMul[Input, Element], /) -> Element
 def matmul(a, b, /):
     """Same as a @ b."""
 
-def neg[Element](a: _SupportsNeg[Element], /) -> Element:
+def neg[Element](a: SupportsNeg[Element], /) -> Element:
     """Same as -a."""
 
 def or_(a, b, /):
     """Same as a | b."""
 
-def pos[Element](a: _SupportsPos[Element], /) -> Element:
+def pos[Element](a: SupportsPos[Element], /) -> Element:
     """Same as +a."""
 
 def pow(a, b, /):

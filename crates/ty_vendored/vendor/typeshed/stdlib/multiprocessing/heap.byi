@@ -24,13 +24,13 @@ private type Block = tuple[Arena, int, int]
 
 if sys.platform != "win32":
     @type_check_only
-    protocol _SupportsDetach:
+    private protocol SupportsDetach:
         def detach(self) -> int
 
     def reduce_arena(
         a: Arena,
-    ) -> ((int, _SupportsDetach) -> Arena, (int, popen_forkserver._DupFd | popen_spawn_posix._DupFd | resource_sharer.DupFd))
-    def rebuild_arena(size: int, dupfd: _SupportsDetach) -> Arena
+    ) -> ((int, SupportsDetach) -> Arena, (int, popen_forkserver._DupFd | popen_spawn_posix._DupFd | resource_sharer.DupFd))
+    def rebuild_arena(size: int, dupfd: SupportsDetach) -> Arena
 
 class Heap:
     init(self, size: int = ...)

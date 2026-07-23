@@ -254,7 +254,7 @@ class Executor:
     ) -> bool | None
 
 @type_check_only
-protocol _AsCompletedFuture[out Element]:
+private protocol AsCompletedFuture[out Element]:
     # as_completed only mutates non-generic aspects of passed Futures and does not do any nominal
     # checks. Therefore, we can use a Protocol here to allow as_completed to act covariantly.
     # See the tests for concurrent.futures
@@ -264,7 +264,7 @@ protocol _AsCompletedFuture[out Element]:
     # Not used by as_completed, but needed to propagate the generic type
     def result(self, timeout: float | None = None) -> Element
 
-def as_completed[Element](fs: Iterable[_AsCompletedFuture[Element]], timeout: float | None = None) -> Iterator[Future[Element]]:
+def as_completed[Element](fs: Iterable[AsCompletedFuture[Element]], timeout: float | None = None) -> Iterator[Future[Element]]:
     """An iterator over the given futures that yields each as it completes.
 
     Args:

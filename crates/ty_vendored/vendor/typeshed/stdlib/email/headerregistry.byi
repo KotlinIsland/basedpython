@@ -232,7 +232,7 @@ if sys.version_info >= (3, 13):
             """
 
 @type_check_only
-protocol _HeaderParser:
+private protocol HeaderParser:
     max_count: ClassVar[1 | None]
     static def value_parser(value: str, /) -> TokenList
     class def parse(cls, value: str, kwds: dict[str, dynamic], /) -> None
@@ -240,11 +240,11 @@ protocol _HeaderParser:
 class HeaderRegistry:
     """A header_factory and header registry."""
 
-    registry: dict[str, type[_HeaderParser]]
+    registry: dict[str, type[HeaderParser]]
     base_class: type[BaseHeader]
-    default_class: type[_HeaderParser]
+    default_class: type[HeaderParser]
     init(
-        self, base_class: type[BaseHeader] = ..., default_class: type[_HeaderParser] = ..., use_default_map: bool = True
+        self, base_class: type[BaseHeader] = ..., default_class: type[HeaderParser] = ..., use_default_map: bool = True
     ):
         """Create a header_factory that works with the Policy API.
 

@@ -15,7 +15,7 @@ protocol _Reader:
     def seek(self, n: int, /) -> dynamic
 
 @type_check_only
-protocol _Decompressor:
+private protocol Decompressor:
     def decompress(self, data: ReadableBuffer, /, max_length: int = ...) -> bytes
     let unused_data: bytes
     let eof: bool
@@ -32,7 +32,7 @@ class DecompressReader(RawIOBase):
     init(
         self,
         fp: _Reader,
-        decomp_factory: (...) -> _Decompressor,
+        decomp_factory: (...) -> Decompressor,
         trailing_error: type[Exception] | (*: type[Exception]) = (),
         **decomp_args: dynamic,  # These are passed to decomp_factory.
     )

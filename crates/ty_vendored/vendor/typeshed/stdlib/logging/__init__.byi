@@ -77,16 +77,16 @@ type _FormatStyle = "%" | "{" | "$"
 
 if sys.version_info >= (3, 12):
     @type_check_only
-    protocol _SupportsFilter:
+    private protocol SupportsFilter:
         def filter(self, record: LogRecord, /) -> bool | LogRecord
 
-    type _FilterType = Filter | ((LogRecord) -> (bool | LogRecord)) | _SupportsFilter
+    type _FilterType = Filter | ((LogRecord) -> (bool | LogRecord)) | SupportsFilter
 else:
     @type_check_only
-    protocol _SupportsFilter:
+    private protocol SupportsFilter:
         def filter(self, record: LogRecord, /) -> bool
 
-    type _FilterType = Filter | ((LogRecord) -> bool) | _SupportsFilter
+    type _FilterType = Filter | ((LogRecord) -> bool) | SupportsFilter
 
 raiseExceptions: bool
 logThreads: bool

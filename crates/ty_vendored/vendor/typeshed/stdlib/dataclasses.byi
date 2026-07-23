@@ -27,7 +27,7 @@ __all__ = [
 
 
 @type_check_only
-protocol _DataclassFactory:
+private protocol DataclassFactory:
     def __call__[Element](
         self,
         cls: type[Element],
@@ -190,7 +190,7 @@ else:
 
 # See https://github.com/python/mypy/issues/10750
 @type_check_only
-protocol _DefaultFactory[out Element]:
+private protocol DefaultFactory[out Element]:
     def __call__(self) -> Element
 
 class Field[in out Element]:
@@ -226,7 +226,7 @@ class Field[in out Element]:
     name: str
     type: Type[Element] | str | dynamic
     default: Element | _MISSING_TYPE.MISSING
-    default_factory: _DefaultFactory[Element] | _MISSING_TYPE.MISSING
+    default_factory: DefaultFactory[Element] | _MISSING_TYPE.MISSING
     repr: bool
     hash: bool | None
     init: bool
@@ -419,7 +419,7 @@ if sys.version_info >= (3, 14):
         slots: bool = False,
         weakref_slot: bool = False,
         module: str | None = None,
-        decorator: _DataclassFactory = ...,
+        decorator: DataclassFactory = ...,
     ) -> type:
         """Return a new dynamically created dataclass.
 

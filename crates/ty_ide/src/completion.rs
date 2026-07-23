@@ -9170,7 +9170,7 @@ if foo:
         let snapshot = CursorTest::builder()
             .source(
                 "helpers.by",
-                "private type Zqzq = int\ntype Zqzq_open = str\n",
+                "private type Zqzq = int\nprivate protocol Zqzq_reader: ...\ntype Zqzq_open = str\n",
             )
             .source("main.by", "import helpers\nhelpers.Zq<CURSOR>")
             .completion_test_builder()

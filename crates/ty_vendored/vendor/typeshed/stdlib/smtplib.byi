@@ -155,7 +155,7 @@ def quotedata(data: str) -> str:
     """
 
 @type_check_only
-protocol _AuthObject:
+private protocol AuthObject:
     def __call__(self, challenge: None = None, /) -> str | None
     def __call__(self, challenge: bytes, /) -> str
 
@@ -345,7 +345,7 @@ class SMTP:
 
     user: str
     password: str
-    def auth(self, mechanism: str, authobject: _AuthObject, *, initial_response_ok: bool = True) -> Reply:
+    def auth(self, mechanism: str, authobject: AuthObject, *, initial_response_ok: bool = True) -> Reply:
         """Authentication command - requires response processing.
 
         'mechanism' specifies which authentication mechanism is to

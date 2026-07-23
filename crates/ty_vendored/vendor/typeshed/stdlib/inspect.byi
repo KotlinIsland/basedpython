@@ -331,11 +331,11 @@ def isasyncgenfunction[**P](obj: (**P) -> dynamic) -> TypeGuard[(**P) -> AsyncGe
 def isasyncgenfunction(obj: object) -> TypeGuard[(...) -> AsyncGeneratorType[dynamic, dynamic]]
 
 @type_check_only
-protocol _SupportsSet[in Input, in V]:
+private protocol SupportsSet[in Input, in V]:
     def __set__(self, instance: Input, value: V, /) -> None
 
 @type_check_only
-protocol _SupportsDelete[in Input]:
+private protocol SupportsDelete[in Input]:
     def __delete__(self, instance: Input, /) -> None
 
 def isasyncgen(object: object) -> object is AsyncGeneratorType[object, Never]:
@@ -458,7 +458,7 @@ def isgetsetdescriptor(object: object) -> object is GetSetDescriptorType:
     modules.
     """
 
-def isdatadescriptor(object: object) -> object is _SupportsSet[Never, Never] | _SupportsDelete[Never]:
+def isdatadescriptor(object: object) -> object is SupportsSet[Never, Never] | SupportsDelete[Never]:
     """Return true if the object is a data descriptor.
 
     Data descriptors have a __set__ or a __delete__ attribute.  Examples are

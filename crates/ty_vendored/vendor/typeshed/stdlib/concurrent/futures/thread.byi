@@ -23,7 +23,7 @@ private type Task = tuple[(...) -> dynamic, (*: dynamic), dict[str, dynamic]]
 
 
 @type_check_only
-protocol _ResolveTaskFunc:
+private protocol ResolveTaskFunc:
     def __call__[C: (...) -> object, *Ts, Key: str, Value](
         self, func: C, args: (Unpack[Ts],), kwargs: dict[Key, Value]
     ) -> (C, (Unpack[Ts],), dict[Key, Value])
@@ -32,10 +32,10 @@ if sys.version_info >= (3, 14):
     class WorkerContext:
         class def prepare[*Ts](
             cls, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)
-        ) -> (() -> Self, _ResolveTaskFunc)
+        ) -> (() -> Self, ResolveTaskFunc)
         class def prepare(
             cls, initializer: () -> object, initargs: tuple[()]
-        ) -> (() -> Self, _ResolveTaskFunc)
+        ) -> (() -> Self, ResolveTaskFunc)
 
         def __init__[*Ts](self, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)) -> None
         init(self, initializer: () -> object, initargs: tuple[()])
@@ -98,7 +98,7 @@ class ThreadPoolExecutor(Executor):
     _thread_name_prefix: str | None
     if sys.version_info >= (3, 14):
         _create_worker_context: () -> WorkerContext
-        _resolve_work_item_task: _ResolveTaskFunc
+        _resolve_work_item_task: ResolveTaskFunc
     else:
         _initializer: (...) -> None | None
         _initargs: (*: dynamic)
@@ -107,10 +107,10 @@ class ThreadPoolExecutor(Executor):
     if sys.version_info >= (3, 14):
         class def prepare_context(
             cls, initializer: () -> object, initargs: tuple[()]
-        ) -> (() -> WorkerContext, _ResolveTaskFunc)
+        ) -> (() -> WorkerContext, ResolveTaskFunc)
         class def prepare_context[*Ts](
             cls, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)
-        ) -> (() -> WorkerContext, _ResolveTaskFunc)
+        ) -> (() -> WorkerContext, ResolveTaskFunc)
 
     init(
         self,

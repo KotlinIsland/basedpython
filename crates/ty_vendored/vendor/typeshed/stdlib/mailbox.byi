@@ -32,22 +32,22 @@ __all__ = [
 
 
 @type_check_only
-protocol _SupportsReadAndReadline(SupportsRead[bytes], SupportsNoArgReadline[bytes])
+private protocol SupportsReadAndReadline(SupportsRead[bytes], SupportsNoArgReadline[bytes])
 
 # As opposed to _MessageT_co in email._policybase, this type is bound to
 # mailbox.Message instead of email.message.Message.
 
-private type MessageData = email.message.Message | bytes | str | io.StringIO | _SupportsReadAndReadline
+private type MessageData = email.message.Message | bytes | str | io.StringIO | SupportsReadAndReadline
 
 @type_check_only
-protocol _HasIteritems:
+private protocol HasIteritems:
     def iteritems(self) -> Iterator[(str, MessageData)]
 
 linesep: bytes
 
 # Common interface for get_file() return types.
 @type_check_only
-protocol _GetFileReturn:
+private protocol GetFileReturn:
     def __iter__(self) -> Iterator[bytes]
     def __enter__(self) -> Self
     def __exit__(
@@ -70,9 +70,9 @@ class Mailbox[out MessageT: Message = Message]:
     """A group of messages in a particular place."""
 
     _path: str  # undocumented
-    _factory: ((_GetFileReturn) -> MessageT) | None  # undocumented
+    _factory: ((GetFileReturn) -> MessageT) | None  # undocumented
 
-    init(self, path: StrPath, factory: (_GetFileReturn) -> MessageT, create: bool = True):
+    init(self, path: StrPath, factory: (GetFileReturn) -> MessageT, create: bool = True):
         """Initialize a Mailbox instance."""
     init(self, path: StrPath, factory: None = None, create: bool = True)
 
@@ -109,7 +109,7 @@ class Mailbox[out MessageT: Message = Message]:
     abstract def get_bytes(self, key: str) -> bytes:
         """Return a byte string representation or raise a KeyError."""
 
-    abstract def get_file(self, key: str) -> _GetFileReturn:
+    abstract def get_file(self, key: str) -> GetFileReturn:
         """Return a file-like representation or raise a KeyError."""
 
     abstract def iterkeys(self) -> Iterator[str]:
@@ -148,7 +148,7 @@ class Mailbox[out MessageT: Message = Message]:
         """Delete an arbitrary (key, message) pair and return it."""
 
     def update(
-        self, arg: _HasIteritems | SupportsItems[str, MessageData] | Iterable[(str, MessageData)] | None = None
+        self, arg: HasIteritems | SupportsItems[str, MessageData] | Iterable[(str, MessageData)] | None = None
     ) -> None:
         """Change the messages that correspond to certain keys."""
 
@@ -180,7 +180,7 @@ class Maildir(Mailbox[MaildirMessage]):
 
     colon: str
     init(
-        self, dirname: StrPath, factory: ((_GetFileReturn) -> MaildirMessage) | None = None, create: bool = True
+        self, dirname: StrPath, factory: ((GetFileReturn) -> MaildirMessage) | None = None, create: bool = True
     ):
         """Initialize a Maildir instance."""
 
@@ -312,7 +312,7 @@ class mbox(_mboxMMDF[mboxMessage]):
     """A classic mbox mailbox."""
 
     init(
-        self, path: StrPath, factory: ((_GetFileReturn) -> mboxMessage) | None = None, create: bool = True
+        self, path: StrPath, factory: ((GetFileReturn) -> mboxMessage) | None = None, create: bool = True
     ):
         """Initialize an mbox mailbox."""
 
@@ -320,14 +320,14 @@ class MMDF(_mboxMMDF[MMDFMessage]):
     """An MMDF mailbox."""
 
     init(
-        self, path: StrPath, factory: ((_GetFileReturn) -> MMDFMessage) | None = None, create: bool = True
+        self, path: StrPath, factory: ((GetFileReturn) -> MMDFMessage) | None = None, create: bool = True
     ):
         """Initialize an MMDF mailbox."""
 
 class MH(Mailbox[MHMessage]):
     """An MH mailbox."""
 
-    init(self, path: StrPath, factory: ((_GetFileReturn) -> MHMessage) | None = None, create: bool = True):
+    init(self, path: StrPath, factory: ((GetFileReturn) -> MHMessage) | None = None, create: bool = True):
         """Initialize an MH instance."""
 
     override def add(self, message: MessageData) -> str:
@@ -394,7 +394,7 @@ class Babyl(_singlefileMailbox[BabylMessage]):
     """An Rmail-style Babyl mailbox."""
 
     init(
-        self, path: StrPath, factory: ((_GetFileReturn) -> BabylMessage) | None = None, create: bool = True
+        self, path: StrPath, factory: ((GetFileReturn) -> BabylMessage) | None = None, create: bool = True
     ):
         """Initialize a Babyl mailbox."""
 
@@ -519,7 +519,7 @@ class MMDFMessage(_mboxMMDFMessage):
 class _ProxyFile:
     """A read-only wrapper of a file."""
 
-    init(self, f: _GetFileReturn, pos: int | None = None):
+    init(self, f: GetFileReturn, pos: int | None = None):
         """Initialize a _ProxyFile."""
 
     def read(self, size: int | None = None) -> bytes:
@@ -564,7 +564,7 @@ class _ProxyFile:
 class _PartialFile(_ProxyFile):
     """A read-only wrapper of part of a file."""
 
-    init(self, f: _GetFileReturn, start: int | None = None, stop: int | None = None):
+    init(self, f: GetFileReturn, start: int | None = None, stop: int | None = None):
         """Initialize a _PartialFile."""
 
 class Error(Exception):

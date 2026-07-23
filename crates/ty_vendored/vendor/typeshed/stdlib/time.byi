@@ -234,13 +234,13 @@ if sys.platform != "win32":
         """
 
 @type_check_only
-protocol _ClockInfo:
+private protocol ClockInfo:
     adjustable: bool
     implementation: str
     monotonic: bool
     resolution: float
 
-def get_clock_info(name: "monotonic" | "perf_counter" | "process_time" | "time" | "thread_time", /) -> _ClockInfo:
+def get_clock_info(name: "monotonic" | "perf_counter" | "process_time" | "time" | "thread_time", /) -> ClockInfo:
     """get_clock_info(name: str) -> dict
 
     Get information of the specified clock.

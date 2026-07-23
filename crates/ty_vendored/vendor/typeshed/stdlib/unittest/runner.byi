@@ -10,14 +10,14 @@ from typing import Generic, Protocol, TypeAlias, TypeVar, type_check_only
 from typing_extensions import Never
 from warnings import _ActionKind
 
-private type ResultClassType = (_TextTestStream, bool, int) -> TextTestResult[dynamic]
+private type ResultClassType = (TextTestStream, bool, int) -> TextTestResult[dynamic]
 
 @type_check_only
-protocol _SupportsWriteAndFlush(SupportsWrite[str], SupportsFlush)
+private protocol SupportsWriteAndFlush(SupportsWrite[str], SupportsFlush)
 
 # All methods used by unittest.runner.TextTestResult's stream
 @type_check_only
-protocol _TextTestStream(_SupportsWriteAndFlush):
+private protocol TextTestStream(SupportsWriteAndFlush):
     def writeln(self, arg: str | None = None, /) -> None
 
 # _WritelnDecorator should have all the same attrs as its stream param.
@@ -26,7 +26,7 @@ protocol _TextTestStream(_SupportsWriteAndFlush):
 class _WritelnDecorator:
     """Used to decorate file-like objects with a handy 'writeln' method"""
 
-    init(self, stream: _SupportsWriteAndFlush)
+    init(self, stream: SupportsWriteAndFlush)
     def writeln(self, arg: str | None = None) -> None
     def __getattr__(self, attr: str) -> dynamic  # Any attribute from the stream type passed to __init__
     # These attributes are prevented by __getattr__
@@ -39,7 +39,7 @@ class _WritelnDecorator:
     def write(self, s: str, /) -> object
 
 
-class TextTestResult[in out StreamT: _TextTestStream = _WritelnDecorator](unittest.result.TestResult):
+class TextTestResult[in out StreamT: TextTestStream = _WritelnDecorator](unittest.result.TestResult):
     """A test result class that can print formatted text results to a stream.
 
     Used by TextTestRunner.
@@ -89,7 +89,7 @@ class TextTestRunner:
         durations: int | None
         def __init__(
             self,
-            stream: _SupportsWriteAndFlush | None = None,
+            stream: SupportsWriteAndFlush | None = None,
             descriptions: bool = True,
             verbosity: int = 1,
             failfast: bool = False,
@@ -109,7 +109,7 @@ class TextTestRunner:
     else:
         def __init__(
             self,
-            stream: _SupportsWriteAndFlush | None = None,
+            stream: SupportsWriteAndFlush | None = None,
             descriptions: bool = True,
             verbosity: int = 1,
             failfast: bool = False,

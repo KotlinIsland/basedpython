@@ -31,11 +31,11 @@ protocol ErrorStream:
     def write(self, s: str, /) -> object
     def writelines(self, seq: list[str], /) -> object
 
-protocol _Readable:
+private protocol Readable:
     def read(self, size: int = ..., /) -> bytes
     # Optional: def close(self) -> object: ...
 
 protocol FileWrapper:
     """WSGI file wrapper as defined in PEP 3333"""
 
-    def __call__(self, file: _Readable, block_size: int = ..., /) -> Iterable[bytes]
+    def __call__(self, file: Readable, block_size: int = ..., /) -> Iterable[bytes]

@@ -63,10 +63,12 @@ pub fn all_patches() -> Vec<Box<dyn Patch>> {
 /// each post-patch is applied on its own re-parse so two patches never have to
 /// coordinate disjoint edits; they run in declared order
 ///
-/// `root` is the typeshed `stdlib/` directory; a patch whose decision depends on
-/// the rest of the tree (currently only `private_type_aliases`) scans it here,
-/// once, before any file is rewritten
+/// `root` is the typeshed `stdlib/` directory; the patches whose decision
+/// depends on the rest of the tree (`private_type_aliases` and
+/// `private_protocols`) share one scan of it, taken here before any file is
+/// rewritten
 pub fn all_post_patches(root: &Path) -> Vec<Box<dyn Patch>> {
+    let private_names = patches::private_names::scan(root);
     vec![
         // widens invariant list/set/dict output typevars over the explicit-variance
         // form; runs first so later idiom patches (e.g. `any_to_dynamic`) still see
@@ -93,8 +95,13 @@ pub fn all_post_patches(root: &Path) -> Vec<Box<dyn Patch>> {
         Box::new(patches::type_aliases::TypeAliasStatements),
         // runs after the alias statements exist, so an alias promoted from
         // `_X: TypeAlias = …` this pass is a candidate on the next sync
-        Box::new(patches::private_type_aliases::PrivateTypeAliases::scan(
-            root,
+        Box::new(patches::private_type_aliases::PrivateTypeAliases::new(
+            private_names.aliases,
+        )),
+        // `protocol_keyword` above turned `class _X(Protocol)` into
+        // `protocol _X`, which is the form the scan looked for
+        Box::new(patches::private_protocols::PrivateProtocols::new(
+            private_names.protocols,
         )),
         Box::new(patches::homogeneous_tuple::HomogeneousTuple),
         Box::new(patches::any_to_dynamic::AnyToDynamic),

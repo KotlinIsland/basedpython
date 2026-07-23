@@ -181,11 +181,11 @@ def asynccontextmanager[**P, Element](func: (**P) -> AsyncGenerator[Element]) ->
 def asynccontextmanager[**P, Element](func: (**P) -> AsyncIterator[Element]) -> (**P) -> _AsyncGeneratorContextManager[Element]
 
 @type_check_only
-protocol _SupportsClose:
+private protocol SupportsClose:
     def close(self) -> object
 
 
-class closing[in out SupportsCloseT: _SupportsClose](AbstractContextManager[SupportsCloseT, None]):
+class closing[in out SupportsCloseT: SupportsClose](AbstractContextManager[SupportsCloseT, None]):
     """Context to automatically close something at the end of a block.
 
     Code like this:
@@ -208,11 +208,11 @@ class closing[in out SupportsCloseT: _SupportsClose](AbstractContextManager[Supp
     override def __exit__(self, *exc_info: Unused) -> None
 
 @type_check_only
-protocol _SupportsAclose:
+private protocol SupportsAclose:
     def aclose(self) -> Awaitable[object]
 
 
-class aclosing[in out SupportsAcloseT: _SupportsAclose](AbstractAsyncContextManager[SupportsAcloseT, None]):
+class aclosing[in out SupportsAcloseT: SupportsAclose](AbstractAsyncContextManager[SupportsAcloseT, None]):
     """Async context manager for safely finalizing an asynchronously cleaned-up
     resource such as an async generator, calling its ``aclose()`` method.
 
@@ -256,19 +256,19 @@ class suppress(AbstractContextManager[None, bool]):
 # of `redirect_stdout` and `redirect_stderr`.
 # https://github.com/python/typeshed/issues/14903
 @type_check_only
-protocol _SupportsRedirect:
+private protocol SupportsRedirect:
     def write(self, s: str, /) -> int
     def flush(self) -> None
 
 
-class _RedirectStream[in out SupportsRedirectT: _SupportsRedirect | None](AbstractContextManager[SupportsRedirectT, None]):
+class _RedirectStream[in out SupportsRedirectT: SupportsRedirect | None](AbstractContextManager[SupportsRedirectT, None]):
     init(self, new_target: SupportsRedirectT)
     override def __enter__(self) -> SupportsRedirectT
     override def __exit__(
         self, exctype: type[BaseException] | None, excinst: BaseException | None, exctb: TracebackType | None
     ) -> None
 
-class redirect_stdout[in out SupportsRedirectT: _SupportsRedirect | None](_RedirectStream[SupportsRedirectT]):
+class redirect_stdout[in out SupportsRedirectT: SupportsRedirect | None](_RedirectStream[SupportsRedirectT]):
     """Context manager for temporarily redirecting stdout to another file.
 
     # How to send help() to stderr
@@ -281,7 +281,7 @@ class redirect_stdout[in out SupportsRedirectT: _SupportsRedirect | None](_Redir
             help(pow)
     """
 
-class redirect_stderr[in out SupportsRedirectT: _SupportsRedirect | None](_RedirectStream[SupportsRedirectT]):
+class redirect_stderr[in out SupportsRedirectT: SupportsRedirect | None](_RedirectStream[SupportsRedirectT]):
     """Context manager for temporarily redirecting stderr to another file."""
 
 class _BaseExitStack[out ExitT: bool | None = bool | None]:

@@ -26,7 +26,7 @@ else:
 private type ClientConnectedCallback = (StreamReader, StreamWriter) -> (Awaitable[None] | None)
 
 @type_check_only
-protocol _ReaduntilBuffer(ReadableBuffer, Sized)
+private protocol ReaduntilBuffer(ReadableBuffer, Sized)
 
 async def open_connection(
     host: str | None = None,
@@ -209,7 +209,7 @@ class StreamReader:
         """
 
     if sys.version_info >= (3, 13):
-        async def readuntil(self, separator: _ReaduntilBuffer | (*: _ReaduntilBuffer) = b"\n") -> bytes:
+        async def readuntil(self, separator: ReaduntilBuffer | (*: ReaduntilBuffer) = b"\n") -> bytes:
             """Read data from the stream until ``separator`` is found.
 
             On success, the data and separator will be removed from the
@@ -237,7 +237,7 @@ class StreamReader:
             """
 
     else:
-        async def readuntil(self, separator: _ReaduntilBuffer = b"\n") -> bytes:
+        async def readuntil(self, separator: ReaduntilBuffer = b"\n") -> bytes:
             """Read data from the stream until ``separator`` is found.
 
             On success, the data and separator will be removed from the

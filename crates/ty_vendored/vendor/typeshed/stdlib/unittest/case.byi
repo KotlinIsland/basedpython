@@ -85,7 +85,7 @@ class SkipTest(Exception):
     init(self, reason: str, /)
 
 @type_check_only
-protocol _SupportsAbsAndDunderGE(SupportsDunderGE[dynamic], SupportsAbs[dynamic])
+private protocol SupportsAbsAndDunderGE(SupportsDunderGE[dynamic], SupportsAbs[dynamic])
 
 class TestCase:
     """A class whose instances are single test cases.
@@ -412,7 +412,7 @@ class TestCase:
         This method must be used as a context manager.
         """
 
-    def assertAlmostEqual[Other: SupportsSub[dynamic, dynamic]](self, first: Other, second: Other, places: None, msg: dynamic, delta: _SupportsAbsAndDunderGE) -> None:
+    def assertAlmostEqual[Other: SupportsSub[dynamic, dynamic]](self, first: Other, second: Other, places: None, msg: dynamic, delta: SupportsAbsAndDunderGE) -> None:
         """Fail if the two objects are unequal as determined by their
         difference rounded to the given number of decimal places
         (default 7) and comparing to zero, or by comparing that the
@@ -426,7 +426,7 @@ class TestCase:
         compare almost equal.
         """
     def assertAlmostEqual[Other: SupportsSub[dynamic, dynamic]](
-        self, first: Other, second: Other, places: None = None, msg: dynamic = None, *, delta: _SupportsAbsAndDunderGE
+        self, first: Other, second: Other, places: None = None, msg: dynamic = None, *, delta: SupportsAbsAndDunderGE
     ) -> None
     def assertAlmostEqual[Element](
         self,
@@ -445,7 +445,7 @@ class TestCase:
         delta: None = None,
     ) -> None
 
-    def assertNotAlmostEqual[Other: SupportsSub[dynamic, dynamic]](self, first: Other, second: Other, places: None, msg: dynamic, delta: _SupportsAbsAndDunderGE) -> None:
+    def assertNotAlmostEqual[Other: SupportsSub[dynamic, dynamic]](self, first: Other, second: Other, places: None, msg: dynamic, delta: SupportsAbsAndDunderGE) -> None:
         """Fail if the two objects are equal as determined by their
         difference rounded to the given number of decimal places
         (default 7) and comparing to zero, or by comparing that the
@@ -457,7 +457,7 @@ class TestCase:
         Objects that are equal automatically fail.
         """
     def assertNotAlmostEqual[Other: SupportsSub[dynamic, dynamic]](
-        self, first: Other, second: Other, places: None = None, msg: dynamic = None, *, delta: _SupportsAbsAndDunderGE
+        self, first: Other, second: Other, places: None = None, msg: dynamic = None, *, delta: SupportsAbsAndDunderGE
     ) -> None
     def assertNotAlmostEqual[Element](
         self,

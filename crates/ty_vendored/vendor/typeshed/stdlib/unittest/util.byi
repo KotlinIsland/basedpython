@@ -4,24 +4,24 @@ from collections.abc import MutableSequence, Sequence
 from typing import Final, Literal, Protocol, TypeAlias, TypeVar, type_check_only
 
 @type_check_only
-protocol _SupportsDunderLT:
+private protocol SupportsDunderLT:
     def __lt__(self, other: dynamic, /) -> bool
 
 @type_check_only
-protocol _SupportsDunderGT:
+private protocol SupportsDunderGT:
     def __gt__(self, other: dynamic, /) -> bool
 
 @type_check_only
-protocol _SupportsDunderLE:
+private protocol SupportsDunderLE:
     def __le__(self, other: dynamic, /) -> bool
 
 @type_check_only
-protocol _SupportsDunderGE:
+private protocol SupportsDunderGE:
     def __ge__(self, other: dynamic, /) -> bool
 
 _T = TypeVar("_T")
 _Mismatch: TypeAlias = tuple[_T, _T, int]
-private type SupportsComparison = _SupportsDunderLE | _SupportsDunderGE | _SupportsDunderGT | _SupportsDunderLT
+private type SupportsComparison = SupportsDunderLE | SupportsDunderGE | SupportsDunderGT | SupportsDunderLT
 
 _MAX_LENGTH: Final = 80
 _PLACEHOLDER_LEN: Final = 12

@@ -54,10 +54,10 @@ if sys.version_info >= (3, 11):
         """Return the cube root of x."""
 
 @type_check_only
-protocol _SupportsCeil[out Element]:
+private protocol SupportsCeil[out Element]:
     def __ceil__(self) -> Element
 
-def ceil[Element](x: _SupportsCeil[Element], /) -> Element:
+def ceil[Element](x: SupportsCeil[Element], /) -> Element:
     """Return the ceiling of x as an Integral.
 
     This is the smallest integer >= x.
@@ -129,10 +129,10 @@ def factorial(x: SupportsIndex, /) -> int:
     """Find n!."""
 
 @type_check_only
-protocol _SupportsFloor[out Element]:
+private protocol SupportsFloor[out Element]:
     def __floor__(self) -> Element
 
-def floor[Element](x: _SupportsFloor[Element], /) -> Element:
+def floor[Element](x: SupportsFloor[Element], /) -> Element:
     """Return the floor of x as an Integral.
 
     This is the largest integer <= x.
@@ -304,7 +304,7 @@ private type LiteralInteger = PositiveInteger | NegativeInteger | 0
 
 
 @type_check_only
-protocol _SupportsProdWithNoDefaultGiven(SupportsMul[dynamic, dynamic], SupportsRMul[int, dynamic])
+private protocol SupportsProdWithNoDefaultGiven(SupportsMul[dynamic, dynamic], SupportsRMul[int, dynamic])
 
 
 # This stub is based on the type stub for `builtins.sum`.
@@ -321,7 +321,7 @@ def prod(iterable: Iterable[bool | LiteralInteger], /, *, start: int = 1) -> int
     intended specifically for use with numeric values and may reject
     non-numeric types.
     """
-def prod[SupportsProdNoDefaultT: _SupportsProdWithNoDefaultGiven](iterable: Iterable[SupportsProdNoDefaultT], /) -> SupportsProdNoDefaultT | 1
+def prod[SupportsProdNoDefaultT: SupportsProdWithNoDefaultGiven](iterable: Iterable[SupportsProdNoDefaultT], /) -> SupportsProdNoDefaultT | 1
 def prod[MultiplicableT1: SupportsMul[dynamic, dynamic], MultiplicableT2: SupportsMul[dynamic, dynamic]](iterable: Iterable[MultiplicableT1], /, *, start: MultiplicableT2) -> MultiplicableT1 | MultiplicableT2
 
 def radians(x: _SupportsFloatOrIndex, /) -> float:
