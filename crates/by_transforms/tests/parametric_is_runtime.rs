@@ -122,13 +122,46 @@ assert _raised, "checked cast to a non-matching protocol raises"
 assert (D() cast? HasA[int]) is not None, "safe cast to a matching protocol returns the value"
 assert (D() cast? HasA[str]) is None, "safe cast to a non-matching protocol yields None"
 
-# a method-bearing protocol has no runtime residue, so the checked cast degrades
-# to an unchecked pass-through (it must never raise a `TypeError` from an
-# `isinstance` against the protocol)
-class HasGet[T](Protocol):
+# a *method* member is checked structurally too: its parameters are checked
+# contravariantly against the impl method's reified annotations, its return
+# covariantly. `in out T` keeps T invariant (and sidesteps the variance error
+# that a param-or-return-only bare T would raise)
+class Feed[in out T](Protocol):
+    def f(self, other: T): ...
+
+class FeedBool:
+    # `other = True` gives the parameter an inferred `bool` at runtime
+    def f(self, other = True):
+        pass
+
+assert (FeedBool() is Feed[int]) is False, "param contravariant: bool does not accept int"
+assert (FeedBool() is Feed[bool]) is True, "param matches bool"
+assert (C() is Feed[bool]) is False, "value without the method fails"
+
+# an impl with an extra *required* parameter the protocol doesn't supply can't
+# satisfy it — a protocol-shaped call would fail to provide that argument
+class ExtraRequired:
+    def f(self, other = True, *, extra):
+        pass
+
+assert (ExtraRequired() is Feed[bool]) is False, "extra required parameter fails"
+
+# a method return is covariant: an impl returning `bool` satisfies a protocol
+# asking for `int` (bool <: int), but not one asking for `str`
+class Get[in out T](Protocol):
     def get(self) -> T: ...
 
-assert (C() cast HasGet[int]) is not None, "method-protocol cast degrades, never raises"
+class GetBool:
+    def get(self) -> bool:
+        return True
+
+assert (GetBool() is Get[bool]) is True, "return matches bool"
+assert (GetBool() is Get[int]) is True, "return covariant: bool <: int"
+assert (GetBool() is Get[str]) is False, "return bool is not str"
+
+# a checked cast to a method protocol validates the same claim
+assert (GetBool() cast Get[int]) is not None, "method-protocol cast returns the value on a match"
+assert (GetBool() cast? Get[str]) is None, "method-protocol safe cast yields None on a mismatch"
 
 print("ok")
 "#;

@@ -47,13 +47,13 @@ pub enum CheckKind {
 pub enum CastCheck {
     /// a shallow or deep soundness check, exactly as a soundness insertion uses
     Kind(CheckKind),
-    /// basedpython: a data-member protocol target, validated structurally
-    /// against the value's reified class annotations (member by member)
+    /// basedpython: a protocol target, validated structurally against the
+    /// value's reified annotations (data and method members, member by member)
     Protocol { members: Vec<ProtocolMemberCheck> },
-    /// a protocol target with no faithful runtime check — a method member (its
-    /// shape isn't recoverable from a reified annotation) or an unspellable data
-    /// member. no sound residue exists, so the checked cast degrades to an
-    /// unchecked `typing.cast` rather than a crashing `isinstance`
+    /// a protocol target with no faithful runtime check — a member whose
+    /// specialized type has no runtime spelling (a callable attribute). no sound
+    /// residue exists, so the checked cast degrades to an unchecked
+    /// `typing.cast` rather than a crashing `isinstance`
     Unchecked,
 }
 

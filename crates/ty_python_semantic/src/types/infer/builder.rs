@@ -8558,8 +8558,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// test a class — so a target whose type arguments are erased at runtime
     /// (`list[int]`, unlike a user generic's `A[int]`) narrows to a claim that
     /// nothing verifies. a protocol target whose members can't be checked
-    /// structurally (a method member) has no runtime residue at all, so the
-    /// whole cast — not just its arguments — is unverified.
+    /// structurally (a member whose specialized type has no runtime spelling)
+    /// has no runtime residue at all, so the whole cast — not just its
+    /// arguments — is unverified.
     ///
     /// the wording describes what a runtime check *can* test rather than what
     /// the transpiler emits, since ty cannot see whether checked casts are
@@ -8577,9 +8578,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return;
         }
         let db = self.db();
-        // a data-member protocol *is* checked structurally, so it never reaches
-        // here; only a method-bearing (or synthesized) protocol does, and it has
-        // no runtime residue — the cast degrades to an unchecked `typing.cast`
+        // a protocol whose data and method members are all spellable *is*
+        // checked structurally, so it never reaches here; only a protocol with a
+        // member whose specialized type has no runtime spelling (a callable
+        // attribute) does, and it has no runtime residue — the cast degrades to
+        // an unchecked `typing.cast`
         if cast_target_is_unverifiable_protocol(db, self.file(), target) {
             let Some(builder) = self.context.report_lint(&ERASED_CAST_ARGUMENT, type_arg) else {
                 return;
@@ -8589,7 +8592,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 target.display(db)
             ));
             diagnostic.info(
-                "a protocol with a method member has no runtime residue; the cast is unchecked",
+                "a protocol member with no runtime spelling has no residue; the cast is unchecked",
             );
             return;
         }

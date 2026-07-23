@@ -1373,16 +1373,18 @@ declare_lint! {
     /// exactly the assumption a checked cast exists to rule out.
     ///
     /// A *user* generic does not have this problem: its instances carry
-    /// `__orig_class__`, so `A[int]` is checked in full. A *protocol* whose
-    /// members are all data members is checked structurally against the value's
-    /// reified class annotations; only a protocol with a *method* member has no
-    /// runtime residue at all, so the whole cast — not just its arguments — is
-    /// left unchecked.
+    /// `__orig_class__`, so `A[int]` is checked in full. A *protocol* is checked
+    /// structurally against the value's reified annotations — data members
+    /// against class annotations, method members against parameter/return
+    /// annotations. Only a protocol member whose specialized type has no runtime
+    /// spelling (a callable attribute) leaves the cast with no runtime residue,
+    /// so the whole cast — not just its arguments — is left unchecked.
     ///
     /// ## Example
     ///
     /// ```by
     /// from typing import Protocol
+    /// from collections.abc import Callable
     ///
     /// def f(x: object):
     ///     a = x cast list[int]   # warning: only `list` is checked
@@ -1394,11 +1396,11 @@ declare_lint! {
     /// def g(x: object):
     ///     a = x cast A[int]      # ok — checked in full via `__orig_class__`
     ///
-    /// class HasGet[T](Protocol):
-    ///     def get(self) -> T: ...
+    /// class HasCb[T](Protocol):
+    ///     cb: Callable[[T], T]
     ///
     /// def h(x: object):
-    ///     a = x cast HasGet[int]  # warning: a method protocol has no runtime check
+    ///     a = x cast HasCb[int]  # warning: a callable member has no runtime check
     /// ```
     pub(crate) static ERASED_CAST_ARGUMENT = {
         summary: "detects casts whose type arguments cannot be checked at runtime",

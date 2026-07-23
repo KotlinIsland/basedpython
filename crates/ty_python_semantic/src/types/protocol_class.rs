@@ -986,19 +986,39 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
             .any(|ty| matches!(ty, ProtocolMemberType::Value { ty, .. } if ty.is_todo()))
     }
 
-    /// basedpython: the instance-access data type of this member, plus whether
-    /// that access is readable and writable — the shape a parametric protocol
-    /// test (`x is A[int]`) checks against a value's reified annotation.
+    /// basedpython: the shape a parametric protocol test (`x is A[int]`) checks
+    /// against a value's reified annotations — a data member's specialized type
+    /// (with its read/write capabilities) or a method member's specialized
+    /// parameter and return types.
     ///
-    /// `None` for a method member: a method's specialization can't be recovered
-    /// from a reified attribute annotation, so a protocol that has one can't be
-    /// verified structurally at runtime this way.
-    pub(super) fn reified_annotation_check(
-        &self,
-        db: &'db dyn Db,
-    ) -> Option<(Type<'db>, bool, bool)> {
+    /// `None` for a member that can't be modeled this way: an overloaded method,
+    /// or a method whose instance type isn't a plain callable.
+    pub(super) fn reified_member_shape(&self, db: &'db dyn Db) -> Option<ReifiedMember<'db>> {
         if self.is_method() {
-            return None;
+            let Some(Type::Callable(callable)) = self
+                .capabilities(db)
+                .instance
+                .read
+                .and_then(|member| member.resolve(db))
+                .map(ProtocolMemberType::ty)
+            else {
+                return None;
+            };
+            // an overloaded method has no single parameter list to check against
+            let [signature] = callable.signatures(db).overloads.as_slice() else {
+                return None;
+            };
+            // the instance-access callable is already self-bound, so its
+            // positional parameters are exactly the ones a caller passes
+            let params = signature
+                .parameters()
+                .positional()
+                .map(super::signatures::Parameter::annotated_type)
+                .collect();
+            return Some(ReifiedMember::Method {
+                params,
+                ret: signature.return_ty,
+            });
         }
         let instance = self.capabilities(db).instance;
         let read = instance
@@ -1010,8 +1030,32 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
             .and_then(|member| member.resolve(db))
             .map(ProtocolMemberType::ty);
         let ty = read.or(write)?;
-        Some((ty, read.is_some(), write.is_some()))
+        Some(ReifiedMember::Attribute {
+            ty,
+            readable: read.is_some(),
+            writable: write.is_some(),
+        })
     }
+}
+
+/// basedpython: the reified shape of a protocol member, for a structural
+/// runtime check against a value's annotations (see
+/// [`ProtocolMember::reified_member_shape`])
+pub(super) enum ReifiedMember<'db> {
+    /// a data member: its instance-access type, and whether that access is
+    /// readable (covariant) and writable (contravariant)
+    Attribute {
+        ty: Type<'db>,
+        readable: bool,
+        writable: bool,
+    },
+    /// a method member: the specialized positional parameter types (after
+    /// `self`, each checked contravariantly) and the specialized return type
+    /// (checked covariantly)
+    Method {
+        params: Vec<Type<'db>>,
+        ret: Type<'db>,
+    },
 }
 
 fn property_get_member_type<'db>(

@@ -216,11 +216,10 @@ assert f(IntAttr()) is not None
 assert f(BoolAttr()) is None  # right member, wrong annotation
 ```
 
-## a method-bearing protocol target cannot be checked
+## a method-bearing protocol target is checked structurally
 
-A method member's specialization isn't recoverable from a reified annotation, so the whole cast has
-no runtime residue. The transpiler degrades it to an unchecked `typing.cast`; ty warns that it is
-unchecked.
+A method member is checked too: its parameters (contravariant) and return (covariant) are validated
+against the value method's reified annotations — no `erased-cast-argument`, the cast is checked.
 
 ```by
 from typing import Protocol
@@ -229,9 +228,26 @@ class HasGet[T](Protocol):
     def get(self) -> T: ...
 
 def f(x: object):
-    # error: [erased-cast-argument] "`HasGet[int]` cannot be checked at runtime"
-    b = x cast HasGet[int]
+    b = x cast HasGet[int]  # no erased-cast-argument: checked structurally
     reveal_type(b)  # revealed: HasGet[int]
+```
+
+## a protocol with an unspellable member cannot be checked
+
+A member whose specialized type has no runtime spelling — a callable attribute — leaves the cast
+with no runtime residue. The transpiler degrades it to an unchecked `typing.cast`; ty warns.
+
+```by
+from typing import Protocol
+from collections.abc import Callable
+
+class HasCb[T](Protocol):
+    cb: Callable[[T], T]
+
+def f(x: object):
+    # error: [erased-cast-argument] "`HasCb[int]` cannot be checked at runtime"
+    b = x cast HasCb[int]
+    reveal_type(b)  # revealed: HasCb[int]
 ```
 
 ## not valid in `.py` files
