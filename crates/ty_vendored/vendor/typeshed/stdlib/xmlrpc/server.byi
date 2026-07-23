@@ -112,33 +112,33 @@ from xmlrpc.client import Fault, _Marshallable
 
 # The dispatch accepts anywhere from 0 to N arguments, no easy way to allow this in mypy
 @type_check_only
-protocol _DispatchArity0:
+private protocol DispatchArity0:
     def __call__(self) -> _Marshallable
 
 @type_check_only
-protocol _DispatchArity1:
+private protocol DispatchArity1:
     def __call__(self, arg1: _Marshallable, /) -> _Marshallable
 
 @type_check_only
-protocol _DispatchArity2:
+private protocol DispatchArity2:
     def __call__(self, arg1: _Marshallable, arg2: _Marshallable, /) -> _Marshallable
 
 @type_check_only
-protocol _DispatchArity3:
+private protocol DispatchArity3:
     def __call__(self, arg1: _Marshallable, arg2: _Marshallable, arg3: _Marshallable, /) -> _Marshallable
 
 @type_check_only
-protocol _DispatchArity4:
+private protocol DispatchArity4:
     def __call__(
         self, arg1: _Marshallable, arg2: _Marshallable, arg3: _Marshallable, arg4: _Marshallable, /
     ) -> _Marshallable
 
 @type_check_only
-protocol _DispatchArityN:
+private protocol DispatchArityN:
     def __call__(self, *args: _Marshallable) -> _Marshallable
 
 private type DispatchProtocol = (
-    _DispatchArity0 | _DispatchArity1 | _DispatchArity2 | _DispatchArity3 | _DispatchArity4 | _DispatchArityN
+    DispatchArity0 | DispatchArity1 | DispatchArity2 | DispatchArity3 | DispatchArity4 | DispatchArityN
 )
 
 def resolve_dotted_attribute(obj: dynamic, attr: str, allow_dotted_names: bool = True) -> dynamic:  # undocumented

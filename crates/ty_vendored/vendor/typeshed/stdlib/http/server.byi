@@ -38,7 +38,7 @@ class ThreadingHTTPServer(socketserver.ThreadingMixIn, HTTPServer)
 
 if sys.version_info >= (3, 14):
     @type_check_only
-    protocol _SSLModule:
+    private protocol SSLModule:
         static def create_default_context(
             purpose: Purpose = ...,
             *,
@@ -48,7 +48,7 @@ if sys.version_info >= (3, 14):
         ) -> SSLContext
 
     class HTTPSServer(HTTPServer):
-        ssl: _SSLModule
+        ssl: SSLModule
         certfile: StrOrBytesPath
         keyfile: StrOrBytesPath | None
         password: _PasswordType | None

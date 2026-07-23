@@ -3,7 +3,7 @@ from typing import Final, Literal, Protocol, type_check_only
 from xml.etree.ElementTree import Element
 
 @type_check_only
-protocol _Loader:
+private protocol Loader:
     def __call__(self, href: FileDescriptorOrPath, parse: "xml", encoding: str | None = None) -> Element
     def __call__(self, href: FileDescriptorOrPath, parse: "text", encoding: str | None = None) -> str
 
@@ -19,6 +19,6 @@ class FatalIncludeError(SyntaxError)
 def default_loader(href: FileDescriptorOrPath, parse: "xml", encoding: str | None = None) -> Element
 def default_loader(href: FileDescriptorOrPath, parse: "text", encoding: str | None = None) -> str
 
-def include(elem: Element, loader: _Loader | None = None, base_url: str | None = None, max_depth: int | None = 6) -> None
+def include(elem: Element, loader: Loader | None = None, base_url: str | None = None, max_depth: int | None = 6) -> None
 
 class LimitedRecursiveIncludeError(FatalIncludeError)

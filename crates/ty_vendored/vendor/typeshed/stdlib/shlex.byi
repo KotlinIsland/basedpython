@@ -10,17 +10,17 @@ from typing_extensions import Self, deprecated
 __all__ = ["shlex", "split", "quote", "join"]
 
 @type_check_only
-protocol _ShlexInstream:
+private protocol ShlexInstream:
     def read(self, size: 1, /) -> str
     def readline(self) -> object
     def close(self) -> object
 
 if sys.version_info >= (3, 12):
-    def split(s: str | _ShlexInstream, comments: bool = False, posix: bool = True) -> list[str]:
+    def split(s: str | ShlexInstream, comments: bool = False, posix: bool = True) -> list[str]:
         """Split the string *s* using shell-like syntax."""
 
 else:
-    def split(s: str | _ShlexInstream, comments: bool = False, posix: bool = True) -> list[str]:
+    def split(s: str | ShlexInstream, comments: bool = False, posix: bool = True) -> list[str]:
         """Split the string *s* using shell-like syntax."""
     @deprecated("Passing None for 's' to shlex.split() is deprecated and will raise an error in Python 3.12.")
     def split(s: None, comments: bool = False, posix: bool = True) -> list[str]
@@ -43,17 +43,17 @@ class shlex:
     escapedquotes: str
     whitespace_split: bool
     infile: str | None
-    instream: _ShlexInstream
+    instream: ShlexInstream
     source: str
     debug: int
     lineno: int
     token: str
-    filestack: deque[(str | None, _ShlexInstream, int)]
+    filestack: deque[(str | None, ShlexInstream, int)]
     eof: str | None
     let punctuation_chars: str
     init(
         self,
-        instream: str | _ShlexInstream | None = None,
+        instream: str | ShlexInstream | None = None,
         infile: str | None = None,
         posix: bool = False,
         punctuation_chars: bool | str = False,
@@ -68,7 +68,7 @@ class shlex:
     def sourcehook(self, newfile: str) -> (str, TextIOWrapper) | None:
         """Hook called on a filename to be sourced."""
 
-    def push_source(self, newstream: str | _ShlexInstream, newfile: str | None = None) -> None:
+    def push_source(self, newstream: str | ShlexInstream, newfile: str | None = None) -> None:
         """Push an input source onto the lexer's input source stack."""
 
     def pop_source(self) -> None:

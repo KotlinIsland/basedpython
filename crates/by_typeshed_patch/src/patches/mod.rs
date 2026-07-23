@@ -18,6 +18,8 @@ pub mod init_shorthand;
 pub mod literal_unwrap;
 pub mod mapping;
 pub mod output_widening;
+pub(crate) mod private_names;
+pub mod private_protocols;
 pub mod private_type_aliases;
 pub mod property_to_let;
 pub mod protocol_keyword;

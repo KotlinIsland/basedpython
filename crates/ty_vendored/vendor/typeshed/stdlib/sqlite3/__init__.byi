@@ -258,26 +258,26 @@ type _IsolationLevel = "DEFERRED" | "EXCLUSIVE" | "IMMEDIATE" | None
 private type RowFactoryOptions = type[Row] | ((Cursor, tuple[dynamic, ...]) -> object) | None
 
 @type_check_only
-protocol _AnyParamWindowAggregateClass:
+private protocol AnyParamWindowAggregateClass:
     def step(self, *args: dynamic) -> object
     def inverse(self, *args: dynamic) -> object
     def value(self) -> SqliteData
     def finalize(self) -> SqliteData
 
 @type_check_only
-protocol _WindowAggregateClass:
+private protocol WindowAggregateClass:
     step: (...) -> object
     inverse: (...) -> object
     def value(self) -> SqliteData
     def finalize(self) -> SqliteData
 
 @type_check_only
-protocol _AggregateProtocol:
+private protocol AggregateProtocol:
     def step(self, value: int, /) -> object
     def finalize(self) -> int
 
 @type_check_only
-protocol _SingleParamWindowAggregateClass:
+private protocol SingleParamWindowAggregateClass:
     def step(self, param: dynamic, /) -> object
     def inverse(self, param: dynamic, /) -> object
     def value(self) -> SqliteData
@@ -382,11 +382,11 @@ class Connection:
         """
 
     if sys.version_info >= (3, 15):
-        def create_aggregate(self, name: str, n_arg: int, aggregate_class: () -> _AggregateProtocol, /) -> None:
+        def create_aggregate(self, name: str, n_arg: int, aggregate_class: () -> AggregateProtocol, /) -> None:
             """Creates a new aggregate."""
 
     else:
-        def create_aggregate(self, name: str, n_arg: int, aggregate_class: () -> _AggregateProtocol) -> None:
+        def create_aggregate(self, name: str, n_arg: int, aggregate_class: () -> AggregateProtocol) -> None:
             """Creates a new aggregate.
 
             Note: Passing keyword arguments 'name', 'n_arg' and 'aggregate_class'
@@ -399,7 +399,7 @@ class Connection:
         # num_params determines how many params will be passed to the aggregate class. We provide an overload
         # for the case where num_params = 1, which is expected to be the common case.
         def create_window_function(
-            self, name: str, num_params: 1, aggregate_class: (() -> _SingleParamWindowAggregateClass) | None, /
+            self, name: str, num_params: 1, aggregate_class: (() -> SingleParamWindowAggregateClass) | None, /
         ) -> None:
             """Creates or redefines an aggregate window function. Non-standard.
 
@@ -414,10 +414,10 @@ class Connection:
             """
         # And for num_params = -1, which means the aggregate must accept any number of parameters.
         def create_window_function(
-            self, name: str, num_params: -1, aggregate_class: (() -> _AnyParamWindowAggregateClass) | None, /
+            self, name: str, num_params: -1, aggregate_class: (() -> AnyParamWindowAggregateClass) | None, /
         ) -> None
         def create_window_function(
-            self, name: str, num_params: int, aggregate_class: (() -> _WindowAggregateClass) | None, /
+            self, name: str, num_params: int, aggregate_class: (() -> WindowAggregateClass) | None, /
         ) -> None
 
     def create_collation(self, name: str, callback: ((str, str) -> SupportsIndex) | None, /) -> None:

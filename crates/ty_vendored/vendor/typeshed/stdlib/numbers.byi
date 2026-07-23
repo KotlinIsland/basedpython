@@ -6,7 +6,7 @@ TODO: Fill out more detailed documentation on the operators.
 # Note: these stubs are incomplete. The more complex type
 # signatures are currently omitted.
 #
-# Use _ComplexLike, _RealLike and _IntegralLike for return types in this module
+# Use ComplexLike, _RealLike and IntegralLike for return types in this module
 # rather than `numbers.Complex`, `numbers.Real` and `numbers.Integral`,
 # to avoid an excessive number of `type: ignore`s in subclasses of these ABCs
 # (since type checkers don't see `complex` as a subtype of `numbers.Complex`,
@@ -21,45 +21,45 @@ __all__ = ["Number", "Complex", "Real", "Rational", "Integral"]
 # Protocols for return types
 ############################
 
-# `_ComplexLike` is a structural-typing approximation
+# `ComplexLike` is a structural-typing approximation
 # of the `Complex` ABC, which is not (and cannot be) a protocol
 #
 # NOTE: We can't include `__complex__` here,
-# as we want `int` to be seen as a subtype of `_ComplexLike`,
+# as we want `int` to be seen as a subtype of `ComplexLike`,
 # and `int.__complex__` does not exist :(
 @type_check_only
-protocol _ComplexLike:
-    def __neg__(self) -> _ComplexLike
-    def __pos__(self) -> _ComplexLike
+private protocol ComplexLike:
+    def __neg__(self) -> ComplexLike
+    def __pos__(self) -> ComplexLike
     def __abs__(self) -> _RealLike
 
 # _RealLike is a structural-typing approximation
 # of the `Real` ABC, which is not (and cannot be) a protocol
 @type_check_only
-protocol _RealLike(_ComplexLike):
-    def __trunc__(self) -> _IntegralLike
-    def __floor__(self) -> _IntegralLike
-    def __ceil__(self) -> _IntegralLike
+protocol _RealLike(ComplexLike):
+    def __trunc__(self) -> IntegralLike
+    def __floor__(self) -> IntegralLike
+    def __ceil__(self) -> IntegralLike
     def __float__(self) -> float
-    # Overridden from `_ComplexLike`
+    # Overridden from `ComplexLike`
     # for a more precise return type:
     override def __neg__(self) -> _RealLike
     override def __pos__(self) -> _RealLike
 
-# _IntegralLike is a structural-typing approximation
+# IntegralLike is a structural-typing approximation
 # of the `Integral` ABC, which is not (and cannot be) a protocol
 @type_check_only
-protocol _IntegralLike(_RealLike):
-    def __invert__(self) -> _IntegralLike
+private protocol IntegralLike(_RealLike):
+    def __invert__(self) -> IntegralLike
     def __int__(self) -> int
     def __index__(self) -> int
-    # Overridden from `_ComplexLike`
+    # Overridden from `ComplexLike`
     # for a more precise return type:
-    override def __abs__(self) -> _IntegralLike
+    override def __abs__(self) -> IntegralLike
     # Overridden from `RealLike`
     # for a more precise return type:
-    override def __neg__(self) -> _IntegralLike
-    override def __pos__(self) -> _IntegralLike
+    override def __neg__(self) -> IntegralLike
+    override def __pos__(self) -> IntegralLike
 
 #################
 # Module "proper"
@@ -77,7 +77,7 @@ class Number(metaclass=ABCMeta):
 
 # See comment at the top of the file
 # for why some of these return types are purposefully vague
-class Complex(Number, _ComplexLike):
+class Complex(Number, ComplexLike):
     """Complex defines the operations that work on the builtin complex type.
 
     In short, those are: a conversion to complex, .real, .imag, +, -,
@@ -109,46 +109,46 @@ class Complex(Number, _ComplexLike):
         This should subclass Real.
         """
 
-    abstract def __add__(self, other) -> _ComplexLike:
+    abstract def __add__(self, other) -> ComplexLike:
         """self + other"""
 
-    abstract def __radd__(self, other) -> _ComplexLike:
+    abstract def __radd__(self, other) -> ComplexLike:
         """other + self"""
 
-    override abstract def __neg__(self) -> _ComplexLike:
+    override abstract def __neg__(self) -> ComplexLike:
         """-self"""
 
-    override abstract def __pos__(self) -> _ComplexLike:
+    override abstract def __pos__(self) -> ComplexLike:
         """+self"""
 
-    def __sub__(self, other) -> _ComplexLike:
+    def __sub__(self, other) -> ComplexLike:
         """self - other"""
 
-    def __rsub__(self, other) -> _ComplexLike:
+    def __rsub__(self, other) -> ComplexLike:
         """other - self"""
 
-    abstract def __mul__(self, other) -> _ComplexLike:
+    abstract def __mul__(self, other) -> ComplexLike:
         """self * other"""
 
-    abstract def __rmul__(self, other) -> _ComplexLike:
+    abstract def __rmul__(self, other) -> ComplexLike:
         """other * self"""
 
-    abstract def __truediv__(self, other) -> _ComplexLike:
+    abstract def __truediv__(self, other) -> ComplexLike:
         """self / other: Should promote to float when necessary."""
 
-    abstract def __rtruediv__(self, other) -> _ComplexLike:
+    abstract def __rtruediv__(self, other) -> ComplexLike:
         """other / self"""
 
-    abstract def __pow__(self, exponent) -> _ComplexLike:
+    abstract def __pow__(self, exponent) -> ComplexLike:
         """self ** exponent; should promote to float or complex when necessary."""
 
-    abstract def __rpow__(self, base) -> _ComplexLike:
+    abstract def __rpow__(self, base) -> ComplexLike:
         """base ** self"""
 
     override abstract def __abs__(self) -> _RealLike:
         """Returns the Real distance from 0. Called for abs(self)."""
 
-    abstract def conjugate(self) -> _ComplexLike:
+    abstract def conjugate(self) -> ComplexLike:
         """(x+y*i).conjugate() returns (x-y*i)."""
 
     override abstract def __eq__(self, other: object) -> bool:
@@ -174,7 +174,7 @@ class Real(Complex, _RealLike):
         Called for float(self).
         """
 
-    override abstract def __trunc__(self) -> _IntegralLike:
+    override abstract def __trunc__(self) -> IntegralLike:
         """trunc(self): Truncates self to an Integral.
 
         Returns an Integral i such that:
@@ -185,14 +185,14 @@ class Real(Complex, _RealLike):
         i.e. "truncate towards 0".
         """
 
-    override abstract def __floor__(self) -> _IntegralLike:
+    override abstract def __floor__(self) -> IntegralLike:
         """Finds the greatest Integral <= self."""
 
-    override abstract def __ceil__(self) -> _IntegralLike:
+    override abstract def __ceil__(self) -> IntegralLike:
         """Finds the least Integral >= self."""
 
     @abstractmethod
-    def __round__(self, ndigits: None = None) -> _IntegralLike:
+    def __round__(self, ndigits: None = None) -> IntegralLike:
         """Rounds self to ndigits decimal places, defaulting to 0.
 
         If ndigits is omitted or None, returns an Integral, otherwise
@@ -265,11 +265,11 @@ class Rational(Real):
 
     __slots__ = ()
     @property
-    abstract def numerator(self) -> _IntegralLike:
+    abstract def numerator(self) -> IntegralLike:
         """The numerator of a rational number in lowest terms."""
 
     @property
-    abstract def denominator(self) -> _IntegralLike:
+    abstract def denominator(self) -> IntegralLike:
         """The denominator of a rational number in lowest terms.
 
         This denominator should be positive.
@@ -286,7 +286,7 @@ class Rational(Real):
 
 # See comment at the top of the file
 # for why some of these return types are purposefully vague
-class Integral(Rational, _IntegralLike):
+class Integral(Rational, IntegralLike):
     """Integral adds methods that work on integral numbers.
 
     In short, these are conversion to int, pow with modulus, and the
@@ -300,7 +300,7 @@ class Integral(Rational, _IntegralLike):
     override def __index__(self) -> int:
         """Called whenever an index is needed, such as in slicing"""
 
-    override abstract def __pow__(self, exponent, modulus=None) -> _IntegralLike:
+    override abstract def __pow__(self, exponent, modulus=None) -> IntegralLike:
         """self ** exponent % modulus, but maybe faster.
 
         Accept the modulus argument if you want to support the
@@ -309,63 +309,63 @@ class Integral(Rational, _IntegralLike):
         2-argument version described in Complex.
         """
 
-    abstract def __lshift__(self, other) -> _IntegralLike:
+    abstract def __lshift__(self, other) -> IntegralLike:
         """self << other"""
 
-    abstract def __rlshift__(self, other) -> _IntegralLike:
+    abstract def __rlshift__(self, other) -> IntegralLike:
         """other << self"""
 
-    abstract def __rshift__(self, other) -> _IntegralLike:
+    abstract def __rshift__(self, other) -> IntegralLike:
         """self >> other"""
 
-    abstract def __rrshift__(self, other) -> _IntegralLike:
+    abstract def __rrshift__(self, other) -> IntegralLike:
         """other >> self"""
 
-    abstract def __and__(self, other) -> _IntegralLike:
+    abstract def __and__(self, other) -> IntegralLike:
         """self & other"""
 
-    abstract def __rand__(self, other) -> _IntegralLike:
+    abstract def __rand__(self, other) -> IntegralLike:
         """other & self"""
 
-    abstract def __xor__(self, other) -> _IntegralLike:
+    abstract def __xor__(self, other) -> IntegralLike:
         """self ^ other"""
 
-    abstract def __rxor__(self, other) -> _IntegralLike:
+    abstract def __rxor__(self, other) -> IntegralLike:
         """other ^ self"""
 
-    abstract def __or__(self, other) -> _IntegralLike:
+    abstract def __or__(self, other) -> IntegralLike:
         """self | other"""
 
-    abstract def __ror__(self, other) -> _IntegralLike:
+    abstract def __ror__(self, other) -> IntegralLike:
         """other | self"""
 
-    override abstract def __invert__(self) -> _IntegralLike:
+    override abstract def __invert__(self) -> IntegralLike:
         """~self"""
 
     override def __float__(self) -> float:
         """float(self) == float(int(self))"""
 
-    let numerator: _IntegralLike
+    let numerator: IntegralLike
 
     let denominator: 1
 
     # Not actually overridden at runtime,
     # but we override these in the stub to give them more precise return types:
-    override abstract def __pos__(self) -> _IntegralLike:
+    override abstract def __pos__(self) -> IntegralLike:
         """+self"""
 
-    override abstract def __neg__(self) -> _IntegralLike:
+    override abstract def __neg__(self) -> IntegralLike:
         """-self"""
 
-    override abstract def __abs__(self) -> _IntegralLike:
+    override abstract def __abs__(self) -> IntegralLike:
         """Returns the Real distance from 0. Called for abs(self)."""
 
     @abstractmethod
-    override def __round__(self, ndigits: None = None) -> _IntegralLike:
+    override def __round__(self, ndigits: None = None) -> IntegralLike:
         """Rounds self to ndigits decimal places, defaulting to 0.
 
         If ndigits is omitted or None, returns an Integral, otherwise
         returns a Real. Rounds half toward even.
         """
     @abstractmethod
-    def __round__(self, ndigits: int) -> _IntegralLike
+    def __round__(self, ndigits: int) -> IntegralLike

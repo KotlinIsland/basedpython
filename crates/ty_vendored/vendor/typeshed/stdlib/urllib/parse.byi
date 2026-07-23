@@ -413,7 +413,7 @@ private type QueryType = (
 )
 
 @type_check_only
-protocol _QuoteVia:
+private protocol QuoteVia:
     def __call__(self, string: str, safe: str | bytes, encoding: str, errors: str, /) -> str
     def __call__(self, string: bytes, safe: str | bytes, /) -> str
 
@@ -423,7 +423,7 @@ def urlencode(
     safe: str | bytes = "",
     encoding: str | None = None,
     errors: str | None = None,
-    quote_via: _QuoteVia = ...,
+    quote_via: QuoteVia = ...,
 ) -> str:
     """Encode a dict or sequence of two-element tuples into a URL query string.
 

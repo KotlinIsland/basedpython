@@ -15,11 +15,11 @@ private type ReadTextMode = "rt"
 private type WriteTextMode = "wt" | "xt" | "at"
 
 @type_check_only
-protocol _FileBinaryRead(_streams._Reader):
+private protocol FileBinaryRead(_streams._Reader):
     def close(self) -> None
 
 @type_check_only
-protocol _FileBinaryWrite(SupportsWrite[bytes]):
+private protocol FileBinaryWrite(SupportsWrite[bytes]):
     def close(self) -> None
 
 class ZstdFile(_streams.BaseStream):
@@ -37,7 +37,7 @@ class ZstdFile(_streams.BaseStream):
 
     init(
         self,
-        file: StrOrBytesPath | _FileBinaryRead,
+        file: StrOrBytesPath | FileBinaryRead,
         /,
         mode: ReadBinaryMode = "r",
         *,
@@ -65,7 +65,7 @@ class ZstdFile(_streams.BaseStream):
         """
     init(
         self,
-        file: StrOrBytesPath | _FileBinaryWrite,
+        file: StrOrBytesPath | FileBinaryWrite,
         /,
         mode: WriteBinaryMode,
         *,
@@ -158,7 +158,7 @@ class ZstdFile(_streams.BaseStream):
     let mode: "rb" | "wb"
 
 def open(
-    file: StrOrBytesPath | _FileBinaryRead,
+    file: StrOrBytesPath | FileBinaryRead,
     /,
     mode: ReadBinaryMode = "rb",
     *,
@@ -198,7 +198,7 @@ def open(
     behavior, and line ending(s).
     """
 def open(
-    file: StrOrBytesPath | _FileBinaryWrite,
+    file: StrOrBytesPath | FileBinaryWrite,
     /,
     mode: WriteBinaryMode,
     *,

@@ -18,7 +18,7 @@ from typing import Protocol, type_check_only
 __all__ = ["compile_dir", "compile_file", "compile_path"]
 
 @type_check_only
-protocol _SupportsSearch:
+private protocol SupportsSearch:
     def search(self, string: str, /) -> dynamic
 
 def compile_dir(
@@ -26,7 +26,7 @@ def compile_dir(
     maxlevels: int | None = None,
     ddir: StrPath | None = None,
     force: bool = False,
-    rx: _SupportsSearch | None = None,
+    rx: SupportsSearch | None = None,
     quiet: int = 0,
     legacy: bool = False,
     optimize: int = -1,
@@ -67,7 +67,7 @@ def compile_file(
     fullname: StrPath,
     ddir: StrPath | None = None,
     force: bool = False,
-    rx: _SupportsSearch | None = None,
+    rx: SupportsSearch | None = None,
     quiet: int = 0,
     legacy: bool = False,
     optimize: int = -1,

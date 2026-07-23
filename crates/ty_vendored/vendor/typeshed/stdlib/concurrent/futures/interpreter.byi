@@ -9,7 +9,7 @@ from typing_extensions import Self, TypeVar, TypeVarTuple, Unpack
 private type Task = tuple[bytes, "function" | "script"]
 
 @type_check_only
-protocol _TaskFunc:
+private protocol TaskFunc:
     def __call__[**P, R](self, fn: (**P) -> R, *args: P.args, **kwargs: P.kwargs) -> (bytes, "function")
     def __call__(self, fn: str) -> (bytes, "script")
 
@@ -25,8 +25,8 @@ if sys.version_info >= (3, 14):
 
         class def prepare[*Ts](
             cls, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)
-        ) -> (() -> Self, _TaskFunc)
-        class def prepare(cls, initializer: () -> object, initargs: tuple[()]) -> (() -> Self, _TaskFunc)
+        ) -> (() -> Self, TaskFunc)
+        class def prepare(cls, initializer: () -> object, initargs: tuple[()]) -> (() -> Self, TaskFunc)
 
         init(self, initdata: Task)
         def __del__(self) -> None
@@ -42,10 +42,10 @@ if sys.version_info >= (3, 14):
 
         class def prepare_context(
             cls, initializer: () -> object, initargs: tuple[()]
-        ) -> (() -> WorkerContext, _TaskFunc)
+        ) -> (() -> WorkerContext, TaskFunc)
         class def prepare_context[*Ts](
             cls, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)
-        ) -> (() -> WorkerContext, _TaskFunc)
+        ) -> (() -> WorkerContext, TaskFunc)
 
         init(
             self,

@@ -56,7 +56,7 @@ __all__ = ["Error", "copy", "deepcopy"]
 
 
 @type_check_only
-protocol _SupportsReplace[out RT]:
+private protocol SupportsReplace[out RT]:
     # In reality doesn't support args, but there's no great way to express this.
     def __replace__(self, /, *_: dynamic, **changes: dynamic) -> RT
 
@@ -79,7 +79,7 @@ def copy[Element](x: Element) -> Element:
 if sys.version_info >= (3, 13):
     __all__ += ["replace"]
     # The types accepted by `**changes` match those of `obj.__replace__`.
-    def replace[RT](obj: _SupportsReplace[RT], /, **changes: dynamic) -> RT:
+    def replace[RT](obj: SupportsReplace[RT], /, **changes: dynamic) -> RT:
         """Return a new object replacing specified fields with new values.
 
         This is especially useful for immutable objects, like named tuples or

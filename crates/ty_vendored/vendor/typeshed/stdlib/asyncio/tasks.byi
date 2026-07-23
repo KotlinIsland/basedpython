@@ -82,9 +82,9 @@ ALL_COMPLETED: Final = concurrent.futures.ALL_COMPLETED
 
 if sys.version_info >= (3, 13):
     @type_check_only
-    protocol _SyncAndAsyncIterator[in out Element](Iterator[Coroutine[dynamic, dynamic, Element]], AsyncIterator[Future[Element]])
+    private protocol SyncAndAsyncIterator[in out Element](Iterator[Coroutine[dynamic, dynamic, Element]], AsyncIterator[Future[Element]])
 
-    def as_completed[Element](fs: Iterable[_FutureLike[Element]], *, timeout: float | None = None) -> _SyncAndAsyncIterator[Element]:
+    def as_completed[Element](fs: Iterable[_FutureLike[Element]], *, timeout: float | None = None) -> SyncAndAsyncIterator[Element]:
         """Create an iterator of awaitables or their results in completion order.
 
         Run the supplied awaitables concurrently. The returned object can be
@@ -444,7 +444,7 @@ elif sys.version_info >= (3, 12):
 if sys.version_info >= (3, 12):
 
     @type_check_only
-    protocol _CustomTaskConstructor[out TaskT: Task[dynamic]]:
+    private protocol CustomTaskConstructor[out TaskT: Task[dynamic]]:
         def __call__(
             self,
             coro: _TaskCompatibleCoro[dynamic],
@@ -457,7 +457,7 @@ if sys.version_info >= (3, 12):
         ) -> TaskT
 
     @type_check_only
-    protocol _EagerTaskFactoryType[out TaskT: Task[dynamic]]:
+    private protocol EagerTaskFactoryType[out TaskT: Task[dynamic]]:
         def __call__(
             self,
             loop: AbstractEventLoop,
@@ -467,7 +467,7 @@ if sys.version_info >= (3, 12):
             context: Context | None = None,
         ) -> TaskT
 
-    def create_eager_task_factory[TaskT: Task[dynamic]](custom_task_constructor: _CustomTaskConstructor[TaskT]) -> _EagerTaskFactoryType[TaskT]:
+    def create_eager_task_factory[TaskT: Task[dynamic]](custom_task_constructor: CustomTaskConstructor[TaskT]) -> EagerTaskFactoryType[TaskT]:
         """Create a function suitable for use as a task factory on an event-loop.
 
         Example usage:
