@@ -896,8 +896,9 @@ reveal_type(SimpleMixed("foo"))  # revealed: SimpleMixed
 
 ### Multiple matching `__new__` overloads
 
-If overload resolution for `__new__` falls back to `Unknown` because the argument is `Any` or
-`Unknown`, we should still validate downstream constructors:
+If overload resolution for `__new__` stays ambiguous because the argument is `Any` or `Unknown`, so
+that the call evaluates to the unsafe union of the possible returns, we should still validate
+downstream constructors:
 
 ```py
 from typing import Any, overload
@@ -916,16 +917,16 @@ class AmbiguousMixed:
 
 def _(a: Any, u: Unknown):
     # error: [too-many-positional-arguments]
-    reveal_type(AmbiguousMixed(a))  # revealed: Unknown
+    reveal_type(AmbiguousMixed(a))  # revealed: UnsafeUnion[str, AmbiguousMixed]
 
     # error: [too-many-positional-arguments]
-    reveal_type(AmbiguousMixed(u))  # revealed: Unknown
+    reveal_type(AmbiguousMixed(u))  # revealed: UnsafeUnion[str, AmbiguousMixed]
 ```
 
 ### Mixed `__new__` overloads should not become declaration-order dependent
 
 Reversing the declaration order of the same mixed overload set should not change the result when
-overload resolution falls back to `Unknown`.
+overload resolution stays ambiguous.
 
 ```py
 from typing import Any, overload
@@ -944,10 +945,10 @@ class ReverseAmbiguousMixed:
 
 def _(a: Any, u: Unknown):
     # error: [too-many-positional-arguments]
-    reveal_type(ReverseAmbiguousMixed(a))  # revealed: Unknown
+    reveal_type(ReverseAmbiguousMixed(a))  # revealed: UnsafeUnion[str, ReverseAmbiguousMixed]
 
     # error: [too-many-positional-arguments]
-    reveal_type(ReverseAmbiguousMixed(u))  # revealed: Unknown
+    reveal_type(ReverseAmbiguousMixed(u))  # revealed: UnsafeUnion[str, ReverseAmbiguousMixed]
 ```
 
 ### Overloaded non-instance `__new__` should preserve matched return type

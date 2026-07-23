@@ -34,7 +34,7 @@ reveal_type(b(1, name="z"))  # revealed: "asdf"
 ```by
 v: (*: int) -> int = lambda *a: sum(a)
 # variadic Protocol return narrows to the inferred lambda body type
-reveal_type(v(1, 2, 3))  # revealed: Unknown
+reveal_type(v(1, 2, 3))  # revealed: UnsafeUnion[int, Unknown | 0]
 ```
 
 ## marker callable

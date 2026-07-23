@@ -107,6 +107,7 @@ pub use crate::types::typevar::{
     BindingContext, BoundTypeVarIdentity, BoundTypeVarInstance, ParamSpecAttrKind,
     TypeVarBoundOrConstraints, TypeVarKind, TypeVarNonce,
 };
+pub use crate::types::unsafe_union::UnsafeUnionType;
 pub use crate::types::variance::TypeVarVariance;
 use crate::types::variance::VarianceInferable;
 use crate::types::visitor::any_over_type;
@@ -185,6 +186,7 @@ mod type_form;
 mod typed_dict;
 mod typevar;
 mod unpacker;
+mod unsafe_union;
 mod variance;
 pub(crate) mod visibility;
 mod visitor;
@@ -1007,6 +1009,11 @@ pub enum Type<'db> {
     Union(UnionType<'db>),
     /// The set of objects in all of the types in the intersection
     Intersection(IntersectionType<'db>),
+    /// `ty_extensions.UnsafeUnion[A, B]`: a gradual type whose materializations are exactly
+    /// `A` and `B`. It is a union in target position (both an `A` and a `B` can be assigned
+    /// to it) and an intersection in source position (it can be used as an `A` or as a `B`,
+    /// and offers the members of both). See [`UnsafeUnionType`].
+    UnsafeUnion(UnsafeUnionType<'db>),
     /// An enum instance with one or more canonical enum members excluded.
     EnumComplement(EnumComplementType<'db>),
     /// Represents objects whose `__bool__` method is deterministic:
@@ -1305,12 +1312,16 @@ impl<'db> Type<'db> {
         if cycle.iteration() <= crate::TAINTED_CYCLES {
             let self_degraded_by_overload =
                 any_over_type(db, self, false, |ty| {
-                    matches!(ty, Type::Dynamic(DynamicType::AmbiguousOverload))
+                    matches!(
+                        ty,
+                        Type::Dynamic(DynamicType::AmbiguousOverload) | Type::UnsafeUnion(_)
+                    )
                 }) && !any_over_type(db, self, false, |ty| ty.is_divergent())
                     && any_over_type(db, previous, false, |ty| ty.is_divergent());
             // Generally, the precision of type inference improves with each iteration.
             // However, overload is an exception; as iterations progress, overload matching may become ambiguous, and a reversal of precision can occur.
-            // This kind of precision degradation can be determined by whether the type contains `DynamicType::AmbiguousOverload`.
+            // This kind of precision degradation can be determined by whether the type contains
+            // `DynamicType::AmbiguousOverload` or an unsafe union, the two results of an ambiguous overload match.
             if self_degraded_by_overload {
                 UnionType::from_elements_cycle_recovery(db, [previous, self])
             } else {
@@ -2058,9 +2069,10 @@ impl<'db> Type<'db> {
                 NegativeIntersectionElements::Single(*self),
             )),
 
-            Type::Union(_) | Type::Intersection(_) | Type::EnumComplement(_) => {
-                IntersectionBuilder::new(db).add_negative(*self).build()
-            }
+            Type::Union(_)
+            | Type::Intersection(_)
+            | Type::EnumComplement(_)
+            | Type::UnsafeUnion(_) => IntersectionBuilder::new(db).add_negative(*self).build(),
         }
     }
 
@@ -2093,7 +2105,7 @@ impl<'db> Type<'db> {
             | Type::TypeAlias(_)
             | Type::SubclassOf(_) => true,
             Type::TypeForm(typeform) => typeform.type_argument(db).is_spellable(db),
-            Type::Intersection(_) => false,
+            Type::Intersection(_) | Type::UnsafeUnion(_) => false,
             Type::EnumComplement(complement) => complement.is_spellable(db),
             Type::Divergent(_)
             | Type::SpecialForm(_)
@@ -2129,6 +2141,7 @@ impl<'db> Type<'db> {
             | Type::TypeAlias(_) => true,
 
             Type::Intersection(_)
+            | Type::UnsafeUnion(_)
             | Type::EnumComplement(_)
             | Type::Divergent(_)
             | Type::SpecialForm(_)
@@ -2350,6 +2363,11 @@ impl<'db> Type<'db> {
             Type::Intersection(intersection) => intersection
                 .recursive_type_normalized_impl(db, div, nested)
                 .map(Type::Intersection),
+            // Like unions and intersections, an unsafe union is "flat" from the perspective
+            // of recursive types, so `nested` is passed through unchanged.
+            Type::UnsafeUnion(unsafe_union) => unsafe_union.try_map_elements(db, |element| {
+                element.recursive_type_normalized_impl(db, div, nested)
+            }),
             Type::EnumComplement(complement) => complement
                 .to_intersection(db)
                 .recursive_type_normalized_impl(db, div, nested),
@@ -2630,6 +2648,9 @@ impl<'db> Type<'db> {
                 .enum_complement(db)
                 .is_some_and(|complement| complement.is_singleton(db)),
             Type::EnumComplement(complement) => complement.is_singleton(db),
+            // Even if every element were a singleton, they are different singletons; which one
+            // this type is remains unknown.
+            Type::UnsafeUnion(_) => false,
             Type::AlwaysTruthy | Type::AlwaysFalsy => false,
             Type::TypeIs(type_is) => type_is.is_bound(db),
             Type::TypeGuard(type_guard) => type_guard.is_bound(db),
@@ -2725,6 +2746,7 @@ impl<'db> Type<'db> {
             | Type::Divergent(_)
             | Type::Never
             | Type::Union(..)
+            | Type::UnsafeUnion(_)
             | Type::AlwaysTruthy
             | Type::AlwaysFalsy
             | Type::Callable(_)
@@ -2778,6 +2800,14 @@ impl<'db> Type<'db> {
             })),
             Type::Intersection(inter) => {
                 Some(inter.map_with_boundness_and_qualifiers(db, |elem| {
+                    elem.find_name_in_mro_with_policy(db, name, policy)
+                        // Fall back to Unbound, similar to the union case (see above).
+                        .unwrap_or_default()
+                }))
+            }
+
+            Type::UnsafeUnion(unsafe_union) => {
+                Some(unsafe_union.map_with_boundness_and_qualifiers(db, |elem| {
                     elem.find_name_in_mro_with_policy(db, name, policy)
                         // Fall back to Unbound, similar to the union case (see above).
                         .unwrap_or_default()
@@ -3298,6 +3328,9 @@ impl<'db> Type<'db> {
             Type::EnumComplement(complement) => {
                 enums::instance_member_for_enum_complement(db, *complement, name)
             }
+
+            Type::UnsafeUnion(unsafe_union) => unsafe_union
+                .map_with_boundness_and_qualifiers(db, |elem| elem.instance_member(db, name)),
 
             Type::Dynamic(_) | Type::Divergent(_) | Type::Never => Place::bound(self).into(),
 
@@ -4121,6 +4154,16 @@ impl<'db> Type<'db> {
 
                 Type::EnumComplement(complement) => {
                     enums::member_lookup_for_enum_complement(db, complement, name_str, policy)
+                }
+
+                // The member is available as long as *some* materialization has it. This is the
+                // intersection face of an unsafe union, and the reason `UnsafeUnion[int, str]`
+                // answers both `.imag` and `.upper`.
+                Type::UnsafeUnion(unsafe_union) => {
+                    let receiver = Some(receiver.unwrap_or(this));
+                    unsafe_union.map_with_boundness_and_qualifiers(db, |elem| {
+                        elem.member_lookup_with_policy_and_receiver(db, name_str, policy, receiver)
+                    })
                 }
 
                 Type::Dynamic(..) | Type::Divergent(_) | Type::Never => Place::bound(this).into(),
@@ -5127,6 +5170,17 @@ impl<'db> Type<'db> {
                 self,
                 intersection
                     .positive_elements_or_object(db)
+                    .map(|element| element.bindings(db)),
+            ),
+
+            // Callable as long as *some* materialization is, like an intersection; but the
+            // results of the callable materializations combine back into an unsafe union
+            // rather than an intersection.
+            Type::UnsafeUnion(unsafe_union) => Bindings::from_unsafe_union(
+                self,
+                unsafe_union
+                    .elements(db)
+                    .iter()
                     .map(|element| element.bindings(db)),
             ),
 
@@ -6231,6 +6285,7 @@ impl<'db> Type<'db> {
                 InstanceProjection::OverApproximation(Type::NewTypeInstance(newtype)),
             ),
             Type::Union(union) => union.to_instance(db),
+            Type::UnsafeUnion(unsafe_union) => unsafe_union.to_instance(db),
             // If there is no bound or constraints on a typevar `T`, `T: object` implicitly, which
             // has no instance type. Otherwise, synthesize a typevar with bound or constraints
             // mapped through `to_instance`.
@@ -6571,6 +6626,35 @@ impl<'db> Type<'db> {
 
             Type::Intersection(_) => Ok(todo_type!("Type::Intersection.in_type_expression")),
 
+            Type::UnsafeUnion(unsafe_union) => {
+                let mut invalid_expressions = smallvec::SmallVec::default();
+                let ty = unsafe_union.map_elements(db, |element| {
+                    match element.in_type_expression(
+                        db,
+                        scope_id,
+                        typevar_binding_context,
+                        inference_flags,
+                    ) {
+                        Ok(type_expr) => type_expr,
+                        Err(InvalidTypeExpressionError {
+                            fallback_type,
+                            invalid_expressions: new_invalid_expressions,
+                        }) => {
+                            invalid_expressions.extend(new_invalid_expressions);
+                            fallback_type
+                        }
+                    }
+                });
+                if invalid_expressions.is_empty() {
+                    Ok(ty)
+                } else {
+                    Err(InvalidTypeExpressionError {
+                        fallback_type: ty,
+                        invalid_expressions,
+                    })
+                }
+            }
+
             Type::TypeAlias(alias) => alias.value_type(db).in_type_expression(
                 db,
                 scope_id,
@@ -6608,6 +6692,9 @@ impl<'db> Type<'db> {
             Type::SpecialForm(special_form) => special_form.to_meta_type(db),
             Type::PropertyInstance(property) => property.instance_class(db).to_class_literal(db),
             Type::Union(union) => union.map(db, |ty| ty.to_meta_type(db)),
+            Type::UnsafeUnion(unsafe_union) => {
+                unsafe_union.map_elements(db, |element| element.to_meta_type(db))
+            }
             Type::TypeIs(_) | Type::TypeGuard(_) => KnownClass::Bool.to_class_literal(db),
             Type::TypeForm(_) => Type::object().to_meta_type(db),
             Type::LiteralValue(literal) => match literal.kind() {
@@ -6682,6 +6769,9 @@ impl<'db> Type<'db> {
     pub(crate) fn dunder_class(self, db: &'db dyn Db) -> Type<'db> {
         match self {
             Type::Union(union) => union.map(db, |element| element.dunder_class(db)),
+            Type::UnsafeUnion(unsafe_union) => {
+                unsafe_union.map_elements(db, |element| element.dunder_class(db))
+            }
             Type::Intersection(intersection) => intersection
                 .try_dunder_class(db)
                 .unwrap_or_else(|| self.to_meta_type(db)),
@@ -7010,6 +7100,30 @@ impl<'db> Type<'db> {
             Type::Union(union) => union.map_leave_aliases(db, |element| {
                 element.apply_type_mapping_impl(db, type_mapping, tcx, visitor)
             }),
+
+            // Materializing an unsafe union picks *one* of its materializations, so the top
+            // materialization is the union of the elements' tops and the bottom materialization
+            // is the intersection of their bottoms.
+            Type::UnsafeUnion(unsafe_union) => match type_mapping {
+                TypeMapping::Materialize(MaterializationKind::Top) => UnionType::from_elements(
+                    db,
+                    unsafe_union.elements(db).iter().map(|element| {
+                        element.apply_type_mapping_impl(db, type_mapping, tcx, visitor)
+                    }),
+                ),
+                TypeMapping::Materialize(MaterializationKind::Bottom) => unsafe_union
+                    .elements(db)
+                    .iter()
+                    .fold(IntersectionBuilder::new(db), |builder, element| {
+                        builder.add_positive(
+                            element.apply_type_mapping_impl(db, type_mapping, tcx, visitor),
+                        )
+                    })
+                    .build(),
+                _ => unsafe_union.map_elements(db, |element| {
+                    element.apply_type_mapping_impl(db, type_mapping, tcx, visitor)
+                }),
+            },
             Type::Intersection(intersection) => {
                 let mut builder = IntersectionBuilder::new(db);
                 for positive in intersection.positive(db) {
@@ -7314,6 +7428,11 @@ impl<'db> Type<'db> {
 
             Type::Union(union) => {
                 for element in union.elements(db) {
+                    element.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
+                }
+            }
+            Type::UnsafeUnion(unsafe_union) => {
+                for element in unsafe_union.elements(db) {
                     element.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
                 }
             }
@@ -7685,7 +7804,7 @@ impl<'db> Type<'db> {
 
             Self::TypedDict(typed_dict) => typed_dict.type_definition(db),
 
-            Self::Union(_) => None,
+            Self::Union(_) | Self::UnsafeUnion(_) => None,
             Self::Intersection(intersection) => {
                 let alternatives = intersection.finite_alternatives(db)?;
                 let [alternative] = alternatives.as_slice() else {
@@ -8041,6 +8160,8 @@ impl<'db> VarianceInferable<'db> for Type<'db> {
                 .iter()
                 .map(|ty| ty.variance_of(db, typevar))
                 .collect(),
+
+            Type::UnsafeUnion(unsafe_union) => unsafe_union.variance_of(db, typevar),
 
             // Products are covariant in their conjuncts. For negative
             // conjuncts, they're contravariant. To see this, suppose we have

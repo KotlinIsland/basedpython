@@ -62,6 +62,41 @@ s: Intersection[P, Q] = S()
 ```
 """
 
+UnsafeUnion: _SpecialForm
+"""
+`UnsafeUnion[T1, T2, ..., Tn]` fuses a union with an intersection: it is a *gradual* type whose
+possible materializations are exactly `T1`, `T2`, ..., `Tn`.
+
+Like a union, any `T1` or any `T2` can be assigned *to* it. Like an intersection, a value *of* it
+can be used where a `T1` or where a `T2` is wanted, and offers the members of both:
+
+```python
+def f(a: UnsafeUnion[int, str]):
+    a.imag    # ok: `int` has it
+    a.upper() # ok: `str` has it
+
+f(1)   # ok
+f("s") # ok
+```
+
+Unlike `Any` the menu of materializations is finite, so the type still rejects things: an
+`UnsafeUnion[int, str]` is not assignable to `bytes`, and a member that neither `int` nor `str`
+has is still an error.
+
+ty infers this type when a call to an overloaded function is ambiguous because an argument is
+gradual, since the surviving overloads' return types are exactly the possible results:
+
+```python
+@overload
+def g(a: int) -> int: ...
+@overload
+def g(a: str) -> str: ...
+
+def h(a: Any):
+    reveal_type(g(a))  # revealed: UnsafeUnion[int, str]
+```
+"""
+
 Top: _SpecialForm
 """
 `Top[T]` represents the "top materialization" of `T`.

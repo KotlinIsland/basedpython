@@ -3120,6 +3120,22 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
             }
 
+            // Deletion succeeds if it succeeds for some materialization, the same any-arm rule
+            // as an intersection.
+            Type::UnsafeUnion(unsafe_union) => {
+                let elements = unsafe_union.elements(db);
+                if elements.iter().any(|element_ty| {
+                    self.validate_attribute_deletion(target, *element_ty, attribute, false)
+                }) {
+                    true
+                } else {
+                    if emit_diagnostics && let Some(element_ty) = elements.first() {
+                        self.validate_attribute_deletion(target, *element_ty, attribute, true);
+                    }
+                    false
+                }
+            }
+
             Type::EnumComplement(complement) => self.validate_attribute_deletion(
                 target,
                 complement.remaining_literal_union(db),
@@ -5340,7 +5356,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
                 // Intersections are currently not handled here because that would require
                 // the decorator to be explicitly annotated as returning an intersection.
-                Type::Intersection(_) | Type::EnumComplement(_) => None,
+                Type::Intersection(_) | Type::EnumComplement(_) | Type::UnsafeUnion(_) => None,
                 // All other types cannot have a callable kind propagated to them.
                 Type::Dynamic(_)
                 | Type::Divergent(_)
@@ -12065,6 +12081,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 | Type::PropertyInstance(_)
                 | Type::Union(_)
                 | Type::Intersection(_)
+                // the dunder lookup resolves across the materializations
+                | Type::UnsafeUnion(_)
                 | Type::EnumComplement(_)
                 | Type::AlwaysTruthy
                 | Type::AlwaysFalsy

@@ -10,7 +10,7 @@ use crate::{
     types::{
         BoundTypeVarInstance, ClassBase, ClassType, DivergentType, DynamicType,
         IntersectionBuilder, KnownClass, MemberLookupPolicy, SpecialFormType, SubclassOfInner,
-        SubclassOfType, Type, TypeVarBoundOrConstraints, UnionBuilder,
+        SubclassOfType, Type, TypeVarBoundOrConstraints, UnionBuilder, UnsafeUnionType,
         constraints::ConstraintSet,
         context::InferContext,
         diagnostic::{INVALID_SUPER_ARGUMENT, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS},
@@ -742,6 +742,24 @@ impl<'db> BoundSuperType<'db> {
                     }
                 }
                 return Ok(builder.build());
+            }
+            // `super()` in one materialization is a valid `super()` for the unsafe union, the
+            // same any-element rule as an intersection.
+            Type::UnsafeUnion(unsafe_union) => {
+                let mut elements = Vec::new();
+                for element in unsafe_union.elements(db) {
+                    if let Ok(good_element) = delegate_to(*element) {
+                        elements.push(good_element);
+                    }
+                }
+                if elements.is_empty() {
+                    return Err(BoundSuperError::AbstractOwnerType {
+                        owner_type,
+                        pivot_class: pivot_class_type,
+                        typevar_context: None,
+                    });
+                }
+                return Ok(UnsafeUnionType::from_elements(db, elements));
             }
             Type::EnumComplement(complement) => {
                 return delegate_to(complement.to_intersection(db));

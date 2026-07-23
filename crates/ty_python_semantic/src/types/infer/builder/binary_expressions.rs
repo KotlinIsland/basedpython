@@ -15,7 +15,7 @@ use crate::types::typevar::TypeVarConstraints;
 use crate::types::{
     DynamicType, InternedConstraintSet, KnownClass, KnownInstanceType, LiteralValueTypeKind,
     MemberLookupPolicy, Type, TypeContext, TypeVarBoundOrConstraints, TypedDictType, UnionBuilder,
-    UnionType, UnionTypeInstance,
+    UnionType, UnionTypeInstance, UnsafeUnionType,
 };
 
 enum BinaryExpressionOperandTypes<'db> {
@@ -425,6 +425,46 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     tcx,
                 )
             }),
+
+            // Only the materializations that support the operator can be the one at hand, so
+            // the results of those combine back into an unsafe union; the operator is
+            // unsupported only if no materialization supports it.
+            (Type::UnsafeUnion(lhs_unsafe_union), rhs, _) => {
+                let results: Vec<_> = lhs_unsafe_union
+                    .elements(db)
+                    .iter()
+                    .filter_map(|lhs_element| {
+                        self.infer_binary_expression_type_impl(
+                            node,
+                            emitted_division_by_zero_diagnostic,
+                            *lhs_element,
+                            rhs,
+                            op,
+                            visitor,
+                            tcx,
+                        )
+                    })
+                    .collect();
+                (!results.is_empty()).then(|| UnsafeUnionType::from_elements(db, results))
+            }
+            (lhs, Type::UnsafeUnion(rhs_unsafe_union), _) => {
+                let results: Vec<_> = rhs_unsafe_union
+                    .elements(db)
+                    .iter()
+                    .filter_map(|rhs_element| {
+                        self.infer_binary_expression_type_impl(
+                            node,
+                            emitted_division_by_zero_diagnostic,
+                            lhs,
+                            *rhs_element,
+                            op,
+                            visitor,
+                            tcx,
+                        )
+                    })
+                    .collect();
+                (!results.is_empty()).then(|| UnsafeUnionType::from_elements(db, results))
+            }
 
             (Type::TypeAlias(alias), rhs, _) => visitor.visit(db, (left_ty, op, right_ty), || {
                 self.infer_binary_expression_type_impl(

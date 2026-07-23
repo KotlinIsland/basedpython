@@ -518,6 +518,11 @@ impl ClassInfoConstraintFunction {
             Type::Union(union) => union.try_map(db, |element| {
                 self.generate_constraint(db, *element, is_positive)
             }),
+            // Any materialization could be the actual class-info argument, so narrowing must
+            // allow for all of them: the union face.
+            Type::UnsafeUnion(unsafe_union) => {
+                self.generate_constraint(db, unsafe_union.to_union(db), is_positive)
+            }
             Type::TypeVar(bound_typevar) => {
                 match bound_typevar.typevar(db).bound_or_constraints(db)? {
                     TypeVarBoundOrConstraints::UpperBound(bound) => {
@@ -4370,6 +4375,10 @@ fn is_or_contains_typeddict<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
             .elements(db)
             .iter()
             .any(|union_member_ty| is_or_contains_typeddict(db, *union_member_ty)),
+        Type::UnsafeUnion(unsafe_union) => unsafe_union
+            .elements(db)
+            .iter()
+            .any(|element| is_or_contains_typeddict(db, *element)),
         Type::TypeAlias(alias) => is_or_contains_typeddict(db, alias.value_type(db)),
 
         Type::Dynamic(_)
@@ -4535,6 +4544,10 @@ fn all_matching_typeddict_fields_have_literal_types<'db>(
                     *union_member_ty,
                     field_name,
                 )
+        }),
+        Type::UnsafeUnion(unsafe_union) => unsafe_union.elements(db).iter().all(|element| {
+            !is_or_contains_typeddict(db, *element)
+                || all_matching_typeddict_fields_have_literal_types(db, *element, field_name)
         }),
         Type::Overlapping(overlapping) => all_matching_typeddict_fields_have_literal_types(
             db,

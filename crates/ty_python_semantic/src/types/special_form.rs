@@ -89,6 +89,8 @@ pub enum SpecialFormType {
     Not,
     /// The symbol `ty_extensions.Intersection`
     Intersection,
+    /// The symbol `ty_extensions.UnsafeUnion`
+    UnsafeUnion,
     /// The symbol `ty_extensions.Overlapping`
     Overlapping,
     /// The symbol `ty_extensions._internal.TypeOf`
@@ -204,6 +206,7 @@ impl SpecialFormType {
             | Self::Top
             | Self::Bottom
             | Self::Intersection
+            | Self::UnsafeUnion
             | Self::Overlapping
             | Self::CallableTypeOf
             | Self::RegularCallableTypeOf
@@ -330,6 +333,7 @@ impl SpecialFormType {
             AlwaysFalsy,
             Not,
             Intersection,
+            UnsafeUnion,
             Overlapping,
             TypeOf,
             CallableTypeOf,
@@ -379,6 +383,7 @@ impl SpecialFormType {
                     SpecialFormType::RegularCallableTypeOf => Self::RegularCallableTypeOf,
                     SpecialFormType::Concatenate => Self::Concatenate,
                     SpecialFormType::Intersection => Self::Intersection,
+                    SpecialFormType::UnsafeUnion => Self::UnsafeUnion,
                     SpecialFormType::Overlapping => Self::Overlapping,
                     SpecialFormType::Literal => Self::Literal,
                     SpecialFormType::LiteralString => Self::LiteralString,
@@ -441,6 +446,7 @@ impl SpecialFormType {
                     SpecialFormTypeBuilder::RegularCallableTypeOf => &[Self::RegularCallableTypeOf],
                     SpecialFormTypeBuilder::Concatenate => &[Self::Concatenate],
                     SpecialFormTypeBuilder::Intersection => &[Self::Intersection],
+                    SpecialFormTypeBuilder::UnsafeUnion => &[Self::UnsafeUnion],
                     SpecialFormTypeBuilder::Overlapping => &[Self::Overlapping],
                     SpecialFormTypeBuilder::Literal => &[Self::Literal],
                     SpecialFormTypeBuilder::LiteralString => &[Self::LiteralString],
@@ -560,6 +566,7 @@ impl SpecialFormType {
             | Self::Top
             | Self::Bottom
             | Self::Intersection
+            | Self::UnsafeUnion
             | Self::Overlapping => module.is_ty_extensions(),
 
             Self::Divergent
@@ -631,6 +638,7 @@ impl SpecialFormType {
             | Self::Top
             | Self::Bottom
             | Self::Intersection
+            | Self::UnsafeUnion
             | Self::Overlapping
             | Self::TypeOf
             | Self::CallableTypeOf
@@ -671,6 +679,7 @@ impl SpecialFormType {
             | Self::RegularCallableTypeOf
             | Self::Concatenate
             | Self::Intersection
+            | Self::UnsafeUnion
             | Self::Literal
             | Self::LiteralString
             | Self::Never
@@ -735,6 +744,7 @@ impl SpecialFormType {
             SpecialFormType::AlwaysFalsy => "AlwaysFalsy",
             SpecialFormType::Not => "Not",
             SpecialFormType::Intersection => "Intersection",
+            SpecialFormType::UnsafeUnion => "UnsafeUnion",
             SpecialFormType::Overlapping => "Overlapping",
             SpecialFormType::TypeOf => "TypeOf",
             SpecialFormType::CallableTypeOf => "CallableTypeOf",
@@ -789,6 +799,7 @@ impl SpecialFormType {
             | SpecialFormType::AlwaysFalsy
             | SpecialFormType::Not
             | SpecialFormType::Intersection
+            | SpecialFormType::UnsafeUnion
             | SpecialFormType::Overlapping
             | SpecialFormType::Top
             | SpecialFormType::Bottom => &[KnownModule::TyExtensions],
@@ -908,7 +919,7 @@ impl SpecialFormType {
             Self::TypeAlias => Err(InvalidTypeExpression::TypeAlias),
             Self::TypedDict(_) => Err(InvalidTypeExpression::TypedDict),
 
-            Self::Literal | Self::Union | Self::Intersection => {
+            Self::Literal | Self::Union | Self::Intersection | Self::UnsafeUnion => {
                 Err(InvalidTypeExpression::RequiresArguments(self))
             }
 
