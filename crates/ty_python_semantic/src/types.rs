@@ -186,6 +186,7 @@ mod typed_dict;
 mod typevar;
 mod unpacker;
 mod variance;
+mod visibility;
 mod visitor;
 
 mod definition;
