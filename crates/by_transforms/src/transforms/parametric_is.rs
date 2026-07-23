@@ -193,9 +193,31 @@ def _by_member_annotation(klass, name):
             return annotations[name]
     return _by_proto_missing
 
+def _by_lit(*values):
+    # rebuild `typing.Literal[…]` for a literal type argument (`A[True]`
+    # specializes `T` to `Literal[True]`). spelled as a call so the member list
+    # needs no import of its own — this helper ships with the check
+    import typing
+    return typing.Literal[values]
+
+def _by_literal_args(t):
+    import typing
+    return typing.get_args(t) if typing.get_origin(t) is typing.Literal else None
+
 def _by_proto_sub(a, b):
     if a is b or b is object:
         return True
+    a_values = _by_literal_args(a)
+    b_values = _by_literal_args(b)
+    if a_values is not None:
+        # `Literal[True]` is a subtype of another literal that lists all its
+        # values, and of any class every value is an instance of
+        if b_values is not None:
+            return all(value in b_values for value in a_values)
+        return isinstance(b, type) and all(isinstance(value, b) for value in a_values)
+    if b_values is not None:
+        # a whole class is never a subtype of a narrower literal
+        return False
     a_origin = getattr(a, \"__origin__\", a)
     b_origin = getattr(b, \"__origin__\", b)
     if isinstance(a_origin, type) and isinstance(b_origin, type) and not getattr(b, \"__args__\", ()):
@@ -1016,6 +1038,43 @@ mod tests {
         assert!(
             out.contains("return _by_protocol_is(x, [(\"method\", \"f\", [(int, 2)], None)])"),
             "method parameter checked contravariantly: {out}"
+        );
+    }
+
+    #[test]
+    fn protocol_literal_argument_spells_through_the_helper() {
+        // `A[True]` specializes `T` to `Literal[True]`, which has no bare
+        // runtime spelling — it is rebuilt by the check's own `_by_lit` helper,
+        // so the member list needs no import of its own
+        let out = out(indoc! {"
+            from typing import Protocol
+            class A[in out T](Protocol):
+                a: T
+            def f(x: object) -> bool:
+                return x is A[True]
+        "});
+        assert!(
+            out.contains("return _by_protocol_is(x, [(\"attr\", \"a\", _by_lit(True), 0)])"),
+            "literal argument spelled through `_by_lit`: {out}"
+        );
+        assert!(
+            out.contains("def _by_lit(*values):"),
+            "the literal helper is emitted: {out}"
+        );
+    }
+
+    #[test]
+    fn protocol_int_literal_argument() {
+        let out = out(indoc! {"
+            from typing import Protocol
+            class A[in out T](Protocol):
+                a: T
+            def f(x: object) -> bool:
+                return x is A[3]
+        "});
+        assert!(
+            out.contains("return _by_protocol_is(x, [(\"attr\", \"a\", _by_lit(3), 0)])"),
+            "int literal argument: {out}"
         );
     }
 

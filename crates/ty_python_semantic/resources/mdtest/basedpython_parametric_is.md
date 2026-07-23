@@ -260,6 +260,68 @@ def f(c: C) -> bool:
     return c is HasA[bool]
 ```
 
+## a literal type argument is checked
+
+`A[True]` specializes the member to `Literal[True]`. A literal has no bare runtime spelling, but the
+structural check rebuilds it, so the test is valid — not an `erased-type-check`.
+
+```by
+from typing import Protocol
+
+class A[in out T](Protocol):
+    def f(self, other: T): ...
+
+def f(x: object) -> bool:
+    reveal_type(x is A[True])  # revealed: bool
+    return x is A[True]
+```
+
+The check stays exact where the member is invariant, and follows literal subtyping where it isn't.
+These assertions run for real:
+
+```by
+from typing import Literal, Protocol
+
+class D[in out T](Protocol):
+    a: T
+
+class BoolAttr:
+    a: bool
+
+class TrueAttr:
+    a: Literal[True]
+
+def is_true(x: object) -> bool:
+    return x is D[True]
+
+# an invariant member is exact: `bool` is not `Literal[True]`
+assert not is_true(BoolAttr())
+assert is_true(TrueAttr())
+```
+
+A method parameter is contravariant, so a wider annotation accepts the literal the protocol asks
+for:
+
+```by
+from typing import Protocol
+
+class A[in out T](Protocol):
+    def f(self, other: T): ...
+
+class C:
+    def f(self, other: bool):
+        pass
+
+def is_int(x: object) -> bool:
+    return x is A[int]
+
+def is_true(x: object) -> bool:
+    return x is A[True]
+
+assert not is_int(C())  # `bool` does not accept `int`
+assert is_true(C())  # `bool` does accept `Literal[True]`
+```
+
 ## a protocol mixing data and method members is checked
 
 A protocol with both data and method members is checked member by member — each contributes its own
