@@ -52,6 +52,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    is_private: false,
                 },
             ),
             TypeAlias(
@@ -105,6 +106,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    is_private: false,
                 },
             ),
             TypeAlias(
@@ -167,6 +169,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    is_private: false,
                 },
             ),
             TypeAlias(
@@ -252,6 +255,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    is_private: false,
                 },
             ),
             TypeAlias(
@@ -369,6 +373,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    is_private: false,
                 },
             ),
         ],

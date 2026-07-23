@@ -126,6 +126,10 @@ fields = [
   { name = "name", type = "Expr" },
   { name = "type_params", type = "Box<crate::TypeParams>?" },
   { name = "value", type = "Expr" },
+  { name = "is_private", type = "bool", doc = """basedpython: when true, this alias was written `private type X = V`.
+A type alias has no decorator list, so unlike `def`/`class` the visibility
+modifier can't ride along as a synthetic decorator and is recorded here
+instead. The name binds unmangled; the `_`-prefix is applied by lowering""" },
 ]
 
 [Stmt.nodes.StmtAssign]

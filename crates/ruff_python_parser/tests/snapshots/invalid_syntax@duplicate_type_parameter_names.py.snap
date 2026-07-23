@@ -64,6 +64,7 @@ Module(
                             range: 19..22,
                         },
                     ),
+                    is_private: false,
                 },
             ),
             FunctionDef(
@@ -385,6 +386,7 @@ Module(
                             range: 129..132,
                         },
                     ),
+                    is_private: false,
                 },
             ),
             FunctionDef(

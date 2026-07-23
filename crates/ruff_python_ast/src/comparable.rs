@@ -1725,6 +1725,7 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 name,
                 type_params,
                 value,
+                is_private: _,
             }) => Self::TypeAlias(StmtTypeAlias {
                 name: name.into(),
                 type_params: type_params.as_ref().map(Into::into),

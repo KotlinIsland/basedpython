@@ -91,6 +91,7 @@ Module(
                             ),
                         },
                     ),
+                    is_private: false,
                 },
             ),
         ],

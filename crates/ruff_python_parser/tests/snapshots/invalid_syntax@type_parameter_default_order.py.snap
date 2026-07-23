@@ -328,6 +328,7 @@ Module(
                             range: 110..113,
                         },
                     ),
+                    is_private: false,
                 },
             ),
         ],

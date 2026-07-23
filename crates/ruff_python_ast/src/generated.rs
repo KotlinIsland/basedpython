@@ -9461,6 +9461,11 @@ pub struct StmtTypeAlias {
     pub name: Box<Expr>,
     pub type_params: Option<Box<crate::TypeParams>>,
     pub value: Box<Expr>,
+    /// basedpython: when true, this alias was written `private type X = V`.
+    /// A type alias has no decorator list, so unlike `def`/`class` the visibility
+    /// modifier can't ride along as a synthetic decorator and is recorded here
+    /// instead. The name binds unmangled; the `_`-prefix is applied by lowering
+    pub is_private: bool,
 }
 
 /// See also [Assign](https://docs.python.org/3/library/ast.html#ast.Assign)
@@ -10394,6 +10399,7 @@ impl StmtTypeAlias {
             name,
             type_params,
             value,
+            is_private: _,
             range: _,
             node_index: _,
         } = self;
