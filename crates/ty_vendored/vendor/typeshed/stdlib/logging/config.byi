@@ -52,17 +52,17 @@ class _FilterConfigurationTypedDict(TypedDict):
 # Formatter and filter configs can specify custom factories via the special `()` key.
 # If that is the case, the dictionary can contain any additional keys
 # https://docs.python.org/3/library/logging.config.html#user-defined-objects
-type _FormatterConfiguration = _FormatterConfigurationTypedDict | dict[str, dynamic]
-type _FilterConfiguration = _FilterConfigurationTypedDict | dict[str, dynamic]
+private type FormatterConfiguration = _FormatterConfigurationTypedDict | dict[str, dynamic]
+private type FilterConfiguration = _FilterConfigurationTypedDict | dict[str, dynamic]
 # Handler config can have additional keys even when not providing a custom factory so we just use `dict`.
-type _HandlerConfiguration = dict[str, dynamic]
+private type HandlerConfiguration = dict[str, dynamic]
 
 @type_check_only
 class _DictConfigArgs(TypedDict, total=False):
     version: Required[1]
-    formatters: dict[str, _FormatterConfiguration]
-    filters: dict[str, _FilterConfiguration]
-    handlers: dict[str, _HandlerConfiguration]
+    formatters: dict[str, FormatterConfiguration]
+    filters: dict[str, FilterConfiguration]
+    handlers: dict[str, HandlerConfiguration]
     loggers: dict[str, _LoggerConfiguration]
     root: _RootLoggerConfiguration
     incremental: bool
@@ -203,16 +203,16 @@ class DictConfigurator(BaseConfigurator):
     def configure(self) -> None:  # undocumented
         """Do the configuration."""
 
-    def configure_formatter(self, config: _FormatterConfiguration) -> Formatter | dynamic:  # undocumented
+    def configure_formatter(self, config: FormatterConfiguration) -> Formatter | dynamic:  # undocumented
         """Configure a formatter from a dictionary."""
 
-    def configure_filter(self, config: _FilterConfiguration) -> Filter | dynamic:  # undocumented
+    def configure_filter(self, config: FilterConfiguration) -> Filter | dynamic:  # undocumented
         """Configure a filter from a dictionary."""
 
     def add_filters(self, filterer: Filterer, filters: Iterable[_FilterType]) -> None:  # undocumented
         """Add filters to a filterer from a list of names."""
 
-    def configure_handler(self, config: _HandlerConfiguration) -> Handler | dynamic:  # undocumented
+    def configure_handler(self, config: HandlerConfiguration) -> Handler | dynamic:  # undocumented
         """Configure a handler from a dictionary."""
 
     def add_handlers(self, logger: Logger, handlers: Iterable[str]) -> None:  # undocumented

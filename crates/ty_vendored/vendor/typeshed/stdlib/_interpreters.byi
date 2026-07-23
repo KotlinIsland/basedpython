@@ -8,7 +8,7 @@ from typing import Final, Literal, TypeAlias, TypeVar
 from typing_extensions import disjoint_base
 
 
-type _Configs = "default" | "isolated" | "legacy" | "empty" | ""
+private type Configs = "default" | "isolated" | "legacy" | "empty" | ""
 type _SharedDict = dict[str, dynamic]  # many objects can be shared
 
 class InterpreterError(Exception):
@@ -24,7 +24,7 @@ class CrossInterpreterBufferView:
     def __buffer__(self, flags: int, /) -> memoryview:
         """Return a buffer object that exposes the underlying memory of the object."""
 
-def new_config(name: _Configs = "isolated", /, **overides: object) -> types.SimpleNamespace:
+def new_config(name: Configs = "isolated", /, **overides: object) -> types.SimpleNamespace:
     """Return a representation of a new PyInterpreterConfig.
 
     The name determines the initial values of the config.  Supported named
@@ -34,7 +34,7 @@ def new_config(name: _Configs = "isolated", /, **overides: object) -> types.Simp
     overriding the initial values.
     """
 
-def create(config: types.SimpleNamespace | _Configs | None = "isolated", *, reqrefs: bool = False) -> int:
+def create(config: types.SimpleNamespace | Configs | None = "isolated", *, reqrefs: bool = False) -> int:
     """Create a new interpreter and return a unique generated ID.
 
     The caller is responsible for destroying the interpreter before exiting,

@@ -26,12 +26,12 @@ if sys.version_info >= (3, 11):
 if sys.version_info < (3, 11):
     class Verbose(Exception)
 
-type _OpSubpatternType = tuple[int | None, int, int, SubPattern]
-type _OpGroupRefExistsType = tuple[int, SubPattern, SubPattern]
-type _OpInType = list[tuple[_NIC, int]]
-type _OpBranchType = tuple[None, list[SubPattern]]
-type _AvType = _OpInType | _OpBranchType | Iterable[SubPattern] | _OpGroupRefExistsType | _OpSubpatternType
-type _CodeType = tuple[_NIC, _AvType]
+private type OpSubpatternType = tuple[int | None, int, int, SubPattern]
+private type OpGroupRefExistsType = tuple[int, SubPattern, SubPattern]
+private type OpInType = list[tuple[_NIC, int]]
+private type OpBranchType = tuple[None, list[SubPattern]]
+private type AvType = OpInType | OpBranchType | Iterable[SubPattern] | OpGroupRefExistsType | OpSubpatternType
+private type CodeType = tuple[_NIC, AvType]
 
 class State:
     flags: int
@@ -45,18 +45,18 @@ class State:
     def checklookbehindgroup(self, gid: int, source: Tokenizer) -> None
 
 class SubPattern:
-    data: list[_CodeType]
+    data: list[CodeType]
     width: int | None
     state: State
 
-    init(self, state: State, data: list[_CodeType] | None = None)
+    init(self, state: State, data: list[CodeType] | None = None)
     def dump(self, level: int = 0) -> None
     def __len__(self) -> int
     def __delitem__(self, index: int | slice) -> None
-    def __getitem__(self, index: int | slice) -> SubPattern | _CodeType
-    def __setitem__(self, index: int | slice, code: _CodeType) -> None
-    def insert(self, index: int, code: _CodeType) -> None
-    def append(self, code: _CodeType) -> None
+    def __getitem__(self, index: int | slice) -> SubPattern | CodeType
+    def __setitem__(self, index: int | slice, code: CodeType) -> None
+    def insert(self, index: int, code: CodeType) -> None
+    def append(self, code: CodeType) -> None
     def getwidth(self) -> (int, int)
 
 class Tokenizer:
@@ -82,17 +82,17 @@ class Tokenizer:
 
 def fix_flags(src: str | bytes, flags: int) -> int
 
-type _TemplateType = tuple[list[tuple[int, int]], list[str | None]]
-type _TemplateByteType = tuple[list[tuple[int, int]], list[bytes | None]]
+private type TemplateType = tuple[list[tuple[int, int]], list[str | None]]
+private type TemplateByteType = tuple[list[tuple[int, int]], list[bytes | None]]
 
 if sys.version_info >= (3, 12):
-    def parse_template(source: str, pattern: _Pattern[dynamic]) -> _TemplateType
-    def parse_template(source: bytes, pattern: _Pattern[dynamic]) -> _TemplateByteType
+    def parse_template(source: str, pattern: _Pattern[dynamic]) -> TemplateType
+    def parse_template(source: bytes, pattern: _Pattern[dynamic]) -> TemplateByteType
 else:
-    def parse_template(source: str, state: _Pattern[dynamic]) -> _TemplateType
-    def parse_template(source: bytes, state: _Pattern[dynamic]) -> _TemplateByteType
+    def parse_template(source: str, state: _Pattern[dynamic]) -> TemplateType
+    def parse_template(source: bytes, state: _Pattern[dynamic]) -> TemplateByteType
 
 def parse(str: str, flags: int = 0, state: State | None = None) -> SubPattern
 
 if sys.version_info < (3, 12):
-    def expand_template(template: _TemplateType, match: Match[dynamic]) -> str
+    def expand_template(template: TemplateType, match: Match[dynamic]) -> str

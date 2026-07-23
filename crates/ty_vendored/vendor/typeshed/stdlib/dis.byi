@@ -43,7 +43,7 @@ else:
 
 # Strictly this should not have to include Callable, but mypy doesn't use FunctionType
 # for functions (python/mypy#3171)
-type _HaveCodeType = types.MethodType | types.FunctionType | types.CodeType | type | ((...) -> dynamic)
+private type HaveCodeType = types.MethodType | types.FunctionType | types.CodeType | type | ((...) -> dynamic)
 
 if sys.version_info >= (3, 11):
     class Positions(NamedTuple):
@@ -224,7 +224,7 @@ class Bytecode:
         # 3.14 added `show_positions`
         def __init__(
             self,
-            x: _HaveCodeType | str,
+            x: HaveCodeType | str,
             *,
             first_line: int | None = None,
             current_offset: int | None = None,
@@ -238,7 +238,7 @@ class Bytecode:
         # 3.13 added `show_offsets`
         def __init__(
             self,
-            x: _HaveCodeType | str,
+            x: HaveCodeType | str,
             *,
             first_line: int | None = None,
             current_offset: int | None = None,
@@ -249,7 +249,7 @@ class Bytecode:
     elif sys.version_info >= (3, 11):
         def __init__(
             self,
-            x: _HaveCodeType | str,
+            x: HaveCodeType | str,
             *,
             first_line: int | None = None,
             current_offset: int | None = None,
@@ -258,7 +258,7 @@ class Bytecode:
         ) -> None
     else:
         def __init__(
-            self, x: _HaveCodeType | str, *, first_line: int | None = None, current_offset: int | None = None
+            self, x: HaveCodeType | str, *, first_line: int | None = None, current_offset: int | None = None
         ) -> None
 
     if sys.version_info >= (3, 11):
@@ -277,14 +277,14 @@ class Bytecode:
 
 final COMPILER_FLAG_NAMES: dict[int, str]
 
-def findlabels(code: _HaveCodeType) -> list[int]:
+def findlabels(code: HaveCodeType) -> list[int]:
     """Detect all offsets in a byte code which are jump targets.
 
     Return the list of offsets.
 
     """
 
-def findlinestarts(code: _HaveCodeType) -> Iterator[(int, int)]:
+def findlinestarts(code: HaveCodeType) -> Iterator[(int, int)]:
     """Find the offsets in a byte code which are start of lines in the source.
 
     Generate pairs (offset, lineno)
@@ -294,13 +294,13 @@ def findlinestarts(code: _HaveCodeType) -> Iterator[(int, int)]:
 def pretty_flags(flags: int) -> str:
     """Return pretty representation of code flags."""
 
-def code_info(x: _HaveCodeType | str) -> str:
+def code_info(x: HaveCodeType | str) -> str:
     """Formatted details of methods, functions, or code."""
 
 if sys.version_info >= (3, 14):
     # 3.14 added `show_positions`
     def dis(
-        x: _HaveCodeType | str | bytes | bytearray | None = None,
+        x: HaveCodeType | str | bytes | bytearray | None = None,
         *,
         file: IO[str] | None = None,
         depth: int | None = None,
@@ -319,7 +319,7 @@ if sys.version_info >= (3, 14):
         """
 
     def disassemble(
-        co: _HaveCodeType,
+        co: HaveCodeType,
         lasti: int = -1,
         *,
         file: IO[str] | None = None,
@@ -344,7 +344,7 @@ if sys.version_info >= (3, 14):
 elif sys.version_info >= (3, 13):
     # 3.13 added `show_offsets`
     def dis(
-        x: _HaveCodeType | str | bytes | bytearray | None = None,
+        x: HaveCodeType | str | bytes | bytearray | None = None,
         *,
         file: IO[str] | None = None,
         depth: int | None = None,
@@ -362,7 +362,7 @@ elif sys.version_info >= (3, 13):
         """
 
     def disassemble(
-        co: _HaveCodeType,
+        co: HaveCodeType,
         lasti: int = -1,
         *,
         file: IO[str] | None = None,
@@ -385,7 +385,7 @@ elif sys.version_info >= (3, 13):
 elif sys.version_info >= (3, 11):
     # 3.11 added `show_caches` and `adaptive`
     def dis(
-        x: _HaveCodeType | str | bytes | bytearray | None = None,
+        x: HaveCodeType | str | bytes | bytearray | None = None,
         *,
         file: IO[str] | None = None,
         depth: int | None = None,
@@ -402,7 +402,7 @@ elif sys.version_info >= (3, 11):
         """
 
     def disassemble(
-        co: _HaveCodeType, lasti: int = -1, *, file: IO[str] | None = None, show_caches: bool = False, adaptive: bool = False
+        co: HaveCodeType, lasti: int = -1, *, file: IO[str] | None = None, show_caches: bool = False, adaptive: bool = False
     ) -> None:
         """Disassemble a code object."""
 
@@ -413,7 +413,7 @@ elif sys.version_info >= (3, 11):
 
 else:
     def dis(
-        x: _HaveCodeType | str | bytes | bytearray | None = None, *, file: IO[str] | None = None, depth: int | None = None
+        x: HaveCodeType | str | bytes | bytearray | None = None, *, file: IO[str] | None = None, depth: int | None = None
     ) -> None:
         """Disassemble classes, methods, functions, and other compiled objects.
 
@@ -424,7 +424,7 @@ else:
         in a special attribute.
         """
 
-    def disassemble(co: _HaveCodeType, lasti: int = -1, *, file: IO[str] | None = None) -> None:
+    def disassemble(co: HaveCodeType, lasti: int = -1, *, file: IO[str] | None = None) -> None:
         """Disassemble a code object."""
 
     def distb(tb: types.TracebackType | None = None, *, file: IO[str] | None = None) -> None:
@@ -432,7 +432,7 @@ else:
 
 if sys.version_info >= (3, 13):
     # 3.13 made `show_caches` `None` by default and has no effect
-    def get_instructions(x: _HaveCodeType, *, first_line: int | None = None, adaptive: bool = False) -> Iterator[Instruction]:
+    def get_instructions(x: HaveCodeType, *, first_line: int | None = None, adaptive: bool = False) -> Iterator[Instruction]:
         """Iterator for the opcodes in methods, functions or code
 
         Generates a series of Instruction named tuples giving the details of
@@ -448,12 +448,12 @@ if sys.version_info >= (3, 13):
         "The iterator generates the `Instruction` instances with the `cache_info` field populated."
     )
     def get_instructions(
-        x: _HaveCodeType, *, first_line: int | None = None, show_caches: bool | None = None, adaptive: bool = False
+        x: HaveCodeType, *, first_line: int | None = None, show_caches: bool | None = None, adaptive: bool = False
     ) -> Iterator[Instruction]
 
 elif sys.version_info >= (3, 11):
     def get_instructions(
-        x: _HaveCodeType, *, first_line: int | None = None, show_caches: bool = False, adaptive: bool = False
+        x: HaveCodeType, *, first_line: int | None = None, show_caches: bool = False, adaptive: bool = False
     ) -> Iterator[Instruction]:
         """Iterator for the opcodes in methods, functions or code
 
@@ -467,7 +467,7 @@ elif sys.version_info >= (3, 11):
         """
 
 else:
-    def get_instructions(x: _HaveCodeType, *, first_line: int | None = None) -> Iterator[Instruction]:
+    def get_instructions(x: HaveCodeType, *, first_line: int | None = None) -> Iterator[Instruction]:
         """Iterator for the opcodes in methods, functions or code
 
         Generates a series of Instruction named tuples giving the details of
@@ -479,7 +479,7 @@ else:
         the disassembled code object.
         """
 
-def show_code(co: _HaveCodeType, *, file: IO[str] | None = None) -> None:
+def show_code(co: HaveCodeType, *, file: IO[str] | None = None) -> None:
     """Print details of methods, functions, or code to *file*.
 
     If *file* is not provided, the output is printed on stdout.

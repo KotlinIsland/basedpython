@@ -59,8 +59,8 @@ __all__ = [
     "SMTPNotSupportedError",
 ]
 
-type _Reply = tuple[int, bytes]
-type _SendErrs = dict[str, _Reply]
+private type Reply = tuple[int, bytes]
+private type SendErrs = dict[str, Reply]
 
 SMTP_PORT: Final = 25
 SMTP_SSL_PORT: Final = 465
@@ -121,9 +121,9 @@ class SMTPRecipientsRefused(SMTPException):
     SMTP.sendmail() returns.
     """
 
-    recipients: _SendErrs
-    args: (_SendErrs,)
-    init(self, recipients: _SendErrs)
+    recipients: SendErrs
+    args: (SendErrs,)
+    init(self, recipients: SendErrs)
 
 class SMTPDataError(SMTPResponseException):
     """The SMTP server didn't accept the data."""
@@ -239,7 +239,7 @@ class SMTP:
 
         """
 
-    def connect(self, host: str = "localhost", port: int = 0, source_address: _SourceAddress | None = None) -> _Reply:
+    def connect(self, host: str = "localhost", port: int = 0, source_address: _SourceAddress | None = None) -> Reply:
         """Connect to a host on a given port.
 
         If the hostname ends with a colon (':') followed by a number, and
@@ -257,7 +257,7 @@ class SMTP:
     def putcmd(self, cmd: str, args: str = "") -> None:
         """Send a command to the server."""
 
-    def getreply(self) -> _Reply:
+    def getreply(self) -> Reply:
         """Get a reply from the server.
 
         Returns a tuple consisting of:
@@ -271,16 +271,16 @@ class SMTP:
         Raises SMTPServerDisconnected if end-of-file is reached.
         """
 
-    def docmd(self, cmd: str, args: str = "") -> _Reply:
+    def docmd(self, cmd: str, args: str = "") -> Reply:
         """Send a command, and return its response code."""
 
-    def helo(self, name: str = "") -> _Reply:
+    def helo(self, name: str = "") -> Reply:
         """SMTP 'helo' command.
         Hostname to send for this command defaults to the FQDN of the local
         host.
         """
 
-    def ehlo(self, name: str = "") -> _Reply:
+    def ehlo(self, name: str = "") -> Reply:
         """SMTP 'ehlo' command.
         Hostname to send for this command defaults to the FQDN of the local
         host.
@@ -294,13 +294,13 @@ class SMTP:
         Returns help text from server.
         """
 
-    def rset(self) -> _Reply:
+    def rset(self) -> Reply:
         """SMTP 'rset' command -- resets session."""
 
-    def noop(self) -> _Reply:
+    def noop(self) -> Reply:
         """SMTP 'noop' command -- doesn't do anything :>"""
 
-    def mail(self, sender: str, options: Sequence[str] = ()) -> _Reply:
+    def mail(self, sender: str, options: Sequence[str] = ()) -> Reply:
         """SMTP 'mail' command -- begins mail xfer session.
 
         This method may raise the following exceptions:
@@ -310,10 +310,10 @@ class SMTP:
                                 the server.
         """
 
-    def rcpt(self, recip: str, options: Sequence[str] = ()) -> _Reply:
+    def rcpt(self, recip: str, options: Sequence[str] = ()) -> Reply:
         """SMTP 'rcpt' command -- indicates 1 recipient for this mail."""
 
-    def data(self, msg: ReadableBuffer | str) -> _Reply:
+    def data(self, msg: ReadableBuffer | str) -> Reply:
         """SMTP 'DATA' command -- sends message data to server.
 
         Automatically quotes lines beginning with a period per rfc821.
@@ -324,11 +324,11 @@ class SMTP:
         '\\r\\n' characters.  If msg is bytes, it is transmitted as is.
         """
 
-    def verify(self, address: str) -> _Reply:
+    def verify(self, address: str) -> Reply:
         """SMTP 'verify' command -- checks for address validity."""
 
     vrfy = verify
-    def expn(self, address: str) -> _Reply:
+    def expn(self, address: str) -> Reply:
         """SMTP 'expn' command -- expands a mailing list."""
 
     def ehlo_or_helo_if_needed(self) -> None:
@@ -345,7 +345,7 @@ class SMTP:
 
     user: str
     password: str
-    def auth(self, mechanism: str, authobject: _AuthObject, *, initial_response_ok: bool = True) -> _Reply:
+    def auth(self, mechanism: str, authobject: _AuthObject, *, initial_response_ok: bool = True) -> Reply:
         """Authentication command - requires response processing.
 
         'mechanism' specifies which authentication mechanism is to
@@ -381,7 +381,7 @@ class SMTP:
         self.password to be set.
         """
 
-    def login(self, user: str, password: str, *, initial_response_ok: bool = True) -> _Reply:
+    def login(self, user: str, password: str, *, initial_response_ok: bool = True) -> Reply:
         """Log in on an SMTP server that requires authentication.
 
         The arguments are:
@@ -410,7 +410,7 @@ class SMTP:
         """
 
     if sys.version_info >= (3, 12):
-        def starttls(self, *, context: SSLContext | None = None) -> _Reply:
+        def starttls(self, *, context: SSLContext | None = None) -> Reply:
             """Puts the connection to the SMTP server into TLS mode.
 
             If there has been no previous EHLO or HELO command this session, this
@@ -429,7 +429,7 @@ class SMTP:
             """
 
     else:
-        def starttls(self, keyfile: None = None, certfile: None = None, context: SSLContext | None = None) -> _Reply:
+        def starttls(self, keyfile: None = None, certfile: None = None, context: SSLContext | None = None) -> Reply:
             """Puts the connection to the SMTP server into TLS mode.
 
             If there has been no previous EHLO or HELO command this session, this
@@ -452,7 +452,7 @@ class SMTP:
         )
         def starttls(
             self, keyfile: StrOrBytesPath | None = None, certfile: StrOrBytesPath | None = None, context: None = None
-        ) -> _Reply
+        ) -> Reply
 
     def sendmail(
         self,
@@ -461,7 +461,7 @@ class SMTP:
         msg: SizedBuffer | str,
         mail_options: Sequence[str] = (),
         rcpt_options: Sequence[str] = (),
-    ) -> _SendErrs:
+    ) -> SendErrs:
         """This command performs an entire mail transaction.
 
 The arguments are:
@@ -532,7 +532,7 @@ empty dictionary.
         to_addrs: str | Sequence[str] | None = None,
         mail_options: Sequence[str] = (),
         rcpt_options: Sequence[str] = (),
-    ) -> _SendErrs:
+    ) -> SendErrs:
         """Converts message to a bytestring and passes it to sendmail.
 
         The arguments are as for sendmail, except that msg is an
@@ -556,7 +556,7 @@ empty dictionary.
     def close(self) -> None:
         """Close the connection to the SMTP server."""
 
-    def quit(self) -> _Reply:
+    def quit(self) -> Reply:
         """Terminate the SMTP session."""
 
 class SMTP_SSL(SMTP):

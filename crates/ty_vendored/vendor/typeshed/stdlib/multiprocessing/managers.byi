@@ -245,7 +245,7 @@ class ListProxy[in out Element](BaseListProxy[Element]):
 
 # Send is (kind, result)
 # Receive is (id, methodname, args, kwds)
-type _ServerConnection = Connection[tuple[str, dynamic], tuple[str, str, Iterable[dynamic], Mapping[str, dynamic]]]
+private type ServerConnection = Connection[tuple[str, dynamic], tuple[str, str, Iterable[dynamic], Mapping[str, dynamic]]]
 
 # Returned by BaseManager.get_server()
 class Server:
@@ -255,7 +255,7 @@ class Server:
 
     address: _Address | None
     id_to_obj: dict[str, (dynamic, set[str], dict[str, str])]
-    fallback_mapping: dict[str, (_ServerConnection, str, dynamic) -> dynamic]
+    fallback_mapping: dict[str, (ServerConnection, str, dynamic) -> dynamic]
     public: list[str]
     # Registry values are (callable, exposed, method_to_typeid, proxytype)
     init(
@@ -271,52 +271,52 @@ class Server:
         """
 
     def accepter(self) -> None
-    def handle_request(self, conn: _ServerConnection) -> None:
+    def handle_request(self, conn: ServerConnection) -> None:
         """
         Handle a new connection
         """
 
-    def serve_client(self, conn: _ServerConnection) -> None:
+    def serve_client(self, conn: ServerConnection) -> None:
         """
         Handle requests from the proxies in a particular process/thread
         """
 
-    def fallback_getvalue[Element](self, conn: _ServerConnection, ident: str, obj: Element) -> Element
-    def fallback_str(self, conn: _ServerConnection, ident: str, obj: dynamic) -> str
-    def fallback_repr(self, conn: _ServerConnection, ident: str, obj: dynamic) -> str
-    def dummy(self, c: _ServerConnection) -> None
-    def debug_info(self, c: _ServerConnection) -> str:
+    def fallback_getvalue[Element](self, conn: ServerConnection, ident: str, obj: Element) -> Element
+    def fallback_str(self, conn: ServerConnection, ident: str, obj: dynamic) -> str
+    def fallback_repr(self, conn: ServerConnection, ident: str, obj: dynamic) -> str
+    def dummy(self, c: ServerConnection) -> None
+    def debug_info(self, c: ServerConnection) -> str:
         """
         Return some info --- useful to spot problems with refcounting
         """
 
-    def number_of_objects(self, c: _ServerConnection) -> int:
+    def number_of_objects(self, c: ServerConnection) -> int:
         """
         Number of shared objects
         """
 
-    def shutdown(self, c: _ServerConnection) -> None:
+    def shutdown(self, c: ServerConnection) -> None:
         """
         Shutdown this process
         """
 
-    def create(self, c: _ServerConnection, typeid: str, /, *args: dynamic, **kwds: dynamic) -> (str, (*: str)):
+    def create(self, c: ServerConnection, typeid: str, /, *args: dynamic, **kwds: dynamic) -> (str, (*: str)):
         """
         Create a new shared object and return its id
         """
 
-    def get_methods(self, c: _ServerConnection, token: Token) -> set[str]:
+    def get_methods(self, c: ServerConnection, token: Token) -> set[str]:
         """
         Return the methods of the shared object indicated by token
         """
 
-    def accept_connection(self, c: _ServerConnection, name: str) -> None:
+    def accept_connection(self, c: ServerConnection, name: str) -> None:
         """
         Spawn a new thread to serve this connection
         """
 
-    def incref(self, c: _ServerConnection, ident: str) -> None
-    def decref(self, c: _ServerConnection, ident: str) -> None
+    def incref(self, c: ServerConnection, ident: str) -> None
+    def decref(self, c: ServerConnection, ident: str) -> None
 
 class BaseManager:
     """
@@ -437,15 +437,15 @@ class SyncManager(BaseManager):
 class RemoteError(Exception)
 
 class SharedMemoryServer(Server):
-    def track_segment(self, c: _ServerConnection, segment_name: str) -> None:
+    def track_segment(self, c: ServerConnection, segment_name: str) -> None:
         """Adds the supplied shared memory block name to Server's tracker."""
 
-    def release_segment(self, c: _ServerConnection, segment_name: str) -> None:
+    def release_segment(self, c: ServerConnection, segment_name: str) -> None:
         """Calls unlink() on the shared memory block with the supplied name
         and removes it from the tracker instance inside the Server.
         """
 
-    def list_segments(self, c: _ServerConnection) -> list[str]:
+    def list_segments(self, c: ServerConnection) -> list[str]:
         """Returns a list of names of shared memory blocks that the Server
         is currently tracking.
         """

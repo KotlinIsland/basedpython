@@ -62,9 +62,9 @@ class _Sentinel:
 sentinel: _Sentinel
 DEFAULT: dynamic
 
-type _ArgsKwargs = tuple[(*: dynamic), Mapping[str, dynamic]]
-type _NameArgsKwargs = tuple[str, (*: dynamic), Mapping[str, dynamic]]
-type _CallValue = str | (*: dynamic) | Mapping[str, dynamic] | _ArgsKwargs | _NameArgsKwargs
+private type ArgsKwargs = tuple[(*: dynamic), Mapping[str, dynamic]]
+private type NameArgsKwargs = tuple[str, (*: dynamic), Mapping[str, dynamic]]
+private type CallValue = str | (*: dynamic) | Mapping[str, dynamic] | ArgsKwargs | NameArgsKwargs
 
 if sys.version_info >= (3, 12):
     class _Call((*: dynamic)):
@@ -89,7 +89,7 @@ if sys.version_info >= (3, 12):
 
         def __new__(
             cls,
-            value: _CallValue = (),
+            value: CallValue = (),
             name: str | None = "",
             parent: _Call | None = None,
             two: bool = False,
@@ -97,7 +97,7 @@ if sys.version_info >= (3, 12):
         ) -> Self
         init(
             self,
-            value: _CallValue = (),
+            value: CallValue = (),
             name: str | None = None,
             parent: _Call | None = None,
             two: bool = False,
@@ -141,7 +141,7 @@ else:
 
         def __new__(
             cls,
-            value: _CallValue = (),
+            value: CallValue = (),
             name: str | None = "",
             parent: _Call | None = None,
             two: bool = False,
@@ -149,7 +149,7 @@ else:
         ) -> Self
         init(
             self,
-            value: _CallValue = (),
+            value: CallValue = (),
             name: str | None = None,
             parent: _Call | None = None,
             two: bool = False,

@@ -37,11 +37,11 @@ protocol _SupportsReadAndReadline(SupportsRead[bytes], SupportsNoArgReadline[byt
 # As opposed to _MessageT_co in email._policybase, this type is bound to
 # mailbox.Message instead of email.message.Message.
 
-type _MessageData = email.message.Message | bytes | str | io.StringIO | _SupportsReadAndReadline
+private type MessageData = email.message.Message | bytes | str | io.StringIO | _SupportsReadAndReadline
 
 @type_check_only
 protocol _HasIteritems:
-    def iteritems(self) -> Iterator[(str, _MessageData)]
+    def iteritems(self) -> Iterator[(str, MessageData)]
 
 linesep: bytes
 
@@ -76,7 +76,7 @@ class Mailbox[out MessageT: Message = Message]:
         """Initialize a Mailbox instance."""
     init(self, path: StrPath, factory: None = None, create: bool = True)
 
-    abstract def add(self, message: _MessageData) -> str:
+    abstract def add(self, message: MessageData) -> str:
         """Add message and return assigned key."""
 
     abstract def remove(self, key: str) -> None:
@@ -86,7 +86,7 @@ class Mailbox[out MessageT: Message = Message]:
     def discard(self, key: str) -> None:
         """If the keyed message exists, remove it."""
 
-    abstract def __setitem__(self, key: str, message: _MessageData) -> None:
+    abstract def __setitem__(self, key: str, message: MessageData) -> None:
         """Replace the keyed message; raise KeyError if it doesn't exist."""
 
     def get(self, key: str, default: None = None) -> MessageT | None:
@@ -148,7 +148,7 @@ class Mailbox[out MessageT: Message = Message]:
         """Delete an arbitrary (key, message) pair and return it."""
 
     def update(
-        self, arg: _HasIteritems | SupportsItems[str, _MessageData] | Iterable[(str, _MessageData)] | None = None
+        self, arg: _HasIteritems | SupportsItems[str, MessageData] | Iterable[(str, MessageData)] | None = None
     ) -> None:
         """Change the messages that correspond to certain keys."""
 
@@ -165,7 +165,7 @@ class Mailbox[out MessageT: Message = Message]:
         """Flush and close the mailbox."""
 
     # Undocumented, called by subclasses to parse added messages.
-    def _dump_message(self, message: _MessageData, target: SupportsWrite[bytes], mangle_from_: bool = False) -> None:
+    def _dump_message(self, message: MessageData, target: SupportsWrite[bytes], mangle_from_: bool = False) -> None:
         """Dump message contents to target file."""
 
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
@@ -184,13 +184,13 @@ class Maildir(Mailbox[MaildirMessage]):
     ):
         """Initialize a Maildir instance."""
 
-    override def add(self, message: _MessageData | MaildirMessage) -> str:
+    override def add(self, message: MessageData | MaildirMessage) -> str:
         """Add message and return assigned key."""
 
     override def remove(self, key: str) -> None:
         """Remove the keyed message; raise KeyError if it doesn't exist."""
 
-    override def __setitem__(self, key: str, message: _MessageData | MaildirMessage) -> None:
+    override def __setitem__(self, key: str, message: MessageData | MaildirMessage) -> None:
         """Replace the keyed message; raise KeyError if it doesn't exist."""
 
     override def get_message(self, key: str) -> MaildirMessage:
@@ -263,13 +263,13 @@ class Maildir(Mailbox[MaildirMessage]):
 class _singlefileMailbox[out MessageT: Message = Message](Mailbox[MessageT], metaclass=ABCMeta):
     """A single-file mailbox."""
 
-    override def add(self, message: _MessageData) -> str:
+    override def add(self, message: MessageData) -> str:
         """Add message and return assigned key."""
 
     override def remove(self, key: str) -> None:
         """Remove the keyed message; raise KeyError if it doesn't exist."""
 
-    override def __setitem__(self, key: str, message: _MessageData) -> None:
+    override def __setitem__(self, key: str, message: MessageData) -> None:
         """Replace the keyed message; raise KeyError if it doesn't exist."""
 
     override def iterkeys(self) -> Iterator[str]:
@@ -330,13 +330,13 @@ class MH(Mailbox[MHMessage]):
     init(self, path: StrPath, factory: ((_GetFileReturn) -> MHMessage) | None = None, create: bool = True):
         """Initialize an MH instance."""
 
-    override def add(self, message: _MessageData) -> str:
+    override def add(self, message: MessageData) -> str:
         """Add message and return assigned key."""
 
     override def remove(self, key: str) -> None:
         """Remove the keyed message; raise KeyError if it doesn't exist."""
 
-    override def __setitem__(self, key: str, message: _MessageData) -> None:
+    override def __setitem__(self, key: str, message: MessageData) -> None:
         """Replace the keyed message; raise KeyError if it doesn't exist."""
 
     override def get_message(self, key: str) -> MHMessage:
@@ -413,7 +413,7 @@ class Babyl(_singlefileMailbox[BabylMessage]):
 class Message(email.message.Message[str, str]):
     """Message with mailbox-format-specific properties."""
 
-    init(self, message: _MessageData | None = None):
+    init(self, message: MessageData | None = None):
         """Initialize a Message instance."""
 
 class MaildirMessage(Message):
@@ -506,7 +506,7 @@ class BabylMessage(Message):
     def get_visible(self) -> Message:
         """Return a Message representation of visible headers."""
 
-    def set_visible(self, visible: _MessageData) -> None:
+    def set_visible(self, visible: MessageData) -> None:
         """Set the Message representation of visible headers."""
 
     def update_visible(self) -> None:

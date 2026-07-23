@@ -100,14 +100,14 @@ __all__ = [
     "COLONEQUAL",
 ]
 
-type _Coord = tuple[int, int]
-type _TokenEater = (int, str, _Coord, _Coord, str) -> object
-type _TokenInfo = tuple[int, str, _Coord, _Coord, str]
+private type Coord = tuple[int, int]
+private type TokenEater = (int, str, Coord, Coord, str) -> object
+type _TokenInfo = tuple[int, str, Coord, Coord, str]
 
 class TokenError(Exception)
 class StopTokenizing(Exception)
 
-def tokenize(readline: () -> str, tokeneater: _TokenEater = ...) -> None:
+def tokenize(readline: () -> str, tokeneater: TokenEater = ...) -> None:
     """
     The tokenize() function accepts two parameters: one representing the
     input stream, and one providing an output mechanism for tokenize().
@@ -125,7 +125,7 @@ class Untokenizer:
     tokens: list[str]
     prev_row: int
     prev_col: int
-    def add_whitespace(self, start: _Coord) -> None
+    def add_whitespace(self, start: Coord) -> None
     def untokenize(self, iterable: Iterable[_TokenInfo]) -> str
     def compat(self, token: (int, str), iterable: Iterable[_TokenInfo]) -> None
 

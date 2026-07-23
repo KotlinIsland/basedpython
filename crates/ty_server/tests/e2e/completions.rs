@@ -456,7 +456,7 @@ re.match('', '', fla<CURSOR>
       {
         "label": "flags=",
         "kind": 6,
-        "detail": "_FlagsType",
+        "detail": "FlagsType",
         "sortText": "0",
         "insertText": "flags="
       },

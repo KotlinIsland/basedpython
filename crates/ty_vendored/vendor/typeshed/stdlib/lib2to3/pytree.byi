@@ -16,9 +16,9 @@ from .fixer_base import BaseFix
 from .pgen2.grammar import Grammar
 
 type _NL = Node | Leaf
-type _Context = tuple[str, int, int]
-type _Results = dict[str, _NL]
-type _RawNode = tuple[int, str, _Context, list[_NL] | None]
+private type Context = tuple[str, int, int]
+private type Results = dict[str, _NL]
+type _RawNode = tuple[int, str, Context, list[_NL] | None]
 
 HUGE: Final = 0x7FFFFFFF
 
@@ -177,7 +177,7 @@ class Leaf(Base):
         self,
         type: int,
         value: str,
-        context: _Context | None = None,
+        context: Context | None = None,
         prefix: str | None = None,
         fixers_applied: MutableSequence[BaseFix] = [],
     ):
@@ -241,7 +241,7 @@ class BasePattern:
         Returns either self or another node with the same effect.
         """
 
-    def match(self, node: _NL, results: _Results | None = None) -> bool:
+    def match(self, node: _NL, results: Results | None = None) -> bool:
         """
         Does this pattern exactly match a node?
 
@@ -253,14 +253,14 @@ class BasePattern:
         Default implementation for non-wildcard patterns.
         """
 
-    def match_seq(self, nodes: SupportsLenAndGetItem[_NL], results: _Results | None = None) -> bool:
+    def match_seq(self, nodes: SupportsLenAndGetItem[_NL], results: Results | None = None) -> bool:
         """
         Does this pattern exactly match a sequence of nodes?
 
         Default implementation for non-wildcard patterns.
         """
 
-    def generate_matches(self, nodes: SupportsGetItem[int, _NL]) -> Iterator[(int, _Results)]:
+    def generate_matches(self, nodes: SupportsGetItem[int, _NL]) -> Iterator[(int, Results)]:
         """
         Generator yielding all matches for this pattern.
 
@@ -352,7 +352,7 @@ class NegatedPattern(BasePattern):
 
 def generate_matches(
     patterns: SupportsGetItem[int | slice, BasePattern] | None, nodes: SupportsGetItem[int | slice, _NL]
-) -> Iterator[(int, _Results)]:
+) -> Iterator[(int, Results)]:
     """
     Generator yielding matches for a sequence of patterns and nodes.
 

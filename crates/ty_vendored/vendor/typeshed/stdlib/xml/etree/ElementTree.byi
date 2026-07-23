@@ -71,9 +71,9 @@ __all__ = [
 if sys.version_info < (3, 15):
     __all__ += ["VERSION"]
 
-type _FileRead = FileDescriptorOrPath | SupportsRead[bytes] | SupportsRead[str]
-type _FileWriteC14N = FileDescriptorOrPath | SupportsWrite[bytes]
-type _FileWrite = _FileWriteC14N | SupportsWrite[str]
+private type FileRead = FileDescriptorOrPath | SupportsRead[bytes] | SupportsRead[str]
+private type FileWriteC14N = FileDescriptorOrPath | SupportsWrite[bytes]
+private type FileWrite = FileWriteC14N | SupportsWrite[str]
 
 final VERSION: str
 
@@ -89,7 +89,7 @@ def canonicalize(
     xml_data: str | ReadableBuffer | None = None,
     *,
     out: None = None,
-    from_file: _FileRead | None = None,
+    from_file: FileRead | None = None,
     with_comments: bool = False,
     strip_text: bool = False,
     rewrite_prefixes: bool = False,
@@ -115,7 +115,7 @@ def canonicalize(
     xml_data: str | ReadableBuffer | None = None,
     *,
     out: SupportsWrite[str],
-    from_file: _FileRead | None = None,
+    from_file: FileRead | None = None,
     with_comments: bool = False,
     strip_text: bool = False,
     rewrite_prefixes: bool = False,
@@ -255,7 +255,7 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
 
     """
 
-    init(self, element: Element[dynamic] | None = None, file: _FileRead | None = None)
+    init(self, element: Element[dynamic] | None = None, file: FileRead | None = None)
     def getroot(self) -> Root:
         """Return root element of this tree."""
 
@@ -267,7 +267,7 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
 
         """
 
-    def parse(self, source: _FileRead, parser: XMLParser | None = None) -> Element:
+    def parse(self, source: FileRead, parser: XMLParser | None = None) -> Element:
         """Load external XML document into element tree.
 
         *source* is a file name or file object, *parser* is an optional
@@ -345,7 +345,7 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
 
     def write(
         self,
-        file_or_filename: _FileWrite,
+        file_or_filename: FileWrite,
         encoding: str | None = None,
         xml_declaration: bool | None = None,
         default_namespace: str | None = None,
@@ -379,7 +379,7 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
 
         """
 
-    def write_c14n(self, file: _FileWriteC14N) -> None
+    def write_c14n(self, file: FileWriteC14N) -> None
 
 final HTML_EMPTY: set[str]
 
@@ -492,7 +492,7 @@ def indent(tree: Element[dynamic] | ElementTree[dynamic], space: str = "  ", lev
     nested inside of a document.
     """
 
-def parse(source: _FileRead, parser: XMLParser[dynamic] | None = None) -> ElementTree[Element]:
+def parse(source: FileRead, parser: XMLParser[dynamic] | None = None) -> ElementTree[Element]:
     """Parse XML document into element tree.
 
     *source* is a filename or file object containing XML data,
@@ -508,18 +508,18 @@ def parse(source: _FileRead, parser: XMLParser[dynamic] | None = None) -> Elemen
 #  * comment, pi: Element[_ElementCallable]
 #  * start-ns: tuple[str, str] (prefix, uri)
 #  * end-ns: None
-type _EventType = "start" | "end" | "comment" | "pi" | "start-ns" | "end-ns"
+private type EventType = "start" | "end" | "comment" | "pi" | "start-ns" | "end-ns"
 
 # This class is defined inside the body of iterparse.
 @type_check_only
-protocol _IterParseIterator[out EventT: Element[str] | Element[_ElementCallable] | tuple[str, str] | None](Iterator[tuple[_EventType, EventT]]):
+protocol _IterParseIterator[out EventT: Element[str] | Element[_ElementCallable] | tuple[str, str] | None](Iterator[tuple[EventType, EventT]]):
     if sys.version_info >= (3, 13):
         def close(self) -> None
     if sys.version_info >= (3, 11):
         def __del__(self) -> None
 
 # See the comment for _EventT_co above for possible iterator types.
-def iterparse(source: _FileRead, events: Iterable[_EventType]) -> _IterParseIterator[dynamic]:
+def iterparse(source: FileRead, events: Iterable[EventType]) -> _IterParseIterator[dynamic]:
     """Incrementally parse XML document into ElementTree.
 
     This class also reports what's going on to the user based on the
@@ -535,17 +535,17 @@ def iterparse(source: _FileRead, events: Iterable[_EventType]) -> _IterParseIter
     Returns an iterator providing (event, elem) pairs.
 
     """
-def iterparse(source: _FileRead, events: None = None) -> _IterParseIterator[Element[str]]
+def iterparse(source: FileRead, events: None = None) -> _IterParseIterator[Element[str]]
 
 # In case a custom parser is passed, the type of the second element of the tuple
 # yielded by iterparse depends on the parser.
 @deprecated("The `parser` parameter is deprecated since Python 3.4.")
-def iterparse(source: _FileRead, events: Iterable[_EventType], parser: XMLParser | None = None) -> _IterParseIterator[dynamic]
+def iterparse(source: FileRead, events: Iterable[EventType], parser: XMLParser | None = None) -> _IterParseIterator[dynamic]
 
-type _EventQueue = tuple[str] | tuple[str, tuple[str, str]] | tuple[str, None]
+private type EventQueue = tuple[str] | tuple[str, tuple[str, str]] | tuple[str, None]
 
 class XMLPullParser[out EventT: Element[str] | Element[_ElementCallable] | tuple[str, str] | None]:
-    init(self, events: Iterable[_EventType] | None = None, *, _parser: XMLParser[EventT] | None = None)
+    init(self, events: Iterable[EventType] | None = None, *, _parser: XMLParser[EventT] | None = None)
     def feed(self, data: str | ReadableBuffer) -> None:
         """Feed encoded data to parser."""
 
@@ -556,7 +556,7 @@ class XMLPullParser[out EventT: Element[str] | Element[_ElementCallable] | tuple
         read_events() to consume elements from XMLPullParser.
         """
 
-    def read_events(self) -> Iterator[_EventQueue | (_EventType, EventT)]:
+    def read_events(self) -> Iterator[EventQueue | (EventType, EventT)]:
         """Return an iterator over currently available (event, elem) pairs.
 
         Events are consumed from the internal event queue as they are

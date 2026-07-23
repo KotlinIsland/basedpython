@@ -19,7 +19,7 @@ _global_shutdown_lock: Lock
 def _python_exit() -> None
 
 
-type _Task = tuple[(...) -> dynamic, (*: dynamic), dict[str, dynamic]]
+private type Task = tuple[(...) -> dynamic, (*: dynamic), dict[str, dynamic]]
 
 
 @type_check_only
@@ -42,13 +42,13 @@ if sys.version_info >= (3, 14):
 
         def initialize(self) -> None
         def finalize(self) -> None
-        def run(self, task: _Task) -> None
+        def run(self, task: Task) -> None
 
 if sys.version_info >= (3, 14):
     class _WorkItem[in out Other]:
         future: Future[dynamic]
-        task: _Task
-        init(self, future: Future[dynamic], task: _Task)
+        task: Task
+        init(self, future: Future[dynamic], task: Task)
         def run(self, ctx: WorkerContext) -> None
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
             """Represent a PEP 585 generic type

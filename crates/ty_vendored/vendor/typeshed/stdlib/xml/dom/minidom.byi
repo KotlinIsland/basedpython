@@ -26,18 +26,18 @@ from xml.dom.minicompat import EmptyNodeList, NodeList
 from xml.dom.xmlbuilder import DocumentLS, DOMImplementationLS
 from xml.sax.xmlreader import XMLReader
 
-type _NSName = tuple[str | None, str]
+private type NSName = tuple[str | None, str]
 
 # Entity can also have children, but it's not implemented the same way as the
 # others, so is deliberately omitted here.
-type _NodesWithChildren = DocumentFragment | Attr | Element | Document
-type _NodesThatAreChildren = CDATASection | Comment | DocumentType | Element | Notation | ProcessingInstruction | Text
+private type NodesWithChildren = DocumentFragment | Attr | Element | Document
+private type NodesThatAreChildren = CDATASection | Comment | DocumentType | Element | Notation | ProcessingInstruction | Text
 
-type _AttrChildren = Text  # Also EntityReference, but we don't implement it
-type _ElementChildren = Element | ProcessingInstruction | Comment | Text | CDATASection
-type _EntityChildren = Text  # I think; documentation is a little unclear
-type _DocumentFragmentChildren = Element | Text | CDATASection | ProcessingInstruction | Comment | Notation
-type _DocumentChildren = Comment | DocumentType | Element | ProcessingInstruction
+private type AttrChildren = Text  # Also EntityReference, but we don't implement it
+private type ElementChildren = Element | ProcessingInstruction | Comment | Text | CDATASection
+private type EntityChildren = Text  # I think; documentation is a little unclear
+private type DocumentFragmentChildren = Element | Text | CDATASection | ProcessingInstruction | Comment | Notation
+private type DocumentChildren = Comment | DocumentType | Element | ProcessingInstruction
 
 
 @type_check_only
@@ -60,21 +60,21 @@ def getDOMImplementation(features: None = None) -> DOMImplementation
 def getDOMImplementation(features: str | Iterable[(str, str | None)]) -> DOMImplementation | None
 
 class Node(xml.dom.Node):
-    parentNode: _NodesWithChildren | Entity | None
+    parentNode: NodesWithChildren | Entity | None
     ownerDocument: Document | None
-    nextSibling: _NodesThatAreChildren | None
-    previousSibling: _NodesThatAreChildren | None
+    nextSibling: NodesThatAreChildren | None
+    previousSibling: NodesThatAreChildren | None
     namespaceURI: str | None  # non-null only for Element and Attr
     prefix: str | None  # non-null only for NS Element and Attr
 
     # These aren't defined on Node, but they exist on all Node subclasses
     # and various methods of Node require them to exist.
     childNodes: (
-        NodeList[_DocumentFragmentChildren]
-        | NodeList[_AttrChildren]
-        | NodeList[_ElementChildren]
-        | NodeList[_DocumentChildren]
-        | NodeList[_EntityChildren]
+        NodeList[DocumentFragmentChildren]
+        | NodeList[AttrChildren]
+        | NodeList[ElementChildren]
+        | NodeList[DocumentChildren]
+        | NodeList[EntityChildren]
         | EmptyNodeList
     )
     nodeType: ClassVar[1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12]
@@ -84,9 +84,9 @@ class Node(xml.dom.Node):
     nodeValue: str | None  # non-null for Attr, ProcessingInstruction, Text, Comment, and CDATASection
     attributes: NamedNodeMap | None  # non-null only for Element
 
-    let firstChild: _NodesThatAreChildren | None
+    let firstChild: NodesThatAreChildren | None
 
-    let lastChild: _NodesThatAreChildren | None
+    let lastChild: NodesThatAreChildren | None
 
     let localName: str | None
 
@@ -123,24 +123,24 @@ class Node(xml.dom.Node):
     ) -> bytes
 
     def hasChildNodes(self) -> bool
-    def insertBefore[ChildNodePlusFragmentVar: _NodesThatAreChildren | DocumentFragment](
-        self: _NodesWithChildren,
+    def insertBefore[ChildNodePlusFragmentVar: NodesThatAreChildren | DocumentFragment](
+        self: NodesWithChildren,
         newChild: ChildNodePlusFragmentVar,
-        refChild: _NodesThatAreChildren | None,
+        refChild: NodesThatAreChildren | None,
     ) -> ChildNodePlusFragmentVar
-    def appendChild[ChildNodePlusFragmentVar: _NodesThatAreChildren | DocumentFragment](
-        self: _NodesWithChildren, node: ChildNodePlusFragmentVar
+    def appendChild[ChildNodePlusFragmentVar: NodesThatAreChildren | DocumentFragment](
+        self: NodesWithChildren, node: ChildNodePlusFragmentVar
     ) -> ChildNodePlusFragmentVar
 
-    def replaceChild[ChildNodeVar: _NodesThatAreChildren](
-        self: _NodesWithChildren, newChild: DocumentFragment, oldChild: ChildNodeVar
+    def replaceChild[ChildNodeVar: NodesThatAreChildren](
+        self: NodesWithChildren, newChild: DocumentFragment, oldChild: ChildNodeVar
     ) -> ChildNodeVar | DocumentFragment
-    def replaceChild[ChildNodeVar: _NodesThatAreChildren](
-        self: _NodesWithChildren, newChild: _NodesThatAreChildren, oldChild: ChildNodeVar
+    def replaceChild[ChildNodeVar: NodesThatAreChildren](
+        self: NodesWithChildren, newChild: NodesThatAreChildren, oldChild: ChildNodeVar
     ) -> ChildNodeVar | None
 
-    def removeChild[ChildNodeVar: _NodesThatAreChildren](self: _NodesWithChildren, oldChild: ChildNodeVar) -> ChildNodeVar
-    def normalize(self: _NodesWithChildren) -> None
+    def removeChild[ChildNodeVar: NodesThatAreChildren](self: NodesWithChildren, oldChild: ChildNodeVar) -> ChildNodeVar
+    def normalize(self: NodesWithChildren) -> None
     def cloneNode(self, deep: bool) -> Self | None
     def isSupported(self, feature: str, version: str | None) -> bool
     def isSameNode(self, other: Node) -> bool
@@ -161,25 +161,25 @@ class DocumentFragment(Node):
     parentNode: None
     nextSibling: None
     previousSibling: None
-    childNodes: NodeList[_DocumentFragmentChildren]
-    let firstChild: _DocumentFragmentChildren | None
+    childNodes: NodeList[DocumentFragmentChildren]
+    let firstChild: DocumentFragmentChildren | None
 
-    let lastChild: _DocumentFragmentChildren | None
+    let lastChild: DocumentFragmentChildren | None
 
     namespaceURI: None
     prefix: None
     let localName: None
 
     init(self)
-    override def insertBefore[DFChildrenPlusFragment: _DocumentFragmentChildren | DocumentFragment](
-        self, newChild: DFChildrenPlusFragment, refChild: _DocumentFragmentChildren | None
+    override def insertBefore[DFChildrenPlusFragment: DocumentFragmentChildren | DocumentFragment](
+        self, newChild: DFChildrenPlusFragment, refChild: DocumentFragmentChildren | None
     ) -> DFChildrenPlusFragment
-    override def appendChild[DFChildrenPlusFragment: _DocumentFragmentChildren | DocumentFragment](self, node: DFChildrenPlusFragment) -> DFChildrenPlusFragment
+    override def appendChild[DFChildrenPlusFragment: DocumentFragmentChildren | DocumentFragment](self, node: DFChildrenPlusFragment) -> DFChildrenPlusFragment
 
-    override def replaceChild[DFChildrenVar: _DocumentFragmentChildren](self, newChild: DocumentFragment, oldChild: DFChildrenVar) -> DFChildrenVar | DocumentFragment
-    def replaceChild[DFChildrenVar: _DocumentFragmentChildren](self, newChild: _DocumentFragmentChildren, oldChild: DFChildrenVar) -> DFChildrenVar | None
+    override def replaceChild[DFChildrenVar: DocumentFragmentChildren](self, newChild: DocumentFragment, oldChild: DFChildrenVar) -> DFChildrenVar | DocumentFragment
+    def replaceChild[DFChildrenVar: DocumentFragmentChildren](self, newChild: DocumentFragmentChildren, oldChild: DFChildrenVar) -> DFChildrenVar | None
 
-    override def removeChild[DFChildrenVar: _DocumentFragmentChildren](self, oldChild: DFChildrenVar) -> DFChildrenVar
+    override def removeChild[DFChildrenVar: DocumentFragmentChildren](self, oldChild: DFChildrenVar) -> DFChildrenVar
 
 
 class Attr(Node):
@@ -192,10 +192,10 @@ class Attr(Node):
     parentNode: None
     nextSibling: None
     previousSibling: None
-    childNodes: NodeList[_AttrChildren]
-    let firstChild: _AttrChildren | None
+    childNodes: NodeList[AttrChildren]
+    let firstChild: AttrChildren | None
 
-    let lastChild: _AttrChildren | None
+    let lastChild: AttrChildren | None
 
     namespaceURI: str | None
     prefix: str | None
@@ -214,13 +214,13 @@ class Attr(Node):
 
     let schemaType: TypeInfo
 
-    override def insertBefore[AttrChildrenPlusFragment: _AttrChildren | DocumentFragment](self, newChild: AttrChildrenPlusFragment, refChild: _AttrChildren | None) -> AttrChildrenPlusFragment
-    override def appendChild[AttrChildrenPlusFragment: _AttrChildren | DocumentFragment](self, node: AttrChildrenPlusFragment) -> AttrChildrenPlusFragment
+    override def insertBefore[AttrChildrenPlusFragment: AttrChildren | DocumentFragment](self, newChild: AttrChildrenPlusFragment, refChild: AttrChildren | None) -> AttrChildrenPlusFragment
+    override def appendChild[AttrChildrenPlusFragment: AttrChildren | DocumentFragment](self, node: AttrChildrenPlusFragment) -> AttrChildrenPlusFragment
 
-    override def replaceChild[AttrChildrenVar: _AttrChildren](self, newChild: DocumentFragment, oldChild: AttrChildrenVar) -> AttrChildrenVar | DocumentFragment
-    def replaceChild[AttrChildrenVar: _AttrChildren](self, newChild: _AttrChildren, oldChild: AttrChildrenVar) -> AttrChildrenVar | None
+    override def replaceChild[AttrChildrenVar: AttrChildren](self, newChild: DocumentFragment, oldChild: AttrChildrenVar) -> AttrChildrenVar | DocumentFragment
+    def replaceChild[AttrChildrenVar: AttrChildren](self, newChild: AttrChildren, oldChild: AttrChildrenVar) -> AttrChildrenVar | None
 
-    override def removeChild[AttrChildrenVar: _AttrChildren](self, oldChild: AttrChildrenVar) -> AttrChildrenVar
+    override def removeChild[AttrChildrenVar: AttrChildren](self, oldChild: AttrChildrenVar) -> AttrChildrenVar
 
 # In the DOM, this interface isn't specific to Attr, but our implementation is
 # because that's the only place we use it.
@@ -234,15 +234,15 @@ class NamedNodeMap:
     """
 
     __slots__ = ("_attrs", "_attrsNS", "_ownerElement")
-    init(self, attrs: dict[str, Attr], attrsNS: dict[_NSName, Attr], ownerElement: Element)
+    init(self, attrs: dict[str, Attr], attrsNS: dict[NSName, Attr], ownerElement: Element)
     let length: int
 
     def item(self, index: int) -> Node | None
     def items(self) -> list[(str, str)]
-    def itemsNS(self) -> list[(_NSName, str)]
-    def __contains__(self, key: str | _NSName) -> bool
+    def itemsNS(self) -> list[(NSName, str)]
+    def __contains__(self, key: str | NSName) -> bool
     def keys(self) -> dict_keys[str, Attr]
-    def keysNS(self) -> dict_keys[_NSName, Attr]
+    def keysNS(self) -> dict_keys[NSName, Attr]
     def values(self) -> dict_values[str, Attr]
     def get(self, name: str, value: Attr | None = None) -> Attr | None
     __hash__: ClassVar[None]
@@ -252,7 +252,7 @@ class NamedNodeMap:
     def __gt__(self, other: NamedNodeMap) -> bool
     def __le__(self, other: NamedNodeMap) -> bool
     def __lt__(self, other: NamedNodeMap) -> bool
-    def __getitem__(self, attname_or_tuple: _NSName | str) -> Attr
+    def __getitem__(self, attname_or_tuple: NSName | str) -> Attr
     def __setitem__(self, attname: str, value: Attr | str) -> None
     def getNamedItem(self, name: str) -> Attr | None
     def getNamedItemNS(self, namespaceURI: str | None, localName: str) -> Attr | None
@@ -260,7 +260,7 @@ class NamedNodeMap:
     def removeNamedItemNS(self, namespaceURI: str | None, localName: str) -> Attr
     def setNamedItem(self, node: Attr) -> Attr | None
     def setNamedItemNS(self, node: Attr) -> Attr | None
-    def __delitem__(self, attname_or_tuple: _NSName | str) -> None
+    def __delitem__(self, attname_or_tuple: NSName | str) -> None
 
 AttributeList = NamedNodeMap
 
@@ -292,12 +292,12 @@ class Element(Node):
     let attributes: NamedNodeMap
 
     parentNode: Document | Element | DocumentFragment | None
-    nextSibling: _DocumentChildren | _ElementChildren | _DocumentFragmentChildren | None
-    previousSibling: _DocumentChildren | _ElementChildren | _DocumentFragmentChildren | None
-    childNodes: NodeList[_ElementChildren]
-    let firstChild: _ElementChildren | None
+    nextSibling: DocumentChildren | ElementChildren | DocumentFragmentChildren | None
+    previousSibling: DocumentChildren | ElementChildren | DocumentFragmentChildren | None
+    childNodes: NodeList[ElementChildren]
+    let firstChild: ElementChildren | None
 
-    let lastChild: _ElementChildren | None
+    let lastChild: ElementChildren | None
 
     namespaceURI: str | None
     prefix: str | None
@@ -358,17 +358,17 @@ class Element(Node):
     def setIdAttribute(self, name: str) -> None
     def setIdAttributeNS(self, namespaceURI: str | None, localName: str) -> None
     def setIdAttributeNode(self, idAttr: Attr) -> None
-    override def insertBefore[ElementChildrenPlusFragment: _ElementChildren | DocumentFragment](
-        self, newChild: ElementChildrenPlusFragment, refChild: _ElementChildren | None
+    override def insertBefore[ElementChildrenPlusFragment: ElementChildren | DocumentFragment](
+        self, newChild: ElementChildrenPlusFragment, refChild: ElementChildren | None
     ) -> ElementChildrenPlusFragment
-    override def appendChild[ElementChildrenPlusFragment: _ElementChildren | DocumentFragment](self, node: ElementChildrenPlusFragment) -> ElementChildrenPlusFragment
+    override def appendChild[ElementChildrenPlusFragment: ElementChildren | DocumentFragment](self, node: ElementChildrenPlusFragment) -> ElementChildrenPlusFragment
 
-    override def replaceChild[ElementChildrenVar: _ElementChildren](
+    override def replaceChild[ElementChildrenVar: ElementChildren](
         self, newChild: DocumentFragment, oldChild: ElementChildrenVar
     ) -> ElementChildrenVar | DocumentFragment
-    def replaceChild[ElementChildrenVar: _ElementChildren](self, newChild: _ElementChildren, oldChild: ElementChildrenVar) -> ElementChildrenVar | None
+    def replaceChild[ElementChildrenVar: ElementChildren](self, newChild: ElementChildren, oldChild: ElementChildrenVar) -> ElementChildrenVar | None
 
-    override def removeChild[ElementChildrenVar: _ElementChildren](self, oldChild: ElementChildrenVar) -> ElementChildrenVar
+    override def removeChild[ElementChildrenVar: ElementChildren](self, oldChild: ElementChildrenVar) -> ElementChildrenVar
 
 class Childless:
     """Mixin that makes childless-ness easy to implement and avoids
@@ -380,14 +380,14 @@ class Childless:
     childNodes: EmptyNodeList
     let firstChild: None
     let lastChild: None
-    def appendChild(self, node: _NodesThatAreChildren | DocumentFragment) -> NoReturn
+    def appendChild(self, node: NodesThatAreChildren | DocumentFragment) -> NoReturn
     def hasChildNodes(self) -> False
     def insertBefore(
-        self, newChild: _NodesThatAreChildren | DocumentFragment, refChild: _NodesThatAreChildren | None
+        self, newChild: NodesThatAreChildren | DocumentFragment, refChild: NodesThatAreChildren | None
     ) -> NoReturn
-    def removeChild(self, oldChild: _NodesThatAreChildren) -> NoReturn
+    def removeChild(self, oldChild: NodesThatAreChildren) -> NoReturn
     def normalize(self) -> None
-    def replaceChild(self, newChild: _NodesThatAreChildren | DocumentFragment, oldChild: _NodesThatAreChildren) -> NoReturn
+    def replaceChild(self, newChild: NodesThatAreChildren | DocumentFragment, oldChild: NodesThatAreChildren) -> NoReturn
 
 class ProcessingInstruction(Childless, Node):
     __slots__ = ("target", "data")
@@ -397,8 +397,8 @@ class ProcessingInstruction(Childless, Node):
     attributes: None
 
     parentNode: Document | Element | DocumentFragment | None
-    nextSibling: _DocumentChildren | _ElementChildren | _DocumentFragmentChildren | None
-    previousSibling: _DocumentChildren | _ElementChildren | _DocumentFragmentChildren | None
+    nextSibling: DocumentChildren | ElementChildren | DocumentFragmentChildren | None
+    previousSibling: DocumentChildren | ElementChildren | DocumentFragmentChildren | None
     childNodes: EmptyNodeList
     let firstChild: None
     let lastChild: None
@@ -419,8 +419,8 @@ class CharacterData(Childless, Node):
     attributes: None
 
     childNodes: EmptyNodeList
-    nextSibling: _NodesThatAreChildren | None
-    previousSibling: _NodesThatAreChildren | None
+    nextSibling: NodesThatAreChildren | None
+    previousSibling: NodesThatAreChildren | None
 
     let localName: None
 
@@ -445,8 +445,8 @@ class Text(CharacterData):
     attributes: None
 
     parentNode: Attr | Element | DocumentFragment | None
-    nextSibling: _DocumentFragmentChildren | _ElementChildren | _AttrChildren | None
-    previousSibling: _DocumentFragmentChildren | _ElementChildren | _AttrChildren | None
+    nextSibling: DocumentFragmentChildren | ElementChildren | AttrChildren | None
+    previousSibling: DocumentFragmentChildren | ElementChildren | AttrChildren | None
     childNodes: EmptyNodeList
     let firstChild: None
     let lastChild: None
@@ -470,8 +470,8 @@ class Comment(CharacterData):
     attributes: None
 
     parentNode: Document | Element | DocumentFragment | None
-    nextSibling: _DocumentChildren | _ElementChildren | _DocumentFragmentChildren | None
-    previousSibling: _DocumentChildren | _ElementChildren | _DocumentFragmentChildren | None
+    nextSibling: DocumentChildren | ElementChildren | DocumentFragmentChildren | None
+    previousSibling: DocumentChildren | ElementChildren | DocumentFragmentChildren | None
     childNodes: EmptyNodeList
     let firstChild: None
     let lastChild: None
@@ -491,8 +491,8 @@ class CDATASection(Text):
     attributes: None
 
     parentNode: Element | DocumentFragment | None
-    nextSibling: _DocumentFragmentChildren | _ElementChildren | None
-    previousSibling: _DocumentFragmentChildren | _ElementChildren | None
+    nextSibling: DocumentFragmentChildren | ElementChildren | None
+    previousSibling: DocumentFragmentChildren | ElementChildren | None
 
     override def writexml(self, writer: SupportsWrite[str], indent: str = "", addindent: str = "", newl: str = "") -> None
 
@@ -502,7 +502,7 @@ class ReadOnlySequentialNamedNodeMap[in out N: Node]:
     def __len__(self) -> int
     def getNamedItem(self, name: str) -> N | None
     def getNamedItemNS(self, namespaceURI: str | None, localName: str) -> N | None
-    def __getitem__(self, name_or_tuple: str | _NSName) -> N | None
+    def __getitem__(self, name_or_tuple: str | NSName) -> N | None
     def item(self, index: int) -> N | None
     def removeNamedItem(self, name: str) -> NoReturn
     def removeNamedItemNS(self, namespaceURI: str | None, localName: str) -> NoReturn
@@ -524,8 +524,8 @@ class DocumentType(Identified, Childless, Node):
     attributes: None
 
     parentNode: Document | None
-    nextSibling: _DocumentChildren | None
-    previousSibling: _DocumentChildren | None
+    nextSibling: DocumentChildren | None
+    previousSibling: DocumentChildren | None
     childNodes: EmptyNodeList
     let firstChild: None
     let lastChild: None
@@ -552,10 +552,10 @@ class Entity(Identified, Node):
     parentNode: None
     nextSibling: None
     previousSibling: None
-    childNodes: NodeList[_EntityChildren]
-    let firstChild: _EntityChildren | None
+    childNodes: NodeList[EntityChildren]
+    let firstChild: EntityChildren | None
 
-    let lastChild: _EntityChildren | None
+    let lastChild: EntityChildren | None
 
     namespaceURI: None
     prefix: None
@@ -567,10 +567,10 @@ class Entity(Identified, Node):
     notationName: str | None
 
     init(self, name: str, publicId: str | None, systemId: str | None, notation: str | None)
-    override def appendChild(self, newChild: _EntityChildren) -> NoReturn
-    override def insertBefore(self, newChild: _EntityChildren, refChild: _EntityChildren | None) -> NoReturn
-    override def removeChild(self, oldChild: _EntityChildren) -> NoReturn
-    override def replaceChild(self, newChild: _EntityChildren, oldChild: _EntityChildren) -> NoReturn
+    override def appendChild(self, newChild: EntityChildren) -> NoReturn
+    override def insertBefore(self, newChild: EntityChildren, refChild: EntityChildren | None) -> NoReturn
+    override def removeChild(self, oldChild: EntityChildren) -> NoReturn
+    override def replaceChild(self, newChild: EntityChildren, oldChild: EntityChildren) -> NoReturn
 
 class Notation(Identified, Childless, Node):
     nodeType: ClassVar[12]
@@ -579,8 +579,8 @@ class Notation(Identified, Childless, Node):
     attributes: None
 
     parentNode: DocumentFragment | None
-    nextSibling: _DocumentFragmentChildren | None
-    previousSibling: _DocumentFragmentChildren | None
+    nextSibling: DocumentFragmentChildren | None
+    previousSibling: DocumentFragmentChildren | None
     childNodes: EmptyNodeList
     let firstChild: None
     let lastChild: None
@@ -634,10 +634,10 @@ class Document(Node, DocumentLS):
     parentNode: None
     previousSibling: None
     nextSibling: None
-    childNodes: NodeList[_DocumentChildren]
-    let firstChild: _DocumentChildren | None
+    childNodes: NodeList[DocumentChildren]
+    let firstChild: DocumentChildren | None
 
-    let lastChild: _DocumentChildren | None
+    let lastChild: DocumentChildren | None
 
     namespaceURI: None
     prefix: None
@@ -656,8 +656,8 @@ class Document(Node, DocumentLS):
     """Top-level element of this document."""
 
     init(self)
-    override def appendChild[DocumentChildrenVar: _DocumentChildren](self, node: DocumentChildrenVar) -> DocumentChildrenVar
-    override def removeChild[DocumentChildrenVar: _DocumentChildren](self, oldChild: DocumentChildrenVar) -> DocumentChildrenVar
+    override def appendChild[DocumentChildrenVar: DocumentChildren](self, node: DocumentChildrenVar) -> DocumentChildrenVar
+    override def removeChild[DocumentChildrenVar: DocumentChildren](self, oldChild: DocumentChildrenVar) -> DocumentChildrenVar
     override def unlink(self) -> None
     override def cloneNode(self, deep: bool) -> Document | None
     def createDocumentFragment(self) -> DocumentFragment
@@ -697,11 +697,11 @@ class Document(Node, DocumentLS):
     def renameNode(self, n: Attr, namespaceURI: str, name: str) -> Attr
     def renameNode(self, n: Element | Attr, namespaceURI: str, name: str) -> Element | Attr
 
-    override def insertBefore[DocumentChildrenPlusFragment: _DocumentChildren | DocumentFragment](
-        self, newChild: DocumentChildrenPlusFragment, refChild: _DocumentChildren | None
+    override def insertBefore[DocumentChildrenPlusFragment: DocumentChildren | DocumentFragment](
+        self, newChild: DocumentChildrenPlusFragment, refChild: DocumentChildren | None
     ) -> DocumentChildrenPlusFragment
 
-    override def replaceChild[DocumentChildrenVar: _DocumentChildren](
+    override def replaceChild[DocumentChildrenVar: DocumentChildren](
         self, newChild: DocumentFragment, oldChild: DocumentChildrenVar
     ) -> DocumentChildrenVar | DocumentFragment
-    def replaceChild[DocumentChildrenVar: _DocumentChildren](self, newChild: _DocumentChildren, oldChild: DocumentChildrenVar) -> DocumentChildrenVar | None
+    def replaceChild[DocumentChildrenVar: DocumentChildren](self, newChild: DocumentChildren, oldChild: DocumentChildrenVar) -> DocumentChildrenVar | None

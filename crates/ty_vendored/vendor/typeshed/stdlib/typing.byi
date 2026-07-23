@@ -1918,7 +1918,7 @@ type ByteString = bytes | bytearray | memoryview
 
 # Functions
 
-type _get_type_hints_obj_allowed_types = (  # noqa: Y042
+private type get_type_hints_obj_allowed_types = (  # noqa: Y042
     object
     | ((...) -> dynamic)
     | FunctionType
@@ -1932,7 +1932,7 @@ type _get_type_hints_obj_allowed_types = (  # noqa: Y042
 
 if sys.version_info >= (3, 14):
     def get_type_hints(
-        obj: _get_type_hints_obj_allowed_types,
+        obj: get_type_hints_obj_allowed_types,
         globalns: dict[str, dynamic] | None = None,
         localns: Mapping[str, dynamic] | None = None,
         include_extras: bool = False,
@@ -1972,7 +1972,7 @@ if sys.version_info >= (3, 14):
 
 else:
     def get_type_hints(
-        obj: _get_type_hints_obj_allowed_types,
+        obj: get_type_hints_obj_allowed_types,
         globalns: dict[str, dynamic] | None = None,
         localns: Mapping[str, dynamic] | None = None,
         include_extras: bool = False,

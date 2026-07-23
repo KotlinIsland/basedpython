@@ -63,7 +63,7 @@ def setup_master(master: tkinter.Misc | None = None):
     RuntimeError is raised.
     """
 
-type _Padding = (
+private type Padding = (
     float
     | str
     | tuple[float | str]
@@ -74,10 +74,10 @@ type _Padding = (
 
 # Last item (option value to apply) varies between different options so use Any.
 # It could also be any iterable with items matching the tuple, but that case
-# hasn't been added here for consistency with _Padding above.
-type _Statespec = tuple[Unpack[(*: str)], dynamic]
-type _ImageStatespec = tuple[Unpack[(*: str)], tkinter._Image | str]
-type _VsapiStatespec = tuple[Unpack[(*: str)], int]
+# hasn't been added here for consistency with Padding above.
+private type Statespec = tuple[Unpack[(*: str)], dynamic]
+private type ImageStatespec = tuple[Unpack[(*: str)], tkinter._Image | str]
+private type VsapiStatespec = tuple[Unpack[(*: str)], int]
 
 
 @type_check_only
@@ -85,35 +85,35 @@ class _Layout(TypedDict, total=False):
     side: "left" | "right" | "top" | "bottom"
     sticky: str  # consists of letters 'n', 's', 'w', 'e', may contain repeats, may be empty
     unit: 0 | 1 | bool
-    children: _LayoutSpec
+    children: LayoutSpec
     # Note: there seem to be some other undocumented keys sometimes
 
 # This could be any sequence when passed as a parameter but will always be a list when returned.
-type _LayoutSpec = list[tuple[str, _Layout | None]]
+private type LayoutSpec = list[tuple[str, _Layout | None]]
 
 # Keep these in sync with the appropriate methods in Style
 @type_check_only
 class _ElementCreateImageKwargs(TypedDict, total=False):
-    border: _Padding
+    border: Padding
     height: float | str
-    padding: _Padding
+    padding: Padding
     sticky: str
     width: float | str
 
-type _ElementCreateArgsCrossPlatform = (
+private type ElementCreateArgsCrossPlatform = (
     # Could be any sequence here but types are not homogenous so just type it as tuple
-    tuple["image", tkinter._Image | str, Unpack[(*: _ImageStatespec)], _ElementCreateImageKwargs]
+    tuple["image", tkinter._Image | str, Unpack[(*: ImageStatespec)], _ElementCreateImageKwargs]
     | tuple["from", str, str]
     | tuple["from", str]  # (fromelement is optional)
 )
 if sys.platform == "win32" and sys.version_info >= (3, 13):
     @type_check_only
     class _ElementCreateVsapiKwargsPadding(TypedDict, total=False):
-        padding: _Padding
+        padding: Padding
 
     @type_check_only
     class _ElementCreateVsapiKwargsMargin(TypedDict, total=False):
-        padding: _Padding
+        padding: Padding
 
     @type_check_only
     class _ElementCreateVsapiKwargsSize(TypedDict):
@@ -124,23 +124,23 @@ if sys.platform == "win32" and sys.version_info >= (3, 13):
         _ElementCreateVsapiKwargsPadding | _ElementCreateVsapiKwargsMargin | _ElementCreateVsapiKwargsSize
     )
     type _ElementCreateArgs = (  # noqa: Y047  # It doesn't recognise the usage below for whatever reason
-        _ElementCreateArgsCrossPlatform
+        ElementCreateArgsCrossPlatform
         | tuple["vsapi", str, int, _ElementCreateVsapiKwargsDict]
-        | tuple["vsapi", str, int, _VsapiStatespec, _ElementCreateVsapiKwargsDict]
+        | tuple["vsapi", str, int, VsapiStatespec, _ElementCreateVsapiKwargsDict]
     )
 else:
-    type _ElementCreateArgs = _ElementCreateArgsCrossPlatform
+    type _ElementCreateArgs = ElementCreateArgsCrossPlatform
 _ThemeSettingsValue = TypedDict(
     "_ThemeSettingsValue",
     {
         "configure": dict[str, dynamic],
-        "map": dict[str, Iterable[_Statespec]],
-        "layout": _LayoutSpec,
+        "map": dict[str, Iterable[Statespec]],
+        "layout": LayoutSpec,
         "element create": _ElementCreateArgs,
     },
     total=False,
 )
-type _ThemeSettings = dict[str, _ThemeSettingsValue]
+private type ThemeSettings = dict[str, _ThemeSettingsValue]
 
 class Style:
     """Manipulate style database."""
@@ -161,7 +161,7 @@ class Style:
     def configure(self, style: str, query_opt: str, **kw: dynamic) -> dynamic
     def configure(self, style: str, query_opt: None = None, **kw: dynamic) -> None
 
-    def map(self, style: str, query_opt: str) -> _Statespec:
+    def map(self, style: str, query_opt: str) -> Statespec:
         """Query or sets dynamic values of the specified option(s) in
         style.
 
@@ -170,7 +170,7 @@ class Style:
         or something else of your preference. A statespec is compound of
         one or more states and then a value.
         """
-    def map(self, style: str, query_opt: None = None, **kw: Iterable[_Statespec]) -> dict[str, _Statespec]
+    def map(self, style: str, query_opt: None = None, **kw: Iterable[Statespec]) -> dict[str, Statespec]
 
     def lookup(self, style: str, option: str, state: Iterable[str] | None = None, default: dynamic | None = None) -> dynamic:
         """Returns the value specified for option in style.
@@ -180,7 +180,7 @@ class Style:
         a fallback value in case no specification for option is found.
         """
 
-    def layout(self, style: str, layoutspec: _LayoutSpec) -> list[Never]:  # Always seems to return an empty list
+    def layout(self, style: str, layoutspec: LayoutSpec) -> list[Never]:  # Always seems to return an empty list
         """Define the widget layout for given style. If layoutspec is
         omitted, return the layout specification for given style.
 
@@ -213,7 +213,7 @@ class Style:
                     where the first item is the layout name, and the other
                     is a LAYOUT.
         """
-    def layout(self, style: str, layoutspec: None = None) -> _LayoutSpec
+    def layout(self, style: str, layoutspec: None = None) -> LayoutSpec
 
     def element_create(
         self,
@@ -221,10 +221,10 @@ class Style:
         etype: "image",
         default_image: tkinter._Image | str,
         /,
-        *imagespec: _ImageStatespec,
-        border: _Padding = ...,
+        *imagespec: ImageStatespec,
+        border: Padding = ...,
         height: float | str = ...,
-        padding: _Padding = ...,
+        padding: Padding = ...,
         sticky: str = ...,
         width: float | str = ...,
     ) -> None:
@@ -240,10 +240,10 @@ class Style:
             etype: "vsapi",
             class_: str,
             part: int,
-            vs_statespec: _VsapiStatespec = ...,
+            vs_statespec: VsapiStatespec = ...,
             /,
             *,
-            padding: _Padding = ...,
+            padding: Padding = ...,
         ) -> None:
             """Create a new element in the current theme of given etype."""
         def element_create(
@@ -252,10 +252,10 @@ class Style:
             etype: "vsapi",
             class_: str,
             part: int,
-            vs_statespec: _VsapiStatespec = ...,
+            vs_statespec: VsapiStatespec = ...,
             /,
             *,
-            margin: _Padding = ...,
+            margin: Padding = ...,
         ) -> None
         def element_create(
             self,
@@ -263,7 +263,7 @@ class Style:
             etype: "vsapi",
             class_: str,
             part: int,
-            vs_statespec: _VsapiStatespec = ...,
+            vs_statespec: VsapiStatespec = ...,
             /,
             *,
             width: float | str,
@@ -276,7 +276,7 @@ class Style:
     def element_options(self, elementname: str) -> (*: str):
         """Return the list of elementname's options."""
 
-    def theme_create(self, themename: str, parent: str | None = None, settings: _ThemeSettings | None = None) -> None:
+    def theme_create(self, themename: str, parent: str | None = None, settings: ThemeSettings | None = None) -> None:
         """Creates a new theme.
 
         It is an error if themename already exists. If parent is
@@ -285,7 +285,7 @@ class Style:
         they are expected to have the same syntax used for theme_settings.
         """
 
-    def theme_settings(self, themename: str, settings: _ThemeSettings) -> None:
+    def theme_settings(self, themename: str, settings: ThemeSettings) -> None:
         """Temporarily sets the current theme to themename, apply specified
         settings and then restore the previous theme.
 
@@ -794,7 +794,7 @@ class Frame(Widget):
         cursor: tkinter._Cursor = "",
         height: float | str = 0,
         name: str = ...,
-        padding: _Padding = ...,
+        padding: Padding = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
@@ -819,7 +819,7 @@ class Frame(Widget):
         borderwidth: float | str = ...,
         cursor: tkinter._Cursor = ...,
         height: float | str = ...,
-        padding: _Padding = ...,
+        padding: Padding = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
@@ -860,7 +860,7 @@ class Label(Widget):
         image: tkinter._Image | str = "",
         justify: "left" | "center" | "right" = ...,
         name: str = ...,
-        padding: _Padding = ...,
+        padding: Padding = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         state: str = "normal",
         style: str = "",
@@ -898,7 +898,7 @@ class Label(Widget):
         foreground: str = ...,
         image: tkinter._Image | str = ...,
         justify: "left" | "center" | "right" = ...,
-        padding: _Padding = ...,
+        padding: Padding = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         state: str = ...,
         style: str = ...,
@@ -943,7 +943,7 @@ class Labelframe(Widget):
         labelanchor: "nw" | "n" | "ne" | "en" | "e" | "es" | "se" | "s" | "sw" | "ws" | "w" | "wn" = ...,
         labelwidget: tkinter.Misc = ...,
         name: str = ...,
-        padding: _Padding = ...,
+        padding: Padding = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,  # undocumented
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",
@@ -972,7 +972,7 @@ class Labelframe(Widget):
         height: float | str = ...,
         labelanchor: "nw" | "n" | "ne" | "en" | "e" | "es" | "se" | "s" | "sw" | "ws" | "w" | "wn" = ...,
         labelwidget: tkinter.Misc = ...,
-        padding: _Padding = ...,
+        padding: Padding = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
@@ -1083,7 +1083,7 @@ class Notebook(Widget):
         cursor: tkinter._Cursor = "",
         height: int = 0,
         name: str = ...,
-        padding: _Padding = ...,
+        padding: Padding = ...,
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         width: int = 0,
@@ -1123,7 +1123,7 @@ class Notebook(Widget):
         *,
         cursor: tkinter._Cursor = ...,
         height: int = ...,
-        padding: _Padding = ...,
+        padding: Padding = ...,
         style: str = ...,
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = ...,
         width: int = ...,
@@ -1149,7 +1149,7 @@ class Notebook(Widget):
         *,
         state: "normal" | "disabled" | "hidden" = ...,
         sticky: str = ...,  # consists of letters 'n', 's', 'w', 'e', no repeats, may be empty
-        padding: _Padding = ...,
+        padding: Padding = ...,
         text: str = ...,
         # `image` is a sequence of an image name, followed by zero or more
         # (sequences of one or more state names followed by an image name)
@@ -1938,7 +1938,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         displaycolumns: str | int | list[str] | (*: str) | list[int] | (*: int) = ("#all",),
         height: int = 10,
         name: str = ...,
-        padding: _Padding = ...,
+        padding: Padding = ...,
         selectmode: "extended" | "browse" | "none" = "extended",
         # list/tuple of Literal don't actually work in mypy
         #
@@ -1978,7 +1978,7 @@ class Treeview(Widget, tkinter.XView, tkinter.YView):
         cursor: tkinter._Cursor = ...,
         displaycolumns: str | int | list[str] | (*: str) | list[int] | (*: int) = ...,
         height: int = ...,
-        padding: _Padding = ...,
+        padding: Padding = ...,
         selectmode: "extended" | "browse" | "none" = ...,
         show: "tree" | "headings" | "tree headings" | "" | list[str] | (*: str) = ...,
         style: str = ...,
@@ -2332,7 +2332,7 @@ class LabeledScale(Frame):
         cursor: tkinter._Cursor = "",
         height: float | str = 0,
         name: str = ...,
-        padding: _Padding = ...,
+        padding: Padding = ...,
         relief: "raised" | "sunken" | "flat" | "ridge" | "solid" | "groove" = ...,
         style: str = "",
         takefocus: bool | 0 | 1 | "" | ((str) -> (bool | None)) = "",

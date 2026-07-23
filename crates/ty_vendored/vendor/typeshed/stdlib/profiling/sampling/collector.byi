@@ -5,11 +5,11 @@ from typing import ClassVar, TypeAlias
 
 from _remote_debugging import AwaitedInfo, FrameInfo, InterpreterInfo, LocationInfo
 
-type _Location = int | tuple[int, int, int, int] | LocationInfo | None
-type _Frame = FrameInfo | tuple[str, _Location, str, int | None]
+private type Location = int | tuple[int, int, int, int] | LocationInfo | None
+type _Frame = FrameInfo | tuple[str, Location, str, int | None]
 type _Timestamps = Sequence[int] | None
 
-def normalize_location(location: _Location) -> (int, int, int, int):
+def normalize_location(location: Location) -> (int, int, int, int):
     """Normalize location to a 4-tuple format.
 
     Args:
@@ -20,7 +20,7 @@ def normalize_location(location: _Location) -> (int, int, int, int):
         tuple: (lineno, end_lineno, col_offset, end_col_offset)
     """
 
-def extract_lineno(location: _Location) -> int:
+def extract_lineno(location: Location) -> int:
     """Extract lineno from location.
 
     Args:

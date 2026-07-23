@@ -14,7 +14,7 @@ from typing_extensions import deprecated
 
 __all__ = ["POP3", "error_proto", "POP3_SSL"]
 
-type _LongResp = tuple[bytes, list[bytes], int]
+private type LongResp = tuple[bytes, list[bytes], int]
 
 class error_proto(Exception)
 
@@ -98,7 +98,7 @@ class POP3:
         Result is tuple of 2 ints (message count, mailbox size)
         """
 
-    def list(self, which: dynamic | None = None) -> _LongResp:
+    def list(self, which: dynamic | None = None) -> LongResp:
         """Request listing, return result.
 
         Result without a message number argument is in form
@@ -108,7 +108,7 @@ class POP3:
         single response: the "scan listing" for that message.
         """
 
-    def retr(self, which: dynamic) -> _LongResp:
+    def retr(self, which: dynamic) -> LongResp:
         """Retrieve whole message number 'which'.
 
         Result is in form ['response', ['line', ...], octets].
@@ -151,14 +151,14 @@ class POP3:
         NB: mailbox is locked by server from here to 'quit()'
         """
 
-    def top(self, which: dynamic, howmuch: int) -> _LongResp:
+    def top(self, which: dynamic, howmuch: int) -> LongResp:
         """Retrieve message header of message number 'which'
         and first 'howmuch' lines of message body.
 
         Result is in form ['response', ['line', ...], octets].
         """
 
-    def uidl(self) -> _LongResp:
+    def uidl(self) -> LongResp:
         """Return message digest (unique id) list.
 
         If 'which', result contains unique id for that message

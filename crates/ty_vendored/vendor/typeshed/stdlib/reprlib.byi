@@ -8,9 +8,9 @@ from typing import TypeAlias
 
 __all__ = ["Repr", "repr", "recursive_repr"]
 
-type _ReprFunc = (dynamic) -> str
+private type ReprFunc = (dynamic) -> str
 
-def recursive_repr(fillvalue: str = "...") -> (_ReprFunc) -> _ReprFunc:
+def recursive_repr(fillvalue: str = "...") -> (ReprFunc) -> ReprFunc:
     """Decorator to make a repr function return fillvalue for a recursive call"""
 
 class Repr:

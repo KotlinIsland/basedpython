@@ -25,7 +25,7 @@ from typing import TypeAlias
 __all__ = ["Timer", "timeit", "repeat", "default_timer"]
 
 type _Timer = () -> float
-type _Stmt = str | (() -> object)
+private type Stmt = str | (() -> object)
 
 default_timer: _Timer
 
@@ -49,8 +49,8 @@ class Timer:
 
     init(
         self,
-        stmt: _Stmt = "pass",
-        setup: _Stmt = "pass",
+        stmt: Stmt = "pass",
+        setup: Stmt = "pass",
         timer: _Timer = time.perf_counter,
         globals: dict[str, dynamic] | None = None,
     ):
@@ -139,8 +139,8 @@ class Timer:
             """
 
 def timeit(
-    stmt: _Stmt = "pass",
-    setup: _Stmt = "pass",
+    stmt: Stmt = "pass",
+    setup: Stmt = "pass",
     timer: _Timer = time.perf_counter,
     number: int = 1000000,
     globals: dict[str, dynamic] | None = None,
@@ -148,8 +148,8 @@ def timeit(
     """Convenience function to create Timer object and call timeit method."""
 
 def repeat(
-    stmt: _Stmt = "pass",
-    setup: _Stmt = "pass",
+    stmt: Stmt = "pass",
+    setup: Stmt = "pass",
     timer: _Timer = time.perf_counter,
     repeat: int = 5,
     number: int = 1000000,

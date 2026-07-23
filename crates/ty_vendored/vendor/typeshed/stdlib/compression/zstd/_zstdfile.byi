@@ -9,10 +9,10 @@ from _zstd import ZstdCompressor, _ZstdCompressorFlushBlock, _ZstdCompressorFlus
 
 __all__ = ("ZstdFile", "open")
 
-type _ReadBinaryMode = "r" | "rb"
-type _WriteBinaryMode = "w" | "wb" | "x" | "xb" | "a" | "ab"
-type _ReadTextMode = "rt"
-type _WriteTextMode = "wt" | "xt" | "at"
+private type ReadBinaryMode = "r" | "rb"
+private type WriteBinaryMode = "w" | "wb" | "x" | "xb" | "a" | "ab"
+private type ReadTextMode = "rt"
+private type WriteTextMode = "wt" | "xt" | "at"
 
 @type_check_only
 protocol _FileBinaryRead(_streams._Reader):
@@ -39,7 +39,7 @@ class ZstdFile(_streams.BaseStream):
         self,
         file: StrOrBytesPath | _FileBinaryRead,
         /,
-        mode: _ReadBinaryMode = "r",
+        mode: ReadBinaryMode = "r",
         *,
         level: None = None,
         options: Mapping[int, int] | None = None,
@@ -67,7 +67,7 @@ class ZstdFile(_streams.BaseStream):
         self,
         file: StrOrBytesPath | _FileBinaryWrite,
         /,
-        mode: _WriteBinaryMode,
+        mode: WriteBinaryMode,
         *,
         level: int | None = None,
         options: Mapping[int, int] | None = None,
@@ -160,7 +160,7 @@ class ZstdFile(_streams.BaseStream):
 def open(
     file: StrOrBytesPath | _FileBinaryRead,
     /,
-    mode: _ReadBinaryMode = "rb",
+    mode: ReadBinaryMode = "rb",
     *,
     level: None = None,
     options: Mapping[int, int] | None = None,
@@ -200,7 +200,7 @@ def open(
 def open(
     file: StrOrBytesPath | _FileBinaryWrite,
     /,
-    mode: _WriteBinaryMode,
+    mode: WriteBinaryMode,
     *,
     level: int | None = None,
     options: Mapping[int, int] | None = None,
@@ -212,7 +212,7 @@ def open(
 def open(
     file: StrOrBytesPath | _WrappedBuffer,
     /,
-    mode: _ReadTextMode,
+    mode: ReadTextMode,
     *,
     level: None = None,
     options: Mapping[int, int] | None = None,
@@ -224,7 +224,7 @@ def open(
 def open(
     file: StrOrBytesPath | _WrappedBuffer,
     /,
-    mode: _WriteTextMode,
+    mode: WriteTextMode,
     *,
     level: int | None = None,
     options: Mapping[int, int] | None = None,

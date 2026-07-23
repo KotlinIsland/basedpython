@@ -10,7 +10,7 @@ from typing import Generic, Protocol, TypeAlias, TypeVar, type_check_only
 from typing_extensions import Never
 from warnings import _ActionKind
 
-type _ResultClassType = (_TextTestStream, bool, int) -> TextTestResult[dynamic]
+private type ResultClassType = (_TextTestStream, bool, int) -> TextTestResult[dynamic]
 
 @type_check_only
 protocol _SupportsWriteAndFlush(SupportsWrite[str], SupportsFlush)
@@ -71,7 +71,7 @@ class TextTestRunner:
     occur, and a summary of the results at the end of the test run.
     """
 
-    resultclass: _ResultClassType
+    resultclass: ResultClassType
     """A test result class that can print formatted text results to a stream.
 
     Used by TextTestRunner.
@@ -94,7 +94,7 @@ class TextTestRunner:
             verbosity: int = 1,
             failfast: bool = False,
             buffer: bool = False,
-            resultclass: _ResultClassType | None = None,
+            resultclass: ResultClassType | None = None,
             warnings: _ActionKind | None = None,
             *,
             tb_locals: bool = False,
@@ -114,7 +114,7 @@ class TextTestRunner:
             verbosity: int = 1,
             failfast: bool = False,
             buffer: bool = False,
-            resultclass: _ResultClassType | None = None,
+            resultclass: ResultClassType | None = None,
             warnings: str | None = None,
             *,
             tb_locals: bool = False,

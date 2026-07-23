@@ -340,10 +340,11 @@ impl<'src> Modifiers<'src> {
         let Ok(prefix_len) = TextSize::try_from("private".len() + gap) else {
             return;
         };
-        self.edits.push(Fix::safe_edit(Edit::range_deletion(TextRange::new(
-            start,
-            start + prefix_len,
-        ))));
+        self.edits
+            .push(Fix::safe_edit(Edit::range_deletion(TextRange::new(
+                start,
+                start + prefix_len,
+            ))));
 
         self.private_renames
             .push(self.src(alias.name.range()).to_owned());

@@ -81,8 +81,8 @@ from types import FrameType, ModuleType, SimpleNamespace, TracebackType
 from typing import Final, Literal, Protocol, TypeAlias, TypeVar, final, type_check_only
 from typing_extensions import LiteralString, deprecated
 
-type _LazyImportMode = "normal" | "all" | "none"
-type _LazyImportFilter = (str | None, str, tuple[str, ...] | None) -> bool
+private type LazyImportMode = "normal" | "all" | "none"
+private type LazyImportFilter = (str | None, str, tuple[str, ...] | None) -> bool
 
 # see https://github.com/python/typeshed/issues/8513#issue-1333671093 for the rationale behind this alias
 type _ExitCode = str | int | None
@@ -429,12 +429,12 @@ final class _int_info(structseq[int], tuple[int, int, int, int]):
 
     let str_digits_check_threshold: int
 
-type _ThreadInfoName = "nt" | "pthread" | "pthread-stubs" | "solaris"
-type _ThreadInfoLock = "semaphore" | "mutex+cond" | None
+private type ThreadInfoName = "nt" | "pthread" | "pthread-stubs" | "solaris"
+private type ThreadInfoLock = "semaphore" | "mutex+cond" | None
 
 # This class is not exposed at runtime. It calls itself sys.thread_info.
 @type_check_only
-final class _thread_info(_UninstantiableStructseq, tuple[_ThreadInfoName, _ThreadInfoLock, str | None]):
+final class _thread_info(_UninstantiableStructseq, tuple[ThreadInfoName, ThreadInfoLock, str | None]):
     """sys.thread_info
 
     A named tuple holding information about the thread implementation.
@@ -442,9 +442,9 @@ final class _thread_info(_UninstantiableStructseq, tuple[_ThreadInfoName, _Threa
 
     __match_args__: Final = ("name", "lock", "version")
 
-    let name: _ThreadInfoName
+    let name: ThreadInfoName
 
-    let lock: _ThreadInfoLock
+    let lock: ThreadInfoLock
 
     let version: str | None
 
@@ -454,11 +454,11 @@ thread_info: _thread_info
 A named tuple holding information about the thread implementation.
 """
 
-type _ReleaseLevel = "alpha" | "beta" | "candidate" | "final"
+private type ReleaseLevel = "alpha" | "beta" | "candidate" | "final"
 
 # This class is not exposed at runtime. It calls itself sys.version_info.
 @type_check_only
-final class _version_info(_UninstantiableStructseq, tuple[int, int, int, _ReleaseLevel, int]):
+final class _version_info(_UninstantiableStructseq, tuple[int, int, int, ReleaseLevel, int]):
     """sys.version_info
 
     Version information as a named tuple.
@@ -472,7 +472,7 @@ final class _version_info(_UninstantiableStructseq, tuple[int, int, int, _Releas
 
     let micro: int
 
-    let releaselevel: _ReleaseLevel
+    let releaselevel: ReleaseLevel
 
     let serial: int
 
@@ -604,14 +604,14 @@ def getfilesystemencodeerrors() -> LiteralString:
     """Return the error mode used Unicode to OS filename conversion."""
 
 if sys.version_info >= (3, 15):
-    def get_lazy_imports() -> _LazyImportMode:
+    def get_lazy_imports() -> LazyImportMode:
         """Gets the global lazy imports mode.
 
         Returns "all" if all top level imports are potentially lazy.
         Returns "normal" if only explicitly marked imports are lazy.
         """
 
-    def get_lazy_imports_filter() -> _LazyImportFilter | None:
+    def get_lazy_imports_filter() -> LazyImportFilter | None:
         """Get the current lazy imports filter callback.
 
         Returns the filter callable or None if no filter is set.
@@ -799,15 +799,15 @@ def addaudithook(hook: (str, tuple[dynamic, ...]) -> dynamic) -> None:
 def audit(event: str, /, *args: dynamic) -> None:
     """Passes the event to any audit hooks that are attached."""
 
-type _AsyncgenHook = ((AsyncGenerator[dynamic, dynamic]) -> None) | None
+private type AsyncgenHook = ((AsyncGenerator[dynamic, dynamic]) -> None) | None
 
 # This class is not exposed at runtime. It calls itself builtins.asyncgen_hooks.
 @type_check_only
-final class _asyncgen_hooks(structseq[_AsyncgenHook], tuple[_AsyncgenHook, _AsyncgenHook]):
+final class _asyncgen_hooks(structseq[AsyncgenHook], tuple[AsyncgenHook, AsyncgenHook]):
     __match_args__: Final = ("firstiter", "finalizer")
 
-    let firstiter: _AsyncgenHook
-    let finalizer: _AsyncgenHook
+    let firstiter: AsyncgenHook
+    let finalizer: AsyncgenHook
 
 def get_asyncgen_hooks() -> _asyncgen_hooks:
     """Return the installed asynchronous generators hooks.
@@ -815,7 +815,7 @@ def get_asyncgen_hooks() -> _asyncgen_hooks:
     This returns a namedtuple of the form (firstiter, finalizer).
     """
 
-def set_asyncgen_hooks(firstiter: _AsyncgenHook = ..., finalizer: _AsyncgenHook = ...) -> None:
+def set_asyncgen_hooks(firstiter: AsyncgenHook = ..., finalizer: AsyncgenHook = ...) -> None:
     """set_asyncgen_hooks([firstiter] [, finalizer])
 
     Set a finalizer for async generators objects.
@@ -869,7 +869,7 @@ def get_int_max_str_digits() -> int:
     """Return the maximum string digits limit for non-binary int<->str conversions."""
 
 if sys.version_info >= (3, 15):
-    def set_lazy_imports(mode: _LazyImportMode) -> None:
+    def set_lazy_imports(mode: LazyImportMode) -> None:
         """Sets the global lazy imports mode.
 
         The mode parameter must be one of the following strings:
@@ -881,7 +881,7 @@ if sys.version_info >= (3, 15):
         provided to sys.set_lazy_imports_filter
         """
 
-    def set_lazy_imports_filter(filter: _LazyImportFilter | None) -> None:
+    def set_lazy_imports_filter(filter: LazyImportFilter | None) -> None:
         """Set the lazy imports filter callback.
 
         The filter is a callable which disables lazy imports when they

@@ -20,9 +20,9 @@ from typing import ClassVar, Final, Literal, TypeAlias, TypedDict, final, type_c
 from typing_extensions import NotRequired, Self, deprecated, disjoint_base
 
 type _PasswordType = (() -> (str | bytes | bytearray)) | str | bytes | bytearray
-type _PCTRTT = (*: tuple[str, str])
-type _PCTRTTT = (*: _PCTRTT)
-type _PeerCertRetDictType = dict[str, str | _PCTRTTT | _PCTRTT]
+private type PCTRTT = (*: tuple[str, str])
+private type PCTRTTT = (*: PCTRTT)
+private type PeerCertRetDictType = dict[str, str | PCTRTTT | PCTRTT]
 
 @type_check_only
 class _Cipher(TypedDict):
@@ -155,7 +155,7 @@ class _SSLContext:
         have been used at least once.
         """
 
-    def get_ca_certs(self, binary_form: False = False) -> list[_PeerCertRetDictType]:
+    def get_ca_certs(self, binary_form: False = False) -> list[PeerCertRetDictType]:
         """Returns a list of dicts with information of loaded CA certs.
 
         If the optional argument is True, returns a DER-encoded copy of the

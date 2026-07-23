@@ -102,8 +102,8 @@ __all__ = [
     "HTTPSConnection",
 ]
 
-type _DataType = SupportsRead[bytes] | Iterable[ReadableBuffer] | ReadableBuffer
-type _HeaderValue = ReadableBuffer | str | int
+private type DataType = SupportsRead[bytes] | Iterable[ReadableBuffer] | ReadableBuffer
+private type HeaderValue = ReadableBuffer | str | int
 
 HTTP_PORT: Final = 80
 HTTPS_PORT: Final = 443
@@ -341,8 +341,8 @@ class HTTPConnection:
         self,
         method: str,
         url: str,
-        body: _DataType | str | None = None,
-        headers: Mapping[str, _HeaderValue] = {},
+        body: DataType | str | None = None,
+        headers: Mapping[str, HeaderValue] = {},
         *,
         encode_chunked: bool = False,
     ) -> None:
@@ -410,13 +410,13 @@ class HTTPConnection:
            'Accept-Encoding:' header
         """
 
-    def putheader(self, header: str | bytes, *values: _HeaderValue) -> None:
+    def putheader(self, header: str | bytes, *values: HeaderValue) -> None:
         """Send a request header line to the server.
 
         For example: h.putheader('Accept', 'text/html')
         """
 
-    def endheaders(self, message_body: _DataType | None = None, *, encode_chunked: bool = False) -> None:
+    def endheaders(self, message_body: DataType | None = None, *, encode_chunked: bool = False) -> None:
         """Indicate that the last header line has been sent to the server.
 
         This method sends the request to the server.  The optional message_body
@@ -424,7 +424,7 @@ class HTTPConnection:
         request.
         """
 
-    def send(self, data: _DataType | str) -> None:
+    def send(self, data: DataType | str) -> None:
         """Send 'data' to the server.
         ``data`` can be a string object, a bytes object, an array object, a
         file-like object that supports a .read() method, or an iterable object.

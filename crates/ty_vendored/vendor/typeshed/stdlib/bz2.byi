@@ -46,14 +46,14 @@ def decompress(data: ReadableBuffer) -> bytes:
     For incremental decompression, use a BZ2Decompressor object instead.
     """
 
-type _ReadBinaryMode = "" | "r" | "rb"
-type _WriteBinaryMode = "w" | "wb" | "x" | "xb" | "a" | "ab"
-type _ReadTextMode = "rt"
-type _WriteTextMode = "wt" | "xt" | "at"
+private type ReadBinaryMode = "" | "r" | "rb"
+private type WriteBinaryMode = "w" | "wb" | "x" | "xb" | "a" | "ab"
+private type ReadTextMode = "rt"
+private type WriteTextMode = "wt" | "xt" | "at"
 
 def open(
     filename: _ReadableFileobj,
-    mode: _ReadBinaryMode = "rb",
+    mode: ReadBinaryMode = "rb",
     compresslevel: int = 9,
     encoding: None = None,
     errors: None = None,
@@ -80,7 +80,7 @@ def open(
     """
 def open(
     filename: _ReadableFileobj,
-    mode: _ReadTextMode,
+    mode: ReadTextMode,
     compresslevel: int = 9,
     encoding: str | None = None,
     errors: str | None = None,
@@ -88,7 +88,7 @@ def open(
 ) -> TextIOWrapper
 def open(
     filename: _WritableFileobj,
-    mode: _WriteBinaryMode,
+    mode: WriteBinaryMode,
     compresslevel: int = 9,
     encoding: None = None,
     errors: None = None,
@@ -96,7 +96,7 @@ def open(
 ) -> BZ2File
 def open(
     filename: _WritableFileobj,
-    mode: _WriteTextMode,
+    mode: WriteTextMode,
     compresslevel: int = 9,
     encoding: str | None = None,
     errors: str | None = None,
@@ -104,7 +104,7 @@ def open(
 ) -> TextIOWrapper
 def open(
     filename: StrOrBytesPath,
-    mode: _ReadBinaryMode | _WriteBinaryMode = "rb",
+    mode: ReadBinaryMode | WriteBinaryMode = "rb",
     compresslevel: int = 9,
     encoding: None = None,
     errors: None = None,
@@ -112,7 +112,7 @@ def open(
 ) -> BZ2File
 def open(
     filename: StrOrBytesPath,
-    mode: _ReadTextMode | _WriteTextMode,
+    mode: ReadTextMode | WriteTextMode,
     compresslevel: int = 9,
     encoding: str | None = None,
     errors: str | None = None,
@@ -139,7 +139,7 @@ class BZ2File(BaseStream, IO[bytes]):
 
     override def __enter__(self) -> Self
 
-    init(self, filename: _WritableFileobj, mode: _WriteBinaryMode, *, compresslevel: int = 9):
+    init(self, filename: _WritableFileobj, mode: WriteBinaryMode, *, compresslevel: int = 9):
         """Open a bzip2-compressed file.
 
         If filename is a str, bytes, or PathLike object, it gives the
@@ -157,9 +157,9 @@ class BZ2File(BaseStream, IO[bytes]):
         If mode is 'r', the input file may be the concatenation of
         multiple compressed streams.
         """
-    init(self, filename: _ReadableFileobj, mode: _ReadBinaryMode = "r", *, compresslevel: int = 9)
+    init(self, filename: _ReadableFileobj, mode: ReadBinaryMode = "r", *, compresslevel: int = 9)
     init(
-        self, filename: StrOrBytesPath, mode: _ReadBinaryMode | _WriteBinaryMode = "r", *, compresslevel: int = 9
+        self, filename: StrOrBytesPath, mode: ReadBinaryMode | WriteBinaryMode = "r", *, compresslevel: int = 9
     )
 
     override def read(self, size: int | None = -1) -> bytes:

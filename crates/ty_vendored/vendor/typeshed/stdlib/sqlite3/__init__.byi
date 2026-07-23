@@ -248,28 +248,28 @@ if sys.version_info >= (3, 11):
 if sys.version_info < (3, 12):
     from sqlite3.dbapi2 import enable_shared_cache as enable_shared_cache, version as version
 
-type _SqliteData = str | ReadableBuffer | int | float | None
+private type SqliteData = str | ReadableBuffer | int | float | None
 # Data that is passed through adapters can be of any type accepted by an adapter.
-type _AdaptedInputData = _SqliteData | dynamic
+private type AdaptedInputData = SqliteData | dynamic
 # The Mapping must really be a dict, but making it invariant is too annoying.
-type _Parameters = SupportsLenAndGetItem[_AdaptedInputData] | Mapping[str, _AdaptedInputData]
+type _Parameters = SupportsLenAndGetItem[AdaptedInputData] | Mapping[str, AdaptedInputData]
 # Controls the legacy transaction handling mode of sqlite3.
 type _IsolationLevel = "DEFERRED" | "EXCLUSIVE" | "IMMEDIATE" | None
-type _RowFactoryOptions = type[Row] | ((Cursor, tuple[dynamic, ...]) -> object) | None
+private type RowFactoryOptions = type[Row] | ((Cursor, tuple[dynamic, ...]) -> object) | None
 
 @type_check_only
 protocol _AnyParamWindowAggregateClass:
     def step(self, *args: dynamic) -> object
     def inverse(self, *args: dynamic) -> object
-    def value(self) -> _SqliteData
-    def finalize(self) -> _SqliteData
+    def value(self) -> SqliteData
+    def finalize(self) -> SqliteData
 
 @type_check_only
 protocol _WindowAggregateClass:
     step: (...) -> object
     inverse: (...) -> object
-    def value(self) -> _SqliteData
-    def finalize(self) -> _SqliteData
+    def value(self) -> SqliteData
+    def finalize(self) -> SqliteData
 
 @type_check_only
 protocol _AggregateProtocol:
@@ -280,8 +280,8 @@ protocol _AggregateProtocol:
 protocol _SingleParamWindowAggregateClass:
     def step(self, param: dynamic, /) -> object
     def inverse(self, param: dynamic, /) -> object
-    def value(self) -> _SqliteData
-    def finalize(self) -> _SqliteData
+    def value(self) -> SqliteData
+    def finalize(self) -> SqliteData
 
 # These classes are implemented in the C module _sqlite3. At runtime, they're imported
 # from there into sqlite3.dbapi2 and from that module to here. However, they
@@ -325,7 +325,7 @@ class Connection:
         @autocommit.setter
         def autocommit(self, val: int) -> None
 
-    row_factory: _RowFactoryOptions
+    row_factory: RowFactoryOptions
     text_factory: dynamic
     if sys.version_info >= (3, 12):
         def __init__(
@@ -425,13 +425,13 @@ class Connection:
 
     if sys.version_info >= (3, 15):
         def create_function(
-            self, name: str, narg: int, func: (...) -> _SqliteData | None, /, *, deterministic: bool = False
+            self, name: str, narg: int, func: (...) -> SqliteData | None, /, *, deterministic: bool = False
         ) -> None:
             """Creates a new function."""
 
     else:
         def create_function(
-            self, name: str, narg: int, func: (...) -> _SqliteData | None, *, deterministic: bool = False
+            self, name: str, narg: int, func: (...) -> SqliteData | None, *, deterministic: bool = False
         ) -> None:
             """Creates a new function.
 
@@ -653,7 +653,7 @@ class Cursor:
     # May be None, but using `| MaybeNone` (`| Any`) instead to avoid slightly annoying false positives.
     let description: (*: (str, None, None, None, None, None, None)) | MaybeNone
     let lastrowid: int | None
-    row_factory: _RowFactoryOptions
+    row_factory: RowFactoryOptions
     let rowcount: int
     init(self, cursor: Connection, /)
     def close(self) -> None:

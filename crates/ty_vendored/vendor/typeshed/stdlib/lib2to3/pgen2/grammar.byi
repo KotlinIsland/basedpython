@@ -13,7 +13,7 @@ from _typeshed import StrPath
 from typing import TypeAlias
 from typing_extensions import Self
 
-type _Label = tuple[int, str | None]
+private type Label = tuple[int, str | None]
 type _DFA = list[list[tuple[int, int]]]
 type _DFAS = tuple[_DFA, dict[int, int]]
 
@@ -75,7 +75,7 @@ class Grammar:
     number2symbol: dict[int, str]
     states: list[_DFA]
     dfas: dict[int, _DFAS]
-    labels: list[_Label]
+    labels: list[Label]
     keywords: dict[str, int]
     tokens: dict[int, int]
     symbol2label: dict[str, int]

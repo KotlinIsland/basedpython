@@ -25,9 +25,9 @@ if sys.version_info >= (3, 11):
     from sqlite3 import Blob as Blob
 
 _T = TypeVar("_T")
-type _SqliteData = str | ReadableBuffer | int | float | None
-_Adapter: TypeAlias = (_T) -> _SqliteData
-type _Converter = (bytes) -> dynamic
+private type SqliteData = str | ReadableBuffer | int | float | None
+_Adapter: TypeAlias = (_T) -> SqliteData
+private type Converter = (bytes) -> dynamic
 
 PARSE_COLNAMES: Final = 2
 PARSE_DECLTYPES: Final = 1
@@ -71,7 +71,7 @@ SQLITE_UPDATE: Final = 23
 if sys.version_info >= (3, 15):
     SQLITE_KEYWORDS: (*: str)
 adapters: dict[(type[dynamic], type[dynamic]), _Adapter[dynamic]]
-converters: dict[str, _Converter]
+converters: dict[str, Converter]
 sqlite_version: str
 
 if sys.version_info < (3, 12):
@@ -321,5 +321,5 @@ if sys.version_info < (3, 12):
 def register_adapter[Element](type: type[Element], adapter: _Adapter[Element], /) -> None:
     """Register a function to adapt Python objects to SQLite values."""
 
-def register_converter(typename: str, converter: _Converter, /) -> None:
+def register_converter(typename: str, converter: Converter, /) -> None:
     """Register a function to convert SQLite values to Python objects."""

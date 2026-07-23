@@ -28,9 +28,9 @@ __all__ = ["IMAP4", "IMAP4_stream", "Internaldate2tuple", "Int2AP", "ParseFlags"
 
 # TODO: Commands should use their actual return types, not this type alias.
 #       E.g. Tuple[Literal["OK"], List[bytes]]
-type _CommandResults = tuple[str, list[dynamic]]
+private type CommandResults = tuple[str, list[dynamic]]
 
-type _AnyResponseData = list[None] | list[bytes | tuple[bytes, bytes]]
+private type AnyResponseData = list[None] | list[bytes | tuple[bytes, bytes]]
 
 Commands: dict[str, (*: str)]
 
@@ -137,7 +137,7 @@ class IMAP4:
         socket = <instance>.socket()
         """
 
-    def recent(self) -> _CommandResults:
+    def recent(self) -> CommandResults:
         """Return most recent 'RECENT' responses if any exist,
         else prompt server for an update using the 'NOOP' command.
 
@@ -147,7 +147,7 @@ class IMAP4:
         else list of RECENT responses, most recent last.
         """
 
-    def response(self, code: str) -> _CommandResults:
+    def response(self, code: str) -> CommandResults:
         """Return data for response 'code' if received, or None.
 
         Old value for response 'code' is cleared.
@@ -156,7 +156,7 @@ class IMAP4:
         """
 
     def append(
-        self, mailbox: str | None, flags: str | None, date_time: _TimeLike | None, message: ReadableBuffer
+        self, mailbox: str | None, flags: str | None, date_time: TimeLike | None, message: ReadableBuffer
     ) -> (str, _list[bytes]):
         """Append message to named mailbox.
 
@@ -182,18 +182,18 @@ class IMAP4:
         return None if the client abort response '*' should be sent instead.
         """
 
-    def capability(self) -> _CommandResults:
+    def capability(self) -> CommandResults:
         """(typ, [data]) = <instance>.capability()
         Fetch capabilities list from server.
         """
 
-    def check(self) -> _CommandResults:
+    def check(self) -> CommandResults:
         """Checkpoint mailbox on server.
 
         (typ, [data]) = <instance>.check()
         """
 
-    def close(self) -> _CommandResults:
+    def close(self) -> CommandResults:
         """Close currently selected mailbox.
 
         Deleted messages are removed from writable mailbox.
@@ -202,31 +202,31 @@ class IMAP4:
         (typ, [data]) = <instance>.close()
         """
 
-    def copy(self, message_set: str, new_mailbox: str) -> _CommandResults:
+    def copy(self, message_set: str, new_mailbox: str) -> CommandResults:
         """Copy 'message_set' messages onto end of 'new_mailbox'.
 
         (typ, [data]) = <instance>.copy(message_set, new_mailbox)
         """
 
-    def create(self, mailbox: str) -> _CommandResults:
+    def create(self, mailbox: str) -> CommandResults:
         """Create new mailbox.
 
         (typ, [data]) = <instance>.create(mailbox)
         """
 
-    def delete(self, mailbox: str) -> _CommandResults:
+    def delete(self, mailbox: str) -> CommandResults:
         """Delete old mailbox.
 
         (typ, [data]) = <instance>.delete(mailbox)
         """
 
-    def deleteacl(self, mailbox: str, who: str) -> _CommandResults:
+    def deleteacl(self, mailbox: str, who: str) -> CommandResults:
         """Delete the ACLs (remove any rights) set for who on mailbox.
 
         (typ, [data]) = <instance>.deleteacl(mailbox, who)
         """
 
-    def enable(self, capability: str) -> _CommandResults:
+    def enable(self, capability: str) -> CommandResults:
         """Send an RFC5161 enable string to the server.
 
         (typ, [data]) = <instance>.enable(capability)
@@ -234,7 +234,7 @@ class IMAP4:
 
     def __enter__(self) -> Self
     def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None
-    def expunge(self) -> _CommandResults:
+    def expunge(self) -> CommandResults:
         """Permanently remove deleted items from selected mailbox.
 
         Generates 'EXPUNGE' response for each deleted message.
@@ -244,7 +244,7 @@ class IMAP4:
         'data' is list of 'EXPUNGE'd message numbers in order received.
         """
 
-    def fetch(self, message_set: str, message_parts: str) -> (str, _AnyResponseData):
+    def fetch(self, message_set: str, message_parts: str) -> (str, AnyResponseData):
         """Fetch (parts of) messages.
 
         (typ, [data, ...]) = <instance>.fetch(message_set, message_parts)
@@ -255,18 +255,18 @@ class IMAP4:
         'data' are tuples of message part envelope and data.
         """
 
-    def getacl(self, mailbox: str) -> _CommandResults:
+    def getacl(self, mailbox: str) -> CommandResults:
         """Get the ACLs for a mailbox.
 
         (typ, [data]) = <instance>.getacl(mailbox)
         """
 
-    def getannotation(self, mailbox: str, entry: str, attribute: str) -> _CommandResults:
+    def getannotation(self, mailbox: str, entry: str, attribute: str) -> CommandResults:
         """(typ, [data]) = <instance>.getannotation(mailbox, entry, attribute)
         Retrieve ANNOTATIONs.
         """
 
-    def getquota(self, root: str) -> _CommandResults:
+    def getquota(self, root: str) -> CommandResults:
         """Get the quota root's resource usage and limits.
 
         Part of the IMAP4 QUOTA extension defined in rfc2087.
@@ -274,7 +274,7 @@ class IMAP4:
         (typ, [data]) = <instance>.getquota(root)
         """
 
-    def getquotaroot(self, mailbox: str) -> _CommandResults:
+    def getquotaroot(self, mailbox: str) -> CommandResults:
         """Get the list of quota roots for the named mailbox.
 
         (typ, [[QUOTAROOT responses...], [QUOTA responses]]) = <instance>.getquotaroot(mailbox)
@@ -292,7 +292,7 @@ class IMAP4:
             Note: 'duration' requires a socket connection (not IMAP4_stream).
             """
 
-    def list(self, directory: str = '""', pattern: str = "*") -> (str, _AnyResponseData):
+    def list(self, directory: str = '""', pattern: str = "*") -> (str, AnyResponseData):
         """List mailbox names in directory matching pattern.
 
         (typ, [data]) = <instance>.list(directory='""', pattern='*')
@@ -308,13 +308,13 @@ class IMAP4:
         NB: 'password' will be quoted.
         """
 
-    def login_cram_md5(self, user: str, password: str) -> _CommandResults:
+    def login_cram_md5(self, user: str, password: str) -> CommandResults:
         """Force use of CRAM-MD5 authentication.
 
         (typ, [data]) = <instance>.login_cram_md5(user, password)
         """
 
-    def logout(self) -> (str, _AnyResponseData):
+    def logout(self) -> (str, AnyResponseData):
         """Shutdown connection to server.
 
         (typ, [data]) = <instance>.logout()
@@ -322,7 +322,7 @@ class IMAP4:
         Returns server 'BYE' response.
         """
 
-    def lsub(self, directory: str = '""', pattern: str = "*") -> _CommandResults:
+    def lsub(self, directory: str = '""', pattern: str = "*") -> CommandResults:
         """List 'subscribed' mailbox names in directory matching pattern.
 
         (typ, [data, ...]) = <instance>.lsub(directory='""', pattern='*')
@@ -330,13 +330,13 @@ class IMAP4:
         'data' are tuples of message part envelope and data.
         """
 
-    def myrights(self, mailbox: str) -> _CommandResults:
+    def myrights(self, mailbox: str) -> CommandResults:
         """Show my ACLs for a mailbox (i.e. the rights that I have on mailbox).
 
         (typ, [data]) = <instance>.myrights(mailbox)
         """
 
-    def namespace(self) -> _CommandResults:
+    def namespace(self) -> CommandResults:
         """Returns IMAP namespaces ala rfc2342
 
         (typ, [data, ...]) = <instance>.namespace()
@@ -348,7 +348,7 @@ class IMAP4:
         (typ, [data]) = <instance>.noop()
         """
 
-    def partial(self, message_num: str, message_part: str, start: str, length: str) -> _CommandResults:
+    def partial(self, message_num: str, message_part: str, start: str, length: str) -> CommandResults:
         """Fetch truncated part of a message.
 
         (typ, [data, ...]) = <instance>.partial(message_num, message_part, start, length)
@@ -356,7 +356,7 @@ class IMAP4:
         'data' is tuple of message part envelope and data.
         """
 
-    def proxyauth(self, user: str) -> _CommandResults:
+    def proxyauth(self, user: str) -> CommandResults:
         """Assume authentication as "user".
 
         Allows an authorised administrator to proxy into any user's
@@ -365,13 +365,13 @@ class IMAP4:
         (typ, [data]) = <instance>.proxyauth(user)
         """
 
-    def rename(self, oldmailbox: str, newmailbox: str) -> _CommandResults:
+    def rename(self, oldmailbox: str, newmailbox: str) -> CommandResults:
         """Rename old mailbox name to new.
 
         (typ, [data]) = <instance>.rename(oldmailbox, newmailbox)
         """
 
-    def search(self, charset: str | None, *criteria: str) -> _CommandResults:
+    def search(self, charset: str | None, *criteria: str) -> CommandResults:
         """Search mailbox for matching messages.
 
         (typ, [data]) = <instance>.search(charset, criterion, ...)
@@ -393,55 +393,55 @@ class IMAP4:
         other responses should be obtained via <instance>.response('FLAGS') etc.
         """
 
-    def setacl(self, mailbox: str, who: str, what: str) -> _CommandResults:
+    def setacl(self, mailbox: str, who: str, what: str) -> CommandResults:
         """Set a mailbox acl.
 
         (typ, [data]) = <instance>.setacl(mailbox, who, what)
         """
 
-    def setannotation(self, *args: str) -> _CommandResults:
+    def setannotation(self, *args: str) -> CommandResults:
         """(typ, [data]) = <instance>.setannotation(mailbox[, entry, attribute]+)
         Set ANNOTATIONs.
         """
 
-    def setquota(self, root: str, limits: str) -> _CommandResults:
+    def setquota(self, root: str, limits: str) -> CommandResults:
         """Set the quota root's resource limits.
 
         (typ, [data]) = <instance>.setquota(root, limits)
         """
 
-    def sort(self, sort_criteria: str, charset: str, *search_criteria: str) -> _CommandResults:
+    def sort(self, sort_criteria: str, charset: str, *search_criteria: str) -> CommandResults:
         """IMAP4rev1 extension SORT command.
 
         (typ, [data]) = <instance>.sort(sort_criteria, charset, search_criteria, ...)
         """
 
     def starttls(self, ssl_context: dynamic | None = None) -> ("OK", _list[None])
-    def status(self, mailbox: str, names: str) -> _CommandResults:
+    def status(self, mailbox: str, names: str) -> CommandResults:
         """Request named status conditions for mailbox.
 
         (typ, [data]) = <instance>.status(mailbox, names)
         """
 
-    def store(self, message_set: str, command: str, flags: str) -> _CommandResults:
+    def store(self, message_set: str, command: str, flags: str) -> CommandResults:
         """Alters flag dispositions for messages in mailbox.
 
         (typ, [data]) = <instance>.store(message_set, command, flags)
         """
 
-    def subscribe(self, mailbox: str) -> _CommandResults:
+    def subscribe(self, mailbox: str) -> CommandResults:
         """Subscribe to new mailbox.
 
         (typ, [data]) = <instance>.subscribe(mailbox)
         """
 
-    def thread(self, threading_algorithm: str, charset: str, *search_criteria: str) -> _CommandResults:
+    def thread(self, threading_algorithm: str, charset: str, *search_criteria: str) -> CommandResults:
         """IMAPrev1 extension THREAD command.
 
         (type, [data]) = <instance>.thread(threading_algorithm, charset, search_criteria, ...)
         """
 
-    def uid(self, command: str, *args: str) -> _CommandResults:
+    def uid(self, command: str, *args: str) -> CommandResults:
         """Execute "command arg ..." with messages identified by UID,
                 rather than message number.
 
@@ -450,13 +450,13 @@ class IMAP4:
         Returns response appropriate to 'command'.
         """
 
-    def unsubscribe(self, mailbox: str) -> _CommandResults:
+    def unsubscribe(self, mailbox: str) -> CommandResults:
         """Unsubscribe from old mailbox.
 
         (typ, [data]) = <instance>.unsubscribe(mailbox)
         """
 
-    def unselect(self) -> _CommandResults:
+    def unselect(self) -> CommandResults:
         """Free server's resources associated with the selected mailbox
         and returns the server to the authenticated state.
         This command performs the same actions as CLOSE, except
@@ -466,7 +466,7 @@ class IMAP4:
         (typ, [data]) = <instance>.unselect()
         """
 
-    def xatom(self, name: str, *args: str) -> _CommandResults:
+    def xatom(self, name: str, *args: str) -> CommandResults:
         """Allow simple extension commands
                 notified by server in CAPABILITY response.
 
@@ -618,9 +618,9 @@ def Int2AP(num: SupportsAbs[SupportsInt]) -> bytes:
 def ParseFlags(resp: ReadableBuffer) -> (*: bytes):
     """Convert IMAP4 flags response to python tuple."""
 
-type _TimeLike = float | time.struct_time | time._TimeTuple | datetime | str
+private type TimeLike = float | time.struct_time | time._TimeTuple | datetime | str
 
-def Time2Internaldate(date_time: _TimeLike) -> str:
+def Time2Internaldate(date_time: TimeLike) -> str:
     """Convert date_time to IMAP4 INTERNALDATE representation.
 
     Return string in form: '"DD-Mmm-YYYY HH:MM:SS +HHMM"'.  The

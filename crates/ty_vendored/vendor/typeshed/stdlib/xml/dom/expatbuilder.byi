@@ -10,7 +10,7 @@ from xml.dom.minidom import Document, DocumentFragment, DOMImplementation, Eleme
 from xml.dom.xmlbuilder import DOMBuilderFilter, Options
 from xml.parsers.expat import XMLParserType
 
-type _Model = tuple[int, int, str | None, (*: dynamic)]  # same as in pyexpat
+private type Model = tuple[int, int, str | None, (*: dynamic)]  # same as in pyexpat
 
 TEXT_NODE: Final = Node.TEXT_NODE
 CDATA_SECTION_NODE: Final = Node.CDATA_SECTION_NODE
@@ -24,7 +24,7 @@ theDOMImplementation: DOMImplementation
 class ElementInfo:
     __slots__ = ("_attr_info", "_model", "tagName")
     tagName: str
-    init(self, tagName: str, model: _Model | None = None)
+    init(self, tagName: str, model: Model | None = None)
     def getAttributeType(self, aname: str) -> TypeInfo
     def getAttributeTypeNS(self, namespaceURI: str | None, localName: str) -> TypeInfo
     def isElementContent(self) -> bool
@@ -85,7 +85,7 @@ class ExpatBuilder:
     def first_element_handler(self, name: str, attributes: list[str]) -> None
     def start_element_handler(self, name: str, attributes: list[str]) -> None
     def end_element_handler(self, name: str) -> None
-    def element_decl_handler(self, name: str, model: _Model) -> None
+    def element_decl_handler(self, name: str, model: Model) -> None
     def attlist_decl_handler(self, elem: str, name: str, type: str, default: str | None, required: bool) -> None
     def xml_decl_handler(self, version: str, encoding: str | None, standalone: int) -> None
 

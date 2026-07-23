@@ -63,7 +63,7 @@ from enum import Enum
 from typing import Final, TypeAlias
 from typing_extensions import LiteralString
 
-type _FieldsType = tuple[int, int, int, int, int, int]
+private type FieldsType = tuple[int, int, int, int, int, int]
 
 class SafeUUID(Enum):
     """An enumeration."""
@@ -143,7 +143,7 @@ class UUID:
         hex: str | None = None,
         bytes: builtins.bytes | None = None,
         bytes_le: builtins.bytes | None = None,
-        fields: _FieldsType | None = None,
+        fields: FieldsType | None = None,
         int: builtins.int | None = None,
         version: builtins.int | None = None,
         *,
@@ -183,7 +183,7 @@ class UUID:
     let clock_seq: builtins.int
     let clock_seq_hi_variant: builtins.int
     let clock_seq_low: builtins.int
-    let fields: _FieldsType
+    let fields: FieldsType
     let hex: str
     let node: builtins.int
     let time: builtins.int

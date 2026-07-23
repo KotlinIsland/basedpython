@@ -11,11 +11,11 @@ from typing import TypeAlias
 __all__ = ["getline", "clearcache", "checkcache", "lazycache"]
 
 type _ModuleGlobals = dict[str, dynamic]
-type _ModuleMetadata = tuple[int, float | None, list[str], str]
+private type ModuleMetadata = tuple[int, float | None, list[str], str]
 
-type _SourceLoader = tuple[() -> (str | None)]
+private type SourceLoader = tuple[() -> (str | None)]
 
-cache: dict[str, _SourceLoader | _ModuleMetadata]  # undocumented
+cache: dict[str, SourceLoader | ModuleMetadata]  # undocumented
 
 def getline(filename: str, lineno: int, module_globals: _ModuleGlobals | None = None) -> str:
     """Get a line for a Python source file from the cache.

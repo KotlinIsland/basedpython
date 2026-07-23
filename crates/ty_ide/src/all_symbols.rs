@@ -69,10 +69,16 @@ pub fn all_symbols<'db>(
             if query.is_match_symbol_name(module.name(db)) {
                 symbols.push(AllSymbolInfo::from_module(db, module, file));
             }
+            // a `private` symbol is module-internal; auto-importing it would
+            // land a `private-import` error
+            let private = ty_python_semantic::private_symbols(db, file);
             for (_, symbol) in symbols_for_file_global_only(db, file).search(query) {
                 // Test functions (starting with `test_`) in third-party
                 // packages are almost never useful to import.
                 if is_non_first_party && symbol.name.starts_with("test_") {
+                    continue;
+                }
+                if private.contains(symbol.name.as_ref()) {
                     continue;
                 }
                 symbols.push(AllSymbolInfo::from_non_module_symbol(
@@ -1121,6 +1127,33 @@ def test_helper_xyzxyzxyz():
           | ^^^^^^
           |
         info: Constant ZQZQZQ
+        ");
+    }
+
+    #[test]
+    fn private_symbols_are_not_auto_importable() {
+        // auto-importing a `private` symbol would land a `private-import`
+        // error, so it must not be offered
+        let test = CursorTest::builder()
+            .source(
+                "helpers.by",
+                "
+private type Zqzqzqzq = int
+private def zqzqzqzq_helper() -> int: ...
+type Zqzqzqzq_open = str
+",
+            )
+            .source("main.by", "<CURSOR>")
+            .build();
+
+        assert_snapshot!(test.all_symbols("zqzqzqzq"), @"
+        info[all-symbols]: AllSymbolInfo
+         --> helpers.by:4:6
+          |
+        4 | type Zqzqzqzq_open = str
+          |      ^^^^^^^^^^^^^
+          |
+        info: Variable Zqzqzqzq_open
         ");
     }
 
