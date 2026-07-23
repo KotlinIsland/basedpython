@@ -12,10 +12,14 @@
 //! method-bearing protocol degrades to an unchecked pass-through rather than
 //! raising a `TypeError` from an `isinstance` against the protocol.
 //!
-//! PEP 695 class syntax needs a 3.13 interpreter; if none is found the test
-//! skips rather than fails.
+//! The programs are split by interpreter requirement: [`PROGRAM`] needs only
+//! PEP 695 (3.12+), while [`DEFAULTS_PROGRAM`] needs PEP 696 defaults in native
+//! syntax and `TypeVar.has_default()` (3.13+). Each is probed for what it
+//! actually uses — a 3.12 interpreter parses PEP 695 quite happily, so a probe
+//! that only checked that would run the defaults program and die on a
+//! `SyntaxError`. Whichever has no capable interpreter skips rather than fails.
 
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use by_transforms::{Config, PythonVersion, transpile};
 
@@ -159,45 +163,11 @@ assert (GetBool() is Get[bool]) is True, "return matches bool"
 assert (GetBool() is Get[int]) is True, "return covariant: bool <: int"
 assert (GetBool() is Get[str]) is False, "return bool is not str"
 
-# a class records its generic bases *unsubstituted* (`class L[T = Never]
-# (list[T])` stores `list[T]`), so a type parameter left at its pep 696 default
-# must resolve to that default — otherwise the probe compares a bare TypeVar and
-# never matches
-class DefaultNever[T = Never](list[T]): ...
-
-class DefaultInt[T = int](list[T]): ...
-
-assert (DefaultNever() is list[Never]) is True, "a defaulted parameter resolves to its default"
-assert (DefaultNever() is list[int]) is False, "the default is not some other argument"
-assert (DefaultInt() is list[int]) is True, "a non-Never default resolves too"
-
-# an *explicit* specialization wins over the default: reading the default over
-# the top of it would report an argument the value never had
-assert (DefaultInt[str]() is list[str]) is True, "the explicit argument matches"
-assert (DefaultInt[str]() is list[int]) is False, "the default must not leak in"
-
-# a parameter with no default stays unknown, so it matches nothing
-class NoDefault[T](list[T]): ...
-
-assert (NoDefault() is list[int]) is False, "an unknown argument matches nothing"
-
-# a parameter that appears *only* in the class's own identity is recorded in no
-# base at all, so it is read straight off `__type_params__`. `Never` has no
-# runtime spelling, so the constructor is left bare — this is exactly the case
-# type reification cannot cover
-class OwnNever[T = Never]:
-    a: T
-
-assert (OwnNever() is OwnNever[Never]) is True, "an own-identity default resolves"
-assert (OwnNever() is OwnNever[int]) is False, "and is not some other argument"
-
 # a subclass's arguments are resolved *down the declared base chain*, never
 # assumed to line up positionally with the base's. `Odd` is a `list[int]`
 # whatever `T` is, so `T` must never be reported as list's argument
-class Odd[T = str](list[int]): ...
+class Odd[T](list[int]): ...
 
-assert (Odd() is list[int]) is True, "the base's written argument stands"
-assert (Odd() is list[str]) is False, "the subclass's own argument is not the base's"
 assert (Odd[str]() is list[int]) is True, "explicit argument, base still fixed"
 assert (Odd[str]() is list[str]) is False, "an explicit argument is not the base's either"
 
@@ -295,10 +265,64 @@ assert cast_cell(["a"]) is None, "reified cell says str"
 print("ok")
 "#;
 
+/// The pep 696 half, split out because native defaults (`[T = int]`) and the
+/// `has_default()` accessor both need 3.13 — a 3.12 interpreter parses the pep
+/// 695 syntax in [`PROGRAM`] quite happily, so the two must be probed
+/// separately or a 3.12 box runs this and dies on a `SyntaxError`.
+const DEFAULTS_PROGRAM: &str = r#"
+from typing import Never, Protocol
+# a class records its generic bases *unsubstituted* (`class L[T = Never]
+# (list[T])` stores `list[T]`), so a type parameter left at its pep 696 default
+# must resolve to that default — otherwise the probe compares a bare TypeVar and
+# never matches
+class DefaultNever[T = Never](list[T]): ...
+
+class DefaultInt[T = int](list[T]): ...
+
+assert (DefaultNever() is list[Never]) is True, "a defaulted parameter resolves to its default"
+assert (DefaultNever() is list[int]) is False, "the default is not some other argument"
+assert (DefaultInt() is list[int]) is True, "a non-Never default resolves too"
+
+# an *explicit* specialization wins over the default: reading the default over
+# the top of it would report an argument the value never had
+assert (DefaultInt[str]() is list[str]) is True, "the explicit argument matches"
+assert (DefaultInt[str]() is list[int]) is False, "the default must not leak in"
+
+# a parameter with no default stays unknown, so it matches nothing
+class NoDefault[T](list[T]): ...
+
+assert (NoDefault() is list[int]) is False, "an unknown argument matches nothing"
+
+# a parameter that appears *only* in the class's own identity is recorded in no
+# base at all, so it is read straight off `__type_params__`. `Never` has no
+# runtime spelling, so the constructor is left bare — this is exactly the case
+# type reification cannot cover
+class OwnNever[T = Never]:
+    a: T
+
+assert (OwnNever() is OwnNever[Never]) is True, "an own-identity default resolves"
+assert (OwnNever() is OwnNever[int]) is False, "and is not some other argument"
+
+
+print("ok")
+"#;
+
 /// Locate a usable 3.13 interpreter: `$PYTHON` first, then common names.
 /// Returns `None` (test skips) when none is found — PEP 695 class syntax is a
 /// hard requirement here.
-fn python() -> Option<String> {
+/// pep 695 type parameters — what [`PROGRAM`] needs (3.12+)
+const PEP695_PROBE: &str = "type X[T] = T";
+
+/// pep 696 defaults in native syntax plus the `has_default()` accessor the probe
+/// reads them back through — what [`DEFAULTS_PROGRAM`] needs (3.13+)
+const PEP696_PROBE: &str = "\
+class _P[T = int](list[T]): pass
+assert _P.__type_params__[0].has_default()
+";
+
+/// Locate an interpreter satisfying `probe`: `$PYTHON` first, then common names.
+/// `None` (test skips) when none qualifies.
+fn python_supporting(probe: &str) -> Option<String> {
     let mut candidates = Vec::new();
     if let Ok(p) = std::env::var("PYTHON") {
         candidates.push(p);
@@ -306,32 +330,27 @@ fn python() -> Option<String> {
     candidates.extend(["python3.13", "python3"].map(String::from));
 
     candidates.into_iter().find(|py| {
+        // a rejected probe writes a `SyntaxError` to stderr; swallow it so a
+        // passing run's log doesn't look like a failure
         Command::new(py)
-            .args(["-c", "type X[T] = T"])
+            .args(["-c", probe])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .map(|s| s.success())
             .unwrap_or(false)
     })
 }
 
-#[test]
-#[expect(
-    clippy::print_stderr,
-    reason = "a skipped test must say why it skipped, or it reads as a pass"
-)]
-fn parametric_protocol_checks_run_correctly() {
-    let Some(python) = python() else {
-        eprintln!("skipping parametric-is runtime test: no PEP 695-capable interpreter found");
-        return;
-    };
-
+/// transpile `program` and run its module-level `assert`s on `python`
+fn run_program(python: &str, program: &str) {
     let config = Config {
         min_version: PythonVersion::PY313,
         ..Config::default()
     };
-    let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
+    let transpiled = transpile(program, &config).expect("transpile should succeed");
 
-    let output = Command::new(&python)
+    let output = Command::new(python)
         .arg("-c")
         .arg(&transpiled)
         .output()
@@ -344,4 +363,32 @@ fn parametric_protocol_checks_run_correctly() {
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn parametric_protocol_checks_run_correctly() {
+    let Some(python) = python_supporting(PEP695_PROBE) else {
+        eprintln!("skipping parametric-is runtime test: no PEP 695-capable interpreter found");
+        return;
+    };
+    run_program(&python, PROGRAM);
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test must say why it skipped, or it reads as a pass"
+)]
+fn type_param_defaults_resolve_at_runtime() {
+    let Some(python) = python_supporting(PEP696_PROBE) else {
+        eprintln!(
+            "skipping parametric-is defaults test: no PEP 696-capable (3.13+) interpreter found"
+        );
+        return;
+    };
+    run_program(&python, DEFAULTS_PROGRAM);
 }
