@@ -676,7 +676,7 @@ fn synthesize_typed_dict_view_method<'db>(
                     .specialize(db, &[typed_dict.key_type(db), typed_dict.value_type(db)])
             })
         })
-        .and_then(|class| Type::from(class).to_instance(db))
+        .and_then(|class| Type::from(class).to_instance_approximation(db))
         .unwrap_or_else(Type::unknown);
 
     synthesize_typed_dict_no_argument_method(db, typed_dict, return_ty)
@@ -767,7 +767,7 @@ fn synthesize_typed_dict_merge<'db>(
 /// The type of `Movie` would be `type[Movie]` where `Movie` is a `DynamicTypedDictLiteral`.
 ///
 /// The field schema is represented by a separate [`TypedDictSchema`].
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 pub enum DynamicTypedDictAnchor<'db> {
     /// The `TypedDict()` call is assigned to a variable.
     ///
@@ -847,6 +847,7 @@ pub struct DynamicTypedDictLiteral<'db> {
     #[returns(ref)]
     pub(crate) anchor: DynamicTypedDictAnchor<'db>,
 
+    #[returns(copy)]
     pub(crate) typed_dict_module: TypedDictModule,
 }
 

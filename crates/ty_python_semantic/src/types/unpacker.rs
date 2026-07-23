@@ -8,7 +8,7 @@ use ruff_python_ast::{self as ast, AnyNodeRef};
 
 use crate::Db;
 use crate::types::infer::{ExpressionInference, FrozenMap};
-use crate::types::tuple::{ResizeTupleError, Tuple, TupleLength, TupleSpec, TupleUnpacker};
+use crate::types::tuple::{ResizeTupleError, TupleLength, TupleSpec, TupleUnpacker};
 use crate::types::{
     Type, TypeCheckDiagnostics, TypeContext, infer_expression_types,
     report_iteration_over_character,
@@ -233,7 +233,7 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
 
                     if let Err(err) = unpacker.unpack_tuple(tuple.as_ref()) {
                         unpacker
-                            .unpack_tuple(&Tuple::homogeneous(Type::unknown()))
+                            .unpack_tuple(&TupleSpec::homogeneous(Type::unknown()))
                             .expect("adding a homogeneous tuple should always succeed");
                         if let Some(builder) = self.context.report_lint(&INVALID_ASSIGNMENT, target)
                         {
@@ -289,7 +289,7 @@ impl<'db, 'ast> Unpacker<'db, 'ast> {
     }
 }
 
-#[derive(Debug, Default, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Default, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
 pub(crate) struct UnpackResult<'db> {
     targets: FrozenMap<ExpressionNodeKey, Type<'db>>,
     diagnostics: TypeCheckDiagnostics,

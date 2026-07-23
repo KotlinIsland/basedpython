@@ -610,7 +610,7 @@ def fromstringlist(sequence: Sequence[str | ReadableBuffer], parser: XMLParser |
 # TreeBuilder is called by client code (they could pass strs, bytes or whatever);
 # but we don't want to use a too-broad type, or it would be too hard to write
 # elementfactories.
-type _ElementFactory = (dynamic, dict[dynamic, dynamic]) -> Element
+_ElementFactory: TypeAlias = (dynamic, dict[dynamic, dynamic]) -> Element
 
 @disjoint_base
 class TreeBuilder:

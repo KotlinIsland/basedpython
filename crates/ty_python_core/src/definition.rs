@@ -41,9 +41,11 @@ pub struct Definition<'db> {
     ///
     /// Storing the interned scope avoids retaining the file and file-local scope separately, at
     /// the cost of database lookups when either of those values is needed.
+    #[returns(copy)]
     pub scope_id: ScopeId<'db>,
 
     /// The place ID and re-export state of the definition.
+    #[returns(copy)]
     place_info: DefinitionPlace,
 
     /// WARNING: Only access this field when doing type inference for the same
@@ -175,7 +177,7 @@ impl<'db> Definition<'db> {
 /// Keeping the re-export state in the enum lets it share the place ID's otherwise-unused
 /// representation space. Storing it as a separate field on [`Definition`] would add padding to
 /// every tracked definition.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, get_size2::GetSize)]
 pub enum DefinitionPlace {
     Symbol {
         id: ScopedSymbolId,
@@ -263,7 +265,7 @@ fn attribute_docstring<'a>(
 }
 
 /// One or more [`Definition`]s.
-#[derive(Debug, Default, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Default, PartialEq, Eq, get_size2::GetSize)]
 pub struct Definitions<'db> {
     definitions: smallvec::SmallVec<[Definition<'db>; 1]>,
 }
@@ -301,7 +303,7 @@ impl<'a, 'db> IntoIterator for &'a Definitions<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, get_size2::GetSize)]
 pub enum DefinitionState<'db> {
     Defined(Definition<'db>),
     /// Represents the implicit "unbound"/"undeclared" definition of every place.
@@ -911,7 +913,7 @@ impl DefinitionCategory {
 /// [`DefinitionKind`] fields in salsa tracked structs should be tracked (attributed with `#[tracked]`)
 /// because the kind is a thin wrapper around [`AstNodeRef`]. See the [`AstNodeRef`] documentation
 /// for an in-depth explanation of why this is necessary.
-#[derive(Clone, Debug, get_size2::GetSize)]
+#[derive(Clone, Debug, get_size2::GetSize, salsa::SalsaValue)]
 pub enum DefinitionKind<'db> {
     Import(ImportDefinitionKind),
     ImportFrom(ImportFromDefinitionKind),
@@ -1223,7 +1225,7 @@ impl StarImportDefinitionKind {
     }
 }
 
-#[derive(Clone, Debug, get_size2::GetSize)]
+#[derive(Clone, Debug, get_size2::GetSize, salsa::SalsaValue)]
 pub struct MatchPatternDefinitionKind<'db> {
     pattern: AstNodeRef<ast::Pattern>,
     identifier: AstNodeRef<ast::Identifier>,
@@ -1245,7 +1247,7 @@ impl<'db> MatchPatternDefinitionKind<'db> {
 /// But if the target is an attribute or subscript, its definition is not in the comprehension's scope;
 /// it is in the scope in which the root variable is bound.
 /// TODO: currently we don't model this correctly and simply assume that it is in a scope outside the comprehension.
-#[derive(Clone, Debug, get_size2::GetSize)]
+#[derive(Clone, Debug, get_size2::GetSize, salsa::SalsaValue)]
 pub struct ComprehensionDefinitionKind<'db> {
     unpack: Option<Unpack<'db>>,
     node: AstNodeRef<ast::Comprehension>,
@@ -1421,7 +1423,7 @@ impl ImportFromSubmoduleDefinitionKind {
     }
 }
 
-#[derive(Clone, Debug, get_size2::GetSize)]
+#[derive(Clone, Debug, get_size2::GetSize, salsa::SalsaValue)]
 pub struct AssignmentDefinitionKind<'db> {
     unpack: Option<Unpack<'db>>,
     value: AstNodeRef<ast::Expr>,
@@ -1465,7 +1467,7 @@ impl AnnotatedAssignmentDefinitionKind {
     }
 }
 
-#[derive(Clone, Debug, get_size2::GetSize)]
+#[derive(Clone, Debug, get_size2::GetSize, salsa::SalsaValue)]
 pub struct DictKeyAssignmentKind<'db> {
     pub(crate) key: AstNodeRef<ast::Expr>,
     pub(crate) value: AstNodeRef<ast::Expr>,
@@ -1486,7 +1488,7 @@ impl<'db> DictKeyAssignmentKind<'db> {
     }
 }
 
-#[derive(Clone, Debug, get_size2::GetSize)]
+#[derive(Clone, Debug, get_size2::GetSize, salsa::SalsaValue)]
 pub struct WithItemDefinitionKind<'db> {
     unpack: Option<Unpack<'db>>,
     item: AstNodeRef<ast::WithItem>,
@@ -1513,7 +1515,7 @@ impl<'db> WithItemDefinitionKind<'db> {
     }
 }
 
-#[derive(Clone, Debug, get_size2::GetSize)]
+#[derive(Clone, Debug, get_size2::GetSize, salsa::SalsaValue)]
 pub struct ForStmtDefinitionKind<'db> {
     unpack: Option<Unpack<'db>>,
     node: AstNodeRef<ast::StmtFor>,
@@ -1608,7 +1610,7 @@ pub struct NestedBindingsDefinitionKind {
 }
 
 #[derive(
-    Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, salsa::Update, get_size2::GetSize,
+    Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, get_size2::GetSize, salsa::SalsaValue,
 )]
 pub struct DefinitionNodeKey(NodeKey);
 

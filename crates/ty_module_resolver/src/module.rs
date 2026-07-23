@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::fmt::Formatter;
 use std::str::FromStr;
 
@@ -12,7 +13,7 @@ use crate::module_name::ModuleName;
 use crate::path::{SearchPath, SystemOrVendoredPathRef};
 
 /// Representation of a Python module.
-#[derive(Clone, Copy, Eq, Hash, PartialEq, salsa::Supertype, salsa::Update)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq, salsa::Supertype, salsa::SalsaValue)]
 pub enum Module<'db> {
     File(FileModule<'db>),
     Namespace(NamespacePackage<'db>),
@@ -25,7 +26,7 @@ impl get_size2::GetSize for Module<'_> {}
 impl<'db> Module<'db> {
     pub(crate) fn file_module(
         db: &'db dyn Db,
-        name: ModuleName,
+        name: Cow<'_, ModuleName>,
         kind: ModuleKind,
         search_path: SearchPath,
         file: File,
@@ -35,7 +36,7 @@ impl<'db> Module<'db> {
         Self::File(FileModule::new(db, name, kind, search_path, file, known))
     }
 
-    pub(crate) fn namespace_package(db: &'db dyn Db, name: ModuleName) -> Self {
+    pub(crate) fn namespace_package(db: &'db dyn Db, name: Cow<'_, ModuleName>) -> Self {
         Self::Namespace(NamespacePackage::new(db, name))
     }
 
@@ -209,7 +210,7 @@ fn all_submodule_names_for_package<'db>(
                     };
                     Some(Module::file_module(
                         db,
-                        name,
+                        Cow::Owned(name),
                         kind,
                         module.search_path(db).clone(),
                         file,
@@ -246,7 +247,7 @@ fn all_submodule_names_for_package<'db>(
                 };
                 Some(Module::file_module(
                     db,
-                    name,
+                    Cow::Owned(name),
                     kind,
                     module.search_path(db).clone(),
                     file,
@@ -261,10 +262,13 @@ fn all_submodule_names_for_package<'db>(
 pub struct FileModule<'db> {
     #[returns(ref)]
     pub(super) name: ModuleName,
+    #[returns(copy)]
     pub(super) kind: ModuleKind,
     #[returns(ref)]
     pub(super) search_path: SearchPath,
+    #[returns(copy)]
     pub(super) file: File,
+    #[returns(copy)]
     pub(super) known: Option<KnownModule>,
 }
 
@@ -360,6 +364,8 @@ pub enum KnownModule {
     PydanticConfig,
     #[strum(serialize = "pydantic.fields")]
     PydanticFields,
+    #[strum(serialize = "pydantic.functional_validators")]
+    PydanticFunctionalValidators,
     #[strum(serialize = "pydantic.main")]
     PydanticMain,
     #[strum(serialize = "pydantic.root_model")]
@@ -423,6 +429,7 @@ impl KnownModule {
             Self::DjangoDbModelsQuery => "django.db.models.query",
             Self::PydanticConfig => "pydantic.config",
             Self::PydanticFields => "pydantic.fields",
+            Self::PydanticFunctionalValidators => "pydantic.functional_validators",
             Self::PydanticMain => "pydantic.main",
             Self::PydanticRootModel => "pydantic.root_model",
             Self::PydanticSettingsMain => "pydantic_settings.main",
@@ -462,6 +469,7 @@ impl KnownModule {
             | Self::DjangoDbModelsQuery
             | Self::PydanticConfig
             | Self::PydanticFields
+            | Self::PydanticFunctionalValidators
             | Self::PydanticMain
             | Self::PydanticRootModel
             | Self::PydanticSettingsMain

@@ -158,6 +158,7 @@ pub enum ModuleResolveMode {
 #[salsa::interned(heap_size=ruff_memory_usage::heap_size)]
 #[derive(Debug)]
 pub(crate) struct ModuleResolveModeIngredient<'db> {
+    #[returns(copy)]
     mode: ModuleResolveMode,
 }
 
@@ -204,7 +205,7 @@ impl ModuleResolveMode {
 ///
 /// This query should not be called directly. Instead, use [`resolve_module`]. It only exists
 /// because Salsa requires the module name to be an ingredient.
-#[salsa::tracked(heap_size=ruff_memory_usage::heap_size)]
+#[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
 fn resolve_module_query<'db>(
     db: &'db dyn Db,
     module_name: ModuleNameIngredient<'db>,
@@ -221,7 +222,7 @@ fn resolve_module_query<'db>(
     resolved
         .into_iter()
         .next()
-        .map(|candidate| candidate.into_module(db, name.clone()))
+        .map(|candidate| candidate.into_module(db, name))
 }
 
 /// Like `resolve_module_query` but for cases where it failed to resolve the module
@@ -236,7 +237,7 @@ fn resolve_module_query<'db>(
 ///
 /// Cache desperate resolution because repeated unresolved imports in a project can otherwise
 /// re-walk the same importing-file-relative search paths many times.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn desperately_resolve_module<'db>(
     db: &'db dyn Db,
     importing_file: File,
@@ -261,7 +262,7 @@ fn desperately_resolve_module<'db>(
     resolved
         .into_iter()
         .next()
-        .map(|candidate| candidate.into_module(db, name.clone()))
+        .map(|candidate| candidate.into_module(db, name))
 }
 
 /// Resolves the module for the given path.
@@ -289,7 +290,7 @@ pub(crate) fn path_to_module<'db>(db: &'db dyn Db, path: &FilePath) -> Option<Mo
 /// and indeed, one of its primary jobs is resolving `.<self>` to derive the module name of `.`.
 /// This intuition is particularly useful for understanding why it's correct that we pass
 /// the file itself as `importing_file` to various subroutines.
-#[salsa::tracked(heap_size=ruff_memory_usage::heap_size)]
+#[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
 pub fn file_to_module(db: &dyn Db, file: File) -> Option<Module<'_>> {
     let _span = tracing::trace_span!("file_to_module", ?file).entered();
 
@@ -326,7 +327,8 @@ fn file_to_module_impl<'db, 'a>(
     let module = resolve_module(db, file, &module_name)?;
     let module_file = module.file(db)?;
 
-    if file.path(db) == module_file.path(db) {
+    let file_path = file.path(db);
+    if file_path == module_file.path(db) {
         return Some(module);
     } else if file.source_type(db).is_py_file() && module_file.source_type(db).is_stub() {
         // If a .py and .pyi are both defined, the .pyi will be the one returned by `resolve_module().file`,
@@ -334,7 +336,7 @@ fn file_to_module_impl<'db, 'a>(
         // like relative imports). So here we try `resolve_real_module().file` to cover both cases.
         let module = resolve_real_module(db, file, &module_name)?;
         let module_file = module.file(db)?;
-        if file.path(db) == module_file.path(db) {
+        if file_path == module_file.path(db) {
             return Some(module);
         }
     }
@@ -526,7 +528,7 @@ fn absolute_desperate_search_paths(db: &dyn Db, importing_file: File) -> Option<
 /// Being so strict minimizes concerns about this going off a lot and doing random
 /// chaotic things. In particular, all files under a given pyproject.toml will currently
 /// agree on this being their desperate search-path, which is really nice.
-#[salsa::tracked(heap_size=ruff_memory_usage::heap_size)]
+#[salsa::tracked(returns(clone), heap_size=ruff_memory_usage::heap_size)]
 fn relative_desperate_search_paths(db: &dyn Db, importing_file: File) -> Option<SearchPath> {
     let system = db.system();
     let importing_path = importing_file.path(db).as_system_path()?;
@@ -1053,6 +1055,7 @@ impl FusedIterator for SearchPathIterator<'_> {}
 struct ModuleNameIngredient<'db> {
     #[returns(ref)]
     pub(super) name: ModuleName,
+    #[returns(copy)]
     pub(super) mode: ModuleResolveMode,
 }
 
@@ -1164,11 +1167,11 @@ impl ModuleResolutionCandidate {
     }
 
     // This is the module we were actually interested in resolving, complete the resolution
-    fn into_module(self, db: &'_ dyn Db, name: ModuleName) -> Module<'_> {
+    fn into_module<'db>(self, db: &'db dyn Db, name: &ModuleName) -> Module<'db> {
         match self.module {
             ResolvedModule::NamespacePackage => {
                 tracing::trace!("Resolve namespace package `{name}`");
-                Module::namespace_package(db, name)
+                Module::namespace_package(db, Cow::Borrowed(name))
             }
             ResolvedModule::LegacyNamespacePackage(file) => {
                 // legacy namespace packages behave like regular packages
@@ -1179,7 +1182,7 @@ impl ModuleResolutionCandidate {
                 );
                 Module::file_module(
                     db,
-                    name,
+                    Cow::Borrowed(name),
                     ModuleKind::Package,
                     self.path.into_search_path(),
                     file,
@@ -1192,7 +1195,7 @@ impl ModuleResolutionCandidate {
                 );
                 Module::file_module(
                     db,
-                    name,
+                    Cow::Borrowed(name),
                     ModuleKind::Package,
                     self.path.into_search_path(),
                     file,
@@ -1202,7 +1205,7 @@ impl ModuleResolutionCandidate {
                 tracing::trace!("Resolved module `{name}` to `{path}`", path = file.path(db));
                 Module::file_module(
                     db,
-                    name,
+                    Cow::Borrowed(name),
                     ModuleKind::Module,
                     self.path.into_search_path(),
                     file,
@@ -2521,7 +2524,7 @@ mod tests {
             Some(foo_real),
             path_to_module(&db, &FilePath::from(src.join("foo.py")))
         );
-        assert!(foo_real != foo);
+        assert_ne!(foo_real, foo);
     }
 
     #[test]

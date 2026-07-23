@@ -19,9 +19,9 @@
 //! override compatibility (a subclass may override with `Key` or the bare upper
 //! bound); only the call site applies the overlap admissibility check
 //!
-//! this patch operates on the already-pep695-converted committed tree (run via
-//! `by_typeshed_patch --skip-conversion`), matching the nice type-parameter
-//! names (`Element`, `Key`) rather than the legacy `_T_co`/`_KT_co` form
+//! this patch matches the nice type-parameter names (`Element`, `Key`) rather
+//! than the legacy `_T_co`/`_KT_co` form, so it is registered as a
+//! post-conversion patch (pass 3), where each patch gets its own re-parse
 
 use std::path::Path;
 

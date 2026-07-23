@@ -49,6 +49,12 @@
 
 use std::borrow::Cow;
 
+use ruff_text_size::TextSize;
+
+use crate::docstring::document::syntax::{
+    find_backtick_run, is_backtick_run_escaped, markdown_code_span,
+};
+
 /// Exposes an interface for rendering a line of prose that may contain a hyperlink.
 #[derive(Default)]
 pub(super) struct Renderer {
@@ -272,21 +278,20 @@ enum Candidate<'a> {
 
 /// Finds the first complete hyperlink or plausible wrapped candidate in `input`.
 fn find_link(input: &str) -> Option<(usize, Candidate<'_>)> {
-    let mut offset = 0;
+    let mut offset = TextSize::ZERO;
 
     // Visit each backtick run that could delimit inline markup.
-    while let Some(relative_index) = input[offset..].find('`') {
-        let index = offset + relative_index;
-        let tick_count = leading_backtick_count(&input[index..]);
+    while let Some(run) = find_backtick_run(input, offset) {
+        let index = run.start().to_usize();
 
         // An escaped run is literal text, so continue immediately after it.
-        if is_escaped(input, index) {
-            offset = index + tick_count;
+        if is_backtick_run_escaped(input, index) {
+            offset = run.end();
             continue;
         }
 
         // Try parsing a link only when a single backtick has valid surrounding characters.
-        if tick_count == 1
+        if run.len() == TextSize::new(1)
             && is_link_start(input, index)
             && let Some(candidate) = parse_candidate(&input[index..])
         {
@@ -294,9 +299,7 @@ fn find_link(input: &str) -> Option<(usize, Candidate<'_>)> {
         }
 
         // Skip other backtick-delimited spans rather than searching inside them.
-        let after_opening = index + tick_count;
-        let closing_end = find_closing_backtick_run(&input[after_opening..], tick_count)?;
-        offset = after_opening + closing_end;
+        offset = markdown_code_span(input, run)?.end();
     }
 
     None
@@ -316,7 +319,7 @@ fn parse_candidate(input: &str) -> Option<Candidate<'_>> {
         return None;
     }
 
-    let Some(relative_closing) = after_opening.find('`') else {
+    let Some(closing) = find_backtick_run(input, TextSize::new(1)) else {
         // Eliminate candidates whose content already contains a disallowed
         // backslash or closing `>`, or whose target cannot become HTTP(S). A
         // partial URI scheme remains valid so it can wrap immediately after
@@ -330,22 +333,21 @@ fn parse_candidate(input: &str) -> Option<Candidate<'_>> {
         }
         return Some(Candidate::Pending);
     };
-    let closing_index = relative_closing + 1;
-    if leading_backtick_count(&input[closing_index..]) != 1 {
+    if closing.len() != TextSize::new(1) {
         return None;
     }
 
-    let content = &input[1..closing_index];
+    let content = &input[1..closing.start().to_usize()];
     if content.contains('\\') {
         return None;
     }
 
-    let after_closing = &input[closing_index + 1..];
+    let after_closing = &input[closing.end().to_usize()..];
     let underscore_count = after_closing
         .bytes()
         .take_while(|byte| *byte == b'_')
         .count();
-    let len = closing_index + 1 + underscore_count;
+    let len = closing.end().to_usize() + underscore_count;
     if !(1..=2).contains(&underscore_count) || !is_link_suffix(&after_closing[underscore_count..]) {
         return None;
     }
@@ -466,25 +468,6 @@ fn is_rst_section_adornment(line: &str) -> bool {
     marker.is_ascii_punctuation() && characters.all(|character| character == marker)
 }
 
-fn leading_backtick_count(input: &str) -> usize {
-    input.bytes().take_while(|byte| *byte == b'`').count()
-}
-
-fn find_closing_backtick_run(input: &str, opening_tick_count: usize) -> Option<usize> {
-    let mut offset = 0;
-
-    while let Some(relative_index) = input[offset..].find('`') {
-        let index = offset + relative_index;
-        let tick_count = leading_backtick_count(&input[index..]);
-        if tick_count == opening_tick_count {
-            return Some(index + tick_count);
-        }
-        offset = index + tick_count;
-    }
-
-    None
-}
-
 /// Returns whether the backtick at `index` may begin inline markup.
 ///
 /// Uses the supported ASCII subset of reStructuredText's
@@ -518,15 +501,6 @@ fn is_link_suffix(input: &str) -> bool {
                 '-' | '/' | ':' | '.' | ',' | ';' | '!' | '?' | '"' | '\'' | ')' | '>' | ']' | '}'
             )
     })
-}
-
-fn is_escaped(input: &str, index: usize) -> bool {
-    !input[..index]
-        .bytes()
-        .rev()
-        .take_while(|byte| *byte == b'\\')
-        .count()
-        .is_multiple_of(2)
 }
 
 fn render_markdown_link(output: &mut String, label: Option<&str>, uri: &str) {

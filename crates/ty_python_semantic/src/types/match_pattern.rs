@@ -9,7 +9,9 @@ use ty_python_core::predicate::{
 use crate::Db;
 use crate::place::{DefinedPlace, Place};
 use crate::types::callable::{CallableFunctionProvenance, CallableTypeKind};
-use crate::types::equality::{evaluate_type_equality, is_same_enum_domain};
+use crate::types::equality::{
+    ComparisonSoundnessPolicy, evaluate_type_equality, is_same_enum_domain,
+};
 use crate::types::signatures::CallableSignature;
 use crate::types::tuple::TupleType;
 use crate::types::visitor::any_over_type;
@@ -604,7 +606,15 @@ pub(crate) fn definite_match_pattern_type_for_subject<'db>(
     match kind {
         PatternPredicateKind::Value(value) => {
             let value_ty = infer_same_file_expression_type(db, *value, TypeContext::default());
-            if equality_truthiness(db, resolved_subject_ty, value_ty) == Truthiness::AlwaysTrue {
+            if equality_truthiness(
+                db,
+                resolved_subject_ty,
+                value_ty,
+                ComparisonSoundnessPolicy::from_analysis_settings(
+                    db.analysis_settings(value.file(db)),
+                ),
+            ) == Truthiness::AlwaysTrue
+            {
                 return subject_ty;
             }
         }
@@ -622,9 +632,10 @@ pub(crate) fn definite_match_pattern_type_for_subject<'db>(
                 }
                 Type::SpecialForm(SpecialFormType::CollectionsAbcCallable)
                     if kind.is_empty()
-                        && subject_ty.is_subtype_of(db, callable_pattern_type(db)) =>
+                        && let callable_pattern_ty = callable_pattern_type(db)
+                        && subject_ty.is_subtype_of(db, callable_pattern_ty) =>
                 {
-                    return callable_pattern_type(db);
+                    return callable_pattern_ty;
                 }
                 _ => {}
             }
@@ -702,14 +713,27 @@ pub(crate) fn pattern_fallthrough_type<'db>(
         // whose upper bound is that enum.
         if let Some(enum_literal) = value_ty.as_enum_literal()
             && is_same_enum_pattern_domain(db, subject_ty, enum_literal)
-            && equality_truthiness(db, value_ty, value_ty) == Truthiness::AlwaysTrue
+            && equality_truthiness(
+                db,
+                value_ty,
+                value_ty,
+                ComparisonSoundnessPolicy::from_analysis_settings(
+                    db.analysis_settings(value.file(db)),
+                ),
+            ) == Truthiness::AlwaysTrue
         {
             return IntersectionBuilder::new(db)
                 .add_positive(subject_ty)
                 .add_negative(value_ty)
                 .build();
         }
-        if let Some(constraint) = evaluate_type_equality(db, subject_ty, value_ty, false) {
+        if let Some(constraint) = evaluate_type_equality(
+            db,
+            subject_ty,
+            value_ty,
+            false,
+            ComparisonSoundnessPolicy::from_analysis_settings(db.analysis_settings(value.file(db))),
+        ) {
             return IntersectionBuilder::new(db)
                 .add_positive(subject_ty)
                 .add_positive(constraint)
@@ -1035,10 +1059,12 @@ pub(crate) fn definite_match_pattern_type<'db>(
         PatternPredicateKind::Singleton(singleton) => singleton_pattern_type(db, *singleton),
         PatternPredicateKind::Value(value) => {
             let ty = infer_same_file_expression_type(db, *value, TypeContext::default());
-            // Only return the type if it's single-valued and guaranteed to match itself.
+            // Only return the type if it's guaranteed to match itself.
             // Otherwise, we can't definitively exclude it from subsequent patterns.
-            if ty.is_single_valued(db) && equality_truthiness(db, ty, ty) == Truthiness::AlwaysTrue
-            {
+            let policy = ComparisonSoundnessPolicy::from_analysis_settings(
+                db.analysis_settings(value.file(db)),
+            );
+            if equality_truthiness(db, ty, ty, policy) == Truthiness::AlwaysTrue {
                 ty
             } else {
                 Type::Never

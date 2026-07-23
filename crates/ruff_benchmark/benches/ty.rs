@@ -85,7 +85,7 @@ fn setup_tomllib_case() -> Case {
 
     let src_root = SystemPath::new("/src");
     let mut metadata = ProjectMetadata::discover(src_root, &system).unwrap();
-    metadata.apply_options(Options {
+    metadata.apply_override_options(Options {
         environment: Some(EnvironmentOptions {
             python_version: Some(RangedValue::cli(SupportedPythonVersion::Py312)),
             ..EnvironmentOptions::default()
@@ -163,13 +163,10 @@ fn benchmark_incremental(criterion: &mut Criterion) {
     fn incremental(case: &mut Case) {
         let Case { db, .. } = case;
 
-        db.apply_changes(
-            &[ChangeEvent::Changed {
-                path: case.file_path.clone(),
-                kind: ChangedKind::FileContent,
-            }],
-            None,
-        );
+        db.apply_changes(&[ChangeEvent::Changed {
+            path: case.file_path.clone(),
+            kind: ChangedKind::FileContent,
+        }]);
 
         let result = db.check();
 
@@ -267,7 +264,7 @@ fn setup_micro_case_inner(code: &str, venv_path: Option<&Path>) -> Case {
 
     let src_root = SystemPath::new("/src");
     let mut metadata = ProjectMetadata::discover(src_root, &system).unwrap();
-    metadata.apply_options(Options {
+    metadata.apply_override_options(Options {
         environment: Some(EnvironmentOptions {
             python_version: Some(RangedValue::cli(SupportedPythonVersion::Py312)),
             python,
@@ -1416,6 +1413,51 @@ fn benchmark_typeis_narrowing(criterion: &mut Criterion) {
     });
 }
 
+/// Regression benchmark for <https://github.com/astral-sh/ty/issues/3986>.
+///
+/// Non-terminal-call predicates must gate later narrowing. Keeping these scope-wide constraints in
+/// an append-only tree avoids eagerly rewriting every live place state after each call. Exercise
+/// unnarrowed, already-narrowed, and fixed-reachability bindings because each takes a different
+/// path through reachability and narrowing evaluation.
+fn benchmark_repeated_statement_calls(criterion: &mut Criterion) {
+    setup_rayon();
+
+    let cases = [
+        (
+            "ty_micro[repeated_statement_calls]",
+            String::from("def f() -> None:\n    value = 'abc'\n"),
+            "    value.upper()\n",
+        ),
+        (
+            "ty_micro[repeated_statement_calls_pre_narrowed]",
+            String::from(
+                "def f(value: str | None) -> None:\n    if value is None:\n        return\n",
+            ),
+            "    value.upper()\n",
+        ),
+        (
+            "ty_micro[repeated_statement_calls_fixed_reachability]",
+            String::from("def f(value: str, flag: bool) -> None:\n    if flag:\n"),
+            "        value.upper()\n",
+        ),
+    ];
+
+    for (name, mut code, statement) in cases {
+        code.push_str(&statement.repeat(1_500));
+        criterion.bench_function(name, |b| {
+            b.iter_batched_ref(
+                || setup_micro_case(&code),
+                |case| {
+                    let Case { db, .. } = case;
+                    let result = db.check();
+                    assert_eq!(result.len(), 0);
+                },
+                BatchSize::SmallInput,
+            );
+        });
+    }
+}
+
 /// Benchmarks solving many union-bearing upper bounds while inferring a generic call.
 ///
 /// Each callable argument places a distinct union upper bound on `T` through callable-parameter
@@ -1678,6 +1720,43 @@ fn benchmark_fluid_many_widenings(criterion: &mut Criterion) {
     });
 }
 
+fn benchmark_many_invariant_typevars(criterion: &mut Criterion) {
+    setup_rayon();
+
+    // Regression benchmark for https://github.com/astral-sh/ty/issues/3989.
+    let code = r#"
+class Invariant[T]:
+    x: T
+
+def f[T1, T2, T3, T4, T5, T6, T7, T8, T9, T10](
+    box1: Invariant[T1],
+    box2: Invariant[T2],
+    box3: Invariant[T3],
+    box4: Invariant[T4],
+    box5: Invariant[T5],
+    box6: Invariant[T6],
+    box7: Invariant[T7],
+    box8: Invariant[T8],
+    box9: Invariant[T9],
+    box10: Invariant[T10],
+) -> None: ...
+
+x = Invariant[int]()
+f(x, x, x, x, x, x, x, x, x, x)
+"#;
+
+    criterion.bench_function("ty_micro[many_invariant_typevars]", |b| {
+        b.iter_batched_ref(
+            || setup_micro_case(code),
+            |case| {
+                let Case { db, .. } = case;
+                let result = db.check();
+                assert_eq!(result.len(), 0);
+            },
+            BatchSize::SmallInput,
+        );
+    });
+}
 fn benchmark_pydantic_core_schema_dict(criterion: &mut Criterion) {
     const NUM_CORE_SCHEMA_VARIANTS: usize = 24;
 
@@ -1758,7 +1837,7 @@ impl<'a> ProjectBenchmark<'a> {
         let src_root = SystemPath::new("/");
         let mut metadata = ProjectMetadata::discover(src_root, &system).unwrap();
 
-        metadata.apply_options(Options {
+        metadata.apply_override_options(Options {
             environment: Some(EnvironmentOptions {
                 python_version: Some(RangedValue::cli(self.project.config.python_version)),
                 python: Some(RelativePathBuf::cli(SystemPath::new(".venv"))),
@@ -1855,10 +1934,14 @@ fn attrs(criterion: &mut Criterion) {
             max_dep_date: TY_ECOSYSTEM_PIN,
             python_version: SupportedPythonVersion::Py311,
         },
-        102,
+        104,
     );
 
     bench_project(&benchmark, criterion);
+
+    // Keep one real-world benchmark frozen to catch regressions from newly added inputs.
+    let frozen_benchmark = benchmark.freeze_inputs();
+    bench_project_named(&frozen_benchmark, criterion, "attrs (frozen inputs)");
 }
 
 fn anyio(criterion: &mut Criterion) {
@@ -1893,10 +1976,6 @@ fn datetype(criterion: &mut Criterion) {
     );
 
     bench_project(&benchmark, criterion);
-
-    // Keep one cheap real-world benchmark frozen to catch regressions from newly added inputs.
-    let frozen_benchmark = benchmark.freeze_inputs();
-    bench_project_named(&frozen_benchmark, criterion, "DateType (frozen inputs)");
 }
 
 criterion_group!(check_file, benchmark_cold, benchmark_incremental);
@@ -1929,11 +2008,13 @@ criterion_group!(
     benchmark_literal_equality_fallthrough_guarded_any,
     benchmark_literal_or_pattern_reachability,
     benchmark_typeis_narrowing,
+    benchmark_repeated_statement_calls,
     benchmark_factored_upper_bounds,
     benchmark_pandas_tdd,
     benchmark_recursive_typed_dict_union_contextual_inference,
     benchmark_invariant_generic_return_union,
     benchmark_invariant_generic_union_bound,
+    benchmark_many_invariant_typevars,
     benchmark_pydantic_core_schema_dict,
     benchmark_fluid_many_widenings,
 );

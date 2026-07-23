@@ -214,7 +214,7 @@ fn resolve_builtin_fixture<'db>(db: &'db dyn Db, name: &str) -> Option<ResolvedF
         let request = known_module_symbol(db, KnownModule::PytestFixtures, "FixtureRequest")
             .place
             .ignore_possibly_undefined()?
-            .to_instance(db)?;
+            .to_instance_approximation(db)?;
         return Some(ResolvedFixture {
             provided_type: Some(request),
             definition: None,

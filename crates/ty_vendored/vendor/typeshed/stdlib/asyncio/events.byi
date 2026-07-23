@@ -13,7 +13,7 @@ from abc import ABCMeta, abstractmethod
 from collections.abc import Callable, Sequence
 from concurrent.futures import Executor
 from contextvars import Context
-from socket import AddressFamily, AddressInfo, SocketKind, _Address, _RetAddress, socket
+from socket import AddressFamily, AddressInfo, _Address, _GetAddrInfoResult, _RetAddress, socket
 from typing import Literal, Protocol, TypeAlias, TypeVar, type_check_only
 from typing_extensions import Self, TypeVarTuple, Unpack, deprecated
 
@@ -238,7 +238,7 @@ class AbstractEventLoop:
         type: int = 0,
         proto: int = 0,
         flags: int = 0,
-    ) -> list[(AddressFamily, SocketKind, int, str, (str, int) | (str, int, int, int) | (int, bytes))]
+    ) -> _GetAddrInfoResult
     abstract async def getnameinfo(self, sockaddr: (str, int) | (str, int, int, int), flags: int = 0) -> (str, str)
 
     if sys.version_info >= (3, 11):

@@ -13,7 +13,6 @@ use crate::types::{
     },
     special_form::TypeQualifier,
 };
-use ruff_python_ast::name::Name;
 use ruff_python_ast::{self as ast, helpers::any_over_expr};
 use ty_module_resolver::{KnownModule, file_to_module};
 use ty_python_core::{definition::Definition, scope::NodeWithScopeRef};
@@ -743,7 +742,7 @@ impl ClassDecoratorUnknownResultPolicy {
                 let call_symbol = decorator_ty
                     .member_lookup_with_policy(
                         db,
-                        Name::new_static("__call__"),
+                        "__call__",
                         MemberLookupPolicy::NO_INSTANCE_FALLBACK,
                     )
                     .place;

@@ -18,7 +18,7 @@ use crate::ast_ids::ExpressionNodeKey;
 use crate::statement::Statement;
 
 /// how a use of a fluid candidate binding interacts with its specialization
-#[derive(Clone, Copy, Debug, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, salsa::SalsaValue, get_size2::GetSize)]
 pub enum FluidUseRole {
     /// receiver of a bound-method call `a.m(...)` — the call's arguments can
     /// constrain the specialization
@@ -52,7 +52,7 @@ impl FluidUseRole {
 }
 
 /// a single use of a fluid candidate binding, in source order
-#[derive(Clone, Debug, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Clone, Debug, PartialEq, Eq, salsa::SalsaValue, get_size2::GetSize)]
 pub struct FluidUse<'db> {
     /// the use expression
     pub use_expression: ExpressionNodeKey,

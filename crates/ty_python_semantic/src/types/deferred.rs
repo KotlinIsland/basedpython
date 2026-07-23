@@ -53,6 +53,7 @@ impl get_size2::GetSize for DeferredOperation {}
 
 #[salsa::interned(debug, heap_size = ruff_memory_usage::heap_size)]
 pub struct DeferredType<'db> {
+    #[returns(copy)]
     pub(crate) operation: DeferredOperation,
     #[returns(deref)]
     pub(crate) operands: Box<[Type<'db>]>,

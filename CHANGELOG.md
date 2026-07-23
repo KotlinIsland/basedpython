@@ -1,5 +1,117 @@
 # Changelog
 
+## 0.15.22
+
+Released on 2026-07-16.
+
+### Preview features
+
+- \[`pycodestyle`\] Add an autofix for `E402` ([#22212](https://github.com/astral-sh/ruff/pull/22212))
+- \[`refurb`\] Allow subclassing builtins in stub files (`FURB189`) ([#26812](https://github.com/astral-sh/ruff/pull/26812))
+- \[`ruff`\] Add rule to replace `noqa` comments with `ruff:ignore` (`RUF105`) ([#26423](https://github.com/astral-sh/ruff/pull/26423))
+- \[`ruff`\] Add rule to use human-readable names in `ruff:ignore` comments (`RUF106`) ([#26682](https://github.com/astral-sh/ruff/pull/26682))
+- \[`ruff`\] Add rule to use human-readable names in configuration selectors (`RUF201`) ([#26772](https://github.com/astral-sh/ruff/pull/26772))
+
+### Bug fixes
+
+- \[`flake8-pyi`\] Fix false positive in `__all__` (`PYI053`) ([#26872](https://github.com/astral-sh/ruff/pull/26872))
+
+### Rule changes
+
+- \[`pylint`\] Ignore mutable type updates in `redefined-loop-name` (`PLW2901`) ([#25733](https://github.com/astral-sh/ruff/pull/25733))
+
+### Performance
+
+- Avoid redundant lexer token bookkeeping ([#26765](https://github.com/astral-sh/ruff/pull/26765))
+- Avoid redundant pending-indentation writes ([#26774](https://github.com/astral-sh/ruff/pull/26774))
+- Avoid unnecessary identifier lookahead ([#26525](https://github.com/astral-sh/ruff/pull/26525))
+- Reuse parser scratch buffers ([#26798](https://github.com/astral-sh/ruff/pull/26798))
+
+### Documentation
+
+- Document argfile support ([#26803](https://github.com/astral-sh/ruff/pull/26803))
+- \[`flake8-datetimez`\] Clarify naming guidance for `datetime.today` (`DTZ002`) ([#26658](https://github.com/astral-sh/ruff/pull/26658))
+- \[`pycodestyle`\] Document `E731` fix safety ([#26847](https://github.com/astral-sh/ruff/pull/26847))
+- \[`ruff`\] Clarify intentional async contexts for `unused-async` (`RUF029`) ([#26641](https://github.com/astral-sh/ruff/pull/26641))
+
+### Contributors
+
+- [@dwego](https://github.com/dwego)
+- [@MichaReiser](https://github.com/MichaReiser)
+- [@Joosboy](https://github.com/Joosboy)
+- [@KaufmanDmitriy](https://github.com/KaufmanDmitriy)
+- [@PeterJCLaw](https://github.com/PeterJCLaw)
+- [@ntBre](https://github.com/ntBre)
+- [@charliermarsh](https://github.com/charliermarsh)
+
+## 0.15.21
+
+Released on 2026-07-09.
+
+### Preview features
+
+- Add `--add-ignore` for adding `ruff:ignore` comments ([#26346](https://github.com/astral-sh/ruff/pull/26346))
+- \[`flake8-comprehensions`\] Drop `C409` tuple comprehension preview behavior ([#25707](https://github.com/astral-sh/ruff/pull/25707))
+- Avoid whitespace normalization when formatting comments ([#26455](https://github.com/astral-sh/ruff/pull/26455))
+- \[`pyupgrade`\] Lint and fix use of deprecated `abc` decorators (`UP051`) ([#26417](https://github.com/astral-sh/ruff/pull/26417))
+
+### Bug fixes
+
+- Refine non-empty f-string detection ([#26526](https://github.com/astral-sh/ruff/pull/26526))
+- Detect syntax errors in individual notebook cells ([#26419](https://github.com/astral-sh/ruff/pull/26419))
+- \[`flake8-implicit-str-concat`\] Fix `ISC003` autofix incorrectly stripping `+` from comments ([#26554](https://github.com/astral-sh/ruff/pull/26554))
+
+### Rule changes
+
+- \[`flake8-executable`\] Mark `EXE004` fix as unsafe ([#26033](https://github.com/astral-sh/ruff/pull/26033))
+- \[`flake8-pyi`\] Mark `PYI061` fixes as unsafe in Python files ([#26533](https://github.com/astral-sh/ruff/pull/26533))
+- \[`pydocstyle`\] Skip `overload-with-docstring` in stub files (`D418`) ([#26318](https://github.com/astral-sh/ruff/pull/26318))
+
+### Performance
+
+- Avoid per-token source index visitor calls ([#26506](https://github.com/astral-sh/ruff/pull/26506))
+- Cache parenthesized expression boundaries in the formatter ([#26344](https://github.com/astral-sh/ruff/pull/26344))
+- Improve performance of rendering edits in preview mode ([#26565](https://github.com/astral-sh/ruff/pull/26565))
+- Inline `fits_element` in formatter ([#26429](https://github.com/astral-sh/ruff/pull/26429))
+- Inline formatter printing hot paths ([#26504](https://github.com/astral-sh/ruff/pull/26504))
+- Lazily create builtin bindings ([#26510](https://github.com/astral-sh/ruff/pull/26510))
+- Skip empty trivia scans in the source indexer ([#26507](https://github.com/astral-sh/ruff/pull/26507))
+- Use ICF for macOS release builds ([#25780](https://github.com/astral-sh/ruff/pull/25780))
+
+### Formatter
+
+- Add `--extend-exclude` to `ruff format` ([#26372](https://github.com/astral-sh/ruff/pull/26372))
+
+### Documentation
+
+- Add "How does Ruff's import sorting compare to isort?" link to README ([#26530](https://github.com/astral-sh/ruff/pull/26530))
+- Fix Mozilla Firefox repository link in README ([#26537](https://github.com/astral-sh/ruff/pull/26537))
+- \[`flake8-bandit`\] Fix misleading docstring for `mako-templates` (`S702`) ([#26432](https://github.com/astral-sh/ruff/pull/26432))
+- \[`ruff`\] Fix non-triggering example for `if-key-in-dict-del` (`RUF051`) ([#26433](https://github.com/astral-sh/ruff/pull/26433))
+
+### Contributors
+
+- [@EkriirkE](https://github.com/EkriirkE)
+- [@tingerrr](https://github.com/tingerrr)
+- [@s-rigaud](https://github.com/s-rigaud)
+- [@nikolauspschuetz](https://github.com/nikolauspschuetz)
+- [@Avasam](https://github.com/Avasam)
+- [@ntBre](https://github.com/ntBre)
+- [@omar-y-abdi](https://github.com/omar-y-abdi)
+- [@AlexWaygood](https://github.com/AlexWaygood)
+- [@sylvestre](https://github.com/sylvestre)
+- [@shaanmajid](https://github.com/shaanmajid)
+- [@lerebear](https://github.com/lerebear)
+- [@baltasarblanco](https://github.com/baltasarblanco)
+- [@Sanjays2402](https://github.com/Sanjays2402)
+- [@ZedThree](https://github.com/ZedThree)
+- [@servusdei2018](https://github.com/servusdei2018)
+- [@charliermarsh](https://github.com/charliermarsh)
+- [@jesco-absolute](https://github.com/jesco-absolut)
+- [@velikodniy](https://github.com/velikodniy)
+- [@zaniebot](https://github.com/zaniebot)
+- [@epage](https://github.com/epage)
+
 ## 0.15.20
 
 Released on 2026-06-25.

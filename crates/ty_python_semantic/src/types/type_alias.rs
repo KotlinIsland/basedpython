@@ -26,8 +26,10 @@ pub struct PEP695TypeAliasType<'db> {
     #[returns(ref)]
     pub name: Name,
 
+    #[returns(copy)]
     pub(crate) rhs_scope: ScopeId<'db>,
 
+    #[returns(copy)]
     pub(super) specialization: Option<Specialization<'db>>,
 }
 
@@ -58,6 +60,7 @@ impl<'db> PEP695TypeAliasType<'db> {
     /// The RHS type of a PEP-695 style type alias with *no* specialization applied.
     /// Returns `Divergent` if the type alias is defined cyclically.
     #[salsa::tracked(
+        returns(copy),
         cycle_initial=|_, id, _| Type::divergent(id),
         cycle_fn=|db, cycle, previous: &Type<'db>, value: Type<'db>, _| {
             value.cycle_normalized(db, *previous, cycle)
@@ -128,7 +131,7 @@ impl<'db> PEP695TypeAliasType<'db> {
         self.specialization(db).is_some()
     }
 
-    #[salsa::tracked(cycle_initial=|_, _, _| None, heap_size=ruff_memory_usage::heap_size)]
+    #[salsa::tracked(returns(copy), cycle_initial=|_, _, _| None, heap_size=ruff_memory_usage::heap_size)]
     pub(crate) fn generic_context(self, db: &'db dyn Db) -> Option<GenericContext<'db>> {
         let scope = self.rhs_scope(db);
         let file = scope.file(db);
@@ -155,6 +158,7 @@ impl<'db> PEP695TypeAliasType<'db> {
 pub struct ManualPEP695TypeAliasType<'db> {
     #[returns(ref)]
     pub name: Name,
+    #[returns(copy)]
     pub definition: Definition<'db>,
 }
 
@@ -176,6 +180,7 @@ impl<'db> ManualPEP695TypeAliasType<'db> {
     /// Computed lazily from the definition to avoid including the value in the interned
     /// struct's identity. Returns `Divergent` if the type alias is defined cyclically.
     #[salsa::tracked(
+        returns(copy),
         cycle_initial=|_, id, _| Type::divergent(id),
         cycle_fn=|db, cycle, previous: &Type<'db>, value: Type<'db>, _| {
             value.cycle_normalized(db, *previous, cycle)
@@ -201,7 +206,7 @@ impl<'db> ManualPEP695TypeAliasType<'db> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 pub enum TypeAliasType<'db> {
     /// A type alias defined using the PEP 695 `type` statement.
     PEP695(PEP695TypeAliasType<'db>),
@@ -227,6 +232,7 @@ pub(super) fn walk_type_alias_type<'db, V: visitor::TypeVisitor<'db> + ?Sized>(
     }
 }
 
+#[salsa::tracked]
 impl<'db> TypeAliasType<'db> {
     pub(crate) fn name(self, db: &'db dyn Db) -> &'db str {
         match self {
@@ -256,6 +262,19 @@ impl<'db> TypeAliasType<'db> {
         }
     }
 
+    /// Returns the alias without an applied specialization.
+    pub(super) fn unspecialized(self, db: &'db dyn Db) -> Self {
+        match self {
+            TypeAliasType::PEP695(alias) => TypeAliasType::PEP695(PEP695TypeAliasType::new(
+                db,
+                alias.name(db),
+                alias.rhs_scope(db),
+                None,
+            )),
+            TypeAliasType::ManualPEP695(_) => self,
+        }
+    }
+
     pub(crate) fn as_pep_695_type_alias(self) -> Option<PEP695TypeAliasType<'db>> {
         match self {
             TypeAliasType::PEP695(type_alias) => Some(type_alias),
@@ -275,13 +294,6 @@ impl<'db> TypeAliasType<'db> {
         match self {
             TypeAliasType::PEP695(type_alias) => type_alias.specialization(db),
             TypeAliasType::ManualPEP695(_) => None,
-        }
-    }
-
-    pub(super) fn apply_function_specialization(self, db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
-        match self {
-            TypeAliasType::PEP695(type_alias) => type_alias.apply_function_specialization(db, ty),
-            TypeAliasType::ManualPEP695(_) => ty,
         }
     }
 
@@ -307,11 +319,40 @@ impl<'db> TypeAliasType<'db> {
 #[salsa::tracked]
 impl<'db> VarianceInferable<'db> for TypeAliasType<'db> {
     #[salsa::tracked(
+        returns(copy),
         cycle_initial=|_, _, _, _| TypeVarVariance::Bivariant,
         heap_size=ruff_memory_usage::heap_size
     )]
     fn variance_of(self, db: &'db dyn Db, typevar: BoundTypeVarIdentity<'db>) -> TypeVarVariance {
-        self.value_type(db).variance_of(db, typevar)
+        let Some(generic_context) = self.generic_context(db) else {
+            return self.value_type(db).variance_of(db, typevar);
+        };
+
+        // Infer an alias's own type-parameter variance from the raw RHS. Applying specialization
+        // here would recursively request the same `variance_of` query.
+        if generic_context
+            .variables(db)
+            .any(|alias_typevar| alias_typevar.identity(db) == typevar)
+        {
+            return self.raw_value_type(db).variance_of(db, typevar);
+        }
+
+        let raw_value_type = self.raw_value_type(db);
+        let specialization = self
+            .specialization(db)
+            .unwrap_or_else(|| generic_context.default_specialization(db, None));
+
+        // For external typevars, variance flows through the specialization arguments. Expanding
+        // the specialized alias body here can create ever-larger recursive alias applications.
+        generic_context
+            .variables(db)
+            .zip(specialization.types(db))
+            .map(|(alias_typevar, argument_ty)| {
+                raw_value_type
+                    .variance_of(db, alias_typevar.identity(db))
+                    .compose_thunk(|| argument_ty.variance_of(db, typevar))
+            })
+            .collect()
     }
 }
 

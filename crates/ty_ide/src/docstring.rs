@@ -11,7 +11,7 @@ mod markdown;
 
 use indexmap::IndexMap;
 use regex::Regex;
-use ruff_python_trivia::{PythonWhitespace, leading_indentation};
+use ruff_python_trivia::{PythonWhitespace, expand_tabs, leading_indentation};
 use ruff_source_file::UniversalNewlines;
 use std::sync::LazyLock;
 
@@ -58,7 +58,8 @@ impl Docstring {
     /// Extract parameter documentation from popular docstring formats.
     /// Returns a map of parameter names to their documentation.
     pub fn parameter_documentation(&self) -> IndexMap<String, String> {
-        document::parameter_documentation(&self.0, extract_numpy_style_params(&self.0))
+        let normalized_source = documentation_trim(&self.0);
+        document::parameter_documentation(&normalized_source, extract_numpy_style_params(&self.0))
     }
 }
 
@@ -83,7 +84,7 @@ impl DocstringFragment {
 
 /// Normalizes an extracted docstring fragment without removing meaningful relative indentation.
 fn documentation_fragment_trim(docs: &str) -> String {
-    let expanded = docs.trim_end().replace('\t', "        ");
+    let expanded = expand_tabs(docs.trim_end());
     let mut output = String::with_capacity(expanded.len());
     for line in expanded.universal_newlines() {
         output.push_str(line.as_str().trim_whitespace_end());
@@ -96,13 +97,13 @@ fn documentation_fragment_trim(docs: &str) -> String {
 ///
 /// See: <https://peps.python.org/pep-0257/#handling-docstring-indentation>
 fn documentation_trim(docs: &str) -> String {
-    // First apply tab expansion as we don't want tabs in our output
-    // (python says tabs are equal to 8 spaces).
+    // First apply tab expansion as we don't want tabs in our output. Python advances tabs to the
+    // next eight-column tab stop.
     //
     // We also trim off all trailing whitespace here to eliminate trailing newlines so we
     // don't need to handle trailing blank lines later. We can't trim away leading
     // whitespace yet, because we need to identify the first line and handle it specially.
-    let expanded = docs.trim_end().replace('\t', "        ");
+    let expanded = expand_tabs(docs.trim_end());
 
     // Compute the minimum indention of all non-empty non-first lines
     // and statistics about leading blank lines to help trim them later.
@@ -346,6 +347,23 @@ mod tests {
         // so tests are stable and the expected output stays readable.
         settings.add_filter("  \n", "<HB>\n");
         settings.bind_to_scope()
+    }
+
+    #[test]
+    fn expands_tabs_to_tab_stops_when_trimming_documentation() {
+        assert_snapshot!(
+            documentation_trim(
+                "\
+Summary.
+    baseline
+  \tindented",
+            ),
+            @"
+        Summary.
+        baseline
+            indented
+        "
+        );
     }
 
     // A nice doctest that is surrounded by prose
@@ -823,16 +841,17 @@ mod tests {
         let docstring = Docstring::new(docstring.to_owned());
 
         assert_snapshot!(docstring.render_markdown(), @"
-        My cool func...<HB>
-        <HB>
-        Returns:<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;Some details<HB>
+        My cool func...
+
+        ## Returns
+        Some details
+
         `````python
-            x_y = thing_do();
-            ``` # this should't close the fence!
-            a_b = other_thing();
+        x_y = thing_do();
+        ``` # this should't close the fence!
+        a_b = other_thing();
         `````<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;And so on.
+        And so on.
         ");
     }
 
@@ -858,16 +877,17 @@ mod tests {
         let docstring = Docstring::new(docstring.to_owned());
 
         assert_snapshot!(docstring.render_markdown(), @"
-        My cool func...<HB>
-        <HB>
-        Returns:<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;Some details<HB>
+        My cool func...
+
+        ## Returns
+        Some details
+
         ~~~~~~python
-            x_y = thing_do();
-            ~~~ # this should't close the fence!
-            a_b = other_thing();
+        x_y = thing_do();
+        ~~~ # this should't close the fence!
+        a_b = other_thing();
         ~~~~~~<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;And so on.
+        And so on.
         ");
     }
 
@@ -1266,16 +1286,21 @@ mod tests {
         ");
 
         assert_snapshot!(docstring.render_markdown(), @"
-        This is a function description.<HB>
-        <HB>
-        Args:<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;param1 (str): The first parameter description<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;param2 (int): The second parameter description<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;This is a continuation of param2 description.<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;param3: A parameter without type annotation<HB>
-        <HB>
-        Returns:<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;str: The return value description
+        This is a function description.
+
+        ## Arguments
+        **param1**: `str`<HB>
+        The first parameter description
+
+        **param2**: `int`<HB>
+        The second parameter description<HB>
+        This is a continuation of param2 description.
+
+        **param3**<HB>
+        A parameter without type annotation
+
+        ## Returns
+        str: The return value description
         ");
     }
 
@@ -1477,12 +1502,15 @@ mod tests {
         ");
 
         assert_snapshot!(docstring.render_markdown(), @"
-        This is a function description.<HB>
-        <HB>
-        Args:<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;param1 (str): Google-style parameter<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;param2 (int): Another Google-style parameter<HB>
-        <HB>
+        This is a function description.
+
+        ## Arguments
+        **param1**: `str`<HB>
+        Google-style parameter
+
+        **param2**: `int`<HB>
+        Another Google-style parameter
+
         Parameters<HB>
         ----------<HB>
         param3 : bool<HB>
@@ -1631,11 +1659,14 @@ mod tests {
         ");
 
         assert_snapshot!(docstring.render_markdown(), @"
-        This is a function description.<HB>
-        <HB>
-        Args:<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;param1 (str): Google-style parameter<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;param2 (int): Google-style duplicate parameter
+        This is a function description.
+
+        ## Arguments
+        **param1**: `str`<HB>
+        Google-style parameter
+
+        **param2**: `int`<HB>
+        Google-style duplicate parameter
 
         ## Parameters
         **param2**: `int`<HB>
@@ -1650,84 +1681,6 @@ mod tests {
         &nbsp;&nbsp;&nbsp;&nbsp;NumPy-style duplicate parameter<HB>
         param4 : bool<HB>
         &nbsp;&nbsp;&nbsp;&nbsp;NumPy-style parameter
-        ");
-    }
-
-    #[test]
-    fn test_numpy_style_with_different_indentation() {
-        let _snap = bind_docstring_snapshot_filters();
-        let docstring = r#"
-        This is a function description.
-
-        Parameters
-        ----------
-        param1 : str
-            The first parameter description
-        param2 : int
-            The second parameter description
-            This is a continuation of param2 description.
-        param3
-            A parameter without type annotation
-
-        Returns
-        -------
-        str
-            The return value description
-        "#;
-
-        let docstring = Docstring::new(docstring.to_owned());
-        let param_docs = docstring.parameter_documentation();
-
-        assert_eq!(param_docs.len(), 3);
-        assert_eq!(
-            param_docs.get("param1").expect("param1 should exist"),
-            "The first parameter description"
-        );
-        assert_eq!(
-            param_docs.get("param2").expect("param2 should exist"),
-            "The second parameter description\nThis is a continuation of param2 description."
-        );
-        assert_eq!(
-            param_docs.get("param3").expect("param3 should exist"),
-            "A parameter without type annotation"
-        );
-
-        assert_snapshot!(docstring.render_plaintext(), @"
-        This is a function description.
-
-        Parameters
-        ----------
-        param1 : str
-            The first parameter description
-        param2 : int
-            The second parameter description
-            This is a continuation of param2 description.
-        param3
-            A parameter without type annotation
-
-        Returns
-        -------
-        str
-            The return value description
-        ");
-
-        assert_snapshot!(docstring.render_markdown(), @"
-        This is a function description.<HB>
-        <HB>
-        Parameters<HB>
-        ----------<HB>
-        param1 : str<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;The first parameter description<HB>
-        param2 : int<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;The second parameter description<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;This is a continuation of param2 description.<HB>
-        param3<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;A parameter without type annotation<HB>
-        <HB>
-        Returns<HB>
-        -------<HB>
-        str<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;The return value description
         ");
     }
 
@@ -1836,11 +1789,14 @@ mod tests {
 
         let markdown = docstring_windows.render_markdown();
         assert_snapshot!(markdown.as_str(), @"
-        This is a function description.<HB>
-        <HB>
-        Args:<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;param1 (str): The first parameter<HB>
-        &nbsp;&nbsp;&nbsp;&nbsp;param2 (int): The second parameter
+        This is a function description.
+
+        ## Arguments
+        **param1**: `str`<HB>
+        The first parameter
+
+        **param2**: `int`<HB>
+        The second parameter
         ");
         assert_eq!(docstring_mac.render_markdown(), markdown);
         assert_eq!(docstring_unix.render_markdown(), markdown);

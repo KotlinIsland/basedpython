@@ -3,13 +3,14 @@ use std::collections::HashMap;
 use crate::FxIndexSet;
 use crate::place::builtins_module_scope;
 use crate::reachability::is_range_reachable;
+use crate::types::call::bind::CheckTypesMode;
 use crate::types::call::{CallArguments, CallError, MatchedArgument};
 use crate::types::class::{DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTupleAnchor};
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::signatures::{ParametersKind, Signature};
 use crate::types::{
     CallDunderError, CallableTypes, ClassBase, ClassLiteral, ClassType, KnownClass, KnownFunction,
-    KnownUnion, Type, TypeContext,
+    KnownUnion, SubclassOfInner, Type, TypeContext,
 };
 use crate::{Db, DisplaySettings, HasDefinition, HasType, SemanticModel};
 use itertools::Either;
@@ -19,6 +20,7 @@ use ruff_db::source::source_text;
 use ruff_python_ast::{self as ast, AnyNodeRef, name::Name};
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::FxHashSet;
+use ty_module_resolver::Module;
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::{attribute_scopes, global_scope, semantic_index, use_def_map};
 
@@ -214,6 +216,18 @@ pub fn definitions_for_attribute<'db>(
     let db = model.db();
     let name_str = attribute.attr.as_str();
 
+    // A structural protocol meta-type still uses its nominal protocol declaration as the source
+    // location for go-to-definition, even though the origin is not a nominal upper bound.
+    let subclass_origin = |subclass_of: SubclassOfInner<'db>| {
+        let class = match subclass_of {
+            SubclassOfInner::Protocol(protocol) => protocol.class_origin().map(|origin| *origin),
+            subclass_of => subclass_of.into_class(db),
+        }?;
+        class
+            .static_class_literal(db)
+            .map(|(literal, _)| ClassLiteral::Static(literal))
+    };
+
     let mut resolved = Vec::new();
 
     // Determine the type of the LHS
@@ -267,13 +281,12 @@ pub fn definitions_for_attribute<'db>(
 
         let class_literal = match lookup_type {
             Type::ClassLiteral(class_literal) => class_literal,
-            Type::SubclassOf(subclass) => match subclass.subclass_of().into_class(db) {
-                Some(cls) => match cls.static_class_literal(db) {
-                    Some((lit, _)) => ClassLiteral::Static(lit),
-                    None => continue,
-                },
-                None => continue,
-            },
+            Type::SubclassOf(subclass) => {
+                let Some(class_literal) = subclass_origin(subclass.subclass_of()) else {
+                    continue;
+                };
+                class_literal
+            }
             _ => continue,
         };
 
@@ -291,13 +304,12 @@ pub fn definitions_for_attribute<'db>(
         if resolved.is_empty() && meta_type != lookup_type {
             let class_literal = match meta_type {
                 Type::ClassLiteral(class_literal) => class_literal,
-                Type::SubclassOf(subclass) => match subclass.subclass_of().into_class(db) {
-                    Some(cls) => match cls.static_class_literal(db) {
-                        Some((lit, _)) => ClassLiteral::Static(lit),
-                        None => continue,
-                    },
-                    None => continue,
-                },
+                Type::SubclassOf(subclass) => {
+                    let Some(class_literal) = subclass_origin(subclass.subclass_of()) else {
+                        continue;
+                    };
+                    class_literal
+                }
                 _ => continue,
             };
 
@@ -767,6 +779,7 @@ pub fn call_signature_details<'db>(
             &call_arguments,
             TypeContext::default(),
             &[],
+            CheckTypesMode::Finalize,
         );
 
         // Extract signature details from all callable bindings
@@ -1967,15 +1980,15 @@ pub fn type_hierarchy_supertypes(db: &dyn Db, ty: Type<'_>) -> Vec<TypeHierarchy
     supertypes
 }
 
-/// Get the direct subtypes of the class given.
+/// Get the direct subtypes of the class given in `modules`.
 ///
 /// When the type given doesn't correspond to a class literal, then this always
 /// returns an empty sequence.
-///
-/// Note that this scans all modules in `db` to find classes that directly
-/// inherit from the given class. This could be quite expensive in large
-/// projects.
-pub fn type_hierarchy_subtypes(db: &dyn Db, ty: Type<'_>) -> Vec<TypeHierarchyClass> {
+pub fn type_hierarchy_subtypes(
+    db: &dyn Db,
+    ty: Type<'_>,
+    modules: &[Module<'_>],
+) -> Vec<TypeHierarchyClass> {
     let Some(target_class) = extract_class_literal(db, ty) else {
         return vec![];
     };
@@ -1983,8 +1996,7 @@ pub fn type_hierarchy_subtypes(db: &dyn Db, ty: Type<'_>) -> Vec<TypeHierarchyCl
     let target_is_object = target_class.is_known(db, KnownClass::Object);
     let mut subtypes = vec![];
 
-    // Scan all modules in the workspace
-    for module in ty_module_resolver::all_modules(db) {
+    for &module in modules {
         let Some(file) = module.file(db) else {
             continue;
         };
@@ -2063,6 +2075,7 @@ fn extract_class_literal<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<ClassLit
                     Some(class_type.class_literal(db))
                 }
                 crate::types::SubclassOfInner::Dynamic(_)
+                | crate::types::SubclassOfInner::Protocol(_)
                 | crate::types::SubclassOfInner::TypeVar(_) => None,
             }
         }

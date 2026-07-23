@@ -19,7 +19,7 @@ use crate::types::enums::is_enum_class;
 use crate::types::{ClassLiteral, FunctionType, StaticClassLiteral, Type};
 
 /// the kind of framework class-transformer that applies to a class
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue, get_size2::GetSize)]
 pub enum FrameworkRole {
     /// a pydantic model — `pydantic.BaseModel` in the mro
     PydanticModel,
@@ -39,7 +39,7 @@ pub fn class_framework_role<'db>(
     static_class_framework_role(db, class.as_static()?)
 }
 
-#[salsa::tracked(heap_size=ruff_memory_usage::heap_size)]
+#[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
 fn static_class_framework_role<'db>(
     db: &'db dyn Db,
     class: StaticClassLiteral<'db>,
@@ -70,7 +70,7 @@ pub fn class_body_annotation_is_semantic<'db>(db: &'db dyn Db, class: ClassLiter
 
 /// the kind of pytest function whose parameters pytest fills from the fixture
 /// registry — the parallel of [`FrameworkRole`] for function-level frameworks
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue, get_size2::GetSize)]
 pub enum FunctionFrameworkRole {
     /// a pytest fixture — a function decorated with `@pytest.fixture`
     PytestFixture,
@@ -82,7 +82,7 @@ pub enum FunctionFrameworkRole {
 /// `None` for an ordinary function. a function that is both a fixture and
 /// named like a test classifies as a fixture: the decorator is explicit,
 /// the name convention is incidental
-#[salsa::tracked(heap_size = ruff_memory_usage::heap_size)]
+#[salsa::tracked(returns(copy), heap_size = ruff_memory_usage::heap_size)]
 pub fn function_framework_role<'db>(
     db: &'db dyn Db,
     function: FunctionType<'db>,

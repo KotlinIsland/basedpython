@@ -102,7 +102,7 @@ fn mark_pass(stdlib_dir: &Path, typeshed_root: &Path) -> Result<(usize, usize)> 
     let system = OsSystem::new(SystemPathBuf::from_path_buf_lossy(project_root.clone()));
     let root = SystemPathBuf::from_path_buf_lossy(project_root);
     let mut metadata = ProjectMetadata::new("typeshed-override", root);
-    metadata.apply_options(Options {
+    metadata.apply_override_options(Options {
         environment: Some(ty_project::metadata::options::EnvironmentOptions {
             typeshed: Some(ty_project::metadata::value::RelativePathBuf::cli(
                 SystemPathBuf::from_path_buf_lossy(typeshed_root.to_path_buf()),

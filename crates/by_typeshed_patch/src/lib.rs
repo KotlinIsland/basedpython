@@ -48,10 +48,7 @@ pub struct Edit {
 pub fn all_patches() -> Vec<Box<dyn Patch>> {
     // patches are added here as upstream syncs surface concrete drift. each
     // entry must have a corresponding module in `src/patches/` with tests
-    vec![
-        Box::new(patches::mapping::MappingKeyCovariance),
-        Box::new(patches::container_overlapping::ContainerMembershipOverlapping),
-    ]
+    vec![Box::new(patches::mapping::MappingKeyCovariance)]
 }
 
 /// registry of every post-conversion patch, applied in pass 3 after the pep 695
@@ -74,6 +71,10 @@ pub fn all_post_patches(root: &Path) -> Vec<Box<dyn Patch>> {
         // form; runs first so later idiom patches (e.g. `any_to_dynamic`) still see
         // and normalise anything it introduces
         Box::new(patches::output_widening::OutputWidening),
+        // rewrites membership/lookup parameters over the converted names
+        // (`Element`, `Key`), so it cannot run in pass 1 alongside
+        // `MappingKeyCovariance` — both would edit `Mapping.__getitem__`
+        Box::new(patches::container_overlapping::ContainerMembershipOverlapping),
         Box::new(patches::cleanup::StripIgnoreComments),
         Box::new(patches::cleanup::BodylessStubs),
         Box::new(patches::dead_symbols::DeleteDeadSymbols),

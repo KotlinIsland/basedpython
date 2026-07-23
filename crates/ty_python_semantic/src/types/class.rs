@@ -72,7 +72,7 @@ bitflags::bitflags! {
     ///
     /// This combines properties derived from the MRO into the existing class-classification
     /// query, avoiding a separate cached query for each property.
-    #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash, salsa::Update)]
+    #[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Hash)]
     pub(super) struct ClassInstanceFlags: u8 {
         /// The class is, or inherits from, a `TypedDict` specification.
         const TYPED_DICT = 1 << 0;
@@ -84,7 +84,7 @@ bitflags::bitflags! {
 impl get_size2::GetSize for ClassInstanceFlags {}
 
 /// A category of classes with code generation capabilities (with synthesized methods).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 pub(crate) enum CodeGeneratorKind<'db> {
     /// Classes decorated with `@dataclass` or similar dataclass-like decorators
     DataclassLike(Option<DataclassTransformerParams<'db>>),
@@ -126,7 +126,9 @@ impl<'db> CodeGeneratorKind<'db> {
             return None;
         }
 
-        #[salsa::tracked(cycle_initial=|_, _, _| None,
+        #[salsa::tracked(
+            returns(copy),
+            cycle_initial=|_, _, _| None,
             heap_size=ruff_memory_usage::heap_size
         )]
         fn code_generator_of_static_class<'db>(
@@ -207,7 +209,9 @@ impl<'db> CodeGeneratorKind<'db> {
     }
 
     fn from_dynamic_class(db: &'db dyn Db, class: DynamicClassLiteral<'db>) -> Option<Self> {
-        #[salsa::tracked(cycle_initial=|_, _, _| None,
+        #[salsa::tracked(
+            returns(copy),
+            cycle_initial=|_, _, _| None,
             heap_size=ruff_memory_usage::heap_size
         )]
         fn code_generator_of_dynamic_class<'db>(
@@ -319,11 +323,16 @@ impl<'db> CodeGeneratorKind<'db> {
     ///
     /// C(value=42)
     /// ```
-    pub(super) const fn synthesizes_constructor_signature_from_fields(self) -> bool {
-        matches!(
-            self,
-            Self::DataclassLike(_) | Self::Pydantic(_) | Self::Django | Self::SqlalchemyDeclarative
-        )
+    pub(super) fn synthesizes_constructor_signature_from_fields(
+        self,
+        db: &'db dyn Db,
+        class: StaticClassLiteral<'db>,
+    ) -> bool {
+        match self {
+            Self::DataclassLike(_) | Self::Django | Self::SqlalchemyDeclarative => true,
+            Self::Pydantic(_) => pydantic::synthesizes_constructor_signature_from_fields(db, class),
+            Self::NamedTuple | Self::TypedDict => false,
+        }
     }
 
     pub(super) const fn pydantic_metadata(self) -> Option<pydantic::ModelMetadata<'db>> {
@@ -341,7 +350,9 @@ impl<'db> CodeGeneratorKind<'db> {
 /// A specialization of a generic class with a particular assignment of types to typevars.
 #[salsa::interned(debug, heap_size=ruff_memory_usage::heap_size)]
 pub struct GenericAlias<'db> {
+    #[returns(copy)]
     pub(crate) origin: StaticClassLiteral<'db>,
+    #[returns(copy)]
     pub(crate) specialization: Specialization<'db>,
 }
 
@@ -441,6 +452,7 @@ impl<'db> From<GenericAlias<'db>> for Type<'db> {
 #[salsa::tracked]
 impl<'db> VarianceInferable<'db> for GenericAlias<'db> {
     #[salsa::tracked(
+        returns(copy),
         cycle_initial=|_, _, _, _| TypeVarVariance::Bivariant,
         heap_size=ruff_memory_usage::heap_size
     )]
@@ -482,7 +494,7 @@ impl<'db> VarianceInferable<'db> for GenericAlias<'db> {
 
 /// A class literal, either defined via a `class` statement or a `type` function call.
 #[derive(
-    Clone, Copy, Debug, Eq, Hash, PartialEq, salsa::Supertype, salsa::Update, get_size2::GetSize,
+    Clone, Copy, Debug, Eq, Hash, PartialEq, salsa::Supertype, get_size2::GetSize, salsa::SalsaValue,
 )]
 pub enum ClassLiteral<'db> {
     /// A class defined via a `class` statement.
@@ -718,7 +730,7 @@ impl<'db> ClassLiteral<'db> {
     /// Return a type representing "the set of all instances of the metaclass of this class".
     pub(crate) fn metaclass_instance_type(self, db: &'db dyn Db) -> Type<'db> {
         self.metaclass(db)
-            .to_instance(db)
+            .to_instance_approximation(db)
             .expect("`Type::to_instance()` should always return `Some()` when called on the type of a metaclass")
     }
 
@@ -1036,7 +1048,7 @@ impl<'db> From<DynamicEnumLiteral<'db>> for ClassLiteral<'db> {
 /// Represents a class type, which might be a non-generic class, or a specialization of a generic
 /// class.
 #[derive(
-    Clone, Copy, Debug, Eq, Hash, PartialEq, salsa::Supertype, salsa::Update, get_size2::GetSize,
+    Clone, Copy, Debug, Eq, Hash, PartialEq, salsa::Supertype, get_size2::GetSize, salsa::SalsaValue,
 )]
 pub enum ClassType<'db> {
     // `NonGeneric` is intended to mean that the `ClassLiteral` has no type parameters. There are
@@ -1440,6 +1452,7 @@ impl<'db> ClassType<'db> {
     ///
     /// Returns `None` if this class does not have any disjoint bases in its MRO.
     #[salsa::tracked(
+        returns(copy),
         cycle_initial=|_, _, _| None,
         heap_size=ruff_memory_usage::heap_size
     )]
@@ -1632,10 +1645,10 @@ impl<'db> ClassType<'db> {
         if other_metaclass == type_class {
             return true;
         }
-        let Some(self_metaclass_instance) = self_metaclass.to_instance(db) else {
+        let Some(self_metaclass_instance) = self_metaclass.to_instance_approximation(db) else {
             return true;
         };
-        let Some(other_metaclass_instance) = other_metaclass.to_instance(db) else {
+        let Some(other_metaclass_instance) = other_metaclass.to_instance_approximation(db) else {
             return true;
         };
         if types_are_disjoint(self_metaclass_instance, other_metaclass_instance) {
@@ -1649,7 +1662,7 @@ impl<'db> ClassType<'db> {
     pub(super) fn metaclass_instance_type(self, db: &'db dyn Db) -> Type<'db> {
         self
             .metaclass(db)
-            .to_instance(db)
+            .to_instance_approximation(db)
             .expect("`Type::to_instance()` should always return `Some()` when called on the type of a metaclass")
     }
 
@@ -1721,6 +1734,8 @@ impl<'db> ClassType<'db> {
         };
 
         let fallback_member_lookup = || {
+            let specialization = specialization
+                .map(|specialization| specialization.tuple_runtime_element_specialization(db));
             class_literal
                 .own_class_member(db, inherited_generic_context, specialization, name)
                 .map_type(|ty| ty.apply_projected_optional_specialization(db, specialization))
@@ -1800,13 +1815,15 @@ impl<'db> ClassType<'db> {
                                     ) {
                                         let overload_return = UnionType::from_elements(
                                             db,
-                                            std::iter::once(variable_length_tuple.variable())
-                                                .chain(
-                                                    variable_length_tuple
-                                                        .iter_prefix_elements()
-                                                        .rev()
-                                                        .take(one_based_index),
-                                                ),
+                                            std::iter::once(
+                                                variable_length_tuple.variable().element_type(db),
+                                            )
+                                            .chain(
+                                                variable_length_tuple
+                                                    .iter_prefix_elements()
+                                                    .rev()
+                                                    .take(one_based_index),
+                                            ),
                                         );
                                         element_type_to_indices
                                             .entry(overload_return)
@@ -1834,12 +1851,14 @@ impl<'db> ClassType<'db> {
                                     ) {
                                         let overload_return = UnionType::from_elements(
                                             db,
-                                            std::iter::once(variable_length_tuple.variable())
-                                                .chain(
-                                                    variable_length_tuple
-                                                        .iter_suffix_elements()
-                                                        .take(index + 1),
-                                                ),
+                                            std::iter::once(
+                                                variable_length_tuple.variable().element_type(db),
+                                            )
+                                            .chain(
+                                                variable_length_tuple
+                                                    .iter_suffix_elements()
+                                                    .take(index + 1),
+                                            ),
                                         );
                                         element_type_to_indices
                                             .entry(overload_return)
@@ -1850,8 +1869,7 @@ impl<'db> ClassType<'db> {
                             }
                         }
 
-                        let all_elements_unioned =
-                            UnionType::from_elements(db, tuple.all_elements());
+                        let all_elements_unioned = tuple.homogeneous_element_type(db);
 
                         let mut overload_signatures =
                             Vec::with_capacity(element_type_to_indices.len().saturating_add(2));
@@ -1939,15 +1957,16 @@ impl<'db> ClassType<'db> {
                         if tuple_len.minimum() == 0 && tuple_len.maximum().is_none() {
                             // If the tuple has no length restrictions,
                             // any iterable is allowed as long as the iterable has the correct element type.
-                            let mut tuple_elements = tuple.iter_all_elements();
-                            iterable_parameter = iterable_parameter.with_annotated_type(
-                                KnownClass::Iterable
-                                    .to_specialized_instance(db, &[tuple_elements.next().unwrap()]),
-                            );
                             assert_eq!(
-                                tuple_elements.next(),
-                                None,
-                                "Tuple specialization should not have more than one element when it has no length restriction"
+                                tuple.iter_element_types(db).count(),
+                                1,
+                                "Tuple specialization should have exactly one element when it has no length restriction"
+                            );
+                            iterable_parameter = iterable_parameter.with_annotated_type(
+                                KnownClass::Iterable.to_specialized_instance(
+                                    db,
+                                    &[tuple.homogeneous_element_type(db)],
+                                ),
                             );
                         } else {
                             // But if the tuple is of a fixed length, or has a minimum length, we require a tuple rather
@@ -2096,7 +2115,7 @@ impl<'db> ClassType<'db> {
         let metaclass_dunder_call_function_symbol = self_ty
             .member_lookup_with_policy(
                 db,
-                "__call__".into(),
+                "__call__",
                 MemberLookupPolicy::NO_INSTANCE_FALLBACK
                     | MemberLookupPolicy::META_CLASS_NO_TYPE_FALLBACK,
             )
@@ -2140,7 +2159,7 @@ impl<'db> ClassType<'db> {
                 !signature.return_ty.is_assignable_to(
                     db,
                     self_ty
-                        .to_instance(db)
+                        .to_instance_approximation(db)
                         .expect("ClassType should be instantiable"),
                 )
             });
@@ -2148,7 +2167,7 @@ impl<'db> ClassType<'db> {
             let instance_ty = Type::instance(db, self);
             let dunder_new_bound_method = CallableType::new(
                 db,
-                dunder_new_signature.bind_self(db, Some(instance_ty)),
+                dunder_new_signature.bind_self_with_receiver(db, Some(self_ty), Some(instance_ty)),
                 CallableTypeKind::Regular,
                 CallableFunctionProvenance::None,
             );
@@ -2164,13 +2183,15 @@ impl<'db> ClassType<'db> {
         let dunder_init_function_symbol = self_ty
             .member_lookup_with_policy(
                 db,
-                "__init__".into(),
+                "__init__",
                 MemberLookupPolicy::MRO_NO_OBJECT_FALLBACK
                     | MemberLookupPolicy::META_CLASS_NO_TYPE_FALLBACK,
             )
             .place;
 
-        let correct_return_type = self_ty.to_instance(db).unwrap_or_else(Type::unknown);
+        let correct_return_type = self_ty
+            .to_instance_approximation(db)
+            .unwrap_or_else(Type::unknown);
 
         // If the class defines an `__init__` method, then we synthesize a callable type with the
         // same parameters as the `__init__` method after it is bound, and with the return type of
@@ -2198,7 +2219,7 @@ impl<'db> ClassType<'db> {
                                 .is_none_or(|bound_typevar| !bound_typevar.typevar(db).is_self(db))
                         });
                     let return_type = self_annotation.unwrap_or(correct_return_type);
-                    let instance_ty = self_annotation.unwrap_or_else(|| Type::instance(db, self));
+                    let instance_ty = Type::instance(db, self);
                     let generic_context = GenericContext::merge_optional(
                         db,
                         class_generic_context,
@@ -2210,7 +2231,11 @@ impl<'db> ClassType<'db> {
                         return_type,
                     )
                     .with_definition(signature.definition())
-                    .bind_self(db, Some(instance_ty))
+                    .bind_self_with_receiver(
+                        db,
+                        Some(instance_ty),
+                        Some(instance_ty),
+                    )
                 };
 
                 let synthesized_dunder_init_signature = CallableSignature::from_overloads(
@@ -2246,7 +2271,7 @@ impl<'db> ClassType<'db> {
                 let new_function_symbol = self_ty
                     .member_lookup_with_policy(
                         db,
-                        "__new__".into(),
+                        "__new__",
                         MemberLookupPolicy::META_CLASS_NO_TYPE_FALLBACK,
                     )
                     .place;
@@ -2420,7 +2445,7 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize, salsa::Update)]
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
 pub(super) struct AbstractMethod<'db> {
     pub(super) defining_class: ClassType<'db>,
     pub(super) definition: Definition<'db>,
@@ -2461,7 +2486,7 @@ impl MethodDecorator {
 }
 
 /// Kind-specific metadata for different types of fields
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
 pub(crate) enum FieldKind<'db> {
     /// `NamedTuple` field metadata
     NamedTuple { default_ty: Option<Type<'db>> },
@@ -2527,7 +2552,7 @@ pub(crate) enum FieldKind<'db> {
 }
 
 /// Metadata regarding a dataclass field/attribute or a `TypedDict` "item" / key-value pair.
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
 pub(crate) struct Field<'db> {
     /// The declared type of the field
     pub(crate) declared_ty: Type<'db>,
@@ -2925,7 +2950,7 @@ impl std::fmt::Display for QualifiedClassName<'_> {
 /// `TypeError`s resulting from class definitions.
 ///
 /// [PEP 800]: https://peps.python.org/pep-0800/
-#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, get_size2::GetSize, salsa::Update)]
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, get_size2::GetSize, salsa::SalsaValue)]
 pub(super) struct DisjointBase<'db> {
     pub(super) class: ClassLiteral<'db>,
     pub(super) kind: DisjointBaseKind,
@@ -2966,7 +2991,7 @@ impl<'db> DisjointBase<'db> {
     }
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, get_size2::GetSize, salsa::Update)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, get_size2::GetSize)]
 pub(super) enum DisjointBaseKind {
     /// We know the class is a disjoint base because it's either hardcoded in ty
     /// or has the `@disjoint_base` decorator.
@@ -2975,7 +3000,7 @@ pub(super) enum DisjointBaseKind {
     DefinesSlots,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
 pub(super) struct MetaclassError<'db> {
     kind: MetaclassErrorKind<'db>,
 }
@@ -2987,7 +3012,7 @@ impl<'db> MetaclassError<'db> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
 pub(super) enum MetaclassErrorKind<'db> {
     /// The class has incompatible metaclasses in its inheritance hierarchy.
     ///

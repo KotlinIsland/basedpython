@@ -100,7 +100,14 @@ pub fn register_lints(registry: &mut LintRegistryBuilder) {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent analysis toggle; a state machine would not model them"
+)]
 pub struct AnalysisSettings {
+    /// Whether ty should use conservative equality and inequality semantics.
+    pub strict_equality_semantics: bool,
+
     /// Whether errors can be suppressed with `type: ignore` comments.
     ///
     /// If set to false, ty won't:
@@ -132,6 +139,7 @@ pub struct AnalysisSettings {
 impl Default for AnalysisSettings {
     fn default() -> Self {
         Self {
+            strict_equality_semantics: false,
             respect_type_ignore_comments: true,
             allowed_unresolved_imports: ModuleGlobSet::empty(),
             replace_imports_with_any: ModuleGlobSet::empty(),

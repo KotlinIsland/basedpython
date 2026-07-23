@@ -177,14 +177,14 @@ impl std::fmt::Display for PlaceExprRef<'_> {
 
 /// ID that uniquely identifies a place inside a [`Scope`](super::FileScopeId).
 #[derive(
-    Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, get_size2::GetSize, salsa::Update,
+    Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, get_size2::GetSize, salsa::SalsaValue,
 )]
 pub enum ScopedPlaceId {
     Symbol(ScopedSymbolId),
     Member(ScopedMemberId),
 }
 
-#[derive(Debug, Eq, PartialEq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Eq, PartialEq, get_size2::GetSize)]
 pub struct PlaceTable {
     symbols: SymbolTable,
     members: MemberTable,
@@ -627,9 +627,19 @@ impl<'db, 'a> PossiblyNarrowedPlacesBuilder<'db, 'a> {
 
     fn expression_node(&self, expr: &ast::Expr) -> PossiblyNarrowedPlaces {
         match expr {
-            // Simple expressions that directly narrow a place
-            ast::Expr::Name(_) | ast::Expr::Attribute(_) | ast::Expr::Subscript(_) => {
-                self.simple_expr(expr)
+            // Simple expressions that directly narrow a place.
+            ast::Expr::Name(_) => self.simple_expr(expr),
+            // Attribute truthiness can also narrow its base (nominal tagged unions).
+            ast::Expr::Attribute(attribute) => {
+                let mut places = self.simple_expr(expr);
+                places.extend(self.simple_expr(&attribute.value));
+                places
+            }
+            // Subscript truthiness can also narrow its base (`TypedDict` tagged unions).
+            ast::Expr::Subscript(subscript) => {
+                let mut places = self.simple_expr(expr);
+                places.extend(self.simple_expr(&subscript.value));
+                places
             }
             // Compare expressions can narrow places on either side
             ast::Expr::Compare(expr_compare) => self.expr_compare(expr_compare),
@@ -713,10 +723,18 @@ impl<'db, 'a> PossiblyNarrowedPlacesBuilder<'db, 'a> {
 
         // Under the current narrowing semantics, we only ever use the first two positional
         // arguments: argument 0 for most narrowing calls, and argument 1 for unbound
-        // TypeGuard/TypeIs methods (e.g. `C.f(C(), x)`).
-        // This set is only a conservative upper bound, so if later positional arguments ever
-        // become narrowable we can widen this scan again.
-        for argument in expr_call.arguments.args.iter().take(2) {
+        // TypeGuard/TypeIs methods (e.g. `C.f(C(), x)`). TypeGuard and TypeIs calls can also
+        // narrow an explicit keyword argument. We don't know which keyword maps to the target
+        // parameter while building the semantic index, so include every explicit keyword here.
+        // This set is only a conservative upper bound.
+        for argument in expr_call.arguments.args.iter().take(2).chain(
+            expr_call
+                .arguments
+                .keywords
+                .iter()
+                .filter(|keyword| keyword.arg.is_some())
+                .map(|keyword| &keyword.value),
+        ) {
             if let Some(place_expr) = PlaceExpr::try_from_expr(argument) {
                 if let Some(place) = self.places.place_id((&place_expr).into()) {
                     places.insert(place);

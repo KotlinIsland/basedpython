@@ -46,6 +46,19 @@ reveal_type(Foo())  # revealed: Foo
 reveal_type(Foo(1))  # revealed: Foo
 ```
 
+## Class-based protocol constructors
+
+Constructing a class-based protocol through `type` must not count the implicit receiver in an arity
+diagnostic.
+
+```py
+from collections.abc import Hashable
+
+def construct(value: Hashable) -> None:
+    # error: [too-many-positional-arguments] "Too many positional arguments to `object.__init__`: expected 0, got 3"
+    type(value)(1970, 1, 1)
+```
+
 ## `__new__` present on the class itself
 
 ```py
@@ -269,6 +282,8 @@ reveal_type(Foo(1))  # revealed: Foo
 Marking it as a classmethod, on the other hand, breaks at runtime.
 
 ```py
+from typing_extensions import Self
+
 class Foo:
     @classmethod
     def __new__(cls, x: int):
@@ -277,6 +292,14 @@ class Foo:
 # error: [invalid-argument-type] "Argument to bound method `Foo.__new__` is incorrect: Expected `int`, found `<class 'Foo'>`"
 # error: [too-many-positional-arguments] "Too many positional arguments to bound method `Foo.__new__`: expected 1, got 2"
 Foo(1)
+
+class Bar:
+    @classmethod
+    def __new__(cls) -> Self:
+        raise NotImplementedError
+
+# error: [too-many-positional-arguments] "Too many positional arguments to bound method `Bar.__new__`: expected 0, got 1"
+reveal_type(Bar())  # revealed: Bar
 ```
 
 ## A callable instance in place of `__new__`

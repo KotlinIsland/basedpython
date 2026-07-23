@@ -302,20 +302,31 @@ class OperationalError(DatabaseError)
 class ProgrammingError(DatabaseError)
 class Warning(Exception)
 
+type _DataError = DataError
+type _DatabaseError = DatabaseError
+type _Error = Error
+type _IntegrityError = IntegrityError
+type _InterfaceError = InterfaceError
+type _InternalError = InternalError
+type _NotSupportedError = NotSupportedError
+type _OperationalError = OperationalError
+type _ProgrammingError = ProgrammingError
+type _Warning = Warning
+
 @disjoint_base
 class Connection:
     """SQLite database connection object."""
 
-    let DataError: type[DataError]
-    let DatabaseError: type[DatabaseError]
-    let Error: type[Error]
-    let IntegrityError: type[IntegrityError]
-    let InterfaceError: type[InterfaceError]
-    let InternalError: type[InternalError]
-    let NotSupportedError: type[NotSupportedError]
-    let OperationalError: type[OperationalError]
-    let ProgrammingError: type[ProgrammingError]
-    let Warning: type[Warning]
+    let DataError: type[_DataError]
+    let DatabaseError: type[_DatabaseError]
+    let Error: type[_Error]
+    let IntegrityError: type[_IntegrityError]
+    let InterfaceError: type[_InterfaceError]
+    let InternalError: type[_InternalError]
+    let NotSupportedError: type[_NotSupportedError]
+    let OperationalError: type[_OperationalError]
+    let ProgrammingError: type[_ProgrammingError]
+    let Warning: type[_Warning]
     let in_transaction: bool
     isolation_level: _IsolationLevel
     let total_changes: int

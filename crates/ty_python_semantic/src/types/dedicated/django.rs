@@ -32,7 +32,7 @@ pub(in crate::types) fn is_model(db: &dyn Db, class: StaticClassLiteral<'_>) -> 
 }
 
 /// `class` is a `django.db.models.Field` subclass (relation fields included)
-#[salsa::tracked(heap_size=ruff_memory_usage::heap_size)]
+#[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
 pub(in crate::types) fn is_field_class<'db>(
     db: &'db dyn Db,
     class: StaticClassLiteral<'db>,
@@ -41,7 +41,7 @@ pub(in crate::types) fn is_field_class<'db>(
 }
 
 /// `class` is a to-one relation field (`ForeignKey`, `OneToOneField`)
-#[salsa::tracked(heap_size=ruff_memory_usage::heap_size)]
+#[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
 pub(in crate::types) fn is_relation_field_class<'db>(
     db: &'db dyn Db,
     class: StaticClassLiteral<'db>,
@@ -134,7 +134,7 @@ fn model_target_instance<'db>(db: &'db dyn Db, to_arg: Type<'db>) -> Option<Type
     if !class.as_static().is_some_and(|class| is_model(db, class)) {
         return None;
     }
-    to_arg.to_instance(db)
+    to_arg.to_instance_approximation(db)
 }
 
 /// the first `name` declaration found on the mro, in mro order
@@ -251,7 +251,7 @@ pub(in crate::types) fn field_facts<'db>(
 }
 
 /// `class` declares `Meta.abstract = True` in its own body
-#[salsa::tracked(heap_size=ruff_memory_usage::heap_size)]
+#[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
 pub(in crate::types) fn is_abstract_model<'db>(
     db: &'db dyn Db,
     class: StaticClassLiteral<'db>,

@@ -468,7 +468,6 @@ ignore = ["D203", "D212"]
     All checks passed!
 
     ----- stderr -----
-    warning: No Python files found under the given path(s)
     ");
 
     Ok(())
@@ -3720,6 +3719,48 @@ def func(t: _T) -> _T:
     );
 }
 
+/// Test that `noqa` comments with rule codes
+/// 1. Get replaced with Ruff-specific suppression comments (RUF105)
+/// 2. Use human-readable rule names instead of codes (RUF106)
+#[test]
+fn noqa_comments_to_human_readable_ruff_ignores() -> Result<()> {
+    let fixture = CliTest::new()?;
+    let source = "# ruff: noqa: F401
+import os
+
+def foo():
+    value = 1  # noqa: F841
+";
+
+    assert_cmd_snapshot!(
+        fixture
+            .check_command()
+            .args([
+                "--select=F401,F841,RUF105,RUF106",
+                "--stdin-filename=test.py",
+                "--fix",
+                "--preview",
+                "-",
+            ])
+            .pass_stdin(source),
+        @"
+        success: true
+        exit_code: 0
+        ----- stdout -----
+        # ruff:file-ignore[unused-import]
+        import os
+
+        def foo():
+            value = 1  # ruff:ignore[unused-variable]
+
+        ----- stderr -----
+        Found 4 errors (4 fixed, 0 remaining).
+        ",
+    );
+
+    Ok(())
+}
+
 /// Test that we do not rename two different type parameters to the same name
 /// in one execution of Ruff (autofixing this to `class Foo[T, T]: ...` would
 /// introduce invalid syntax)
@@ -5148,5 +5189,44 @@ fn preview_default_rules() -> Result<()> {
     ]
     ",
     );
+    Ok(())
+}
+
+#[test]
+fn ruff_toml_is_linted() -> Result<()> {
+    let test = CliTest::with_file("ruff.toml", r#"lint.select = ["F401"]"#)?;
+
+    assert_cmd_snapshot!(
+        test.command().args([
+            "check",
+            "--no-cache",
+            "--isolated",
+            "--preview",
+            "--select",
+            "RUF201",
+        ]),
+        @r#"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    rule-codes-in-selectors: [*] Rule code used instead of name in `lint.select`
+     --> ruff.toml:1:17
+      |
+    1 | lint.select = ["F401"]
+      |                 ^^^^
+      |
+    help: Replace rule code with `unused-import`
+      |
+      - lint.select = ["F401"]
+    1 + lint.select = ["unused-import"]
+      |
+
+    Found 1 error.
+    [*] 1 fixable with the `--fix` option.
+
+    ----- stderr -----
+    "#,
+    );
+
     Ok(())
 }

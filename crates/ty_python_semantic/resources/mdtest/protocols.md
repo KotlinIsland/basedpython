@@ -432,7 +432,7 @@ And as a corollary, `type[MyProtocol]` can also be called:
 
 ```py
 def f(x: type[MyProtocol]):
-    reveal_type(x())  # revealed: @Todo(type[T] for protocols)
+    reveal_type(x())  # revealed: MyProtocol
 ```
 
 ## Members of a protocol
@@ -898,8 +898,8 @@ class ExplicitSubclass(HasXWithDefault): ...
 reveal_type(ExplicitSubclass.x)  # revealed: int
 
 def f(arg: HasXWithDefault):
-    # TODO: should emit `[unresolved-reference]` and reveal `Unknown`
-    reveal_type(type(arg).x)  # revealed: int
+    # `arg` may be an implicit subtype that does not define `x` on its class object.
+    type(arg).x  # error: [unresolved-attribute]
 ```
 
 Assignments in a class body of a protocol -- of any kind -- are not permitted by ty unless the
@@ -1683,6 +1683,86 @@ static_assert(is_assignable_to(AliasedNeverLength, HasLengthTwo))
 static_assert(not is_disjoint_from(AliasedNeverLength, HasLengthTwo))
 ```
 
+For overloaded methods, every possible return type on one side must be disjoint from every possible
+return type on the other. A `Never` return in either overload set prevents the method from
+establishing disjointness.
+
+```py
+from typing import Literal, Protocol, overload
+from typing_extensions import Never
+from ty_extensions import static_assert
+from ty_extensions._internal import is_disjoint_from
+
+class ReturnsOneOrTwo(Protocol):
+    @overload
+    def value(self, flag: Literal[True], /) -> Literal[1]: ...
+    @overload
+    def value(self, flag: Literal[False], /) -> Literal[2]: ...
+
+class ReturnsThreeOrFour:
+    @overload
+    def value(self, flag: Literal[True], /) -> Literal[3]: ...
+    @overload
+    def value(self, flag: Literal[False], /) -> Literal[4]: ...
+    def value(self, flag: bool, /) -> Literal[3, 4]:
+        return 3 if flag else 4
+
+class ReturnsTwoOrThree:
+    @overload
+    def value(self, flag: Literal[True], /) -> Literal[2]: ...
+    @overload
+    def value(self, flag: Literal[False], /) -> Literal[3]: ...
+    def value(self, flag: bool, /) -> Literal[2, 3]:
+        return 2 if flag else 3
+
+static_assert(is_disjoint_from(ReturnsOneOrTwo, ReturnsThreeOrFour))
+static_assert(not is_disjoint_from(ReturnsOneOrTwo, ReturnsTwoOrThree))
+
+class ReturnsOneOrNever(Protocol):
+    @overload
+    def value(self, flag: Literal[True], /) -> Literal[1]: ...
+    @overload
+    def value(self, flag: Literal[False], /) -> Never: ...
+
+class ReturnsThreeOrNever:
+    @overload
+    def value(self, flag: Literal[True], /) -> Literal[3]: ...
+    @overload
+    def value(self, flag: Literal[False], /) -> Never: ...
+    def value(self, flag: bool, /) -> Literal[3]:
+        return 3
+
+static_assert(not is_disjoint_from(ReturnsOneOrNever, ReturnsThreeOrFour))
+static_assert(not is_disjoint_from(ReturnsOneOrTwo, ReturnsThreeOrNever))
+
+type BottomReturn = Never
+
+class ReturnsThreeOrBottom:
+    @overload
+    def value(self, flag: Literal[True], /) -> Literal[3]: ...
+    @overload
+    def value(self, flag: Literal[False], /) -> BottomReturn: ...
+    def value(self, flag: bool, /) -> Literal[3]:
+        return 3
+
+static_assert(not is_disjoint_from(ReturnsOneOrTwo, ReturnsThreeOrBottom))
+
+class ReceiverFiltered[T]:
+    payload: T
+
+    @overload
+    def value(self: "ReceiverFiltered[bytes]", flag: bool, /) -> bytes: ...
+    @overload
+    def value(self: "ReceiverFiltered[str]", flag: bool, /) -> str: ...
+    def value(self, flag: bool, /) -> str | bytes:
+        return ""
+
+def empty_overloads(receiver: ReceiverFiltered[int]) -> None:
+    reveal_type(receiver.value)  # revealed: Overload[]
+
+static_assert(not is_disjoint_from(ReturnsOneOrTwo, ReceiverFiltered[int]))
+```
+
 ## Intersections of protocols with types that have possibly unbound attributes
 
 Note that if a `@final` class has a possibly unbound attribute corresponding to the protocol member,
@@ -1834,7 +1914,7 @@ the non-callable attribute must be readable with the same type through both an i
 `classvars.py`:
 
 ```py
-from typing import ClassVar, Protocol
+from typing import Any, ClassVar, Protocol
 from ty_extensions import static_assert
 from ty_extensions._internal import is_subtype_of, is_assignable_to
 
@@ -1866,6 +1946,36 @@ class ClassVarX:
 
 static_assert(is_assignable_to(ClassVarX, ClassVarXProto))
 static_assert(is_subtype_of(ClassVarX, ClassVarXProto))
+
+class XMeta(type):
+    def x(cls) -> str:
+        return ""
+
+class ClassVarXWithConflictingMetaclass(metaclass=XMeta):
+    x: ClassVar[int] = 42
+
+static_assert(is_assignable_to(ClassVarXWithConflictingMetaclass, ClassVarXProto))
+static_assert(is_subtype_of(ClassVarXWithConflictingMetaclass, ClassVarXProto))
+
+class GenericMeta(type):
+    x: list[Any] = []
+
+class ClassVarXWithGenericMetaclass(metaclass=GenericMeta):
+    x: ClassVar[int] = 42
+
+static_assert(is_assignable_to(ClassVarXWithGenericMetaclass, ClassVarXProto))
+static_assert(is_subtype_of(ClassVarXWithGenericMetaclass, ClassVarXProto))
+
+# A class-level attribute shadows a non-data descriptor on the metaclass. In particular,
+# `NotHashable.__hash__` takes precedence over the non-data `type.__hash__` descriptor.
+class NotHashableProto(Protocol):
+    __hash__: ClassVar[None]
+
+class NotHashable:
+    __hash__: ClassVar[None] = None
+
+static_assert(is_assignable_to(NotHashable, NotHashableProto))
+static_assert(is_subtype_of(NotHashable, NotHashableProto))
 ```
 
 This is mentioned by the
@@ -2126,6 +2236,66 @@ int_value: JustInt = 1
 bool_value: JustInt = True  # error: [invalid-assignment]
 ```
 
+Explicitly specializing a protocol that directly declares a `__class__` write type of `type[T]` for
+one of its type parameters does not apply the `int`/`float` special case to its type arguments. This
+allows such protocols to distinguish an actual `float` from an `int`. This is a narrowly-focused
+special case to better support the `Just` type in pandas-stubs:
+
+```py
+from typing import Generic, TypeVar
+from typing_extensions import Self
+
+JustT = TypeVar("JustT")
+JustT_co = TypeVar("JustT_co", covariant=True)
+
+class Just(Protocol, Generic[JustT]):
+    @property
+    def __class__(self, /) -> type[JustT]: ...
+    @__class__.setter
+    def __class__(self, value: type[JustT], /) -> None: ...
+
+def takes_just_int(value: Just[int]) -> None: ...
+def takes_just_float(value: Just[float]) -> None: ...
+def takes_just_union(value: Just[int | float]) -> None: ...
+
+takes_just_int(1)
+takes_just_int(True)  # error: [invalid-argument-type]
+takes_just_int(1.0)  # error: [invalid-argument-type]
+
+takes_just_float(1.0)
+takes_just_float(1)  # error: [invalid-argument-type]
+takes_just_float(True)  # error: [invalid-argument-type]
+
+# An explicit union remains a union; disabling the special case must not erase its `int` member.
+takes_just_union(1)  # error: [invalid-argument-type]
+takes_just_union(1.0)  # error: [invalid-argument-type]
+
+class Timestamp:
+    def __mul__(self, other: Just[float], /) -> Self:
+        return self
+
+reveal_type(Timestamp() * 1.0)  # revealed: Timestamp
+
+class ReadClass(Protocol[JustT_co]):
+    @property
+    def __class__(self, /) -> type[JustT_co]: ...
+
+def takes_read_class(value: ReadClass[float]) -> None:
+    reveal_type(value)  # revealed: ReadClass[int | float]
+
+takes_read_class(1)
+takes_read_class(1.0)
+
+class WritableValue(Protocol[JustT]):
+    @property
+    def value(self) -> type[JustT]: ...
+    @value.setter
+    def value(self, value: type[JustT], /) -> None: ...
+
+def takes_writable_value(value: WritableValue[float]) -> None:
+    reveal_type(value)  # revealed: WritableValue[int | float]
+```
+
 A read/write property on a protocol, where the setter accepts a subtype of the type returned by the
 getter, can be satisfied by a mutable attribute of any type bounded by the upper bound of the
 getter-returned type and the lower bound of the setter-accepted type.
@@ -2338,10 +2508,103 @@ class HasSetAttrWithUnsuitableInput:
 
 static_assert(not is_subtype_of(HasSetAttrWithUnsuitableInput, HasMutableXProperty))
 static_assert(not is_assignable_to(HasSetAttrWithUnsuitableInput, HasMutableXProperty))
+```
 
-# For static checking, an explicit attribute declaration takes precedence over `__setattr__`.
-# This matches other type checkers and likely user intent, even though a custom `__setattr__`
-# intercepts every assignment at runtime.
+A class object should also satisfy a writable property protocol using `__getattr__` and
+`__setattr__` on its metaclass:
+
+```py
+class MetaWithGetAttrAndSetAttr(type):
+    def __getattr__(cls, attr: str) -> int:
+        return 1
+
+    def __setattr__(cls, attr: str, value: int) -> None: ...
+
+class ClassWithDynamicX(metaclass=MetaWithGetAttrAndSetAttr): ...
+
+ClassWithDynamicX.x = 1
+# TODO: this should pass once metaclass setters are considered for protocol writes.
+dynamic_x: HasMutableXProperty = ClassWithDynamicX  # error: [invalid-assignment]
+```
+
+Once metaclass setters are considered, one with an incompatible value type must still be rejected:
+
+```py
+class MetaWithUnsuitableSetAttr(type):
+    def __getattr__(cls, attr: str) -> int:
+        return 1
+
+    def __setattr__(cls, attr: str, value: str) -> None: ...
+
+class ClassWithUnsuitableSetAttr(metaclass=MetaWithUnsuitableSetAttr): ...
+
+unsuitable_x: HasMutableXProperty = ClassWithUnsuitableSetAttr  # error: [invalid-assignment]
+```
+
+A terminal metaclass setter should prevent a class object from satisfying a writable property
+protocol even when the attribute is declared:
+
+```py
+class MetaWithTerminalSetAttr(type):
+    def __setattr__(cls, attr: str, value: int) -> Never:
+        raise AttributeError("immutable")
+
+class ClassWithTerminalSetAttr(metaclass=MetaWithTerminalSetAttr):
+    x: int = 1
+
+# TODO: terminal setters should prevent all writes.
+terminal_x: HasMutableXProperty = ClassWithTerminalSetAttr
+```
+
+Once metaclass setters are considered, an overload for a different attribute must not make the class
+satisfy the protocol:
+
+```py
+from typing import Literal
+from ty_extensions._internal import TypeOf
+
+class MetaWithOverloadedSetAttr(type):
+    def __getattr__(cls, attr: str) -> int:
+        return 1
+
+    @overload
+    def __setattr__(cls, attr: Literal["x"], value: Any) -> None: ...
+    @overload
+    def __setattr__(cls, attr: Literal["y"], value: int) -> None: ...
+    # error: [invalid-method-override]
+    def __setattr__(cls, attr: str, value: object) -> None: ...
+
+class ClassWithOverloadedSetAttr(metaclass=MetaWithOverloadedSetAttr): ...
+
+ClassWithOverloadedSetAttr.x = 1
+static_assert(not is_subtype_of(TypeOf[ClassWithOverloadedSetAttr], HasMutableXProperty))
+```
+
+A generic metaclass setter can satisfy a writable property protocol:
+
+```py
+from typing import TypeVar
+
+T = TypeVar("T")
+
+class MetaWithGenericSetAttr(type):
+    def __getattr__(cls, attr: str) -> int:
+        return 1
+
+    def __setattr__(cls, attr: str, value: T) -> None: ...
+
+class ClassWithGenericSetAttr(metaclass=MetaWithGenericSetAttr): ...
+
+ClassWithGenericSetAttr.x = 1
+# TODO: this should pass once metaclass setters are considered for protocol writes.
+generic_x: HasMutableXProperty = ClassWithGenericSetAttr  # error: [invalid-assignment]
+```
+
+For static checking, an explicit attribute declaration takes precedence over `__setattr__`. This
+matches other type checkers and likely user intent, even though a custom `__setattr__` intercepts
+every assignment at runtime:
+
+```py
 class ExplicitXWithBroadSetAttr:
     x: int
 
@@ -2442,6 +2705,820 @@ static_assert(is_subtype_of(PropertyWithSelfSetter, HasConcretePropertySetter))
 static_assert(is_assignable_to(PropertyWithSelfSetter, HasConcretePropertySetter))
 ```
 
+## Protocol members defined using descriptor decorators
+
+### Descriptor reads and writes
+
+On an instance, a protocol member defined using a descriptor decorator has the type returned by
+`__get__`, not the type of the descriptor stored on the protocol class. If the descriptor defines
+`__set__`, its value parameter determines which assignments are valid:
+
+```py
+from typing import Protocol
+
+class StringDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> str:
+        return "example"
+
+    def __set__(self, instance: object, value: str) -> None: ...
+
+class HasName(Protocol):
+    @StringDescriptor
+    def name(self) -> object: ...
+
+class WithName:
+    name: str = "example"
+
+has_name: HasName = WithName()
+reveal_type(has_name.name)  # revealed: str
+has_name.name = "updated"
+has_name.name = 1  # error: [invalid-assignment]
+```
+
+### `cached_property`
+
+The standard-library `cached_property` descriptor uses the same behavior:
+
+```py
+from functools import cached_property
+from typing import Protocol
+
+class HasCachedName(Protocol):
+    @cached_property
+    def name(self) -> str: ...
+
+class WithCachedName:
+    @cached_property
+    def name(self) -> str:
+        return "example"
+
+has_name: HasCachedName = WithCachedName()
+```
+
+### Generic descriptor result types
+
+Applying a generic descriptor decorator to a generic protocol method currently loses the protocol's
+type variable and produces `cached_property[Unknown]`. The protocol must preserve that descriptor
+type instead of reducing it to a bare `Unknown`, which would allow an incompatible implementation.
+
+```py
+from functools import cached_property
+from typing import Protocol, TypeVar
+from ty_extensions import static_assert
+from ty_extensions._internal import is_assignable_to, reveal_protocol_interface
+
+T = TypeVar("T")
+
+class HasValue(Protocol[T]):
+    @cached_property
+    def value(self) -> T: ...
+
+class StrValue:
+    @cached_property
+    def value(self) -> str:
+        return "value"
+
+static_assert(not is_assignable_to(StrValue, HasValue[int]))
+
+# TODO: This should be a property with an `int` read type once decorator calls preserve enclosing
+# type variables.
+# revealed: {"value": AttributeMember(`cached_property[Unknown]`)}
+reveal_protocol_interface(HasValue[int])
+```
+
+### Descriptor values in annotations
+
+Only a descriptor produced by decorating a protocol method changes how that member is read and
+written through an instance. An annotation whose type implements the descriptor protocol still
+declares an ordinary attribute whose protocol member type is the descriptor object. We reveal the
+protocol interface here because ordinary instance access would invoke `cached_property.__get__` and
+reveal `str` in both cases:
+
+```py
+from functools import cached_property
+from typing import Protocol
+from ty_extensions._internal import reveal_protocol_interface
+
+class StoresDescriptor(Protocol):
+    name: cached_property[str]
+
+# revealed: {"name": AttributeMember(`cached_property[str]`)}
+reveal_protocol_interface(StoresDescriptor)
+```
+
+### Overloaded setters selected by receiver type
+
+An overloaded `__set__` method can accept different values for different receiver types. For
+`HasValue`, the overloads with an `object` receiver accept `int` and `bytes`; the overload for
+`Other` does not apply. Therefore, assignments of `int` and `bytes` are valid, but assignments of
+`str` are not.
+
+```py
+from typing import Protocol, final, overload
+
+@final
+class Other: ...
+
+class ReceiverSensitiveDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        raise NotImplementedError
+
+    @overload
+    def __set__(self, instance: object, value: int) -> None: ...
+    @overload
+    def __set__(self, instance: object, value: bytes) -> None: ...
+    @overload
+    def __set__(self, instance: Other, value: str) -> None: ...
+    def __set__(self, instance: object, value: int | bytes | str) -> None: ...
+
+class HasValue(Protocol):
+    @ReceiverSensitiveDescriptor
+    def value(self) -> int: ...
+
+class ReadOnlyValue:
+    @property
+    def value(self) -> int:
+        return 1
+
+read_only: HasValue = ReadOnlyValue()  # error: [invalid-assignment]
+
+def update_value(value: HasValue) -> None:
+    value.value = 1
+    value.value = b"valid"
+    value.value = "bad"  # error: [invalid-assignment]
+```
+
+### Descriptor setters on union protocol receivers
+
+When assigning through a union of protocols, each descriptor setter is called with its matching
+union element as the receiver. The other elements of the union do not participate in that call. The
+`a_only` and `b_only` methods keep the two protocol types distinct.
+
+```py
+from __future__ import annotations
+
+from typing import Protocol
+
+class ADescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 1
+
+    def __set__(self, instance: A, value: int) -> None: ...
+
+class BDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 1
+
+    def __set__(self, instance: B, value: int) -> None: ...
+
+class A(Protocol):
+    @ADescriptor
+    def value(self) -> int: ...
+    def a_only(self) -> None: ...
+
+class B(Protocol):
+    @BDescriptor
+    def value(self) -> int: ...
+    def b_only(self) -> None: ...
+
+def update_union_value(value: A | B) -> None:
+    value.value = 1
+```
+
+### Static, class, and callable setters
+
+The examples below use the same property implementations to check both assignment and protocol
+compatibility:
+
+```py
+from typing import Protocol
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+class IntPropertySetter:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    def value(self, new_value: int) -> None: ...
+
+class StrPropertySetter:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    def value(self, new_value: str) -> None: ...
+```
+
+A static `__set__` method receives the instance and assigned value directly:
+
+```py
+class StaticSetterDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 1
+
+    @staticmethod
+    def __set__(instance: object, value: int) -> None: ...
+
+class HasStaticSetter(Protocol):
+    @StaticSetterDescriptor
+    def value(self) -> int: ...
+
+static_assert(is_subtype_of(IntPropertySetter, HasStaticSetter))
+static_assert(not is_subtype_of(StrPropertySetter, HasStaticSetter))
+
+def update_static_setter(value: HasStaticSetter) -> None:
+    value.value = 1
+    value.value = "bad"  # error: [invalid-assignment]
+```
+
+A class `__set__` method also receives the descriptor class implicitly:
+
+```py
+class ClassSetterDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 1
+
+    @classmethod
+    def __set__(cls, instance: object, value: int) -> None: ...
+
+class HasClassSetter(Protocol):
+    @ClassSetterDescriptor
+    def value(self) -> int: ...
+
+static_assert(is_subtype_of(IntPropertySetter, HasClassSetter))
+static_assert(not is_subtype_of(StrPropertySetter, HasClassSetter))
+
+def update_class_setter(value: HasClassSetter) -> None:
+    value.value = 1
+    value.value = "bad"  # error: [invalid-assignment]
+```
+
+An object stored in `__set__` is called with the instance and assigned value:
+
+```py
+class IntSetterCallable:
+    def __call__(self, instance: object, value: int) -> None: ...
+
+class CallableSetterDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 1
+
+    __set__ = IntSetterCallable()
+
+class HasCallableSetter(Protocol):
+    @CallableSetterDescriptor
+    def value(self) -> int: ...
+
+static_assert(is_subtype_of(IntPropertySetter, HasCallableSetter))
+static_assert(not is_subtype_of(StrPropertySetter, HasCallableSetter))
+
+def update_callable_setter(value: HasCallableSetter) -> None:
+    value.value = 1
+    value.value = "bad"  # error: [invalid-assignment]
+```
+
+### Union descriptor types
+
+If a decorator can return either of two descriptors, an assignment must be accepted by both possible
+descriptors. Here, only `str` is accepted by both, so an `int` assignment is invalid even though one
+of the descriptors accepts it.
+
+```py
+from typing import Generic, Protocol, TypeVar
+
+T = TypeVar("T")
+
+class Descriptor(Generic[T]):
+    def __get__(self, instance: object, owner: type | None = None) -> T:
+        raise NotImplementedError
+
+    def __set__(self, instance: object, value: T) -> None: ...
+
+def either_descriptor(getter: object) -> Descriptor[int | str] | Descriptor[str | bytes]:
+    raise NotImplementedError
+
+class HasEitherValue(Protocol):
+    @either_descriptor
+    def either_value(self) -> object: ...
+
+def update_either_value(value: HasEitherValue) -> None:
+    value.either_value = "valid"
+    value.either_value = 1  # error: [invalid-assignment]
+```
+
+### Aliased union descriptor types
+
+Top-level PEP 695 aliases do not change which assignments a descriptor union accepts. As with the
+unaliased form above, only `str` is accepted by both possible descriptors. The alias also does not
+make the protocol member read-only.
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Generic, Protocol, TypeVar
+
+T = TypeVar("T")
+
+class Descriptor(Generic[T]):
+    def __get__(self, instance: object, owner: type | None = None) -> T:
+        raise NotImplementedError
+
+    def __set__(self, instance: object, value: T) -> None: ...
+
+type DescriptorAlias = Descriptor[int | str] | Descriptor[str | bytes]
+
+def aliased_descriptor(getter: object) -> DescriptorAlias:
+    raise NotImplementedError
+
+class HasAliasedValue(Protocol):
+    @aliased_descriptor
+    def value(self) -> object: ...
+
+class ReadOnlyAliasedValue:
+    @property
+    def value(self) -> object:
+        return "value"
+
+read_only: HasAliasedValue = ReadOnlyAliasedValue()  # error: [invalid-assignment]
+
+def update_aliased_value(value: HasAliasedValue) -> None:
+    value.value = "valid"
+    value.value = 1  # error: [invalid-assignment]
+```
+
+### Large unions of descriptor types
+
+A value assigned through the protocol must be accepted by every possible descriptor. Here, `AX` is
+accepted by both descriptors, while `A` is accepted only by the first. Because the protocol member
+is writable, a read-only property cannot implement it.
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Generic, Protocol, TypeVar
+
+T = TypeVar("T")
+
+class A: ...
+class B: ...
+class C: ...
+class X: ...
+class Y: ...
+class Z: ...
+class AX(A, X): ...
+
+class Descriptor(Generic[T]):
+    def __get__(self, instance: object, owner: type | None = None) -> object:
+        raise NotImplementedError
+
+    def __set__(self, instance: object, value: T) -> None: ...
+
+def large_union_descriptor(
+    getter: object,
+) -> Descriptor[A | B | C] | Descriptor[X | Y | Z]:
+    raise NotImplementedError
+
+class HasLargeUnionValue(Protocol):
+    @large_union_descriptor
+    def value(self) -> object: ...
+
+class ReadOnlyLargeUnionValue:
+    @property
+    def value(self) -> object:
+        return "value"
+
+read_only: HasLargeUnionValue = ReadOnlyLargeUnionValue()  # error: [invalid-assignment]
+
+def update_large_union_value(
+    value: HasLargeUnionValue,
+    valid: AX,
+    invalid: A,
+) -> None:
+    value.value = valid
+    value.value = invalid  # error: [invalid-assignment]
+```
+
+### Overloaded setters selected by descriptor type
+
+An overload can also restrict the type of the descriptor itself. The decorator below returns
+`SelfSensitiveDescriptor[int]`, so only the overload accepting an `int` value applies.
+
+```py
+from __future__ import annotations
+
+from typing import Generic, Protocol, TypeVar, overload
+
+T = TypeVar("T")
+
+class SelfSensitiveDescriptor(Generic[T]):
+    def __get__(self, instance: object, owner: type | None = None) -> T:
+        raise NotImplementedError
+
+    @overload
+    def __set__(self: SelfSensitiveDescriptor[int], instance: object, value: int) -> None: ...
+    @overload
+    def __set__(self: SelfSensitiveDescriptor[str], instance: object, value: str) -> None: ...
+    def __set__(self, instance: object, value: int | str) -> None: ...
+
+def int_descriptor(getter: object) -> SelfSensitiveDescriptor[int]:
+    raise NotImplementedError
+
+class HasIntValue(Protocol):
+    @int_descriptor
+    def int_value(self) -> int: ...
+
+def update_int_value(value: HasIntValue) -> None:
+    value.int_value = 1
+    value.int_value = "bad"  # error: [invalid-assignment]
+```
+
+### Generic setter value types
+
+A setter that uses a method type variable directly as its value parameter accepts every value
+allowed by that type variable's upper bound. The setter below therefore accepts `int` values.
+
+```py
+from typing import Protocol, TypeVar
+
+T = TypeVar("T", bound=int)
+
+class BoundedDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 1
+
+    def __set__(self, instance: object, value: T) -> None: ...
+
+def bounded_descriptor(getter: object) -> BoundedDescriptor:
+    raise NotImplementedError
+
+class HasBoundedValue(Protocol):
+    @bounded_descriptor
+    def bounded_value(self) -> int: ...
+
+def update_bounded_value(value: HasBoundedValue) -> None:
+    value.bounded_value = 1
+    value.bounded_value = "bad"  # error: [invalid-assignment]
+```
+
+### Type variables from the surrounding function
+
+A type variable supplied by the surrounding function is still the descriptor's value type. Assigning
+a value of that type is valid.
+
+```py
+from typing import Generic, Protocol, TypeVar
+
+T = TypeVar("T")
+U = TypeVar("U")
+
+class Descriptor(Generic[T]):
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> T:
+        raise NotImplementedError
+
+    def __set__(self, instance: object, value: T) -> None: ...
+
+class HasGenericValue(Protocol[T]):
+    @Descriptor[T]
+    def value(self) -> T: ...
+
+def update_generic_value(value: HasGenericValue[U], new_value: U) -> None:
+    value.value = new_value
+```
+
+### Setter type variables inside aliases
+
+A type alias does not hide that `T` belongs to `__set__`. The descriptor below still accepts `int`,
+so it remains writable with `int` but not with `str`.
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Never, Protocol
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+type Alias[T] = T
+
+class AliasedReceiverDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 1
+
+    def __set__[T](self, instance: Alias[T], value: int) -> None: ...
+
+class HasAliasedReceiver(Protocol):
+    @AliasedReceiverDescriptor
+    def value(self) -> int: ...
+```
+
+A property setter that accepts only `Never` cannot implement this protocol member:
+
+```py
+class NeverPropertySetter:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    def value(self, new_value: Never) -> None: ...
+
+static_assert(not is_subtype_of(NeverPropertySetter, HasAliasedReceiver))
+```
+
+Assignments through the protocol accept `int` but reject `str`:
+
+```py
+def update_aliased_receiver(value: HasAliasedReceiver) -> None:
+    value.value = 1
+    value.value = "bad"  # error: [invalid-assignment]
+```
+
+### Constrained generic setters
+
+A setter with a constrained type variable must choose one constraint for each call. It accepts `int`
+and `str` separately, but not a value whose type is `int | str`.
+
+```py
+from typing import Protocol, TypeVar
+
+T = TypeVar("T", int, str)
+
+class ConstrainedDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> int | str:
+        raise NotImplementedError
+
+    def __set__(self, instance: object, value: T) -> None: ...
+
+def constrained_descriptor(getter: object) -> ConstrainedDescriptor:
+    raise NotImplementedError
+
+class HasConstrainedValue(Protocol):
+    @constrained_descriptor
+    def constrained_value(self) -> int | str: ...
+```
+
+The setter is still present, so a read-only property cannot implement the protocol:
+
+```py
+class ReadOnlyConstrainedValue:
+    @property
+    def constrained_value(self) -> int | str:
+        return "value"
+
+read_only: HasConstrainedValue = ReadOnlyConstrainedValue()  # error: [invalid-assignment]
+```
+
+Literal values select one constraint, while a union of the constraints does not:
+
+```py
+def update_constrained_value(value: HasConstrainedValue, new_value: int | str) -> None:
+    value.constrained_value = 1
+    value.constrained_value = "valid"
+    value.constrained_value = new_value  # error: [invalid-assignment]
+```
+
+### Setters that accept `Never`
+
+A `Never` value cannot normally exist, but a `__set__` parameter of type `Never` still makes the
+protocol member writable. A read-only property therefore cannot implement it.
+
+```py
+from typing import Protocol
+from typing_extensions import Never
+
+class NeverDescriptor:
+    def __get__(self, instance: object, owner: type | None = None) -> object:
+        raise NotImplementedError
+
+    def __set__(self, instance: object, value: Never) -> None: ...
+
+def never_descriptor(getter: object) -> NeverDescriptor:
+    raise NotImplementedError
+
+class HasNeverValue(Protocol):
+    @never_descriptor
+    def never_value(self) -> object: ...
+
+class ReadOnlyNeverValue:
+    @property
+    def never_value(self) -> object:
+        return "value"
+
+read_only: HasNeverValue = ReadOnlyNeverValue()  # error: [invalid-assignment]
+```
+
+If the assigned expression itself has type `Never`, the assignment is valid:
+
+```py
+def update_never_value(value: HasNeverValue, new_value: Never) -> None:
+    value.never_value = new_value
+```
+
+### Optional parameters after the setter value
+
+Attribute assignment calls `__set__` with the instance and assigned value. Any later parameters can
+be present if they can all be omitted.
+
+```py
+from typing import Protocol
+
+class OptionalTrailingDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        raise NotImplementedError
+
+    def __set__(
+        self,
+        instance: object,
+        value: int,
+        notify: bool = False,
+        *metadata: str,
+        log: bool = False,
+        **named_metadata: str,
+    ) -> None: ...
+
+class HasOptionalTrailingValue(Protocol):
+    @OptionalTrailingDescriptor
+    def value(self) -> int: ...
+
+def update_optional_trailing_value(value: HasOptionalTrailingValue) -> None:
+    value.value = 1
+    value.value = "bad"  # error: [invalid-assignment]
+```
+
+### Gradual variadic tails after the setter value
+
+A `*args: Any, **kwargs: Any` tail can also be omitted. It does not make the protocol member
+read-only or change the `int` value accepted by the setter.
+
+```py
+from typing import Any, Protocol
+
+class GradualTrailingDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        raise NotImplementedError
+
+    def __set__(self, instance: object, value: int, *args: Any, **kwargs: Any) -> None: ...
+
+class HasGradualTrailingValue(Protocol):
+    @GradualTrailingDescriptor
+    def value(self) -> int: ...
+
+class ReadOnlyGradualTrailingValue:
+    @property
+    def value(self) -> int:
+        return 1
+
+read_only: HasGradualTrailingValue = ReadOnlyGradualTrailingValue()  # error: [invalid-assignment]
+
+def update_gradual_trailing_value(value: HasGradualTrailingValue) -> None:
+    value.value = 1
+    value.value = "bad"  # error: [invalid-assignment]
+```
+
+### Required parameters after the setter value
+
+If `__set__` requires another parameter after the assigned value, attribute assignment cannot call
+it because that argument is missing.
+
+```py
+from typing import Protocol
+
+class RequiredTrailingDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        raise NotImplementedError
+
+    def __set__(self, instance: object, value: int, required: bool) -> None: ...
+
+class HasRequiredTrailingValue(Protocol):
+    @RequiredTrailingDescriptor
+    def value(self) -> int: ...
+
+def update_required_trailing_value(value: HasRequiredTrailingValue) -> None:
+    value.value = 1  # error: [invalid-assignment]
+```
+
+### Setter values captured by `*args`
+
+When `__set__` declares `(instance, *values: int)`, attribute assignment supplies the value as the
+first element of `values`. The descriptor therefore accepts `int` but not `str`.
+
+```py
+from typing import Protocol
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+class VariadicValueDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 1
+
+    def __set__(self, instance: object, *values: int) -> None: ...
+
+class HasVariadicValue(Protocol):
+    @VariadicValueDescriptor
+    def value(self) -> int: ...
+```
+
+A property setter restricted to `str` cannot implement this protocol member:
+
+```py
+class StrPropertySetter:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    def value(self, new_value: str) -> None: ...
+
+static_assert(not is_subtype_of(StrPropertySetter, HasVariadicValue))
+```
+
+Assignments through the protocol follow the `int` annotation on `*values`:
+
+```py
+def update_variadic_value(value: HasVariadicValue) -> None:
+    value.value = 1
+    value.value = "bad"  # error: [invalid-assignment]
+```
+
+### Gradually typed setter signatures
+
+When `__set__` is `Callable[..., None]`, ty cannot determine which values it accepts. Assignment is
+allowed, but a property setter limited to `int` is not guaranteed to implement the same member.
+
+```py
+from typing import Any, Callable, Protocol
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+class IntPropertySetter:
+    @property
+    def value(self) -> int:
+        return 1
+
+    @value.setter
+    def value(self, new_value: int) -> None: ...
+
+class CallableSetterDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 1
+
+    __set__: Callable[..., None]
+
+class HasCallableSetter(Protocol):
+    @CallableSetterDescriptor
+    def value(self) -> int: ...
+
+static_assert(not is_subtype_of(IntPropertySetter, HasCallableSetter))
+
+def update_callable_setter(value: HasCallableSetter) -> None:
+    value.value = object()
+```
+
+The same applies when the type of `__set__` is `Any`:
+
+```py
+class AnySetterDescriptor:
+    def __init__(self, getter: object) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None) -> int:
+        return 1
+
+    __set__: Any
+
+class HasAnySetter(Protocol):
+    @AnySetterDescriptor
+    def value(self) -> int: ...
+
+static_assert(not is_subtype_of(IntPropertySetter, HasAnySetter))
+
+def update_any_setter(value: HasAnySetter) -> None:
+    value.value = object()
+```
+
 ## Variance of generic protocols with `Final` members
 
 A `Final` attribute is readable but not writable, so it constrains an inferred type parameter
@@ -2480,6 +3557,14 @@ from ty_extensions._internal import is_subtype_of, is_assignable_to
 
 class P(Protocol):
     def m(self, x: int, /) -> None: ...
+
+class PWithClassMethod(Protocol):
+    @classmethod
+    def m(cls, x: int, /) -> None: ...
+
+class PWithStaticMethod(Protocol):
+    @staticmethod
+    def m(x: int, /) -> None: ...
 
 class NominalSubtype:
     def m(self, y: int) -> None: ...
@@ -2521,6 +3606,8 @@ static_assert(is_assignable_to(NominalWithClassMethod, P))
 static_assert(is_assignable_to(NominalWithStaticMethodGood, P))
 static_assert(is_assignable_to(NominalSubtype | NominalWithClassMethod, P))
 static_assert(is_assignable_to(NominalSubtype | NominalWithStaticMethodGood, P))
+static_assert(is_subtype_of(PWithClassMethod, P))
+static_assert(is_subtype_of(PWithStaticMethod, P))
 
 # This staticmethod has an extra parameter when accessed on an instance.
 static_assert(not is_assignable_to(NominalWithStaticMethod, P))
@@ -2550,14 +3637,14 @@ static_assert(not is_assignable_to(Foo, SupportsFooMethod))
 static_assert(is_assignable_to(Foo, SupportsFooAttr))
 ```
 
-The reason for this is that some methods, such as dunder methods, are always looked up on the class
-directly. If a class with an `__iter__` instance attribute satisfied the `Iterable` protocol, for
-example, the `Iterable` protocol would not accurately describe the requirements Python has for a
-class to be iterable at runtime. Allowing callable instance attributes to satisfy method members of
-protocols would also make `issubclass()` narrowing of runtime-checkable protocols unsound, as the
-`issubclass()` mechanism at runtime for protocols only checks whether a method is accessible on the
-class object, not the instance. (Protocols with non-method members cannot be passed to
-`issubclass()` at all at runtime.)
+The reason for this is that some methods, such as Python's special methods, are always looked up on
+the class directly. If a class with an `__iter__` instance attribute satisfied the `Iterable`
+protocol, for example, the `Iterable` protocol would not accurately describe the requirements Python
+has for a class to be iterable at runtime. Allowing callable instance attributes to satisfy method
+members of protocols would also make `issubclass()` narrowing of runtime-checkable protocols
+unsound, as the `issubclass()` mechanism at runtime for protocols only checks whether a method is
+accessible on the class object, not the instance. (Protocols with non-method members cannot be
+passed to `issubclass()` at all at runtime.)
 
 ```py
 from typing import Iterable, Any
@@ -2571,26 +3658,6 @@ class Foo:
 static_assert(not is_assignable_to(Foo, Iterable[Any]))
 ```
 
-Because method members are always looked up on the meta-type of an object when testing assignability
-and subtyping, we understand that `IterableClass` here is a subtype of `Iterable[int]` even though
-`IterableClass.__iter__` has the wrong signature:
-
-```py
-from typing import Iterator, Iterable
-from ty_extensions import static_assert
-from ty_extensions._internal import TypeOf, is_subtype_of
-
-class Meta(type):
-    def __iter__(self) -> Iterator[int]:
-        yield from range(42)
-
-class IterableClass(metaclass=Meta):
-    def __iter__(self) -> Iterator[str]:
-        yield from "abc"
-
-static_assert(is_subtype_of(TypeOf[IterableClass], Iterable[int]))
-```
-
 Enforcing that members must always be available on the class also means that it is safe to access a
 method on `type[P]`, where `P` is a protocol class, just like it is generally safe to access a
 method on `type[C]` where `C` is a nominal class:
@@ -2602,7 +3669,7 @@ class Foo(Protocol):
     def method(self) -> str: ...
 
 def f(x: Foo):
-    reveal_type(type(x).method)  # revealed: def method(self, /) -> str
+    reveal_type(type(x).method)  # revealed: (self, /) -> str
 
 class Bar:
     def __init__(self):
@@ -2716,7 +3783,7 @@ python-version = "3.12"
 ```
 
 ```py
-from typing import final
+from typing import Any, final, overload
 from typing_extensions import TypeVar, Self, Protocol
 from ty_extensions import static_assert
 from ty_extensions._internal import is_equivalent_to, is_assignable_to, is_subtype_of
@@ -2815,6 +3882,54 @@ class NominalReturningOtherClass:
     def g(self) -> Other:
         raise NotImplementedError
 
+class ConcreteMethod(Protocol):
+    def f(self, input: int) -> int: ...
+
+class GenericReceiver:
+    def f[T](self: T, input: T) -> T:
+        return self
+
+class GradualReceiverProtocol(Protocol):
+    def method(self: list[Any]) -> None: ...
+
+class GradualReceiverImplementation(list[int]):
+    def method(self: list[Any]) -> None: ...
+
+class ExplicitReceiverProtocol(Protocol):
+    def method(self: "ExplicitReceiverProtocol") -> None: ...
+
+class StructuralExplicitReceiver:
+    def method(self: ExplicitReceiverProtocol) -> None: ...
+
+class OverloadedExplicitReceiverProtocol(Protocol):
+    def overloaded(self: str, value: int | str) -> int: ...
+
+class OverloadedExplicitReceiverImplementation:
+    @overload
+    def overloaded(self, value: int) -> int: ...
+    @overload
+    def overloaded(self, value: str) -> int: ...
+    def overloaded(self, value: int | str) -> int:
+        return 1
+
+class ReceiverOnly(Protocol):
+    def method(self) -> None: ...
+
+class InvalidBoundedReceiver:
+    def method[T: int](self: T) -> None: ...
+
+class ValidBoundedReceiver(int):
+    def method[T: int](self: T) -> None: ...
+
+class InvalidConstrainedReceiver:
+    def method[T: (int, str)](self: T) -> None: ...
+
+class ValidConstrainedReceiver(str):
+    def method[T: (int, str)](self: T) -> None: ...
+
+class RecursiveReceiverBound:
+    def method[T: ReceiverOnly](self: T) -> None: ...
+
 static_assert(is_equivalent_to(LegacyFunctionScoped, NewStyleFunctionScoped))
 static_assert(is_assignable_to(NominalNewStyle, NewStyleFunctionScoped))
 static_assert(is_assignable_to(NominalNewStyle, LegacyFunctionScoped))
@@ -2846,6 +3961,40 @@ static_assert(not is_assignable_to(NominalReturningSelfNotGeneric, UsesSelf))  #
 
 static_assert(not is_assignable_to(NominalReturningOtherClass, UsesSelf))
 
+# Binding `GenericReceiver.f` adds the constraint `GenericReceiver <= T`. It cannot choose
+# `T = int`, so the resulting bound method does not satisfy `ConcreteMethod.f`.
+static_assert(not is_assignable_to(GenericReceiver, ConcreteMethod))
+static_assert(not is_subtype_of(GenericReceiver, ConcreteMethod))
+
+# Specializing the receiver constraint to `GradualReceiverImplementation` must preserve the
+# assignability relation that produced it; `list[int]` is assignable to, but not a subtype of,
+# `list[Any]`.
+static_assert(is_assignable_to(GradualReceiverImplementation, GradualReceiverProtocol))
+
+# Checking the receiver constraint requires the same protocol relation that is already in
+# progress. The recursive check should terminate and establish the structural relation.
+static_assert(is_assignable_to(StructuralExplicitReceiver, ExplicitReceiverProtocol))
+static_assert(is_subtype_of(StructuralExplicitReceiver, ExplicitReceiverProtocol))
+
+# Aggregating the implementation's overloads covers the visible `int | str` parameter, but the
+# implementation's concrete receiver does not satisfy the protocol's explicit `str` receiver.
+static_assert(not is_assignable_to(OverloadedExplicitReceiverImplementation, OverloadedExplicitReceiverProtocol))
+static_assert(not is_subtype_of(OverloadedExplicitReceiverImplementation, OverloadedExplicitReceiverProtocol))
+
+# A bound receiver must choose a specialization within its declared domain.
+static_assert(not is_assignable_to(InvalidBoundedReceiver, ReceiverOnly))
+static_assert(not is_subtype_of(InvalidBoundedReceiver, ReceiverOnly))
+static_assert(is_assignable_to(ValidBoundedReceiver, ReceiverOnly))
+static_assert(is_subtype_of(ValidBoundedReceiver, ReceiverOnly))
+static_assert(not is_assignable_to(InvalidConstrainedReceiver, ReceiverOnly))
+static_assert(not is_subtype_of(InvalidConstrainedReceiver, ReceiverOnly))
+static_assert(is_assignable_to(ValidConstrainedReceiver, ReceiverOnly))
+static_assert(is_subtype_of(ValidConstrainedReceiver, ReceiverOnly))
+
+# Verifying the receiver's bound recurses into the protocol relation currently being checked.
+static_assert(is_assignable_to(RecursiveReceiverBound, ReceiverOnly))
+static_assert(is_subtype_of(RecursiveReceiverBound, ReceiverOnly))
+
 # These test cases are taken from the typing conformance suite:
 class ShapeProtocolImplicitSelf(Protocol):
     def set_scale(self, scale: float) -> Self: ...
@@ -2859,6 +4008,262 @@ class BadReturnType:
 
 static_assert(not is_assignable_to(BadReturnType, ShapeProtocolImplicitSelf))
 static_assert(not is_assignable_to(BadReturnType, ShapeProtocolExplicitSelf))
+```
+
+## Module objects with static-method protocol members
+
+Module objects implement protocols through their public interface. A module-level function can
+therefore satisfy an ordinary or static method member with the same signature.
+
+`factory.py`:
+
+```py
+size: int = 1
+
+def make(value: int) -> str:
+    return str(value)
+```
+
+`main.py`:
+
+```py
+from typing import Protocol
+
+import factory
+
+class FactoryObject(Protocol):
+    size: int
+    def make(self, value: int) -> str: ...
+
+class FactoryModule(Protocol):
+    size: int
+
+    @staticmethod
+    def make(value: int) -> str: ...
+
+factory_object: FactoryObject = factory
+factory_module: FactoryModule = factory
+```
+
+## Class objects with class-method protocol members
+
+A class object implements a protocol when its directly accessible members have compatible types. The
+corresponding member does not also need to exist on the class object's metaclass:
+
+```py
+from typing import Protocol
+
+class Parser(Protocol):
+    @classmethod
+    def parse(cls, value: str) -> int: ...
+
+class IntParser:
+    @classmethod
+    def parse(cls, value: str) -> int:
+        return int(value)
+
+parser: Parser = IntParser
+```
+
+## Class objects and `Self`-returning class-method protocol members
+
+When a class object is checked against a class-method protocol member, `Self` in the protocol
+signature names the class object. A class method that returns `Self` returns an instance and cannot
+satisfy that requirement; a class method that returns `type[Self]` can satisfy a `type[C]`
+candidate:
+
+```py
+from typing import Protocol, TypeVar
+from typing_extensions import Self
+from ty_extensions import static_assert
+from ty_extensions._internal import TypeOf, is_assignable_to
+
+class FactoryProtocol(Protocol):
+    @classmethod
+    def make(cls) -> Self: ...
+
+class ExplicitReceiverFactoryProtocol(Protocol):
+    @classmethod
+    def make(cls: type[Self]) -> Self: ...
+
+class Factory:
+    @classmethod
+    def make(cls) -> Self:
+        return cls()
+
+class ExplicitReceiverFactory:
+    @classmethod
+    def make(cls: type[Self]) -> Self:
+        return cls()
+
+class BadFactory:
+    @classmethod
+    def make(cls) -> int:
+        return 1
+
+class ClassObjectFactory:
+    @classmethod
+    def make(cls) -> type[Self]:
+        return cls
+
+static_assert(not is_assignable_to(TypeOf[Factory], FactoryProtocol))
+static_assert(not is_assignable_to(TypeOf[ExplicitReceiverFactory], ExplicitReceiverFactoryProtocol))
+static_assert(not is_assignable_to(TypeOf[BadFactory], FactoryProtocol))
+static_assert(is_assignable_to(type[ClassObjectFactory], FactoryProtocol))
+
+T = TypeVar("T", bound=FactoryProtocol)
+
+def exact_factory(value: T) -> T:
+    return value.make()
+
+exact_factory(Factory)  # error: [invalid-argument-type]
+exact_factory(ClassObjectFactory)  # error: [invalid-argument-type]
+
+def _(factory: type[ClassObjectFactory]) -> None:
+    exact_factory(factory)
+```
+
+## Class objects and `Self`-returning instance-method protocol members
+
+A class object can satisfy a protocol with a regular instance-method member if the class object's
+directly accessible member has a compatible bound signature. Class and static methods therefore
+work, but a regular instance method does not: accessing it through the class produces an unbound
+function rather than a method bound to the class object. If the protocol method returns `Self`, the
+implementation must return the class object, not an instance of the class.
+
+```py
+from typing import Protocol, TypeVar
+from typing_extensions import Self
+from ty_extensions import static_assert
+from ty_extensions._internal import TypeOf, is_assignable_to
+
+class CopierProtocol(Protocol):
+    def copy(self) -> Self: ...
+
+class PlainCopierProtocol(Protocol):
+    def copy(self) -> str: ...
+
+class Copier:
+    def copy(self) -> Self:
+        return self
+
+class ClassCopier:
+    @classmethod
+    def copy(cls) -> Self:
+        return cls()
+
+class StaticCopier:
+    @staticmethod
+    def copy() -> "StaticCopier":
+        return StaticCopier()
+
+class ClassObjectCopier:
+    @classmethod
+    def copy(cls) -> type[Self]:
+        return cls
+
+class PlainClassCopier:
+    @classmethod
+    def copy(cls) -> str:
+        return "copy"
+
+class PlainStaticCopier:
+    @staticmethod
+    def copy() -> str:
+        return "copy"
+
+class CopierMeta(type):
+    def copy(cls) -> "BadDirectCopier":
+        return BadDirectCopier()
+
+class BadDirectCopier(metaclass=CopierMeta):
+    def copy(self, value: int) -> Self:
+        return self
+
+static_assert(is_assignable_to(Copier, CopierProtocol))
+static_assert(not is_assignable_to(TypeOf[Copier], CopierProtocol))
+static_assert(not is_assignable_to(TypeOf[ClassCopier], CopierProtocol))
+static_assert(not is_assignable_to(TypeOf[StaticCopier], CopierProtocol))
+static_assert(is_assignable_to(type[ClassObjectCopier], CopierProtocol))
+static_assert(is_assignable_to(TypeOf[PlainClassCopier], PlainCopierProtocol))
+static_assert(is_assignable_to(TypeOf[PlainStaticCopier], PlainCopierProtocol))
+# The metaclass method is compatible, but ordinary protocol methods describe direct access on the
+# class object, where `BadDirectCopier.copy` is an incompatible unbound function.
+static_assert(not is_assignable_to(TypeOf[BadDirectCopier], CopierProtocol))
+
+T = TypeVar("T", bound=CopierProtocol)
+
+def exact_copy(value: T) -> T:
+    return value.copy()
+
+exact_copy(ClassCopier)  # error: [invalid-argument-type]
+exact_copy(StaticCopier)  # error: [invalid-argument-type]
+exact_copy(ClassObjectCopier)  # error: [invalid-argument-type]
+
+def _(copier: type[ClassObjectCopier]) -> None:
+    exact_copy(copier)
+```
+
+## Class objects and dunder instance-method protocol members
+
+Special methods are looked up on the meta-type of an object when testing assignability and
+subtyping, matching Python's special-method lookup. We therefore understand that `IterableClass`
+here is a subtype of `Iterable[int]` even though `IterableClass.__iter__` has the wrong signature:
+
+```py
+from typing import Iterable, Iterator
+from ty_extensions import static_assert
+from ty_extensions._internal import TypeOf, is_subtype_of
+
+class Meta(type):
+    def __iter__(self) -> Iterator[int]:
+        yield from range(42)
+
+class IterableClass(metaclass=Meta):
+    def __iter__(self) -> Iterator[str]:
+        yield from "abc"
+
+static_assert(is_subtype_of(TypeOf[IterableClass], Iterable[int]))
+
+class DirectIterable:
+    @classmethod
+    def __iter__(cls) -> Iterator[int]:
+        yield from range(42)
+
+iterable: Iterable[int] = DirectIterable  # snapshot
+```
+
+```snapshot
+error[invalid-assignment]: Object of type `<class 'DirectIterable'>` is not assignable to `Iterable[int]`
+  --> src/mdtest_snippet.py:20:11
+   |
+20 | iterable: Iterable[int] = DirectIterable  # snapshot
+   |           -------------   ^^^^^^^^^^^^^^ Incompatible value of type `<class 'DirectIterable'>`
+   |           |
+   |           Declared type
+   |
+info: type `<class 'DirectIterable'>` is not assignable to protocol `Iterable[int]`
+info: └── protocol member `__iter__` is not defined on type `<class 'DirectIterable'>`
+info:     └── special methods must be defined on the meta-type when matching a protocol
+```
+
+A custom dunder such as `__custom__` is an ordinary method: it is accessed directly on the class
+object and does not use Python's special-method lookup.
+
+```py
+from typing import Protocol
+from ty_extensions import static_assert
+from ty_extensions._internal import TypeOf, is_assignable_to
+
+class CustomProtocol(Protocol):
+    def __custom__(self, value: int) -> str: ...
+
+class Custom:
+    @classmethod
+    def __custom__(cls, value: int) -> str:
+        return str(value)
+
+static_assert(is_assignable_to(TypeOf[Custom], CustomProtocol))
 ```
 
 ## Subtyping of protocols with `@classmethod` or `@staticmethod` members
@@ -2875,7 +4280,9 @@ of `N` or inhabitants of `type[N]`, *and* the signature of `N.x` is equivalent t
 `P.x` after the descriptor protocol has been invoked on `P.x`:
 
 ```py
-from typing import Protocol
+from collections.abc import Callable
+from typing import Protocol, overload
+from typing_extensions import Self
 from ty_extensions import static_assert
 from ty_extensions._internal import is_subtype_of, is_assignable_to, is_equivalent_to, is_disjoint_from
 
@@ -2914,23 +4321,70 @@ class NStaticMethodBad:
     def x(cls, val: int) -> str:
         return "foo"
 
+class NMaybeCallable:
+    x: Callable[[int], str] | None
+
+class F:
+    def __call__(self, val: int) -> str:
+        return "foo"
+
+class NObject:
+    x: object = F()
+
+class NStaticMethodShadowed(NStaticMethodGood):
+    def __init__(self) -> None:
+        self.x: int = 1
+
+class PFactory(Protocol):
+    @classmethod
+    def create(cls) -> Self: ...
+
+class Factory:
+    @classmethod
+    def create(cls) -> Self:
+        return cls()
+
+class BadFactory:
+    @classmethod
+    def create(cls) -> int:
+        return 42
+
+class POverloadedFactory(Protocol):
+    @overload
+    @classmethod
+    def create(cls, value: int) -> Self: ...
+    @overload
+    @classmethod
+    def create(cls, value: str) -> Self: ...
+
+class OverloadedFactory:
+    @overload
+    @classmethod
+    def create(cls, value: int) -> Self: ...
+    @overload
+    @classmethod
+    def create(cls, value: str) -> Self: ...
+    @classmethod
+    def create(cls, value: int | str) -> Self:
+        return cls()
+
 # `PClassMethod.x` and `PStaticMethod.x` evaluate to callable types with equivalent signatures
 # whether you access them on the protocol class or instances of the protocol.
 # That means that they are equivalent protocols!
 static_assert(is_equivalent_to(PClassMethod, PStaticMethod))
 
-# TODO: these should all pass
-static_assert(not is_assignable_to(NNotCallable, PClassMethod))  # error: [static-assert-error]
-static_assert(not is_assignable_to(NNotCallable, PStaticMethod))  # error: [static-assert-error]
-static_assert(is_disjoint_from(NNotCallable, PClassMethod))  # error: [static-assert-error]
-static_assert(is_disjoint_from(NNotCallable, PStaticMethod))  # error: [static-assert-error]
+static_assert(not is_assignable_to(NNotCallable, PClassMethod))
+static_assert(not is_assignable_to(NNotCallable, PStaticMethod))
+static_assert(not is_disjoint_from(NNotCallable, PClassMethod))
+static_assert(not is_disjoint_from(NNotCallable, PStaticMethod))
+static_assert(not is_disjoint_from(NMaybeCallable, PStaticMethod))
+static_assert(not is_disjoint_from(NObject, PStaticMethod))
 
 # `NInstanceMethod.x` has the correct type when accessed on an instance of
 # `NInstanceMethod`, but not when accessed on the class object itself
 #
-# TODO: these should pass
-static_assert(not is_assignable_to(NInstanceMethod, PClassMethod))  # error: [static-assert-error]
-static_assert(not is_assignable_to(NInstanceMethod, PStaticMethod))  # error: [static-assert-error]
+static_assert(not is_assignable_to(NInstanceMethod, PClassMethod))
+static_assert(not is_assignable_to(NInstanceMethod, PStaticMethod))
 
 # A nominal type with a `@staticmethod` can satisfy a protocol with a `@classmethod`
 # if the staticmethod duck-types the same as the classmethod member
@@ -2939,26 +4393,33 @@ static_assert(not is_assignable_to(NInstanceMethod, PStaticMethod))  # error: [s
 # with a `@staticmethod` member
 static_assert(is_assignable_to(NClassMethodGood, PClassMethod))
 static_assert(is_assignable_to(NClassMethodGood, PStaticMethod))
-# TODO: these should all pass:
-static_assert(is_subtype_of(NClassMethodGood, PClassMethod))  # error: [static-assert-error]
-static_assert(is_subtype_of(NClassMethodGood, PStaticMethod))  # error: [static-assert-error]
-static_assert(not is_assignable_to(NClassMethodBad, PClassMethod))  # error: [static-assert-error]
-static_assert(not is_assignable_to(NClassMethodBad, PStaticMethod))  # error: [static-assert-error]
-static_assert(not is_assignable_to(NClassMethodGood | NClassMethodBad, PClassMethod))  # error: [static-assert-error]
+static_assert(is_subtype_of(NClassMethodGood, PClassMethod))
+static_assert(is_subtype_of(NClassMethodGood, PStaticMethod))
+static_assert(not is_assignable_to(NClassMethodBad, PClassMethod))
+static_assert(not is_assignable_to(NClassMethodBad, PStaticMethod))
+static_assert(not is_assignable_to(NClassMethodGood | NClassMethodBad, PClassMethod))
 
 static_assert(is_assignable_to(NStaticMethodGood, PClassMethod))
 static_assert(is_assignable_to(NStaticMethodGood, PStaticMethod))
-# TODO: these should all pass:
-static_assert(is_subtype_of(NStaticMethodGood, PClassMethod))  # error: [static-assert-error]
-static_assert(is_subtype_of(NStaticMethodGood, PStaticMethod))  # error: [static-assert-error]
-static_assert(not is_assignable_to(NStaticMethodBad, PClassMethod))  # error: [static-assert-error]
-static_assert(not is_assignable_to(NStaticMethodBad, PStaticMethod))  # error: [static-assert-error]
-static_assert(not is_assignable_to(NStaticMethodGood | NStaticMethodBad, PStaticMethod))  # error: [static-assert-error]
+static_assert(is_subtype_of(NStaticMethodGood, PClassMethod))
+static_assert(is_subtype_of(NStaticMethodGood, PStaticMethod))
+static_assert(not is_assignable_to(NStaticMethodBad, PClassMethod))
+static_assert(not is_assignable_to(NStaticMethodBad, PStaticMethod))
+static_assert(not is_assignable_to(NStaticMethodGood | NStaticMethodBad, PStaticMethod))
+
+# An instance attribute can override an inherited static method.
+static_assert(not is_subtype_of(NStaticMethodShadowed, PStaticMethod))
+
+# `Self` in the classmethod signature is bound to the implementation type.
+static_assert(is_subtype_of(Factory, PFactory))
+static_assert(not is_assignable_to(BadFactory, PFactory))
+
+# Each overload keeps its own `Self` binding.
+static_assert(is_subtype_of(OverloadedFactory, POverloadedFactory))
 ```
 
-Until classmethod protocol members are fully supported, their placeholder representation should not
-incorrectly require a mutable instance attribute. In particular, a frozen dataclass can satisfy a
-protocol bound through a classmethod:
+A classmethod protocol member does not require a mutable instance attribute. In particular, a frozen
+dataclass can satisfy a protocol bound through a classmethod:
 
 ```py
 from dataclasses import dataclass
@@ -3015,6 +4476,45 @@ class MissingDecorator:
 static_assert(is_assignable_to(CorrectImpl, ContextManagerProtocol))
 static_assert(is_assignable_to(AlsoCorrect, ContextManagerProtocol))
 static_assert(not is_assignable_to(MissingDecorator, ContextManagerProtocol))
+```
+
+A decorator with a precise callable return type preserves the signatures of class and static
+protocol methods:
+
+```py
+from collections.abc import Callable
+from typing import ParamSpec, Protocol, TypeVar
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+P = ParamSpec("P")
+R = TypeVar("R")
+
+def preserve_signature(function: Callable[P, R]) -> Callable[P, R]:
+    return function
+
+class StaticProtocol(Protocol):
+    @staticmethod
+    @preserve_signature
+    def method(value: int) -> str: ...
+
+class StaticImplementation:
+    @staticmethod
+    def method(value: int) -> str:
+        return str(value)
+
+class ClassProtocol(Protocol):
+    @classmethod
+    @preserve_signature
+    def method(cls, value: int) -> str: ...
+
+class ClassImplementation:
+    @classmethod
+    def method(cls, value: int) -> str:
+        return str(value)
+
+static_assert(is_subtype_of(StaticImplementation, StaticProtocol))
+static_assert(is_subtype_of(ClassImplementation, ClassProtocol))
 ```
 
 ## Equivalence of protocols with method or property members
@@ -3483,6 +4983,34 @@ static_assert(not is_assignable_to(TypeOf[doesnt_satisfy_foo], Foo))
 static_assert(not is_subtype_of(TypeOf[doesnt_satisfy_foo], Foo))
 ```
 
+Type-variable inference also uses static and class `__call__` members:
+
+```py
+from typing import Protocol, TypeVar
+
+CallbackT = TypeVar("CallbackT")
+
+class StaticCallback(Protocol[CallbackT]):
+    @staticmethod
+    def __call__(value: CallbackT) -> CallbackT: ...
+
+class ClassCallback(Protocol[CallbackT]):
+    @classmethod
+    def __call__(cls, value: CallbackT) -> CallbackT: ...
+
+def use_static(callback: StaticCallback[CallbackT]) -> CallbackT:
+    raise NotImplementedError
+
+def use_class(callback: ClassCallback[CallbackT]) -> CallbackT:
+    raise NotImplementedError
+
+def identity(value: int) -> int:
+    return value
+
+reveal_type(use_static(identity))  # revealed: int
+reveal_type(use_class(identity))  # revealed: int
+```
+
 Class-literals and generic aliases can also be subtypes of callback protocols:
 
 ```py
@@ -3519,6 +5047,29 @@ class NoArgs(Protocol):
 
 def _(source: NoArgs):
     target: Variadic[Any] = source  # error: [invalid-assignment]
+```
+
+## Class constructors and static callback protocols
+
+A class object's call signature comes from its constructor. An unrelated `__call__` method on the
+class's instances does not replace that constructor signature when matching a static callback
+protocol:
+
+```py
+from typing import Protocol
+
+class Product:
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+    def __call__(self, text: str) -> str:
+        return text
+
+class Constructor(Protocol):
+    @staticmethod
+    def __call__(value: int) -> Product: ...
+
+constructor: Constructor = Product
 ```
 
 ## Generic protocols and union arguments
@@ -3779,7 +5330,7 @@ def _(r: Recursive):
     reveal_type(r.t)  # revealed: tuple[int, tuple[str, Recursive]]
     reveal_type(r.callable1)  # revealed: (int, /) -> Recursive
     reveal_type(r.callable2)  # revealed: (Recursive, /) -> int
-    reveal_type(r.subtype_of)  # revealed: @Todo(type[T] for protocols)
+    reveal_type(r.subtype_of)  # revealed: type[Recursive]
     reveal_type(r.generic)  # revealed: GenericC[Recursive]
     reveal_type(r.method(r))  # revealed: Recursive
     reveal_type(r.nested)  # revealed: Recursive | ((Recursive, tuple[Recursive, Recursive], /) -> Recursive)
@@ -3801,6 +5352,61 @@ class Bar(Protocol):
     x: Foo
 
 static_assert(is_equivalent_to(Foo, Bar))
+```
+
+### Recursively-specialized generic protocols
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from __future__ import annotations
+
+from typing import Protocol
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+class LeftProtocol[T](Protocol):
+    child: LeftAlias[list[T]]
+
+class RightProtocol[T](Protocol):
+    child: RightAlias[list[T]]
+
+class DifferentProtocol[T](Protocol):
+    child: DifferentProtocol[set[T]]
+
+type LeftAlias[T] = LeftProtocol[T]
+type RightAlias[T] = RightProtocol[T]
+
+# TODO: These structurally equivalent protocols should be recognized as subtypes.
+static_assert(not is_subtype_of(LeftProtocol[int], RightProtocol[int]))
+static_assert(not is_subtype_of(LeftAlias[int], RightAlias[int]))
+# A conservative cycle fallback must not accept structurally different recursive protocols.
+static_assert(not is_subtype_of(LeftProtocol[int], DifferentProtocol[int]))
+
+class FiniteLeft[T](Protocol):
+    value: T
+
+class FiniteRight[T](Protocol):
+    value: T
+
+# Reusing a non-recursive protocol at a finite nesting depth is not a recursive definition.
+static_assert(is_subtype_of(FiniteLeft[FiniteLeft[int]], FiniteRight[FiniteRight[int]]))
+static_assert(not is_subtype_of(FiniteLeft[FiniteLeft[int]], FiniteRight[FiniteRight[str]]))
+
+class ProtocolBox[T](Protocol):
+    value: T
+
+class NestedLeftProtocol[T](Protocol):
+    child: ProtocolBox[ProtocolBox[NestedLeftProtocol[list[T]]]]
+
+class NestedRightProtocol[T](Protocol):
+    child: ProtocolBox[ProtocolBox[NestedRightProtocol[list[T]]]]
+
+# TODO: These structurally equivalent protocols should be recognized as subtypes.
+static_assert(not is_subtype_of(NestedLeftProtocol[int], NestedRightProtocol[int]))
 ```
 
 ### Disjointness of recursive protocol and recursive final type
@@ -3955,9 +5561,8 @@ def f(x: PGconn):
 
 ### Recursive protocols used as the first argument to `cast()`
 
-These caused issues in an early version of our `Protocol` implementation due to the fact that we use
-a recursive function in our `cast()` implementation to check whether a type contains `Unknown` or
-`Todo`. Recklessly recursing into a type causes stack overflows if the type is recursive:
+A redundant cast is reported only if neither type contains `Unknown` nor `Todo`. Inspecting protocol
+members for these types must terminate when a protocol refers back to itself.
 
 ```toml
 [environment]
@@ -3973,6 +5578,139 @@ class Iterator[T](Protocol):
 
 def f(value: Iterator[Any]):
     cast(Iterator[Any], value)  # error: [redundant-cast]
+```
+
+### Protocol methods and properties in `cast()`
+
+The `Iterator` example above also ensures that the implicit `self` parameter of an ordinary method
+does not make the protocol appear recursive. The method's return type must still be checked.
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Protocol, cast
+
+from ty_extensions import Unknown
+
+class UnknownMethod[T](Protocol):
+    def method(self) -> Unknown: ...
+
+def method(value: UnknownMethod[int]) -> None:
+    cast(UnknownMethod[int], value)
+```
+
+Property getters follow the same rule: their implicit receiver is ignored, but their return type is
+checked.
+
+```py
+from typing import Protocol, cast
+
+from ty_extensions import Unknown
+
+class IntProperty[T](Protocol):
+    @property
+    def value(self) -> int: ...
+
+class UnknownProperty[T](Protocol):
+    @property
+    def value(self) -> Unknown: ...
+
+def properties(known: IntProperty[int], unknown: UnknownProperty[int]) -> None:
+    cast(IntProperty[int], known)  # error: [redundant-cast]
+    cast(UnknownProperty[int], unknown)
+```
+
+### Specialized protocol type parameters in `cast()`
+
+A type variable's bound does not remain part of a specialized protocol. Here, the `Unknown` bound
+has been replaced by `int`, so the cast is redundant.
+
+```py
+from typing import Protocol, TypeVar, cast
+
+from ty_extensions import Unknown
+
+T = TypeVar("T", bound=Unknown)
+
+class BoundedProtocol(Protocol[T]):
+    value: T
+
+def bounded(value: BoundedProtocol[int]) -> None:
+    cast(BoundedProtocol[int], value)  # error: [redundant-cast]
+```
+
+### Recursive protocol specializations in `cast()`
+
+A protocol can refer to itself with a different type argument on every step. Since the sequence
+`Linked[int]`, `Linked[list[int]]`, and so on never repeats exactly, the inspection stops when it
+sees the same protocol definition again. The diagnostic is not reported because a later
+specialization could expose `Unknown`.
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Protocol, cast
+
+class Linked[T](Protocol):
+    value: T
+    next: "Linked[list[T]]"
+
+def linked(value: Linked[int]) -> None:
+    cast(Linked[int], value)
+```
+
+An explicit `self` annotation is part of the method's type, so recursion through that annotation
+must also terminate.
+
+```py
+from typing import Protocol, cast
+
+class ExplicitReceiver[T](Protocol):
+    def method(self: "ExplicitReceiver[list[T]]") -> int: ...
+
+def explicit_receiver(value: ExplicitReceiver[int]) -> None:
+    cast(ExplicitReceiver[int], value)
+```
+
+The diagnostic must be withheld because member lookup can depend on the type argument. In this
+example, descriptor overload resolution exposes `Unknown` only through the nested protocol.
+
+```py
+from typing import Protocol, cast, overload
+
+from ty_extensions import Unknown
+
+class Descriptor:
+    @overload
+    def __get__(
+        self,
+        instance: "DescriptorProtocol[list[int]]",
+        owner: type["DescriptorProtocol[list[int]]"],
+    ) -> Unknown: ...
+    @overload
+    def __get__(self, instance: object, owner: type[object]) -> int: ...
+    def __get__(self, instance: object, owner: type[object]) -> object:
+        return object()
+
+def descriptor(_function: object) -> Descriptor:
+    return Descriptor()
+
+class DescriptorProtocol[T](Protocol):
+    marker: T
+    next: "DescriptorProtocol[list[T]]"
+
+    @descriptor
+    def value(self) -> object: ...
+
+def descriptor_specialization(value: DescriptorProtocol[int]) -> None:
+    reveal_type((value.value, value.next.value))  # revealed: tuple[int, Unknown]
+    cast(DescriptorProtocol[int], value)
 ```
 
 ### Recursive generic protocols
@@ -4030,6 +5768,35 @@ def f(c: C[int]) -> None:
     # The cycle detection assumes compatibility when it detects potential
     # infinite recursion between protocol specializations.
     takes_c(c)
+
+class Left[T](Protocol):
+    @property
+    def value(self) -> T: ...
+    @property
+    def child(self) -> "Left[list[T]]": ...
+
+class Right1[T](Protocol):
+    @property
+    def value(self) -> T: ...
+    @property
+    def child(self) -> "RightAlias1[list[T]]": ...
+
+class Right2[T](Protocol):
+    @property
+    def value(self) -> T: ...
+    @property
+    def child(self) -> "RightAlias2[set[T]]": ...
+
+type RightAlias1[T] = Right1[T]
+type RightAlias2[T] = Right2[T]
+
+def expect_right1(value: RightAlias1[int]) -> None: ...
+def expect_right2(value: RightAlias2[int]) -> None: ...
+def check(value: Left[int]) -> None:
+    # TODO: no error
+    expect_right1(value)  # error: [invalid-argument-type]
+    # This should be an error
+    expect_right2(value)  # error: [invalid-argument-type]
 ```
 
 ### Recursive legacy generic protocol
@@ -4135,11 +5902,17 @@ Where `P` is a protocol type, a class object `N` can be said to inhabit the type
 - All method members on `P` exist on the class object `N`
 - Instantiating `N` creates an object that would satisfy the protocol `P`
 
-Currently meta-protocols are not fully supported by ty, but we try to keep false positives to a
-minimum in the meantime.
+Ordinary instance attributes are required only on the object constructed by `N`, so they are not
+available through a value of type `type[P]`. Class variables and methods are available because every
+inhabitant of `type[P]` must provide them on the class object itself.
+
+```toml
+[environment]
+python-version = "3.12"
+```
 
 ```py
-from typing import Protocol, ClassVar
+from typing import Any, ClassVar, Protocol, Self
 from ty_extensions import static_assert
 from ty_extensions._internal import TypeOf, is_assignable_to, is_subtype_of
 
@@ -4149,39 +5922,507 @@ class Foo(Protocol):
     def method(self) -> bytes: ...
 
 def _(f: type[Foo]):
-    reveal_type(f)  # revealed: type[@Todo(type[T] for protocols)]
-
-    # TODO: we should emit `unresolved-attribute` here: although we would accept this for a
-    # nominal class, we would see any class `N` as inhabiting `Foo` if it had an implicit
-    # instance attribute `x`, and implicit instance attributes are rarely bound on the class
-    # object.
-    reveal_type(f.x)  # revealed: @Todo(type[T] for protocols)
-
-    # TODO: should be `str`
-    reveal_type(f.y)  # revealed: @Todo(type[T] for protocols)
+    reveal_type(f)  # revealed: type[Foo]
+    f.x  # error: [unresolved-attribute]
+    f.x = 1  # error: [invalid-assignment]
+    reveal_type(f.y)  # revealed: str
     f.y = "foo"  # fine
+    f.y = b"bad"  # error: [invalid-assignment]
+    reveal_type(f.method)  # revealed: (self, /) -> bytes
+    reveal_type(f())  # revealed: Foo
+```
 
-    # TODO: should be `Callable[[Foo], bytes]`
-    reveal_type(f.method)  # revealed: @Todo(type[T] for protocols)
+Both a particular class object, represented by `TypeOf[C]`, and an arbitrary subclass of `C`,
+represented by `type[C]`, are checked structurally. `Bar` fails the protocol requirements, while
+`Baz` satisfies them.
 
+```py
 class Bar: ...
 
-# TODO: these should pass
-static_assert(not is_assignable_to(type[Bar], type[Foo]))  # error: [static-assert-error]
-static_assert(not is_assignable_to(TypeOf[Bar], type[Foo]))  # error: [static-assert-error]
+static_assert(not is_assignable_to(type[Bar], type[Foo]))
+static_assert(not is_assignable_to(TypeOf[Bar], type[Foo]))
+static_assert(not is_subtype_of(type[Bar], type[Foo]))
+static_assert(not is_subtype_of(TypeOf[Bar], type[Foo]))
 
 class Baz:
-    x: int
     y: ClassVar[str] = "foo"
+    def __init__(self) -> None:
+        self.x = 1
     def method(self) -> bytes:
         return b"foo"
 
 static_assert(is_assignable_to(type[Baz], type[Foo]))
 static_assert(is_assignable_to(TypeOf[Baz], type[Foo]))
+static_assert(is_subtype_of(type[Baz], type[Foo]))
+static_assert(is_subtype_of(TypeOf[Baz], type[Foo]))
+```
 
-# TODO: these should pass
-static_assert(is_subtype_of(type[Baz], type[Foo]))  # error: [static-assert-error]
-static_assert(is_subtype_of(TypeOf[Baz], type[Foo]))  # error: [static-assert-error]
+As stated above, a class object must construct instances that satisfy `Foo` in order to inhabit
+`type[Foo]`. The type of instances a class is considered to construct respects the `__call__` of its
+metaclass. `Factory` constructs `Baz` instances (and itself has the necessary attributes to satisfy
+the classvar/method portion of `Foo`), so it inhabits `type[Foo]`. `BadFactory` constructs `object`,
+which does not satisfy `Foo`, so it cannot inhabit `type[Foo]`.
+
+```py
+class FactoryMeta(type):
+    def __call__(self) -> Baz:
+        return Baz()
+
+class Factory(metaclass=FactoryMeta):
+    y: ClassVar[str] = "foo"
+    def method(self) -> bytes:
+        return b"foo"
+
+static_assert(is_assignable_to(TypeOf[Factory], type[Foo]))
+
+class BadFactoryMeta(type):
+    def __call__(self) -> object:
+        return object()
+
+class BadFactory(Baz, metaclass=BadFactoryMeta): ...
+
+static_assert(not is_assignable_to(TypeOf[BadFactory], type[Foo]))
+```
+
+Even when construction returns a `Foo`, the class object itself must provide the required class
+variable and method (the instance attribute is not required).
+
+```py
+class MissingClassVar(metaclass=FactoryMeta):
+    def method(self) -> bytes:
+        return b"foo"
+
+static_assert(not is_assignable_to(type[MissingClassVar], type[Foo]))
+
+class MissingMethod(metaclass=FactoryMeta):
+    y: ClassVar[str] = "foo"
+
+static_assert(not is_assignable_to(type[MissingMethod], type[Foo]))
+```
+
+Conversely, compatible class members are not enough if construction produces an object without the
+required instance attribute.
+
+```py
+class MissingInstanceAttribute:
+    y: ClassVar[str] = "foo"
+    def method(self) -> bytes:
+        return b"foo"
+
+static_assert(not is_assignable_to(type[MissingInstanceAttribute], type[Foo]))
+```
+
+A static method can have the right signature on an instance while lacking the unbound signature
+required on the class object.
+
+```py
+class StaticMethod:
+    y: ClassVar[str] = "foo"
+    def __init__(self) -> None:
+        self.x = 1
+    @staticmethod
+    def method() -> bytes:
+        return b"foo"
+
+static_assert(not is_assignable_to(type[StaticMethod], type[Foo]))
+```
+
+Static methods and class methods declared by a protocol are checked on the candidate class object.
+They can be provided by the candidate's metaclass.
+
+```py
+class DecoratedMethods(Protocol):
+    @staticmethod
+    def static(value: int) -> str: ...
+    @classmethod
+    def class_(cls, value: int) -> str: ...
+
+class DecoratedMethodsImpl:
+    @staticmethod
+    def static(value: int) -> str:
+        return str(value)
+    @classmethod
+    def class_(cls, value: int) -> str:
+        return str(value)
+
+static_assert(is_assignable_to(TypeOf[DecoratedMethodsImpl], type[DecoratedMethods]))
+
+class DecoratedMethodsMeta(type):
+    @staticmethod
+    def static(value: int) -> str:
+        return str(value)
+    @classmethod
+    def class_(cls, value: int) -> str:
+        return str(value)
+    def __call__(self) -> DecoratedMethodsImpl:
+        return DecoratedMethodsImpl()
+
+class MetaclassOnlyDecoratedMethods(metaclass=DecoratedMethodsMeta): ...
+
+static_assert(is_assignable_to(TypeOf[MetaclassOnlyDecoratedMethods], type[DecoratedMethods]))
+```
+
+It is not enough for the constructed instance to acquire callables with matching signatures.
+
+```py
+def decorated_method(value: int) -> str:
+    return str(value)
+
+class InstanceOnlyDecoratedMethods:
+    def __init__(self) -> None:
+        self.static = decorated_method
+        self.class_ = decorated_method
+
+static_assert(not is_assignable_to(TypeOf[InstanceOnlyDecoratedMethods], type[DecoratedMethods]))
+
+def _(cls: type[DecoratedMethods]) -> None:
+    reveal_type(cls.static)  # revealed: (value: int) -> str
+    reveal_type(cls.class_)  # revealed: (value: int) -> str
+```
+
+`Self` in a class method names the instance constructed by the class object being checked.
+
+```py
+class SelfFactory(Protocol):
+    @classmethod
+    def make(cls) -> Self: ...
+
+class SelfFactoryImpl:
+    @classmethod
+    def make(cls) -> Self:
+        return cls()
+
+static_assert(is_assignable_to(TypeOf[SelfFactoryImpl], type[SelfFactory]))
+```
+
+A `@property` declaration requires a readable attribute on the constructed instance, but does not
+require the implementation to use `@property` or guarantee that the attribute exists on the class
+object.
+
+```py
+class PropertyProtocol(Protocol):
+    @property
+    def value(self) -> int: ...
+
+class PropertyImpl:
+    def __init__(self) -> None:
+        self.value = 1
+
+static_assert(is_assignable_to(TypeOf[PropertyImpl], type[PropertyProtocol]))
+
+class MissingProperty: ...
+
+static_assert(not is_assignable_to(TypeOf[MissingProperty], type[PropertyProtocol]))
+
+def _(cls: type[PropertyProtocol]) -> None:
+    cls.value  # error: [unresolved-attribute]
+```
+
+Protocol and abstract class objects are accepted as inhabitants of `type[Foo]`. This is
+intentionally more permissive than the typing spec, which requires a concrete class.
+
+```py
+from abc import ABC, ABCMeta, abstractmethod
+
+class AbstractFoo(ABC):
+    x: int
+    y: ClassVar[str] = "foo"
+    @abstractmethod
+    def method(self) -> bytes: ...
+
+static_assert(is_assignable_to(TypeOf[Foo], type[Foo]))
+static_assert(is_assignable_to(TypeOf[AbstractFoo], type[Foo]))
+```
+
+A structural implementation can use any subclass of `type` as its metaclass, so `type[Foo]` is not
+limited to the protocol class's own metaclass.
+
+```py
+static_assert(is_subtype_of(type[Foo], type))
+static_assert(not is_subtype_of(type[Foo], ABCMeta))
+```
+
+`type[Any]` is assignable to `type[Foo]` but is not a subtype of it.
+
+```py
+static_assert(is_assignable_to(type[Any], type[Foo]))
+static_assert(not is_subtype_of(type[Any], type[Foo]))
+```
+
+An ordinary instance attribute does not satisfy a `ClassVar` requirement on another meta-protocol.
+
+```py
+class InstanceAttributeProtocol(Protocol):
+    value: int
+
+class ClassVariableProtocol(Protocol):
+    value: ClassVar[int]
+
+static_assert(not is_assignable_to(type[InstanceAttributeProtocol], type[ClassVariableProtocol]))
+```
+
+A metaclass data descriptor takes precedence over an otherwise compatible unbound instance method.
+
+```py
+class HidingMeta(type):
+    @property
+    def method(cls) -> int:
+        return 1
+
+class HiddenMethod(metaclass=HidingMeta):
+    y: ClassVar[str] = "foo"
+    def __init__(self) -> None:
+        self.x = 1
+    def method(self) -> bytes:
+        return b"foo"
+
+static_assert(not is_assignable_to(TypeOf[HiddenMethod], type[Foo]))
+```
+
+## Meta-protocols satisfying instance-method protocols
+
+A value of type `type[P]` is itself a class object, so it can satisfy another protocol through its
+directly accessible methods. An ordinary method on `P` remains unbound when accessed through
+`type[P]`, while class and static methods are bound. Generic specialization and overloads are
+preserved in either case.
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Iterable, Iterator, Protocol, Self, overload
+
+class BoundMethod(Protocol):
+    def method(self, value: int) -> str: ...
+
+class InstanceMethodSource(Protocol):
+    def method(self, value: int) -> str: ...
+
+class UnboundMethod(Protocol):
+    def method(self, instance: InstanceMethodSource, /, value: int) -> str: ...
+
+class StaticMethodSource(Protocol):
+    @staticmethod
+    def method(value: int) -> str: ...
+
+class ClassMethodSource(Protocol):
+    @classmethod
+    def method(cls, value: int) -> str: ...
+
+def _(
+    instance_source: type[InstanceMethodSource],
+    static_source: type[StaticMethodSource],
+    class_source: type[ClassMethodSource],
+) -> None:
+    reveal_type(instance_source.method)  # revealed: (self, /, value: int) -> str
+    unbound: UnboundMethod = instance_source
+    bound: BoundMethod = instance_source  # error: [invalid-assignment]
+    reveal_type(static_source.method)  # revealed: (value: int) -> str
+    static_bound: BoundMethod = static_source
+    reveal_type(class_source.method)  # revealed: (value: int) -> str
+    class_bound: BoundMethod = class_source
+
+class GenericBoundMethod[T](Protocol):
+    def method(self, value: T) -> T: ...
+
+class GenericStaticMethodSource[T](Protocol):
+    @staticmethod
+    def method(value: T) -> T: ...
+
+def _(source: type[GenericStaticMethodSource[int]]) -> None:
+    reveal_type(source.method)  # revealed: (value: int) -> int
+    good: GenericBoundMethod[int] = source
+    bad: GenericBoundMethod[str] = source  # error: [invalid-assignment]
+
+class OverloadedBoundMethod(Protocol):
+    @overload
+    def method(self, value: int) -> int: ...
+    @overload
+    def method(self, value: str) -> str: ...
+
+class OverloadedStaticMethodSource(Protocol):
+    @overload
+    @staticmethod
+    def method(value: int) -> int: ...
+    @overload
+    @staticmethod
+    def method(value: str) -> str: ...
+
+def _(source: type[OverloadedStaticMethodSource]) -> None:
+    reveal_type(source.method)  # revealed: Overload[(value: int) -> int, (value: str) -> str]
+    overloaded: OverloadedBoundMethod = source
+
+class Copier(Protocol):
+    def copy(self) -> Self: ...
+
+class InstanceFactory(Protocol):
+    @classmethod
+    def copy(cls) -> Self: ...
+
+class ClassObjectFactory(Protocol):
+    @classmethod
+    def copy(cls) -> type[Self]: ...
+
+def _(instance_factory: type[InstanceFactory], class_object_factory: type[ClassObjectFactory]) -> None:
+    reveal_type(instance_factory.copy)  # revealed: () -> InstanceFactory
+    bad: Copier = instance_factory  # error: [invalid-assignment]
+    reveal_type(class_object_factory.copy)  # revealed: () -> type[ClassObjectFactory]
+    good: Copier = class_object_factory
+
+class IterableSource(Protocol):
+    def __iter__(self) -> Iterator[int]: ...
+
+class CustomSource(Protocol):
+    @classmethod
+    def __custom__(cls, value: int) -> str: ...
+
+class CustomConsumer(Protocol):
+    def __custom__(self, value: int) -> str: ...
+
+def _(iterable_source: type[IterableSource], custom_source: type[CustomSource]) -> None:
+    reveal_type(iterable_source.__iter__)  # revealed: (self, /) -> Iterator[int]
+    iterable: Iterable[int] = iterable_source  # error: [invalid-assignment]
+    reveal_type(custom_source.__custom__)  # revealed: (value: int) -> str
+    custom: CustomConsumer = custom_source
+```
+
+## Generic meta-protocols
+
+Generic protocol arguments are preserved by structural matching, member lookup, and construction.
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Protocol
+from ty_extensions import static_assert
+from ty_extensions._internal import is_assignable_to
+
+class GenericFoo[T](Protocol):
+    value: T
+    def get(self) -> T: ...
+
+class IntFoo:
+    def __init__(self) -> None:
+        self.value = 1
+    def get(self) -> int:
+        return self.value
+
+class GenericFooImpl[T]:
+    def __init__(self, value: T) -> None:
+        self.value = value
+    def get(self) -> T:
+        return self.value
+
+static_assert(is_assignable_to(type[IntFoo], type[GenericFoo[int]]))
+static_assert(not is_assignable_to(type[IntFoo], type[GenericFoo[str]]))
+
+def _(f: type[GenericFoo[int]]) -> None:
+    reveal_type(f.get)  # revealed: (self, /) -> int
+    reveal_type(f())  # revealed: GenericFoo[int]
+```
+
+Inference derives the protocol argument from exact class objects, generic aliases, and parameters
+already annotated as `type[GenericFoo[T]]`.
+
+```py
+def infer_meta_protocol[T](cls: type[GenericFoo[T]]) -> T:
+    raise NotImplementedError
+
+reveal_type(infer_meta_protocol(IntFoo))  # revealed: int
+reveal_type(infer_meta_protocol(GenericFooImpl[int]))  # revealed: int
+
+def _(f: type[GenericFoo[int]]) -> None:
+    reveal_type(infer_meta_protocol(f))  # revealed: int
+```
+
+For a covariant protocol, inference combines the specializations contributed by each class object in
+a union.
+
+```py
+class Producer[T](Protocol):
+    def get(self) -> T: ...
+
+def infer_producer[T](cls: type[Producer[T]]) -> T:
+    raise NotImplementedError
+
+def _(flag: bool) -> None:
+    cls = GenericFooImpl[int] if flag else GenericFooImpl[str]
+    reveal_type(infer_producer(cls))  # revealed: int | str
+```
+
+## Generic substitution of `type[Protocol]`
+
+Passing `type[P]` through a generic identity function preserves its structural meaning, including
+inside a union.
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Protocol, TypeVar
+
+class P(Protocol):
+    value: int
+
+class GenericP[T](Protocol):
+    value: T
+
+T_identity = TypeVar("T_identity")
+
+def class_identity(cls: type[T_identity]) -> type[T_identity]:
+    return cls
+
+def _(cls: type[P]) -> None:
+    preserved: type[P] = class_identity(cls)
+
+def _(cls: type[P] | type[int]) -> None:
+    preserved: type[P] | type[int] = class_identity(cls)
+```
+
+The protocol class object is also accepted by the identity function as an inhabitant of `type[P]`.
+
+```py
+reveal_type(class_identity(P))  # revealed: type[P]
+```
+
+Generic protocol arguments are also preserved through the identity function.
+
+```py
+def _(cls: type[GenericP[int]]) -> None:
+    preserved: type[GenericP[int]] = class_identity(cls)
+    wrong: type[GenericP[str]] = class_identity(cls)  # error: [invalid-assignment]
+```
+
+The same substitution occurs when `type[P]` appears in a generic callable signature such as
+`classmethod`.
+
+```py
+def predicate(cls: type[P]) -> bool:
+    return True
+
+classmethod(predicate)
+```
+
+## Meta-types of protocol intersections
+
+Calling `type()` on an intersection retains each positive class constraint.
+
+```py
+from typing import Protocol
+
+class RuntimeProtocol(Protocol):
+    def get(self) -> object: ...
+
+def _(value: RuntimeProtocol) -> None:
+    if isinstance(value, int):
+        reveal_type(type(value))  # revealed: type[RuntimeProtocol] & type[int]
 ```
 
 ## Regression test for `ClassVar` members in stubs

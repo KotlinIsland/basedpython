@@ -85,7 +85,7 @@ impl FluidConstraints<'_> {
 /// the per-use visibility rules to the recorded events: when the events it
 /// includes form a prefix of the timeline (any use in straight-line code), its
 /// type is a stored cumulative solution and no solving happens at all
-#[derive(Debug, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, PartialEq, Eq, salsa::SalsaValue, get_size2::GetSize)]
 pub(crate) struct FluidTimeline<'db> {
     /// the creation-time type as a constraint, if it binds the class typevars
     creation_constraint: Option<Type<'db>>,
@@ -93,7 +93,7 @@ pub(crate) struct FluidTimeline<'db> {
     events: Box<[FluidEvent<'db>]>,
 }
 
-#[derive(Debug, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, PartialEq, Eq, salsa::SalsaValue, get_size2::GetSize)]
 struct FluidEvent<'db> {
     /// the use expression this event is anchored at: the use whose processing
     /// produced the event (for statement constraints, the first
@@ -110,7 +110,7 @@ struct FluidEvent<'db> {
     solution_promoted: Option<Type<'db>>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::SalsaValue, get_size2::GetSize)]
 enum FluidEventKind {
     /// a widening constraint
     Constrain,

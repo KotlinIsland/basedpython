@@ -130,7 +130,7 @@ pub(crate) fn applicable_extensions(db: &dyn Db, file: File) -> Box<[StaticClass
 /// the class an extension declaration extends: its name resolved in the
 /// declaring module's globals, else builtins. `None` when the name does not
 /// resolve to a class (reported at the declaration)
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub(crate) fn extended_class<'db>(
     db: &'db dyn Db,
     extension: StaticClassLiteral<'db>,
@@ -276,10 +276,8 @@ pub(crate) fn resolve_extension_member<'db>(
     // serves only `static def` / `class def` members
     let (receiver_class, instance) = if let Some(class) = receiver.nominal_class(db) {
         (class, Some(receiver))
-    } else if let Some(class) = receiver.to_class_type(db) {
-        (class, None)
     } else {
-        return None;
+        (receiver.to_class_type(db)?, None)
     };
 
     let mut resolved: Option<ExtensionMemberResolution<'db>> = None;

@@ -43,7 +43,7 @@ impl<'a> Benchmark<'a> {
 
         let mut metadata = ProjectMetadata::discover(&root, &system).unwrap();
 
-        metadata.apply_options(Options {
+        metadata.apply_override_options(Options {
             environment: Some(EnvironmentOptions {
                 python_version: Some(RangedValue::cli(installed_project.config.python_version)),
                 python: Some(RelativePathBuf::cli(SystemPath::new(".venv"))),
@@ -198,7 +198,7 @@ static SYMPY: Benchmark = Benchmark::new(
         max_dep_date: TY_ECOSYSTEM_PIN,
         python_version: SupportedPythonVersion::Py311,
     },
-    16500,
+    16617,
 );
 
 static TANJUN: Benchmark = Benchmark::new(
@@ -211,7 +211,7 @@ static TANJUN: Benchmark = Benchmark::new(
         max_dep_date: TY_ECOSYSTEM_PIN,
         python_version: SupportedPythonVersion::Py311,
     },
-    110,
+    124,
 );
 
 static STATIC_FRAME: Benchmark = Benchmark::new(

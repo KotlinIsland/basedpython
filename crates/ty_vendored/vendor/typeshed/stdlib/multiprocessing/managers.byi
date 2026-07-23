@@ -1,3 +1,4 @@
+import builtins
 import queue
 import sys
 import threading
@@ -423,8 +424,8 @@ class SyncManager(BaseManager):
     def dict[Value](self, map: SupportsKeysAndGetItem[str, Value], /, **kwargs: Value) -> DictProxy[str, Value]
     def dict[Key, Value](self, iterable: Iterable[(Key, Value)], /) -> DictProxy[Key, Value]
     def dict[Value](self, iterable: Iterable[(str, Value)], /, **kwargs: Value) -> DictProxy[str, Value]
-    def dict(self, iterable: Iterable[list[str]], /) -> DictProxy[str, str]
-    def dict(self, iterable: Iterable[list[bytes]], /) -> DictProxy[bytes, bytes]
+    def dict(self, iterable: Iterable[builtins.list[str]], /) -> DictProxy[str, str]
+    def dict(self, iterable: Iterable[builtins.list[bytes]], /) -> DictProxy[bytes, bytes]
 
     # Overloads are copied from builtins.list.__init__
     def list[Element](self, iterable: Iterable[Element], /) -> ListProxy[Element]

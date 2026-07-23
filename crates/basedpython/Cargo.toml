@@ -15,7 +15,7 @@
 name = "basedpython"
 version = "0.0.1-a5"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.95"
 publish = false
 # cargo-dist reads this crate (it drives the release version); it needs these
 # metadata keys, and the crate is its own workspace so it can't inherit them from

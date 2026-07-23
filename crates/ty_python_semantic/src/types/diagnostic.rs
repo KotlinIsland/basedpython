@@ -168,6 +168,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS);
     registry.register_lint(&UNDEFINED_REVEAL);
     registry.register_lint(&UNKNOWN_ARGUMENT);
+    registry.register_lint(&PYDANTIC_DISCARDED_EXTRA_ARGUMENT);
     registry.register_lint(&POSITIONAL_ONLY_PARAMETER_AS_KWARG);
     registry.register_lint(&UNRESOLVED_ATTRIBUTE);
     registry.register_lint(&UNRESOLVED_IMPORT);
@@ -711,10 +712,13 @@ declare_lint! {
 }
 
 declare_lint! {
-    #[doc = include_str!("../../resources/lint_docs/invalid-type-guard-call.md")]
+    /// Type guard calls without a narrowing target are valid and have no narrowing effect.
     pub(crate) static INVALID_TYPE_GUARD_CALL = {
-        summary: "detects type guard function calls that has no narrowing effect",
-        status: LintStatus::stable("0.0.1-alpha.11"),
+        summary: "detects type guard function calls that have no narrowing effect",
+        status: LintStatus::removed(
+            "0.0.60",
+            "Type guard calls without a narrowing target are valid and have no narrowing effect.",
+        ),
         default_level: Level::Error,
     }
 }
@@ -1834,6 +1838,19 @@ declare_lint! {
         summary: "detects unknown keyword arguments in calls",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    #[allow(
+        rustdoc::invalid_codeblock_attributes,
+        reason = "`data-mdtest` is an mdtest-specific code-block attribute"
+    )]
+    #[doc = include_str!("../../resources/lint_docs/pydantic-discarded-extra-argument.md")]
+    pub(crate) static PYDANTIC_DISCARDED_EXTRA_ARGUMENT = {
+        summary: "detects extra constructor arguments that Pydantic silently discards",
+        status: LintStatus::stable("0.0.60"),
+        default_level: Level::Warn,
     }
 }
 
@@ -3581,6 +3598,7 @@ pub(crate) fn report_undeclared_protocol_member(
             }) => return true,
             Type::SubclassOf(subclass_of) => match subclass_of.subclass_of() {
                 SubclassOfInner::Class(class) => class,
+                SubclassOfInner::Protocol(_) => return true,
                 SubclassOfInner::Dynamic(DynamicType::Any) => return true,
                 SubclassOfInner::Dynamic(_) | SubclassOfInner::TypeVar(_) => return false,
             },
@@ -4324,12 +4342,15 @@ pub(crate) fn report_invalid_typevar_default_reference<'db>(
 /// class Parent(Grandparent[T1, T2]): ...
 /// class BadChild(Parent[T1, T2], Grandparent[T2, T1]): ...  # Error
 /// ```
+///
+/// Returns `true` if an inconsistency was found, even when it is inherited or the diagnostic is
+/// disabled.
 pub(crate) fn report_inconsistent_generic_bases<'db>(
     context: &InferContext<'db, '_>,
     header_range: TextRange,
     explicit_bases: &[Type<'db>],
     base_nodes: Option<&[ast::Expr]>,
-) {
+) -> bool {
     let db = context.db();
     // Maps each generic ancestor's class literal to the first
     // specialization seen and the index of the explicit base it
@@ -4337,7 +4358,7 @@ pub(crate) fn report_inconsistent_generic_bases<'db>(
     let mut ancestor_specs =
         FxHashMap::<StaticClassLiteral<'db>, (GenericAlias<'db>, usize)>::default();
 
-    'outer: for (i, base) in explicit_bases.iter().enumerate() {
+    for (i, base) in explicit_bases.iter().enumerate() {
         let base_class = match base {
             Type::GenericAlias(alias) => ClassType::Generic(*alias),
             Type::ClassLiteral(class) if class.generic_context(db).is_none() => {
@@ -4353,17 +4374,19 @@ pub(crate) fn report_inconsistent_generic_bases<'db>(
             let origin = supercls_alias.origin(db);
 
             if let Some(&(earlier_alias, earlier_idx)) = ancestor_specs.get(&origin) {
-                if earlier_idx != i
-                    && earlier_alias
-                        .specialization(db)
-                        .types(db)
-                        .iter()
-                        .zip(supercls_alias.specialization(db).types(db))
-                        .any(|(t1, t2)| !t1.is_dynamic() && !t2.is_dynamic() && t1 != t2)
+                if earlier_alias
+                    .specialization(db)
+                    .types(db)
+                    .iter()
+                    .zip(supercls_alias.specialization(db).types(db))
+                    .any(|(t1, t2)| !t1.is_dynamic() && !t2.is_dynamic() && t1 != t2)
                 {
+                    if earlier_idx == i {
+                        return true;
+                    }
                     let Some(builder) = context.report_lint(&INVALID_GENERIC_CLASS, header_range)
                     else {
-                        break 'outer;
+                        return true;
                     };
                     let mut diagnostic = builder.into_diagnostic(format_args!(
                         "Inconsistent type arguments for `{}` among class bases",
@@ -4416,7 +4439,7 @@ pub(crate) fn report_inconsistent_generic_bases<'db>(
                         supercls_alias.display(db),
                         earlier_alias.display(db)
                     ));
-                    break 'outer;
+                    return true;
                 }
             } else if !supercls_alias
                 .specialization(db)
@@ -4428,6 +4451,8 @@ pub(crate) fn report_inconsistent_generic_bases<'db>(
             }
         }
     }
+
+    false
 }
 
 pub(crate) fn report_shadowed_type_variable<'db>(
@@ -4449,6 +4474,7 @@ pub(crate) fn report_shadowed_type_variable<'db>(
         | TypeVarKind::TypingSelf
         | TypeVarKind::Pep613Alias => "type variable",
         TypeVarKind::LegacyParamSpec | TypeVarKind::Pep695ParamSpec => "ParamSpec",
+        TypeVarKind::LegacyTypeVarTuple | TypeVarKind::Pep695TypeVarTuple => "TypeVarTuple",
     };
     let mut diagnostic = builder.into_diagnostic(format_args!(
         "Generic {kind} `{name}` uses {typevar_kind} `{typevar_name}` already bound by an enclosing scope",
@@ -4467,15 +4493,16 @@ pub(crate) fn report_shadowed_type_variable<'db>(
         Type::FunctionLiteral(function) => function.spans(db).signature,
         _ => return,
     };
-    if other_typevar.is_paramspec(db) {
-        diagnostic.annotate(Annotation::secondary(span).message(format_args!(
-            "ParamSpec `{typevar_name}` is bound in this enclosing scope"
-        )));
+    let other_typevar_kind = if other_typevar.is_paramspec(db) {
+        "ParamSpec"
+    } else if other_typevar.is_typevartuple(db) {
+        "TypeVarTuple"
     } else {
-        diagnostic.annotate(Annotation::secondary(span).message(format_args!(
-            "Type variable `{typevar_name}` is bound in this enclosing scope"
-        )));
-    }
+        "Type variable"
+    };
+    diagnostic.annotate(Annotation::secondary(span).message(format_args!(
+        "{other_typevar_kind} `{typevar_name}` is bound in this enclosing scope"
+    )));
 }
 
 /// basedpython: an override whose reified type-parameter list is incompatible
@@ -4786,6 +4813,63 @@ pub(super) fn report_invalid_method_override<'db>(
         for subdiag in eq_subdiagnostics {
             diagnostic.help(subdiag);
         }
+    }
+}
+
+/// Reports an incompatible pair of source-defined methods in a resolved MRO.
+pub(super) fn report_incompatible_base_method<'db>(
+    context: &InferContext<'db, '_>,
+    class: StaticClassLiteral<'db>,
+    member: &str,
+    selected: (ClassType<'db>, Definition<'db>, MethodDecorator),
+    contract: (ClassType<'db>, Definition<'db>, MethodDecorator),
+    error_context: impl FnOnce() -> ErrorContextTree<'db>,
+) {
+    let db = context.db();
+    let Some(builder) = context.report_lint(&INVALID_METHOD_OVERRIDE, class.header_range(db))
+    else {
+        return;
+    };
+
+    let (selected_owner, selected_definition, selected_decorator) = selected;
+    let (contract_owner, contract_definition, contract_decorator) = contract;
+    let (selected_name, contract_name) = if selected_owner.name(db) == contract_owner.name(db) {
+        (
+            selected_owner.qualified_name(db).to_string(),
+            contract_owner.qualified_name(db).to_string(),
+        )
+    } else {
+        (
+            selected_owner.name(db).to_string(),
+            contract_owner.name(db).to_string(),
+        )
+    };
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "Base classes for class `{}` define method `{member}` incompatibly",
+        class.name(db)
+    ));
+    diagnostic.set_primary_message(format_args!(
+        "`{selected_name}.{member}` is incompatible with `{contract_name}.{member}`"
+    ));
+    if selected_decorator != contract_decorator {
+        diagnostic.info(format_args!(
+            "`{selected_name}.{member}` is {} but `{contract_name}.{member}` is {}",
+            selected_decorator.description(),
+            contract_decorator.description(),
+        ));
+    }
+    error_context().attach_to(db, &mut diagnostic);
+    diagnostic.info("This violates the Liskov Substitution Principle");
+
+    for (definition, owner_name) in [
+        (selected_definition, selected_name),
+        (contract_definition, contract_name),
+    ] {
+        let module = parsed_module(db, definition.file(db)).load(db);
+        diagnostic.annotate(
+            Annotation::secondary(Span::from(definition.focus_range(db, &module)))
+                .message(format_args!("`{owner_name}.{member}` defined here")),
+        );
     }
 }
 

@@ -1,6 +1,7 @@
 //! Instance types: both nominal and structural.
 
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::marker::PhantomData;
 
 use ruff_python_ast::name::Name;
@@ -9,7 +10,7 @@ use ty_module_resolver::{ModuleName, file_to_module};
 use super::protocol_class::ProtocolInterface;
 use super::{
     BoundTypeVarIdentity, BoundTypeVarInstance, ClassType, DivergentType, KnownClass,
-    MaterializationKind, SubclassOfType, Type, TypeVarVariance,
+    MaterializationKind, SubclassOfType, Type, TypeAliasType, TypeVarVariance,
 };
 use crate::place::PlaceAndQualifiers;
 use crate::types::class::DynamicNamedTupleAnchor;
@@ -19,13 +20,16 @@ use crate::types::constraints::{
 use crate::types::enums::is_single_member_enum;
 use crate::types::generics::{InferableTypeVars, walk_specialization};
 use crate::types::protocol_class::{
-    ProtocolClass, has_all_protocol_members_defined, walk_protocol_interface,
+    ProtocolClass, has_all_protocol_members_defined, walk_protocol_instance_member,
+    walk_protocol_interface,
 };
 use crate::types::relation::{
-    DisjointnessChecker, HasRelationToVisitor, IsDisjointVisitor, TypeRelationChecker,
+    DisjointnessChecker, HasRelationToVisitor, IsDisjointVisitor, TypeRelation,
+    TypeRelationChecker, TypeVarEvaluation,
 };
 use crate::types::signatures::SignatureRelationVisitor;
 use crate::types::tuple::{TupleSpec, TupleType, walk_tuple_type};
+use crate::types::visitor::{TypeCollector, TypeVisitor, walk_type_with_recursion_guard};
 use crate::types::{
     ApplyTypeMappingVisitor, CallableType, ClassBase, ClassLiteral, ErrorContext,
     FindLegacyTypeVarsVisitor, LiteralValueTypeKind, TypeContext, TypeMapping, VarianceInferable,
@@ -168,7 +172,7 @@ impl<'db> Type<'db> {
 }
 
 /// A type representing the set of runtime objects which are instances of a certain nominal class.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 pub struct NominalInstanceType<'db>(
     // Keep this field private, so that the only way of constructing `NominalInstanceType` instances
     // is through the `Type::instance` constructor function.
@@ -509,13 +513,14 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
         let mut result = self.never();
 
         if let Some(nominal_instance) = protocol.to_nominal_instance() {
+            let source_protocol_as_nominal = ty
+                .as_protocol_instance()
+                .and_then(ProtocolInstanceType::to_nominal_instance);
             // if `ty` and `protocol` are *both* protocols, we also need to treat `ty` as if it
             // were a nominal type, or we won't consider a protocol `P` that explicitly inherits
             // from a protocol `Q` to be a subtype of `Q` to be a subtype of `Q` if it overrides
             // `Q`'s members in a Liskov-incompatible way.
-            let type_to_test = ty
-                .as_protocol_instance()
-                .and_then(ProtocolInstanceType::to_nominal_instance)
+            let type_to_test = source_protocol_as_nominal
                 .map(Type::NominalInstance)
                 .unwrap_or(ty);
 
@@ -528,20 +533,48 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
             {
                 return result;
             }
-        }
 
-        // `Generator` special case: compare the type parameters nominally. Prior to 3.13, its
-        // return type does not appear non-recursively in the protocol; from 3.13 onward,
-        // structurally inferring through `close() -> ReturnT | None` can spuriously infer `None`.
-        // TODO: Remove the Python 3.13+ extension of this special case once
-        // https://github.com/astral-sh/ty/issues/3596 is fixed.
-        if let Some(source_protocol) = ty.as_protocol_instance()
-            && let Protocol::FromClass(source_class) = source_protocol.inner
-            && let Protocol::FromClass(proto_class) = protocol.inner
-            && source_class.is_known(db, KnownClass::Generator)
-            && proto_class.is_known(db, KnownClass::Generator)
-        {
-            return result;
+            // `Generator` special case: compare the type parameters nominally. Prior to 3.13,
+            // its return type does not appear non-recursively in the protocol; from 3.13 onward,
+            // structurally inferring through `close() -> ReturnT | None` can spuriously infer
+            // `None`.
+            // TODO: Remove the Python 3.13+ extension of this special case once
+            // https://github.com/astral-sh/ty/issues/3596 is fixed.
+            if let Some(source_protocol) = ty.as_protocol_instance()
+                && let Protocol::FromClass(source_class) = source_protocol.inner
+                && let Protocol::FromClass(proto_class) = protocol.inner
+                && source_class.is_known(db, KnownClass::Generator)
+                && proto_class.is_known(db, KnownClass::Generator)
+            {
+                return result;
+            }
+
+            if let Some(structurally_satisfied) = self.try_check_non_recursive_protocol_members(
+                db,
+                ty,
+                protocol,
+                source_protocol_as_nominal,
+                nominal_instance,
+            ) {
+                return result.or(db, self.constraints, || structurally_satisfied);
+            }
+
+            // For union simplification, failing the nominal relation between two
+            // specializations of the same protocol class is enough to keep both union elements.
+            // Falling back to the structural relation can recursively compare every protocol
+            // member even though a failed redundancy check only means that we preserve a
+            // potentially redundant union arm.
+            if matches!(self.relation, TypeRelation::Redundancy { pure: false })
+                && ty
+                    .as_protocol_instance()
+                    .and_then(ProtocolInstanceType::to_nominal_instance)
+                    .is_some_and(|source_instance| {
+                        source_instance.class(db).class_literal(db)
+                            == nominal_instance.class(db).class_literal(db)
+                    })
+            {
+                return nominally_satisfied;
+            }
         }
 
         // Fast path: skip expensive per-member type comparisons when members are plainly
@@ -578,6 +611,86 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
             });
         }
         result.or(db, self.constraints, || structurally_satisfied)
+    }
+
+    /// Tries to relate the finite members of two specializations of the same protocol.
+    ///
+    /// This retains structural solutions such as `T | int`, while recursive members are the
+    /// coinductive edge currently being proved. Returns `None` when the shortcut is inapplicable.
+    fn try_check_non_recursive_protocol_members(
+        &self,
+        db: &'db dyn Db,
+        ty: Type<'db>,
+        protocol: ProtocolInstanceType<'db>,
+        source_protocol_as_nominal: Option<NominalInstanceType<'db>>,
+        nominal_instance: NominalInstanceType<'db>,
+    ) -> Option<ConstraintSet<'db, 'c>> {
+        if self.typevar_evaluation != TypeVarEvaluation::Lazy
+            || self.is_context_collection_enabled()
+        {
+            return None;
+        }
+
+        let Type::ProtocolInstance(source_protocol) = ty else {
+            return None;
+        };
+        let source_instance = source_protocol_as_nominal?;
+        let (ClassType::Generic(source_alias), ClassType::Generic(target_alias)) =
+            (source_instance.class(db), nominal_instance.class(db))
+        else {
+            return None;
+        };
+        if source_alias.origin(db) != target_alias.origin(db) {
+            return None;
+        }
+        let identity_protocol = target_alias
+            .origin(db)
+            .identity_specialization(db)
+            .into_protocol_class(db)?;
+
+        let source_interface = source_protocol.interface(db);
+        let target_interface = protocol.interface(db);
+        let source_non_recursive =
+            non_recursive_protocol_interface(db, source_interface, identity_protocol, ty);
+        let target_non_recursive = non_recursive_protocol_interface(
+            db,
+            target_interface,
+            identity_protocol,
+            Type::ProtocolInstance(protocol),
+        );
+
+        if source_non_recursive == source_interface && target_non_recursive == target_interface {
+            return None;
+        }
+
+        Some(self.check_protocol_interface_pair(db, ty, source_non_recursive, target_non_recursive))
+    }
+
+    /// Return whether a class-object type inhabits `type[protocol]`.
+    ///
+    /// The effective constructor return must satisfy the instance protocol, while the class object
+    /// itself must provide the protocol's `ClassVar` and unbound method requirements. Ordinary
+    /// instance attributes and properties are intentionally not required on the class object.
+    ///
+    /// `meta_ty` must be a class-object type represented by `ClassLiteral`, `SubclassOf`, or
+    /// `GenericAlias`. Other types are not necessarily subtypes of `type` or callable, and could
+    /// therefore incorrectly satisfy this check through an `Unknown` constructor return type.
+    pub(super) fn check_meta_type_satisfies_protocol(
+        &self,
+        db: &'db dyn Db,
+        meta_ty: Type<'db>,
+        protocol: ProtocolInstanceType<'db>,
+    ) -> ConstraintSet<'db, 'c> {
+        debug_assert!(matches!(
+            meta_ty,
+            Type::ClassLiteral(_) | Type::SubclassOf(_) | Type::GenericAlias(_)
+        ));
+
+        let constructed_ty = meta_ty.bindings(db).return_type(db);
+        self.check_type_pair(db, constructed_ty, Type::ProtocolInstance(protocol))
+            .and(db, self.constraints, || {
+                self.check_meta_protocol_members(db, constructed_ty, meta_ty, protocol)
+            })
     }
 
     pub(super) fn check_nominal_instance_pair(
@@ -663,6 +776,67 @@ impl<'c, 'db> TypeRelationChecker<'_, 'c, 'db> {
     }
 }
 
+/// Returns the finite members of a protocol interface, omitting members that refer back to its
+/// class-backed origin. Type aliases are expanded, but lazy protocol attributes are not visited.
+///
+/// For example, `value` is retained while `child` is omitted:
+///
+/// ```python
+/// class P[T](Protocol):
+///     def value(self) -> T | int: ...
+///     def child(self) -> P[list[T]]: ...
+/// ```
+#[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
+fn non_recursive_protocol_interface<'db>(
+    db: &'db dyn Db,
+    interface: ProtocolInterface<'db>,
+    protocol: ProtocolClass<'db>,
+    receiver_ty: Type<'db>,
+) -> ProtocolInterface<'db> {
+    struct ProtocolReferenceFinder<'db> {
+        origin: ClassLiteral<'db>,
+        found: Cell<bool>,
+        recursion_guard: TypeCollector<'db>,
+    }
+
+    impl<'db> TypeVisitor<'db> for ProtocolReferenceFinder<'db> {
+        fn should_visit_lazy_type_attributes(&self) -> bool {
+            false
+        }
+
+        fn visit_type_alias_type(&self, db: &'db dyn Db, type_alias: TypeAliasType<'db>) {
+            self.visit_type(db, type_alias.value_type(db));
+        }
+
+        fn visit_type(&self, db: &'db dyn Db, ty: Type<'db>) {
+            if self.found.get() {
+                return;
+            }
+
+            if ty
+                .as_protocol_instance()
+                .and_then(ProtocolInstanceType::to_nominal_instance)
+                .is_some_and(|instance| instance.class_literal(db) == self.origin)
+            {
+                self.found.set(true);
+                return;
+            }
+
+            walk_type_with_recursion_guard(db, ty, self, &self.recursion_guard);
+        }
+    }
+
+    interface.filter_members(db, |member| {
+        let visitor = ProtocolReferenceFinder {
+            origin: protocol.class_literal(db),
+            found: Cell::new(false),
+            recursion_guard: TypeCollector::default(),
+        };
+        walk_protocol_instance_member(db, member, receiver_ty, &visitor);
+        !visitor.found.get()
+    })
+}
+
 impl<'c, 'db> DisjointnessChecker<'_, 'c, 'db> {
     /// Return `true` if this protocol type is disjoint from the protocol `other`.
     ///
@@ -687,15 +861,15 @@ impl<'c, 'db> DisjointnessChecker<'_, 'c, 'db> {
         if left.is_object() || right.is_object() {
             return result;
         }
-        if let Some(left_spec) = left.tuple_spec(db) {
-            if let Some(right_spec) = right.tuple_spec(db) {
-                let compatible = self.check_tuple_spec_pair(db, &left_spec, &right_spec);
-                if result
-                    .union(db, self.constraints, compatible)
-                    .is_always_satisfied(db)
-                {
-                    return result;
-                }
+        if let Some(left_spec) = left.tuple_spec(db)
+            && let Some(right_spec) = right.tuple_spec(db)
+        {
+            let compatible = self.check_tuple_spec_pair(db, &left_spec, &right_spec);
+            if result
+                .union(db, self.constraints, compatible)
+                .is_always_satisfied(db)
+            {
+                return result;
             }
         }
 
@@ -713,6 +887,7 @@ impl<'c, 'db> DisjointnessChecker<'_, 'c, 'db> {
 /// The class of a nominal instance whose MRO contains an explicit `Any` base.
 #[salsa::interned(debug, heap_size=ruff_memory_usage::heap_size)]
 struct ExplicitAnyInstanceClass<'db> {
+    #[returns(copy)]
     class: ClassType<'db>,
 }
 
@@ -723,7 +898,7 @@ impl get_size2::GetSize for ExplicitAnyInstanceClass<'_> {}
 ///
 /// Interning the uncommon explicit-`Any` case lets this type store the additional semantic bit
 /// without increasing the size of [`Type`].
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 enum NominalInstanceClass<'db> {
     Plain(ClassType<'db>),
     InheritsFromExplicitAny(ExplicitAnyInstanceClass<'db>),
@@ -762,7 +937,7 @@ impl<'db> NominalInstanceClass<'db> {
 /// [`NominalInstanceType`] is split into several variants internally as a pure optimization to
 /// avoid having to materialize the [`ClassType`] for tuple instances where it would be unnecessary
 /// (this is somewhat expensive!).
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 enum NominalInstanceInner<'db> {
     /// An instance of `object`.
     ///
@@ -805,7 +980,7 @@ impl<'db> VarianceInferable<'db> for NominalInstanceType<'db> {
 
 /// A `ProtocolInstanceType` represents the set of all possible runtime objects
 /// that conform to the interface described by a certain protocol.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 pub struct ProtocolInstanceType<'db> {
     pub(super) inner: Protocol<'db>,
 
@@ -861,6 +1036,14 @@ impl<'db> ProtocolInstanceType<'db> {
         }
     }
 
+    /// Return the class backing a class-based protocol instance.
+    pub(super) fn as_class_based(self) -> Option<ProtocolClass<'db>> {
+        match self.inner {
+            Protocol::FromClass(class) => Some(class),
+            Protocol::Synthesized(_) => None,
+        }
+    }
+
     /// If this is a class-based protocol, convert the protocol-instance into a nominal instance.
     ///
     /// If this is a synthesized protocol that does not correspond to a class definition
@@ -875,10 +1058,18 @@ impl<'db> ProtocolInstanceType<'db> {
         }
     }
 
-    /// Return the meta-type of this protocol-instance type.
+    /// Return the class that defines this protocol, if it is class-backed.
+    pub(super) const fn class_origin(self) -> Option<ProtocolClass<'db>> {
+        match self.inner {
+            Protocol::FromClass(class) => Some(class),
+            Protocol::Synthesized(_) => None,
+        }
+    }
+
+    /// Return the structural meta-type of this protocol-instance type.
     pub(super) fn to_meta_type(self, db: &'db dyn Db) -> Type<'db> {
         match self.inner {
-            Protocol::FromClass(class) => SubclassOfType::from(db, class),
+            Protocol::FromClass(_) => SubclassOfType::from_protocol(self),
 
             // TODO: we can and should do better here.
             //
@@ -897,6 +1088,14 @@ impl<'db> ProtocolInstanceType<'db> {
         }
     }
 
+    /// Return the nominal meta-type used for internal class-member lookup on a protocol instance.
+    pub(super) fn to_nominal_meta_type(self, db: &'db dyn Db) -> Type<'db> {
+        match self.inner {
+            Protocol::FromClass(class) => SubclassOfType::from(db, *class),
+            Protocol::Synthesized(_) => self.to_meta_type(db),
+        }
+    }
+
     /// Return `true` if this protocol is a supertype of `object`.
     ///
     /// This indicates that the protocol represents the same set of possible runtime objects
@@ -904,7 +1103,7 @@ impl<'db> ProtocolInstanceType<'db> {
     /// Such a protocol is therefore an equivalent type to `object`, which would in fact be
     /// normalised to `object`.
     pub(super) fn is_equivalent_to_object(self, db: &'db dyn Db) -> bool {
-        #[salsa::tracked(cycle_initial=|_, _, _, ()| true, heap_size=ruff_memory_usage::heap_size)]
+        #[salsa::tracked(returns(copy), cycle_initial=|_, _, _, ()| true, heap_size=ruff_memory_usage::heap_size)]
         fn is_equivalent_to_object_inner<'db>(
             db: &'db dyn Db,
             protocol: ProtocolInstanceType<'db>,
@@ -997,7 +1196,7 @@ impl<'db> VarianceInferable<'db> for ProtocolInstanceType<'db> {
 
 /// An enumeration of the two kinds of protocol types: those that originate from a class
 /// definition in source code, and those that are synthesized from a set of members.
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 pub(super) enum Protocol<'db> {
     FromClass(ProtocolClass<'db>),
     Synthesized(SynthesizedProtocolType<'db>),
@@ -1055,7 +1254,7 @@ mod synthesized_protocol {
     use ty_python_core::definition::Definition;
 
     /// A "synthesized" protocol type that is dissociated from a class definition in source code.
-    #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, salsa::Update, get_size2::GetSize)]
+    #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, get_size2::GetSize, salsa::SalsaValue)]
     pub(in crate::types) struct SynthesizedProtocolType<'db>(ProtocolInterface<'db>);
 
     impl<'db> SynthesizedProtocolType<'db> {

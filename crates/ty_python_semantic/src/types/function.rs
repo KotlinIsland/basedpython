@@ -86,11 +86,12 @@ use crate::types::list_members::all_members;
 use crate::types::narrow::ClassInfoConstraintFunction;
 use crate::types::relation::TypeRelationChecker;
 use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope, Signature};
+use crate::types::tuple::TupleSpec;
 use crate::types::variance::{TypeVarVariance, VarianceInferable};
-use crate::types::visitor::any_over_type;
+use crate::types::visitor::non_any_dynamic_content;
 use crate::types::{
     ApplyTypeMappingVisitor, BoundMethodType, BoundTypeVarIdentity, BoundTypeVarInstance,
-    CallableType, ClassBase, ClassLiteral, ClassType, DynamicType, FindLegacyTypeVarsVisitor,
+    CallableType, ClassBase, ClassLiteral, ClassType, FindLegacyTypeVarsVisitor,
     IntersectionBuilder, KnownClass, KnownInstanceType, SpecialFormType, SubclassOfInner,
     SubclassOfType, Truthiness, Type, TypeContext, TypeMapping, TypeVarBoundOrConstraints,
     UnionBuilder, UnionType, definition_expression_type, walk_signature,
@@ -269,7 +270,7 @@ bitflags! {
     /// arguments that were passed in. For the precise meaning of the fields, see [1].
     ///
     /// [1]: https://docs.python.org/3/library/typing.html#typing.dataclass_transform
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct DataclassTransformerFlags: u8 {
         const EQ_DEFAULT = 1 << 0;
         const ORDER_DEFAULT = 1 << 1;
@@ -290,6 +291,7 @@ impl Default for DataclassTransformerFlags {
 /// instance that we use as the return type for `dataclass_transform(…)` calls.
 #[salsa::interned(debug, heap_size=ruff_memory_usage::heap_size)]
 pub struct DataclassTransformerParams<'db> {
+    #[returns(copy)]
     pub flags: DataclassTransformerFlags,
 
     #[returns(deref)]
@@ -320,22 +322,28 @@ pub struct OverloadLiteral<'db> {
     pub name: ast::name::Name,
 
     /// Is this a function that we special-case somehow? If so, which one?
+    #[returns(copy)]
     pub(crate) known: Option<KnownFunction>,
 
     /// The scope that's created by the function, in which the function body is evaluated.
+    #[returns(copy)]
     pub(crate) body_scope: ScopeId<'db>,
 
     /// A set of special decorators that were applied to this function
+    #[returns(copy)]
     pub(crate) decorators: FunctionDecorators,
 
     /// If `Some` then contains the `@warnings.deprecated`
+    #[returns(copy)]
     pub(crate) deprecated: Option<DeprecatedInstance<'db>>,
 
     /// The arguments to `dataclass_transformer`, if this function was annotated
     /// with `@dataclass_transformer(...)`.
+    #[returns(copy)]
     pub(crate) dataclass_transformer_params: Option<DataclassTransformerParams<'db>>,
 
     /// Whether this overload or implementation has an explicit return annotation.
+    #[returns(copy)]
     pub(crate) has_explicit_return_annotation: bool,
 }
 
@@ -351,7 +359,7 @@ impl get_size2::GetSize for OverloadLiteral<'_> {}
 /// A `once` parameter is a `local` borrow with an extra "called exactly once"
 /// obligation, so "borrowed" means `local` *or* `once`; the separate `once`
 /// flags let the strict `once` → `once` propagation rule distinguish them.
-#[derive(Debug, Default, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Default, PartialEq, Eq, salsa::SalsaValue, get_size2::GetSize)]
 pub(crate) struct CallbackParameterModifiers {
     /// `once` on the parameter a trailing block binds to — the last declared
     /// parameter, keyword-only included (see [`last_bound_parameter`])
@@ -1014,7 +1022,7 @@ impl<'db> OverloadLiteral<'db> {
 /// Representation of a function definition in the AST, along with any previous overloads of the
 /// function. Each overload can be separately generic or not, and each generic overload uses
 /// distinct typevars.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 pub struct FunctionLiteral<'db> {
     pub(crate) last_definition: OverloadLiteral<'db>,
     overloaded: bool,
@@ -1213,7 +1221,7 @@ impl<'db> FunctionLiteral<'db> {
     /// For functions without an implementation (e.g., overloaded functions),
     /// returns [`FunctionBodyKind::Stub`].
     fn body_kind(self, db: &'db dyn Db) -> FunctionBodyKind {
-        #[salsa::tracked]
+        #[salsa::tracked(returns(copy))]
         fn implementation_body_kind<'db>(
             db: &'db dyn Db,
             implementation: OverloadLiteral<'db>,
@@ -1268,7 +1276,7 @@ pub(super) fn same_module_uncached_raw_signature<'db>(
 }
 
 /// Indicates whether a method is explicitly or implicitly abstract.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, get_size2::GetSize)]
 pub(super) enum AbstractMethodKind {
     /// The method is explicitly marked as abstract using `@abstractmethod`.
     Explicit,
@@ -1294,7 +1302,7 @@ impl AbstractMethodKind {
 ///
 /// This uncommon payload is boxed so that ordinary function types only retain the literal and one
 /// optional pointer.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update, get_size2::GetSize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
 pub struct UpdatedFunctionSignatures<'db> {
     /// Contains a potentially modified signature for this function literal, in case certain
     /// operations (like type mappings) have been applied to it.
@@ -1327,6 +1335,7 @@ impl<'db> UpdatedFunctionSignatures<'db> {
 /// generic function.
 #[salsa::interned(debug, heap_size=ruff_memory_usage::heap_size)]
 pub struct FunctionType<'db> {
+    #[returns(copy)]
     pub(crate) literal: FunctionLiteral<'db>,
 
     #[returns(ref)]
@@ -1723,6 +1732,7 @@ impl<'db> FunctionType<'db> {
     /// This is tracked because signatures can contain recursive `TypeOf` references back to the
     /// function itself. Class and generic-alias variance use the same `Bivariant` cycle fallback.
     #[salsa::tracked(
+        returns(copy),
         cycle_initial=|_, _, _, _| TypeVarVariance::Bivariant,
         heap_size=ruff_memory_usage::heap_size,
     )]
@@ -1944,25 +1954,24 @@ fn check_classinfo_in_isinstance<'db>(
                 classinfo_expr,
             );
         }
-        Type::NominalInstance(nominal) => {
-            if let Some(tuple_spec) = nominal.tuple_spec(db) {
-                let element_exprs = match classinfo_expr {
-                    Some(ast::Expr::Tuple(tuple_expr)) => Some(&tuple_expr.elts),
-                    _ => None,
-                };
-                for (index, element) in tuple_spec.iter_all_elements().enumerate() {
-                    let element_expr = element_exprs.and_then(|elts| elts.get(index));
-                    check_classinfo_in_isinstance(
-                        db,
-                        context,
-                        call_expression,
-                        function,
-                        element,
-                        element_expr,
-                    );
-                }
+        Type::NominalInstance(nominal) if let Some(tuple_spec) = nominal.tuple_spec(db) => {
+            let element_exprs = match classinfo_expr {
+                Some(ast::Expr::Tuple(tuple_expr)) => Some(&tuple_expr.elts),
+                _ => None,
+            };
+            for (index, element) in tuple_spec.iter_element_types(db).enumerate() {
+                let element_expr = element_exprs.and_then(|elts| elts.get(index));
+                check_classinfo_in_isinstance(
+                    db,
+                    context,
+                    call_expression,
+                    function,
+                    element,
+                    element_expr,
+                );
             }
         }
+
         _ => {}
     }
 }
@@ -2213,6 +2222,66 @@ fn is_instance_truthiness<'db>(
     }
 }
 
+/// Return whether a fixed `isinstance` tuple covers every possible type of an input.
+///
+/// Each class in the tuple uses the same truthiness inference as a single-class `isinstance` check.
+///
+/// ```python
+/// def f(x: A | B) -> bool:
+///     if isinstance(x, (A, B)):
+///         return True
+/// ```
+fn is_instance_tuple_exhaustive<'db>(db: &'db dyn Db, ty: Type<'db>, classinfo: Type<'db>) -> bool {
+    let Some(tuple) = classinfo.tuple_instance_spec(db) else {
+        return false;
+    };
+    if tuple.is_variadic() {
+        return false;
+    }
+
+    is_instance_tuple_covers(db, &tuple, ty, &ActiveRecursionDetector::default())
+}
+
+fn is_instance_tuple_covers<'db>(
+    db: &'db dyn Db,
+    tuple: &TupleSpec<'db>,
+    ty: Type<'db>,
+    recursion_guard: &ActiveRecursionDetector<Type<'db>>,
+) -> bool {
+    match ty {
+        Type::TypeAlias(alias) => recursion_guard.visit(
+            &ty,
+            || true,
+            || is_instance_tuple_covers(db, tuple, alias.value_type(db), recursion_guard),
+        ),
+        Type::Union(union) => union
+            .elements(db)
+            .iter()
+            .all(|element| is_instance_tuple_covers(db, tuple, *element, recursion_guard)),
+        Type::Intersection(intersection) => intersection
+            .positive(db)
+            .iter()
+            .any(|element| is_instance_tuple_covers(db, tuple, *element, recursion_guard)),
+        Type::TypeVar(typevar) => match typevar.typevar(db).bound_or_constraints(db) {
+            Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
+                is_instance_tuple_covers(db, tuple, bound, recursion_guard)
+            }
+            Some(TypeVarBoundOrConstraints::Constraints(constraints)) => {
+                constraints.elements(db).iter().all(|constraint| {
+                    is_instance_tuple_covers(db, tuple, *constraint, recursion_guard)
+                })
+            }
+            None => is_instance_tuple_covers(db, tuple, Type::object(), recursion_guard),
+        },
+        ty => tuple.fixed_elements().any(|element| {
+            let Type::ClassLiteral(class) = element else {
+                return false;
+            };
+            is_instance_truthiness(db, ty, *class).is_always_true()
+        }),
+    }
+}
+
 /// Returns `true` if the function body is stub-like, ignoring a leading docstring.
 pub(crate) fn function_has_stub_body(node: &ast::StmtFunctionDef) -> bool {
     let suite = ast::helpers::body_without_leading_docstring(&node.body);
@@ -2358,6 +2427,9 @@ pub enum KnownFunction {
     /// `pydantic.fields.Field`
     #[strum(serialize = "Field")]
     PydanticField,
+    /// `pydantic.functional_validators.field_validator`
+    #[strum(serialize = "field_validator")]
+    PydanticFieldValidator,
 
     /// `_pytest.fixtures.fixture` — the `@pytest.fixture` decorator
     #[strum(serialize = "fixture")]
@@ -2483,6 +2555,9 @@ impl KnownFunction {
             }
             Self::PydanticField => matches!(module, KnownModule::PydanticFields),
             Self::PytestFixture => matches!(module, KnownModule::PytestFixtures),
+            Self::PydanticFieldValidator => {
+                matches!(module, KnownModule::PydanticFunctionalValidators)
+            }
             Self::TotalOrdering => module.is_functools(),
             Self::GetattrStatic => module.is_inspect(),
             Self::StaticAssert => module.is_ty_extensions(),
@@ -2701,12 +2776,9 @@ impl KnownFunction {
                     return;
                 };
                 let casted_type = casted_type.project_type_form(db);
-                let contains_unknown_or_todo = |ty: Type<'_>| {
-                    ty.is_dynamic() && !matches!(ty, Type::Dynamic(DynamicType::Any))
-                };
                 if source_type.is_equivalent_to(db, casted_type)
-                    && !any_over_type(db, *source_type, true, contains_unknown_or_todo)
-                    && !any_over_type(db, casted_type, true, contains_unknown_or_todo)
+                    && non_any_dynamic_content(db, *source_type).is_absent()
+                    && non_any_dynamic_content(db, casted_type).is_absent()
                 {
                     if let Some(builder) = context.report_lint(&REDUNDANT_CAST, call_expression) {
                         let source_display = source_type.display(db).to_string();
@@ -2893,13 +2965,27 @@ impl KnownFunction {
                     call_expression.arguments.args.get(1),
                 );
 
-                if let Type::ClassLiteral(class) = second_argument
-                    && self == KnownFunction::IsInstance
-                {
-                    overload.set_return_type(Type::from_truthiness(
-                        db,
-                        is_instance_truthiness(db, *first_arg, *class),
-                    ));
+                if self == KnownFunction::IsInstance {
+                    let truthiness = match second_argument {
+                        Type::ClassLiteral(class) => is_instance_truthiness(db, *first_arg, *class),
+                        Type::SpecialForm(
+                            SpecialFormType::TypingCallable
+                            | SpecialFormType::CollectionsAbcCallable,
+                        ) => {
+                            let callable_top =
+                                Type::Callable(CallableType::unknown(db)).top_materialization(db);
+                            if first_arg.is_subtype_of(db, callable_top) {
+                                Truthiness::AlwaysTrue
+                            } else {
+                                Truthiness::Ambiguous
+                            }
+                        }
+                        _ if is_instance_tuple_exhaustive(db, *first_arg, *second_argument) => {
+                            Truthiness::AlwaysTrue
+                        }
+                        _ => Truthiness::Ambiguous,
+                    };
+                    overload.set_return_type(Type::from_truthiness(db, truthiness));
                 }
             }
 
@@ -3014,6 +3100,7 @@ pub(crate) mod tests {
                 KnownFunction::Dataclass | KnownFunction::Field => KnownModule::Dataclasses,
 
                 KnownFunction::PydanticField => KnownModule::PydanticFields,
+                KnownFunction::PydanticFieldValidator => KnownModule::PydanticFunctionalValidators,
 
                 KnownFunction::PytestFixture => KnownModule::PytestFixtures,
 

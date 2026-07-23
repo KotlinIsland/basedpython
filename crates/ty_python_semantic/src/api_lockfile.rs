@@ -821,7 +821,7 @@ fn render_anon_named_tuple<'db>(
     // fall back to tuple-spec elements when body declarations aren't
     // available
     let spec = instance.tuple_spec(db)?;
-    let elements: Vec<&Type<'db>> = spec.all_elements().iter().collect();
+    let elements: Vec<&Type<'db>> = spec.fixed_elements().collect();
     if elements.is_empty() {
         return None;
     }

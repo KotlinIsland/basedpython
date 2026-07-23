@@ -110,6 +110,7 @@ pub enum KnownClass {
     ParamSpecKwargs,
     ProtocolMeta,
     TypeVarTuple,
+    ExtensionsTypeVarTuple, // must be distinct from typing.TypeVarTuple, backports new features
     TypeAliasType,
     NoDefaultType,
     NewType,
@@ -148,6 +149,7 @@ pub enum KnownClass {
     // ty_extensions
     Character,
     ConstraintSet,
+    ConstraintSetSolution,
     GenericContext,
     Specialization,
     TyExtensionsAsyncIterable,
@@ -159,6 +161,7 @@ pub enum KnownClass {
     PydanticBaseSettings,
     PydanticConfigDict,
     PydanticRootModel,
+    PydanticStrict,
     // Django
     DjangoModel,
     DjangoField,
@@ -209,6 +212,7 @@ impl KnownClass {
             | Self::ParamSpecArgs
             | Self::ParamSpecKwargs
             | Self::TypeVarTuple
+            | Self::ExtensionsTypeVarTuple
             | Self::Sentinel
             | Self::Super
             | Self::WrapperDescriptorType
@@ -293,6 +297,7 @@ impl KnownClass {
             | Self::NamedTupleLike
             | Self::Character
             | Self::ConstraintSet
+            | Self::ConstraintSetSolution
             | Self::GenericContext
             | Self::Specialization
             | Self::ProtocolMeta
@@ -303,6 +308,7 @@ impl KnownClass {
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
             | Self::PydanticRootModel
+            | Self::PydanticStrict
             | Self::DjangoModel
             | Self::DjangoField
             | Self::DjangoForeignKey
@@ -384,6 +390,7 @@ impl KnownClass {
             | KnownClass::ParamSpecArgs
             | KnownClass::ParamSpecKwargs
             | KnownClass::TypeVarTuple
+            | KnownClass::ExtensionsTypeVarTuple
             | KnownClass::Sentinel
             | KnownClass::TypeAliasType
             | KnownClass::NoDefaultType
@@ -413,6 +420,7 @@ impl KnownClass {
             | KnownClass::NamedTupleLike
             | KnownClass::Character
             | KnownClass::ConstraintSet
+            | KnownClass::ConstraintSetSolution
             | KnownClass::GenericContext
             | KnownClass::Specialization
             | KnownClass::TypedDictFallback
@@ -426,6 +434,7 @@ impl KnownClass {
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticConfigDict
             | KnownClass::PydanticRootModel
+            | KnownClass::PydanticStrict
             | KnownClass::DjangoModel
             | KnownClass::DjangoField
             | KnownClass::DjangoForeignKey
@@ -504,6 +513,7 @@ impl KnownClass {
             | KnownClass::ParamSpecArgs
             | KnownClass::ParamSpecKwargs
             | KnownClass::TypeVarTuple
+            | KnownClass::ExtensionsTypeVarTuple
             | KnownClass::Sentinel
             | KnownClass::TypeAliasType
             | KnownClass::NoDefaultType
@@ -533,6 +543,7 @@ impl KnownClass {
             | KnownClass::NamedTupleLike
             | KnownClass::Character
             | KnownClass::ConstraintSet
+            | KnownClass::ConstraintSetSolution
             | KnownClass::GenericContext
             | KnownClass::Specialization
             | KnownClass::TypedDictFallback
@@ -545,6 +556,7 @@ impl KnownClass {
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticRootModel
+            | KnownClass::PydanticStrict
             | KnownClass::DjangoModel
             | KnownClass::DjangoField
             | KnownClass::DjangoForeignKey
@@ -625,6 +637,7 @@ impl KnownClass {
             | KnownClass::ParamSpecArgs
             | KnownClass::ParamSpecKwargs
             | KnownClass::TypeVarTuple
+            | KnownClass::ExtensionsTypeVarTuple
             | KnownClass::Sentinel
             | KnownClass::TypeAliasType
             | KnownClass::NoDefaultType
@@ -655,6 +668,7 @@ impl KnownClass {
             | KnownClass::NamedTupleFallback
             | KnownClass::Character
             | KnownClass::ConstraintSet
+            | KnownClass::ConstraintSetSolution
             | KnownClass::GenericContext
             | KnownClass::Specialization
             | KnownClass::BuiltinFunctionType
@@ -666,6 +680,7 @@ impl KnownClass {
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticConfigDict
             | KnownClass::PydanticRootModel
+            | KnownClass::PydanticStrict
             | KnownClass::DjangoModel
             | KnownClass::DjangoField
             | KnownClass::DjangoForeignKey
@@ -752,6 +767,7 @@ impl KnownClass {
             | Self::ParamSpecArgs
             | Self::ParamSpecKwargs
             | Self::TypeVarTuple
+            | Self::ExtensionsTypeVarTuple
             | Self::Sentinel
             | Self::TypeAliasType
             | Self::NoDefaultType
@@ -783,6 +799,7 @@ impl KnownClass {
             | Self::NamedTupleFallback
             | Self::Character
             | Self::ConstraintSet
+            | Self::ConstraintSetSolution
             | Self::GenericContext
             | Self::Specialization
             | Self::TypedDictFallback
@@ -798,6 +815,7 @@ impl KnownClass {
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
             | Self::PydanticRootModel
+            | Self::PydanticStrict
             | Self::DjangoModel
             | Self::DjangoField
             | Self::DjangoForeignKey
@@ -884,6 +902,7 @@ impl KnownClass {
             | KnownClass::ParamSpecKwargs
             | KnownClass::ProtocolMeta
             | KnownClass::TypeVarTuple
+            | KnownClass::ExtensionsTypeVarTuple
             | KnownClass::Sentinel
             | KnownClass::TypeAliasType
             | KnownClass::NoDefaultType
@@ -913,12 +932,14 @@ impl KnownClass {
             | KnownClass::FunctoolsPartial
             | KnownClass::Character
             | KnownClass::ConstraintSet
+            | KnownClass::ConstraintSetSolution
             | KnownClass::GenericContext
             | KnownClass::Specialization
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticConfigDict
             | KnownClass::PydanticRootModel
+            | KnownClass::PydanticStrict
             | KnownClass::DjangoModel
             | KnownClass::DjangoField
             | KnownClass::DjangoForeignKey
@@ -987,6 +1008,7 @@ impl KnownClass {
             Self::ParamSpecArgs => "ParamSpecArgs",
             Self::ParamSpecKwargs => "ParamSpecKwargs",
             Self::TypeVarTuple => "TypeVarTuple",
+            Self::ExtensionsTypeVarTuple => "TypeVarTuple",
             Self::Sentinel => "sentinel",
             Self::TypeAliasType => "TypeAliasType",
             Self::NoDefaultType => "_NoDefaultType",
@@ -1041,6 +1063,7 @@ impl KnownClass {
             Self::NamedTupleLike => "NamedTupleLike",
             Self::Character => "Character",
             Self::ConstraintSet => "ConstraintSet",
+            Self::ConstraintSetSolution => "ConstraintSetSolution",
             Self::GenericContext => "GenericContext",
             Self::Specialization => "Specialization",
             Self::TypedDictFallback => "TypedDictFallback",
@@ -1053,6 +1076,7 @@ impl KnownClass {
             Self::PydanticBaseSettings => "BaseSettings",
             Self::PydanticConfigDict => "ConfigDict",
             Self::PydanticRootModel => "RootModel",
+            Self::PydanticStrict => "Strict",
             Self::DjangoModel => "Model",
             Self::DjangoField => "Field",
             Self::DjangoForeignKey => "ForeignKey",
@@ -1102,10 +1126,21 @@ impl KnownClass {
             KnownClass::Tuple,
             "Use `Type::heterogeneous_tuple` or `Type::homogeneous_tuple` to create `tuple` instances"
         );
-        self.to_class_literal(db)
-            .to_class_type(db)
-            .map(|class| Type::instance(db, class))
-            .unwrap_or_else(Type::unknown)
+
+        #[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
+        fn known_class_to_instance<'db>(
+            db: &'db dyn Db,
+            class: KnownClassArgument<'db>,
+        ) -> Type<'db> {
+            class
+                .class(db)
+                .to_class_literal(db)
+                .to_class_type(db)
+                .map(|class| Type::instance(db, class))
+                .unwrap_or_else(Type::unknown)
+        }
+
+        known_class_to_instance(db, KnownClassArgument::new(db, self))
     }
 
     /// Similar to [`KnownClass::to_instance`], but returns the Unknown-specialization where each type
@@ -1196,7 +1231,7 @@ impl KnownClass {
             "Use `Type::heterogeneous_tuple` or `Type::homogeneous_tuple` to create `tuple` instances"
         );
         self.to_specialized_class_type(db, specialization)
-            .and_then(|class_type| Type::from(class_type).to_instance(db))
+            .and_then(|class_type| Type::from(class_type).to_instance_approximation(db))
             .unwrap_or_else(Type::unknown)
     }
 
@@ -1207,12 +1242,7 @@ impl KnownClass {
         self,
         db: &dyn Db,
     ) -> Result<Option<StaticClassLiteral<'_>>, KnownClassLookupError<'_>> {
-        #[salsa::interned(heap_size=ruff_memory_usage::heap_size)]
-        struct KnownClassArgument {
-            class: KnownClass,
-        }
-
-        #[salsa::tracked(cycle_initial=|_, _, _| Ok(None), heap_size=ruff_memory_usage::heap_size)]
+        #[salsa::tracked(returns(copy), cycle_initial=|_, _, _| Ok(None), heap_size=ruff_memory_usage::heap_size)]
         fn known_class_to_class_literal<'db>(
             db: &'db dyn Db,
             class: KnownClassArgument<'db>,
@@ -1401,13 +1431,20 @@ impl KnownClass {
             | Self::SupportsIndex => KnownModule::Typing,
             Self::TypeAliasType
             | Self::ExtensionsTypeVar
-            | Self::TypeVarTuple
+            | Self::ExtensionsTypeVarTuple
             | Self::ExtensionsParamSpec
             | Self::ParamSpecArgs
             | Self::ParamSpecKwargs
             | Self::Deprecated
             | Self::ExtensionTypedDictFallback
             | Self::NewType => KnownModule::TypingExtensions,
+            Self::TypeVarTuple => {
+                if Program::get(db).python_version(db) >= PythonVersion::PY311 {
+                    KnownModule::Typing
+                } else {
+                    KnownModule::TypingExtensions
+                }
+            }
             Self::Sentinel => {
                 if Program::get(db).python_version(db) >= PythonVersion::PY315 {
                     KnownModule::Builtins
@@ -1436,6 +1473,7 @@ impl KnownClass {
             Self::NamedTupleFallback | Self::TypedDictFallback => KnownModule::TypeCheckerInternals,
             Self::NamedTupleLike | Self::Character => KnownModule::TyExtensions,
             Self::ConstraintSet
+            | Self::ConstraintSetSolution
             | Self::GenericContext
             | Self::Specialization
             | Self::TyExtensionsAsyncIterable
@@ -1449,6 +1487,7 @@ impl KnownClass {
             Self::PydanticBaseSettings => KnownModule::PydanticSettingsMain,
             Self::PydanticConfigDict => KnownModule::PydanticConfig,
             Self::PydanticRootModel => KnownModule::PydanticRootModel,
+            Self::PydanticStrict => KnownModule::PydanticTypes,
             Self::DjangoModel => KnownModule::DjangoDbModelsBase,
             Self::DjangoField => KnownModule::DjangoDbModelsFields,
             Self::DjangoForeignKey | Self::DjangoOneToOneField | Self::DjangoManyToManyField => {
@@ -1529,6 +1568,7 @@ impl KnownClass {
             | Self::ParamSpecArgs
             | Self::ParamSpecKwargs
             | Self::TypeVarTuple
+            | Self::ExtensionsTypeVarTuple
             | Self::Sentinel
             | Self::Enum
             | Self::EnumProperty
@@ -1558,6 +1598,7 @@ impl KnownClass {
             | Self::NamedTupleLike
             | Self::Character
             | Self::ConstraintSet
+            | Self::ConstraintSetSolution
             | Self::GenericContext
             | Self::Specialization
             | Self::TypedDictFallback
@@ -1572,6 +1613,7 @@ impl KnownClass {
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
             | Self::PydanticRootModel
+            | Self::PydanticStrict
             | Self::DjangoModel
             | Self::DjangoField
             | Self::DjangoForeignKey
@@ -1654,6 +1696,7 @@ impl KnownClass {
             | Self::ParamSpecArgs
             | Self::ParamSpecKwargs
             | Self::TypeVarTuple
+            | Self::ExtensionsTypeVarTuple
             | Self::Sentinel
             | Self::Enum
             | Self::EnumProperty
@@ -1684,6 +1727,7 @@ impl KnownClass {
             | Self::NamedTupleLike
             | Self::Character
             | Self::ConstraintSet
+            | Self::ConstraintSetSolution
             | Self::GenericContext
             | Self::Specialization
             | Self::TypedDictFallback
@@ -1697,6 +1741,7 @@ impl KnownClass {
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
             | Self::PydanticRootModel
+            | Self::PydanticStrict
             | Self::DjangoModel
             | Self::DjangoField
             | Self::DjangoForeignKey
@@ -1772,7 +1817,9 @@ impl KnownClass {
             "ParamSpec" => &[Self::ParamSpec, Self::ExtensionsParamSpec],
             "ParamSpecArgs" => &[Self::ParamSpecArgs],
             "ParamSpecKwargs" => &[Self::ParamSpecKwargs],
-            "TypeVarTuple" => &[Self::TypeVarTuple],
+            // On Python 3.10, both candidates resolve to `typing_extensions`. Prefer the
+            // backport-aware variant so that we recognize features such as `default`.
+            "TypeVarTuple" => &[Self::ExtensionsTypeVarTuple, Self::TypeVarTuple],
             "sentinel" => &[Self::Sentinel],
             "ChainMap" => &[Self::ChainMap],
             "Counter" => &[Self::Counter],
@@ -1809,6 +1856,7 @@ impl KnownClass {
             "NamedTupleLike" => &[Self::NamedTupleLike],
             "Character" => &[Self::Character],
             "ConstraintSet" => &[Self::ConstraintSet],
+            "ConstraintSetSolution" => &[Self::ConstraintSetSolution],
             "GenericContext" => &[Self::GenericContext],
             "Specialization" => &[Self::Specialization],
             "TypedDictFallback" => &[Self::TypedDictFallback],
@@ -1821,6 +1869,7 @@ impl KnownClass {
             "BaseSettings" => &[Self::PydanticBaseSettings],
             "ConfigDict" => &[Self::PydanticConfigDict],
             "RootModel" => &[Self::PydanticRootModel],
+            "Strict" => &[Self::PydanticStrict],
             "Model" => &[Self::DjangoModel],
             "ForeignKey" => &[Self::DjangoForeignKey],
             "OneToOneField" => &[Self::DjangoOneToOneField],
@@ -1911,10 +1960,13 @@ impl KnownClass {
             | Self::ExtensionsTypeVar
             | Self::ParamSpec
             | Self::ExtensionsParamSpec
+            | Self::TypeVarTuple
+            | Self::ExtensionsTypeVarTuple
             | Self::Sentinel
             | Self::NamedTupleLike
             | Self::Character
             | Self::ConstraintSet
+            | Self::ConstraintSetSolution
             | Self::GenericContext
             | Self::Specialization
             | Self::TyExtensionsAsyncIterable
@@ -1931,6 +1983,7 @@ impl KnownClass {
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
             | Self::PydanticRootModel
+            | Self::PydanticStrict
             | Self::DjangoModel
             | Self::DjangoField
             | Self::DjangoForeignKey
@@ -1949,7 +2002,6 @@ impl KnownClass {
             | Self::SupportsIndex
             | Self::ParamSpecArgs
             | Self::ParamSpecKwargs
-            | Self::TypeVarTuple
             | Self::Iterable
             | Self::Iterator
             | Self::AsyncIterator
@@ -2104,8 +2156,14 @@ impl KnownClass {
     }
 }
 
+#[salsa::interned(heap_size=ruff_memory_usage::heap_size)]
+struct KnownClassArgument {
+    #[returns(copy)]
+    class: KnownClass,
+}
+
 /// Enumeration of ways in which looking up a [`KnownClass`] in its canonical module could fail.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, salsa::Update, get_size2::GetSize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
 pub(crate) enum KnownClassLookupError<'db> {
     /// There is no symbol by that name in the expected module.
     ClassNotFound { third_party: bool },
@@ -2264,6 +2322,7 @@ mod tests {
                     KnownClass::BaseExceptionGroup | KnownClass::ExceptionGroup => {
                         PythonVersion::PY311
                     }
+                    KnownClass::TypeVarTuple => PythonVersion::PY311,
                     KnownClass::GenericAlias => PythonVersion::PY39,
                     KnownClass::EnumProperty
                     | KnownClass::Member

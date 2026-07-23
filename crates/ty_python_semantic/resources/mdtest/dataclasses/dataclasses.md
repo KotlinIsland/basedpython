@@ -28,7 +28,7 @@ reveal_type(alice1.age)  # revealed: int | None
 reveal_type(repr(alice1))  # revealed: str
 
 reveal_type(alice1 == alice2)  # revealed: bool
-reveal_type(alice1 == "Alice")  # revealed: bool
+reveal_type(alice1 == "Alice")  # revealed: Literal[False]
 
 bob = Person("Bob")
 bob2 = Person("Bob", None)
@@ -154,6 +154,26 @@ class BadWithInitFalse:
     y: str = field(init=False)
     # error: [dataclass-field-order] "Required field `z` cannot be defined after fields with default values"
     z: float
+```
+
+Class-level `init=False` suppresses the ordering check because no constructor is generated:
+
+```py
+@dataclass(init=False)
+class GoodWithClassInitFalse:
+    x: int = 1
+    y: str
+
+    def __init__(self, y: str) -> None:
+        self.y = y
+
+GoodWithClassInitFalse("value")
+
+# Re-enabling `init` makes the inherited default-before-required ordering invalid at runtime.
+# TODO: error: [dataclass-field-order]
+@dataclass
+class BadWithReenabledInit(GoodWithClassInitFalse):
+    pass
 ```
 
 Keyword-only fields (using `kw_only=True`) also don't participate in the positional ordering check:

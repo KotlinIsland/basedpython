@@ -24,7 +24,7 @@ enum BinaryExpressionOperandTypes<'db> {
 }
 
 type BinaryExpressionVisitor<'db> =
-    CycleDetector<ast::Operator, (Type<'db>, ast::Operator, Type<'db>), Option<Type<'db>>, 1>;
+    CycleDetector<'db, ast::Operator, (Type<'db>, ast::Operator, Type<'db>), Option<Type<'db>>, 1>;
 
 impl<'db> TypeInferenceBuilder<'db, '_> {
     pub(super) fn infer_binary_expression(
@@ -356,7 +356,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         match (left_ty, right_ty, op) {
             // parameter-only marker; behaves as the type a body sees (bound of `Key`)
             (Type::Overlapping(overlapping), _, _) => {
-                visitor.visit((left_ty, op, right_ty), || {
+                visitor.visit(db, (left_ty, op, right_ty), || {
                     self.infer_binary_expression_type_impl(
                         node,
                         emitted_division_by_zero_diagnostic,
@@ -369,7 +369,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 })
             }
             (_, Type::Overlapping(overlapping), _) => {
-                visitor.visit((left_ty, op, right_ty), || {
+                visitor.visit(db, (left_ty, op, right_ty), || {
                     self.infer_binary_expression_type_impl(
                         node,
                         emitted_division_by_zero_diagnostic,
@@ -381,7 +381,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     )
                 })
             }
-            (Type::Deferred(deferred), _, _) => visitor.visit((left_ty, op, right_ty), || {
+            (Type::Deferred(deferred), _, _) => visitor.visit(db, (left_ty, op, right_ty), || {
                 self.infer_binary_expression_type_impl(
                     node,
                     emitted_division_by_zero_diagnostic,
@@ -392,7 +392,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     tcx,
                 )
             }),
-            (_, Type::Deferred(deferred), _) => visitor.visit((left_ty, op, right_ty), || {
+            (_, Type::Deferred(deferred), _) => visitor.visit(db, (left_ty, op, right_ty), || {
                 self.infer_binary_expression_type_impl(
                     node,
                     emitted_division_by_zero_diagnostic,
@@ -426,7 +426,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 )
             }),
 
-            (Type::TypeAlias(alias), rhs, _) => visitor.visit((left_ty, op, right_ty), || {
+            (Type::TypeAlias(alias), rhs, _) => visitor.visit(db, (left_ty, op, right_ty), || {
                 self.infer_binary_expression_type_impl(
                     node,
                     emitted_division_by_zero_diagnostic,
@@ -438,7 +438,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 )
             }),
 
-            (lhs, Type::TypeAlias(alias), _) => visitor.visit((left_ty, op, right_ty), || {
+            (lhs, Type::TypeAlias(alias), _) => visitor.visit(db, (left_ty, op, right_ty), || {
                 self.infer_binary_expression_type_impl(
                     node,
                     emitted_division_by_zero_diagnostic,
@@ -616,26 +616,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 })
             }
 
-            (
-                todo @ Type::Dynamic(
-                    DynamicType::Todo(_)
-                    | DynamicType::TodoUnpack
-                    | DynamicType::TodoStarredExpression
-                    | DynamicType::TodoTypeVarTuple,
-                ),
-                _,
-                _,
-            )
-            | (
-                _,
-                todo @ Type::Dynamic(
-                    DynamicType::Todo(_)
-                    | DynamicType::TodoUnpack
-                    | DynamicType::TodoStarredExpression
-                    | DynamicType::TodoTypeVarTuple,
-                ),
-                _,
-            ) => Some(todo),
+            (todo @ Type::Dynamic(DynamicType::Todo(_)), _, _)
+            | (_, todo @ Type::Dynamic(DynamicType::Todo(_)), _) => Some(todo),
 
             (Type::Never, _, _) | (_, Type::Never, _) => Some(Type::Never),
 
@@ -1262,11 +1244,12 @@ pub(crate) fn literal_binary_op<'db>(
             let ty = if n.as_i64() < 1 {
                 Type::string_literal(db, "")
             } else if let Ok(n) = usize::try_from(n.as_i64())
-                && n.checked_mul(s.value(db).len()).is_some_and(|new_length| {
+                && let value = s.value(db)
+                && n.checked_mul(value.len()).is_some_and(|new_length| {
                     new_length <= TypeInferenceBuilder::MAX_STRING_LITERAL_SIZE
                 })
             {
-                let new_literal = s.value(db).repeat(n);
+                let new_literal = value.repeat(n);
                 Type::string_literal(db, &*new_literal)
             } else {
                 Type::literal_string()

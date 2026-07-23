@@ -62,7 +62,7 @@ strip = true
 
 [dependency-groups]
 dev = [
-    "prek==0.4.5",
+    "prek==0.4.9",
 ]
 docs = [
     "zensical",

@@ -469,6 +469,174 @@ Nested(value=[{"a": 1}, {"b": "2", "c": 3.0}])
 Nested(value=[{"a": 1}, {"b": None}])  # error: [invalid-argument-type]
 ```
 
+In lax mode, fields that refer to an ordinary Pydantic model accept either an instance of that model
+or a mapping:
+
+```py
+class Child(BaseModel):
+    value: int
+
+class Stranger(BaseModel):
+    value: int
+
+class Parent(BaseModel):
+    child: Child
+    children: list[Child]
+
+# revealed: (self: Parent, *, child: Child | Mapping[str, Any], children: Iterable[Child | Mapping[str, Any]], **extra: Any) -> None
+reveal_type(Parent.__init__)
+
+child_input = {"value": "1"}
+
+Parent(child=Child(value=1), children=[Child(value=2), Child(value=3)])
+Parent(child={"value": "1"}, children=[{"value": "2"}, {"value": "3"}])
+
+Parent(child=Stranger(value=1), children=[])  # error: [invalid-argument-type]
+Parent(child=1, children=[])  # error: [invalid-argument-type]
+Parent(child={"value": 1}, children=[Stranger(value=2)])  # error: [invalid-argument-type]
+Parent(child={"value": 1}, children=[2])  # error: [invalid-argument-type]
+```
+
+"before" and "plain" field validators can accept input of a different type, so for now, we widen the
+input types of affected fields to `Any`:
+
+```py
+from pydantic import field_validator
+
+class BeforeValidatedParent(BaseModel):
+    child: Child
+    untouched_child: Child
+
+    @field_validator("child", mode="before")
+    @classmethod
+    def coerce_child(cls, value: object) -> object:
+        if isinstance(value, int):
+            return {"value": value}
+        return value
+
+# revealed: (self: BeforeValidatedParent, *, child: Any, untouched_child: Child | Mapping[str, Any], **extra: Any) -> None
+reveal_type(BeforeValidatedParent.__init__)
+
+BeforeValidatedParent(child=1, untouched_child={"value": "2"})
+BeforeValidatedParent(child=1, untouched_child=1)  # error: [invalid-argument-type]
+```
+
+"before" field validators are inherited:
+
+```py
+class BeforeValidatorBase(BaseModel):
+    @field_validator("child", mode="before", check_fields=False)
+    @classmethod
+    def coerce_child(cls, value: object) -> object:
+        if isinstance(value, int):
+            return {"value": value}
+        return value
+
+class InheritedBeforeValidatedParent(BeforeValidatorBase):
+    child: Child
+
+# revealed: (self: InheritedBeforeValidatedParent, *, child: Any, **extra: Any) -> None
+reveal_type(InheritedBeforeValidatedParent.__init__)
+```
+
+A wildcard "before" validator applies to every field:
+
+```py
+class WildcardBeforeValidatedParent(BaseModel):
+    child: Child
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def coerce_fields(cls, value: object) -> object:
+        if isinstance(value, int):
+            return {"value": value}
+        return value
+
+# revealed: (self: WildcardBeforeValidatedParent, *, child: Any, **extra: Any) -> None
+reveal_type(WildcardBeforeValidatedParent.__init__)
+
+WildcardBeforeValidatedParent(child=1)
+```
+
+A "plain" field validator also bypasses Pydantic's validation against the field's declared type:
+
+```py
+class PlainValidatedParent(BaseModel):
+    child: Child
+    untouched_child: Child
+
+    @field_validator("child", mode="plain")
+    @classmethod
+    def accept_child(cls, value: object) -> object:
+        return value
+
+# revealed: (self: PlainValidatedParent, *, child: Any, untouched_child: Child | Mapping[str, Any], **extra: Any) -> None
+reveal_type(PlainValidatedParent.__init__)
+
+PlainValidatedParent(child=1, untouched_child={"value": "2"})
+PlainValidatedParent(child=1, untouched_child=1)  # error: [invalid-argument-type]
+```
+
+An "after" field validator does not change the raw input accepted by the field:
+
+```py
+class AfterValidatedParent(BaseModel):
+    child: Child
+
+    @field_validator("child", mode="after")
+    @classmethod
+    def validate_child(cls, value: Child) -> Child:
+        return value
+
+# revealed: (self: AfterValidatedParent, *, child: Child | Mapping[str, Any], **extra: Any) -> None
+reveal_type(AfterValidatedParent.__init__)
+
+AfterValidatedParent(child=1)  # error: [invalid-argument-type]
+```
+
+For fields that refer to generic models, we widen to a gradual specialization, since Pydantic
+revalidates same-origin generic model instances against the target specialization:
+
+```py
+class Box[T](BaseModel):
+    value: T
+
+class HasBox(BaseModel):
+    box: Box[int]
+
+# revealed: (self: HasBox, *, box: Box[Unknown] | Mapping[str, Any], **extra: Any) -> None
+reveal_type(HasBox.__init__)
+
+HasBox(box=Box(value=1))
+HasBox(box=Box(value="1"))
+HasBox(box=1)  # error: [invalid-argument-type]
+
+# This would ideally be an error, but we currently do not attempt to detect this:
+HasBox(box=Box(value=None))
+```
+
+Models configured to validate from attributes can accept arbitrary objects, so their field
+parameters remain `Any`:
+
+```py
+class AttributeChild(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    value: int
+
+class AttributeParent(BaseModel):
+    child: AttributeChild
+
+class AttributeSource:
+    def __init__(self, value: int) -> None:
+        self.value = value
+
+# revealed: (self: AttributeParent, *, child: Any, **extra: Any) -> None
+reveal_type(AttributeParent.__init__)
+
+AttributeParent(child=AttributeSource(1))
+```
+
 For enums, we currently fall back to a very permissive `Any`, because Pydantic allows certain
 conversions that are not further specified in the documentation.
 
@@ -625,6 +793,43 @@ Person3(age=20)
 Person3(age="20")  # error: [invalid-argument-type]
 ```
 
+Pydantic's strict aliases and `Strict()` metadata also enable strict validation for individual
+fields:
+
+```py
+from typing import Annotated
+from pydantic import Field, Strict, StrictInt
+
+class StrictFields(BaseModel):
+    strict_int: StrictInt
+    strict_str: Annotated[str, Strict()]
+
+StrictFields(strict_int=1, strict_str="foo")
+StrictFields(strict_int="1", strict_str="foo")  # error: [invalid-argument-type]
+StrictFields(strict_int=1, strict_str=b"foo")  # error: [invalid-argument-type]
+
+class StrictMetadataOrder(BaseModel):
+    field_then_lax: Annotated[int, Field(strict=True), Strict(False)]
+    lax_then_field: Annotated[int, Strict(False), Field(strict=True)]
+
+StrictMetadataOrder(field_then_lax="1", lax_then_field=1)
+StrictMetadataOrder(field_then_lax=1, lax_then_field="1")  # error: [invalid-argument-type]
+```
+
+A field with `Strict(False)` can opt out of strict validation, even in a model with `strict=True`:
+
+```py
+class LaxFieldInStrictModel(BaseModel):
+    model_config = ConfigDict(strict=True)
+
+    strict_int: int
+    lax_int: Annotated[int, Strict(False)]
+
+LaxFieldInStrictModel(strict_int=1, lax_int=1)
+LaxFieldInStrictModel(strict_int=1, lax_int="1")
+LaxFieldInStrictModel(strict_int="1", lax_int=1)  # error: [invalid-argument-type]
+```
+
 ## `validate_by_name`, `validate_by_alias`
 
 By default, Pydantic only allows a field to be initialized by its alias name, not by its field name:
@@ -651,6 +856,20 @@ class AliasAndName(BaseModel):
 AliasAndName(alias=1)
 AliasAndName(name=1)
 AliasAndName(name=None)  # error: [invalid-argument-type]
+```
+
+The older `populate_by_name=True` setting has the same behavior:
+
+```py
+class PopulatedByName(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    name: int = Field(alias="alias")
+
+PopulatedByName(alias=1)
+PopulatedByName(name=1)
+PopulatedByName(alias=None)  # error: [invalid-argument-type]
+PopulatedByName(name=None)  # error: [invalid-argument-type]
 ```
 
 Passing none of these should be an error:
@@ -702,7 +921,8 @@ ValidationAlias(alias=1)  # error: [missing-argument]
 
 ## Extra fields
 
-By default, Pydantic allows arbitrary extra data which is simply ignored:
+By default, Pydantic allows arbitrary extra data which is simply ignored. This often indicates a
+mistake though, so ty emits a warning by default:
 
 ```py
 from pydantic import BaseModel, ConfigDict
@@ -710,10 +930,34 @@ from pydantic import BaseModel, ConfigDict
 class Person(BaseModel):
     name: str
 
-Person(name="Alice", something_else=7)
+Person(name="Alice", something_else=7)  # error: [pydantic-discarded-extra-argument]
 ```
 
-By setting `extra="forbid"`, this can be disallowed:
+The same thing happens when explicitly setting `extra="ignore"`:
+
+```py
+class PersonIgnoringExtras(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    name: str
+
+PersonIgnoringExtras(name="Alice", something_else=7)  # error: [pydantic-discarded-extra-argument]
+```
+
+When `extra="allow"` is set, extra arguments are explicitly allowed (and stored in the model at
+runtime), so we do not emit a warning in this case:
+
+```py
+class PersonAllowingExtras(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+
+PersonAllowingExtras(name="Alice", something_else=7)
+```
+
+Conversely, when setting `extra="forbid"`, a hard `unknown-argument` error is emitted, since the
+construction would fail at runtime:
 
 ```py
 class PersonWithoutExtras(BaseModel):
@@ -724,20 +968,44 @@ class PersonWithoutExtras(BaseModel):
 # revealed: (self: PersonWithoutExtras, *, name: LaxStr) -> None
 reveal_type(PersonWithoutExtras.__init__)
 PersonWithoutExtras(name="Alice", something_else=7)  # error: [unknown-argument]
+```
 
-class PersonIgnoringExtras(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+## Custom initializers and extra fields
 
+A custom initializer that accepts arbitrary keyword arguments does not prevent a subclass from
+accepting extra data:
+
+```py
+from typing import Any
+
+from pydantic import BaseModel
+
+class FrameworkBase(BaseModel):
+    def __init__(self, **data: Any) -> None:
+        super().__init__(**data)
+
+class User(FrameworkBase):
     name: str
 
-PersonIgnoringExtras(name="Alice", something_else=7)
+reveal_type(User.__init__)  # revealed: (self: User, *, name: LaxStr, **extra: Any) -> None
+User(name="Alice", city="Berlin")
+```
 
-class PersonAllowingExtras(BaseModel):
-    model_config = ConfigDict(extra="allow")
+A fixed custom initializer continues to control the accepted arguments:
 
+```py
+class RestrictiveBase(BaseModel):
+    def __init__(self, name: str) -> None:
+        super().__init__(name=name)
+
+RestrictiveBase(name="Alice")
+RestrictiveBase(name="Alice", city="Berlin")  # error: [unknown-argument]
+
+class RestrictiveUser(RestrictiveBase):
     name: str
 
-PersonAllowingExtras(name="Alice", something_else=7)
+RestrictiveUser(name="Alice")
+RestrictiveUser(name="Alice", city="Berlin")  # error: [unknown-argument]
 ```
 
 ## Field named `extra`
@@ -746,9 +1014,11 @@ The variadic keyword parameter uses a collision-free name when the model already
 `extra`:
 
 ```py
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 class PersonWithExtraField(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     extra: int
 
 # revealed: (self: PersonWithExtraField, *, extra: LaxInt, **extra_: Any) -> None
@@ -802,6 +1072,60 @@ Person(name="Alice")
 
 Person(name=None, id=1)  # error: [invalid-argument-type]
 Person(id=1)  # error: [missing-argument]
+```
+
+Multiple `Field(...)` calls in `Annotated[...]` are merged:
+
+```py
+class MultipleAnnotatedFields(BaseModel):
+    strict_then_default: Annotated[int, Field(strict=True), Field(default=0)]
+    default_then_strict: Annotated[int, Field(default=0), Field(strict=True)]
+
+MultipleAnnotatedFields()
+MultipleAnnotatedFields(strict_then_default=1, default_then_strict=1)
+MultipleAnnotatedFields(strict_then_default="1")  # error: [invalid-argument-type]
+MultipleAnnotatedFields(default_then_strict="1")  # error: [invalid-argument-type]
+```
+
+Field metadata in the annotation and on the right hand side is also merged:
+
+```py
+class AnnotatedAndAssignedFields(BaseModel):
+    strict_then_default: Annotated[int, Field(strict=True)] = Field(default=0)
+    default_then_strict: Annotated[int, Field(default=0)] = Field(strict=True)
+
+AnnotatedAndAssignedFields()
+AnnotatedAndAssignedFields(strict_then_default=1, default_then_strict=1)
+AnnotatedAndAssignedFields(strict_then_default="1")  # error: [invalid-argument-type]
+AnnotatedAndAssignedFields(default_then_strict="1")  # error: [invalid-argument-type]
+```
+
+Field metadata is also collected through aliases:
+
+```py
+AliasField = Annotated[int, Field(default=0)]
+
+class ModelWithAliasField(BaseModel):
+    value: AliasField
+
+ModelWithAliasField()
+```
+
+Field metadata is also collected through a generic alias, where the `Field(...)` default is carried
+on a type variable that is only specialized at the use site:
+
+```py
+from typing import TypeVar
+
+T = TypeVar("T")
+GenericAliasField = Annotated[T, Field(default=0)]
+
+class ModelWithGenericAliasField(BaseModel):
+    value: GenericAliasField[int]
+
+# `value` is optional because the alias supplies `Field(default=0)`.
+ModelWithGenericAliasField()
+ModelWithGenericAliasField(value=1)
 ```
 
 ## Frozen models and fields
@@ -944,6 +1268,7 @@ A model derived from `BaseSettings` can use environment variables, so we assume 
 to provide their values:
 
 ```py
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
@@ -957,8 +1282,37 @@ Settings(port=8000)
 Settings(host="localhost", port=8000)
 Settings(host=None)  # error: [invalid-argument-type]
 
+# `BaseSettings` accepts underscore-prefixed parameters that override settings configuration.
+Settings(_secrets_dir="./secrets")
+# An unknown leading-underscore keyword is not a control argument and is still rejected.
+Settings(_not_a_control_kwarg=1)  # error: [unknown-argument]
+
+class AliasedSettings(BaseSettings):
+    env_file: int = Field(alias="_env_file")
+
+# `_env_file` binds the control argument (not the `int` field).
+AliasedSettings(_env_file=".env")
+AliasedSettings(_env_file=1)  # error: [invalid-argument-type]
+
 # `BaseSettings` defines a specialized constructor and forbids extra values by default.
 Settings(host="localhost", port=8000, something_else=7)  # error: [unknown-argument]
+```
+
+A custom initializer continues to control the accepted arguments:
+
+```py
+from pydantic_settings import BaseSettings
+
+class CustomInit(BaseSettings):
+    def __init__(self, value: int) -> None: ...
+
+class DerivedSettings(CustomInit):
+    host: str
+
+DerivedSettings(1)
+
+# `CustomInit.__init__` overrides the constructor, so `_secrets_dir` is not accepted.
+DerivedSettings(1, _secrets_dir="./secrets")  # error: [unknown-argument]
 ```
 
 ## Root models
@@ -993,6 +1347,21 @@ Model(int_list=["1", "2", "3"])
 Model(int_list=1)  # error: [invalid-argument-type]
 ```
 
+Generic root models can accept root models with a different specialization:
+
+```py
+class GenericRoot[T](RootModel[T]): ...
+
+class HasGenericRoot(BaseModel):
+    root: GenericRoot[int]
+
+HasGenericRoot(root=GenericRoot(1))
+HasGenericRoot(root=GenericRoot("1"))
+
+# This would ideally be an error, but we currently do not attempt to detect this:
+HasGenericRoot(root=GenericRoot(None))
+```
+
 ## Model configuration
 
 The tests in this section use `extra` as an exemplary setting, but primarily test how model
@@ -1010,7 +1379,7 @@ class InheritsForbidExtras(ForbidExtras):
 InheritsForbidExtras(name="Alice", something_else=7)  # error: [unknown-argument]
 
 class OverridesForbidExtras(ForbidExtras):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="allow")
 
     name: str
 
@@ -1207,6 +1576,8 @@ reveal_type(User.__init__)  # revealed: (self: User, *, name: LaxStr, age: LaxIn
 
 User(name="alice")
 User(name="alice", age=1)
+
+# error: [pydantic-discarded-extra-argument]
 User(name="alice", extra=1)
 
 # error: [missing-argument]
