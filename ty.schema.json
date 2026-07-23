@@ -1474,6 +1474,16 @@
             }
           ]
         },
+        "private-import": {
+          "title": "detects imports of another module's `private` symbols",
+          "description": "## What it does\nChecks for imports of a symbol another module declared `private`.\n\n## Why is this bad?\nA `private` declaration is part of its module's implementation, not its\ninterface. It is renamed with a leading underscore by the lowering, so an\nimporting module is reaching past a boundary the author drew explicitly,\nand the symbol may be renamed or removed without notice.\n\n## Example\n\n```by\n# helpers.by\nprivate type Key = str | int\n\n# main.by\nfrom helpers import Key  # error: `Key` is private to `helpers`\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "raw-string-type-annotation": {
           "title": "detects raw strings in type annotation positions",
           "description": "## What it does\n\nChecks for raw-strings in type annotation positions.\n\n## Why is this bad?\n\nStatic analysis tools like ty can't analyze type annotations that use raw-string notation.\n\n## Examples\n\n```python\ndef test() -> r\"int\":  # error\n    return 1\n```\n\nUse instead:\n\n```python\ndef test() -> \"int\":\n    return 1\n```",

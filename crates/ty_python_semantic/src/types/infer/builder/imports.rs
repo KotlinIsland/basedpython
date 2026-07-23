@@ -15,14 +15,16 @@ use crate::{
         ModuleLiteralType, Type, TypeAndQualifiers,
         dedicated::EXTERNALLY_STUBBED_FRAMEWORKS,
         diagnostic::{
-            MISSING_FRAMEWORK_STUBS, POSSIBLY_MISSING_IMPORT, UNRESOLVED_IMPORT,
+            MISSING_FRAMEWORK_STUBS, POSSIBLY_MISSING_IMPORT, PRIVATE_IMPORT, UNRESOLVED_IMPORT,
             hint_if_stdlib_attribute_exists_on_other_versions,
             hint_if_stdlib_submodule_exists_on_other_versions,
         },
         infer::{TypeInferenceBuilder, builder::DeclaredAndInferredType},
         infer_definition_types,
+        visibility::private_symbols,
     },
 };
+use ruff_python_ast::name::Name;
 use ty_python_core::definition::Definition;
 
 impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
@@ -387,6 +389,36 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         ));
     }
 
+    /// basedpython: report `from other import X` where `other` declared `X`
+    /// `private`.
+    ///
+    /// A star import is not reported: it names no symbol, so the diagnostic
+    /// would have nothing actionable to point at.
+    fn check_private_import(
+        &self,
+        module: Module<'db>,
+        module_name: &ModuleName,
+        alias: &ast::Alias,
+        name: &Name,
+    ) {
+        let db = self.db();
+        let Some(defining_file) = module.file(db) else {
+            return;
+        };
+        if defining_file == self.file() || &alias.name == "*" {
+            return;
+        }
+        if !private_symbols(db, defining_file).contains(name) {
+            return;
+        }
+        if let Some(builder) = self
+            .context
+            .report_lint(&PRIVATE_IMPORT, ast::AnyNodeRef::Alias(alias))
+        {
+            builder.into_diagnostic(format_args!("`{name}` is private to `{module_name}`"));
+        }
+    }
+
     pub(super) fn infer_import_from_definition(
         &mut self,
         import_from: &ast::StmtImportFrom,
@@ -435,6 +467,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         } else {
             &alias.name.id
         };
+
+        self.check_private_import(module, &module_name, alias, name);
 
         // Avoid looking up attributes on a module if a module imports from itself
         // at the module-global scope, where the import definition itself is one of the
