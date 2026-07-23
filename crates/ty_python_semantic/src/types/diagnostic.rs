@@ -131,6 +131,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&SHADOWED_TYPE_VARIABLE);
     registry.register_lint(&SUBCLASS_OF_FINAL_CLASS);
     registry.register_lint(&SUBCLASS_OF_SEALED_CLASS);
+    registry.register_lint(&PRIVATE_IMPORT);
     registry.register_lint(&INVALID_EXTENSION);
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
     registry.register_lint(&MISSING_FRAMEWORK_STUBS);
@@ -947,6 +948,32 @@ declare_lint! {
     /// ```
     pub(crate) static SUBCLASS_OF_SEALED_CLASS = {
         summary: "detects subclasses of sealed classes from outside their workspace",
+        status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for imports of a symbol another module declared `private`.
+    ///
+    /// ## Why is this bad?
+    /// A `private` declaration is part of its module's implementation, not its
+    /// interface. It is renamed with a leading underscore by the lowering, so an
+    /// importing module is reaching past a boundary the author drew explicitly,
+    /// and the symbol may be renamed or removed without notice.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// # helpers.by
+    /// private type Key = str | int
+    ///
+    /// # main.by
+    /// from helpers import Key  # error: `Key` is private to `helpers`
+    /// ```
+    pub(crate) static PRIVATE_IMPORT = {
+        summary: "detects imports of another module's `private` symbols",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
     }

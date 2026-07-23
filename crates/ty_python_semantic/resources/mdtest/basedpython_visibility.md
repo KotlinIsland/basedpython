@@ -48,3 +48,89 @@ private final class Sealed:
 
 reveal_type(Sealed().n)  # revealed: int
 ```
+
+## `private type` aliases bind the unmangled name
+
+the `_` prefix is applied by the lowering; in the type checker the alias binds the name as written.
+
+```by
+private type Key = str | int
+
+def lookup(k: Key) -> None: ...
+
+reveal_type(lookup)  # revealed: def lookup(k: Key) -> None
+```
+
+## a private alias may be used freely inside its own module
+
+`store.by`:
+
+```by
+private type Key = str | int
+
+type Table = dict[Key, int]
+
+def get(t: Table, k: Key) -> int:
+    return t[k]
+```
+
+## importing a private symbol from another module is an error
+
+`helpers.by`:
+
+```by
+private type Key = str | int
+
+private def secret() -> int:
+    return 1
+
+private class Hidden: ...
+
+type Open = list[int]
+```
+
+`main.by`:
+
+```by
+from helpers import Open  # fine
+from helpers import Key  # error: [private-import] "`Key` is private to `helpers`"
+from helpers import secret  # error: [private-import] "`secret` is private to `helpers`"
+from helpers import Hidden  # error: [private-import] "`Hidden` is private to `helpers`"
+```
+
+## renaming on import does not launder a private symbol
+
+`helpers2.by`:
+
+```by
+private type Key = str | int
+```
+
+`main2.by`:
+
+```by
+from helpers2 import Key as K  # error: [private-import] "`Key` is private to `helpers2`"
+```
+
+## a real `@private` decorator is not the modifier
+
+a decorator written with `@` is an ordinary decorator, so the symbol stays importable.
+
+`deco.by`:
+
+```by
+def private[T](f: T) -> T:
+    return f
+
+@private
+def helper() -> int:
+    return 1
+```
+
+`main3.by`:
+
+```by
+from deco import helper
+
+reveal_type(helper())  # revealed: int
+```
