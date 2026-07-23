@@ -81,11 +81,11 @@ def synchronized[Element](
 def synchronized[CT: _CData](obj: CT, lock: _LockLike | None = None, ctx: dynamic | None = None) -> SynchronizedBase[CT]
 
 @type_check_only
-protocol _AcquireFunc:
+private protocol AcquireFunc:
     def __call__(self, block: bool = ..., timeout: float | None = ..., /) -> bool
 
 class SynchronizedBase[in out CT: _CData]:
-    acquire: _AcquireFunc
+    acquire: AcquireFunc
     release: () -> None
     init(self, obj: dynamic, lock: _LockLike | None = None, ctx: dynamic | None = None)
     override def __reduce__(self) -> ((dynamic, _LockLike) -> SynchronizedBase[dynamic], (dynamic, _LockLike))

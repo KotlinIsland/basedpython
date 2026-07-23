@@ -91,11 +91,11 @@ protocol _Stream(_WritableStream, _ReadableStream)
 # They were much more common in Python 2 than in Python 3.
 
 @type_check_only
-protocol _Encoder:
+private protocol Encoder:
     def __call__(self, input: str, errors: str = ..., /) -> (bytes, int)  # signature of Codec().encode
 
 @type_check_only
-protocol _Decoder:
+private protocol Decoder:
     def __call__(self, input: ReadableBuffer, errors: str = ..., /) -> (str, int)  # signature of Codec().decode
 
 @type_check_only
@@ -119,12 +119,12 @@ protocol _BufferedIncrementalDecoder:
     def __call__(self, errors: str = ...) -> BufferedIncrementalDecoder
 
 if sys.version_info >= (3, 12):
-    class CodecInfo(tuple[_Encoder, _Decoder, _StreamReader, _StreamWriter]):
+    class CodecInfo(tuple[Encoder, Decoder, _StreamReader, _StreamWriter]):
         """Codec details when looking up the codec registry"""
 
         _is_text_encoding: bool
-        let encode: _Encoder
-        let decode: _Decoder
+        let encode: Encoder
+        let decode: Decoder
         let streamreader: _StreamReader
         let streamwriter: _StreamWriter
         let incrementalencoder: _IncrementalEncoder
@@ -132,8 +132,8 @@ if sys.version_info >= (3, 12):
         name: str
         def __new__(
             cls,
-            encode: _Encoder,
-            decode: _Decoder,
+            encode: Encoder,
+            decode: Decoder,
             streamreader: _StreamReader | None = None,
             streamwriter: _StreamWriter | None = None,
             incrementalencoder: _IncrementalEncoder | None = None,
@@ -145,12 +145,12 @@ if sys.version_info >= (3, 12):
 
 else:
     @disjoint_base
-    class CodecInfo(tuple[_Encoder, _Decoder, _StreamReader, _StreamWriter]):
+    class CodecInfo(tuple[Encoder, Decoder, _StreamReader, _StreamWriter]):
         """Codec details when looking up the codec registry"""
 
         _is_text_encoding: bool
-        let encode: _Encoder
-        let decode: _Decoder
+        let encode: Encoder
+        let decode: Decoder
         let streamreader: _StreamReader
         let streamwriter: _StreamWriter
         let incrementalencoder: _IncrementalEncoder
@@ -158,8 +158,8 @@ else:
         name: str
         def __new__(
             cls,
-            encode: _Encoder,
-            decode: _Decoder,
+            encode: Encoder,
+            decode: Decoder,
             streamreader: _StreamReader | None = None,
             streamwriter: _StreamWriter | None = None,
             incrementalencoder: _IncrementalEncoder | None = None,
@@ -169,7 +169,7 @@ else:
             _is_text_encoding: bool | None = None,
         ) -> Self
 
-def getencoder(encoding: str) -> _Encoder:
+def getencoder(encoding: str) -> Encoder:
     """Lookup up the codec for the given encoding and return
     its encoder function.
 
@@ -177,7 +177,7 @@ def getencoder(encoding: str) -> _Encoder:
 
     """
 
-def getdecoder(encoding: str) -> _Decoder:
+def getdecoder(encoding: str) -> Decoder:
     """Lookup up the codec for the given encoding and return
     its decoder function.
 
@@ -724,8 +724,8 @@ class StreamRecoder(BinaryIO):
     init(
         self,
         stream: _Stream,
-        encode: _Encoder,
-        decode: _Decoder,
+        encode: Encoder,
+        decode: Decoder,
         Reader: _StreamReader,
         Writer: _StreamWriter,
         errors: str = "strict",

@@ -52,7 +52,7 @@ class LargeZipFile(Exception):
     """
 
 @type_check_only
-protocol _ZipStream:
+private protocol ZipStream:
     def read(self, n: int, /) -> bytes
     # The following methods are optional:
     # def seekable(self) -> bool: ...
@@ -61,13 +61,13 @@ protocol _ZipStream:
 
 # Stream shape as required by _EndRecData() and _EndRecData64().
 @type_check_only
-protocol _SupportsReadSeekTell:
+private protocol SupportsReadSeekTell:
     def read(self, n: int = ..., /) -> bytes
     def seek(self, cookie: int, whence: int, /) -> object
     def tell(self) -> int
 
 @type_check_only
-protocol _ClosableZipStream(_ZipStream):
+private protocol ClosableZipStream(ZipStream):
     def close(self) -> object
 
 class ZipExtFile(io.BufferedIOBase):
@@ -83,11 +83,11 @@ class ZipExtFile(io.BufferedIOBase):
     name: str
 
     init(
-        self, fileobj: _ClosableZipStream, mode: ReadWriteMode, zipinfo: ZipInfo, pwd: bytes | None, close_fileobj: True
+        self, fileobj: ClosableZipStream, mode: ReadWriteMode, zipinfo: ZipInfo, pwd: bytes | None, close_fileobj: True
     )
     init(
         self,
-        fileobj: _ClosableZipStream,
+        fileobj: ClosableZipStream,
         mode: ReadWriteMode,
         zipinfo: ZipInfo,
         pwd: bytes | None = None,
@@ -96,7 +96,7 @@ class ZipExtFile(io.BufferedIOBase):
     )
     init(
         self,
-        fileobj: _ZipStream,
+        fileobj: ZipStream,
         mode: ReadWriteMode,
         zipinfo: ZipInfo,
         pwd: bytes | None = None,
@@ -123,23 +123,23 @@ class ZipExtFile(io.BufferedIOBase):
     override def seek(self, offset: int, whence: int = 0) -> int
 
 @type_check_only
-protocol _Writer:
+private protocol Writer:
     def write(self, s: str, /) -> object
 
 @type_check_only
-protocol _ZipReadable:
+private protocol ZipReadable:
     def seek(self, offset: int, whence: int = 0, /) -> int
     def read(self, n: int = -1, /) -> bytes
 
 @type_check_only
-protocol _ZipTellable:
+private protocol ZipTellable:
     def tell(self) -> int
 
 @type_check_only
-protocol _ZipReadableTellable(_ZipReadable, _ZipTellable)
+private protocol ZipReadableTellable(ZipReadable, ZipTellable)
 
 @type_check_only
-protocol _ZipWritable:
+private protocol ZipWritable:
     def flush(self) -> None
     def close(self) -> None
     def write(self, b: bytes, /) -> int
@@ -203,7 +203,7 @@ class ZipFile:
         # metadata_encoding is only allowed for read mode
         def __init__(
             self,
-            file: StrPath | _ZipReadable,
+            file: StrPath | ZipReadable,
             mode: "r" = "r",
             compression: int = 0,
             allowZip64: bool = True,
@@ -214,7 +214,7 @@ class ZipFile:
         ) -> None
         def __init__(
             self,
-            file: StrPath | _ZipWritable,
+            file: StrPath | ZipWritable,
             mode: "w" | "x",
             compression: int = 0,
             allowZip64: bool = True,
@@ -225,7 +225,7 @@ class ZipFile:
         ) -> None
         def __init__(
             self,
-            file: StrPath | _ZipReadableTellable,
+            file: StrPath | ZipReadableTellable,
             mode: "a",
             compression: int = 0,
             allowZip64: bool = True,
@@ -250,7 +250,7 @@ class ZipFile:
             """
         def __init__(
             self,
-            file: StrPath | _ZipReadable,
+            file: StrPath | ZipReadable,
             mode: "r" = "r",
             compression: int = 0,
             allowZip64: bool = True,
@@ -260,7 +260,7 @@ class ZipFile:
         ) -> None
         def __init__(
             self,
-            file: StrPath | _ZipWritable,
+            file: StrPath | ZipWritable,
             mode: "w" | "x",
             compression: int = 0,
             allowZip64: bool = True,
@@ -270,7 +270,7 @@ class ZipFile:
         ) -> None
         def __init__(
             self,
-            file: StrPath | _ZipReadableTellable,
+            file: StrPath | ZipReadableTellable,
             mode: "a",
             compression: int = 0,
             allowZip64: bool = True,
@@ -336,7 +336,7 @@ class ZipFile:
         using 'pwd'.
         """
 
-    def printdir(self, file: _Writer | None = None) -> None:
+    def printdir(self, file: Writer | None = None) -> None:
         """Print a table of contents for the zip file."""
 
     def setpassword(self, pwd: bytes) -> None:
@@ -646,7 +646,7 @@ else:
         def joinpath(self, *other: StrPath) -> Path
         def __truediv__(self, add: StrPath) -> Path
 
-def is_zipfile(filename: StrOrBytesPath | _SupportsReadSeekTell) -> bool:
+def is_zipfile(filename: StrOrBytesPath | SupportsReadSeekTell) -> bool:
     """Quickly see if a file is a ZIP file by checking the magic number.
 
     The filename argument may be a file or file-like object too.

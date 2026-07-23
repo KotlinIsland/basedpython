@@ -9,7 +9,7 @@ from _typeshed import OptExcInfo
 from collections.abc import Callable, Iterable, Iterator
 from typing import Protocol, TypeAlias
 
-protocol _Readable:
+private protocol Readable:
     def read(self, size: int = ..., /) -> bytes
     # Optional: def close(self) -> object: ...
 
@@ -40,4 +40,4 @@ else:
 
     # Optional file wrapper in wsgi.file_wrapper
     protocol FileWrapper:
-        def __call__(self, file: _Readable, block_size: int = ..., /) -> Iterable[bytes]
+        def __call__(self, file: Readable, block_size: int = ..., /) -> Iterable[bytes]

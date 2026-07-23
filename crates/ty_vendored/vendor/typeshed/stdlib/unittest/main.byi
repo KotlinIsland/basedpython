@@ -14,7 +14,7 @@ final MAIN_EXAMPLES: str
 final MODULE_EXAMPLES: str
 
 @type_check_only
-protocol _TestRunner:
+private protocol TestRunner:
     def run(self, test: unittest.suite.TestSuite | unittest.case.TestCase, /) -> unittest.result.TestResult
 
 # not really documented
@@ -39,7 +39,7 @@ class TestProgram:
             module: ModuleType | str | None = "__main__",
             defaultTest: str | Iterable[str] | None = None,
             argv: list[str] | None = None,
-            testRunner: type[_TestRunner] | _TestRunner | None = None,
+            testRunner: type[TestRunner] | TestRunner | None = None,
             testLoader: unittest.loader.TestLoader = ...,
             exit: bool = True,
             verbosity: int = 1,
@@ -57,7 +57,7 @@ class TestProgram:
             module: None | str | ModuleType = "__main__",
             defaultTest: str | Iterable[str] | None = None,
             argv: list[str] | None = None,
-            testRunner: type[_TestRunner] | _TestRunner | None = None,
+            testRunner: type[TestRunner] | TestRunner | None = None,
             testLoader: unittest.loader.TestLoader = ...,
             exit: bool = True,
             verbosity: int = 1,

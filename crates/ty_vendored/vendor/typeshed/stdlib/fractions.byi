@@ -12,7 +12,7 @@ private type ComparableNum = int | float | Decimal | Real
 __all__ = ["Fraction"]
 
 @type_check_only
-protocol _ConvertibleToIntegerRatio:
+private protocol ConvertibleToIntegerRatio:
     def as_integer_ratio(self) -> (int | Rational, int | Rational)
 
 class Fraction(Rational):
@@ -71,7 +71,7 @@ class Fraction(Rational):
         """
     def __new__(cls, numerator: float | Decimal | str) -> Self
     if sys.version_info >= (3, 14):
-        def __new__(cls, numerator: _ConvertibleToIntegerRatio) -> Self:
+        def __new__(cls, numerator: ConvertibleToIntegerRatio) -> Self:
             """Constructs a Rational.
 
             Takes a string like '3/2' or '1.5', another Rational instance, a
@@ -296,7 +296,7 @@ class Fraction(Rational):
         """Conjugate is a no-op for Reals."""
 
     if sys.version_info >= (3, 14):
-        class def from_number(cls, number: float | Rational | _ConvertibleToIntegerRatio) -> Self:
+        class def from_number(cls, number: float | Rational | ConvertibleToIntegerRatio) -> Self:
             """Converts a finite real number to a rational number, exactly.
 
             Beware that Fraction.from_number(0.3) != Fraction(3, 10).

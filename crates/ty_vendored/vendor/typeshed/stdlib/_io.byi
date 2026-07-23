@@ -527,7 +527,7 @@ class BytesIO(BufferedIOBase, _BufferedIOBase, BinaryIO):
         """
 
 @type_check_only
-protocol _BufferedReaderStream:
+private protocol BufferedReaderStream:
     def read(self, n: int = ..., /) -> bytes
     # Optional: def readall(self) -> bytes: ...
     def readinto(self, b: memoryview, /) -> int | None
@@ -553,7 +553,7 @@ protocol _BufferedReaderStream:
 
 
 @disjoint_base
-class BufferedReader[in out BufferedReaderStreamT: _BufferedReaderStream = _BufferedReaderStream](BufferedIOBase, _BufferedIOBase, BinaryIO):
+class BufferedReader[in out BufferedReaderStreamT: BufferedReaderStream = BufferedReaderStream](BufferedIOBase, _BufferedIOBase, BinaryIO):
     """Create a new buffered reader using the given readable raw IO object."""
 
     raw: BufferedReaderStreamT
@@ -567,7 +567,7 @@ class BufferedReader[in out BufferedReaderStreamT: _BufferedReaderStream = _Buff
     override def truncate(self, pos: int | None = None, /) -> int
 
 @type_check_only
-protocol _BufferedWriterStream:
+private protocol BufferedWriterStream:
     def write(self, b: WriteableBuffer, /) -> int | None
     def seek(self, pos: int, whence: int, /) -> int
     def tell(self) -> int
@@ -591,7 +591,7 @@ protocol _BufferedWriterStream:
 
 
 @disjoint_base
-class BufferedWriter[in out BufferedWriterStreamT: _BufferedWriterStream = _BufferedWriterStream](BufferedIOBase, _BufferedIOBase, BinaryIO):
+class BufferedWriter[in out BufferedWriterStreamT: BufferedWriterStream = BufferedWriterStream](BufferedIOBase, _BufferedIOBase, BinaryIO):
     """A buffer for a writeable sequential RawIO object.
 
     The constructor creates a BufferedWriter for the given writeable raw
@@ -631,7 +631,7 @@ class BufferedRandom(BufferedIOBase, _BufferedIOBase, BinaryIO):
     override def truncate(self, pos: int | None = None, /) -> int
 
 @disjoint_base
-class BufferedRWPair[in out BufferedReaderStreamT: _BufferedReaderStream = _BufferedReaderStream, in out BufferedWriterStreamT: _BufferedWriterStream = _BufferedWriterStream](BufferedIOBase, _BufferedIOBase):
+class BufferedRWPair[in out BufferedReaderStreamT: BufferedReaderStream = BufferedReaderStream, in out BufferedWriterStreamT: BufferedWriterStream = BufferedWriterStream](BufferedIOBase, _BufferedIOBase):
     """A buffered reader and writer object together.
 
     A buffered reader object and buffered writer object put together to

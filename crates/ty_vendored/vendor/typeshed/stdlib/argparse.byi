@@ -202,7 +202,7 @@ class _ActionsContainer:
     def _handle_conflict_resolve(self, action: Action, conflicting_actions: Iterable[(str, Action)]) -> None
 
 @type_check_only
-protocol _FormatterClass:
+private protocol FormatterClass:
     def __call__(self, *, prog: str) -> HelpFormatter
 
 class ArgumentParser(_AttributeHolder, _ActionsContainer):
@@ -233,7 +233,7 @@ class ArgumentParser(_AttributeHolder, _ActionsContainer):
     prog: str
     usage: str | None
     epilog: str | None
-    formatter_class: _FormatterClass
+    formatter_class: FormatterClass
     fromfile_prefix_chars: str | None
     add_help: bool
     allow_abbrev: bool
@@ -257,7 +257,7 @@ class ArgumentParser(_AttributeHolder, _ActionsContainer):
             description: str | None = None,
             epilog: str | None = None,
             parents: Iterable[ArgumentParser] = [],
-            formatter_class: _FormatterClass = ...,
+            formatter_class: FormatterClass = ...,
             prefix_chars: str = "-",
             fromfile_prefix_chars: str | None = None,
             argument_default: dynamic = None,
@@ -278,7 +278,7 @@ class ArgumentParser(_AttributeHolder, _ActionsContainer):
             description: str | None = None,
             epilog: str | None = None,
             parents: Iterable[ArgumentParser] = [],
-            formatter_class: _FormatterClass = ...,
+            formatter_class: FormatterClass = ...,
             prefix_chars: str = "-",
             fromfile_prefix_chars: str | None = None,
             argument_default: dynamic = None,
@@ -298,7 +298,7 @@ class ArgumentParser(_AttributeHolder, _ActionsContainer):
             description: str | None = None,
             epilog: str | None = None,
             parents: Iterable[ArgumentParser] = [],
-            formatter_class: _FormatterClass = ...,
+            formatter_class: FormatterClass = ...,
             prefix_chars: str = "-",
             fromfile_prefix_chars: str | None = None,
             argument_default: dynamic = None,
@@ -982,7 +982,7 @@ class _SubParsersAction[in out ArgumentParserT: ArgumentParser](Action):
             description: str | None = ...,
             epilog: str | None = ...,
             parents: Iterable[ArgumentParserT] = ...,
-            formatter_class: _FormatterClass = ...,
+            formatter_class: FormatterClass = ...,
             prefix_chars: str = ...,
             fromfile_prefix_chars: str | None = ...,
             argument_default: dynamic = ...,
@@ -1008,7 +1008,7 @@ class _SubParsersAction[in out ArgumentParserT: ArgumentParser](Action):
             description: str | None = ...,
             epilog: str | None = ...,
             parents: Iterable[ArgumentParserT] = ...,
-            formatter_class: _FormatterClass = ...,
+            formatter_class: FormatterClass = ...,
             prefix_chars: str = ...,
             fromfile_prefix_chars: str | None = ...,
             argument_default: dynamic = ...,
@@ -1031,7 +1031,7 @@ class _SubParsersAction[in out ArgumentParserT: ArgumentParser](Action):
             description: str | None = ...,
             epilog: str | None = ...,
             parents: Iterable[ArgumentParserT] = ...,
-            formatter_class: _FormatterClass = ...,
+            formatter_class: FormatterClass = ...,
             prefix_chars: str = ...,
             fromfile_prefix_chars: str | None = ...,
             argument_default: dynamic = ...,

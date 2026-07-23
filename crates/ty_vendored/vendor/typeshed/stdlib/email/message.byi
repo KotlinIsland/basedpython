@@ -22,11 +22,11 @@ private type MultipartPayloadType = list[PayloadType]
 private type CharsetType = Charset | str | None
 
 @type_check_only
-protocol _SupportsEncodeToPayload:
-    def encode(self, encoding: str, /) -> PayloadType | MultipartPayloadType | _SupportsDecodeToPayload
+private protocol SupportsEncodeToPayload:
+    def encode(self, encoding: str, /) -> PayloadType | MultipartPayloadType | SupportsDecodeToPayload
 
 @type_check_only
-protocol _SupportsDecodeToPayload:
+private protocol SupportsDecodeToPayload:
     def decode(self, encoding: str, errors: str, /) -> PayloadType | MultipartPayloadType
 
 class Message[out HeaderT = str, in HeaderParamT = str]:
@@ -94,8 +94,8 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
 
     # If `charset=None` and payload supports both `encode` AND `decode`,
     # then an invalid payload could be passed, but this is unlikely
-    # Not[_SupportsEncodeToPayload]
-    def set_payload(self, payload: _SupportsDecodeToPayload | PayloadType | MultipartPayloadType, charset: None = None) -> None:
+    # Not[SupportsEncodeToPayload]
+    def set_payload(self, payload: SupportsDecodeToPayload | PayloadType | MultipartPayloadType, charset: None = None) -> None:
         """Set the payload to the given value.
 
         Optional charset sets the message's default character set.  See
@@ -103,7 +103,7 @@ class Message[out HeaderT = str, in HeaderParamT = str]:
         """
     def set_payload(
         self,
-        payload: _SupportsEncodeToPayload | _SupportsDecodeToPayload | PayloadType | MultipartPayloadType,
+        payload: SupportsEncodeToPayload | SupportsDecodeToPayload | PayloadType | MultipartPayloadType,
         charset: Charset | str,
     ) -> None
 

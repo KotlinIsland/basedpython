@@ -10,7 +10,7 @@ import pickle
 
 reveal_type(open(""))  # revealed: TextIOWrapper[_WrappedBuffer]
 reveal_type(open("", "r"))  # revealed: TextIOWrapper[_WrappedBuffer]
-reveal_type(open("", "rb"))  # revealed: BufferedReader[_BufferedReaderStream]
+reveal_type(open("", "rb"))  # revealed: BufferedReader[BufferedReaderStream]
 
 with open("foo.pickle", "rb") as f:
     x = pickle.load(f)  # fine
@@ -29,7 +29,7 @@ import os
 
 reveal_type(os.fdopen(0))  # revealed: TextIOWrapper[_WrappedBuffer]
 reveal_type(os.fdopen(0, "r"))  # revealed: TextIOWrapper[_WrappedBuffer]
-reveal_type(os.fdopen(0, "rb"))  # revealed: BufferedReader[_BufferedReaderStream]
+reveal_type(os.fdopen(0, "rb"))  # revealed: BufferedReader[BufferedReaderStream]
 
 with os.fdopen(0, "rb") as f:
     x = pickle.load(f)  # fine
@@ -45,7 +45,7 @@ import pickle
 
 reveal_type(Path("").open())  # revealed: TextIOWrapper[_WrappedBuffer]
 reveal_type(Path("").open("r"))  # revealed: TextIOWrapper[_WrappedBuffer]
-reveal_type(Path("").open("rb"))  # revealed: BufferedReader[_BufferedReaderStream]
+reveal_type(Path("").open("rb"))  # revealed: BufferedReader[BufferedReaderStream]
 
 with Path("foo.pickle").open("rb") as f:
     x = pickle.load(f)  # fine

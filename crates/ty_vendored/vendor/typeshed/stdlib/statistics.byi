@@ -149,7 +149,7 @@ private type Seed = int | float | str | bytes | bytearray  # noqa: Y041
 # Used in linear_regression
 
 @type_check_only
-protocol _SizedIterable[out Element](Iterable[Element], Sized)
+private protocol SizedIterable[out Element](Iterable[Element], Sized)
 
 class StatisticsError(ValueError)
 
@@ -694,7 +694,7 @@ class LinearRegression(NamedTuple):
 
 if sys.version_info >= (3, 11):
     def linear_regression(
-        regressor: _SizedIterable[Number], dependent_variable: _SizedIterable[Number], /, *, proportional: bool = False
+        regressor: SizedIterable[Number], dependent_variable: SizedIterable[Number], /, *, proportional: bool = False
     ) -> LinearRegression:
         """Slope and intercept for simple linear regression.
 
@@ -735,7 +735,7 @@ if sys.version_info >= (3, 11):
         """
 
 else:
-    def linear_regression(regressor: _SizedIterable[Number], dependent_variable: _SizedIterable[Number], /) -> LinearRegression:
+    def linear_regression(regressor: SizedIterable[Number], dependent_variable: SizedIterable[Number], /) -> LinearRegression:
         """Slope and intercept for simple linear regression.
 
         Return the slope and intercept of simple linear regression

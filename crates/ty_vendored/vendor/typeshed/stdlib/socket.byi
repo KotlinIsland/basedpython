@@ -1490,7 +1490,7 @@ if sys.platform == "win32":
     errorTab: dict[int, str]  # undocumented
 
 @type_check_only
-protocol _SendableFile:
+private protocol SendableFile:
     def read(self, size: int, /) -> bytes
     def seek(self, offset: int, /) -> object
 
@@ -1587,7 +1587,7 @@ class socket(_socket.socket):
         newline: str | None = None,
     ) -> TextIOWrapper
 
-    def sendfile(self, file: _SendableFile, offset: int = 0, count: int | None = None) -> int:
+    def sendfile(self, file: SendableFile, offset: int = 0, count: int | None = None) -> int:
         """sendfile(file[, offset[, count]]) -> sent
 
         Send a file until EOF is reached by using high-performance

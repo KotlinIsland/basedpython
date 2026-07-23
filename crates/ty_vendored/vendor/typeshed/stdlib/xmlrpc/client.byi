@@ -52,10 +52,10 @@ from typing import ClassVar, Final, Literal, Protocol, TypeAlias, type_check_onl
 from typing_extensions import Self
 
 @type_check_only
-protocol _SupportsTimeTuple:
+private protocol SupportsTimeTuple:
     def timetuple(self) -> time.struct_time
 
-private type DateTimeComparable = DateTime | datetime | str | _SupportsTimeTuple
+private type DateTimeComparable = DateTime | datetime | str | SupportsTimeTuple
 type _Marshallable = (
     bool
     | int

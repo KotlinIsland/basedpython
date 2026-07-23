@@ -7,12 +7,12 @@ from typing import Protocol, type_check_only
 __all__ = ["what"]
 
 @type_check_only
-protocol _ReadableBinary:
+private protocol ReadableBinary:
     def tell(self) -> int
     def read(self, size: int, /) -> bytes
     def seek(self, offset: int, /) -> dynamic
 
-def what(file: StrPath | _ReadableBinary, h: None = None) -> str | None:
+def what(file: StrPath | ReadableBinary, h: None = None) -> str | None:
     """Return the type of image contained in a file or byte stream."""
 def what(file: dynamic, h: bytes) -> str | None
 

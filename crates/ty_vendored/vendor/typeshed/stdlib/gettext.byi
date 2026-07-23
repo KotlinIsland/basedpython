@@ -40,14 +40,14 @@ if sys.version_info < (3, 11):
     __all__ += ["bind_textdomain_codeset", "ldgettext", "ldngettext", "lgettext", "lngettext"]
 
 @type_check_only
-protocol _TranslationsReader:
+private protocol TranslationsReader:
     def read(self) -> bytes
     # optional:
     # name: str
 
 class NullTranslations:
-    init(self, fp: _TranslationsReader | None = None)
-    def _parse(self, fp: _TranslationsReader) -> None
+    init(self, fp: TranslationsReader | None = None)
+    def _parse(self, fp: TranslationsReader) -> None
     def add_fallback(self, fallback: NullTranslations) -> None
     def gettext(self, message: str) -> str
     def ngettext(self, msgid1: str, msgid2: str, n: int) -> str

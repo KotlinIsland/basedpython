@@ -96,7 +96,7 @@ class NullImporter:
 # Technically, a text file has to support a slightly different set of operations than a binary file,
 # but we ignore that here.
 @type_check_only
-protocol _FileLike:
+private protocol FileLike:
     closed: bool
     mode: str
     def read(self) -> str | bytes
@@ -105,14 +105,14 @@ protocol _FileLike:
     def __exit__(self, typ: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None, /) -> dynamic
 
 # PathLike doesn't work for the pathname argument here
-def load_source(name: str, pathname: str, file: _FileLike | None = None) -> types.ModuleType
-def load_compiled(name: str, pathname: str, file: _FileLike | None = None) -> types.ModuleType:
+def load_source(name: str, pathname: str, file: FileLike | None = None) -> types.ModuleType
+def load_compiled(name: str, pathname: str, file: FileLike | None = None) -> types.ModuleType:
     """**DEPRECATED**"""
 
 def load_package(name: str, path: StrPath) -> types.ModuleType:
     """**DEPRECATED**"""
 
-def load_module(name: str, file: _FileLike | None, filename: str, details: (str, str, int)) -> types.ModuleType:
+def load_module(name: str, file: FileLike | None, filename: str, details: (str, str, int)) -> types.ModuleType:
     """**DEPRECATED**
 
     Load a module, given information returned by find_module().

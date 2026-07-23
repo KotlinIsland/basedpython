@@ -311,7 +311,6 @@ dependencies = [
  "anyhow",
  "ruff_db",
  "ruff_ranged_value",
- "ruff_text_size",
  "ty_project",
  "ty_python_semantic",
  "walkdir",
