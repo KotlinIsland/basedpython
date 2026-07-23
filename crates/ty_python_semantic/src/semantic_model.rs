@@ -213,6 +213,25 @@ impl<'db> SemanticModel<'db> {
         ))
     }
 
+    /// basedpython: [`Self::parametric_is_plan`] for a checked cast
+    /// (`value cast T`). The same classification engine decides both — only the
+    /// target's inference position differs, since a cast's target is a *type*
+    /// expression while an `is`-rhs is a value expression.
+    pub fn parametric_cast_plan(
+        &self,
+        value: &ast::Expr,
+        target: &ast::Expr,
+    ) -> Option<crate::types::reified_infer::ParametricIsPlan> {
+        let alias = crate::types::reified_infer::parametric_cast_target(
+            self.db,
+            target.inferred_type(self)?,
+        )?;
+        let value_ty = value.inferred_type(self)?;
+        Some(crate::types::reified_infer::classify_parametric_is(
+            self.db, self.file, value_ty, alias, target,
+        ))
+    }
+
     pub fn line_index(&self) -> LineIndex {
         line_index(self.db, self.file)
     }

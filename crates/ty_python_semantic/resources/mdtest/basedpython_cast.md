@@ -178,6 +178,43 @@ assert f(A("")) is None  # right base, wrong argument
 assert f(1) is None  # wrong base
 ```
 
+## a reified type parameter is checked, not assumed
+
+A cast shares the `is`-test's engine, so a value whose type is carried by a *reified* type parameter
+carries the answer in a runtime cell. `def f[T](data: list[T])` casting to `list[int]` lowers to
+`T == int`, which verifies the argument exactly — so `erased-cast-argument` must stay silent.
+
+```by
+def f[T](data: list[T]):
+    x = data cast? list[int]  # no erased-cast-argument: `T == int` decides it
+    reveal_type(x)  # revealed: list[int] | None
+```
+
+These assertions run for real — the reified cell distinguishes the specializations:
+
+```by
+def f[T](data: list[T]) -> list[int] | None:
+    return data cast? list[int]
+
+assert f([1, 2]) is not None
+assert f(["a"]) is None
+```
+
+## a union target is decomposed per arm
+
+A union cast is the disjunction of its arms, each lowered by its own kind — never a single
+`isinstance` against a tuple holding a parameterized arm, which would be a runtime error.
+
+```by
+class A[T]:
+    t: T
+    def __init__(self, t: T): ...
+
+def f(a: object):
+    b = a cast? A[int] | str
+    reveal_type(b)  # revealed: A[int] | str | None
+```
+
 ## a data-member protocol target is checked structurally
 
 A protocol has no `__orig_class__` to probe, but basedpython reifies class attribute annotations, so

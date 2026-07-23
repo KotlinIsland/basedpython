@@ -37,6 +37,19 @@
 //! a subscripted rhs that is *not* a generic class (`x is candidates[0]`)
 //! falls back to the ordinary `isinstance` lowering that
 //! [`identity_swap`](super::identity_swap) applies to every other rhs
+//!
+//! # shared with the checked cast
+//!
+//! [`build_predicate`] is the core of this pass *and* of
+//! [`checked_cast`](super::checked_cast): both ask one question — does this
+//! value satisfy this specialization at runtime — over the same
+//! [`ParametricIsPlan`]. they differ only in two parameters:
+//!
+//! - [`TargetPosition`], because a cast's target is a type expression while an
+//!   `is`-rhs is a value expression, so ty infers the two differently
+//! - [`ProbeStrictness`], because an `is`-test must *earn* a `True` (it narrows)
+//!   while a cast is an assertion that only holds the value to arguments the
+//!   runtime can actually see
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{self as ast, CmpOp, Expr, Stmt};
@@ -130,6 +143,19 @@ def _parametric_is_sub(a, b):
         except TypeError:
             return False
     return a == b
+
+def _parametric_is_lenient(value, alias, variances):
+    # the checked-cast form: a value that records no reification has no
+    # arguments to check, so the base class test is the whole guarantee. this is
+    # what keeps `[1, 2] cast list[int]` legal while still rejecting a value
+    # whose recorded arguments contradict the target
+    alias = getattr(alias, \"__value__\", alias)
+    origin = getattr(alias, \"__origin__\", alias)
+    if not isinstance(value, origin):
+        return False
+    if not _by_generic_args(value, origin):
+        return True
+    return _parametric_is(value, alias, variances)
 ";
 
 /// runtime residue for a parametric test against a *protocol* target
@@ -294,6 +320,199 @@ pub(crate) fn protocol_members_literal(checks: &[ProtocolMemberCheck]) -> String
     format!("[{entries}]")
 }
 
+/// which inference position a target expression lives in. this is the *only*
+/// difference between an `is`-test and a checked cast at the front end: an
+/// `is`-rhs is a value expression (its type is the class object), a `cast`
+/// target is a type expression (its type is the instance). both then classify
+/// through the same engine
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TargetPosition {
+    Value,
+    Type,
+}
+
+/// how a runtime probe treats a value that carries no reification
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProbeStrictness {
+    /// no reification → no match. an `is`-test must *earn* its positive answer,
+    /// since a `True` narrows
+    Strict,
+    /// no reification → the base class test is the whole guarantee. a checked
+    /// cast is an assertion, so arguments it cannot see are not held against the
+    /// value (`[1, 2] cast list[int]` stays legal)
+    Lenient,
+}
+
+/// what a built predicate needs from the preamble, and what it proved
+#[derive(Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent yes/no facts about one built predicate; grouping them \
+              would only rename the same flags"
+)]
+pub(crate) struct PredicateNeeds {
+    /// the predicate calls `_parametric_is` / `_parametric_is_lenient`
+    pub(crate) parametric_runtime: bool,
+    /// the predicate calls `_by_protocol_is`
+    pub(crate) protocol_runtime: bool,
+    /// no arm carried a parametric claim — a plain `isinstance` covers the whole
+    /// target, so a caller may use its compact shallow form instead
+    pub(crate) all_plain: bool,
+    /// every arm folded to `True`; the check is redundant
+    pub(crate) all_true: bool,
+    /// some arm has no faithful runtime check
+    pub(crate) erased: bool,
+    /// the predicate mentions the value; when it doesn't (a static fold, a
+    /// reified-cell comparison) the caller must keep an effectful value alive
+    /// itself
+    pub(crate) references_value: bool,
+}
+
+impl PredicateNeeds {
+    fn new() -> Self {
+        Self {
+            all_plain: true,
+            all_true: true,
+            ..Self::default()
+        }
+    }
+}
+
+/// the plan for one `(value, target)` pair, resolved through the position's
+/// inference rules
+fn plan_for(
+    types: &dyn TypeInfo,
+    value_expr: &Expr,
+    target: &Expr,
+    position: TargetPosition,
+) -> Option<ParametricIsPlan> {
+    match position {
+        TargetPosition::Value => types.parametric_is_plan(value_expr, target),
+        TargetPosition::Type => types.parametric_cast_plan(value_expr, target),
+    }
+}
+
+/// the bare (non-negated) runtime predicate for one target arm, referencing the
+/// value through `value_ref` so the caller controls how it is bound.
+///
+/// this is the shared core of `x is T` and `x cast T`: both ask the same
+/// question — does this value satisfy this specialization at runtime — and
+/// differ only in `position` (how the target is inferred) and `probe` (what an
+/// unreified value means).
+fn arm_predicate(
+    types: &dyn TypeInfo,
+    value_ref: &dyn Fn() -> Fragment,
+    value_expr: &Expr,
+    arm: &Expr,
+    position: TargetPosition,
+    probe: ProbeStrictness,
+    needs: &mut PredicateNeeds,
+) -> Vec<Fragment> {
+    // a `None` arm (an `X | None` optional) is an identity check, not
+    // `isinstance(_, None)` — `None` is a value, not a class
+    if matches!(arm, Expr::NoneLiteral(_)) {
+        needs.all_true = false;
+        needs.references_value = true;
+        return vec![value_ref(), Fragment::Lit(" is None".to_owned())];
+    }
+    let Some(plan) = plan_for(types, value_expr, arm, position) else {
+        needs.all_true = false;
+        needs.references_value = true;
+        return vec![
+            Fragment::Lit("isinstance(".to_owned()),
+            value_ref(),
+            Fragment::Lit(", ".to_owned()),
+            Fragment::Src(arm.range()),
+            Fragment::Lit(")".to_owned()),
+        ];
+    };
+    needs.all_plain = false;
+    if !matches!(plan, ParametricIsPlan::Fold(true)) {
+        needs.all_true = false;
+    }
+    match plan {
+        // an erased arm can't be checked at runtime; ty reports the error (a
+        // union arm may not silently fold to `False` — that would be unsound —
+        // so the checker rejects it), and the lowering is the constant it is
+        ParametricIsPlan::ErasedTarget(_) => {
+            needs.erased = true;
+            vec![Fragment::Lit("False".to_owned())]
+        }
+        ParametricIsPlan::Fold(false) => vec![Fragment::Lit("False".to_owned())],
+        ParametricIsPlan::Fold(true) => vec![Fragment::Lit("True".to_owned())],
+        ParametricIsPlan::TokenEq(tokens) => {
+            let mut frags = vec![Fragment::Lit("(".to_owned())];
+            for (index, (name, target)) in tokens.iter().enumerate() {
+                let lead = if index == 0 { "" } else { " and " };
+                frags.push(Fragment::Lit(format!("{lead}{name} == ")));
+                frags.push(Fragment::Src(*target));
+            }
+            frags.push(Fragment::Lit(")".to_owned()));
+            frags
+        }
+        ParametricIsPlan::Probe(variances) => {
+            needs.parametric_runtime = true;
+            needs.references_value = true;
+            let codes: Vec<u8> = variances.iter().copied().map(variance_code).collect();
+            let call = match probe {
+                ProbeStrictness::Strict => "_parametric_is(",
+                ProbeStrictness::Lenient => "_parametric_is_lenient(",
+            };
+            vec![
+                Fragment::Lit(call.to_owned()),
+                value_ref(),
+                Fragment::Lit(", ".to_owned()),
+                Fragment::Src(arm.range()),
+                Fragment::Lit(format!(", {})", variance_tuple(&codes))),
+            ]
+        }
+        ParametricIsPlan::ProtocolStructural(checks) => {
+            needs.protocol_runtime = true;
+            needs.references_value = true;
+            let members = protocol_members_literal(&checks);
+            vec![
+                Fragment::Lit("_by_protocol_is(".to_owned()),
+                value_ref(),
+                Fragment::Lit(format!(", {members})")),
+            ]
+        }
+    }
+}
+
+/// the full runtime predicate for a target expression, splitting a union into
+/// the disjunction of its arms. shared by `is` and `cast`.
+pub(crate) fn build_predicate(
+    types: &dyn TypeInfo,
+    value_ref: &dyn Fn() -> Fragment,
+    value_expr: &Expr,
+    target: &Expr,
+    position: TargetPosition,
+    probe: ProbeStrictness,
+) -> (Vec<Fragment>, PredicateNeeds) {
+    let mut needs = PredicateNeeds::new();
+    let Some(arms) = union_arms(target) else {
+        let frags = arm_predicate(
+            types, value_ref, value_expr, target, position, probe, &mut needs,
+        );
+        return (frags, needs);
+    };
+    let mut frags = Vec::new();
+    for (index, arm) in arms.iter().enumerate() {
+        if index > 0 {
+            frags.push(Fragment::Lit(" or ".to_owned()));
+        }
+        frags.extend(arm_predicate(
+            types, value_ref, value_expr, arm, position, probe, &mut needs,
+        ));
+    }
+    (frags, needs)
+}
+
+/// whether replacing an expression may drop it without losing effects
+pub(crate) fn effect_free(expr: &Expr) -> bool {
+    matches!(expr, Expr::Name(_)) || expr.is_literal_expr()
+}
+
 struct ParametricIs<'src, 'ti> {
     source: &'src str,
     types: &'ti dyn TypeInfo,
@@ -303,15 +522,10 @@ struct ParametricIs<'src, 'ti> {
 }
 
 impl ParametricIs<'_, '_> {
-    /// whether replacing the pair may drop the lhs without losing effects
-    fn effect_free(lhs: &Expr) -> bool {
-        matches!(lhs, Expr::Name(_)) || lhs.is_literal_expr()
-    }
-
     /// the folded / token result expression, with the lhs kept alive when it
     /// may have effects (`(g(), True)[1]` evaluates then discards it)
     fn with_lhs_effects(lhs: &Expr, result: Vec<Fragment>) -> Vec<Fragment> {
-        if Self::effect_free(lhs) {
+        if effect_free(lhs) {
             return result;
         }
         let mut frags = vec![Fragment::Lit("(".to_owned()), Fragment::Src(lhs.range())];
@@ -321,162 +535,63 @@ impl ParametricIs<'_, '_> {
         frags
     }
 
+    /// `lhs is rhs` for a single (non-union) target, built by the shared
+    /// predicate builder and then wrapped for this form: negation, and keeping
+    /// an effectful lhs alive when the predicate doesn't mention it
     fn lower_pair(&mut self, lhs: &Expr, rhs: &Expr, negate: bool) -> Vec<Fragment> {
-        let Some(plan) = self.types.parametric_is_plan(lhs, rhs) else {
-            // rhs is a bare class or a plain value, not a specialization — the
-            // ordinary isinstance lowering that identity_swap used to emit
-            let open = if negate {
-                "not isinstance("
-            } else {
-                "isinstance("
-            };
-            return vec![
-                Fragment::Lit(open.to_owned()),
-                Fragment::Src(lhs.range()),
-                Fragment::Lit(", ".to_owned()),
-                Fragment::Src(rhs.range()),
-                Fragment::Lit(")".to_owned()),
-            ];
-        };
-        match plan {
-            // an erased-target probe (builtin or protocol) can never be true
-            // (ty reports the error); lower it to the constant it always is
-            ParametricIsPlan::Fold(false) | ParametricIsPlan::ErasedTarget(_) => {
-                let value = if negate { "True" } else { "False" };
-                Self::with_lhs_effects(lhs, vec![Fragment::Lit(value.to_owned())])
+        let value = || Fragment::Src(lhs.range());
+        let (frags, needs) = build_predicate(
+            self.types,
+            &value,
+            lhs,
+            rhs,
+            TargetPosition::Value,
+            ProbeStrictness::Strict,
+        );
+        self.needs_probe |= needs.parametric_runtime;
+        self.needs_protocol |= needs.protocol_runtime;
+
+        // a predicate that folded to a constant inverts in place rather than
+        // growing a `not`
+        if let [Fragment::Lit(literal)] = frags.as_slice()
+            && let Some(folded) = match literal.as_str() {
+                "True" => Some(true),
+                "False" => Some(false),
+                _ => None,
             }
-            ParametricIsPlan::Fold(true) => {
-                let value = if negate { "False" } else { "True" };
-                Self::with_lhs_effects(lhs, vec![Fragment::Lit(value.to_owned())])
-            }
-            ParametricIsPlan::TokenEq(tokens) => {
-                let mut frags = vec![Fragment::Lit(if negate { "not (" } else { "(" }.to_owned())];
-                for (index, (name, target)) in tokens.iter().enumerate() {
-                    let lead = if index == 0 { "" } else { " and " };
-                    frags.push(Fragment::Lit(format!("{lead}{name} == ")));
-                    frags.push(Fragment::Src(*target));
-                }
-                frags.push(Fragment::Lit(")".to_owned()));
-                Self::with_lhs_effects(lhs, frags)
-            }
-            // a user-defined generic target carries `__orig_class__`; probe it,
-            // matching each type argument by the target's effective variance
-            ParametricIsPlan::Probe(variances) => {
-                self.needs_probe = true;
-                let codes = variances
-                    .iter()
-                    .map(|variance| match variance {
-                        ArgVariance::Invariant => "0",
-                        ArgVariance::Covariant => "1",
-                        ArgVariance::Contravariant => "2",
-                        ArgVariance::Bivariant => "3",
-                    })
-                    .collect::<Vec<_>>();
-                // a one-element tuple needs its trailing comma
-                let tuple = match codes.as_slice() {
-                    [single] => format!("({single},)"),
-                    _ => format!("({})", codes.join(", ")),
-                };
-                let open = if negate {
-                    "not _parametric_is("
-                } else {
-                    "_parametric_is("
-                };
-                vec![
-                    Fragment::Lit(open.to_owned()),
-                    Fragment::Src(lhs.range()),
-                    Fragment::Lit(", ".to_owned()),
-                    Fragment::Src(rhs.range()),
-                    Fragment::Lit(format!(", {tuple})")),
-                ]
-            }
-            // a protocol target carries no `__orig_class__`, but its members'
-            // reified annotations can be checked structurally on the value's
-            // class
-            ParametricIsPlan::ProtocolStructural(checks) => {
-                self.needs_protocol = true;
-                let members = protocol_members_literal(&checks);
-                let open = if negate {
-                    "not _by_protocol_is("
-                } else {
-                    "_by_protocol_is("
-                };
-                vec![
-                    Fragment::Lit(open.to_owned()),
-                    Fragment::Src(lhs.range()),
-                    Fragment::Lit(format!(", {members})")),
-                ]
-            }
+        {
+            let value = if folded != negate { "True" } else { "False" };
+            return Self::with_lhs_effects(lhs, vec![Fragment::Lit(value.to_owned())]);
+        }
+
+        let mut result = Vec::new();
+        if negate {
+            result.push(Fragment::Lit("not ".to_owned()));
+        }
+        result.extend(frags);
+        if needs.references_value {
+            result
+        } else {
+            Self::with_lhs_effects(lhs, result)
         }
     }
 
-    /// one arm of a union `is`-target: its bare (non-negated) test, referencing
-    /// the value through `value` rather than the lhs directly so the caller can
-    /// bind the lhs once and share it across arms. no lhs-effect wrapping here —
-    /// the union combiner evaluates the lhs exactly once for the whole test
+    /// one arm of a union `is`-target, delegated to the shared predicate
+    /// builder so `is` and `cast` stay in lockstep
     fn lower_arm(&mut self, value: &dyn Fn() -> Fragment, lhs: &Expr, arm: &Expr) -> Vec<Fragment> {
-        // a `None` arm (an `X | None` optional) is an identity check, not
-        // `isinstance(_, None)` — `None` is a value, not a class
-        if matches!(arm, Expr::NoneLiteral(_)) {
-            return vec![value(), Fragment::Lit(" is None".to_owned())];
-        }
-        let Some(plan) = self.types.parametric_is_plan(lhs, arm) else {
-            return vec![
-                Fragment::Lit("isinstance(".to_owned()),
-                value(),
-                Fragment::Lit(", ".to_owned()),
-                Fragment::Src(arm.range()),
-                Fragment::Lit(")".to_owned()),
-            ];
-        };
-        match plan {
-            // an erased arm can't be checked at runtime; ty reports the error
-            // (a union arm may not silently fold to `False` — that would be
-            // unsound — so the checker rejects it), and the lowering is the
-            // constant the standalone form uses
-            ParametricIsPlan::Fold(false) | ParametricIsPlan::ErasedTarget(_) => {
-                vec![Fragment::Lit("False".to_owned())]
-            }
-            ParametricIsPlan::Fold(true) => vec![Fragment::Lit("True".to_owned())],
-            ParametricIsPlan::TokenEq(tokens) => {
-                let mut frags = vec![Fragment::Lit("(".to_owned())];
-                for (index, (name, target)) in tokens.iter().enumerate() {
-                    let lead = if index == 0 { "" } else { " and " };
-                    frags.push(Fragment::Lit(format!("{lead}{name} == ")));
-                    frags.push(Fragment::Src(*target));
-                }
-                frags.push(Fragment::Lit(")".to_owned()));
-                frags
-            }
-            ParametricIsPlan::Probe(variances) => {
-                self.needs_probe = true;
-                let codes: Vec<u8> = variances
-                    .iter()
-                    .map(|variance| match variance {
-                        ArgVariance::Invariant => 0,
-                        ArgVariance::Covariant => 1,
-                        ArgVariance::Contravariant => 2,
-                        ArgVariance::Bivariant => 3,
-                    })
-                    .collect();
-                vec![
-                    Fragment::Lit("_parametric_is(".to_owned()),
-                    value(),
-                    Fragment::Lit(", ".to_owned()),
-                    Fragment::Src(arm.range()),
-                    Fragment::Lit(format!(", {})", variance_tuple(&codes))),
-                ]
-            }
-            ParametricIsPlan::ProtocolStructural(checks) => {
-                self.needs_protocol = true;
-                let members = protocol_members_literal(&checks);
-                vec![
-                    Fragment::Lit("_by_protocol_is(".to_owned()),
-                    value(),
-                    Fragment::Lit(format!(", {members})")),
-                ]
-            }
-        }
+        let mut needs = PredicateNeeds::new();
+        let frags = arm_predicate(
+            self.types,
+            value,
+            lhs,
+            arm,
+            TargetPosition::Value,
+            ProbeStrictness::Strict,
+            &mut needs,
+        );
+        self.needs_probe |= needs.parametric_runtime;
+        self.needs_protocol |= needs.protocol_runtime;
+        frags
     }
 
     /// `lhs is (T1 | T2 | …)` — a test against a union type — is the disjunction
@@ -484,7 +599,7 @@ impl ParametricIs<'_, '_> {
     /// once: referenced directly when it has no effects, else through a lambda
     /// parameter so the arms share a single evaluation
     fn lower_union(&mut self, lhs: &Expr, arms: &[&Expr], negate: bool) -> Vec<Fragment> {
-        let via_lambda = !Self::effect_free(lhs);
+        let via_lambda = !effect_free(lhs);
         let value = || {
             if via_lambda {
                 Fragment::Lit(UNION_VALUE_PARAM.to_owned())

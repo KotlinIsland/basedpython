@@ -163,6 +163,32 @@ assert (GetBool() is Get[str]) is False, "return bool is not str"
 assert (GetBool() cast Get[int]) is not None, "method-protocol cast returns the value on a match"
 assert (GetBool() cast? Get[str]) is None, "method-protocol safe cast yields None on a mismatch"
 
+# a union cast is the disjunction of its arms, each checked by its own kind —
+# it must never become one `isinstance` against a tuple holding a parameterized
+# arm (a runtime TypeError)
+assert (GetBool() cast? Get[int] | str) is not None, "generic arm of a union matches"
+assert ("s" cast? Get[int] | str) is not None, "plain arm of a union matches"
+assert (1 cast? Get[int] | str) is None, "neither arm matches"
+
+# the cast probe is *lenient*: a value recording no reification has no arguments
+# to check, so the base class test is the whole guarantee. this keeps a plain
+# list castable while still rejecting one whose recorded arguments contradict
+assert ([1, 2] cast list[int]) is not None, "an unreified list still casts"
+
+class IntList(list[int]): ...
+class StrList(list[str]): ...
+
+assert (IntList() cast? list[int]) is not None, "recorded arguments agree"
+assert (StrList() cast? list[int]) is None, "recorded arguments contradict"
+
+# a value typed by a *reified* type parameter carries the answer in a runtime
+# cell, so the cast is exact — the same `T == int` lowering `is` uses
+def cast_cell[T](data: list[T]) -> list[int] | None:
+    return data cast? list[int]
+
+assert cast_cell([1, 2]) is not None, "reified cell says int"
+assert cast_cell(["a"]) is None, "reified cell says str"
+
 print("ok")
 "#;
 

@@ -80,6 +80,15 @@ pub(crate) trait TypeInfo {
         rhs: &Expr,
     ) -> Option<ty_python_semantic::ParametricIsPlan>;
 
+    /// [`Self::parametric_is_plan`] for a checked cast's `(value, target)` pair.
+    /// the same classification engine backs both; only the target's inference
+    /// position differs (a cast target is a type expression)
+    fn parametric_cast_plan(
+        &self,
+        value: &Expr,
+        target: &Expr,
+    ) -> Option<ty_python_semantic::ParametricIsPlan>;
+
     /// whether an `is`/`is not` comparison whose rhs is `expr` keeps python
     /// identity semantics instead of lowering to `isinstance`: true when
     /// `expr` resolves to a plain *value* — an enum member (`Color.RED`, a
@@ -342,6 +351,14 @@ impl TypeInfo for SemanticModel<'_> {
         rhs: &Expr,
     ) -> Option<ty_python_semantic::ParametricIsPlan> {
         SemanticModel::parametric_is_plan(self, lhs, rhs)
+    }
+
+    fn parametric_cast_plan(
+        &self,
+        value: &Expr,
+        target: &Expr,
+    ) -> Option<ty_python_semantic::ParametricIsPlan> {
+        SemanticModel::parametric_cast_plan(self, value, target)
     }
 
     fn is_keeps_identity(&self, expr: &Expr) -> bool {

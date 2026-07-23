@@ -16,17 +16,28 @@
 //! value is a [`Fragment::Src`] passthrough, so lowerings inside it still
 //! compose and it is evaluated exactly once.
 //!
-//! How deeply a *checked* form validates is decided by what the target can
-//! prove at runtime ([`TypeInfo::cast_check_plan`]):
+//! How a *checked* form validates is decided by the **same engine that decides
+//! `x is T`** — [`build_predicate`], via [`TypeInfo::parametric_cast_plan`]. The
+//! two forms ask one question (does this value satisfy this specialization at
+//! runtime) and differ only in two parameters:
 //!
-//! - a **user generic** whose instances carry `__orig_class__` (stamped by
-//!   `A[int](…)`) validates its type arguments too, via `_parametric_is`:
-//!   `x cast A[int]` rejects an `A[str]`.
-//! - **anything else** collapses to the shallow `isinstance` target
-//!   (`list[object]` → `list`, `int | str` → `(int, str)`), because builtins
-//!   erase their arguments and a bare `isinstance(v, list[object])` is itself
-//!   a runtime error. The dropped argument claim is reported by ty's
-//!   `erased-cast-argument` lint.
+//! - [`TargetPosition::Type`], because a cast's target is a *type* expression
+//!   while an `is`-rhs is a value expression, so ty infers it differently;
+//! - [`ProbeStrictness::Lenient`], because a cast is an assertion: arguments the
+//!   runtime cannot see are not held against the value, keeping
+//!   `[1, 2] cast list[int]` legal. An `is`-test is strict — a `True` narrows,
+//!   so it must be earned.
+//!
+//! Everything else follows from the shared plan: a reified type parameter
+//! compares its runtime cell (`def f[T](x: list[T])` casting to `list[int]`
+//! lowers to `T == int`), a user generic probes `__orig_class__`, a protocol is
+//! checked structurally, and a union is the disjunction of its arms, each
+//! lowered by its own kind. Such a target lowers to `_checked_cast_pred(value,
+//! lambda …)` so the value is evaluated once and the predicate can reference it.
+//!
+//! A target with **no parametric claim** keeps the compact shallow form
+//! (`_checked_cast(v, (int, str))`), and one the engine cannot check at all
+//! degrades to `typing.cast` and is reported by ty's `erased-cast-argument`.
 //!
 //! The unchecked `typing.cast` keeps the exact written type (it never reaches
 //! `isinstance`).
@@ -39,9 +50,13 @@ use ruff_text_size::{Ranged, TextRange};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::parametric_is::{
-    PARAMETRIC_IS_RUNTIME, PROTOCOL_IS_RUNTIME, protocol_members_literal, variance_tuple,
+    PARAMETRIC_IS_RUNTIME, PROTOCOL_IS_RUNTIME, ProbeStrictness, TargetPosition, build_predicate,
 };
 use crate::type_info::{CastCheck, SoundnessCheck, TypeInfo};
+
+/// the lambda parameter a predicate-form cast binds its value to, so the value
+/// is evaluated exactly once and the predicate can reference it
+const CAST_VALUE_PARAM: &str = "_by_cast_value";
 
 // `<value> cast <type>` with checks on: verify at runtime, raise on mismatch.
 const CHECKED_CAST_HELPER: &str = "\
@@ -59,79 +74,34 @@ def _try_cast(_v, _t):
     return _v if isinstance(_v, _t) else None
 ";
 
-// deep forms, for a user generic whose instances carry `__orig_class__`
-// (stamped by `A[int](…)`): validate the base class always, and the reified
-// type arguments when the value carries them. a value with no reification
-// passes the argument check — its arguments aren't available to check, leaving
-// the base `isinstance` as the guarantee. reuses `_parametric_is` from
-// `PARAMETRIC_IS_RUNTIME`
-const CHECKED_CAST_P_HELPER: &str = "\
-def _checked_cast_p(_v, _alias, _variances):
-    _origin = getattr(_alias, \"__origin__\", _alias)
-    if not isinstance(_v, _origin):
-        raise TypeError(
-            f\"cast to {_alias} failed: value is {type(_v).__name__}\"
-        )
-    if getattr(_v, \"__orig_class__\", None) is not None and not _parametric_is(_v, _alias, _variances):
-        raise TypeError(
-            f\"cast to {_alias} failed: value is {_v.__orig_class__}\"
-        )
+// predicate forms, for any target the shared parametric engine can decide at
+// runtime — a reified-cell comparison (`T == int`), an `__orig_class__` probe, a
+// structural protocol check, or a disjunction of those across a union's arms.
+// the predicate is a lambda so the value is evaluated exactly once (as `_v`) and
+// referenced from inside the test
+const CHECKED_CAST_PRED_HELPER: &str = "\
+def _checked_cast_pred(_v, _pred):
+    if not _pred(_v):
+        raise TypeError(f\"cast failed: value is {type(_v).__name__}\")
     return _v
 ";
 
-const TRY_CAST_P_HELPER: &str = "\
-def _try_cast_p(_v, _alias, _variances):
-    _origin = getattr(_alias, \"__origin__\", _alias)
-    if not isinstance(_v, _origin):
-        return None
-    if getattr(_v, \"__orig_class__\", None) is not None and not _parametric_is(_v, _alias, _variances):
-        return None
-    return _v
+const TRY_CAST_PRED_HELPER: &str = "\
+def _try_cast_pred(_v, _pred):
+    return _v if _pred(_v) else None
 ";
-
-// structural forms, for a *protocol* target whose data members are checked
-// against the value's reified class annotations (a protocol has no
-// `__orig_class__` to probe). `_members` is the list `_by_protocol_is` takes;
-// reuses `_by_protocol_is` from `PROTOCOL_IS_RUNTIME`
-const CHECKED_CAST_PROTO_HELPER: &str = "\
-def _checked_cast_proto(_v, _members):
-    if not _by_protocol_is(_v, _members):
-        raise TypeError(
-            f\"cast failed: {type(_v).__name__} does not structurally match the protocol\"
-        )
-    return _v
-";
-
-const TRY_CAST_PROTO_HELPER: &str = "\
-def _try_cast_proto(_v, _members):
-    return _v if _by_protocol_is(_v, _members) else None
-";
-
-/// how deeply a checked cast validates: the shallow `isinstance` target, a deep
-/// `__orig_class__` probe (user generic), or a structural annotation check
-/// (protocol)
-#[derive(Clone, Copy)]
-enum Depth {
-    Shallow,
-    Parametric,
-    Protocol,
-}
 
 /// the runtime helper a `cast` / `cast?` occurrence lowers to
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Helper {
-    /// `_checked_cast(value, target)` — shallow, raises on mismatch
+    /// `_checked_cast(value, target)` — shallow `isinstance`, raises on mismatch
     Checked,
-    /// `_try_cast(value, target)` — shallow, yields `None` on mismatch
+    /// `_try_cast(value, target)` — shallow `isinstance`, yields `None`
     Try,
-    /// `_checked_cast_p(value, alias, variances)` — deep, raises on mismatch
-    CheckedParametric,
-    /// `_try_cast_p(value, alias, variances)` — deep, yields `None`
-    TryParametric,
-    /// `_checked_cast_proto(value, members)` — structural, raises on mismatch
-    CheckedProtocol,
-    /// `_try_cast_proto(value, members)` — structural, yields `None`
-    TryProtocol,
+    /// `_checked_cast_pred(value, pred)` — shared parametric predicate, raises
+    CheckedPredicate,
+    /// `_try_cast_pred(value, pred)` — shared parametric predicate, yields `None`
+    TryPredicate,
     /// `cast(type, value)` — unchecked `typing.cast`
     TypingCast,
 }
@@ -140,20 +110,15 @@ impl Helper {
     /// whether this helper yields `None` on mismatch (the `cast?` family) rather
     /// than raising (the `cast` family)
     fn is_yielding(self) -> bool {
-        matches!(self, Self::Try | Self::TryParametric | Self::TryProtocol)
+        matches!(self, Self::Try | Self::TryPredicate)
     }
 
-    /// the variant of this raising/yielding pair at the given depth. only ever
-    /// called on the checked (`Checked` / `Try`) helpers — `TypingCast` never
-    /// reaches a depth decision
-    fn at_depth(self, depth: Depth) -> Self {
-        match (depth, self.is_yielding()) {
-            (Depth::Shallow, false) => Self::Checked,
-            (Depth::Shallow, true) => Self::Try,
-            (Depth::Parametric, false) => Self::CheckedParametric,
-            (Depth::Parametric, true) => Self::TryParametric,
-            (Depth::Protocol, false) => Self::CheckedProtocol,
-            (Depth::Protocol, true) => Self::TryProtocol,
+    /// the predicate-taking variant of this raising/yielding pair
+    fn as_predicate(self) -> Self {
+        if self.is_yielding() {
+            Self::TryPredicate
+        } else {
+            Self::CheckedPredicate
         }
     }
 
@@ -161,10 +126,8 @@ impl Helper {
         match self {
             Self::Checked => "_checked_cast(",
             Self::Try => "_try_cast(",
-            Self::CheckedParametric => "_checked_cast_p(",
-            Self::TryParametric => "_try_cast_p(",
-            Self::CheckedProtocol => "_checked_cast_proto(",
-            Self::TryProtocol => "_try_cast_proto(",
+            Self::CheckedPredicate => "_checked_cast_pred(",
+            Self::TryPredicate => "_try_cast_pred(",
             Self::TypingCast => "cast(",
         }
     }
@@ -174,22 +137,10 @@ impl Helper {
         match self {
             Self::Checked => CHECKED_CAST_HELPER,
             Self::Try => TRY_CAST_HELPER,
-            Self::CheckedParametric => CHECKED_CAST_P_HELPER,
-            Self::TryParametric => TRY_CAST_P_HELPER,
-            Self::CheckedProtocol => CHECKED_CAST_PROTO_HELPER,
-            Self::TryProtocol => TRY_CAST_PROTO_HELPER,
+            Self::CheckedPredicate => CHECKED_CAST_PRED_HELPER,
+            Self::TryPredicate => TRY_CAST_PRED_HELPER,
             Self::TypingCast => "from typing import cast",
         }
-    }
-
-    /// deep helpers call `_parametric_is`, so they pull in its runtime too
-    fn is_parametric(self) -> bool {
-        matches!(self, Self::CheckedParametric | Self::TryParametric)
-    }
-
-    /// structural helpers call `_by_protocol_is`, so they pull in its runtime too
-    fn is_protocol(self) -> bool {
-        matches!(self, Self::CheckedProtocol | Self::TryProtocol)
     }
 }
 
@@ -200,6 +151,8 @@ struct CastLower<'a> {
     checked: bool,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     used: BTreeSet<Helper>,
+    needs_parametric: bool,
+    needs_protocol: bool,
 }
 
 impl<'a> CastLower<'a> {
@@ -209,44 +162,54 @@ impl<'a> CastLower<'a> {
             checked,
             edits: Vec::new(),
             used: BTreeSet::new(),
+            needs_parametric: false,
+            needs_protocol: false,
         }
     }
 
-    /// the target arguments for a *runtime-checked* cast, and the helper
-    /// variant they belong to. a user generic whose instances carry
-    /// `__orig_class__` goes deep (`A[int]` plus the variance codes
-    /// `_parametric_is` needs); anything else collapses to the shallow
-    /// `isinstance` target ty derives (`list[object]` → `list`,
+    /// the call arguments after the value, and the helper they belong to.
+    ///
+    /// a target the shared parametric engine can decide — a reified-cell
+    /// comparison, an `__orig_class__` probe, a structural protocol check, or a
+    /// union mixing those — becomes a predicate lambda built by exactly the code
+    /// that builds an `is`-test. anything with no parametric claim keeps the
+    /// compact shallow `isinstance` target ty derives (`list[object]` → `list`,
     /// `int | str` → `(int, str)`), since a bare `isinstance(v, list[object])`
-    /// is a runtime error. with no faithful test the written type passes
-    /// through unchanged
-    fn target(&self, type_arg: &Expr, helper: Helper) -> (Helper, Vec<Fragment>) {
+    /// is itself a runtime error
+    fn target(
+        &mut self,
+        value_arg: &Expr,
+        type_arg: &Expr,
+        helper: Helper,
+    ) -> (Helper, Vec<Fragment>) {
+        let value_ref = || Fragment::Lit(CAST_VALUE_PARAM.to_owned());
+        let (predicate, needs) = build_predicate(
+            self.types,
+            &value_ref,
+            value_arg,
+            type_arg,
+            TargetPosition::Type,
+            ProbeStrictness::Lenient,
+        );
+        if !needs.all_plain && !needs.erased {
+            self.needs_parametric |= needs.parametric_runtime;
+            self.needs_protocol |= needs.protocol_runtime;
+            let mut fragments = vec![Fragment::Lit(format!("lambda {CAST_VALUE_PARAM}: "))];
+            fragments.extend(predicate);
+            return (helper.as_predicate(), fragments);
+        }
+        // no parametric claim (or none that can be checked): the shallow
+        // `isinstance` target, or the written type when ty offers no faithful one
         match self.types.cast_check_plan(type_arg) {
-            Some(CastCheck::Kind(SoundnessCheck::Parametric { alias, variances })) => (
-                helper.at_depth(Depth::Parametric),
-                vec![Fragment::Lit(format!(
-                    "{alias}, {}",
-                    variance_tuple(&variances)
-                ))],
-            ),
             Some(CastCheck::Kind(SoundnessCheck::Isinstance(target))) => {
-                (helper.at_depth(Depth::Shallow), vec![Fragment::Lit(target)])
+                (helper, vec![Fragment::Lit(target)])
             }
-            Some(CastCheck::Protocol { members }) => (
-                helper.at_depth(Depth::Protocol),
-                vec![Fragment::Lit(protocol_members_literal(&members))],
-            ),
-            // `Unchecked` never reaches here — `visit_expr` degrades an
-            // unverifiable-protocol target to `typing.cast` before emit — so a
-            // target with no faithful check is a plain shallow passthrough
-            Some(CastCheck::Unchecked) | None => (
-                helper.at_depth(Depth::Shallow),
-                vec![Fragment::Src(type_arg.range())],
-            ),
+            _ => (helper, vec![Fragment::Src(type_arg.range())]),
         }
     }
 
-    fn emit(&mut self, whole: TextRange, type_arg: &Expr, value_range: TextRange, helper: Helper) {
+    fn emit(&mut self, whole: TextRange, type_arg: &Expr, value_arg: &Expr, helper: Helper) {
+        let value_range = value_arg.range();
         // unchecked `typing.cast(type, value)` keeps the exact written type (it
         // never reaches `isinstance`) and takes the type first
         let (helper, first, rest) = if helper == Helper::TypingCast {
@@ -256,7 +219,7 @@ impl<'a> CastLower<'a> {
                 vec![Fragment::Src(value_range)],
             )
         } else {
-            let (helper, rest) = self.target(type_arg, helper);
+            let (helper, rest) = self.target(value_arg, type_arg, helper);
             (helper, Fragment::Src(value_range), rest)
         };
 
@@ -298,7 +261,7 @@ impl<'ast> Visitor<'ast> for CastLower<'_> {
             } else {
                 Helper::TypingCast
             };
-            self.emit(expr.range(), type_arg, value_arg.range(), helper);
+            self.emit(expr.range(), type_arg, value_arg, helper);
         }
         walk_expr(self, expr);
     }
@@ -323,12 +286,12 @@ impl TypeAwarePass for CheckedCastPass {
         if inner.edits.is_empty() {
             return;
         }
-        // `_parametric_is` / `_by_protocol_is` must precede the helpers that
+        // `_parametric_is` / `_by_protocol_is` must precede the predicates that
         // call them
-        if inner.used.iter().any(|helper| helper.is_parametric()) {
+        if inner.needs_parametric {
             ctx.required_imports.push(PARAMETRIC_IS_RUNTIME.to_owned());
         }
-        if inner.used.iter().any(|helper| helper.is_protocol()) {
+        if inner.needs_protocol {
             ctx.required_imports.push(PROTOCOL_IS_RUNTIME.to_owned());
         }
         for helper in &inner.used {
@@ -341,6 +304,7 @@ impl TypeAwarePass for CheckedCastPass {
 #[cfg(test)]
 mod tests {
     use crate::{Config, transpile};
+    use ruff_python_ast::PythonVersion;
 
     /// default config — checked casts on
     fn check(input: &str) -> String {
@@ -412,10 +376,10 @@ mod tests {
             "class A[T]:\n    t: T\n    def __init__(self, t: T): ...\n\ndef f(x: object):\n    b = x cast A[int]\n",
         );
         assert!(
-            out.contains("b = _checked_cast_p(x, A[int], (0,))"),
+            out.contains("b = _checked_cast_pred(x, lambda _by_cast_value: _parametric_is_lenient(_by_cast_value, A[int], (0,)))"),
             "got:\n{out}"
         );
-        assert!(out.contains("def _checked_cast_p"), "got:\n{out}");
+        assert!(out.contains("def _checked_cast_pred"), "got:\n{out}");
         // the deep helper calls `_parametric_is`, so its runtime comes along
         assert!(out.contains("def _parametric_is"), "got:\n{out}");
     }
@@ -426,10 +390,10 @@ mod tests {
             "class A[T]:\n    t: T\n    def __init__(self, t: T): ...\n\ndef f(x: object):\n    b = x cast? A[int]\n",
         );
         assert!(
-            out.contains("b = _try_cast_p(x, A[int], (0,))"),
+            out.contains("b = _try_cast_pred(x, lambda _by_cast_value: _parametric_is_lenient(_by_cast_value, A[int], (0,)))"),
             "got:\n{out}"
         );
-        assert!(out.contains("def _try_cast_p"), "got:\n{out}");
+        assert!(out.contains("def _try_cast_pred"), "got:\n{out}");
     }
 
     /// the variance codes come from the target's own type parameters, so an
@@ -440,7 +404,7 @@ mod tests {
             "class A[out T]:\n    t: T\n    def __init__(self, t: T): ...\n\ndef f(x: object):\n    b = x cast A[int]\n",
         );
         assert!(
-            out.contains("b = _checked_cast_p(x, A[int], (1,))"),
+            out.contains("b = _checked_cast_pred(x, lambda _by_cast_value: _parametric_is_lenient(_by_cast_value, A[int], (1,)))"),
             "got:\n{out}"
         );
     }
@@ -459,22 +423,26 @@ mod tests {
     }
 
     #[test]
-    fn parameterized_generic_collapses_to_origin() {
-        // regression: `isinstance(v, list[object])` is a runtime error; the
-        // checked cast must target the origin `list` instead
+    fn parameterized_builtin_probes_leniently() {
+        // regression: `isinstance(v, list[object])` is a runtime error, so the
+        // subscripted target must never reach `isinstance`. the probe unwraps it
+        // to the origin itself, and checks the arguments only when the value
+        // records them
         let out = check("def f(a: object):\n    b = a cast list[object]\n");
-        assert!(out.contains("b = _checked_cast(a, list)"), "got:\n{out}");
         assert!(
-            !out.contains("list[object]"),
-            "no parameterized target:\n{out}"
+            out.contains("b = _checked_cast_pred(a, lambda _by_cast_value: _parametric_is_lenient(_by_cast_value, list[object], (0,)))"),
+            "got:\n{out}"
         );
     }
 
+    /// a union target is the disjunction of its arms, each lowered by its own
+    /// kind — the same decomposition an `is`-test uses. it must never become a
+    /// single `isinstance` against a tuple containing a parameterized arm
     #[test]
-    fn union_of_generics_collapses_each_arm() {
+    fn union_arms_are_decomposed() {
         let out = check("def f(a: object):\n    b = a cast? list[int] | None\n");
         assert!(
-            out.contains("b = _try_cast(a, (list, type(None)))"),
+            out.contains("b = _try_cast_pred(a, lambda _by_cast_value: _parametric_is_lenient(_by_cast_value, list[int], (0,)) or _by_cast_value is None)"),
             "got:\n{out}"
         );
     }
@@ -507,7 +475,7 @@ mod tests {
     fn collection_literal_value_composes() {
         // a bare collection-literal value passes through the wrap intact
         let out = check("x = [1] cast list[object]\n");
-        assert!(out.contains("_checked_cast([1], list)"), "got:\n{out}");
+        assert!(out.contains("_checked_cast_pred([1], "), "got:\n{out}");
         assert_eq!(
             out.matches('(').count(),
             out.matches(')').count(),
@@ -555,8 +523,12 @@ mod tests {
     /// a genuine cast whose value is *not* already the target keeps its probe
     #[test]
     fn non_redundant_cast_keeps_probe() {
+        // (the probe is lenient: an unreified value passes the argument check)
         let out = check("def f(a: object):\n    b = a cast list[int]\n");
-        assert!(out.contains("b = _checked_cast(a, list)"), "got:\n{out}");
+        assert!(
+            out.contains("b = _checked_cast_pred(a, lambda _by_cast_value: _parametric_is_lenient(_by_cast_value, list[int], (0,)))"),
+            "got:\n{out}"
+        );
     }
 
     /// a data-member protocol target has no `__orig_class__` to probe, but its
@@ -567,10 +539,10 @@ mod tests {
             "from typing import Protocol\n\nclass A[T](Protocol):\n    a: T\n\ndef f(x: object):\n    b = x cast A[int]\n",
         );
         assert!(
-            out.contains("b = _checked_cast_proto(x, [(\"attr\", \"a\", int, 0)])"),
+            out.contains("b = _checked_cast_pred(x, lambda _by_cast_value: _by_protocol_is(_by_cast_value, [(\"attr\", \"a\", int, 0)]))"),
             "got:\n{out}"
         );
-        assert!(out.contains("def _checked_cast_proto"), "got:\n{out}");
+        assert!(out.contains("def _checked_cast_pred"), "got:\n{out}");
         // the structural helper calls `_by_protocol_is`, so its runtime comes along
         assert!(out.contains("def _by_protocol_is"), "got:\n{out}");
     }
@@ -581,10 +553,10 @@ mod tests {
             "from typing import Protocol\n\nclass A[T](Protocol):\n    a: T\n\ndef f(x: object):\n    b = x cast? A[bool]\n",
         );
         assert!(
-            out.contains("b = _try_cast_proto(x, [(\"attr\", \"a\", bool, 0)])"),
+            out.contains("b = _try_cast_pred(x, lambda _by_cast_value: _by_protocol_is(_by_cast_value, [(\"attr\", \"a\", bool, 0)]))"),
             "got:\n{out}"
         );
-        assert!(out.contains("def _try_cast_proto"), "got:\n{out}");
+        assert!(out.contains("def _try_cast_pred"), "got:\n{out}");
     }
 
     /// a method member is checkable too — its return type is validated against
@@ -595,7 +567,7 @@ mod tests {
             "from typing import Protocol\n\nclass M[T](Protocol):\n    def get(self) -> T: ...\n\ndef f(x: object):\n    b = x cast M[int]\n",
         );
         assert!(
-            out.contains("b = _checked_cast_proto(x, [(\"method\", \"get\", [], (int, 1))])"),
+            out.contains("b = _checked_cast_pred(x, lambda _by_cast_value: _by_protocol_is(_by_cast_value, [(\"method\", \"get\", [], (int, 1))]))"),
             "got:\n{out}"
         );
         assert!(out.contains("def _by_method_matches"), "got:\n{out}");
@@ -637,6 +609,46 @@ mod tests {
         .unwrap();
         assert!(out.contains("b = cast(A[int], x)"), "got:\n{out}");
         assert!(!out.contains("_by_protocol_is"), "got:\n{out}");
+    }
+
+    /// a value typed by a *reified* type parameter carries the answer in a
+    /// runtime cell, so the cast is checked exactly — no argument is assumed.
+    /// this is the same `TokenEq` lowering `x is list[int]` uses
+    #[test]
+    fn reified_type_parameter_compares_its_cell() {
+        let out = transpile(
+            "def f[T](data: list[T]):\n    x = data cast? list[int]\n    return x\n",
+            &Config {
+                min_version: PythonVersion::PY313,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("x = _try_cast_pred(data, lambda _by_cast_value: (T == int))"),
+            "reified cell compared: {out}"
+        );
+        assert!(
+            out.contains("@generic  # basedpython: reified"),
+            "the parametric cast must reify T: {out}"
+        );
+    }
+
+    /// a union mixing a user generic with a plain class lowers each arm by its
+    /// own kind, exactly as the `is`-test does
+    #[test]
+    fn union_mixes_probe_and_isinstance_per_arm() {
+        let out = check(
+            "class A[T]:\n    t: T\n    def __init__(self, t: T): ...\n\ndef f(a: object):\n    b = a cast A[int] | str\n",
+        );
+        assert!(
+            out.contains(
+                "b = _checked_cast_pred(a, lambda _by_cast_value: \
+                 _parametric_is_lenient(_by_cast_value, A[int], (0,)) \
+                 or isinstance(_by_cast_value, str))"
+            ),
+            "each arm lowered by its own kind: {out}"
+        );
     }
 
     #[test]
