@@ -6,7 +6,7 @@ use itertools::Itertools;
 use ruff_db::files::File;
 use ruff_db::parsed::ParsedModuleRef;
 use ruff_db::source::source_text;
-use ruff_python_ast::helpers::is_dotted_name;
+use ruff_python_ast::helpers::{is_dotted_name, is_untyped_declaration_marker};
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{
     self as ast, AnyNodeRef, ArgOrKeyword, ArgumentsSourceOrder, ExprContext, HasNodeIndex,
@@ -4212,6 +4212,27 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ));
                 diagnostic.info("a final variable is declared with `let`, which lowers to `Final`");
             }
+        }
+
+        // basedpython: a declaration keyword on an unannotated assignment
+        // (`var a = 1`, `override a = 1`) states no type, so it binds without
+        // declaring — the definition is categorized as a binding to match. going
+        // through the declaration path instead would record a declared `Unknown`
+        // and hide the inferred type from every reader that prefers a
+        // declaration (an importer of the module, a class attribute lookup)
+        if is_untyped_declaration_marker(annotation)
+            && let Some(value) = value
+        {
+            self.store_expression_type(annotation, Type::unknown());
+            self.store_qualifiers(annotation, TypeQualifiers::empty());
+            let add = self.add_binding(target.into(), definition);
+            let value_ty = self.infer_maybe_standalone_expression(value, add.type_context());
+            let target_ty = self
+                .stub_placeholder_binding_type(value)
+                .unwrap_or(value_ty);
+            self.store_expression_type(target, target_ty);
+            add.insert(self, target_ty);
+            return;
         }
 
         // PEP 681 lets a field specifier appear in the annotation's `Annotated`

@@ -3,6 +3,7 @@ use std::ops::Deref;
 use ruff_db::files::{File, FileRange};
 use ruff_db::parsed::{ParsedModuleRef, parsed_module};
 use ruff_python_ast::find_node::covering_node;
+use ruff_python_ast::helpers::is_untyped_declaration_marker;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::traversal::suite;
 use ruff_python_ast::{self as ast, AnyNodeRef, Expr};
@@ -1133,7 +1134,15 @@ impl<'db> DefinitionKind<'db> {
             // Annotated assignment is always a declaration. It is also a binding if there is a RHS
             // or if we are in a stub file. Unfortunately, it is common for stubs to omit even an `...` value placeholder.
             DefinitionKind::AnnotatedAssignment(ann_assign) => {
-                if in_stub || ann_assign.value(module).is_some() {
+                // basedpython: `var a = 1` / `override a = 1` are annotated
+                // assignments only in shape — the annotation is a marker for the
+                // keyword prefix and states no type, so they bind without
+                // declaring, exactly like the `a = 1` they lower to
+                if ann_assign.value(module).is_some()
+                    && is_untyped_declaration_marker(ann_assign.annotation(module))
+                {
+                    DefinitionCategory::Binding
+                } else if in_stub || ann_assign.value(module).is_some() {
                     DefinitionCategory::DeclarationAndBinding
                 } else {
                     DefinitionCategory::Declaration

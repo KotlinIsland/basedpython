@@ -31,11 +31,13 @@ class Person:
         self._age = value
 ```
 
-> **STATUS: planned for version 0.0.1a6, not yet implemented.** the `var`
-> keyword, the `get`/`set` accessor block, `field`, `lateinit`, and the
-> `let x: T` accessor form described below are not yet recognized by the
-> parser. `let x: T = init` at class scope partially works as the
-> [modifier](modifiers.md) form. tracking item: properties v0.0.1a6
+> **STATUS: planned for version 0.0.1a6, not yet implemented.** the `get`/`set`
+> accessor block, `field`, `lateinit`, and the `let x: T` accessor form
+> described below are not yet recognized by the parser. `var x: T = init` and
+> `let x: T = init` at class scope already parse as the
+> [modifier](modifiers.md) forms — a plain class attribute and a `Final` one,
+> not yet the property lowering described here. tracking item: properties
+> v0.0.1a6
 
 without accessors the declaration stays a plain attribute — no descriptor
 overhead
@@ -253,10 +255,10 @@ class Bag:
 
 ## scope and placement
 
-property declarations recognised only inside class body. `var` at module
-scope is parse error (use plain assignment). `let` at module scope keeps
-its existing [modifier-style meaning](modifiers.md) — module-level
-constant, no property semantics
+accessor blocks are recognised only inside a class body. `var` and `let`
+themselves are declarations in every scope: outside a class they keep their
+[modifier-style meaning](modifiers.md) — `let` is a module-level constant and
+`var` a plain mutable declaration, neither with property semantics
 
 accessor blocks recognised only directly following a `let`/`var`
 declaration. stray `get()` / `set(...)` elsewhere parses as normal call

@@ -1049,6 +1049,16 @@ pub fn is_top_star_marker(expr: &Expr) -> bool {
     name.id.is_empty() && matches!(name.ctx, ExprContext::Invalid)
 }
 
+/// basedpython: returns `true` if `expr` is the parser-synthesized marker for a
+/// declaration keyword on an *unannotated* assignment — `var a = 1`,
+/// `override a = 1`, `final override a = 1`. Those parse as an `AnnAssign` whose
+/// annotation is `Name(id="__modifier_assign__", ctx=Invalid)` spanning the
+/// keyword prefix. The marker carries no type, so the statement declares nothing
+/// and binds exactly like the `a = 1` it lowers to.
+pub fn is_untyped_declaration_marker(expr: &Expr) -> bool {
+    matches!(expr, Expr::Name(name) if name.id.as_str() == "__modifier_assign__")
+}
+
 /// basedpython: use-site variance marker, one of `out X`, `in X`, `in out X`
 /// in a subscript element. Encoded by the parser as
 /// `Subscript(Name(id, ctx=Invalid), inner)` where `id` is one of

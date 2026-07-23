@@ -70,13 +70,16 @@ subclassed. neither emits a runtime artefact
 `abstract def` with no body is filled in with `: raise NotImplementedError`
 instead of the usual `: ...`
 
-## let / class-var / newtype
+## let / var / class-var / newtype
 
 | basedpython            | Python output                          |
 | ---------------------- | -------------------------------------- |
 | `let MAX = 100`        | `MAX: Final = 100`                     |
 | `let x: int`           | `x: Final[int]`                        |
 | `let x`                | `x: Final`                             |
+| `var x = 1`            | `x = 1`                                |
+| `var x: int = 1`       | `x: int = 1`                           |
+| `var x: int`           | `x: int`                               |
 | `class count = 0`      | `count: ClassVar = 0` (inside a class) |
 | `newtype UserId = int` | `UserId = NewType("UserId", int)`      |
 
@@ -85,6 +88,29 @@ class-variable form (distinct from the regular `let x = ...` which is `Final`).
 the initializer may be omitted: `let x: int` declares a read-only attribute and
 a bare `let x` an uninitialized `Final`, both bound by a single later assignment.
 `newtype` introduces a distinct `typing.NewType`-backed type at module scope
+
+## var
+
+`var` is the mutable counterpart of `let`: it marks the declaration site of a
+variable and nothing else. the keyword is stripped at transpile time and the
+statement means exactly what the assignment under it means — no `Final`, and an
+untyped `var` puts no declared type on the name:
+
+```by
+var count = 0
+count = 1        # fine; `let count = 0` would reject this
+
+var name: str = ""
+name = 1         # error: `str` is declared
+```
+
+`var` works at module, class, and function scope, and composes with the
+modifier keywords (`private var x = 1`). unlike `let`, it may not be written
+bare: `var x` states neither a type nor a value, so there is nothing to declare
+and it is rejected — write `var x: T` or `let x`
+
+`var` on an `init(...)` parameter is a different feature — the attribute
+shorthand described in [init method](init-method.md)
 
 ## assignment modifiers
 

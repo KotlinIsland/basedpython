@@ -72,6 +72,27 @@ abstract n: int = 1
 n = 2
 ```
 
+## an unannotated modifier declares nothing
+
+Without a type there is nothing to declare, so `override x = v` means exactly `x = v` — including
+for readers that prefer a declaration over an inference.
+
+`m.by`:
+
+```by
+override exported = 1
+
+class C:
+    override count = 0
+```
+
+```by
+from m import exported, C
+
+reveal_type(exported)  # revealed: 1
+reveal_type(C.count)  # revealed: int
+```
+
 ## inside a class body
 
 ```by

@@ -99,6 +99,23 @@ fn synthetic_modifier_annot<'ast, 'src>(
     Some((src.get(start..end)?.trim(), s.slice.as_ref()))
 }
 
+/// detect the synthetic marker the parser emits for a declaration keyword on an
+/// unannotated assignment — `var a = 1`, `override a = 1`, `final override a = 1`.
+/// the annotation is a bare `Name("__modifier_assign__")` whose range spans the
+/// surface keyword prefix, so the prefix is recovered from source like
+/// [`synthetic_final`] does
+fn synthetic_modifier_assign<'src>(ann: &Expr, src: &'src str) -> Option<&'src str> {
+    let Expr::Name(name) = ann else {
+        return None;
+    };
+    if name.id.as_str() != "__modifier_assign__" {
+        return None;
+    }
+    let start = u32::from(name.range.start()) as usize;
+    let end = u32::from(name.range.end()) as usize;
+    Some(src.get(start..end)?.trim())
+}
+
 impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
     fn fmt_fields(&self, item: &StmtAnnAssign, f: &mut PyFormatter) -> FormatResult<()> {
         let StmtAnnAssign {
@@ -149,6 +166,17 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
                     type_ann.format()
                 ]
             )?;
+            if let Some(v) = value {
+                write!(f, [space(), token("="), space(), v.format()])?;
+            }
+            return Ok(());
+        }
+        if f.options().is_basedpython()
+            && let Some(prefix) = synthetic_modifier_assign(annotation, f.context().source())
+        {
+            // `<keyword chain> <target> = <value>` — the keyword prefix is
+            // rendered verbatim from source; the statement carries no annotation
+            write!(f, [text(prefix), space(), target.format()])?;
             if let Some(v) = value {
                 write!(f, [space(), token("="), space(), v.format()])?;
             }

@@ -5201,6 +5201,30 @@ final c: str = \"x\"
     }
 
     #[test]
+    fn semantic_tokens_var_keyword() {
+        // `var` declares through the modifier markers — untyped through the bare
+        // one, typed through the subscripted one — so both forms highlight
+        let test = SemanticTokenTest::new_by(
+            "
+var a = 5
+var b: int = 5
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "var" @ 1..4: Keyword
+        "a" @ 5..6: Variable [definition]
+        "5" @ 9..10: Number
+        "var" @ 11..14: Keyword
+        "b" @ 15..16: Variable [definition]
+        "int" @ 18..21: Class
+        "5" @ 24..25: Number
+        "#);
+    }
+
+    #[test]
     fn semantic_tokens_modifier_annotation_keywords() {
         // the modifiers that carry no type meaning still declare a type, and it
         // is highlighted like any other annotation

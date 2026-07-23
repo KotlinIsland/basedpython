@@ -348,6 +348,37 @@ if True:
         Ok(())
     }
 
+    /// basedpython: a `var` declaration round-trips — the parser models it as an
+    /// annotated assignment over a synthetic marker, so the surface keyword has
+    /// to be recovered from the marker's source range rather than printed as an
+    /// annotation.
+    #[test]
+    fn var_declaration_round_trip() -> Result<()> {
+        for input in [
+            "var a = 1\n",
+            "var a: int = 1\n",
+            "var a: int\n",
+            "private var a = 1\n",
+        ] {
+            let options = PyFormatOptions::from_extension(Path::new("test.by"));
+            let actual = format_module_source(input, options)?.as_code().to_string();
+            assert_eq!(input, actual);
+        }
+        Ok(())
+    }
+
+    /// basedpython: the same recovery applies to the other keyword prefixes on
+    /// an unannotated assignment.
+    #[test]
+    fn modifier_assignment_round_trip() -> Result<()> {
+        for input in ["override a = 1\n", "final override a = 1\n"] {
+            let options = PyFormatOptions::from_extension(Path::new("test.by"));
+            let actual = format_module_source(input, options)?.as_code().to_string();
+            assert_eq!(input, actual);
+        }
+        Ok(())
+    }
+
     /// Use this test to debug the formatting of some snipped
     #[ignore]
     #[test]
