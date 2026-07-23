@@ -43,7 +43,66 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
             .unwrap_or_else(|| self.src(expr.range()).to_owned())
     }
 
+    /// Lower a subscript of a class declaring a keyword-variadic pack.
+    ///
+    /// `class A[**Kwargs]` is a `ParamSpec` at runtime, and python has no keyword subscript, so
+    /// the pack's fields lower to the `ParamSpec` list form — `A[foo=int, bar=str]` → `A[[int,
+    /// str]]`, `A[()]` → `A[[]]`. field names are erased, which matches python's own erasure of
+    /// type arguments; the names are checked against the `.by` source, not this output.
+    ///
+    /// Returns whether the subscript was rewritten.
+    fn rewrite_keyword_pack_subscript(
+        &mut self,
+        sub: &ruff_python_ast::ExprSubscript,
+        pack_index: usize,
+    ) -> bool {
+        let elements: Vec<&Expr> = match sub.slice.as_ref() {
+            Expr::Tuple(t) => t.elts.iter().collect(),
+            single => vec![single],
+        };
+
+        let mut fields: Vec<String> = Vec::new();
+        let mut positional: Vec<String> = Vec::new();
+        for element in elements {
+            if let Expr::Named(n) = element
+                && let Expr::Name(target) = n.target.as_ref()
+                && matches!(target.ctx, ruff_python_ast::ExprContext::Invalid)
+            {
+                fields.push(self.value_src(n.value.as_ref()));
+            } else {
+                positional.push(self.value_src(element));
+            }
+        }
+
+        // an all-positional subscript with no pack slot to fill is already valid python
+        if fields.is_empty() && positional.len() > pack_index {
+            return false;
+        }
+
+        let mut parts = positional;
+        let pack = format!("[{}]", fields.join(", "));
+        if pack_index <= parts.len() {
+            parts.insert(pack_index, pack);
+        } else {
+            parts.push(pack);
+        }
+
+        let value_src = self.src(sub.value.range()).to_owned();
+        let replacement = format!("{value_src}[{}]", parts.join(", "));
+        self.edits.push(Fix::safe_edit(Edit::range_replacement(
+            replacement,
+            sub.range(),
+        )));
+        true
+    }
+
     fn rewrite_subscript(&mut self, sub: &ruff_python_ast::ExprSubscript) {
+        if let Some(types) = self.types
+            && let Some(pack_index) = types.class_keyword_pack_index(&sub.value)
+            && self.rewrite_keyword_pack_subscript(sub, pack_index)
+        {
+            return;
+        }
         // single keyword arg, e.g. `A[T=int]` (no surrounding tuple).
         // for a multi-typevar class with declared defaults, expand to a
         // positional list filling unbound slots with their declared defaults
@@ -283,5 +342,56 @@ mod tests {
     #[test]
     fn python_unchanged() {
         unchanged("x[a, b]\n");
+    }
+
+    /// a keyword-variadic pack is a `ParamSpec` at runtime, so its fields lower to the
+    /// `ParamSpec` list form. needs type info to know the class declares a pack
+    mod keyword_pack {
+        use ruff_db::files::system_path_to_file;
+        use ruff_db::system::{DbWithWritableSystem, SystemPathBuf};
+        use ty_project::{ProjectMetadata, TestDb};
+
+        use crate::{Config, transpile_typed};
+
+        fn transpiled(source: &str) -> String {
+            let mut db = TestDb::new(ProjectMetadata::new(
+                ruff_python_ast::name::Name::new_static(""),
+                SystemPathBuf::from("/proj"),
+            ));
+            db.write_file("/proj/main.by", source)
+                .expect("write file failed");
+            db.init_program().expect("program init failed");
+            let file = system_path_to_file(&db, "/proj/main.by").expect("file not in db");
+            transpile_typed(&db, file, &Config::test_default()).expect("transpile failed")
+        }
+
+        #[test]
+        fn fields_lower_to_a_parameter_list() {
+            let output =
+                transpiled("class A[**Kwargs]: ...\n\ndef f(a: A[foo=int, bar=str]): ...\n");
+            assert!(
+                output.contains("def f(a: A[[int, str]]): ..."),
+                "unexpected output:\n{output}"
+            );
+        }
+
+        #[test]
+        fn empty_pack_lowers_to_an_empty_list() {
+            let output = transpiled("class A[**Kwargs]: ...\n\ndef f(a: A[()]): ...\n");
+            assert!(
+                output.contains("def f(a: A[[]]): ..."),
+                "unexpected output:\n{output}"
+            );
+        }
+
+        #[test]
+        fn positional_type_arguments_keep_their_slots() {
+            let output =
+                transpiled("class Two[T, **Kwargs]: ...\n\ndef f(t: Two[bytes, foo=int]): ...\n");
+            assert!(
+                output.contains("def f(t: Two[bytes, [int]]): ..."),
+                "unexpected output:\n{output}"
+            );
+        }
     }
 }

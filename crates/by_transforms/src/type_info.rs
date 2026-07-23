@@ -158,6 +158,11 @@ pub(crate) trait TypeInfo {
     /// returns `false` when `expr` is not a generic class
     fn class_first_typevar_is_paramspec(&self, expr: &Expr) -> bool;
 
+    /// position of the keyword-variadic pack among the type parameters of the
+    /// class referenced by `expr` (`class A[T, **Kwargs]` → `Some(1)`).
+    /// `None` when `expr` is not a generic class or declares no pack
+    fn class_keyword_pack_index(&self, expr: &Expr) -> Option<usize>;
+
     /// classify the "absent" arm of `expr`'s type for `^` / `!` propagation.
     /// returns [`AbsentTest::Result`] when any arm of the (possibly union)
     /// type is a `BaseException` subtype — a result-like `T | E` — else
@@ -507,6 +512,14 @@ impl TypeInfo for SemanticModel<'_> {
         ctx.variables(self.db())
             .next()
             .is_some_and(|tv| tv.is_paramspec(self.db()))
+    }
+
+    fn class_keyword_pack_index(&self, expr: &Expr) -> Option<usize> {
+        let ty = expr.inferred_type(self)?;
+        let class = ty.as_class_literal()?;
+        let ctx = class.generic_context(self.db())?;
+        ctx.variables(self.db())
+            .position(|tv| tv.is_keyword_variadic(self.db()))
     }
 
     fn propagate_absent_test(&self, expr: &Expr) -> Option<AbsentTest> {

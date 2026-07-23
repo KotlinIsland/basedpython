@@ -952,7 +952,9 @@ impl<'db> GenericContext<'db> {
                     TypeVarKind::LegacyTypeVarTuple | TypeVarKind::Pep695TypeVarTuple => {
                         Type::homogeneous_tuple(db, Type::unknown())
                     }
-                    TypeVarKind::LegacyParamSpec | TypeVarKind::Pep695ParamSpec => {
+                    TypeVarKind::LegacyParamSpec
+                    | TypeVarKind::Pep695ParamSpec
+                    | TypeVarKind::Pep695KeywordVariadic => {
                         Type::paramspec_value_callable(db, Parameters::unknown())
                     }
                     _ => Type::unknown(),
@@ -1107,7 +1109,9 @@ impl<'db> GenericContext<'db> {
                 TypeVarKind::LegacyTypeVarTuple | TypeVarKind::Pep695TypeVarTuple => {
                     Type::homogeneous_tuple(db, Type::unknown())
                 }
-                TypeVarKind::LegacyParamSpec | TypeVarKind::Pep695ParamSpec => {
+                TypeVarKind::LegacyParamSpec
+                | TypeVarKind::Pep695ParamSpec
+                | TypeVarKind::Pep695KeywordVariadic => {
                     Type::paramspec_value_callable(db, Parameters::unknown())
                 }
                 _ => Type::unknown(),
@@ -2021,8 +2025,8 @@ fn specialization_variance<'db>(
     bound_typevar: BoundTypeVarInstance<'db>,
 ) -> TypeVarVariance {
     let variance = bound_typevar.variance(db);
-    if bound_typevar.is_paramspec(db) {
-        // `ParamSpec` specializations are represented as callable-shaped values. Their relation
+    if bound_typevar.is_parameter_pack(db) {
+        // Parameter-pack specializations are represented as callable-shaped values. Their relation
         // and materialization already use callable parameter contravariance, so flip the generic
         // variance here to avoid applying that direction twice.
         variance.flip()
@@ -2461,7 +2465,7 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
         if generic_context
             .variables_inner(self.db)
             .values()
-            .any(|typevar| typevar.is_paramspec(self.db) || typevar.is_typevartuple(self.db))
+            .any(|typevar| typevar.is_parameter_pack(self.db) || typevar.is_typevartuple(self.db))
         {
             return Ok(self.solve_hash_map_with(generic_context, choose));
         }
@@ -2703,7 +2707,9 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
         match self.types.entry(identity) {
             Entry::Occupied(mut entry) => {
                 match bound_typevar.kind(self.db) {
-                    TypeVarKind::LegacyParamSpec | TypeVarKind::Pep695ParamSpec => {
+                    TypeVarKind::LegacyParamSpec
+                    | TypeVarKind::Pep695ParamSpec
+                    | TypeVarKind::Pep695KeywordVariadic => {
                         // TODO: The spec says that when a ParamSpec is used multiple times in a signature,
                         // the type checker can solve it to a common behavioral supertype. We don't
                         // implement that yet so in case there are multiple ParamSpecs, use the
@@ -2754,7 +2760,7 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
         bounds: ConstraintBounds<'db>,
     ) {
         let identity = bound_typevar.identity(self.db);
-        if bound_typevar.is_paramspec(self.db) && !self.paramspec_seen.insert(identity) {
+        if bound_typevar.is_parameter_pack(self.db) && !self.paramspec_seen.insert(identity) {
             return;
         }
 

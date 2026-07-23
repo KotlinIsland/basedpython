@@ -315,7 +315,9 @@ impl<'db> KnownInstanceType<'db> {
     pub(super) fn class(self, db: &'db dyn Db) -> KnownClass {
         match self {
             Self::SubscriptedProtocol(_) | Self::SubscriptedGeneric(_) => KnownClass::SpecialForm,
-            Self::TypeVar(typevar_instance) if typevar_instance.is_paramspec(db) => {
+            // a basedpython keyword-variadic pack is spelled `**Name`, so python builds a
+            // real `ParamSpec` object for it at runtime
+            Self::TypeVar(typevar_instance) if typevar_instance.is_parameter_pack(db) => {
                 KnownClass::ParamSpec
             }
             Self::TypeVar(typevar_instance) if typevar_instance.is_typevartuple(db) => {

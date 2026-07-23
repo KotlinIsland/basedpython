@@ -2110,7 +2110,7 @@ impl<'db> DisplayGenericContext<'_, 'db> {
             }
             f.set_invalid_type_annotation();
             let typevar = bound_typevar.typevar(self.db);
-            if typevar.is_paramspec(self.db) {
+            if typevar.is_parameter_pack(self.db) {
                 f.write_str("**")?;
             } else if typevar.is_typevartuple(self.db) {
                 f.write_char('*')?;
@@ -2247,6 +2247,34 @@ impl<'db> DisplaySpecialization<'db> {
                             .fmt_detailed(f)?;
                         wrote_any = true;
                     }
+                }
+                continue;
+            }
+
+            // basedpython: a keyword-variadic pack reads back the way it is written —
+            // `A[foo=int, bar=str]` — rather than as the parameter list that stores it
+            if typevar.is_keyword_variadic(self.db)
+                && let Some(fields) = ty.keyword_pack_fields(self.db)
+            {
+                if fields.is_empty() {
+                    if variables.len() == 1 {
+                        if wrote_any {
+                            f.write_str(", ")?;
+                        }
+                        f.write_str("()")?;
+                        wrote_any = true;
+                    }
+                    continue;
+                }
+                for (name, field_type) in fields {
+                    if wrote_any {
+                        f.write_str(", ")?;
+                    }
+                    write!(f, "{name}=")?;
+                    field_type
+                        .display_with(self.db, self.settings.clone())
+                        .fmt_detailed(f)?;
+                    wrote_any = true;
                 }
                 continue;
             }
@@ -3510,7 +3538,7 @@ impl<'db> FmtDetailed<'db> for DisplayKnownInstanceRepr<'db> {
             // it as an instance of `typing.TypeVar`. Inside of a generic class or function, we'll
             // have a `Type::TypeVar(_)`, which is rendered as the typevar's name.
             KnownInstanceType::TypeVar(typevar_instance) => {
-                if typevar_instance.kind(self.db).is_paramspec() {
+                if typevar_instance.kind(self.db).is_parameter_pack() {
                     f.with_type(ty).write_str("ParamSpec")
                 } else if typevar_instance.kind(self.db).is_typevartuple() {
                     f.with_type(ty).write_str("TypeVarTuple")

@@ -303,7 +303,7 @@ impl<'db> CallableSignature<'db> {
             visitor: &ApplyTypeMappingVisitor<'db>,
         ) -> Option<CallableSignature<'db>> {
             match paramspec_value {
-                Type::TypeVar(typevar) if typevar.is_paramspec(db) => {
+                Type::TypeVar(typevar) if typevar.is_parameter_pack(db) => {
                     let prefix_parameters = prefix_parameters
                         .iter()
                         .map(|param| param.apply_type_mapping_impl(db, type_mapping, tcx, visitor))
@@ -4448,19 +4448,28 @@ impl<'db> Parameters<'db> {
 
     /// Expands an unpacked `*args` annotation into its logical callable parameters.
     fn expand_starred_variadic_annotations(&self, db: &'db dyn Db) -> Self {
-        if !self
-            .data
-            .value
-            .iter()
-            .any(|parameter| parameter.is_variadic() && parameter.has_starred_annotation())
-        {
+        if !self.data.value.iter().any(|parameter| {
+            (parameter.is_variadic() || parameter.is_keyword_variadic())
+                && parameter.has_starred_annotation()
+        }) {
             return self.clone();
         }
 
         let mut expanded = false;
         let mut parameters = Vec::with_capacity(self.data.value.len());
         for parameter in &self.data.value {
-            if parameter.is_variadic()
+            // basedpython: `**kwargs: *Kwargs` contributes the pack's fields as keyword-only
+            // parameters once the pack is specialized. while it is still unsolved the parameter
+            // stays put, so call binding can infer the pack from the keyword arguments
+            if parameter.is_keyword_variadic()
+                && parameter.has_starred_annotation()
+                && let Some(fields) = parameter.annotated_type().keyword_pack_fields(db)
+            {
+                expanded = true;
+                parameters.extend(fields.into_iter().map(|(name, field_type)| {
+                    Parameter::keyword_only(name.clone()).with_annotated_type(field_type)
+                }));
+            } else if parameter.is_variadic()
                 && parameter.has_starred_annotation()
                 && let Some(tuple) = parameter.annotated_type().exact_tuple_instance_spec(db)
             {

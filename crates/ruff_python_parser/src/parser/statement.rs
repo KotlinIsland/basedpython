@@ -5110,6 +5110,39 @@ impl<'src> Parser<'src> {
 
                             parsed_expr
                         }
+                        AllowStarAnnotation::KeywordPackOnly => {
+                            // basedpython: `**kwargs: **Kwargs` unpacks a keyword-variadic pack.
+                            // the star count matches the pack's declaration (`[**Kwargs]`), the
+                            // way `*args: *Ts` matches `[*Ts]`. encoded as `Starred(Starred(_))`,
+                            // the same shape the callable arrow `(**P) -> R` uses
+                            if self.at(TokenKind::DoubleStar) {
+                                self.error_if_not_basedpython(
+                                    "keyword-pack unpacking `**kwargs: **Pack` is not valid in \
+                                     .py files"
+                                        .to_string(),
+                                );
+                                let star_start = self.node_start();
+                                self.bump(TokenKind::DoubleStar);
+                                let inner = self.parse_conditional_expression_or_higher();
+                                let inner_range = inner.expr.range();
+                                ParsedExpr {
+                                    expr: Expr::Starred(ast::ExprStarred {
+                                        value: Box::new(Expr::Starred(ast::ExprStarred {
+                                            value: Box::new(inner.expr),
+                                            ctx: ExprContext::Load,
+                                            range: inner_range,
+                                            node_index: AtomicNodeIndex::NONE,
+                                        })),
+                                        ctx: ExprContext::Load,
+                                        range: self.node_range(star_start),
+                                        node_index: AtomicNodeIndex::NONE,
+                                    }),
+                                    is_parenthesized: false,
+                                }
+                            } else {
+                                self.parse_conditional_expression_or_higher()
+                            }
+                        }
                         AllowStarAnnotation::No => {
                             // test_ok param_with_annotation
                             // def foo(arg: int): ...
@@ -5317,7 +5350,7 @@ impl<'src> Parser<'src> {
                     let double_star_range = parser.current_token_range();
                     parser.bump(TokenKind::DoubleStar);
 
-                    let param = parser.parse_parameter(param_start, function_kind, AllowStarAnnotation::No, AllowContextModifier::No);
+                    let param = parser.parse_parameter(param_start, function_kind, AllowStarAnnotation::KeywordPackOnly, AllowContextModifier::No);
                     let param_double_star_range = parser.node_range(double_star_range.start());
 
                     if parameters.kwarg.is_some() {
@@ -6147,6 +6180,9 @@ impl ExceptClauseKind {
 enum AllowStarAnnotation {
     Yes,
     No,
+    /// basedpython: `**kwargs: *Kwargs` unpacks a keyword-variadic pack into this parameter,
+    /// mirroring how `*args: *Ts` unpacks a `TypeVarTuple`. Rejected in `.py` files
+    KeywordPackOnly,
 }
 
 /// basedpython: whether a `context` prefix may mark this parameter. `No` for

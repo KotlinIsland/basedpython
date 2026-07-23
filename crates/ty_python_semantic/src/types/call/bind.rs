@@ -184,13 +184,13 @@ enum CallErrorPriority {
     BindingError = 2,
 }
 
-fn generic_context_has_paramspec<'db>(
+fn generic_context_has_parameter_pack<'db>(
     db: &'db dyn Db,
     generic_context: GenericContext<'db>,
 ) -> bool {
     generic_context
         .variables(db)
-        .any(|typevar| typevar.is_paramspec(db))
+        .any(|typevar| typevar.is_parameter_pack(db))
 }
 
 /// A single callable item within the union/intersection structure.
@@ -3349,7 +3349,9 @@ impl<'db> CallableBinding<'db> {
             overload
                 .signature
                 .generic_context
-                .is_some_and(|generic_context| generic_context_has_paramspec(db, generic_context))
+                .is_some_and(|generic_context| {
+                    generic_context_has_parameter_pack(db, generic_context)
+                })
         }) {
             return;
         }
@@ -5605,13 +5607,42 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
         specialization_errors: &mut Vec<BindingError<'db>>,
     ) -> bool {
         let parameters = self.signature.parameters();
-        for (argument_index, adjusted_argument_index, _, argument_types) in
+
+        // basedpython: a `**kwargs: *Kwargs` parameter is solved from *all* the keyword arguments
+        // that reached it, as one pack value. inferring per-argument like an ordinary annotation
+        // would instead solve the pack to a single field's type
+        let keyword_pack_parameter = parameters.iter().position(|parameter| {
+            parameter.is_keyword_variadic()
+                && parameter.has_starred_annotation()
+                && matches!(
+                    parameter.annotated_type(),
+                    Type::TypeVar(typevar) if typevar.is_keyword_variadic(self.db)
+                )
+        });
+        let mut keyword_pack_fields: Vec<Parameter<'db>> = Vec::new();
+
+        for (argument_index, adjusted_argument_index, argument, argument_types) in
             self.enumerate_argument_types()
         {
             for matched_parameter in self.argument_matches[argument_index].iter() {
                 let parameter_index = matched_parameter.index;
                 let parameter = &parameters[parameter_index];
                 let declared_type = parameter.annotated_type();
+                if keyword_pack_parameter == Some(parameter_index) {
+                    // a splatted `**other` contributes no statically-known field names, so the
+                    // pack cannot be solved from it; leave it to the ordinary arity checks
+                    if let Argument::Keyword(name) = argument {
+                        let field_type = matched_parameter
+                            .argument_type
+                            .or_else(|| argument_types.get_default())
+                            .unwrap_or_else(Type::unknown);
+                        keyword_pack_fields.push(
+                            Parameter::keyword_only(Name::new(name))
+                                .with_annotated_type(field_type.promote(self.db)),
+                        );
+                    }
+                    continue;
+                }
                 // TODO: Infer a `TypeVarTuple` from all matched positional arguments as a single
                 // tuple. Until then, skip per-argument inference.
                 if parameter.has_starred_annotation()
@@ -5646,6 +5677,19 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
                         argument_index: adjusted_argument_index,
                     });
                 }
+            }
+        }
+
+        if let Some(parameter_index) = keyword_pack_parameter {
+            let pack_value =
+                Type::paramspec_value_callable(self.db, Parameters::standard(keyword_pack_fields));
+            if let Err(error) =
+                builder.infer(parameters[parameter_index].annotated_type(), pack_value)
+            {
+                specialization_errors.push(BindingError::SpecializationError {
+                    error,
+                    argument_index: None,
+                });
             }
         }
 

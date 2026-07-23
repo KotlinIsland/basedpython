@@ -6444,12 +6444,15 @@ impl<'db> Type<'db> {
                 KnownInstanceType::NewType(newtype) => Ok(Type::NewTypeInstance(*newtype)),
                 KnownInstanceType::TypeVar(typevar) => {
                     if !inference_flags.contains(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR)
-                        && typevar.is_paramspec(db)
+                        && typevar.is_parameter_pack(db)
                     {
+                        let invalid = if typevar.is_keyword_variadic(db) {
+                            InvalidTypeExpression::InvalidBareKeywordVariadic(*typevar)
+                        } else {
+                            InvalidTypeExpression::InvalidBareParamSpec(*typevar)
+                        };
                         return Err(InvalidTypeExpressionError {
-                            invalid_expressions: smallvec_inline![
-                                InvalidTypeExpression::InvalidBareParamSpec(*typevar)
-                            ],
+                            invalid_expressions: smallvec_inline![invalid],
                             fallback_type: Type::unknown(),
                         });
                     }
@@ -8817,6 +8820,8 @@ enum InvalidTypeExpression<'db> {
     /// Some types are always invalid in type expressions
     InvalidType(Type<'db>, ScopeId<'db>),
     InvalidBareParamSpec(TypeVarInstance<'db>),
+    /// basedpython: a keyword-variadic pack (`**Kwargs`) named on its own in a type expression
+    InvalidBareKeywordVariadic(TypeVarInstance<'db>),
     InvalidBareTypeVarTuple(TypeVarInstance<'db>),
 }
 
@@ -8943,6 +8948,11 @@ impl<'db> InvalidTypeExpression<'db> {
                         "Bare ParamSpec `{}` is not valid in this context in a {location}",
                         paramspec.name(self.db)
                     ),
+                    InvalidTypeExpression::InvalidBareKeywordVariadic(pack) => write!(
+                        f,
+                        "Bare keyword-variadic pack `{}` is not valid in this context in a {location}",
+                        pack.name(self.db)
+                    ),
                     InvalidTypeExpression::InvalidBareTypeVarTuple(typevartuple) => write!(
                         f,
                         "Bare TypeVarTuple `{}` is not valid in this context in a {location}",
@@ -9024,6 +9034,12 @@ impl<'db> InvalidTypeExpression<'db> {
             diagnostic.info(" - as the first argument to `Callable`");
             diagnostic.info(" - as the last argument to `Concatenate`");
             diagnostic.info(" - as the default type for another ParamSpec");
+            diagnostic.info(" - as part of a type parameter list when defining a generic class");
+            diagnostic.info(" - or as part of an argument list when specializing a generic class");
+        } else if matches!(self, InvalidTypeExpression::InvalidBareKeywordVariadic(_)) {
+            diagnostic.info("A keyword-variadic pack is only valid:");
+            diagnostic.info(" - unpacked with `**` in a callable parameter list");
+            diagnostic.info(" - as the default for another keyword-variadic pack");
             diagnostic.info(" - as part of a type parameter list when defining a generic class");
             diagnostic.info(" - or as part of an argument list when specializing a generic class");
         } else if matches!(self, InvalidTypeExpression::InvalidBareTypeVarTuple(_)) {

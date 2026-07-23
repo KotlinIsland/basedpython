@@ -756,11 +756,29 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             source_index: usize,
         }
 
+        /// What a basedpython keyword-form type subscript binds to one typevar slot.
+        enum KeywordSlot<'ast> {
+            /// A single type argument, given either by keyword or positionally.
+            Bound(&'ast ast::Expr),
+            /// The `name=type` fields collected for a keyword-variadic pack, in source order.
+            Pack(Vec<(&'ast ast::name::Name, &'ast ast::Expr)>),
+            /// Nothing was provided; fall back to the typevar's declared default.
+            Default,
+        }
+
         let db = self.db();
         let constraints = ConstraintSetBuilder::new();
         let slice_node = subscript.slice.as_ref();
 
         let exactly_one_paramspec = generic_context.exactly_one_paramspec(db);
+        // basedpython: a keyword-variadic pack (`class A[**Kwargs]`) is specialized by keyword,
+        // and every keyword argument is one of its fields. its presence therefore changes what
+        // a keyword argument means: with a pack, `A[foo=int]` names a *field*; without one,
+        // `A[T=int]` names a *typevar*. the two spellings can't be mixed, so any other typevar
+        // in a pack's context is specialized positionally
+        let keyword_pack_index = generic_context
+            .variables(db)
+            .position(|typevar| typevar.is_keyword_variadic(db));
         let (type_arguments, store_inferred_type_arguments) = match slice_node {
             // basedpython: an anonymous named tuple `(name: T, ...)` is a
             // single type expression, not a list of generic arguments.
@@ -770,10 +788,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // basedpython: a Parameters spec `(int, str, /, name: T)` is a
             // single subscript argument bound to a `ParamSpec`-shaped type
             // variable. inference treats it as one type expression.
-            // EXCEPT when every element is a kw binding (`A[R=str, T=int]`) —
-            // that's per-typevar binding by name, not a parameter spec
+            // EXCEPT when the kw bindings are per-name rather than positional:
+            // `A[R=str, T=int]` binds typevars by name, and `A[bytes, foo=int]`
+            // on a keyword-pack context binds the pack's fields
             ast::Expr::Tuple(tuple)
                 if tuple.has_parameter_shape()
+                    && keyword_pack_index.is_none()
                     && !tuple.elts.iter().all(|e| {
                         matches!(
                             e,
@@ -792,7 +812,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // `Iterable[tuple[K, V]]`), a single type argument. unparenthesized
             // tuples remain the standard multi-arg subscript form
             // (`dict[K, V]`).
-            ast::Expr::Tuple(tuple) if tuple.parenthesized && self.is_basedpython_file() => {
+            // `A[()]` on a keyword-pack context is the empty pack, not the empty tuple type
+            ast::Expr::Tuple(tuple)
+                if tuple.parenthesized
+                    && self.is_basedpython_file()
+                    && !(tuple.elts.is_empty() && keyword_pack_index.is_some()) =>
+            {
                 (std::slice::from_ref(slice_node), false)
             }
             ast::Expr::Tuple(tuple) => {
@@ -817,38 +842,79 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // fall through to their declared default (or error if none).
         // `bp_kw_slots[i] = Some(expr)` if typevar i has a bound expr,
         // `None` if it should fall back to the declared default
-        let bp_kw_slots: Option<Vec<Option<&ast::Expr>>> = if self.is_basedpython_file()
-            && type_arguments.iter().any(|e| {
-                matches!(
-                    e,
-                    ast::Expr::Named(n) if matches!(
-                        n.target.as_ref(),
-                        ast::Expr::Name(name) if matches!(name.ctx, ast::ExprContext::Invalid)
-                    )
+        let has_keyword_argument = type_arguments.iter().any(|e| {
+            matches!(
+                e,
+                ast::Expr::Named(n) if matches!(
+                    n.target.as_ref(),
+                    ast::Expr::Name(name) if matches!(name.ctx, ast::ExprContext::Invalid)
                 )
-            }) {
-            let mut by_name: rustc_hash::FxHashMap<&str, &ast::Expr> =
-                rustc_hash::FxHashMap::default();
+            )
+        });
+        let bp_kw_slots: Option<Vec<KeywordSlot<'_>>> = if self.is_basedpython_file()
+            && (has_keyword_argument || keyword_pack_index.is_some())
+        {
+            // source order, so leftover-argument diagnostics are reported deterministically
+            let mut keywords: Vec<(&ast::name::Name, &ast::Expr)> = Vec::new();
+            let mut pack_fields: Vec<(&ast::name::Name, &ast::Expr)> = Vec::new();
             let mut positional: Vec<&ast::Expr> = Vec::new();
             for expr in type_arguments {
                 if let ast::Expr::Named(n) = expr
                     && let ast::Expr::Name(name) = n.target.as_ref()
                     && matches!(name.ctx, ast::ExprContext::Invalid)
                 {
-                    by_name.insert(name.id.as_str(), n.value.as_ref());
+                    if keyword_pack_index.is_some() {
+                        pack_fields.push((&name.id, n.value.as_ref()));
+                    } else {
+                        keywords.push((&name.id, n.value.as_ref()));
+                    }
                 } else {
                     positional.push(expr);
                 }
             }
-            let mut slots: Vec<Option<&ast::Expr>> = Vec::with_capacity(typevars_len);
+            let mut by_name: rustc_hash::FxHashMap<&str, &ast::Expr> = keywords
+                .iter()
+                .map(|(name, expr)| (name.as_str(), *expr))
+                .collect();
+            let mut slots: Vec<KeywordSlot<'_>> = Vec::with_capacity(typevars_len);
             let mut positional_iter = positional.into_iter();
-            for tv in &typevars {
-                if let Some(expr) = by_name.remove(tv.name(db).as_str()) {
-                    slots.push(Some(expr));
+            for (index, tv) in typevars.iter().enumerate() {
+                if keyword_pack_index == Some(index) {
+                    slots.push(KeywordSlot::Pack(std::mem::take(&mut pack_fields)));
+                } else if let Some(expr) = by_name.remove(tv.name(db).as_str()) {
+                    slots.push(KeywordSlot::Bound(expr));
                 } else if let Some(expr) = positional_iter.next() {
-                    slots.push(Some(expr));
+                    slots.push(KeywordSlot::Bound(expr));
                 } else {
-                    slots.push(None);
+                    slots.push(KeywordSlot::Default);
+                }
+            }
+            // arguments that reached no slot would otherwise be dropped, silently specializing
+            // the class to something the source never asked for
+            let described = || {
+                CallableDescription::new(db, value_ty)
+                    .map(|description| format!(" for {description}"))
+                    .unwrap_or_default()
+            };
+            for extra in positional_iter {
+                if let Some(builder) = self.context.report_lint(&INVALID_TYPE_ARGUMENTS, extra) {
+                    builder.into_diagnostic(format_args!(
+                        "Too many type arguments{}: expected {typevars_len}",
+                        described(),
+                    ));
+                }
+                self.infer_type_expression(extra);
+            }
+            for (name, _) in keywords
+                .iter()
+                .filter(|(name, _)| by_name.contains_key(name.as_str()))
+            {
+                if let Some(builder) = self.context.report_lint(&INVALID_TYPE_ARGUMENTS, subscript)
+                {
+                    builder.into_diagnostic(format_args!(
+                        "No type variable named `{name}`{}",
+                        described(),
+                    ));
                 }
             }
             Some(slots)
@@ -862,7 +928,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             let mut missing_typevars: Vec<_> = Vec::new();
             for (typevar, slot) in typevars.iter().zip(slots.iter()) {
                 match slot {
-                    Some(expr) => {
+                    KeywordSlot::Bound(expr) => {
                         let provided_type = self.infer_type_expression(expr);
                         specialization_types.push(Some(provided_type));
                         // bound/constraints checks intentionally skipped here;
@@ -870,7 +936,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         // diagnostics on the expr itself
                         let _ = typevar;
                     }
-                    None => {
+                    KeywordSlot::Pack(fields) => {
+                        let parameters = Parameters::standard(fields.iter().map(|(name, expr)| {
+                            let field_type = self.infer_type_expression(expr);
+                            Parameter::keyword_only((*name).clone()).with_annotated_type(field_type)
+                        }));
+                        specialization_types
+                            .push(Some(Type::paramspec_value_callable(db, parameters)));
+                    }
+                    KeywordSlot::Default => {
                         if typevar.default_type(db).is_some() {
                             specialization_types.push(None);
                         } else {

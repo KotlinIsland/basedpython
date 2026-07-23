@@ -2,6 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use ruff_db::parsed::parsed_module;
+use ruff_python_ast::PySourceType;
 use ruff_python_ast::name::Name;
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
@@ -223,6 +224,14 @@ impl<'db> TypeVarInstance<'db> {
 
     pub(crate) fn is_paramspec(self, db: &'db dyn Db) -> bool {
         self.kind(db).is_paramspec()
+    }
+
+    pub(crate) fn is_keyword_variadic(self, db: &'db dyn Db) -> bool {
+        self.kind(db).is_keyword_variadic()
+    }
+
+    pub(crate) fn is_parameter_pack(self, db: &'db dyn Db) -> bool {
+        self.kind(db).is_parameter_pack()
     }
 
     pub(crate) fn is_typevartuple(self, db: &'db dyn Db) -> bool {
@@ -607,11 +616,11 @@ impl<'db> TypeVarInstance<'db> {
                     | DynamicType::AmbiguousOverload => Parameters::unknown(),
                 },
                 Type::Divergent(_) => Parameters::unknown(),
-                Type::TypeVar(typevar) if typevar.is_paramspec(db) => {
+                Type::TypeVar(typevar) if typevar.is_parameter_pack(db) => {
                     return ty;
                 }
                 Type::KnownInstance(KnownInstanceType::TypeVar(typevar))
-                    if typevar.is_paramspec(db) =>
+                    if typevar.is_parameter_pack(db) =>
                 {
                     return ty;
                 }
@@ -943,6 +952,14 @@ impl<'db> BoundTypeVarInstance<'db> {
         self.kind(db).is_paramspec()
     }
 
+    pub fn is_keyword_variadic(self, db: &'db dyn Db) -> bool {
+        self.kind(db).is_keyword_variadic()
+    }
+
+    pub(crate) fn is_parameter_pack(self, db: &'db dyn Db) -> bool {
+        self.kind(db).is_parameter_pack()
+    }
+
     pub(crate) fn is_typevartuple(self, db: &'db dyn Db) -> bool {
         self.kind(db).is_typevartuple()
     }
@@ -953,12 +970,16 @@ impl<'db> BoundTypeVarInstance<'db> {
     /// attribute kind. For `P.args`, the upper bound will be `tuple[object, ...]`, and for
     /// `P.kwargs`, the upper bound will be `Top[dict[str, Any]]`.
     ///
-    /// It's the caller's responsibility to ensure that this method is only called on a `ParamSpec`
-    /// type variable.
+    /// It's the caller's responsibility to ensure that this method is only called on a parameter
+    /// pack. basedpython's keyword-variadic packs have no source-level `.args`/`.kwargs`, but
+    /// they share the unspecialized placeholder built by [`Parameters::paramspec`], which is
+    /// spelled with these components.
+    ///
+    /// [`Parameters::paramspec`]: crate::types::Parameters::paramspec
     pub(crate) fn with_paramspec_attr(self, db: &'db dyn Db, kind: ParamSpecAttrKind) -> Self {
         debug_assert!(
-            self.is_paramspec(db),
-            "Expected a ParamSpec, got {:?}",
+            self.is_parameter_pack(db),
+            "Expected a parameter pack, got {:?}",
             self.kind(db)
         );
 
@@ -996,8 +1017,8 @@ impl<'db> BoundTypeVarInstance<'db> {
     /// type variable.
     pub(crate) fn without_paramspec_attr(self, db: &'db dyn Db) -> Self {
         debug_assert!(
-            self.is_paramspec(db),
-            "Expected a ParamSpec, got {:?}",
+            self.is_parameter_pack(db),
+            "Expected a parameter pack, got {:?}",
             self.kind(db)
         );
 
@@ -1233,7 +1254,7 @@ impl<'db> BoundTypeVarInstance<'db> {
                 generic_context,
                 delta,
             } => {
-                if generic_context.contains(db, self.identity(db)) && !self.is_paramspec(db) {
+                if generic_context.contains(db, self.identity(db)) && !self.is_parameter_pack(db) {
                     Type::TypeVar(self.freshen_with_mapping(
                         db,
                         self.freshness(db).add(*delta),
@@ -1383,13 +1404,52 @@ pub enum TypeVarKind {
     LegacyTypeVarTuple,
     /// `def foo[*Ts]() -> None: ...`
     Pep695TypeVarTuple,
+    /// basedpython `class A[**Kwargs]: ...`
+    ///
+    /// in a basedpython file `**Name` is a *keyword-variadic pack* — an ordered
+    /// mapping of parameter name to type — not a `ParamSpec`. it shares the
+    /// `ParamSpec` value representation (a callable-shaped value) but is
+    /// specialized by keyword (`A[foo=int, bar=str]`) and has no
+    /// `.args`/`.kwargs` components
+    Pep695KeywordVariadic,
     /// `Alias: typing.TypeAlias = T`
     Pep613Alias,
 }
 
 impl TypeVarKind {
+    /// The kind declared by a PEP-695 `**Name` type parameter.
+    ///
+    /// basedpython spells its keyword-variadic packs with the same `**Name` syntax python uses
+    /// for `ParamSpec`, so the declaring file decides which one it is.
+    ///
+    /// Stubs are excluded: `.byi` is the interop surface with python's typing ecosystem, and the
+    /// vendored typeshed is machine-converted from upstream, where `**P` means `ParamSpec`. A
+    /// `ParamSpec` generic can still be declared in `.by` with the legacy `P = ParamSpec("P")`
+    /// form.
+    pub(super) const fn double_starred_type_param(source_type: PySourceType) -> Self {
+        match source_type {
+            PySourceType::BasedPython => Self::Pep695KeywordVariadic,
+            _ => Self::Pep695ParamSpec,
+        }
+    }
+
     pub(super) const fn is_paramspec(self) -> bool {
         matches!(self, Self::LegacyParamSpec | Self::Pep695ParamSpec)
+    }
+
+    pub const fn is_keyword_variadic(self) -> bool {
+        matches!(self, Self::Pep695KeywordVariadic)
+    }
+
+    /// Whether this typevar is specialized by a *parameter list* rather than by a type, and so
+    /// carries the callable-shaped value representation built by
+    /// [`Type::paramspec_value_callable`](crate::types::Type::paramspec_value_callable).
+    ///
+    /// [`ParamSpec`](Self::is_paramspec) and basedpython's
+    /// [keyword-variadic packs](Self::is_keyword_variadic) differ in how that parameter list is
+    /// spelled and used, but agree on how it is stored.
+    pub(super) const fn is_parameter_pack(self) -> bool {
+        self.is_paramspec() || self.is_keyword_variadic()
     }
 
     pub(super) const fn is_typevartuple(self) -> bool {
@@ -1546,10 +1606,14 @@ impl<'db> BoundTypeVarIdentity<'db> {
         self.kind(db).is_paramspec()
     }
 
+    pub(crate) fn is_parameter_pack(self, db: &'db dyn Db) -> bool {
+        self.kind(db).is_parameter_pack()
+    }
+
     pub(crate) fn without_paramspec_attr(mut self, db: &'db dyn Db) -> Self {
         debug_assert!(
-            self.is_paramspec(db),
-            "Expected a ParamSpec, got {:?}",
+            self.is_parameter_pack(db),
+            "Expected a parameter pack, got {:?}",
             self.kind(db)
         );
 

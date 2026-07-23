@@ -1596,7 +1596,7 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
             | (Type::Callable(other), Type::TypeVar(bound_typevar))
                 if self.is_eager_assignability()
                     && !bound_typevar.is_inferable(db, self.inferable)
-                    && bound_typevar.is_paramspec(db)
+                    && bound_typevar.is_parameter_pack(db)
                     && Self::is_gradual_paramspec_value(db, other) =>
             {
                 self.always()
@@ -1606,7 +1606,7 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
             // materialization of a `ParamSpec` value.
             (Type::TypeVar(bound_typevar), Type::Callable(other))
                 if !bound_typevar.is_inferable(db, self.inferable)
-                    && bound_typevar.is_paramspec(db)
+                    && bound_typevar.is_parameter_pack(db)
                     && Self::is_top_paramspec_value(db, other) =>
             {
                 self.always()
