@@ -192,17 +192,38 @@ impl<'a> ValueUseFinder<'a> {
             if matches!(op, CmpOp::Is | CmpOp::IsNot)
                 && matches!(rhs, Expr::Subscript(_))
                 && is_keyword_comparison(self.source, *op, lhs, rhs)
-                && let Expr::Name(name) = lhs
-                && let Some(typevars) = self.param_typevars.get(name.id.as_str())
             {
-                for typevar in typevars {
-                    if self.active.contains(typevar) {
-                        self.found.insert(typevar);
-                    }
-                }
+                self.reify_tested_param(lhs);
             }
             lhs = rhs;
         }
+    }
+
+    /// a parametric `cast` / `cast?` of a `T`-annotated parameter against a
+    /// subscripted target reifies `T` for the same reason the `is` form does:
+    /// the check lowers to a comparison of the reified cell against the
+    /// target's type arguments
+    fn check_parametric_cast(&mut self, type_arg: &'a Expr, value_arg: &'a Expr) {
+        if matches!(type_arg, Expr::Subscript(_)) {
+            self.reify_tested_param(value_arg);
+        }
+    }
+
+    /// mark as reified every still-active type parameter mentioned by the
+    /// declared annotation of the parameter `value` names
+    fn reify_tested_param(&mut self, value: &'a Expr) {
+        let Expr::Name(name) = value else {
+            return;
+        };
+        let Some(typevars) = self.param_typevars.get(name.id.as_str()) else {
+            return;
+        };
+        let reified: Vec<&'a str> = typevars
+            .iter()
+            .copied()
+            .filter(|typevar| self.active.contains(typevar))
+            .collect();
+        self.found.extend(reified);
     }
 }
 
@@ -278,7 +299,8 @@ impl<'a> Visitor<'a> for ValueUseFinder<'a> {
             // `value cast T` / `value cast? T` parse as a call whose first
             // argument is the target type — a type position
             Expr::Call(call) if call.is_cast || call.is_checked_cast => {
-                if let [_type_arg, value_arg] = &*call.arguments.args {
+                if let [type_arg, value_arg] = &*call.arguments.args {
+                    self.check_parametric_cast(type_arg, value_arg);
                     self.visit_expr(value_arg);
                 } else {
                     walk_expr(self, expr);

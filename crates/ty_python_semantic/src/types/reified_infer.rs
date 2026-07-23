@@ -437,6 +437,31 @@ pub(crate) fn parametric_is_target<'db>(
     }
 }
 
+/// [`parametric_is_target`] for a target written in *type position* — a checked
+/// cast's `cast T` operand, which ty infers as the instance type rather than the
+/// class object an `is`-rhs evaluates to. This is the only difference between
+/// the two forms; both then classify through [`classify_parametric_is`].
+pub(crate) fn parametric_cast_target<'db>(
+    db: &'db dyn Db,
+    target_ty: Type<'db>,
+) -> Option<GenericAlias<'db>> {
+    match target_ty {
+        Type::NominalInstance(instance) => match instance.class(db) {
+            ClassType::Generic(alias) => Some(alias),
+            ClassType::NonGeneric(_) => None,
+        },
+        Type::ProtocolInstance(instance) => match instance.inner {
+            crate::types::instance::Protocol::FromClass(protocol_class) => match *protocol_class {
+                ClassType::Generic(alias) => Some(alias),
+                ClassType::NonGeneric(_) => None,
+            },
+            crate::types::instance::Protocol::Synthesized(_) => None,
+        },
+        // an alias name still resolves through the value-position rules
+        _ => parametric_is_target(db, target_ty),
+    }
+}
+
 /// Classify how `lhs is rhs` (keyword form) resolves, from the already-inferred
 /// static type of the lhs. `rhs` evaluates to `rhs_alias` — it may be spelled
 /// directly (`list[int]`), through an alias name whose value is that

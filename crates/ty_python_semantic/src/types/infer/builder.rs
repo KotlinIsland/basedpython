@@ -8578,6 +8578,25 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return;
         }
         let db = self.db();
+        // the cast shares the parametric `is` engine, so a target the engine can
+        // decide in full assumes nothing: a reified type parameter compares its
+        // runtime cell (`def f[T](x: list[T])` casting to `list[int]` lowers to
+        // `T == int`), and a static fold needs no check at all
+        if let Some(alias) = crate::types::reified_infer::parametric_cast_target(db, target)
+            && matches!(
+                crate::types::reified_infer::classify_parametric_is(
+                    db,
+                    self.file(),
+                    value_ty,
+                    alias,
+                    type_arg,
+                ),
+                crate::types::reified_infer::ParametricIsPlan::TokenEq(_)
+                    | crate::types::reified_infer::ParametricIsPlan::Fold(_)
+            )
+        {
+            return;
+        }
         // a protocol whose data and method members are all spellable *is*
         // checked structurally, so it never reaches here; only a protocol with a
         // member whose specialized type has no runtime spelling (a callable
