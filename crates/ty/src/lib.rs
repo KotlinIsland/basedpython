@@ -81,10 +81,17 @@ where
         },
         Command::Run {
             module,
+            args,
             min_version,
             soundness,
             no_checked_cast,
-        } => by_commands::cmd_run(&module, min_version.as_deref(), &soundness, no_checked_cast),
+        } => by_commands::cmd_run(
+            &module,
+            &args,
+            min_version.as_deref(),
+            &soundness,
+            no_checked_cast,
+        ),
         Command::Build {
             min_version,
             soundness,
