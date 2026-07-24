@@ -45,6 +45,81 @@ def f(a: A[(int, str)]):
 this is what a python `ParamSpec` reverse-transpiles to, so `class A[**P]` in a `.py` file
 round-trips to `class A[P: (*: *, **: *)]` and back
 
+## a named field keeps its name
+
+specializing with a parameters spec preserves each field's name and the `/` and `*` markers, so the
+parameters are the ones written. a bare type has no name to be passed by, hence the implicit `/`
+after it
+
+```by
+class A[P: (*: *, **: *)]:
+    def get(self) -> (**P) -> None:
+        raise NotImplementedError
+
+a = A[(int, foo: str)]()
+reveal_type(a)  # revealed: A[(int, /, foo: str)]
+
+def use(a: A[(int, foo: str)]):
+    reveal_type(a.get())  # revealed: (int, /, foo: str) -> None
+    a.get()(1, "x")
+    a.get()(1, foo="x")
+    a.get()(1, foo=2)  # error: [invalid-argument-type]
+    a.get()(foo="x")  # error: [missing-argument]
+```
+
+## the `*` marker makes the fields after it keyword-only
+
+```by
+class A[P: (*: *, **: *)]:
+    def get(self) -> (**P) -> None:
+        raise NotImplementedError
+
+def use(b: A[(int, *, foo: str)]):
+    reveal_type(b.get())  # revealed: (int, /, *, foo: str) -> None
+    b.get()(1, foo="x")
+    # error: [too-many-positional-arguments]
+    # error: [missing-argument] "No argument provided for required parameter `foo`"
+    b.get()(1, "x")
+```
+
+## the `/` marker makes the fields before it positional-only
+
+```by
+class A[P: (*: *, **: *)]:
+    def get(self) -> (**P) -> None:
+        raise NotImplementedError
+
+def use(c: A[(int, /, b: str)]):
+    reveal_type(c.get())  # revealed: (int, /, b: str) -> None
+    c.get()(1, "x")
+    c.get()(1, b="x")
+```
+
+## a `/` after a named field does not parse
+
+a parenthesized group opening with `name: type` is taken as an
+[anonymous named tuple](anonymous_named_tuple.md), which has no marker syntax. this predates keyword
+packs and applies to the callable arrow equally
+
+```by
+class A[P: (*: *, **: *)]: ...
+
+# error: [invalid-syntax] "Expected an expression"
+# error: [invalid-syntax] "Expected an expression"
+d = A[(a: int, /, b: str)]()
+```
+
+## variadic fields
+
+```by
+class A[P: (*: *, **: *)]:
+    def get(self) -> (**P) -> None:
+        raise NotImplementedError
+
+def use(d: A[(int, *rest: str, **opts: bytes)]):
+    reveal_type(d.get())  # revealed: (int, /, *rest: str, **opts: bytes) -> None
+```
+
 ## `(T1, …, **P) -> R` is `Callable[Concatenate[T1, …, P], R]`
 
 ```by

@@ -1546,48 +1546,39 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             ast::Expr::Tuple(ast::ExprTuple { elts, .. })
             | ast::Expr::List(ast::ExprList { elts, .. }) => {
-                let mut parameter_types = Vec::with_capacity(elts.len());
-
-                // Whether to infer `Todo` for the parameters
-                let mut return_todo = false;
-
                 let previously_allowed_paramspec = self
                     .context
                     .inference_flags
                     .replace(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, false);
-                for param in elts {
-                    // basedpython Parameters spec: a `name: type` field is
-                    // stored as `Expr::Named` (target = name, value = type).
-                    // walking the named expr would treat it as a walrus and
-                    // panic — extract the value-side type expression
-                    let param_type = if let ast::Expr::Named(named) = param {
-                        self.infer_type_expression(&named.value)
-                    } else {
-                        self.infer_type_expression(param)
-                    };
-                    // This is similar to what we currently do for inferring tuple type expression.
-                    // We currently infer `Todo` for the parameters to avoid invalid diagnostics
-                    // when trying to check for assignability or any other relation. For example,
-                    // `*tuple[int, str]`, `Unpack[]`, etc. are not yet supported.
-                    return_todo |= param_type.is_todo()
-                        && matches!(param, ast::Expr::Starred(_) | ast::Expr::Subscript(_));
-                    parameter_types.push(param_type);
-                }
+                // basedpython: the slice is a parameters spec, so a `name: T` field keeps its
+                // name and the `/` and `*` markers keep their meaning — the same shape the
+                // callable arrow `(int, /, name: T)` builds
+                let (slash, star) = match expr {
+                    ast::Expr::Tuple(tuple) => (
+                        tuple.parameter_slash.map(|i| i as usize),
+                        tuple.parameter_star.map(|i| i as usize),
+                    ),
+                    _ => (None, None),
+                };
+                let params = self.infer_parameter_spec_elements(elts, slash, star);
                 self.context.inference_flags.set(
                     InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR,
                     previously_allowed_paramspec,
                 );
 
+                // We currently infer `Todo` for the parameters to avoid invalid diagnostics when
+                // trying to check for assignability or any other relation. For example,
+                // `*tuple[int, str]`, `Unpack[]`, etc. are not yet supported.
+                let return_todo = std::iter::zip(elts, &params).any(|(element, param)| {
+                    param.annotated_type().is_todo()
+                        && matches!(element, ast::Expr::Starred(_) | ast::Expr::Subscript(_))
+                });
+
                 let parameters = if return_todo {
                     // TODO: `Unpack`
                     Parameters::todo()
                 } else {
-                    Parameters::from_annotation(
-                        db,
-                        parameter_types.iter().map(|param_type| {
-                            Parameter::positional_only(None).with_annotated_type(*param_type)
-                        }),
-                    )
+                    Parameters::from_annotation(db, params)
                 };
 
                 return Ok(Type::paramspec_value_callable(db, parameters));
