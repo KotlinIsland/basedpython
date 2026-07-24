@@ -1,6 +1,7 @@
 use ruff_formatter::FormatRuleWithOptions;
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::{Expr, ExprCall};
+use ruff_text_size::Ranged;
 
 use crate::comments::dangling_comments;
 use crate::expression::CallChainLayout;
@@ -28,10 +29,19 @@ impl FormatNodeRule<ExprCall> for FormatExprCall {
             node_index: _,
             is_cast,
             is_checked_cast,
-            is_string_tag: _,
+            is_string_tag,
             func,
             arguments,
         } = item;
+
+        // basedpython custom string tags parse as a `tag(t"...")` call, but their
+        // surface form glues the template straight onto the tag name. render the
+        // template from source — it carries no `t` prefix there — or the tag is
+        // rewritten into a t-string call that the surface syntax never had
+        if *is_string_tag && let [template] = arguments.args.as_ref() {
+            func.format().fmt(f)?;
+            return source_text_slice(template.range()).fmt(f);
+        }
 
         // basedpython casts parse as a synthetic `cast(<type>, <value>)` call
         // but their surface form is the infix `<value> cast <type>` (checked)

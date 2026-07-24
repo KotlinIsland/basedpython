@@ -1,0 +1,21 @@
+# basedpython tuple-member access `expr.N` is lexed as a single float token, so
+# the attribute identifier's range already covers the dot
+
+
+def f(pair: tuple[int, str, float]) -> None:
+    reveal_type(pair.0)
+    reveal_type(pair.1)
+    print(pair.2 + 1.5)
+
+    # chained onto an ordinary attribute access
+    print(pair.0.bit_length())
+
+
+nested = ((1, 2), 3)
+inner = nested.0.1
+
+# an ordinary float attribute is unaffected
+part = (1.5).real
+
+# a two-digit index
+wide = (0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10).10

@@ -148,9 +148,14 @@ impl FormatNodeRule<ExprAttribute> for FormatExprAttribute {
             //      b
             // )
             // ```
+            // basedpython tuple-member access (`pair.0`) is lexed as a single
+            // float token, so the attribute identifier's range already covers
+            // the dot — writing one here as well would produce `pair..0`
+            let attr_owns_dot = f.context().source()[attr.range()].starts_with('.');
+
             let dangling = comments.dangling(item);
-            let (before_dot, after_dot) = if dangling.is_empty() {
-                (dangling, dangling)
+            let (before_dot, after_dot) = if dangling.is_empty() || attr_owns_dot {
+                (dangling, &dangling[dangling.len()..])
             } else {
                 let dot_token = find_only_token_in_range(
                     TextRange::new(item.value.end(), item.attr.start()),
@@ -162,15 +167,11 @@ impl FormatNodeRule<ExprAttribute> for FormatExprAttribute {
                 )
             };
 
-            write!(
-                f,
-                [
-                    dangling_comments(before_dot),
-                    token(dot),
-                    dangling_comments(after_dot),
-                    attr.format()
-                ]
-            )
+            dangling_comments(before_dot).fmt(f)?;
+            if !attr_owns_dot {
+                token(dot).fmt(f)?;
+            }
+            write!(f, [dangling_comments(after_dot), attr.format()])
         });
 
         let is_call_chain_root =

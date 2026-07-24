@@ -1,0 +1,117 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/init_method.by
+---
+## Input
+```bython
+class Bodyless:
+    init(self, let a: int, var b: str)
+
+
+class WithBody:
+    init(self, let a: int):
+        print(a)
+        self.b = a + 1
+
+
+class ImplicitSelf:
+    init(let a: int, var b: str = "x")
+
+
+class Modifiers:
+    init(self, private var a: int, public let b: str, private let c: float)
+
+
+class PlainParams:
+    init(self, a: int, let b: int)
+
+
+class Defaults:
+    init(self, let a: int = 0, var b: list[int] = [], *args: int, **kwargs: str)
+
+
+class KeywordOnly:
+    init(self, let a: int, *, let b: str, var c: bool = False)
+
+
+class Multiline:
+    init(
+        self,
+        let a: int,
+        private var b: str,
+    ):
+        self.d = 1
+
+
+class Commented:
+    # leading comment
+    init(self, let a: int)  # trailing comment
+
+    def other(self) -> int:
+        return self.a
+
+
+class OnlySelf:
+    init(self)
+
+
+class Empty:
+    init()
+```
+
+## Output
+```bython
+class Bodyless:
+    init(self, let a: int, var b: str)
+
+
+class WithBody:
+    init(self, let a: int):
+        print(a)
+        self.b = a + 1
+
+
+class ImplicitSelf:
+    init(let a: int, var b: str = "x")
+
+
+class Modifiers:
+    init(self, private var a: int, public let b: str, private let c: float)
+
+
+class PlainParams:
+    init(self, a: int, let b: int)
+
+
+class Defaults:
+    init(self, let a: int = 0, var b: list[int] = [], *args: int, **kwargs: str)
+
+
+class KeywordOnly:
+    init(self, let a: int, *, let b: str, var c: bool = False)
+
+
+class Multiline:
+    init(
+        self,
+        let a: int,
+        private var b: str,
+    ):
+        self.d = 1
+
+
+class Commented:
+    # leading comment
+    init(self, let a: int)  # trailing comment
+
+    def other(self) -> int:
+        return self.a
+
+
+class OnlySelf:
+    init(self)
+
+
+class Empty:
+    init()
+```
