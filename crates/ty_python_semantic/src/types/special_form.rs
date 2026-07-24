@@ -7,8 +7,11 @@ use crate::types::IntersectionType;
 use crate::types::infer::InferenceFlags;
 use crate::types::{
     CallableType, FunctionDecorators, InvalidTypeExpression, TypeDefinition, TypeQualifiers,
+    TypedDictType,
     generics::typing_self,
-    infer::{function_known_decorator_flags, nearest_enclosing_class},
+    infer::{
+        enclosing_class_for_self, function_known_decorator_flags, is_class_type_parameters_scope,
+    },
 };
 use ruff_db::files::File;
 use strum_macros::EnumString;
@@ -870,7 +873,16 @@ impl SpecialFormType {
                 }
 
                 let index = semantic_index(db, scope_id.file(db));
-                let Some(class) = nearest_enclosing_class(db, index, scope_id) else {
+                // In a class's own type parameter list, `Self` is meaningful only as a
+                // *default*. As a *bound* it could never be checked: specializing the class
+                // (`C[X]`) happens where there is no receiver for `Self` to denote.
+                if inference_flags.contains(InferenceFlags::IN_TYPE_VARIABLE_BOUND)
+                    && is_class_type_parameters_scope(db, index, scope_id)
+                {
+                    return Err(InvalidTypeExpression::TypingSelfInClassTypeParameterBound);
+                }
+
+                let Some(class) = enclosing_class_for_self(db, index, scope_id) else {
                     return Err(InvalidTypeExpression::InvalidType(
                         Type::SpecialForm(self),
                         scope_id,
@@ -917,6 +929,13 @@ impl SpecialFormType {
             // annotated assignment statement) doesn't reach here. Using it in any other type
             // expression is an error.
             Self::TypeAlias => Err(InvalidTypeExpression::TypeAlias),
+            // as a type variable's upper bound, bare `TypedDict` denotes the top of the
+            // `TypedDict` lattice, letting the type variable range over every `TypedDict`
+            Self::TypedDict(_)
+                if inference_flags.contains(InferenceFlags::IN_TYPE_VARIABLE_BOUND) =>
+            {
+                Ok(Type::TypedDict(TypedDictType::top(db)))
+            }
             Self::TypedDict(_) => Err(InvalidTypeExpression::TypedDict),
 
             Self::Literal | Self::Union | Self::Intersection | Self::UnsafeUnion => {

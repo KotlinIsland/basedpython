@@ -408,6 +408,16 @@ impl NodeWithScopeKind {
         }
     }
 
+    /// The class this scope belongs to, counting a class's own type-parameter scope as part of
+    /// the class. That scope is lexically outside the body, but `Self` and the class's type
+    /// parameters are both in scope there.
+    pub fn as_class_or_class_type_parameters(&self) -> Option<&AstNodeRef<ast::StmtClassDef>> {
+        match self {
+            Self::Class(class) | Self::ClassTypeParameters(class) => Some(class),
+            _ => None,
+        }
+    }
+
     pub fn expect_class(&self) -> &AstNodeRef<ast::StmtClassDef> {
         self.as_class().expect("expected class")
     }

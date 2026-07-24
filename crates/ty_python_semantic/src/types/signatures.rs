@@ -10,6 +10,7 @@
 //! argument types and return types. For each callable type in the union, the call expression's
 //! arguments must match _at least one_ overload.
 
+use crate::types::any_over_type;
 use std::fmt;
 use std::slice::Iter;
 use std::sync::Arc;
@@ -1576,6 +1577,14 @@ impl<'db> Signature<'db> {
                 .enumerate()
                 .skip(usize::from(receiver_is_removed))
                 .any(|(_, parameter)| parameter.annotated_type().contains_self(db))
+            // a type parameter of this signature can be bounded by `Self`
+            // (`def method[T: Self]`). that bound is evaluated lazily, so it is invisible to
+            // `contains_self`, but it still has to be rewritten for the bound to constrain anything
+            || self.generic_context.is_some_and(|generic_context| {
+                generic_context
+                    .variables(db)
+                    .any(|typevar| typevar.bound_or_constraints_mention_self(db))
+            })
     }
 
     fn inferable_typevars(&self, db: &'db dyn Db) -> InferableTypeVars<'db> {
@@ -3810,10 +3819,21 @@ impl<'db> Parameters<'db> {
         db: &'db dyn Db,
         parameters: impl IntoIterator<Item = Parameter<'db>>,
     ) -> Self {
-        let parameters = parameters.into_iter();
-        let mut value: Vec<Parameter<'db>> = Vec::with_capacity(parameters.size_hint().0);
+        let parameters: Vec<Parameter<'db>> = parameters.into_iter().collect();
+        let mut value: Vec<Parameter<'db>> = Vec::with_capacity(parameters.len());
 
-        for parameter in parameters {
+        for (index, parameter) in parameters.iter().enumerate() {
+            let mut parameter = parameter.clone();
+            // `**kwargs: Unpack[T]` defers expansion until `T` is solved, which only works when
+            // `T` is solved from the keyword arguments themselves. If another parameter also
+            // mentions `T`, that one decides `T` before these keywords are matched, and the
+            // deferred parameter could never be re-checked against it. Drop the deferral so the
+            // shape is reported as unsupported instead of silently going unchecked.
+            if parameter.annotated_type().is_typed_dict_bounded_typevar(db)
+                && Self::typevar_used_by_another_parameter(db, &parameters, index)
+            {
+                parameter.annotation_kind = ParameterAnnotationKind::Normal;
+            }
             if let Some(unpacked_typed_dict) = parameter.unpacked_typed_dict(db) {
                 Self::push_unpacked_typed_dict(db, &mut value, &parameter, unpacked_typed_dict);
             } else {
@@ -3822,6 +3842,28 @@ impl<'db> Parameters<'db> {
         }
 
         Self::from_normalized(db, value)
+    }
+
+    /// Whether the type variable annotating `parameters[index]` also appears in another
+    /// parameter's annotation.
+    fn typevar_used_by_another_parameter(
+        db: &'db dyn Db,
+        parameters: &[Parameter<'db>],
+        index: usize,
+    ) -> bool {
+        let Type::TypeVar(typevar) = parameters[index].annotated_type() else {
+            return false;
+        };
+        let identity = typevar.identity(db);
+        parameters.iter().enumerate().any(|(other_index, other)| {
+            other_index != index
+                && any_over_type(
+                    db,
+                    other.annotated_type(),
+                    false,
+                    |ty| matches!(ty, Type::TypeVar(other) if other.identity(db) == identity),
+                )
+        })
     }
 
     fn push_unpacked_typed_dict(
@@ -4462,7 +4504,8 @@ impl<'db> Parameters<'db> {
     fn expand_starred_variadic_annotations(&self, db: &'db dyn Db) -> Self {
         if !self.data.value.iter().any(|parameter| {
             (parameter.is_variadic() || parameter.is_keyword_variadic())
-                && parameter.has_starred_annotation()
+                && (parameter.has_starred_annotation()
+                    || parameter.unpacked_typed_dict(db).is_some())
         }) {
             return self.clone();
         }
@@ -4470,6 +4513,14 @@ impl<'db> Parameters<'db> {
         let mut expanded = false;
         let mut parameters = Vec::with_capacity(self.data.value.len());
         for parameter in &self.data.value {
+            // `**kwargs: Unpack[T]` with `T` bounded by `TypedDict` keeps the parameter in place
+            // until `T` is solved; once it is, the solved `TypedDict` contributes its keys as
+            // keyword-only parameters, exactly as a written-out `Unpack[SomeTypedDict]` would
+            if let Some(unpacked_typed_dict) = parameter.unpacked_typed_dict(db) {
+                expanded = true;
+                Self::push_unpacked_typed_dict(db, &mut parameters, parameter, unpacked_typed_dict);
+                continue;
+            }
             // basedpython: `**kwargs: *Kwargs` contributes the pack's fields as keyword-only
             // parameters once the pack is specialized. while it is still unsolved the parameter
             // stays put, so call binding can infer the pack from the keyword arguments
@@ -4958,12 +5009,16 @@ impl<'db> Parameter<'db> {
         let has_unpacked_variadic_annotation = matches!(&kind, ParameterKind::Variadic { .. })
             && annotation_flags.contains(TypeExpressionFlags::UNPACK);
         let is_unpacked_typed_dict_kwargs = matches!(&kind, ParameterKind::KeywordVariadic { .. })
-            && extract_unpacked_typed_dict_keys_from_kwargs_annotation(
+            && (extract_unpacked_typed_dict_keys_from_kwargs_annotation(
                 db,
                 annotated_type,
                 annotation_flags,
             )
-            .is_some();
+            .is_some()
+                // `**kwargs: Unpack[T]` where `T` is bounded by `TypedDict` is an unpacked
+                // `TypedDict` too; which keys it contributes is only known once `T` is solved
+                || (annotation_flags.contains(TypeExpressionFlags::UNPACK)
+                    && annotated_type.is_typed_dict_bounded_typevar(db)));
         let annotation_kind = if is_unpacked_typed_dict_kwargs {
             ParameterAnnotationKind::UnpackedTypedDictKwargs
         } else if has_starred_annotation || has_unpacked_variadic_annotation {

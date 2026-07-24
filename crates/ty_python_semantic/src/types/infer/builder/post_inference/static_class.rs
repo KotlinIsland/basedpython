@@ -875,10 +875,12 @@ pub(crate) fn check_static_class_definitions<'db>(
                         Type::KnownInstance(KnownInstanceType::TypeVar(tvar)) => tvar,
                         _ => return None,
                     };
-                    if !typevars.clone().take(i).contains(&tvar) {
-                        Some(tvar)
-                    } else {
+                    // `Self` is bound by this very class rather than by its type parameter list,
+                    // so a `Self` default (`class C[T = Self]`) references nothing out of scope.
+                    if tvar.is_self(db) || typevars.clone().take(i).contains(&tvar) {
                         None
+                    } else {
+                        Some(tvar)
                     }
                 });
                 if let Some(bad_typevar) = first_bad_tvar {

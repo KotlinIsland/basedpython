@@ -67,7 +67,7 @@ use builder::TypeInferenceBuilder;
 pub(super) use comparisons::UnsupportedComparisonError;
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::expression::Expression;
-use ty_python_core::scope::ScopeId;
+use ty_python_core::scope::{NodeWithScopeKind, ScopeId};
 use ty_python_core::statement::StatementInner;
 use ty_python_core::unpack::Unpack;
 use ty_python_core::{ExpressionNodeKey, SemanticIndex, Statement, semantic_index};
@@ -719,6 +719,36 @@ pub(crate) fn nearest_enclosing_class<'db>(
             let definition = semantic.expect_single_definition(class);
             original_class_type(db, definition).and_then(ClassLiteral::as_static)
         })
+}
+
+/// Returns the class that `Self` refers to in the given scope.
+///
+/// This is [`nearest_enclosing_class`], except that a class's own type-parameter scope resolves to
+/// that class: that scope is lexically outside the class body, but it belongs to the class.
+pub(crate) fn enclosing_class_for_self<'db>(
+    db: &'db dyn Db,
+    semantic: &SemanticIndex<'db>,
+    scope: ScopeId,
+) -> Option<StaticClassLiteral<'db>> {
+    if let NodeWithScopeKind::ClassTypeParameters(class) =
+        semantic.scope(scope.file_scope_id(db)).node()
+    {
+        let definition = semantic.expect_single_definition(class);
+        return original_class_type(db, definition).and_then(ClassLiteral::as_static);
+    }
+    nearest_enclosing_class(db, semantic, scope)
+}
+
+/// Whether `scope` is a class's own type-parameter scope.
+pub(crate) fn is_class_type_parameters_scope(
+    db: &dyn Db,
+    semantic: &SemanticIndex,
+    scope: ScopeId,
+) -> bool {
+    matches!(
+        semantic.scope(scope.file_scope_id(db)).node(),
+        NodeWithScopeKind::ClassTypeParameters(_)
+    )
 }
 
 /// Return the original class literal for a class definition.
@@ -2012,7 +2042,7 @@ impl<'db> StatementInferenceInner<'db> {
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub(crate) struct InferenceFlags: u16 {
+    pub(crate) struct InferenceFlags: u32 {
         /// Whether to allow `ParamSpec` in type expressions.
         ///
         /// In most contexts inside type expressions, bare `ParamSpec`s are not allowed.
@@ -2073,6 +2103,12 @@ bitflags::bitflags! {
         /// (e.g. `list[int | Top]`); on encounter the enclosing subscript is
         /// top/bottom-materialized
         const IN_SUBSCRIPT_SLICE = 1 << 15;
+
+        /// Whether the visitor is currently visiting a type variable's upper bound.
+        ///
+        /// The bare `TypedDict` special form is only a type expression here, where it denotes
+        /// the top of the `TypedDict` lattice
+        const IN_TYPE_VARIABLE_BOUND = 1 << 16;
     }
 }
 

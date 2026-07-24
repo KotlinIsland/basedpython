@@ -570,6 +570,25 @@ impl<'db> TypedDictType<'db> {
         Self::from_schema_items_with_openness(db, items, TypedDictOpenness::ImplicitlyOpen)
     }
 
+    /// The top of the `TypedDict` lattice: the schema that declares no items and permits
+    /// undeclared ones, so that every `TypedDict` is a subtype of it and no other type is.
+    ///
+    /// This is what the bare `TypedDict` special form denotes as a type variable's upper bound
+    pub(crate) fn top(db: &'db dyn Db) -> Self {
+        Self::from_schema_items(db, TypedDictSchema::default())
+    }
+
+    pub(crate) fn is_top(self, db: &'db dyn Db) -> bool {
+        match self {
+            Self::Class(_) => false,
+            Self::Synthesized(synthesized) => {
+                synthesized.kind(db) == SynthesizedTypedDictKind::Schema
+                    && synthesized.openness(db).is_implicitly_open()
+                    && synthesized.items(db).is_empty()
+            }
+        }
+    }
+
     /// Creates a synthesized schema while preserving its undeclared-item policy.
     pub(crate) fn from_schema_items_with_openness(
         db: &'db dyn Db,

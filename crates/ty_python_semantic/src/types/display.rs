@@ -1549,6 +1549,11 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                         .fmt_detailed(f),
                 }
             }
+            Type::TypedDict(typed_dict) if typed_dict.is_top(self.db) => f
+                .with_type(Type::SpecialForm(SpecialFormType::TypedDict(
+                    TypedDictModule::Typing,
+                )))
+                .write_str("TypedDict"),
             Type::TypedDict(TypedDictType::Synthesized(synthesized)) => {
                 f.set_invalid_type_annotation();
                 f.write_char('<')?;

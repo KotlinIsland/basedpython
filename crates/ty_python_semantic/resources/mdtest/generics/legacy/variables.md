@@ -567,11 +567,14 @@ reveal_type(S.__bound__)  # revealed: None
 The upper bound must be a valid type expression:
 
 ```py
-from typing import TypedDict
+from typing import TypeAlias, TypeVar
 
 # error: [invalid-type-form]
-InvalidBoundT = TypeVar("InvalidBoundT", bound=TypedDict)
+InvalidBoundT = TypeVar("InvalidBoundT", bound=TypeAlias)
 ```
+
+Bare `TypedDict` is the one special form that is a type expression only here; see
+[`TypedDict` and `Self` as type variable bounds](../typeddict_and_self_bounds.md).
 
 ### Type variables with constraints
 

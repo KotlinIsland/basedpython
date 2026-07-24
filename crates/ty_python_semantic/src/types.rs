@@ -8817,6 +8817,8 @@ enum InvalidTypeExpression<'db> {
     TypingSelfInTypeAlias,
     /// `typing.Self` cannot be used in metaclass definitions.
     TypingSelfInMetaclass,
+    /// `typing.Self` cannot bound a type parameter of the class it belongs to.
+    TypingSelfInClassTypeParameterBound,
     /// Some types are always invalid in type expressions
     InvalidType(Type<'db>, ScopeId<'db>),
     InvalidBareParamSpec(TypeVarInstance<'db>),
@@ -8926,6 +8928,9 @@ impl<'db> InvalidTypeExpression<'db> {
                     InvalidTypeExpression::TypingSelfInMetaclass => {
                         f.write_str("`Self` cannot be used in a metaclass")
                     }
+                    InvalidTypeExpression::TypingSelfInClassTypeParameterBound => f.write_str(
+                        "`Self` cannot bound a type parameter of the class it belongs to",
+                    ),
                     InvalidTypeExpression::InvalidType(Type::FunctionLiteral(function), _) => {
                         write!(
                             f,

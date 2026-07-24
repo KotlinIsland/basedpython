@@ -274,14 +274,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 Some(TypeVarBoundOrConstraints::UpperBound(bound_ty))
             }
             Some(expr) => {
-                let bound_ty = self.infer_type_expression(expr);
-                if bound_ty.has_typevar_or_typevar_instance(db)
-                    && let Some(builder) =
-                        self.context.report_lint(&INVALID_TYPE_VARIABLE_BOUND, expr)
-                {
-                    builder.into_diagnostic("TypeVar upper bound cannot be generic");
-                }
-
+                let bound_ty = self.infer_type_variable_bound(expr);
                 Some(TypeVarBoundOrConstraints::UpperBound(bound_ty))
             }
             None => None,
@@ -314,6 +307,32 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
         }
         self.deferred_state = previous_deferred_state;
+    }
+
+    /// Infer a type variable's upper bound, reporting a diagnostic if it is generic.
+    ///
+    /// `Self` is exempt from that check: it is bound by the enclosing class, not by the generic
+    /// context being defined, so `def method[T: Self](self) -> T` leaves nothing unsolved
+    pub(super) fn infer_type_variable_bound(&mut self, bound: &ast::Expr) -> Type<'db> {
+        let previously_in_type_variable_bound = self
+            .context
+            .inference_flags
+            .replace(InferenceFlags::IN_TYPE_VARIABLE_BOUND, true);
+        let bound_ty = self.infer_type_expression(bound);
+        self.context.inference_flags.set(
+            InferenceFlags::IN_TYPE_VARIABLE_BOUND,
+            previously_in_type_variable_bound,
+        );
+
+        if bound_ty.has_non_self_typevar_or_typevar_instance(self.db())
+            && let Some(builder) = self
+                .context
+                .report_lint(&INVALID_TYPE_VARIABLE_BOUND, bound)
+        {
+            builder.into_diagnostic("TypeVar upper bound cannot be generic");
+        }
+
+        bound_ty
     }
 
     /// Validate that a `TypeVar`'s default is compatible with its bound or constraints.
