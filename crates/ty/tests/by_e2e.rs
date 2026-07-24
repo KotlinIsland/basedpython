@@ -143,6 +143,143 @@ fn run_invokes_async_main_via_asyncio() {
     );
 }
 
+/// write `source` as `main.by`, run it with `args`, and return
+/// `(stdout, stderr, exit code)`
+fn run_main_with_args(source: &str, args: &[&str]) -> (String, String, i32) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), source).unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .args(args)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    (
+        String::from_utf8_lossy(&output.stdout).trim().to_owned(),
+        String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        output.status.code().unwrap_or(-1),
+    )
+}
+
+#[test]
+fn run_fills_main_parameter_positionally_or_by_name() {
+    let source = "def main(name: str):\n    print(name)\n";
+
+    let (stdout, stderr, code) = run_main_with_args(source, &["asdf"]);
+    assert_eq!((stdout.as_str(), code), ("asdf", 0), "stderr:\n{stderr}");
+
+    let (stdout, stderr, code) = run_main_with_args(source, &["--name", "asdf"]);
+    assert_eq!((stdout.as_str(), code), ("asdf", 0), "stderr:\n{stderr}");
+}
+
+#[test]
+fn run_converts_arguments_to_the_annotated_type() {
+    let source = "from pathlib import Path\n\
+                  def main(count: int, ratio: float, out: Path):\n\
+                  \x20   print(count + 1, ratio * 2, out.name)\n";
+
+    let (stdout, stderr, code) = run_main_with_args(source, &["2", "1.5", "/tmp/x.txt"]);
+    assert_eq!(
+        (stdout.as_str(), code),
+        ("3 3.0 x.txt", 0),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn run_rejects_an_argument_the_annotation_cannot_convert() {
+    let source = "def main(count: int):\n    print(count)\n";
+
+    let (_, stderr, code) = run_main_with_args(source, &["nope"]);
+    assert_eq!(code, 2, "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("invalid int value: 'nope'"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn run_reports_a_missing_required_argument() {
+    let source = "def main(name: str):\n    print(name)\n";
+
+    let (_, stderr, code) = run_main_with_args(source, &[]);
+    assert_eq!(code, 2, "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("the following arguments are required: name"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn run_treats_a_bool_parameter_as_a_flag() {
+    // a `bool` never takes a positional slot: it is set by `--name` /
+    // `--no-name`, so the value token still binds to the next real parameter
+    let source = "def main(name: str, verbose: bool = False):\n    print(name, verbose)\n";
+
+    let (stdout, stderr, code) = run_main_with_args(source, &["bob"]);
+    assert_eq!(
+        (stdout.as_str(), code),
+        ("bob False", 0),
+        "stderr:\n{stderr}"
+    );
+
+    let (stdout, stderr, code) = run_main_with_args(source, &["bob", "--verbose"]);
+    assert_eq!(
+        (stdout.as_str(), code),
+        ("bob True", 0),
+        "stderr:\n{stderr}"
+    );
+
+    let source = "def main(name: str, verbose: bool = True):\n    print(name, verbose)\n";
+    let (stdout, stderr, code) = run_main_with_args(source, &["bob", "--no-verbose"]);
+    assert_eq!(
+        (stdout.as_str(), code),
+        ("bob False", 0),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn run_fills_positional_only_and_keyword_only_parameters() {
+    // a positional-only parameter must be passed positionally even when the
+    // command line named it, and a keyword-only one only ever by name
+    let source = "async def main(a: str, /, b: int = 1, *, c: str = \"z\"):\n\
+                  \x20   print(a, b, c)\n";
+
+    let (stdout, stderr, code) = run_main_with_args(source, &["x", "7", "--c", "q"]);
+    assert_eq!((stdout.as_str(), code), ("x 7 q", 0), "stderr:\n{stderr}");
+
+    let (stdout, stderr, code) = run_main_with_args(source, &["--a", "x"]);
+    assert_eq!((stdout.as_str(), code), ("x 1 z", 0), "stderr:\n{stderr}");
+}
+
+#[test]
+fn run_rejects_an_argument_given_twice() {
+    let source = "def main(name: str):\n    print(name)\n";
+
+    let (_, stderr, code) = run_main_with_args(source, &["bob", "--name", "jim"]);
+    assert_eq!(code, 2, "stderr:\n{stderr}");
+    assert!(
+        stderr.contains("given both positionally and as an option"),
+        "stderr:\n{stderr}"
+    );
+}
+
+#[test]
+fn run_forwards_argv_to_a_hand_written_entry_point() {
+    // the arguments reach the program itself, not just a synthesised guard
+    let source = "import sys\nprint(sys.argv[1:])\n";
+
+    let (stdout, stderr, code) = run_main_with_args(source, &["a", "--b"]);
+    assert_eq!(
+        (stdout.as_str(), code),
+        ("['a', '--b']", 0),
+        "stderr:\n{stderr}"
+    );
+}
+
 #[test]
 fn run_applies_transforms() {
     // Sanity check: tuple subscripts pass through unchanged after the

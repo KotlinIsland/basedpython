@@ -69,6 +69,7 @@ pub(crate) fn parse_soundness(spec: &str) -> anyhow::Result<by_transforms::Sound
 #[allow(clippy::exit, clippy::print_stderr)]
 pub(crate) fn cmd_run(
     module: &str,
+    args: &[String],
     min_version: Option<&str>,
     soundness: &str,
     no_checked_cast: bool,
@@ -142,6 +143,7 @@ pub(crate) fn cmd_run(
     let status = Command::new(&python)
         .arg(BY_RUNNER_FILENAME)
         .arg(module)
+        .args(args)
         .current_dir(tmp.path())
         .status()
         .with_context(|| format!("{python}: failed to execute"))?;

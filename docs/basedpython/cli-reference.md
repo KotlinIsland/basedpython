@@ -28,6 +28,13 @@ by run MODULE --min-version 3.12    # target a specific runtime python version
 equivalent to `by build && python -m MODULE`, but only transpiles the
 modules required to import `MODULE`
 
+everything after `MODULE` is forwarded to the program as `sys.argv[1:]`,
+including options — `by run main --name asdf` passes `--name asdf` on. the one
+exception is a leading `-h` / `--help`, which prints `by run`'s own help; write
+`by run main -- --help` to reach the program's. when the program's entry point
+is a [`main` function](features/main-function.md), those arguments are parsed
+into its parameters
+
 the project is type-checked first, and a program with check *errors* is not
 run — the checker's verdict and the runtime must not diverge. warnings don't
 block; a rule can be downgraded in configuration where its error is unwanted

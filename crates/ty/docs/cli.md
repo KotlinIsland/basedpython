@@ -228,12 +228,13 @@ Transpile and run a module with `python -m <module>`
 <h3 class="cli-reference">Usage</h3>
 
 ```
-by run [OPTIONS] <MODULE>
+by run [OPTIONS] <MODULE> [ARGS]...
 ```
 
 <h3 class="cli-reference">Arguments</h3>
 
 <dl class="cli-reference"><dt id="by-run--module"><a href="#by-run--module"><code>MODULE</code></a></dt><dd><p>module to run (e.g. <code>by run main</code> looks for main.by)</p>
+</dd><dt id="by-run--args"><a href="#by-run--args"><code>ARGS</code></a></dt><dd><p>arguments forwarded to the program, as <code>sys.argv[1:]</code></p>
 </dd></dl>
 
 <h3 class="cli-reference">Options</h3>

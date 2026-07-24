@@ -69,6 +69,13 @@ pub(crate) enum Command {
     Run {
         /// module to run (e.g. `by run main` looks for main.by)
         module: String,
+        /// arguments forwarded to the program, as `sys.argv[1:]`
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "ARGS"
+        )]
+        args: Vec<String>,
         /// minimum Python version the output must run on
         /// [default: the version of the interpreter that will run it]
         #[arg(long, value_name = "VERSION")]
