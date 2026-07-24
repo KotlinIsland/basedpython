@@ -384,10 +384,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return;
         }
 
+        self.check_parametrize(function_node, function);
+
         // parametrized names are supplied as arguments, not by fixtures, so
-        // collect them first to exclude them from the fixture resolution below
-        let mut parametrized = FxHashSet::default();
-        self.check_parametrize(function_node, function, &mut parametrized);
+        // they are excluded from the fixture resolution below
+        let parametrized = pytest::parametrized_names(db, function);
 
         let file = self.file();
         let callable = function.signature(db);
@@ -452,17 +453,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
-    /// Check every `@pytest.mark.parametrize` marker on `function_node`,
-    /// recording the parametrized names in `parametrized`.
-    fn check_parametrize(
-        &self,
-        function_node: &ast::StmtFunctionDef,
-        function: FunctionType<'db>,
-        parametrized: &mut FxHashSet<ast::name::Name>,
-    ) {
+    /// Check every `@pytest.mark.parametrize` marker on `function_node`: each
+    /// name against the function's parameters, and each value row's length
+    /// against the number of names.
+    fn check_parametrize(&self, function_node: &ast::StmtFunctionDef, function: FunctionType<'db>) {
         let db = self.db();
-        let definition = function.definition(db);
-        let types = infer_definition_types(db, definition);
         let callable = function.signature(db);
         let parameter_names: FxHashSet<&ast::name::Name> = callable
             .iter()
@@ -477,42 +472,27 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .unwrap_or_default();
 
         for decorator in &function_node.decorator_list {
-            let ast::Expr::Call(call) = &decorator.expression else {
-                continue;
-            };
-            let ast::Expr::Attribute(attribute) = call.func.as_ref() else {
-                continue;
-            };
-            if attribute.attr.as_str() != "parametrize" {
-                continue;
-            }
-            if !pytest::is_mark_generator(db, types.expression_type(attribute.value.as_ref())) {
-                continue;
-            }
-            let Some(argnames) = call.arguments.find_argument_value("argnames", 0) else {
-                continue;
-            };
-            let Some(names) = pytest::parametrize_names(argnames) else {
+            let Some(marker) = pytest::parametrize_marker(db, function, decorator) else {
                 continue;
             };
 
-            for name in &names {
-                parametrized.insert(name.clone());
-                if !parameter_names.contains(name) {
-                    if let Some(builder) = self.context.report_lint(&INVALID_PARAMETRIZE, argnames)
-                    {
-                        builder.into_diagnostic(format_args!(
-                            "`{}` has no parameter `{name}` to parametrize",
-                            function_node.name,
-                        ));
-                    }
+            for name in &marker.names {
+                if !parameter_names.contains(name)
+                    && let Some(builder) = self
+                        .context
+                        .report_lint(&INVALID_PARAMETRIZE, marker.argnames)
+                {
+                    builder.into_diagnostic(format_args!(
+                        "`{}` has no parameter `{name}` to parametrize",
+                        function_node.name,
+                    ));
                 }
             }
 
-            if names.len() > 1 {
-                if let Some(argvalues) = call.arguments.find_argument_value("argvalues", 1) {
-                    self.check_parametrize_arity(argvalues, names.len());
-                }
+            if marker.names.len() > 1
+                && let Some(argvalues) = marker.argvalues
+            {
+                self.check_parametrize_arity(argvalues, marker.names.len());
             }
         }
     }
@@ -1225,6 +1205,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ty
             } else if let Some(ty) = inherited {
                 ty
+            } else if let Some(ty) = self.pytest_fixture_parameter_type(parameter) {
+                ty
             } else {
                 Type::unknown()
             };
@@ -1232,6 +1214,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.add_binding(parameter.into(), definition)
                 .insert(self, ty);
         }
+    }
+
+    /// basedpython: for an unannotated parameter of a pytest test or fixture,
+    /// the type of the fixture pytest binds it to by name. an annotated
+    /// parameter is instead *checked* against that fixture, by
+    /// [`check_pytest_function`].
+    ///
+    /// [`check_pytest_function`]: Self::check_pytest_function
+    fn pytest_fixture_parameter_type(&self, parameter: &ast::Parameter) -> Option<Type<'db>> {
+        let db = self.db();
+        let function = nearest_enclosing_function(db, self.index, self.scope())?;
+        pytest::injected_parameter_type(db, function, parameter.name.as_str())
     }
 
     /// basedpython: for an unannotated parameter inside the implementation of

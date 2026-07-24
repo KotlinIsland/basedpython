@@ -83,3 +83,63 @@ def test_add(a: int, b: int) -> None: ...
 @pytest.mark.parametrize("a, missing", [(1, 2)])  # error: [invalid-parametrize]
 def test_missing(a: int) -> None: ...
 ```
+
+## Unannotated parameters take the fixture's type
+
+An unannotated parameter is bound by pytest to the fixture of that name, so it takes the fixture's
+provided type rather than staying gradual — for a user fixture, for a builtin like `tmp_path`, and
+across a `conftest.py`.
+
+`conftest.py`:
+
+```py
+import pytest
+
+@pytest.fixture
+def db() -> str:
+    return "sqlite://"
+```
+
+`test_unannotated.py`:
+
+```py
+import pytest
+from typing import Iterator
+
+@pytest.fixture
+def port() -> int:
+    return 5432
+
+@pytest.fixture
+def handle() -> Iterator[bytes]:
+    yield b""
+
+def test_it(port, handle, db, tmp_path) -> None:
+    reveal_type(port)  # revealed: int
+    reveal_type(handle)  # revealed: bytes
+    reveal_type(db)  # revealed: str
+    reveal_type(tmp_path)  # revealed: Path
+    # the injected type is usable: a real attribute resolves, a bogus one is an error
+    reveal_type(tmp_path.name)  # revealed: str
+    port.bit_length()
+    port.no_such_method  # error: [unresolved-attribute]
+```
+
+## Parametrized names are arguments, not fixtures
+
+A name `@pytest.mark.parametrize` supplies comes from the marker's value rows, not the registry, so
+it is not fixture-typed even when a fixture of that name exists.
+
+`test_parametrized.py`:
+
+```py
+import pytest
+
+@pytest.fixture
+def value() -> int:
+    return 1
+
+@pytest.mark.parametrize("value", ["a", "b"])
+def test_it(value) -> None:
+    reveal_type(value)  # revealed: Unknown
+```

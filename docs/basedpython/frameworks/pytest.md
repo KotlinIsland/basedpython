@@ -1,12 +1,13 @@
 # pytest support
 
-basedpython understands pytest's fixture system. fixture parameters check correctly against their types, and tests using basedpython features work at runtime.
+basedpython understands pytest's fixture system. fixture parameters are typed from the fixtures they request, and tests using basedpython features work at runtime.
 
 ## what works
 
 ### fixtures and dependency injection
 
 - fixture parameters resolve correctly by name
+- an unannotated parameter takes the fixture's type, so the body sees `int` rather than `Unknown` for a fixture returning `int` — no annotation needed just to get checking
 - fixture type mismatches are caught: if a test requests `db: Database` but the fixture provides `Connection`, you'll get a type error
 - builtin fixtures: `tmp_path`, `monkeypatch`, `capsys`, `tmp_path_factory`, and others from pytest's stubs all have their correct types
 - yield fixtures: `Iterator[T]` and `Generator[T, ...]` unwrap to `T`
@@ -29,7 +30,7 @@ basedpython understands pytest's fixture system. fixture parameters check correc
 
 ### plugin-provided fixtures
 
-third-party pytest plugins that inject fixtures via entry points aren't discovered. builtin fixtures work, but plugin fixtures like `django_db` or `flask_app` won't be recognized by the type checker.
+third-party pytest plugins that inject fixtures via entry points aren't discovered. builtin fixtures work, but plugin fixtures like `django_db` or `flask_app` won't be recognized by the type checker, so an unannotated parameter requesting one stays `Unknown`.
 
 **workaround:** annotate the parameter explicitly:
 
