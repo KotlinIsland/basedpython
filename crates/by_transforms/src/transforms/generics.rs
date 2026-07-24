@@ -3,9 +3,7 @@ use std::fmt::Write as _;
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{
-    Expr, Stmt, StmtClassDef, StmtFunctionDef, StmtImportFrom, StmtTypeAlias, TypeParam,
-};
+use ruff_python_ast::{Expr, Stmt, StmtClassDef, StmtFunctionDef, StmtTypeAlias, TypeParam};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::config::Config;
@@ -37,8 +35,8 @@ pub(crate) struct GenericPolyfill<'src> {
     emitted_typevar_signatures: std::collections::HashMap<String, String>,
     /// counter for fresh-suffix typevar names (`_T_2`, `_T_3`, …)
     typevar_suffix_counter: usize,
-    /// names of classes/functions whose first type parameter is a `Parameters`
-    /// bound (i.e. `class A[P: Parameters]`). subscript sites for these
+    /// names of classes/functions whose first type parameter has a top-parameters
+    /// bound (i.e. `class A[P: (*: *, **: *)]`). subscript sites for these
     /// targets get tuple slices rewritten to list form so paramspec
     /// substitution at runtime accepts them
     parameters_targets: HashSet<String>,
@@ -261,7 +259,7 @@ impl<'src> GenericPolyfill<'src> {
                 TypeParam::TypeVar(tv) => {
                     let name = tv.name.id.as_str();
 
-                    // `T: Parameters` → emit a ParamSpec rather than a TypeVar
+                    // top-parameters bound → emit a ParamSpec rather than a TypeVar
                     // so the polyfilled output behaves like `**T` at runtime
                     if let Some(bound) = &tv.bound
                         && is_parameters_bound(bound)
@@ -418,7 +416,7 @@ impl<'src> GenericPolyfill<'src> {
         for param in params {
             if let TypeParam::TypeVar(tv) = param {
                 if let Some(bound) = &tv.bound {
-                    // `T: Parameters` → `**T` (PEP 695 paramspec syntax)
+                    // top-parameters bound → `**T` (PEP 695 paramspec syntax)
                     if is_parameters_bound(bound) {
                         let name = tv.name.id.as_str();
                         self.edits.push(Fix::safe_edit(Edit::range_replacement(
@@ -744,61 +742,6 @@ impl<'src> GenericPolyfill<'src> {
 }
 
 impl GenericPolyfill<'_> {
-    /// Strips `Parameters` from a `from typing import …` line. Parameters is
-    /// a basedpython surface form; the import has no runtime equivalent so
-    /// it must not appear in the lowered Python output.
-    fn strip_parameters_import(&mut self, node: &StmtImportFrom) {
-        if node.level > 0 {
-            return;
-        }
-        let Some(module) = &node.module else {
-            return;
-        };
-        if module.id.as_str() != "typing" {
-            return;
-        }
-        let mut keep: Vec<String> = Vec::new();
-        let mut found = false;
-        for alias in &node.names {
-            let name = alias.name.id.as_str();
-            if name == "Parameters" && alias.asname.is_none() {
-                found = true;
-                continue;
-            }
-            let formatted = match &alias.asname {
-                Some(asname) => format!("{name} as {}", asname.id.as_str()),
-                None => name.to_owned(),
-            };
-            keep.push(formatted);
-        }
-        if !found {
-            return;
-        }
-        let replacement = if keep.is_empty() {
-            // drop the entire line including its trailing newline
-            let line_end = self.line_end_of(node.range().end());
-            self.edits
-                .push(Fix::safe_edit(Edit::range_deletion(TextRange::new(
-                    node.range().start(),
-                    line_end,
-                ))));
-            return;
-        } else {
-            format!("from typing import {}", keep.join(", "))
-        };
-        self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            replacement,
-            node.range(),
-        )));
-    }
-
-    fn line_end_of(&self, pos: TextSize) -> TextSize {
-        let offset = usize::from(pos);
-        let rest = &self.source[offset..];
-        let extra = rest.find('\n').map_or(rest.len(), |i| i + 1);
-        TextSize::from(u32::try_from(offset + extra).expect("offset fits u32"))
-    }
-
     /// Rewrites a tuple slice of a parameters-typed subscript to a list.
     /// `A[(int, str)]` → `A[[int, str]]` so the runtime `ParamSpec` accepts
     /// the substitution. Parameters spec syntax (`(int, str, /, name: T)`)
@@ -892,7 +835,6 @@ impl<'ast> Visitor<'ast> for GenericPolyfill<'_> {
                 self.process_type_alias(alias);
                 return; // don't recurse into the alias value
             }
-            Stmt::ImportFrom(imp) => self.strip_parameters_import(imp),
             _ => {}
         }
         walk_stmt(self, stmt);
@@ -917,15 +859,10 @@ fn has_parameters_bound(params: &[TypeParam]) -> bool {
     })
 }
 
+/// basedpython spells a `ParamSpec` as a type variable bound by the top parameters form
+/// `(*: *, **: *)` — the parameter list every other parameter list is a subtype of
 fn is_parameters_bound(bound: &Expr) -> bool {
-    match bound {
-        Expr::Name(n) => n.id.as_str() == "Parameters",
-        Expr::Attribute(a) => {
-            a.attr.id.as_str() == "Parameters"
-                && matches!(a.value.as_ref(), Expr::Name(m) if m.id.as_str() == "typing")
-        }
-        _ => false,
-    }
+    ruff_python_ast::helpers::is_top_parameters_form(bound)
 }
 
 fn rename_in_expr(expr: &Expr, renames: &HashMap<String, String>, edits: &mut Vec<Fix>) {
@@ -1877,13 +1814,10 @@ mod tests {
     fn parameters_bound_polyfill() {
         check(
             indoc! {"
-                from typing import Parameters
-
-                class A[P: Parameters]: ...
+                class A[P: (*: *, **: *)]: ...
             "},
             indoc! {"
                 from typing import ParamSpec, Generic
-
                 _P = ParamSpec(\"_P\")
                 class A(Generic[_P]): ...
             "},
@@ -1894,12 +1828,9 @@ mod tests {
     fn parameters_bound_native_312() {
         check_at(
             indoc! {"
-                from typing import Parameters
-
-                class A[P: Parameters]: ...
+                class A[P: (*: *, **: *)]: ...
             "},
             indoc! {"
-
                 class A[**P]: ...
             "},
             PythonVersion::PY312,
@@ -1912,14 +1843,11 @@ mod tests {
         // ParamSpec receives the right shape at runtime
         check(
             indoc! {"
-                from typing import Parameters
-
-                class A[P: Parameters]: ...
+                class A[P: (*: *, **: *)]: ...
                 A[(int, str)]
             "},
             indoc! {"
                 from typing import ParamSpec, Generic
-
                 _P = ParamSpec(\"_P\")
                 class A(Generic[_P]): ...
                 A[[int, str]]
@@ -1934,14 +1862,11 @@ mod tests {
         // carries positional types
         check(
             indoc! {"
-                from typing import Parameters
-
-                class A[P: Parameters]: ...
+                class A[P: (*: *, **: *)]: ...
                 A[(int, str, /, name: str)]
             "},
             indoc! {"
                 from typing import Any, ParamSpec, Generic
-
                 _P = ParamSpec(\"_P\")
                 class A(Generic[_P]): ...
                 A[[int, str, Any]]
@@ -1953,14 +1878,11 @@ mod tests {
     fn parameters_subscript_with_markers_native_312() {
         check_at(
             indoc! {"
-                from typing import Parameters
-
-                class A[P: Parameters]: ...
+                class A[P: (*: *, **: *)]: ...
                 A[(int, str, /, name: str)]
             "},
             indoc! {"
                 from typing import Any
-
                 class A[**P]: ...
                 A[[int, str, Any]]
             "},
@@ -1972,8 +1894,7 @@ mod tests {
     fn parameters_subscript_named_only() {
         check_at(
             indoc! {"
-                from typing import Parameters
-                class A[P: Parameters]: ...
+                class A[P: (*: *, **: *)]: ...
                 A[(/, x: int)]
             "},
             indoc! {"
@@ -1991,8 +1912,7 @@ mod tests {
         // runtime ParamSpec list has no kwargs slot
         check_at(
             indoc! {"
-                from typing import Parameters
-                class A[P: Parameters]: ...
+                class A[P: (*: *, **: *)]: ...
                 A[(int, **: str)]
             "},
             indoc! {"
@@ -2009,8 +1929,7 @@ mod tests {
         // to `Any` in paramspec list since runtime form has no variadic slot
         check_at(
             indoc! {"
-                from typing import Parameters
-                class A[P: Parameters]: ...
+                class A[P: (*: *, **: *)]: ...
                 A[(int, *: str)]
             "},
             indoc! {"
@@ -2026,13 +1945,10 @@ mod tests {
     fn parameters_subscript_native_312() {
         check_at(
             indoc! {"
-                from typing import Parameters
-
-                class A[P: Parameters]: ...
+                class A[P: (*: *, **: *)]: ...
                 A[(int, str)]
             "},
             indoc! {"
-
                 class A[**P]: ...
                 A[[int, str]]
             "},
@@ -2044,8 +1960,7 @@ mod tests {
     fn parameters_function_polyfill() {
         check(
             indoc! {"
-                from typing import Parameters
-                def f[P: Parameters](): ...
+                def f[P: (*: *, **: *)](): ...
             "},
             indoc! {"
                 from typing import ParamSpec
@@ -2055,14 +1970,15 @@ mod tests {
         );
     }
 
+    /// the top-parameters bound is structural, so it pulls in no import of its own and leaves
+    /// the module's existing `typing` imports alone
     #[test]
-    fn parameters_import_kept_when_other_names_present() {
-        // only the `Parameters` name is stripped; siblings stay
+    fn parameters_bound_needs_no_import() {
         check(
             indoc! {"
-                from typing import Parameters, TypeVar
+                from typing import TypeVar
 
-                class A[P: Parameters]: ...
+                class A[P: (*: *, **: *)]: ...
             "},
             indoc! {"
                 from typing import ParamSpec, Generic

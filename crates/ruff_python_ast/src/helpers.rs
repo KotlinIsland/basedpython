@@ -1031,6 +1031,40 @@ pub fn is_top_star_marker(expr: &Expr) -> bool {
     name.id.is_empty() && matches!(name.ctx, ExprContext::Invalid)
 }
 
+/// basedpython: returns `true` if `expr` is the *top parameters* form `(*: *, **: *)` — an
+/// anonymous variadic and an anonymous keyword-variadic, both admitting anything.
+///
+/// Every parameter list is a subtype of this one, so a type variable bound by it ranges over all
+/// parameter lists: it is the surface spelling of a `ParamSpec`.
+///
+/// The encodings are those the parameter-shaped tuple parser produces: `*: T` is `Starred(T)`,
+/// `**: T` is `Starred(Starred(T))`, and the `*` type is a
+/// [top-star marker](is_top_star_marker).
+pub fn is_top_parameters_form(expr: &Expr) -> bool {
+    fn is_top_star_annotated(expr: &Expr, stars: usize) -> bool {
+        let mut current = expr;
+        for _ in 0..stars {
+            let Expr::Starred(starred) = current else {
+                return false;
+            };
+            current = starred.value.as_ref();
+        }
+        is_top_star_marker(current)
+    }
+
+    let Expr::Tuple(tuple) = expr else {
+        return false;
+    };
+    tuple.parenthesized
+        && tuple.has_parameter_shape()
+        && matches!(
+            tuple.elts.as_slice(),
+            [variadic, keyword_variadic]
+                if is_top_star_annotated(variadic, 1)
+                    && is_top_star_annotated(keyword_variadic, 2)
+        )
+}
+
 /// basedpython: returns `true` if `expr` is the parser-synthesized marker for a
 /// declaration keyword on an *unannotated* assignment — `var a = 1`,
 /// `override a = 1`, `final override a = 1`. Those parse as an `AnnAssign` whose

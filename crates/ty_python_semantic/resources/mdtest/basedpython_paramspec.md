@@ -4,8 +4,10 @@ basedpython spells a `ParamSpec` callable `Callable[P, R]` with the arrow form `
 `Concatenate` callable `Callable[Concatenate[T1, …, P], R]` with `(T1, …, **P) -> R`.
 
 in a `.by` file the PEP-695 spelling `[**P]` declares a
-[keyword-variadic pack](basedpython_keyword_variadic.md), not a `ParamSpec`, so a `ParamSpec` is
-declared with the legacy `P = ParamSpec("P")` form. the arrow syntax unpacks either one
+[keyword-variadic pack](basedpython_keyword_variadic.md), not a `ParamSpec`. a `ParamSpec` is a type
+variable bound by the *top parameters* form `(*: *, **: *)` — the parameter list every other
+parameter list is a subtype of — or the legacy `P = ParamSpec("P")`. the arrow syntax unpacks any of
+them
 
 ```toml
 [environment]
@@ -25,6 +27,23 @@ def f(arrow: (**P) -> int, callable: Callable[P, int]):
     arrow = callable
     callable = arrow
 ```
+
+## a top-parameters bound declares a `ParamSpec`
+
+```by
+class A[P: (*: *, **: *)]:
+    def get(self) -> (**P) -> None:
+        raise NotImplementedError
+
+def f(a: A[(int, str)]):
+    reveal_type(a)  # revealed: A[(int, str, /)]
+    reveal_type(a.get())  # revealed: (int, str, /) -> None
+    a.get()(1, "x")
+    a.get()("wrong", "x")  # error: [invalid-argument-type]
+```
+
+this is what a python `ParamSpec` reverse-transpiles to, so `class A[**P]` in a `.py` file
+round-trips to `class A[P: (*: *, **: *)]` and back
 
 ## `(T1, …, **P) -> R` is `Callable[Concatenate[T1, …, P], R]`
 
