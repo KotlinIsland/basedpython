@@ -42,6 +42,7 @@ pub(crate) mod overload;
 pub(crate) mod parametric_is;
 pub(crate) mod postfix_await;
 pub(crate) mod propagate;
+pub(crate) mod properties;
 pub(crate) mod reified_generic;
 pub(crate) mod repeated_underscore;
 pub(crate) mod sentinel;

@@ -256,6 +256,11 @@ pub(crate) fn synthetic_decorator_target_type<'db>(
         ),
         "static" => (&[KnownModule::Builtins], "staticmethod"),
         "classmethod" => (&[KnownModule::Builtins], "classmethod"),
+        // basedpython: a property accessor block synthesizes a getter tagged with
+        // this marker instead of a literal `@property`, since there is no `@` in
+        // the surface syntax. resolving it to the builtin makes ty's existing
+        // property handling apply to the accessor form unchanged
+        "__property__" => (&[KnownModule::Builtins], "property"),
         _ => return None,
     };
     modules.iter().find_map(|module| {

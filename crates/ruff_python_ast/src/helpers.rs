@@ -1075,6 +1075,22 @@ pub fn is_untyped_declaration_marker(expr: &Expr) -> bool {
     matches!(expr, Expr::Name(name) if name.id.as_str() == "__modifier_assign__")
 }
 
+/// basedpython: the inference-context marker an *unannotated* `field = <init>` in a
+/// property accessor block carries — `__field__[T]`, where `T` is the property's
+/// declared type. Returns `T`.
+///
+/// The field has no declared type of its own: `T` is only the context its
+/// initialiser is inferred in, and the inferred type becomes the declaration. That
+/// is what lets a bare `field = []` under a `Sequence[int]` property declare
+/// `list[int]` while still keeping storage typed independently of the property.
+pub fn untyped_declaration_context(expr: &Expr) -> Option<&Expr> {
+    let Expr::Subscript(subscript) = expr else {
+        return None;
+    };
+    matches!(subscript.value.as_ref(), Expr::Name(name) if name.id.as_str() == "__field__")
+        .then(|| subscript.slice.as_ref())
+}
+
 /// basedpython: use-site variance marker, one of `out X`, `in X`, `in out X`
 /// in a subscript element. Encoded by the parser as
 /// `Subscript(Name(id, ctx=Invalid), inner)` where `id` is one of

@@ -1483,14 +1483,34 @@ reveal_type(NAME)  # revealed: "alice"
 NAME = "bob"  # error: [invalid-assignment]
 ```
 
-### `let` inside class body has no qualifier
+### `let` inside a class body is read-only
+
+a `let` attribute is read-only wherever it is declared — assigning to it away from the declaration
+site is reported. no `Final` is emitted in the lowered python; read-only-ness is a type-checker-only
+marker, so this does not constrain the runtime.
 
 ```by
 class A:
     let foo = 100
 
 a = A()
-a.foo = 200  # ok — no Final qualifier inside class
+a.foo = 200  # error: [invalid-assignment]
+```
+
+### a read-only `let` is still open to subclasses
+
+unlike a real `Final`, `let` does not close the attribute: a subclass may shadow it with its own
+declaration, mutable or immutable. that is what keeps `let` usable for ordinary class state.
+
+```by
+class A:
+    let foo = 100
+
+class B(A):
+    var foo = 200
+
+class C(A):
+    let foo = 300
 ```
 
 ### valueless `let x: T` is read-only

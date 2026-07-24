@@ -94,6 +94,10 @@ fn is_modifier_kw(text: &str) -> bool {
             | "export"
             | "public"
             | "private"
+            // basedpython: `late var x: T` defers a property's initialisation.
+            // the keyword strips like any other modifier prefix; validity (only on
+            // `var`, never with an initialiser) is checked where the property is lowered
+            | "late"
     )
 }
 
@@ -163,6 +167,252 @@ fn synthetic_variant_decorator(marker: &'static str, range: TextRange) -> ast::D
         }),
         range,
         node_index: AtomicNodeIndex::NONE,
+    }
+}
+
+/// Rewrites bare `field` identifiers inside a property accessor body to
+/// `self.<backing>` attribute accesses, so ty sees real backing storage and the
+/// lowering emits `self._<name>`. Records whether any `field` was seen — an
+/// accessor block that never mentions `field` allocates no backing storage (the
+/// property is computed), matching Kotlin's "no backing field" rule.
+struct FieldRewriter {
+    backing: Name,
+    seen: std::cell::Cell<bool>,
+}
+
+/// Whether an accessor body is exactly a read of the backing field — the shape an
+/// implicit getter has, and the only shape for which the in-class narrow view is
+/// sound: `self.<prop>` and `self._<prop>` then denote the same object, so reading
+/// the property at the narrower storage type cannot disagree with the runtime.
+fn is_pure_field_read(body: &[Stmt], backing: &Name) -> bool {
+    let [Stmt::Return(ret)] = body else {
+        return false;
+    };
+    let Some(Expr::Attribute(attr)) = ret.value.as_deref() else {
+        return false;
+    };
+    attr.attr.id == *backing
+        && matches!(attr.value.as_ref(), Expr::Name(name) if name.id.as_str() == "self")
+}
+
+/// What an in-class access written under a property's public name should actually
+/// resolve to.
+#[derive(Debug)]
+pub(crate) struct PropertyRetarget {
+    /// the name the author writes
+    pub(crate) public: Name,
+    /// a read resolves here: the backing field when the getter only reads it (so
+    /// the class sees storage at its own type), otherwise the property itself
+    pub(crate) read: Name,
+    /// a write always resolves to the property, so a validating setter still runs
+    pub(crate) write: Name,
+}
+
+/// Retargets in-class accesses written under a property's public name.
+///
+/// Two things need this. A property whose getter only reads its backing field
+/// reads at the *storage* type inside the class (`let a: object` backed by
+/// `field = 1` reads as `int`) — the point of stating the two types separately. And
+/// a `private` property does not exist under its public name at all: it is `_a`,
+/// so `self.a` has to be pointed at it.
+///
+/// Only the `id` changes — the identifier keeps its original source range, so the
+/// formatter (which prints an identifier from its range) still emits what the
+/// author wrote.
+struct RetargetPropertyAccess<'a> {
+    properties: &'a [PropertyRetarget],
+    /// the enclosing method's first parameter, i.e. what `self` is called here
+    receiver: &'a str,
+}
+
+impl ruff_python_ast::visitor::transformer::Transformer for RetargetPropertyAccess<'_> {
+    fn visit_stmt(&self, stmt: &mut Stmt) {
+        // a nested class has its own `self`; leave its bodies alone
+        if matches!(stmt, Stmt::ClassDef(_)) {
+            return;
+        }
+        ruff_python_ast::visitor::transformer::walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&self, expr: &mut Expr) {
+        if let Expr::Attribute(attr) = expr
+            && matches!(attr.value.as_ref(), Expr::Name(name) if name.id.as_str() == self.receiver)
+            && let Some(property) = self
+                .properties
+                .iter()
+                .find(|property| attr.attr.id == property.public)
+        {
+            attr.attr.id = if attr.ctx == ExprContext::Load {
+                property.read.clone()
+            } else {
+                property.write.clone()
+            };
+        }
+        ruff_python_ast::visitor::transformer::walk_expr(self, expr);
+    }
+}
+
+/// Applies [`RetargetPropertyAccess`] to every method in a class body.
+fn narrow_property_reads(body: &mut [Stmt], properties: &[PropertyRetarget]) {
+    use ruff_python_ast::visitor::transformer::Transformer;
+    for member in body {
+        let Stmt::FunctionDef(func) = member else {
+            continue;
+        };
+        // the receiver is whatever the method called its first parameter; a
+        // parameterless function (a staticmethod) has no `self` to narrow through
+        let Some(receiver) = func
+            .parameters
+            .posonlyargs
+            .first()
+            .or_else(|| func.parameters.args.first())
+            .map(|param| param.parameter.name.id.clone())
+        else {
+            continue;
+        };
+        let rewriter = RetargetPropertyAccess {
+            properties,
+            receiver: receiver.as_str(),
+        };
+        for stmt in &mut func.body {
+            rewriter.visit_stmt(stmt);
+        }
+    }
+}
+
+/// A zero-width synthetic parameter for a synthesised accessor signature.
+fn synth_property_param(
+    name: &str,
+    annotation: Option<Expr>,
+    at: TextSize,
+) -> ast::ParameterWithDefault {
+    let range = TextRange::empty(at);
+    ast::ParameterWithDefault {
+        range,
+        parameter: ast::Parameter {
+            range,
+            name: ast::Identifier {
+                id: Name::new(name),
+                range,
+                node_index: AtomicNodeIndex::NONE,
+            },
+            annotation: annotation.map(Box::new),
+            node_index: AtomicNodeIndex::NONE,
+            is_context: false,
+        },
+        default: None,
+        node_index: AtomicNodeIndex::NONE,
+    }
+}
+
+/// Wraps synthesised parameters into a zero-width [`ast::Parameters`] node.
+fn synth_property_parameters(
+    args: Vec<ast::ParameterWithDefault>,
+    at: TextSize,
+) -> ast::Parameters {
+    ast::Parameters {
+        range: TextRange::empty(at),
+        node_index: AtomicNodeIndex::NONE,
+        posonlyargs: std::iter::empty().collect(),
+        args: args.into_iter().collect(),
+        vararg: None,
+        kwonlyargs: std::iter::empty().collect(),
+        kwarg: None,
+    }
+}
+
+/// Builds one synthesised accessor `def`.
+fn build_property_fn(
+    name: ast::Identifier,
+    decorators: Vec<ast::Decorator>,
+    parameters: ast::Parameters,
+    returns: Option<Expr>,
+    body: Vec<Stmt>,
+    range: TextRange,
+) -> Stmt {
+    Stmt::FunctionDef(ast::StmtFunctionDef {
+        name,
+        type_params: None,
+        parameters: Box::new(parameters),
+        body: body.into_iter().collect(),
+        decorator_list: decorators.into(),
+        is_async: false,
+        returns: returns.map(Box::new),
+        is_trailing_lambda: false,
+        range,
+        node_index: AtomicNodeIndex::NONE,
+    })
+}
+
+/// An attribute access on the implicit `self`, used to reach a property's
+/// backing storage (`self._<name>`) from a synthesised accessor body.
+fn synth_backing_attr(backing: &Name, ctx: ExprContext, at: TextSize) -> Expr {
+    let range = TextRange::empty(at);
+    Expr::Attribute(ast::ExprAttribute {
+        value: Box::new(Expr::Name(ast::ExprName {
+            id: Name::new_static("self"),
+            ctx: ExprContext::Load,
+            range,
+            node_index: AtomicNodeIndex::NONE,
+        })),
+        attr: ast::Identifier {
+            id: backing.clone(),
+            range,
+            node_index: AtomicNodeIndex::NONE,
+        },
+        ctx,
+        range,
+        node_index: AtomicNodeIndex::NONE,
+        optional: false,
+    })
+}
+
+/// The declared type of a property, peeled out of the synthetic `let` / `var`
+/// declaration marker: `__let__[T]` / `__modifier_annot__[T]` carry the type in
+/// the subscript slice. A `final` anywhere in the modifier chain swaps the marker
+/// for `__final__`, which carries the type the same way. An untyped declaration
+/// (`let x` / `var x = v`, whose marker is a bare `Name`) has no declared type.
+fn property_decl_type(annotation: &Expr) -> Option<Expr> {
+    if let Expr::Subscript(subscript) = annotation
+        && let Expr::Name(marker) = subscript.value.as_ref()
+        && matches!(
+            marker.id.as_str(),
+            "__let__" | "__modifier_annot__" | "__final__"
+        )
+    {
+        return Some((*subscript.slice).clone());
+    }
+    None
+}
+
+impl ruff_python_ast::visitor::transformer::Transformer for FieldRewriter {
+    fn visit_expr(&self, expr: &mut Expr) {
+        if let Expr::Name(name) = expr
+            && name.id.as_str() == "field"
+        {
+            self.seen.set(true);
+            let range = name.range;
+            let ctx = name.ctx;
+            *expr = Expr::Attribute(ast::ExprAttribute {
+                value: Box::new(Expr::Name(ast::ExprName {
+                    id: Name::new_static("self"),
+                    ctx: ExprContext::Load,
+                    range: TextRange::empty(range.start()),
+                    node_index: AtomicNodeIndex::NONE,
+                })),
+                attr: ast::Identifier {
+                    id: self.backing.clone(),
+                    range,
+                    node_index: AtomicNodeIndex::NONE,
+                },
+                ctx,
+                range,
+                node_index: AtomicNodeIndex::NONE,
+                optional: false,
+            });
+            return;
+        }
+        ruff_python_ast::visitor::transformer::walk_expr(self, expr);
     }
 }
 
@@ -266,6 +516,15 @@ impl<'src> Parser<'src> {
                 if token == TokenKind::Name
                     && let Some(stmt) = self.try_parse_modifier_or_introducer(start)
                 {
+                    // basedpython: a class-body `var`/`let` declaration may be
+                    // followed by an indented accessor block (`get`/`set`/`field`),
+                    // which turns it into a python `@property` with a backing field
+                    if self.class_body_depth > 0
+                        && self.at(TokenKind::Indent)
+                        && self.at_accessor_block_start()
+                    {
+                        return self.parse_property_accessors(stmt, start);
+                    }
                     return stmt;
                 }
 
@@ -3818,6 +4077,621 @@ impl<'src> Parser<'src> {
         out.push(stmt);
     }
 
+    /// True when the token after the current `Indent` opens a property accessor
+    /// block — one of the `get` / `set` / `field` entry keywords. An indent after
+    /// a completed simple statement is otherwise always an error, so this is an
+    /// unambiguous signal inside a class body.
+    fn at_accessor_block_start(&mut self) -> bool {
+        let (kind, range) = self.peek_nth(0);
+        kind == TokenKind::Name
+            && matches!(
+                self.src_text(range),
+                // `late` may lead the block as a prefix on `field`
+                "get" | "set" | "field" | "late"
+            )
+    }
+
+    /// Parses a basedpython property accessor block and lowers the whole
+    /// construct to standard python `@property` members.
+    ///
+    /// The caller has parsed the `var` / `let` declaration (`decl`) and is
+    /// positioned at the `Indent` that opens the accessor suite:
+    ///
+    /// ```text
+    /// var age: int = 0
+    ///     get() = field
+    ///     set(value):
+    ///         assert value >= 0
+    ///         field = value
+    /// ```
+    ///
+    /// Emits, in class-body order, a backing-field declaration (`_age: int = 0`,
+    /// only when an accessor mentions `field`), a getter carrying the synthetic
+    /// `__property__` marker whose range spans the whole construct, and — for a
+    /// mutable `var` — a setter decorated `@<name>.setter`. `field` is rewritten
+    /// to `self._<name>` so ty sees real backing storage and needs no special
+    /// rule for the keyword. The declaration statement itself is dropped: the
+    /// returned statement is the first synthesised member and the rest are
+    /// drained by [`Parser::parse_block`].
+    fn parse_property_accessors(&mut self, decl: Stmt, start: TextSize) -> Stmt {
+        self.error_if_not_basedpython(
+            "property accessor blocks are not valid in .py files".to_string(),
+        );
+
+        let Stmt::AnnAssign(ann) = &decl else {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "a property accessor block must follow a `var` or `let` declaration"
+                        .to_string(),
+                ),
+                self.current_token_range(),
+            );
+            return decl;
+        };
+        let Expr::Name(target) = ann.target.as_ref() else {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "a property accessor block must follow a simple `var` or `let` name"
+                        .to_string(),
+                ),
+                self.current_token_range(),
+            );
+            return decl;
+        };
+        let public_name = target.id.clone();
+        let prop_name_range = target.range;
+        let prop_type = property_decl_type(&ann.annotation);
+        let prop_init = ann.value.as_deref().cloned();
+
+        // the modifier prefix ahead of the name carries `let` / `var` and any
+        // modifier keywords; the parser consumed them without recording them
+        let prefix = &self.source[usize::from(start)..usize::from(prop_name_range.start())];
+        let is_let = prefix.split_whitespace().any(|word| word == "let");
+        let is_var = prefix.split_whitespace().any(|word| word == "var");
+        let is_late = prefix.split_whitespace().any(|word| word == "late");
+        if !is_let && !is_var {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "a property accessor block requires a `var` or `let` declaration".to_string(),
+                ),
+                prop_name_range,
+            );
+        }
+        if is_late && is_let {
+            self.add_error(
+                ParseErrorType::OtherError("`late` requires `var`".to_string()),
+                prop_name_range,
+            );
+        }
+
+        // `private` shifts the whole construct one level of underscore deeper: the
+        // property becomes `_x` and its storage `__x`. that is self-enforcing —
+        // the property simply does not exist under its public name, so an access
+        // from outside the class is an unresolved attribute rather than something
+        // needing its own check
+        let is_private = prefix.split_whitespace().any(|word| word == "private");
+        let prop_name = if is_private {
+            Name::new(format!("_{public_name}"))
+        } else {
+            public_name.clone()
+        };
+        // storage is an implementation detail, so it gets a dunder name and python's
+        // name mangling hides it: `self.__a` inside the class body resolves to
+        // `_A__a`, and there is no `_a` for anything outside to reach. derived from
+        // the *public* name so a `private` property (already `_x`) gets `__x` rather
+        // than a third underscore
+        let backing = Name::new(format!("__{public_name}"));
+
+        // modifier keywords ty must see on the accessors themselves (`override`
+        // checked against the base, `final`, `abstract`). they are appended *after*
+        // the property marker so they decorate the accessor function and the
+        // `property` wrapper stays outermost — all three are identity-returning, so
+        // the result is still a property. each keeps its real source range, so the
+        // `modifiers` pass's own narrow edit for it lands inside the span this
+        // construct's lowering claims and is superseded there
+        let modifier_markers: Vec<ast::Decorator> = {
+            let base = usize::from(start);
+            let mut markers = Vec::new();
+            let mut offset = 0usize;
+            for word in prefix.split_whitespace() {
+                let Some(relative) = prefix[offset..].find(word) else {
+                    continue;
+                };
+                let word_start = offset + relative;
+                offset = word_start + word.len();
+                if !matches!(word, "override" | "final" | "abstract") {
+                    continue;
+                }
+                let (Ok(from), Ok(to)) = (
+                    TextSize::try_from(base + word_start),
+                    TextSize::try_from(base + offset),
+                ) else {
+                    continue;
+                };
+                let range = TextRange::new(from, to);
+                markers.push(ast::Decorator {
+                    expression: Expr::Name(ast::ExprName {
+                        id: Name::new(word),
+                        ctx: ExprContext::Invalid,
+                        range,
+                        node_index: AtomicNodeIndex::NONE,
+                    }),
+                    range,
+                    node_index: AtomicNodeIndex::NONE,
+                });
+            }
+            markers
+        };
+
+        // ---- parse the accessor suite -------------------------------------
+        self.bump(TokenKind::Indent);
+
+        let mut getter: Option<(Vec<Stmt>, TextRange)> = None;
+        let mut setter: Option<(Vec<Stmt>, Option<ast::Identifier>, TextRange)> = None;
+        let mut field_decl: Option<(Option<Expr>, Option<Expr>, TextRange)> = None;
+        // `late field: T` declares storage with no initialiser at all — it must
+        // not fall back to the property's own initialiser either
+        let mut field_is_late = false;
+
+        let mut progress = ParserProgress::default();
+        while !self.at(TokenKind::Dedent) && !self.at(TokenKind::EndOfFile) {
+            progress.assert_progressing(self);
+            let mut kw_range = self.current_token_range();
+            // `late field: T` defers the backing field's initialisation
+            let field_late = self.at(TokenKind::Name) && self.src_text(kw_range) == "late";
+            if field_late {
+                self.bump(TokenKind::Name);
+                kw_range = self.current_token_range();
+            }
+            let entry = if self.at(TokenKind::Name) {
+                self.src_text(kw_range)
+            } else {
+                ""
+            };
+            if field_late && entry != "field" {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "`late` may only precede `field` in a property accessor block".to_string(),
+                    ),
+                    kw_range,
+                );
+            }
+            match entry {
+                "get" | "set" => {
+                    let is_get = entry == "get";
+                    self.bump(TokenKind::Name);
+                    self.expect(TokenKind::Lpar);
+                    let param = if self.at(TokenKind::Rpar) {
+                        None
+                    } else {
+                        Some(self.parse_identifier())
+                    };
+                    self.expect(TokenKind::Rpar);
+
+                    let body: Vec<Stmt> = if self.eat(TokenKind::Equal) {
+                        // single-expression accessor: `get() = field * 2`
+                        let expr = self.parse_conditional_expression_or_higher().expr;
+                        let expr_range = expr.range();
+                        self.eat(TokenKind::Semi);
+                        self.eat(TokenKind::Newline);
+                        if is_get {
+                            vec![Stmt::Return(ast::StmtReturn {
+                                value: Some(Box::new(expr)),
+                                range: expr_range,
+                                node_index: AtomicNodeIndex::NONE,
+                            })]
+                        } else {
+                            vec![Stmt::Expr(ast::StmtExpr {
+                                value: Box::new(expr),
+                                range: expr_range,
+                                node_index: AtomicNodeIndex::NONE,
+                            })]
+                        }
+                    } else if self.eat(TokenKind::Colon) {
+                        // multi-statement accessor: `set(value):` + block
+                        self.parse_body(Clause::FunctionDef).into_iter().collect()
+                    } else {
+                        self.add_error(
+                            ParseErrorType::OtherError(format!(
+                                "expected `=` or `:` after `{entry}(...)` in a property accessor block"
+                            )),
+                            self.current_token_range(),
+                        );
+                        Vec::new()
+                    };
+
+                    let acc_range = TextRange::new(kw_range.start(), self.prev_token_end);
+                    if is_get {
+                        if getter.is_some() {
+                            self.add_error(
+                                ParseErrorType::OtherError(
+                                    "duplicate `get` in a property accessor block".to_string(),
+                                ),
+                                kw_range,
+                            );
+                        }
+                        getter = Some((body, acc_range));
+                    } else {
+                        if setter.is_some() {
+                            self.add_error(
+                                ParseErrorType::OtherError(
+                                    "duplicate `set` in a property accessor block".to_string(),
+                                ),
+                                kw_range,
+                            );
+                        }
+                        setter = Some((body, param, acc_range));
+                    }
+                }
+                "field" => {
+                    self.bump(TokenKind::Name);
+                    let annotation = if self.eat(TokenKind::Colon) {
+                        Some(self.parse_conditional_expression_or_higher().expr)
+                    } else {
+                        None
+                    };
+                    let init = if self.eat(TokenKind::Equal) {
+                        Some(
+                            self.parse_expression_list(
+                                ExpressionContext::yield_or_starred_bitwise_or(),
+                            )
+                            .expr,
+                        )
+                    } else {
+                        None
+                    };
+                    self.eat(TokenKind::Semi);
+                    self.eat(TokenKind::Newline);
+                    let decl_range = TextRange::new(kw_range.start(), self.prev_token_end);
+                    if field_decl.is_some() {
+                        self.add_error(
+                            ParseErrorType::OtherError(
+                                "duplicate `field` in a property accessor block".to_string(),
+                            ),
+                            kw_range,
+                        );
+                    }
+                    if field_late && init.is_some() {
+                        self.add_error(
+                            ParseErrorType::OtherError(
+                                "`late` cannot be combined with an initialiser".to_string(),
+                            ),
+                            decl_range,
+                        );
+                    }
+                    field_is_late = field_late;
+                    field_decl = Some((annotation, init, decl_range));
+                }
+                _ => {
+                    self.add_error(
+                        ParseErrorType::OtherError(
+                            "expected `get`, `set`, or `field` in a property accessor block"
+                                .to_string(),
+                        ),
+                        kw_range,
+                    );
+                    self.bump_any();
+                }
+            }
+        }
+        self.expect(TokenKind::Dedent);
+
+        let construct_range = self.node_range(start);
+
+        // ---- rewrite `field` and validate --------------------------------
+        let rewriter = FieldRewriter {
+            backing: backing.clone(),
+            seen: std::cell::Cell::new(false),
+        };
+        {
+            use ruff_python_ast::visitor::transformer::Transformer;
+            if let Some((body, _)) = getter.as_mut() {
+                for stmt in body.iter_mut() {
+                    rewriter.visit_stmt(stmt);
+                }
+            }
+            if let Some((body, _, _)) = setter.as_mut() {
+                for stmt in body.iter_mut() {
+                    rewriter.visit_stmt(stmt);
+                }
+            }
+        }
+        let references_field = rewriter.seen.get();
+
+        if is_let && setter.is_some() {
+            self.add_error(
+                ParseErrorType::OtherError("read-only property cannot define a setter".to_string()),
+                construct_range,
+            );
+        }
+        // an explicit `field` declaration is a complete property on its own — the
+        // getter is implicit, which is the whole point of stating storage
+        // separately from the public type
+        if getter.is_none() && setter.is_none() && field_decl.is_none() {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "a property accessor block must define `get`, `set`, or `field`".to_string(),
+                ),
+                construct_range,
+            );
+        }
+        if let Some((_, field_init, field_range)) = field_decl.as_ref() {
+            // only an accessor that was actually written can fail to use the
+            // storage it declared; an implicit getter always reads it
+            if !references_field && (getter.is_some() || setter.is_some()) {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "explicit `field` declaration is never referenced by an accessor"
+                            .to_string(),
+                    ),
+                    *field_range,
+                );
+            }
+            if field_init.is_some() && prop_init.is_some() {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "an explicit `field` initialiser cannot be combined with the property's own initialiser"
+                            .to_string(),
+                    ),
+                    *field_range,
+                );
+            }
+        }
+        if is_late && prop_init.is_some() {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "`late` cannot be combined with an initialiser".to_string(),
+                ),
+                construct_range,
+            );
+        }
+
+        // ---- synthesise the python members -------------------------------
+        let has_backing = references_field || field_decl.is_some();
+
+        // a getter that only reads the field lets the class see storage at its own
+        // type; one with real logic must keep being called, so it stays public-typed
+        let getter_reads_field_only = match &getter {
+            None => true,
+            Some((body, _)) => is_pure_field_read(body, &backing),
+        };
+        // in-class accesses are written under the public name, so record what each
+        // one should resolve to. a read may reach storage directly (narrowing); a
+        // write must reach the property so its setter still runs
+        let read_target = if has_backing && getter_reads_field_only {
+            backing.clone()
+        } else {
+            prop_name.clone()
+        };
+        if read_target != public_name || prop_name != public_name {
+            self.pending_narrow_props.push(PropertyRetarget {
+                public: public_name,
+                read: read_target,
+                write: prop_name.clone(),
+            });
+        }
+        let mut members: Vec<Stmt> = Vec::new();
+
+        // the getter leads the group: it carries the marker spanning the whole
+        // construct, and the formatter emits that span verbatim while swallowing
+        // the members that follow. the backing field's position is immaterial to
+        // ty (its name is distinct), and the setter must still trail the getter so
+        // `<name>.setter` resolves
+        let mut backing_stmt: Option<Stmt> = None;
+        if has_backing {
+            let (field_ann, field_init, field_range) = match field_decl {
+                Some((annotation, init, range)) => (annotation, init, range),
+                None => (None, None, TextRange::empty(start)),
+            };
+            // an explicit `field` declaration states the storage type itself: when
+            // it carries no annotation the type comes from its initialiser, *not*
+            // from the property's public type — the two being different is the
+            // reason to declare storage separately at all
+            let field_declares = field_ann.is_some() || field_init.is_some();
+            let backing_type = if field_declares {
+                field_ann
+            } else {
+                prop_type.clone()
+            };
+            let backing_init = if field_is_late {
+                None
+            } else {
+                field_init.or(prop_init)
+            };
+            // zero-width, like the other synthesized nodes: a real range invites a
+            // sibling pass to attach an edit to this name (`inferred_annotation`
+            // appends `: <type>` to a bare class-body assignment), which would then
+            // be stranded wherever the property lowering moved the assignment to
+            let backing_target = Expr::Name(ast::ExprName {
+                id: backing.clone(),
+                ctx: ExprContext::Store,
+                range: TextRange::empty(field_range.start()),
+                node_index: AtomicNodeIndex::NONE,
+            });
+            match (backing_type, backing_init) {
+                (Some(annotation), value) => {
+                    backing_stmt = Some(Stmt::AnnAssign(ast::StmtAnnAssign {
+                        target: Box::new(backing_target),
+                        annotation: Box::new(annotation),
+                        value: value.map(Box::new),
+                        simple: true,
+                        range: field_range,
+                        node_index: AtomicNodeIndex::NONE,
+                    }));
+                }
+                (None, Some(value)) => {
+                    // no declared storage type. when the property has one, carry it
+                    // as an inference-context marker so the initialiser is solved
+                    // against it (`field = []` under `Sequence[int]` declares
+                    // `list[int]`) without the property's type *becoming* the
+                    // storage type
+                    backing_stmt = Some(match prop_type.clone() {
+                        Some(context) => Stmt::AnnAssign(ast::StmtAnnAssign {
+                            target: Box::new(backing_target),
+                            annotation: Box::new(Expr::Subscript(ast::ExprSubscript {
+                                value: Box::new(Expr::Name(ast::ExprName {
+                                    id: Name::new_static("__field__"),
+                                    ctx: ExprContext::Invalid,
+                                    range: TextRange::empty(field_range.start()),
+                                    node_index: AtomicNodeIndex::NONE,
+                                })),
+                                slice: Box::new(context),
+                                ctx: ExprContext::Load,
+                                range: TextRange::empty(field_range.start()),
+                                node_index: AtomicNodeIndex::NONE,
+                                is_typeof: false,
+                            })),
+                            value: Some(Box::new(value)),
+                            simple: true,
+                            range: field_range,
+                            node_index: AtomicNodeIndex::NONE,
+                        }),
+                        None => Stmt::Assign(ast::StmtAssign {
+                            targets: vec![backing_target],
+                            value: Box::new(value),
+                            range: field_range,
+                            node_index: AtomicNodeIndex::NONE,
+                        }),
+                    });
+                }
+                // nothing to declare: storage springs into existence on first write
+                (None, None) => {}
+            }
+        }
+
+        // the getter carries the `__property__` marker, whose range spans the
+        // whole construct so the lowering knows exactly what source to replace
+        let marker = ast::Decorator {
+            expression: Expr::Name(ast::ExprName {
+                id: Name::new_static("__property__"),
+                ctx: ExprContext::Invalid,
+                range: construct_range,
+                node_index: AtomicNodeIndex::NONE,
+            }),
+            range: construct_range,
+            node_index: AtomicNodeIndex::NONE,
+        };
+        let (getter_body, getter_range) = match getter {
+            Some((body, range)) => (body, range),
+            // `var` with only a setter gets a pass-through getter
+            None => (
+                vec![Stmt::Return(ast::StmtReturn {
+                    value: Some(Box::new(synth_backing_attr(
+                        &backing,
+                        ExprContext::Load,
+                        start,
+                    ))),
+                    range: TextRange::empty(start),
+                    node_index: AtomicNodeIndex::NONE,
+                })],
+                TextRange::empty(start),
+            ),
+        };
+        let getter_params = synth_property_parameters(
+            vec![synth_property_param("self", None, getter_range.start())],
+            getter_range.start(),
+        );
+        members.push(build_property_fn(
+            ast::Identifier {
+                id: prop_name.clone(),
+                range: prop_name_range,
+                node_index: AtomicNodeIndex::NONE,
+            },
+            std::iter::once(marker)
+                .chain(modifier_markers.iter().cloned())
+                .collect(),
+            getter_params,
+            prop_type.clone(),
+            getter_body,
+            getter_range,
+        ));
+        members.extend(backing_stmt);
+
+        // a mutable property gets a setter: the author's, or a pass-through when
+        // only `get` was written. a computed property (no backing storage) has
+        // nothing to write, so it stays read-only
+        let wants_setter = is_var && (setter.is_some() || has_backing);
+        if wants_setter {
+            let (setter_body, setter_param, setter_range) = match setter {
+                Some((body, param, range)) => (body, param, range),
+                None => {
+                    let target =
+                        synth_backing_attr(&backing, ExprContext::Store, construct_range.end());
+                    (
+                        vec![Stmt::Assign(ast::StmtAssign {
+                            targets: vec![target],
+                            value: Box::new(Expr::Name(ast::ExprName {
+                                id: Name::new_static("value"),
+                                ctx: ExprContext::Load,
+                                range: TextRange::empty(construct_range.end()),
+                                node_index: AtomicNodeIndex::NONE,
+                            })),
+                            range: TextRange::empty(construct_range.end()),
+                            node_index: AtomicNodeIndex::NONE,
+                        })],
+                        None,
+                        TextRange::empty(construct_range.end()),
+                    )
+                }
+            };
+            let param_name = setter_param
+                .as_ref()
+                .map_or_else(|| Name::new_static("value"), |ident| ident.id.clone());
+            let setter_decorator = ast::Decorator {
+                expression: Expr::Attribute(ast::ExprAttribute {
+                    value: Box::new(Expr::Name(ast::ExprName {
+                        id: prop_name.clone(),
+                        ctx: ExprContext::Load,
+                        range: TextRange::empty(setter_range.start()),
+                        node_index: AtomicNodeIndex::NONE,
+                    })),
+                    attr: ast::Identifier {
+                        id: Name::new_static("setter"),
+                        range: TextRange::empty(setter_range.start()),
+                        node_index: AtomicNodeIndex::NONE,
+                    },
+                    ctx: ExprContext::Load,
+                    range: TextRange::empty(setter_range.start()),
+                    node_index: AtomicNodeIndex::NONE,
+                    optional: false,
+                }),
+                range: TextRange::empty(setter_range.start()),
+                node_index: AtomicNodeIndex::NONE,
+            };
+            let setter_params = synth_property_parameters(
+                vec![
+                    synth_property_param("self", None, setter_range.start()),
+                    synth_property_param(param_name.as_str(), prop_type, setter_range.start()),
+                ],
+                setter_range.start(),
+            );
+            members.push(build_property_fn(
+                ast::Identifier {
+                    id: prop_name,
+                    range: prop_name_range,
+                    node_index: AtomicNodeIndex::NONE,
+                },
+                std::iter::once(setter_decorator)
+                    .chain(modifier_markers)
+                    .collect(),
+                setter_params,
+                Some(Expr::NoneLiteral(ast::ExprNoneLiteral {
+                    range: TextRange::empty(setter_range.start()),
+                    node_index: AtomicNodeIndex::NONE,
+                })),
+                setter_body,
+                setter_range,
+            ));
+        }
+
+        // hand back the first member; `parse_block` drains the rest so they all
+        // land as siblings in the class body
+        let mut members = members.into_iter();
+        let first = members.next().unwrap_or(decl);
+        self.pending_members.extend(members);
+        first
+    }
+
     /// Parses a statement-level trailing lambda block — an expression followed
     /// by `:` and an indented suite (basedpython only):
     ///
@@ -4920,6 +5794,18 @@ impl<'src> Parser<'src> {
             let body = self.parse_body_inner(parent_clause);
             self.class_body_depth = saved;
             body
+        } else if matches!(parent_clause, Clause::Class) {
+            // properties are collected while the body is parsed and applied once it
+            // is complete, so a method written above the declaration is rewritten
+            // too. saving the outer list keeps a nested class from narrowing
+            // through its parent's properties
+            let saved = std::mem::take(&mut self.pending_narrow_props);
+            let mut body = self.parse_body_inner(parent_clause);
+            let properties = std::mem::replace(&mut self.pending_narrow_props, saved);
+            if !properties.is_empty() {
+                narrow_property_reads(&mut body, &properties);
+            }
+            body
         } else {
             self.parse_body_inner(parent_clause)
         }
@@ -4979,6 +5865,14 @@ impl<'src> Parser<'src> {
             parser.parse_list(RecoveryContextKind::BlockStatements, |parser| {
                 let statement = parser.parse_statement();
                 parser.stmt_scratch.push(statement);
+                // basedpython: a property accessor block lowers one `var`/`let`
+                // declaration to several class-body members; the extras follow
+                // the returned declaration statement here, in class-body order
+                if !parser.pending_members.is_empty() {
+                    for member in std::mem::take(&mut parser.pending_members) {
+                        parser.stmt_scratch.push(member);
+                    }
+                }
             });
 
             parser.stmt_scratch.take_thin_vec(snapshot)
@@ -6289,4 +7183,275 @@ enum ImportStyle {
     Import,
     /// E.g., `from foo import bar, baz`
     ImportFrom,
+}
+
+#[cfg(test)]
+mod property_tests {
+    use crate::parse_unchecked_source;
+    use ruff_python_ast::{Expr, PySourceType, Stmt};
+
+    /// The class body members a property construct lowered to, plus any parse errors.
+    fn class_body(source: &str, source_type: PySourceType) -> (Vec<Stmt>, Vec<String>) {
+        let parsed = parse_unchecked_source(source, source_type);
+        let errors = parsed.errors().iter().map(ToString::to_string).collect();
+        let body = parsed
+            .syntax()
+            .body
+            .iter()
+            .find_map(|stmt| match stmt {
+                Stmt::ClassDef(class) => Some(class.body.iter().cloned().collect()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        (body, errors)
+    }
+
+    fn parse_by(source: &str) -> (Vec<Stmt>, Vec<String>) {
+        class_body(source, PySourceType::BasedPython)
+    }
+
+    /// name of a class-body member, for shape assertions
+    fn member_name(stmt: &Stmt) -> String {
+        match stmt {
+            Stmt::FunctionDef(f) => format!("def {}", f.name),
+            Stmt::AnnAssign(a) => match a.target.as_ref() {
+                ruff_python_ast::Expr::Name(n) => format!("annassign {}", n.id),
+                _ => "annassign ?".to_string(),
+            },
+            Stmt::Assign(a) => match a.targets.first() {
+                Some(ruff_python_ast::Expr::Name(n)) => format!("assign {}", n.id),
+                _ => "assign ?".to_string(),
+            },
+            _ => "other".to_string(),
+        }
+    }
+
+    /// the doc's motivating example: a stored `var` property with both accessors
+    /// lowers to a backing field, a `@property` getter, and a setter
+    #[test]
+    fn stored_var_property() {
+        let (body, errors) = parse_by(
+            "class Person:\n    var age: int = 0\n        get() = field\n        set(value):\n            assert value >= 0\n            field = value\n",
+        );
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let names: Vec<String> = body.iter().map(member_name).collect();
+        assert_eq!(
+            names,
+            vec!["def age", "annassign __age", "def age"],
+            "members: {names:?}"
+        );
+    }
+
+    /// an accessor that never mentions `field` allocates no backing storage
+    #[test]
+    fn computed_property_has_no_backing_field() {
+        let (body, errors) = parse_by(
+            "class Rect:\n    var w: int = 0\n    let area: int\n        get() = self.w * self.w\n",
+        );
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let names: Vec<String> = body.iter().map(member_name).collect();
+        // `var w` stays a plain declaration; `area` becomes a getter only
+        assert_eq!(names, vec!["annassign w", "def area"], "members: {names:?}");
+    }
+
+    /// an explicit `field:` declaration sets the backing type and initialiser
+    #[test]
+    fn explicit_backing_field() {
+        let (body, errors) = parse_by(
+            "class Bag:\n    let items: Sequence[int]\n        field: list[int] = []\n        get() = field\n",
+        );
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let names: Vec<String> = body.iter().map(member_name).collect();
+        assert_eq!(
+            names,
+            vec!["def items", "annassign __items"],
+            "members: {names:?}"
+        );
+        // the backing field carries the explicit type, not the property's
+        let Stmt::AnnAssign(backing) = &body[1] else {
+            panic!("expected backing AnnAssign, got {:?}", body[1]);
+        };
+        assert!(
+            backing.value.is_some(),
+            "backing field keeps its initialiser"
+        );
+    }
+
+    /// `var` with only a getter gains a pass-through setter
+    #[test]
+    fn var_get_only_gains_passthrough_setter() {
+        let (body, errors) = parse_by("class A:\n    var x: int = 0\n        get() = field\n");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let names: Vec<String> = body.iter().map(member_name).collect();
+        assert_eq!(
+            names,
+            vec!["def x", "annassign __x", "def x"],
+            "members: {names:?}"
+        );
+    }
+
+    /// a read-only `let` property may not define a setter
+    #[test]
+    fn let_with_setter_is_rejected() {
+        let (_, errors) = parse_by(
+            "class A:\n    let x: int = 0\n        get() = field\n        set(value):\n            field = value\n",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("read-only property cannot define a setter")),
+            "got: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn duplicate_get_is_rejected() {
+        let (_, errors) = parse_by(
+            "class A:\n    var x: int = 0\n        get() = field\n        get() = field\n",
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("duplicate `get`")),
+            "got: {errors:?}"
+        );
+    }
+
+    /// an explicit `field` nobody references is a mistake
+    #[test]
+    fn unreferenced_explicit_field_is_rejected() {
+        let (_, errors) = parse_by(
+            "class A:\n    let x: int\n        field: int = 0\n        get() = self.other\n",
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("never referenced")),
+            "got: {errors:?}"
+        );
+    }
+
+    /// two initialiser sites for one piece of storage is ambiguous
+    #[test]
+    fn field_and_property_initialiser_conflict_is_rejected() {
+        let (_, errors) = parse_by(
+            "class A:\n    var x: int = 1\n        field: int = 2\n        get() = field\n",
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("cannot be combined")),
+            "got: {errors:?}"
+        );
+    }
+
+    /// `late` defers initialisation, so pairing it with one is contradictory
+    #[test]
+    fn late_field_with_initialiser_is_rejected() {
+        let (_, errors) = parse_by(
+            "class A:\n    let x: int\n        late field: int = 0\n        get() = field\n",
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("cannot be combined with an initialiser")),
+            "got: {errors:?}"
+        );
+    }
+
+    /// `late` is only meaningful on the backing field declaration
+    #[test]
+    fn late_before_get_is_rejected() {
+        let (_, errors) = parse_by("class A:\n    var x: int = 0\n        late get() = field\n");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("may only precede `field`")),
+            "got: {errors:?}"
+        );
+    }
+
+    /// a `late field` block still parses to backing storage plus a getter
+    #[test]
+    fn late_field_parses() {
+        let (body, errors) = parse_by(
+            "class Bag:\n    let items: list[int]\n        late field: list[int]\n        get() = field\n",
+        );
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let names: Vec<String> = body.iter().map(member_name).collect();
+        assert_eq!(
+            names,
+            vec!["def items", "annassign __items"],
+            "members: {names:?}"
+        );
+    }
+
+    /// an explicit `field` declaration is a complete property: the getter is
+    /// implicit, which is the point of stating storage separately from the public
+    /// type (kotlin's explicit-backing-field shape)
+    #[test]
+    fn field_without_accessors_is_a_property() {
+        let (body, errors) =
+            parse_by("class A:\n    let a: Sequence[int]\n        field: list[int] = []\n");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let names: Vec<String> = body.iter().map(member_name).collect();
+        assert_eq!(names, vec!["def a", "annassign __a"], "members: {names:?}");
+    }
+
+    /// an accessor block with neither storage nor an accessor declares nothing
+    #[test]
+    fn empty_accessor_block_is_rejected() {
+        let (_, errors) = parse_by("class A:\n    var x: int = 0\n        get\n");
+        assert!(!errors.is_empty(), "expected a rejection");
+    }
+
+    /// an unannotated `field = v` takes its type from the initialiser, not from the
+    /// property's (wider) public type. the property's type is still carried as an
+    /// `__field__[T]` *inference context* so an uninformative initialiser like `[]`
+    /// can be solved against it
+    #[test]
+    fn unannotated_field_infers_from_initialiser() {
+        let (body, errors) =
+            parse_by("class A:\n    let a: object\n        field = 1\n        get() = field\n");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let names: Vec<String> = body.iter().map(member_name).collect();
+        assert_eq!(names, vec!["def a", "annassign __a"], "members: {names:?}");
+        let Stmt::AnnAssign(backing) = &body[1] else {
+            panic!("expected backing AnnAssign, got {:?}", body[1]);
+        };
+        // the annotation is the context marker, not a declared storage type
+        assert!(
+            matches!(backing.annotation.as_ref(), Expr::Subscript(s)
+                if matches!(s.value.as_ref(), Expr::Name(n) if n.id.as_str() == "__field__")),
+            "expected an `__field__[T]` marker, got {:?}",
+            backing.annotation
+        );
+    }
+
+    /// an untyped property has no context to offer, so the backing stays a bare
+    /// assignment
+    #[test]
+    fn unannotated_field_on_untyped_property() {
+        let (body, errors) = parse_by("class A:\n    let a\n        field = 2\n");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let names: Vec<String> = body.iter().map(member_name).collect();
+        assert_eq!(names, vec!["def a", "assign __a"], "members: {names:?}");
+    }
+
+    /// accessor blocks are basedpython-only syntax
+    #[test]
+    fn accessor_block_rejected_in_python_file() {
+        let (_, errors) = class_body(
+            "class A:\n    var x: int = 0\n        get() = field\n",
+            PySourceType::Python,
+        );
+        assert!(!errors.is_empty(), "expected a .py rejection");
+    }
+
+    /// a plain declaration with no accessor block is untouched
+    #[test]
+    fn plain_declaration_is_not_a_property() {
+        let (body, errors) = parse_by("class A:\n    var x: int = 0\n    let y: int = 1\n");
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let names: Vec<String> = body.iter().map(member_name).collect();
+        assert_eq!(
+            names,
+            vec!["annassign x", "annassign y"],
+            "members: {names:?}"
+        );
+    }
 }

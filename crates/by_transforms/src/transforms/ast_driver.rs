@@ -40,7 +40,7 @@ use super::{
     generic_call, generics, grapheme_string, identity_swap, implicit_typing, inferred_annotation,
     init_method, just_float, kw_subscript, literal_types, local_once, main_function, modifiers,
     mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await, propagate,
-    reified_generic, repeated_underscore, sentinel, some_ctor, soundness, string_tag,
+    properties, reified_generic, repeated_underscore, sentinel, some_ctor, soundness, string_tag,
     super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_is,
     type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
 };
@@ -452,6 +452,7 @@ pub(crate) fn run_against_source<'a>(
         config.inject_future_annotations,
     );
     let init_method_pass = init_method::InitMethod::new(source_ref);
+    let properties_pass = properties::PropertiesPass::new(source_ref);
     let local_once_pass = local_once::LocalOncePass::new(source_ref);
     let modifiers_pass = modifiers::ModifiersPass::new(source_ref);
     let main_function_pass = main_function::MainFunction::new(source_ref, config.is_stub);
@@ -559,6 +560,12 @@ pub(crate) fn run_against_source<'a>(
         // `T?`, a bare `float`); the imports / hoisted classes those need are
         // requested by the sibling passes' visit of the same parameter
         &init_method_pass,
+        // property accessor blocks: replace the whole `var`/`let` + `get`/`set`
+        // construct with the python `@property` members the parser already
+        // synthesized. it claims the construct span as one template, so it runs
+        // among the early template-claiming passes; type positions and the
+        // backing initialiser pass through as `Src` and still compose
+        &properties_pass,
         // soundness wraps whole gated expressions in `_soundness_check(...)`
         // template edits; it runs first so an equal-span template from a
         // later pass (e.g. coalesce on a wrapped iterable) is claimed and

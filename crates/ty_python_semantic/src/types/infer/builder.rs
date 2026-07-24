@@ -7,7 +7,9 @@ use itertools::Itertools;
 use ruff_db::files::File;
 use ruff_db::parsed::ParsedModuleRef;
 use ruff_db::source::source_text;
-use ruff_python_ast::helpers::{is_dotted_name, is_untyped_declaration_marker};
+use ruff_python_ast::helpers::{
+    is_dotted_name, is_untyped_declaration_marker, untyped_declaration_context,
+};
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{
     self as ast, AnyNodeRef, ArgOrKeyword, ArgumentsSourceOrder, ExprContext, HasNodeIndex,
@@ -4409,6 +4411,27 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return;
         }
 
+        // basedpython: an unannotated `field = <init>` in a property accessor block
+        // carries `__field__[T]`, where `T` is the property's declared type. The
+        // field has no declared type of its own — `T` is only the context the
+        // initialiser is solved against, so a bare `[]` under a `Sequence[int]`
+        // property declares `list[int]` rather than `list[Unknown]` — and the
+        // inferred type becomes the declaration, keeping storage typed
+        // independently of the property
+        if let Some(context) = untyped_declaration_context(annotation)
+            && let Some(value) = value
+        {
+            let context_ty = self.infer_type_expression(context);
+            self.store_expression_type(annotation, Type::unknown());
+            self.store_qualifiers(annotation, TypeQualifiers::empty());
+            let add = self.add_binding(target.into(), definition);
+            let value_ty =
+                self.infer_maybe_standalone_expression(value, TypeContext::new(Some(context_ty)));
+            self.store_expression_type(target, value_ty);
+            add.insert(self, value_ty);
+            return;
+        }
+
         // PEP 681 lets a field specifier appear in the annotation's `Annotated`
         // metadata (`x: Annotated[int, Field(default=0)]`), so recognize
         // field-specifier calls while inferring the annotation, exactly as the
@@ -4421,10 +4444,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         );
         self.dataclass_field_specifiers.clear();
 
-        // basedpython: a valueless `let x: T` (declaration with no initializer)
-        // is read-only in every scope, matching a read-only property. the
-        // `__let__` marker only marks `FINAL` outside class scope, so add it here
-        // for the in-class case (idempotent at module scope, already `FINAL`)
+        // basedpython: `let x: T` declares read-only state in every scope, with or
+        // without an initializer. the `__let__` marker only marks `FINAL` outside
+        // class scope, so add it here for the in-class case (idempotent at module
+        // scope, already `FINAL`).
+        //
+        // `FINAL` is what enforces "no reassignment away from the declaration"; it
+        // does *not* close the attribute to subclasses, because `is_let_declaration`
+        // exempts a `let` from the override-of-final check. no `Final` is emitted in
+        // the lowered python either — read-only-ness is a type-checker-only marker
         let is_let_marker = match annotation {
             ast::Expr::Name(n) => n.id.as_str() == "__let__",
             ast::Expr::Subscript(s) => {
@@ -4432,7 +4460,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             _ => false,
         };
-        if value.is_none() && is_let_marker {
+        if is_let_marker {
             declared = declared.with_qualifier(TypeQualifiers::FINAL);
         }
 
@@ -5283,6 +5311,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let source = source_text(self.db(), self.file());
         let start = usize::from(decorator.range().start());
         if source.as_bytes().get(start).copied() != Some(b'@') {
+            // basedpython: a property accessor block synthesizes `@<name>.setter`
+            // with no `@` in the source. unlike a modifier keyword this *is* a real
+            // attribute access — on the property the getter just built — so resolve
+            // it instead of treating it as inert, which would erase the property
+            if let ast::Expr::Attribute(attribute) = expression
+                && matches!(attribute.attr.as_str(), "setter" | "getter" | "deleter")
+            {
+                return self.infer_expression(expression, TypeContext::default());
+            }
             let ty = Type::unknown();
             self.store_expression_type(expression, ty);
             return ty;
@@ -7954,9 +7991,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             //
             // Note that we also avoid unioning  the inferred type with `Unknown` in this
             // case, which is only necessary for invariant collections.
-            if elt_tcx_variance
-                .get(&elt_ty_identity)
-                .is_some_and(|variance| variance.is_covariant())
+            //
+            // An *empty* literal is the exception: there are no elements to infer from, so
+            // the covariant bound is the only information available, and using it beats
+            // falling back to `Unknown`. `v: Sequence[int] = []` solves as `list[int]` —
+            // the widest `T` with `list[T]` assignable to `Sequence[int]` — which is both
+            // well-defined and more precise than the gradual `list[Unknown]`.
+            if !elts.is_empty()
+                && elt_tcx_variance
+                    .get(&elt_ty_identity)
+                    .is_some_and(|variance| variance.is_covariant())
             {
                 continue;
             }
