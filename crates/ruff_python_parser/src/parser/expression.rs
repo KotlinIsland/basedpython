@@ -850,6 +850,36 @@ impl<'src> Parser<'src> {
     /// field will be [`ExprContext::Invalid`].
     ///
     /// See: <https://docs.python.org/3/reference/expressions.html#atom-identifiers>
+    /// basedpython: parses the type after the `:` of an anonymous parameter field (`*: T`,
+    /// `**: T`).
+    ///
+    /// A bare `*` here is the top type, so `(*: *, **: *)` spells the *top parameters* form that
+    /// every parameter list is a subtype of. It is encoded as the same
+    /// [top-star marker](ruff_python_ast::helpers::is_top_star_marker) a subscript `[*]` produces.
+    fn parse_parameter_field_annotation(&mut self) -> ParsedExpr {
+        if self.at(TokenKind::Star) && matches!(self.peek(), TokenKind::Comma | TokenKind::Rpar) {
+            let star_start = self.node_start();
+            self.bump(TokenKind::Star);
+            let star_range = self.node_range(star_start);
+            let marker_name = Expr::Name(ast::ExprName {
+                range: TextRange::empty(star_range.end()),
+                id: Name::empty(),
+                ctx: ExprContext::Invalid,
+                node_index: AtomicNodeIndex::NONE,
+            });
+            return ParsedExpr {
+                expr: Expr::Starred(ast::ExprStarred {
+                    value: Box::new(marker_name),
+                    ctx: ExprContext::Load,
+                    range: star_range,
+                    node_index: AtomicNodeIndex::NONE,
+                }),
+                is_parenthesized: false,
+            };
+        }
+        self.parse_conditional_expression_or_higher_impl(ExpressionContext::default())
+    }
+
     pub(super) fn parse_name(&mut self, context: ExpressionContext) -> ast::ExprName {
         let identifier = self.parse_identifier_with_context(context);
 
@@ -3721,8 +3751,7 @@ impl<'src> Parser<'src> {
                 let starred_start = self.node_start();
                 self.bump(TokenKind::Star);
                 self.expect(TokenKind::Colon);
-                let inner =
-                    self.parse_conditional_expression_or_higher_impl(ExpressionContext::default());
+                let inner = self.parse_parameter_field_annotation();
                 let range = self.node_range(starred_start);
                 elts.push(Expr::Starred(ast::ExprStarred {
                     value: Box::new(inner.expr),
@@ -3761,8 +3790,7 @@ impl<'src> Parser<'src> {
                 let doublestar_start = self.node_start();
                 self.bump(TokenKind::DoubleStar);
                 self.expect(TokenKind::Colon);
-                let inner =
-                    self.parse_conditional_expression_or_higher_impl(ExpressionContext::default());
+                let inner = self.parse_parameter_field_annotation();
                 let range = self.node_range(doublestar_start);
                 let inner_range = inner.expr.range();
                 // encode `**: T` as Starred(Starred(T)) — the double-starred

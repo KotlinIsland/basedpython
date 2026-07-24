@@ -34,6 +34,12 @@ use ty_python_core::{
     scope::NodeWithScopeKind,
 };
 
+/// basedpython: whether a type parameter's bound is the top parameters form `(*: *, **: *)`,
+/// which makes the type variable range over parameter lists rather than types.
+fn is_top_parameters_bound(bound: Option<&ast::Expr>) -> bool {
+    bound.is_some_and(ast::helpers::is_top_parameters_form)
+}
+
 impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     pub(super) fn is_basedpython_file(&self) -> bool {
         self.source_type().is_basedpython()
@@ -81,19 +87,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let db = self.db();
 
         let is_by = self.is_basedpython_file();
-        // basedpython: `T: Parameters` makes T a ParamSpec-shaped type
-        // variable. detect early so the bound itself isn't evaluated as a
-        // type expression — `Parameters` resolves to nothing useful at the
-        // semantic level
-        let is_parameters_bound = is_by
-            && match bound.as_deref() {
-                Some(ast::Expr::Name(n)) => n.id.as_str() == "Parameters",
-                Some(ast::Expr::Attribute(a)) => {
-                    a.attr.id.as_str() == "Parameters"
-                        && matches!(a.value.as_ref(), ast::Expr::Name(m) if m.id.as_str() == "typing")
-                }
-                _ => false,
-            };
+        // basedpython: a bound of the top parameters form `(*: *, **: *)` makes T a
+        // ParamSpec-shaped type variable. detect early so the bound itself isn't evaluated as a
+        // type expression — it denotes a parameter list, not a type
+        let is_parameters_bound = is_by && is_top_parameters_bound(bound.as_deref());
         let bound_or_constraint = match bound.as_deref() {
             _ if is_parameters_bound => None,
             Some(expr @ ast::Expr::Call(call))
@@ -169,25 +166,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             default,
             variance: _,
         } = node;
-        // basedpython: skip type-expression inference for `T: Parameters` —
-        // `Parameters` is a marker for paramspec-kind, not a real type
-        let is_by = self.is_basedpython_file();
-        if is_by {
-            let is_parameters_bound = match bound.as_deref() {
-                Some(ast::Expr::Name(n)) => n.id.as_str() == "Parameters",
-                Some(ast::Expr::Attribute(a)) => {
-                    a.attr.id.as_str() == "Parameters"
-                        && matches!(a.value.as_ref(), ast::Expr::Name(m) if m.id.as_str() == "typing")
-                }
-                _ => false,
-            };
-            if is_parameters_bound {
-                if let Some(default_expr) = default.as_deref() {
-                    let _ = self.infer_type_expression(default_expr);
-                    let _ = name;
-                }
-                return;
+        // basedpython: skip type-expression inference for a top-parameters bound — it denotes a
+        // parameter list, not a type
+        if self.is_basedpython_file() && is_top_parameters_bound(bound.as_deref()) {
+            if let Some(default_expr) = default.as_deref() {
+                let _ = self.infer_type_expression(default_expr);
+                let _ = name;
             }
+            return;
         }
         let ast::TypeParamTypeVar {
             range: _,

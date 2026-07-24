@@ -28,14 +28,23 @@ impl<'src> GenericsReverse<'src> {
         &self.source[usize::from(range.start())..usize::from(range.end())]
     }
 
-    /// `[**P]` → `[P: Parameters]` so paramspec syntax round-trips through
-    /// the basedpython surface form
+    /// `[**P]` → `[P: (*: *, **: *)]`.
+    ///
+    /// In a `.by` file `[**P]` declares a keyword-variadic pack, so a python `ParamSpec` reverses
+    /// to a type variable bound by the *top parameters* form — an anonymous variadic and an
+    /// anonymous keyword-variadic, both admitting anything. Every parameter list is a subtype of
+    /// it, so the bound ranges over all parameter lists, which is exactly a `ParamSpec`
     fn rewrite_paramspec(&mut self, params: &[TypeParam]) {
         for param in params {
             if let TypeParam::ParamSpec(ps) = param {
                 let name = ps.name.id.as_str();
+                let default = ps
+                    .default
+                    .as_deref()
+                    .map(|default| format!(" = {}", self.src(default.range())))
+                    .unwrap_or_default();
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    format!("{name}: Parameters"),
+                    format!("{name}: (*: *, **: *){default}"),
                     param.range(),
                 )));
             }
@@ -124,7 +133,31 @@ mod tests {
         check(
             "class A[**P]: ...\n",
             // empty_class also strips `: ...`
-            "class A[P: Parameters]\n",
+            "class A[P: (*: *, **: *)]\n",
+        );
+    }
+
+    /// a `ParamSpec` default rides along on the reversed bound
+    #[test]
+    fn paramspec_default_reversed() {
+        check(
+            "class A[**P = ...]: ...\n",
+            "class A[P: (*: *, **: *) = ...]\n",
+        );
+    }
+
+    /// the reversed form is what the forward transform reads back as a `ParamSpec`, so the pair
+    /// round-trips rather than drifting
+    #[test]
+    fn paramspec_round_trips_through_the_forward_transform() {
+        use crate::transpile;
+        let reversed = reverse_transpile("class A[**P]: ...\n", &Config::test_default())
+            .expect("reverse failed");
+        assert_eq!(reversed, "class A[P: (*: *, **: *)]\n");
+        let forward = transpile(&reversed, &Config::test_default()).expect("forward failed");
+        assert!(
+            forward.contains("_P = ParamSpec(\"_P\")") && forward.contains("Generic[_P]"),
+            "expected a ParamSpec, got:\n{forward}"
         );
     }
 
@@ -136,7 +169,7 @@ mod tests {
                     return x
             "},
             indoc! {"
-                def f[P: Parameters](x: int) -> int:
+                def f[P: (*: *, **: *)](x: int) -> int:
                     return x
             "},
         );
@@ -144,6 +177,6 @@ mod tests {
 
     #[test]
     fn mixed_typevar_and_paramspec_reversed() {
-        check("class A[T, **P]: ...\n", "class A[T, P: Parameters]\n");
+        check("class A[T, **P]: ...\n", "class A[T, P: (*: *, **: *)]\n");
     }
 }
