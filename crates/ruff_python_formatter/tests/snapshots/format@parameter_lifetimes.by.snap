@@ -1,0 +1,83 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/parameter_lifetimes.by
+---
+## Input
+```bython
+# basedpython `local` / `once` parameter modifiers carry no AST field, so the
+# formatter recovers them from the source span preceding the parameter name
+
+
+def once_only(once done: () -> None) -> None:
+    done()
+
+
+def local_only(local fn: () -> None) -> None:
+    fn()
+
+
+# both modifiers, in either source order
+def both(once local a: () -> None, local once b: () -> None) -> None: ...
+
+
+# alongside a `context` modifier, which the AST does record
+def with_context(local fn: () -> None, context c: int) -> None: ...
+
+
+# parameters literally named `local` / `once` are not modifiers
+def not_modifiers(local, once) -> None: ...
+
+
+# keyword-only, variadic and defaulted parameters
+def positions(local a: int, *, once cb: () -> None = print) -> None: ...
+
+
+# lambdas take the same modifiers
+handler = lambda local fn: fn
+
+
+def multiline(
+    local first: () -> None,
+    once second: () -> None,
+) -> None: ...
+```
+
+## Output
+```bython
+# basedpython `local` / `once` parameter modifiers carry no AST field, so the
+# formatter recovers them from the source span preceding the parameter name
+
+
+def once_only(once done: () -> None) -> None:
+    done()
+
+
+def local_only(local fn: () -> None) -> None:
+    fn()
+
+
+# both modifiers, in either source order
+def both(once local a: () -> None, local once b: () -> None) -> None: ...
+
+
+# alongside a `context` modifier, which the AST does record
+def with_context(local fn: () -> None, context c: int) -> None: ...
+
+
+# parameters literally named `local` / `once` are not modifiers
+def not_modifiers(local, once) -> None: ...
+
+
+# keyword-only, variadic and defaulted parameters
+def positions(local a: int, *, once cb: () -> None = print) -> None: ...
+
+
+# lambdas take the same modifiers
+handler = lambda local fn: fn
+
+
+def multiline(
+    local first: () -> None,
+    once second: () -> None,
+) -> None: ...
+```

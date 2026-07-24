@@ -1,0 +1,75 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/identity_operators.by
+---
+## Input
+```bython
+# basedpython spells identity as `===` / `!==`. both parse to the `CmpOp` of
+# `is` / `is not`, whose surface form is instead a parametric type test, so the
+# two spellings must not be collapsed into one
+
+xs = [1]
+
+a = xs === xs
+b = xs !== xs
+
+# the `is` spelling is a type test and stays as written
+c = xs is list[int]
+d = xs is not list[int]
+
+# chained comparisons mix the spellings freely
+e = xs === xs !== None is list[int] is not list[str]
+
+# mixed with value comparisons
+f = 1 === 1 == 1
+
+# parenthesised operands
+g = (xs) === (xs)
+h = (xs) !== (xs)
+
+# inside a condition
+if xs === xs:
+    pass
+
+# a long chain that has to break
+long_chain = (
+    some_rather_long_name === another_rather_long_name
+    and another_rather_long_name !== yet_another_long_name
+)
+```
+
+## Output
+```bython
+# basedpython spells identity as `===` / `!==`. both parse to the `CmpOp` of
+# `is` / `is not`, whose surface form is instead a parametric type test, so the
+# two spellings must not be collapsed into one
+
+xs = [1]
+
+a = xs === xs
+b = xs !== xs
+
+# the `is` spelling is a type test and stays as written
+c = xs is list[int]
+d = xs is not list[int]
+
+# chained comparisons mix the spellings freely
+e = xs === xs !== None is list[int] is not list[str]
+
+# mixed with value comparisons
+f = 1 === 1 == 1
+
+# parenthesised operands
+g = (xs) === (xs)
+h = (xs) !== (xs)
+
+# inside a condition
+if xs === xs:
+    pass
+
+# a long chain that has to break
+long_chain = (
+    some_rather_long_name === another_rather_long_name
+    and another_rather_long_name !== yet_another_long_name
+)
+```

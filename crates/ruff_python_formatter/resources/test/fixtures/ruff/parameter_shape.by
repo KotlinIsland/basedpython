@@ -1,0 +1,25 @@
+# basedpython parameter-shape tuples. `*: T` encodes as `Starred(T)` and
+# `**: T` as `Starred(Starred(T))`, so an anonymous variadic annotated with the
+# bare star (`*: *`) collides with the kwargs catch-all on shape alone — the
+# empty `Invalid`-context name of the bare star is what tells them apart
+
+type Variadic = (*: int)
+type VariadicAny = (*: *)
+type Kwargs = (**: int)
+type KwargsAny = (**: *)
+
+# the `ParamSpec` spelling — both halves anonymous and unconstrained
+type Any = (*: *, **: *)
+
+# alongside positional entries
+type Mixed = (int, str, *: *, **: *)
+
+# named variadic and catch-all
+type Named = (*args: int, **kwargs: str)
+
+# positional-only and keyword-only markers
+type Markers = (int, /, str, *, name: bool)
+
+
+class Callback[Params: (*: *, **: *)]:
+    def get(self) -> (**Params) -> None: ...

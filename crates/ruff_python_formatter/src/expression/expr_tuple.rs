@@ -1,5 +1,6 @@
 use ruff_formatter::{FormatRuleWithOptions, format_args};
 use ruff_python_ast::AnyNodeRef;
+use ruff_python_ast::helpers::is_top_star_marker;
 use ruff_python_ast::{Expr, ExprTuple};
 use ruff_text_size::{Ranged, TextRange};
 
@@ -376,6 +377,22 @@ impl Format<PyFormatContext<'_>> for ParameterShapeFields<'_> {
                         );
                     }
                 },
+                // an anonymous variadic whose annotation is the bare star
+                // (`*: *`) encodes as `Starred(Starred(Name("")))` — the same
+                // outer shape as the kwargs catch-all `**: T`. the empty
+                // `Invalid`-context name is unique to the bare-star synthesis,
+                // so test for it before reading the shape as a double star
+                Expr::Starred(s) if is_top_star_marker(&s.value) => {
+                    joiner.entry(
+                        elt,
+                        &format_with(|f| {
+                            token("*").fmt(f)?;
+                            token(":").fmt(f)?;
+                            space().fmt(f)?;
+                            token("*").fmt(f)
+                        }),
+                    );
+                }
                 Expr::Starred(s) => match s.value.as_ref() {
                     // `**: T`
                     Expr::Starred(inner) => {

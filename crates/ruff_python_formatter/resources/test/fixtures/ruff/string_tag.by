@@ -1,0 +1,26 @@
+# basedpython custom string tags parse as a `tag(t"...")` call, but the surface
+# form glues the template straight onto the tag name
+
+from string.templatelib import Template
+
+
+class Query: ...
+
+
+def sql(template: Template) -> Query: ...
+
+
+def html(template: Template) -> str: ...
+
+
+q = sql"select * from t"
+page = html"<p>{name}</p>"
+
+# as a call argument
+print(html"hi {1}")
+
+# an interpolation carrying an expression
+detail = html"<i>{value + 1}</i>"
+
+# a plain call on the same name is still a call
+plain = sql(t"select 1")

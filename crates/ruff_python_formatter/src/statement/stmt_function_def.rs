@@ -9,21 +9,38 @@ use crate::statement::stmt_class_def::FormatDecorators;
 use crate::statement::suite::SuiteKind;
 use crate::verbatim::verbatim_text;
 use ruff_formatter::write;
-use ruff_python_ast::{NodeKind, StmtFunctionDef};
+use ruff_python_ast::{Expr, ExprContext, NodeKind, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange, TextSize};
+
+/// True when this function is a basedpython `init(...)` constructor shorthand:
+/// the parser tags it with a synthetic `__init_method__` marker decorator (a
+/// zero-binding `Name` with `ExprContext::Invalid`). The synthesised `__init__`
+/// name, implicit `self` parameter, `-> None` annotation and
+/// `self.<name> = <name>` body statements are all zero-width, so printing from
+/// the AST would emit the surface `init(...)` text alongside a mangled
+/// reconstruction of the synthesised `def`. Render it verbatim instead.
+fn is_init_method(item: &StmtFunctionDef) -> bool {
+    item.decorator_list.iter().any(|decorator| {
+        matches!(
+            &decorator.expression,
+            Expr::Name(name)
+                if name.id.as_str() == "__init_method__" && name.ctx == ExprContext::Invalid
+        )
+    })
+}
 
 #[derive(Default)]
 pub struct FormatStmtFunctionDef;
 
 impl FormatNodeRule<StmtFunctionDef> for FormatStmtFunctionDef {
     fn fmt_fields(&self, item: &StmtFunctionDef, f: &mut PyFormatter) -> FormatResult<()> {
-        // basedpython trailing lambda blocks (`f(2):` + suite) have no
-        // AST-faithful surface printer — their identifiers are synthetic and
-        // zero-width — so emit them verbatim, like based enums. the range
-        // extends to the end of the final line so a trailing end-of-line
-        // comment (outside the node range but marked formatted below) is
-        // carried along rather than dropped
-        if item.is_trailing_lambda {
+        // basedpython trailing lambda blocks (`f(2):` + suite) and `init(...)`
+        // constructor shorthands have no AST-faithful surface printer — their
+        // identifiers are synthetic and zero-width — so emit them verbatim, like
+        // based enums. the range extends to the end of the final line so a
+        // trailing end-of-line comment (outside the node range but marked
+        // formatted below) is carried along rather than dropped
+        if item.is_trailing_lambda || is_init_method(item) {
             let source = f.context().source();
             let end_offset = usize::from(item.range().end());
             let line_end = source[end_offset..]
