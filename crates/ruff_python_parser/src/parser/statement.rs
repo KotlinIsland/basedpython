@@ -191,6 +191,8 @@ impl<'src> Parser<'src> {
             token,
             TokenKind::Star | TokenKind::DoubleStar | TokenKind::Name
         ) || token.is_keyword()
+            // basedpython: `/` divides a type parameter list the way it divides a value one
+            || (self.options.is_basedpython && token == TokenKind::Slash)
     }
 
     /// Parses a compound or a single simple statement.
@@ -5590,10 +5592,49 @@ impl<'src> Parser<'src> {
         let start = self.node_start();
         self.bump(TokenKind::Lsqb);
 
-        let type_params = self.parse_comma_separated_list_into_vec(
-            RecoveryContextKind::TypeParams,
-            Parser::parse_type_param,
-        );
+        let mut type_params = Vec::new();
+        let mut separators = ast::TypeParamSeparators::default();
+        // basedpython: `/` and a bare `*` divide the list the way they divide a value parameter
+        // list. their positions are validated once the whole list is known, so a malformed list
+        // still reports every parameter it contains
+        let mut slash_range: Option<TextRange> = None;
+        let mut star_range: Option<TextRange> = None;
+
+        self.parse_comma_separated_list(RecoveryContextKind::TypeParams, |parser| {
+            if parser.options.is_basedpython && parser.at(TokenKind::Slash) {
+                let range = parser.current_token_range();
+                parser.bump(TokenKind::Slash);
+                if slash_range.is_none() {
+                    slash_range = Some(range);
+                    separators.positional_only_count =
+                        Some(u32::try_from(type_params.len()).unwrap_or(u32::MAX));
+                    separators.slash_range = Some(range);
+                } else {
+                    parser.add_error(ParseErrorType::DuplicateTypeParamSeparator("/"), range);
+                }
+                return;
+            }
+            if parser.options.is_basedpython
+                && parser.at(TokenKind::Star)
+                && matches!(
+                    parser.peek(),
+                    TokenKind::Comma | TokenKind::Rsqb | TokenKind::Newline
+                )
+            {
+                let range = parser.current_token_range();
+                parser.bump(TokenKind::Star);
+                if star_range.is_none() {
+                    star_range = Some(range);
+                    separators.keyword_only_start =
+                        Some(u32::try_from(type_params.len()).unwrap_or(u32::MAX));
+                    separators.star_range = Some(range);
+                } else {
+                    parser.add_error(ParseErrorType::DuplicateTypeParamSeparator("*"), range);
+                }
+                return;
+            }
+            type_params.push(parser.parse_type_param());
+        });
 
         if type_params.is_empty() {
             // test_err type_params_empty
@@ -5603,12 +5644,61 @@ impl<'src> Parser<'src> {
             self.add_error(ParseErrorType::EmptyTypeParams, self.current_token_range());
         }
 
+        self.validate_type_param_separators(&type_params, &mut separators, slash_range, star_range);
+
         self.expect(TokenKind::Rsqb);
 
         ast::TypeParams {
             range: self.node_range(start),
             type_params,
             node_index: AtomicNodeIndex::NONE,
+            separators,
+        }
+    }
+
+    /// basedpython: reject separator placements a value parameter list would also reject.
+    ///
+    /// A rejected separator is dropped rather than kept, so downstream consumers only ever see a
+    /// well-formed split.
+    fn validate_type_param_separators(
+        &mut self,
+        type_params: &[ast::TypeParam],
+        separators: &mut ast::TypeParamSeparators,
+        slash_range: Option<TextRange>,
+        star_range: Option<TextRange>,
+    ) {
+        if let Some(range) = slash_range {
+            if separators.positional_only_count == Some(0) {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "At least one type parameter must precede `/`".to_string(),
+                    ),
+                    range,
+                );
+                separators.positional_only_count = None;
+                separators.slash_range = None;
+            } else if star_range.is_some_and(|star| star.start() < range.start()) {
+                self.add_error(
+                    ParseErrorType::OtherError("`/` must precede `*`".to_string()),
+                    range,
+                );
+                separators.positional_only_count = None;
+                separators.slash_range = None;
+            }
+        }
+
+        if let Some(range) = star_range
+            && separators.keyword_only_start
+                == Some(u32::try_from(type_params.len()).unwrap_or(u32::MAX))
+        {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "At least one type parameter must follow `*`".to_string(),
+                ),
+                range,
+            );
+            separators.keyword_only_start = None;
+            separators.star_range = None;
         }
     }
 

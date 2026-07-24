@@ -2246,6 +2246,7 @@ mod tests {
                 type_params: vec![type_var_one, type_var_two],
                 range: TextRange::default(),
                 node_index: AtomicNodeIndex::NONE,
+                separators: crate::TypeParamSeparators::default(),
             })),
             value: Box::new(constant_three.clone()),
             range: TextRange::default(),

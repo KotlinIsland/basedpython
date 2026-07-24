@@ -1509,14 +1509,46 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                 .reduced(self.db)
                 .display_with(self.db, self.settings.clone())
                 .fmt_detailed(f),
-            Type::TypedDict(TypedDictType::Class(defining_class)) => match defining_class {
-                ClassType::NonGeneric(class) => class
-                    .display_with(self.db, self.settings.clone())
-                    .fmt_detailed(f),
-                ClassType::Generic(alias) => alias
-                    .display_with(self.db, self.settings.clone())
-                    .fmt_detailed(f),
-            },
+            Type::TypedDict(TypedDictType::Class(defining_class)) => {
+                // basedpython: a dict-literal type reads back as the shape it was written as —
+                // its generated class name is a hash and says nothing
+                if let ClassType::NonGeneric(ClassLiteral::DynamicTypedDict(typeddict)) =
+                    defining_class
+                    && let Some((schema, packs)) = typeddict.synthesized_shape(self.db)
+                {
+                    f.write_char('{')?;
+                    let mut wrote_any = false;
+                    for (name, field) in schema {
+                        if wrote_any {
+                            f.write_str(", ")?;
+                        }
+                        write!(f, "\"{name}\": ")?;
+                        field
+                            .declared_ty
+                            .display_with(self.db, self.settings.clone())
+                            .fmt_detailed(f)?;
+                        wrote_any = true;
+                    }
+                    for pack in packs {
+                        if wrote_any {
+                            f.write_str(", ")?;
+                        }
+                        f.write_str("**")?;
+                        pack.display_with(self.db, self.settings.clone())
+                            .fmt_detailed(f)?;
+                        wrote_any = true;
+                    }
+                    return f.write_char('}');
+                }
+                match defining_class {
+                    ClassType::NonGeneric(class) => class
+                        .display_with(self.db, self.settings.clone())
+                        .fmt_detailed(f),
+                    ClassType::Generic(alias) => alias
+                        .display_with(self.db, self.settings.clone())
+                        .fmt_detailed(f),
+                }
+            }
             Type::TypedDict(TypedDictType::Synthesized(synthesized)) => {
                 f.set_invalid_type_annotation();
                 f.write_char('<')?;

@@ -167,37 +167,34 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
         if !has_kw {
             return;
         }
-        let all_kw = t.elts.iter().all(|e| {
-            matches!(
-                e,
-                Expr::Named(n) if matches!(
-                    n.target.as_ref(),
-                    Expr::Name(name) if matches!(name.ctx, ruff_python_ast::ExprContext::Invalid)
-                )
-            )
-        });
-        // when every arg is a kw binding and the value is a known generic
-        // class, reorder by typevar declaration and emit positional subscript.
-        // unbound typevars fall back to their declared default
-        // (`A[R=str, T=int]` → `A[int, str]`;
-        //  `A[R=int]` with `A[T=int, R=str]` → `A[int, int]`)
-        if all_kw
-            && let Some(types) = self.types
+        // when the value is a known generic class, reorder by typevar declaration and emit a
+        // positional subscript. positional arguments fill the leading typevars in source order,
+        // keyword arguments bind by name, and any remaining typevar falls back to its declared
+        // default (`A[R=str, T=int]` → `A[int, str]`; `C[int, D=bytes]` on `class C[A, B, D]` with
+        // `B`'s default → `C[int, <B default>, bytes]`)
+        if let Some(types) = self.types
             && let Some(typevars) = types.class_typevars(&sub.value)
         {
             let mut by_name: std::collections::HashMap<&str, &Expr> =
                 std::collections::HashMap::new();
+            let mut positional: Vec<&Expr> = Vec::new();
             for elt in &t.elts {
                 if let Expr::Named(n) = elt
                     && let Expr::Name(target) = n.target.as_ref()
+                    && matches!(target.ctx, ruff_python_ast::ExprContext::Invalid)
                 {
                     by_name.insert(target.id.as_str(), n.value.as_ref());
+                } else {
+                    positional.push(elt);
                 }
             }
+            let mut positional_iter = positional.iter();
             let mut parts: Vec<String> = Vec::with_capacity(typevars.len());
             let mut filled_all = true;
             for (tv_name, tv_default) in &typevars {
                 if let Some(value_expr) = by_name.get(tv_name.as_str()) {
+                    parts.push(self.value_src(value_expr));
+                } else if let Some(value_expr) = positional_iter.next() {
                     parts.push(self.value_src(value_expr));
                 } else if let Some(default) = tv_default {
                     parts.push(default.clone());
@@ -206,7 +203,9 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
                     break;
                 }
             }
-            if filled_all {
+            // a leftover positional argument means the source over-specified the class; leave it
+            // for the generic form below so ty's diagnostic is the authority on the arity
+            if filled_all && positional_iter.next().is_none() {
                 let value_src = self.src(sub.value.range()).to_owned();
                 let replacement = format!("{value_src}[{}]", parts.join(", "));
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
@@ -390,6 +389,33 @@ mod tests {
                 transpiled("class Two[T, **Kwargs]: ...\n\ndef f(t: Two[bytes, foo=int]): ...\n");
             assert!(
                 output.contains("def f(t: Two[bytes, [int]]): ..."),
+                "unexpected output:\n{output}"
+            );
+        }
+
+        #[test]
+        fn mixed_positional_and_keyword_reorder_to_positional() {
+            // a positional argument followed by keyword ones must resolve to a positional
+            // subscript, not a `__getitem__` call that crashes at runtime
+            let output =
+                transpiled("class C[A, B, D]: ...\n\ndef f(c: C[int, B=str, D=bytes]): ...\n");
+            assert!(
+                output.contains("def f(c: C[int, str, bytes]): ..."),
+                "unexpected output:\n{output}"
+            );
+            assert!(
+                !output.contains("__getitem__"),
+                "unexpected output:\n{output}"
+            );
+        }
+
+        #[test]
+        fn positional_fills_leading_slots_with_default_gap() {
+            let output = transpiled(
+                "class C[A, B = str, D = bytes]: ...\n\ndef f(c: C[int, D=complex]): ...\n",
+            );
+            assert!(
+                output.contains("def f(c: C[int, str, complex]): ..."),
                 "unexpected output:\n{output}"
             );
         }

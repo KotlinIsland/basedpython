@@ -1,0 +1,75 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/type_param_separators.by
+---
+## Input
+```bython
+class C[A, /, B, *, D]: ...
+
+
+class OnlySlash[A, B, /, C]: ...
+
+
+class OnlyStar[A, *, B, C]: ...
+
+
+class TrailingSlash[A, /]: ...
+
+
+class LeadingStar[*, A, B]: ...
+
+
+class AdjacentSeparators[A, /, *, B]: ...
+
+
+class WithVariance[out A, /, in B, *, D]: ...
+
+
+def f[A, /, B, *, D](a: A, b: B, d: D) -> A:
+    return a
+
+
+class Broken[
+    A,
+    /,
+    B,
+    *,
+    D,
+]: ...
+```
+
+## Output
+```bython
+class C[A, /, B, *, D]: ...
+
+
+class OnlySlash[A, B, /, C]: ...
+
+
+class OnlyStar[A, *, B, C]: ...
+
+
+class TrailingSlash[A, /]: ...
+
+
+class LeadingStar[*, A, B]: ...
+
+
+class AdjacentSeparators[A, /, *, B]: ...
+
+
+class WithVariance[out A, /, in B, *, D]: ...
+
+
+def f[A, /, B, *, D](a: A, b: B, d: D) -> A:
+    return a
+
+
+class Broken[
+    A,
+    /,
+    B,
+    *,
+    D,
+]: ...
+```

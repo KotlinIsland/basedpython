@@ -17,15 +17,17 @@
 //! from typing_extensions import TypedDict
 //!
 //! class _TypedDict_<hash1>(TypedDict, closed=True):
-//!     name: str
-//!     age: int
+//!     name: "str"
+//!     age: "int"
 //!
-//! class _TypedDict_<hash2>(TypedDict, extra_items=str):
-//!     name: str
+//! class _TypedDict_<hash2>(TypedDict, extra_items="str"):
+//!     name: "str"
 //!
 //! a: _TypedDict_<hash1>
 //! b: _TypedDict_<hash2>
 //! ```
+//!
+//! field types are emitted as forward references — see [`quote_type`]
 
 use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
@@ -63,7 +65,7 @@ impl Shape {
 
     fn class_def(&self, name: &str) -> String {
         let bases = match &self.extra_items {
-            Some(ty) => format!("TypedDict, extra_items={ty}"),
+            Some(ty) => format!("TypedDict, extra_items={}", quote_type(ty)),
             None => "TypedDict, closed=True".to_owned(),
         };
         let mut out = format!("class {name}({bases}):\n");
@@ -77,10 +79,33 @@ impl Shape {
             // attribute annotations. Such typed dicts are still valid
             // (TypedDict's functional form supports them), but we leave
             // them un-rewritten and let the user fall back to that form.
-            let _ = writeln!(out, "    {field_name}: {field_type}");
+            let _ = writeln!(out, "    {field_name}: {}", quote_type(field_type));
         }
         out
     }
+}
+
+/// Wrap a rendered field type in a string annotation.
+///
+/// The hoisted classes are emitted in the preamble, ahead of everything the
+/// module defines, and a shape can name a class declared later or a type
+/// parameter that only exists inside the generic class the literal was written
+/// in. Neither resolves where the class lands, and `TypedDict` evaluates its
+/// class-body annotations eagerly, so every field is a forward reference.
+fn quote_type(type_source: &str) -> String {
+    let mut out = String::with_capacity(type_source.len() + 2);
+    out.push('"');
+    for c in type_source.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 pub(crate) struct TypedDictLiteral<'src> {
@@ -153,10 +178,11 @@ impl<'src> TypedDictLiteral<'src> {
     }
 
     /// Try to extract a shape from a dict literal. Returns `None` when the
-    /// dict has any non-string-literal key, any unpacked `**other` item (other
-    /// than the basedpython `**: T` extra-items marker), or any field name
-    /// that isn't a valid Python identifier — those cases are left for the
-    /// user to spell with the functional `TypedDict()` form instead.
+    /// dict has any non-string-literal key, any unpacked item that is neither
+    /// the basedpython `**: T` extra-items marker nor a `**Kwargs` pack
+    /// splice, or any field name that isn't a valid Python identifier — those
+    /// cases are left for the user to spell with the functional `TypedDict()`
+    /// form instead.
     fn extract_shape(&mut self, dict: &ruff_python_ast::ExprDict) -> Option<Shape> {
         // an empty dict literal `{}` is a valid annotation: a TypedDict with no
         // fields. it still needs to be hoisted so the surface annotation lands
@@ -165,10 +191,16 @@ impl<'src> TypedDictLiteral<'src> {
         let mut extra_items: Option<String> = None;
         for item in &dict.items {
             let Some(key_expr) = item.key.as_ref() else {
-                // `**: T` is encoded as `key = None, value = Starred(Starred(T))`.
-                // any other key-less item is a regular `**other` unpacking,
-                // which we don't rewrite
+                // `**: T` is encoded as `key = None, value = Starred(Starred(T))`
                 let Expr::Starred(outer) = &item.value else {
+                    // `{**Kwargs}` splices a keyword-variadic pack. its fields are
+                    // only known once the enclosing class is specialized, and python
+                    // erases type arguments anyway, so the shape lowers to a
+                    // `TypedDict` that admits the pack's keys as extra items
+                    if matches!(&item.value, Expr::Name(_)) && extra_items.is_none() {
+                        extra_items = Some("object".to_owned());
+                        continue;
+                    }
                     return None;
                 };
                 let Expr::Starred(inner) = outer.value.as_ref() else {
@@ -497,8 +529,8 @@ mod tests {
             out.contains("(TypedDict, closed=True):"),
             "dict literal types should be closed by default, got: {out}"
         );
-        assert!(out.contains("    name: str\n"), "got: {out}");
-        assert!(out.contains("    age: int\n"), "got: {out}");
+        assert!(out.contains("    name: \"str\"\n"), "got: {out}");
+        assert!(out.contains("    age: \"int\"\n"), "got: {out}");
         assert!(out.contains("a: _TypedDict_"), "got: {out}");
     }
 
@@ -510,10 +542,10 @@ mod tests {
             "got: {out}"
         );
         assert!(
-            out.contains("(TypedDict, extra_items=str):"),
+            out.contains("(TypedDict, extra_items=\"str\"):"),
             "`**: T` should lower to extra_items=T, got: {out}"
         );
-        assert!(out.contains("    key: int\n"), "got: {out}");
+        assert!(out.contains("    key: \"int\"\n"), "got: {out}");
         assert!(out.contains("b: _TypedDict_"), "got: {out}");
         // `extra_items=` form must not also set `closed=True`
         assert!(
@@ -536,16 +568,66 @@ mod tests {
         let count = out.matches("class _TypedDict_").count();
         assert_eq!(count, 2, "got: {out}");
         assert!(out.contains("closed=True"), "got: {out}");
-        assert!(out.contains("extra_items=str"), "got: {out}");
+        assert!(out.contains("extra_items=\"str\""), "got: {out}");
     }
 
     #[test]
     fn extra_items_only() {
         let out = transpile("c: {**: int}\n", &Config::test_default()).unwrap();
-        assert!(out.contains("(TypedDict, extra_items=int):"), "got: {out}");
+        assert!(
+            out.contains("(TypedDict, extra_items=\"int\"):"),
+            "got: {out}"
+        );
         assert!(
             out.contains("    pass\n"),
             "empty body needs pass, got: {out}"
+        );
+    }
+
+    #[test]
+    fn keyword_pack_splice() {
+        // `{**Kwargs}` fields are only known once the class is specialized, so
+        // the erased shape admits them as extra items
+        let out = transpile(
+            indoc! {"
+                class A[**Kwargs]:
+                    def get(self) -> {\"tag\": int, **Kwargs}:
+                        raise NotImplementedError
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("(TypedDict, extra_items=\"object\"):"),
+            "got: {out}"
+        );
+        assert!(out.contains("    tag: \"int\"\n"), "got: {out}");
+        assert!(out.contains("-> _TypedDict_"), "got: {out}");
+        assert!(!out.contains("**Kwargs}"), "got: {out}");
+    }
+
+    #[test]
+    fn forward_reference_field() {
+        // hoisted classes land ahead of the module body, so a field naming a
+        // class defined later must not be evaluated at class-creation time
+        let out = transpile(
+            indoc! {"
+                a: {\"foo\": Foo}
+
+                class Foo: ...
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(out.contains("    foo: \"Foo\"\n"), "got: {out}");
+    }
+
+    #[test]
+    fn quoted_field_type_escapes_inner_quotes() {
+        let out = transpile("a: {\"k\": \"Foo\"}\n", &Config::test_default()).unwrap();
+        assert!(
+            out.contains("    k: \"Literal[\\\"Foo\\\"]\"\n"),
+            "got: {out}"
         );
     }
 

@@ -762,6 +762,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             Bound(&'ast ast::Expr),
             /// The `name=type` fields collected for a keyword-variadic pack, in source order.
             Pack(Vec<(&'ast ast::name::Name, &'ast ast::Expr)>),
+            /// A keyword argument named a type variable that cannot be given by name (a `*Ts`
+            /// variadic). The expression is still type-checked, and the slot is filled with the
+            /// gradual form so no cascading missing-argument error is reported.
+            Invalid(&'ast ast::Expr),
             /// Nothing was provided; fall back to the typevar's declared default.
             Default,
         }
@@ -788,22 +792,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // basedpython: a Parameters spec `(int, str, /, name: T)` is a
             // single subscript argument bound to a `ParamSpec`-shaped type
             // variable. inference treats it as one type expression.
-            // EXCEPT when the kw bindings are per-name rather than positional:
-            // `A[R=str, T=int]` binds typevars by name, and `A[bytes, foo=int]`
-            // on a keyword-pack context binds the pack's fields
+            //
+            // only the parenthesized spec form qualifies. a `name=T` label on its own means the
+            // keyword-subscript form instead — `A[R=str, T=int]` binds typevars by name, and
+            // `A[bytes, foo=int]` on a keyword-pack context binds the pack's fields
             ast::Expr::Tuple(tuple)
-                if tuple.has_parameter_shape()
-                    && keyword_pack_index.is_none()
-                    && !tuple.elts.iter().all(|e| {
-                        matches!(
-                            e,
-                            ast::Expr::Named(n) if matches!(
-                                n.target.as_ref(),
-                                ast::Expr::Name(name)
-                                    if matches!(name.ctx, ast::ExprContext::Invalid)
-                            )
-                        )
-                    }) =>
+                if (tuple.is_parameter_shape
+                    || tuple.parameter_slash.is_some()
+                    || tuple.parameter_star.is_some())
+                    && keyword_pack_index.is_none() =>
             {
                 (std::slice::from_ref(slice_node), false)
             }
@@ -851,8 +848,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 )
             )
         });
+        // a separated list also takes this path when every argument is positional, so that a
+        // keyword-only type variable filled by position is still caught
+        let has_separators = generic_context.has_type_param_separators(db);
         let bp_kw_slots: Option<Vec<KeywordSlot<'_>>> = if self.is_basedpython_file()
-            && (has_keyword_argument || keyword_pack_index.is_some())
+            && (has_keyword_argument || keyword_pack_index.is_some() || has_separators)
         {
             // source order, so leftover-argument diagnostics are reported deterministically
             let mut keywords: Vec<(&ast::name::Name, &ast::Expr)> = Vec::new();
@@ -879,11 +879,47 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             let mut slots: Vec<KeywordSlot<'_>> = Vec::with_capacity(typevars_len);
             let mut positional_iter = positional.into_iter();
             for (index, tv) in typevars.iter().enumerate() {
+                let kind = generic_context.type_param_kind(db, index);
                 if keyword_pack_index == Some(index) {
                     slots.push(KeywordSlot::Pack(std::mem::take(&mut pack_fields)));
                 } else if let Some(expr) = by_name.remove(tv.name(db).as_str()) {
-                    slots.push(KeywordSlot::Bound(expr));
+                    // basedpython: a `*Ts` variadic cannot be given by name, the same way `*args`
+                    // rejects a keyword argument — it binds an unknown-length run of positions, so
+                    // a single `Ts=int` is meaningless
+                    if tv.is_typevartuple(db) {
+                        if let Some(builder) =
+                            self.context.report_lint(&INVALID_TYPE_ARGUMENTS, expr)
+                        {
+                            builder.into_diagnostic(format_args!(
+                                "Type variable `{}` is variadic and cannot be given by name",
+                                tv.name(db),
+                            ));
+                        }
+                        slots.push(KeywordSlot::Invalid(expr));
+                    } else {
+                        // basedpython: `/` and a bare `*` restrict how a type argument may be
+                        // given, exactly as they do for a value parameter
+                        if kind == ast::TypeParamKind::PositionalOnly
+                            && let Some(builder) =
+                                self.context.report_lint(&INVALID_TYPE_ARGUMENTS, expr)
+                        {
+                            builder.into_diagnostic(format_args!(
+                                "Type variable `{}` is positional-only",
+                                tv.name(db),
+                            ));
+                        }
+                        slots.push(KeywordSlot::Bound(expr));
+                    }
                 } else if let Some(expr) = positional_iter.next() {
+                    if kind == ast::TypeParamKind::KeywordOnly
+                        && let Some(builder) =
+                            self.context.report_lint(&INVALID_TYPE_ARGUMENTS, expr)
+                    {
+                        builder.into_diagnostic(format_args!(
+                            "Type variable `{}` is keyword-only",
+                            tv.name(db),
+                        ));
+                    }
                     slots.push(KeywordSlot::Bound(expr));
                 } else {
                     slots.push(KeywordSlot::Default);
@@ -943,6 +979,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         }));
                         specialization_types
                             .push(Some(Type::paramspec_value_callable(db, parameters)));
+                    }
+                    KeywordSlot::Invalid(expr) => {
+                        // still type-check the expression so its own diagnostics fire, then fill
+                        // the slot gradually — the variadic error was already reported
+                        let _ = self.infer_type_expression(expr);
+                        specialization_types.push(Some(Type::unknown()));
                     }
                     KeywordSlot::Default => {
                         if typevar.default_type(db).is_some() {

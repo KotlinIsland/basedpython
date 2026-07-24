@@ -3849,6 +3849,64 @@ pub struct TypeParams {
     pub range: TextRange,
     pub node_index: AtomicNodeIndex,
     pub type_params: Vec<TypeParam>,
+    /// basedpython: how the `/` and bare `*` separators split the list, if it has any
+    pub separators: TypeParamSeparators,
+}
+
+/// basedpython: the `/` and bare `*` separators of a type parameter list.
+///
+/// A type parameter list is written the way a value parameter list is, so the same two separators
+/// divide it into positional-only, positional-or-keyword, and keyword-only sections:
+///
+/// ```by
+/// class C[A, /, B, *, D]
+/// ```
+///
+/// A `*Ts` type variable tuple is *not* a separator — unlike `*args`, it does not make what
+/// follows it keyword-only, because a type argument list resolves a variadic from both ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub struct TypeParamSeparators {
+    /// How many leading type parameters precede a `/`, making them positional-only.
+    /// `None` when the list has no `/`
+    pub positional_only_count: Option<u32>,
+    /// The index of the first type parameter after a bare `*`, making it and everything after it
+    /// keyword-only. `None` when the list has no bare `*`
+    pub keyword_only_start: Option<u32>,
+    /// Where the `/` was written, so the formatter can put it back. Set exactly when
+    /// `positional_only_count` is
+    pub slash_range: Option<TextRange>,
+    /// Where the bare `*` was written. Set exactly when `keyword_only_start` is
+    pub star_range: Option<TextRange>,
+}
+
+impl TypeParamSeparators {
+    /// The [`TypeParamKind`] of the type parameter at `index`.
+    pub fn kind_at(self, index: usize) -> TypeParamKind {
+        let index = u32::try_from(index).unwrap_or(u32::MAX);
+        if self.positional_only_count.is_some_and(|end| index < end) {
+            TypeParamKind::PositionalOnly
+        } else if self.keyword_only_start.is_some_and(|start| index >= start) {
+            TypeParamKind::KeywordOnly
+        } else {
+            TypeParamKind::PositionalOrKeyword
+        }
+    }
+
+    pub const fn is_empty(self) -> bool {
+        self.positional_only_count.is_none() && self.keyword_only_start.is_none()
+    }
+}
+
+/// basedpython: how a type parameter may be given at a specialization site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TypeParamKind {
+    /// Written before a `/` — can only be given positionally
+    PositionalOnly,
+    /// Written between the separators — can be given either way
+    PositionalOrKeyword,
+    /// Written after a bare `*` — can only be given by name
+    KeywordOnly,
 }
 
 impl Deref for TypeParams {

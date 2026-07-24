@@ -27,6 +27,8 @@ use crate::types::TypeDefinition;
 use crate::types::class::FieldKind;
 use crate::types::constraints::{ConstraintSet, IteratorConstraintsExtension};
 use crate::types::relation::{DisjointnessChecker, TypeRelation, TypeRelationChecker};
+use crate::types::typevar::BoundTypeVarIdentity;
+use crate::types::variance::{TypeVarVariance, VarianceInferable};
 use ty_python_core::definition::Definition;
 
 bitflags! {
@@ -525,6 +527,24 @@ impl<'db> TypedDictType<'db> {
                 class_based_items(db, defining_class)
             }
             Self::Synthesized(synthesized) => synthesized.items(db),
+        }
+    }
+
+    /// basedpython: the fields and still-pending `{**Kwargs}` packs of a dict-literal type, if
+    /// this `TypedDict` was synthesized from one.
+    pub(crate) fn synthesized_shape(
+        self,
+        db: &'db dyn Db,
+    ) -> Option<(&'db TypedDictSchema<'db>, &'db [Type<'db>])> {
+        match self {
+            Self::Class(defining_class) => match defining_class.class_literal(db) {
+                ClassLiteral::DynamicTypedDict(dynamic) => dynamic.synthesized_shape(db),
+                ClassLiteral::Static(_)
+                | ClassLiteral::Dynamic(_)
+                | ClassLiteral::DynamicNamedTuple(_)
+                | ClassLiteral::DynamicEnum(_) => None,
+            },
+            Self::Synthesized(_) => None,
         }
     }
 
@@ -1242,6 +1262,38 @@ impl<'c, 'db> DisjointnessChecker<'_, 'c, 'db> {
     }
 }
 
+impl<'db> VarianceInferable<'db> for TypedDictType<'db> {
+    /// basedpython: a `{"key": T}` literal is a non-generic class, so a type variable written in
+    /// its schema has no other route to variance inference and would otherwise read as bivariant.
+    ///
+    /// Only synthesized literals are walked. A class-based `TypedDict` can name itself in its own
+    /// fields, and walking a class body here has no recursion guard; those keep the bivariant
+    /// answer they have always had.
+    ///
+    /// A dict-literal field is always mutable — there is no spelling for a read-only one — so the
+    /// `TypedDict` is invariant in every field it declares.
+    ///
+    /// A pending `{**Kwargs}` pack is deliberately *not* walked. Reporting the pack as invariant
+    /// here is the right answer, but it routes the enclosing call through the declared-type
+    /// preference in `Bindings::infer_specialization`, which then adopts the declared pack without
+    /// checking the arguments against it — `a: A[foo=int] = A(bar=1)` starts passing. Until a pack
+    /// pinned by a type context also drives the call's arity, bivariant is the safe answer.
+    fn variance_of(self, db: &'db dyn Db, typevar: BoundTypeVarIdentity<'db>) -> TypeVarVariance {
+        let Some((schema, _packs)) = self.synthesized_shape(db) else {
+            return TypeVarVariance::Bivariant;
+        };
+        schema
+            .values()
+            .map(|field| {
+                field
+                    .declared_ty
+                    .with_polarity(TypeVarVariance::Invariant)
+                    .variance_of(db, typevar)
+            })
+            .collect()
+    }
+}
+
 pub(crate) fn walk_typed_dict_type<'db, V: visitor::TypeVisitor<'db> + ?Sized>(
     db: &'db dyn Db,
     typed_dict: TypedDictType<'db>,
@@ -1250,6 +1302,16 @@ pub(crate) fn walk_typed_dict_type<'db, V: visitor::TypeVisitor<'db> + ?Sized>(
     match typed_dict {
         TypedDictType::Class(defining_class) => {
             visitor.visit_type(db, defining_class.into());
+            // basedpython: a synthesized `{"key": T}` literal is a non-generic class, so its
+            // schema is not reachable through the class type itself
+            if let Some((schema, packs)) = typed_dict.synthesized_shape(db) {
+                for field in schema.values() {
+                    visitor.visit_type(db, field.declared_ty);
+                }
+                for pack in packs {
+                    visitor.visit_type(db, *pack);
+                }
+            }
         }
         TypedDictType::Synthesized(synthesized) => {
             for field in synthesized.items(db).values() {

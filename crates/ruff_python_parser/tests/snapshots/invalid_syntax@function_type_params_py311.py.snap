@@ -41,6 +41,12 @@ Module(
                                     },
                                 ),
                             ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
                         },
                     ),
                     parameters: Parameters {
@@ -86,6 +92,12 @@ Module(
                             range: 69..71,
                             node_index: NodeIndex(None),
                             type_params: [],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
                         },
                     ),
                     parameters: Parameters {

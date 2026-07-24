@@ -1323,3 +1323,73 @@ fn recursion_limit_nested_lambda_chain() {
         err.error
     );
 }
+
+#[test]
+fn basedpython_type_param_separators_parse() {
+    // `/` and a bare `*` divide a type parameter list the way they divide a
+    // value parameter list
+    let parsed = parse_basedpython_module("class C[A, /, B, *, D]: ...\n");
+    assert!(
+        parsed.errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        parsed.errors()
+    );
+    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single class definition");
+    };
+    let type_params = class.type_params.as_ref().expect("type params");
+    let names: Vec<&str> = type_params.iter().map(|tp| tp.name().as_str()).collect();
+    assert_eq!(names, ["A", "B", "D"]);
+    assert_eq!(type_params.separators.positional_only_count, Some(1));
+    assert_eq!(type_params.separators.keyword_only_start, Some(2));
+}
+
+#[test]
+fn basedpython_type_param_star_tuple_is_not_a_separator() {
+    // a `*Ts` type variable tuple is a parameter, not a keyword-only marker
+    let parsed = parse_basedpython_module("class C[A, *Ts, B]: ...\n");
+    assert!(
+        parsed.errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        parsed.errors()
+    );
+    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single class definition");
+    };
+    let type_params = class.type_params.as_ref().expect("type params");
+    assert!(type_params.separators.is_empty());
+    assert_eq!(type_params.type_params.len(), 3);
+}
+
+#[test]
+fn basedpython_type_param_separators_are_basedpython_only() {
+    // in plain python `/` inside a type parameter list is a syntax error
+    let has_error = match parse("class C[A, /, B]: ...\n", ParseOptions::from(Mode::Module)) {
+        Ok(parsed) => !parsed.errors().is_empty(),
+        Err(_) => true,
+    };
+    assert!(
+        has_error,
+        "`/` in a python type parameter list should be an error"
+    );
+}
+
+#[test]
+fn basedpython_type_param_separator_misuse_reports() {
+    for source in [
+        "class C[/, A]: ...\n",
+        "class C[A, *]: ...\n",
+        "class C[A, *, B, *, D]: ...\n",
+        "class C[A, /, B, /, D]: ...\n",
+        "class C[A, *, B, /, D]: ...\n",
+    ] {
+        let has_error = match parse(
+            source,
+            ParseOptions::from(Mode::Module).with_basedpython(true),
+        ) {
+            Ok(parsed) => !parsed.errors().is_empty(),
+            Err(_) => true,
+        };
+        assert!(has_error, "expected a parse error for `{source}`");
+    }
+}
