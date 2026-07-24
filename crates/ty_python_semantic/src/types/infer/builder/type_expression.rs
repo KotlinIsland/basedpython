@@ -1518,90 +1518,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         return Type::single_callable(db, Signature::new(parameters, return_type));
                     }
                 }
-                let slash = callable.parameter_slash.map(|i| i as usize);
-                let star = callable.parameter_star.map(|i| i as usize);
-                let mut params: Vec<Parameter<'db>> = Vec::with_capacity(callable.args.len());
-                for (i, arg) in callable.args.iter().enumerate() {
-                    let after_star = star.is_some_and(|s| i >= s);
-                    match arg {
-                        ast::Expr::Named(named) => match named.target.as_ref() {
-                            ast::Expr::Starred(starred) => {
-                                let ty = self.infer_type_expression(&named.value);
-                                let name_str = match starred.value.as_ref() {
-                                    ast::Expr::Starred(inner) => {
-                                        let n = inner
-                                            .value
-                                            .as_name_expr()
-                                            .map(|n| n.id.as_str())
-                                            .unwrap_or("kwargs");
-                                        let p = Parameter::keyword_variadic(
-                                            ruff_python_ast::name::Name::new(n),
-                                        );
-                                        params.push(p.with_annotated_type(ty));
-                                        continue;
-                                    }
-                                    _ => starred
-                                        .value
-                                        .as_name_expr()
-                                        .map(|n| n.id.as_str())
-                                        .unwrap_or("args")
-                                        .to_owned(),
-                                };
-                                params.push(
-                                    Parameter::variadic(ruff_python_ast::name::Name::new(
-                                        &name_str,
-                                    ))
-                                    .with_annotated_type(ty),
-                                );
-                            }
-                            _ => {
-                                let name_str = named
-                                    .target
-                                    .as_name_expr()
-                                    .map(|n| n.id.as_str().to_owned())
-                                    .unwrap_or_default();
-                                let ty = self.infer_type_expression(&named.value);
-                                let p = if after_star
-                                    || slash.is_none_or(|s| i >= s) && slash.is_none()
-                                {
-                                    // before slash or no slash: positional_or_keyword
-                                    Parameter::positional_or_keyword(
-                                        ruff_python_ast::name::Name::new(&name_str),
-                                    )
-                                } else if after_star {
-                                    Parameter::keyword_only(ruff_python_ast::name::Name::new(
-                                        &name_str,
-                                    ))
-                                } else {
-                                    Parameter::positional_or_keyword(
-                                        ruff_python_ast::name::Name::new(&name_str),
-                                    )
-                                };
-                                params.push(p.with_annotated_type(ty));
-                            }
-                        },
-                        ast::Expr::Starred(s) => {
-                            let (ty, is_kw) = match s.value.as_ref() {
-                                ast::Expr::Starred(inner) => {
-                                    (self.infer_type_expression(&inner.value), true)
-                                }
-                                _ => (self.infer_type_expression(&s.value), false),
-                            };
-                            let p = if is_kw {
-                                Parameter::keyword_variadic(
-                                    ruff_python_ast::name::Name::new_static("kwargs"),
-                                )
-                            } else {
-                                Parameter::variadic(ruff_python_ast::name::Name::new_static("args"))
-                            };
-                            params.push(p.with_annotated_type(ty));
-                        }
-                        _ => {
-                            let ty = self.infer_type_expression(arg);
-                            params.push(Parameter::positional_only(None).with_annotated_type(ty));
-                        }
-                    }
-                }
+                let params = self.infer_parameter_spec_elements(
+                    &callable.args,
+                    callable.parameter_slash.map(|i| i as usize),
+                    callable.parameter_star.map(|i| i as usize),
+                );
                 let parameters = Parameters::from_annotation(db, params);
                 let return_type = self.infer_type_expression(&callable.returns);
                 let previous = self
@@ -1613,6 +1534,77 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 result
             }
         }
+    }
+
+    /// basedpython: builds the parameters of a *parameters spec* — the shared shape behind the
+    /// callable arrow `(int, /, name: T, *args: U, **kwargs: V) -> R` and the parameter list a
+    /// `ParamSpec` is specialized with, `A[(int, name: T)]`.
+    ///
+    /// `slash` and `star` are the marker positions the parser recorded on the enclosing node.
+    /// Field encodings: a bare type is positional-only (it has no name to be passed by), `name: T`
+    /// is `Named(Name, T)`, `*name: T` / `**name: T` are `Named(Starred(..), T)`, and the
+    /// anonymous `*: T` / `**: T` are `Starred(T)` / `Starred(Starred(T))`.
+    pub(super) fn infer_parameter_spec_elements(
+        &mut self,
+        elements: &[ast::Expr],
+        slash: Option<usize>,
+        star: Option<usize>,
+    ) -> Vec<Parameter<'db>> {
+        let mut params: Vec<Parameter<'db>> = Vec::with_capacity(elements.len());
+        for (index, element) in elements.iter().enumerate() {
+            let after_star = star.is_some_and(|star| index >= star);
+            let before_slash = slash.is_some_and(|slash| index < slash);
+            match element {
+                // `*name: T` / `**name: T` — a named variadic
+                ast::Expr::Named(named) => {
+                    let ty = self.infer_type_expression(&named.value);
+                    if let ast::Expr::Starred(starred) = named.target.as_ref() {
+                        let parameter = match starred.value.as_ref() {
+                            ast::Expr::Starred(inner) => Parameter::keyword_variadic(Name::new(
+                                inner
+                                    .value
+                                    .as_name_expr()
+                                    .map_or("kwargs", |n| n.id.as_str()),
+                            )),
+                            value => Parameter::variadic(Name::new(
+                                value.as_name_expr().map_or("args", |n| n.id.as_str()),
+                            )),
+                        };
+                        params.push(parameter.with_annotated_type(ty));
+                        continue;
+                    }
+                    let name = Name::new(named.target.as_name_expr().map_or("", |n| n.id.as_str()));
+                    let parameter = if after_star {
+                        Parameter::keyword_only(name)
+                    } else if before_slash {
+                        Parameter::positional_only(Some(name))
+                    } else {
+                        Parameter::positional_or_keyword(name)
+                    };
+                    params.push(parameter.with_annotated_type(ty));
+                }
+                // `*: T` / `**: T` — an anonymous variadic
+                ast::Expr::Starred(starred) => {
+                    let (ty, parameter) = match starred.value.as_ref() {
+                        ast::Expr::Starred(inner) => (
+                            self.infer_type_expression(&inner.value),
+                            Parameter::keyword_variadic(Name::new_static("kwargs")),
+                        ),
+                        value => (
+                            self.infer_type_expression(value),
+                            Parameter::variadic(Name::new_static("args")),
+                        ),
+                    };
+                    params.push(parameter.with_annotated_type(ty));
+                }
+                // a bare type has no name, so it can only be passed positionally
+                _ => {
+                    let ty = self.infer_type_expression(element);
+                    params.push(Parameter::positional_only(None).with_annotated_type(ty));
+                }
+            }
+        }
+        params
     }
 
     fn infer_starred_type_expression(&mut self, starred: &ast::ExprStarred) -> Type<'db> {
