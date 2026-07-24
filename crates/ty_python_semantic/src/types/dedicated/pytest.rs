@@ -6,7 +6,9 @@
 //! fixtures. no ordinary checker validates this, so a parameter annotated
 //! with a type that drifts from the fixture's real type checks the body
 //! against a lie, and a renamed fixture leaves a request that only fails at
-//! collection time.
+//! collection time. an *unannotated* parameter is the common case, and
+//! nothing else in the language can type it: only the registry knows what
+//! pytest will bind, so [`injected_parameter_type`] supplies it.
 //!
 //! detection is semantic: a function is a fixture because a decorator
 //! resolves to `_pytest.fixtures.fixture` (`KnownFunction::PytestFixture`),
@@ -21,13 +23,14 @@ use ruff_db::files::{File, FilePath, system_path_to_file};
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{self as ast};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use ty_module_resolver::{KnownModule, ModuleName, file_to_module, resolve_module_confident};
 use ty_python_core::definition::Definition;
 use ty_python_core::semantic_index;
 
 use crate::Db;
 use crate::place::known_module_symbol;
+use crate::types::dedicated::role::function_framework_role;
 use crate::types::{
     FunctionType, KnownClass, KnownFunction, Type, definition_expression_type,
     infer_definition_types,
@@ -279,10 +282,92 @@ pub(in crate::types) fn is_mark_generator<'db>(db: &'db dyn Db, ty: Type<'db>) -
             == Some(KnownModule::PytestMarkStructures)
 }
 
+/// a `@pytest.mark.parametrize` marker on a test, with the expressions a
+/// check anchors its diagnostics to.
+pub(in crate::types) struct ParametrizeMarker<'ast> {
+    /// the `argnames` expression
+    pub(in crate::types) argnames: &'ast ast::Expr,
+    /// the names parsed out of `argnames`
+    pub(in crate::types) names: Vec<Name>,
+    /// the `argvalues` expression, when one is supplied
+    pub(in crate::types) argvalues: Option<&'ast ast::Expr>,
+}
+
+/// the `@pytest.mark.parametrize` marker `decorator` applies to `function`.
+/// `None` when `decorator` is any other decorator, or when its argnames are
+/// not static literals (dynamic → not checkable).
+pub(in crate::types) fn parametrize_marker<'ast>(
+    db: &dyn Db,
+    function: FunctionType<'_>,
+    decorator: &'ast ast::Decorator,
+) -> Option<ParametrizeMarker<'ast>> {
+    let ast::Expr::Call(call) = &decorator.expression else {
+        return None;
+    };
+    let ast::Expr::Attribute(attribute) = call.func.as_ref() else {
+        return None;
+    };
+    if attribute.attr.as_str() != "parametrize" {
+        return None;
+    }
+    let types = infer_definition_types(db, function.definition(db));
+    if !is_mark_generator(db, types.expression_type(attribute.value.as_ref())) {
+        return None;
+    }
+    let argnames = call.arguments.find_argument_value("argnames", 0)?;
+    Some(ParametrizeMarker {
+        names: parametrize_names(argnames)?,
+        argnames,
+        argvalues: call.arguments.find_argument_value("argvalues", 1),
+    })
+}
+
+/// the parameter names `@pytest.mark.parametrize` supplies to `function`.
+///
+/// pytest passes these as ordinary arguments from the marker's value rows, so
+/// they are not fixture requests: they neither resolve against the registry
+/// nor take a fixture's type.
+#[salsa::tracked(returns(ref), heap_size = ruff_memory_usage::heap_size)]
+pub(in crate::types) fn parametrized_names(
+    db: &dyn Db,
+    function: FunctionType<'_>,
+) -> FxHashSet<Name> {
+    let file = function.file(db);
+    let module = parsed_module(db, file).load(db);
+    let mut names: FxHashSet<Name> = function
+        .node(db, file, &module)
+        .decorator_list
+        .iter()
+        .filter_map(|decorator| parametrize_marker(db, function, decorator))
+        .flat_map(|marker| marker.names)
+        .collect();
+    names.shrink_to_fit();
+    names
+}
+
+/// the type an unannotated parameter named `name` of `function` receives.
+///
+/// pytest binds such a parameter by name from the fixture registry, so the
+/// body sees the fixture's provided type rather than an implicit `Unknown`.
+/// `None` — leaving the parameter gradual — when `function` is not a pytest
+/// function, when the name is supplied by `parametrize` instead, or when no
+/// fixture resolves or the resolved one's type cannot be derived.
+pub(in crate::types) fn injected_parameter_type<'db>(
+    db: &'db dyn Db,
+    function: FunctionType<'db>,
+    name: &str,
+) -> Option<Type<'db>> {
+    function_framework_role(db, function)?;
+    if parametrized_names(db, function).contains(name) {
+        return None;
+    }
+    resolve_fixture(db, function.file(db), name)?.provided_type
+}
+
 /// parse `@pytest.mark.parametrize` argnames — a comma-separated string or a
 /// list/tuple of string literals — into the parametrized names. `None` when
 /// the argnames are not a static string literal (dynamic → not checkable).
-pub(in crate::types) fn parametrize_names(argnames: &ast::Expr) -> Option<Vec<Name>> {
+fn parametrize_names(argnames: &ast::Expr) -> Option<Vec<Name>> {
     fn names_from_elements(elements: &[ast::Expr]) -> Option<Vec<Name>> {
         elements
             .iter()
