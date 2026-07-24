@@ -1248,7 +1248,9 @@ fn is_let_declaration<'db>(db: &'db dyn Db, scope: ScopeId<'db>, symbol: ScopedS
             let DefinitionKind::AnnotatedAssignment(assignment) = definition.kind(db) else {
                 return false;
             };
-            assignment.value(&module).is_none() && is_let_marker(assignment.annotation(&module))
+            // with or without an initializer: `let` is read-only but stays open to
+            // subclasses, so it is exempt from the override-of-final check
+            is_let_marker(assignment.annotation(&module))
         })
 }
 

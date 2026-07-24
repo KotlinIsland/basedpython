@@ -19,25 +19,33 @@ transpiles to:
 ```python
 class Person:
     def __init__(self) -> None:
-        self._age: int = 0
-
+        self.__age: int = 0
     @property
     def age(self) -> int:
-        return self._age
-
+        return self.__age
     @age.setter
     def age(self, value: int) -> None:
         assert value >= 0
-        self._age = value
+        self.__age = value
 ```
 
-> **STATUS: planned for version 0.0.1a6, not yet implemented.** the `get`/`set`
-> accessor block, `field`, `lateinit`, and the `let x: T` accessor form
-> described below are not yet recognized by the parser. `var x: T = init` and
-> `let x: T = init` at class scope already parse as the
-> [modifier](modifiers.md) forms — a plain class attribute and a `Final` one,
-> not yet the property lowering described here. tracking item: properties
-> v0.0.1a6
+> **STATUS: implemented, with one deliberate deviation from the shape originally
+> sketched here.**
+>
+> - **a plain `var` / `let` declaration stays class-level.** only an accessor
+>     property's backing-field initialiser moves into `__init__`; a declaration
+>     without accessors is emitted as a class-body attribute, because dataclasses,
+>     `TypedDict`, `Protocol`, enums, and the framework integrations all read
+>     class-level annotations and would lose their fields otherwise. the
+>     consequence is that `var items: list[int] = []` with no accessors is one
+>     list shared by every instance — python's own semantics for what the user
+>     wrote
+>
+> also not enforced: `field` referenced outside an accessor body is an ordinary
+> identifier rather than a parse error, and a basedpython-only construct written
+> *inside* an accessor body is not lowered — the accessor body is re-rendered
+> from the AST, so the pipeline's final syntax check reports it instead of
+> emitting bad python
 
 without accessors the declaration stays a plain attribute — no descriptor
 overhead
@@ -59,22 +67,22 @@ class Person:
             field = value
 ```
 
-| form                            | meaning                             |
-| ------------------------------- | ----------------------------------- |
-| `var x: T = init`               | mutable instance attribute          |
-| `let x: T = init`               | read-only instance attribute        |
-| `var x: T = init` + `get`/`set` | `@property` with backing field `_x` |
-| `let x: T = init` + `get`       | `@property` with getter only        |
+| form                            | meaning                                |
+| ------------------------------- | -------------------------------------- |
+| `var x: T = init`               | mutable instance attribute             |
+| `let x: T = init`               | read-only instance attribute           |
+| `var x: T = init` + `get`/`set` | `@property` with backing storage `__x` |
+| `let x: T = init` + `get`       | `@property` with getter only           |
 
 `let` at class scope used to lower to `x: Final = ...` (see [modifiers](modifiers.md)).
 property lowering supersedes that: inside a class body `let x: T = init` now
-emits a plain `self.x: T = init`, with read-only enforcement done by ty.
+emits a plain `x: T = init`, with read-only enforcement done by ty.
 module-scope `let` is unaffected
 
 ## plain `var` / `let`
 
-without accessors the keyword is stripped and the assignment lands in
-`__init__`. no `Final` is emitted
+without accessors the keyword is stripped and the declaration stays a class-body
+attribute. no `Final` is emitted
 
 ```by
 class Point:
@@ -86,20 +94,14 @@ transpiles to:
 
 ```python
 class Point:
-    def __init__(self) -> None:
-        self.x: int = 0
-        self.y: int = 0
+    x: int = 0
+    y: int = 0
 ```
 
 ty sees `let` in the basedpython AST and records the attribute as read-only.
-assignment to `self.x` outside the declaration site is reported. subclasses
+assignment outside the declaration site is reported. subclasses
 may shadow `x` with their own declaration (mutable or immutable) — no
 `Final` blocks them
-
-if the class has an explicit `init(...)` (see
-[init method shorthand](init-method.md)) the `var`/`let` assignments
-prepend ahead of the user's body, after any `let`-parameter
-self-assignments
 
 ## accessor block
 
@@ -107,6 +109,7 @@ accessor block is a suite directly following the declaration, indented one
 level deeper. accepted entries: `get()`, `set(name)`, and `field`. each is
 optional:
 
+- `field` alone → property with an implicit getter
 - `let` with `get` only → read-only property
 - `let` with `set` → parse error
 - `var` with `get` only → property + pass-through setter
@@ -130,8 +133,8 @@ set(value):
 ## `field` keyword
 
 inside `get`/`set` body, `field` refers to backing storage. lowers to
-`self._<name>`. `field` only in scope inside accessor — referencing
-elsewhere is parse error. assigning to `field` outside `set` rejected
+`self.__<name>`. it is only meaningful inside an accessor; elsewhere it stays an
+ordinary identifier (not currently a parse error — see the status note)
 
 accessor that never references `field` allocates no backing storage —
 property is computed. matches Kotlin's "no backing field" rule:
@@ -148,10 +151,8 @@ transpiles to:
 
 ```python
 class Rect:
-    def __init__(self) -> None:
-        self.w: int = 0
-        self.h: int = 0
-
+    w: int = 0
+    h: int = 0
     @property
     def area(self) -> int:
         return self.w * self.h
@@ -176,26 +177,77 @@ transpiles to:
 ```python
 class Bag:
     def __init__(self) -> None:
-        self._items: list[int] = []
-
+        self.__items: list[int] = []
     @property
     def items(self) -> Sequence[int]:
-        return self._items
+        return self.__items
 ```
 
 rules:
 
-- the declaration form is `field: <type> = <init>` or `field: <type>` (no
-    initialiser, paired with `lateinit`)
+- the declaration form is `field: <type> = <init>`, `field: <type>` (no
+    initialiser, paired with `late`), or `field = <init>` — an unannotated
+    declaration takes its type from the initialiser, *not* from the property's
+    public type
+- a `field` declaration on its own is a complete property: the getter is
+    implicit. no `get() = field` boilerplate is needed
 - only one `field` declaration per accessor block
-- accessors must reference `field` somewhere — otherwise an explicit
-    backing field with no use is a parse error
+- an accessor that was written must reference `field` somewhere — otherwise the
+    explicit backing field is unused, which is a parse error. an implicit getter
+    always reads it
 - the property's own initialiser (`var x: T = init`) is rejected when an
     explicit `field` declaration carries its own initialiser. choose one site
 
 shape mirrors Kotlin's explicit backing field proposal — the public type
 and the storage type are stated independently, and `field` is typed by the
 explicit declaration rather than inferred from the property
+
+## storage type inside the class
+
+inside the declaring class a property *reads* at its storage type rather than its
+public one — the class works with the implementation without a second name for
+storage, which is the reason to state the two types separately:
+
+```by
+class A:
+    let a: object
+        field = 1
+
+    def f(self):
+        reveal_type(self.a)   # int — the storage type
+
+def outside(x: A):
+    reveal_type(x.a)          # object — the public type
+```
+
+three rules keep this sound:
+
+- only **reads** narrow. a write goes through the setter, which may validate
+- only when the getter is a **pure field read** (implicit, or literally
+    `get() = field`). a getter with logic has to keep being called, so it keeps
+    the public type
+- only in the **declaring class**. a subclass sees the public type
+
+nothing changes in the emitted python: `self.a` stays `self.a` and calls the
+getter, which returns exactly the backing field, so the narrower type cannot
+disagree with the value
+
+the property's own name is the only way to reach storage — write `self.a`, and
+mutate through it directly:
+
+```by
+class Bag:
+    let items: Sequence[int]
+        field: list[int] = []
+
+    def add(self, n: int):
+        self.items.append(n)   # `items` is `list[int]` here
+```
+
+storage is named `__a`, so python's name mangling hides it: there is no `_a` for
+anything to reach, inside the class or out. that also means a getter carrying
+logic (which turns the narrow view off) leaves storage reachable only as
+`self.__a` inside the class body
 
 ## lowering — accessor form
 
@@ -206,6 +258,20 @@ setter parameter annotation comes from the property's declared type.
 getter return annotation matches. without an explicit `field` declaration,
 backing field type also matches the property type
 
+the backing field's initialiser is emitted into `__init__` — synthesized when the
+class has none, otherwise injected ahead of the constructor's own statements — so
+each instance gets its own storage. that matters because an explicit backing field
+usually holds a mutable implementation behind a read-only public view, and a
+class-body `__items: list[int] = []` would be one list shared by every instance
+
+a declaration with no initialiser (a `late field: T`) stays a class-level
+annotation, which creates no runtime attribute and only declares the type
+
+two constructor shapes are not yet injected into and keep the class-level
+declaration: a bodyless `init(...)`, whose body the
+[init shorthand](init-method.md) lowering completes, and an inline
+`def __init__(self): ...`. both need the two lowerings to agree on a single body
+
 ## modifiers
 
 property declarations compose with [modifier keywords](modifiers.md):
@@ -215,19 +281,67 @@ property declarations compose with [modifier keywords](modifiers.md):
 | `override var x: int = 0` | `x` overrides parent; `@override` on accessors |
 | `final var x: int = 0`    | property marked `@final`                       |
 | `abstract let x: int`     | `@property` + `@abstractmethod`, no body       |
-| `private var x: int = 0`  | renamed to `_x` (backing `__x`)                |
+| `private var x: int = 0`  | property renamed `_x`, storage `__x`           |
 
 `abstract let` / `abstract var` are bodyless. abstract `var` produces both
-abstract getter and abstract setter
+abstract getter and abstract setter. the modifiers apply to a declaration that
+carries an accessor block; `abstract let x: int` on its own (no accessors) is
+still a plain annotated attribute, not a property
 
-## `lateinit`
+## `private`
 
-`lateinit var x: T` declares a property whose initialisation is deferred.
+`private` shifts the whole construct one level of underscore deeper — the property
+becomes `_x` and its storage `__x`:
+
+```by
+class A:
+    private var x: int = 0
+        get() = field
+        set(value):
+            field = value
+
+    def bump(self):
+        self.x = self.x + 1
+```
+
+transpiles to:
+
+```python
+class A:
+    def __init__(self) -> None:
+        self.__x: int = 0
+    @property
+    def _x(self) -> int:
+        return self.__x
+    @_x.setter
+    def _x(self, value: int) -> None:
+        self.__x = value
+
+    def bump(self):
+        self._x = self._x + 1
+```
+
+accesses written inside the class under the public name are redirected, so the
+declaration site is the only place the name changes. privacy is self-enforcing:
+the property does not exist under its public name, so an access from outside the
+class — or from a subclass — is an unresolved attribute, reported rather than
+failing at runtime
+
+a write is redirected to the property, not to its storage, so a validating setter
+still runs
+
+note this differs from a plain `private var x: int = 0` with no accessor block,
+which is [stripped without renaming](modifiers.md) like any other class member
+annotation
+
+## `late`
+
+`late var x: T` declares a property whose initialisation is deferred.
 no initialiser, no accessor block:
 
 ```by
 class Loader:
-    lateinit var handle: File
+    late var handle: File
 ```
 
 transpiles to:
@@ -238,18 +352,18 @@ class Loader:
 ```
 
 reading `handle` before assignment raises `AttributeError` at runtime —
-same as ordinary unbound python attributes. `lateinit` is therefore a
+same as ordinary unbound python attributes. `late` is therefore a
 type-checker hint: `handle` treated as `File` (not `File | None`) at use
 sites, unassignment is the user's responsibility. only valid on `var`,
 never on `let`
 
-`lateinit` also accepted on a `field:` declaration when the property's
+`late` also accepted on a `field:` declaration when the property's
 public form has no initialiser:
 
 ```by
 class Bag:
     let items: Sequence[int]
-        lateinit field: list[int]
+        late field: list[int]
         get() = field
 ```
 
@@ -265,13 +379,13 @@ declaration. stray `get()` / `set(...)` elsewhere parses as normal call
 
 ## interaction with `init(...)`
 
-`var` / `let` declarations and `init(let ...)` parameters coexist.
-lowering order inside synthesised `__init__`:
-
-1. `let`-parameter self-assignments from `init`
-1. backing-field initialisers for accessor properties (`self._x = <init>`)
-1. plain attribute initialisers for `var` / `let` without accessors
-1. user-written body of `init`
+`var` / `let` declarations and `init(let ...)` parameters coexist. because
+declarations and backing fields lower to class-body attributes rather than
+constructor assignments (see the status note above), there is no ordering to
+reconcile inside `__init__` — an `init(...)` body is untouched by this feature.
+should storage move into the constructor later, that ordering becomes:
+`let`-parameter self-assignments, then backing-field initialisers, then plain
+`var` / `let` initialisers, then the user's `init` body
 
 note: the `let` parameter modifier on `init` parameters is unrelated to the
 class-body `let` property — it's the existing
@@ -291,19 +405,20 @@ class Greeting:
 
 ## ty integration
 
-transpiler synthesises a real `@property` descriptor for accessor-form
-declarations, so ty's existing property handling applies unchanged. for
-plain `var` / `let` the lowering produces ordinary `self.x: T = ...`
-statements inside `__init__`, which ty already analyses for instance
-attributes
+the parser synthesises a real `@property` descriptor for accessor-form
+declarations, so ty's existing property handling applies unchanged — there is no
+property-specific inference. for plain `var` / `let` the lowering produces an
+ordinary class-body attribute, which ty already analyses
 
-read-only enforcement for `let` is implemented in ty by walking the
-basedpython AST before lowering and recording attribute mutability per
-class. no runtime annotation is emitted — the marker exists only in the
-pre-lowering tree. subclasses are not blocked from overriding
+read-only enforcement for `let` reuses ty's `Final` machinery: the `let` marker
+in the pre-lowering tree carries the `Final` qualifier, so a write away from the
+declaration is reported as `invalid-assignment`. a `let` is exempt from the
+override-of-final check, so subclasses are not blocked from overriding. no
+runtime annotation is emitted — the marker exists only in the pre-lowering
+tree
 
-`field` is rewritten to `self._<name>` before ty sees the lowered tree, so
-ty never needs a special-case rule for it
+`field` is rewritten to `self.__<name>` by the parser, before ty sees the tree at
+all, so ty never needs a special-case rule for it
 
 ## polyfill imports
 
@@ -317,9 +432,10 @@ no `Final`, no `cached_property` — neither is emitted by this feature
 ## rejected forms
 
 - `let` + `set` → parse error: "read-only property cannot define a setter"
-- `lateinit let` → parse error: "lateinit requires var"
-- `lateinit` with initialiser → parse error
-- `field` referenced outside accessor body → parse error
+- `late let` → parse error: "late requires var"
+- `late` with initialiser → parse error
+- `field` referenced outside accessor body → *not enforced*: it stays an
+    ordinary identifier
 - accessor block at module scope → parse error
 - duplicate `get` / `set` / `field` in same accessor block → parse error
 - explicit `field` with initialiser combined with property-side initialiser

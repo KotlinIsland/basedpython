@@ -851,6 +851,41 @@ x5: Callable[[Any], bool] | None = maybe_make_callable(0)
 reveal_type(x5)  # revealed: ((Any, /) -> bool) | None
 ```
 
+## An empty literal takes its element type from a covariant context
+
+A covariant context is only an upper bound, so when a literal *has* elements we prefer their own
+narrower types (see below). An empty literal has no elements to infer from, so the bound is the only
+information available — and using it is both well-defined (the widest `T` for which the literal's
+type is assignable to the context) and more precise than falling back to `Unknown`.
+
+```py
+from collections.abc import Iterable, Mapping, MutableSequence, Sequence
+
+def _():
+    x1: Sequence[int] = []
+    reveal_type(x1)  # revealed: list[int]
+
+    x2: Iterable[int] = []
+    reveal_type(x2)  # revealed: list[int]
+
+    x3: Sequence[int] | None = []
+    reveal_type(x3)  # revealed: list[int]
+
+    x4: Mapping[str, int] = {}
+    reveal_type(x4)  # revealed: dict[str, int]
+
+    # an invariant context already behaved this way
+    x5: MutableSequence[int] = []
+    reveal_type(x5)  # revealed: list[int]
+
+    x6: list[int] = []
+    reveal_type(x6)  # revealed: list[int]
+
+    # elements still take precedence over the bound when there are any
+    x7: Sequence[object] = [1]
+    reveal_type(x7)  # revealed: list[int]
+```
+
 ## Declared type preference sees through subtyping
 
 Additionally, if the inferred type is a subtype of the declared type, we prefer declared type

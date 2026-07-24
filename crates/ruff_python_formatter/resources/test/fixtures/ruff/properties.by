@@ -1,0 +1,19 @@
+class Person:
+    var age: int = 0
+        get() = field
+        set(value):
+            assert value >= 0
+            field = value
+
+class Rect:
+    var w: int = 0
+    let area: int
+        get() = self.w * self.w
+
+class Bag:
+    let items: list[int]
+        field: list[int] = []
+        get() = field
+
+class Loader:
+    late var handle: str

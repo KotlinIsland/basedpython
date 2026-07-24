@@ -2,7 +2,7 @@ use ruff_formatter::{
     FormatContext, FormatOwnedWithRule, FormatRefWithRule, FormatRuleWithOptions, write,
 };
 use ruff_python_ast::helpers::is_compound_statement;
-use ruff_python_ast::{self as ast, Expr, PySourceType, Stmt, Suite};
+use ruff_python_ast::{self as ast, Expr, ExprContext, PySourceType, Stmt, Suite};
 use ruff_python_ast::{AnyNodeRef, StmtExpr};
 use ruff_python_trivia::{
     SimpleTokenKind, SimpleTokenizer, lines_after, lines_after_ignoring_end_of_line_trivia,
@@ -961,11 +961,44 @@ impl Format<PyFormatContext<'_>> for SuiteChildStatement<'_> {
     }
 }
 
+/// The construct range a basedpython property accessor block was parsed from, if
+/// `stmt` is the getter the parser synthesised for one.
+///
+/// A `var` / `let` declaration carrying a `get` / `set` / `field` suite lowers to
+/// several class-body members (a backing field, a getter, a setter), none of which
+/// has an AST-faithful surface printer — their `self` parameters and backing
+/// attributes are synthetic and zero-width. The getter leads the group and carries
+/// a synthetic `__property__` marker whose range spans the whole construct, so the
+/// suite formatter can emit that source verbatim and swallow the rest of the group,
+/// exactly as it does for a `# fmt: skip` region.
+fn property_construct_range(stmt: &Stmt) -> Option<TextRange> {
+    let Stmt::FunctionDef(function) = stmt else {
+        return None;
+    };
+    function
+        .decorator_list
+        .iter()
+        .find_map(|decorator| match &decorator.expression {
+            Expr::Name(name)
+                if name.id.as_str() == "__property__" && name.ctx == ExprContext::Invalid =>
+            {
+                Some(decorator.range())
+            }
+            _ => None,
+        })
+}
+
 pub(crate) fn skip_range(
     first: &Stmt,
     statements: &[Stmt],
     context: &PyFormatContext,
 ) -> Option<TextRange> {
+    // basedpython property accessor blocks have no surface printer; emit the whole
+    // construct verbatim and let the caller consume the members synthesised with it
+    if let Some(construct) = property_construct_range(first) {
+        return Some(construct);
+    }
+
     let start = first.start();
     let mut last_statement = first;
 

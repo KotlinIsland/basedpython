@@ -99,6 +99,21 @@ pub(crate) struct Parser<'src> {
     /// Used to recognise `init(...)` as a method shorthand only inside a class.
     pub(super) class_body_depth: u32,
 
+    /// basedpython: extra class-body members a single `parse_statement` produced
+    /// but could not return directly. A property accessor block lowers one
+    /// `var`/`let` declaration to a backing field plus getter/setter defs; the
+    /// declaration statement is returned and these follow-on members are drained
+    /// here by [`Parser::parse_block`]. Filled only by the property path (guarded
+    /// by `class_body_depth > 0`), empty everywhere else.
+    pub(super) pending_members: Vec<Stmt>,
+
+    /// basedpython: `(property, backing field)` pairs declared in the class body
+    /// currently being parsed whose getter is a pure field read. In-class *reads*
+    /// of those properties are retargeted at the backing field once the body is
+    /// complete, so the class sees storage at its own type. Scoped per class body
+    /// by [`Parser::parse_body`].
+    pub(super) pending_narrow_props: Vec<statement::PropertyRetarget>,
+
     /// Current parser recursion depth remaining before the depth limit is exceeded.
     depth_remaining: u16,
 
@@ -153,6 +168,8 @@ impl<'src> Parser<'src> {
             start_offset,
             current_token_id: TokenId::default(),
             class_body_depth: 0,
+            pending_members: Vec::new(),
+            pending_narrow_props: Vec::new(),
             depth_remaining,
             max_nesting_depth,
             expr_scratch: ScratchBuffer::with_capacity(16),
