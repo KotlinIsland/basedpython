@@ -18,13 +18,13 @@ use crate::types::member::Member;
 use crate::types::mro::Mro;
 use crate::types::signatures::{CallableSignature, Parameter, Parameters, Signature};
 use crate::types::typed_dict::{
-    TypedDictField, TypedDictOpenness, TypedDictSchema, deferred_functional_typed_dict_openness,
-    deferred_functional_typed_dict_schema,
+    TypedDictField, TypedDictFieldBuilder, TypedDictOpenness, TypedDictSchema,
+    deferred_functional_typed_dict_openness, deferred_functional_typed_dict_schema,
 };
 use crate::types::{
-    BoundTypeVarInstance, CallableType, ClassBase, ClassLiteral, ClassType, KnownClass,
-    MemberLookupPolicy, Type, TypeContext, TypeMapping, TypeVarVariance, TypedDictModule,
-    TypedDictType, UnionType, determine_upper_bound,
+    ApplyTypeMappingVisitor, BoundTypeVarInstance, CallableType, ClassBase, ClassLiteral,
+    ClassType, KnownClass, MemberLookupPolicy, Type, TypeContext, TypeMapping, TypeVarVariance,
+    TypedDictModule, TypedDictType, UnionType, determine_upper_bound,
 };
 use crate::{Db, FxIndexMap};
 use ty_python_core::definition::Definition;
@@ -791,10 +791,15 @@ pub enum DynamicTypedDictAnchor<'db> {
     /// literal. Has no associated `Call` node — `range` points at the
     /// originating dict-literal expression directly. Identity is shape-based:
     /// identical schemas in the same scope intern to the same literal.
+    ///
+    /// `packs` holds the keyword-variadic packs spliced in with `{**Kwargs}`,
+    /// which contribute no fields until they are specialized. Applying a type
+    /// mapping resolves each one and folds its fields into `schema`.
     Synthesized {
         scope: ScopeId<'db>,
         range: TextRange,
         schema: TypedDictSchema<'db>,
+        packs: Box<[Type<'db>]>,
     },
 }
 
@@ -822,10 +827,15 @@ impl<'db> DynamicTypedDictAnchor<'db> {
                 scope,
                 range,
                 schema,
+                packs,
             } => Some(Self::Synthesized {
                 scope: *scope,
                 range: *range,
                 schema: schema.recursive_type_normalized_impl(db, div, nested)?,
+                packs: packs
+                    .iter()
+                    .map(|pack| pack.recursive_type_normalized_impl(db, div, true))
+                    .collect::<Option<Box<[_]>>>()?,
             }),
         }
     }
@@ -867,6 +877,76 @@ impl<'db> DynamicTypedDictLiteral<'db> {
                 .recursive_type_normalized_impl(db, div, nested)?,
             self.typed_dict_module(db),
         ))
+    }
+
+    /// basedpython: propagate a type mapping into a synthesized `{"key": T}` schema.
+    ///
+    /// A synthesized `TypedDict` is not a generic class — it has no type parameters of its own —
+    /// so a specialization can only reach its fields through the mapping applied here. Any
+    /// `{**Kwargs}` pack that the mapping resolves to a concrete field list is spliced in and
+    /// stops being pending. The name is left alone: it identifies the dict-literal expression,
+    /// not the shape it currently has.
+    pub(super) fn apply_type_mapping_impl<'a>(
+        self,
+        db: &'db dyn Db,
+        type_mapping: &TypeMapping<'a, 'db>,
+        tcx: TypeContext<'db>,
+        visitor: &ApplyTypeMappingVisitor<'db>,
+    ) -> Self {
+        let DynamicTypedDictAnchor::Synthesized {
+            scope,
+            range,
+            schema,
+            packs,
+        } = self.anchor(db)
+        else {
+            return self;
+        };
+
+        let mut mapped: TypedDictSchema<'db> = schema
+            .iter()
+            .map(|(name, field)| {
+                (
+                    name.clone(),
+                    field
+                        .clone()
+                        .apply_type_mapping_impl(db, type_mapping, tcx, visitor),
+                )
+            })
+            .collect();
+
+        let mut pending = Vec::with_capacity(packs.len());
+        for pack in packs {
+            let pack = pack.apply_type_mapping_impl(db, type_mapping, tcx, visitor);
+            match pack.keyword_pack_fields(db) {
+                Some(fields) => {
+                    for (name, field_ty) in fields {
+                        mapped.insert(
+                            name.clone(),
+                            TypedDictFieldBuilder::new(field_ty).required(true).build(),
+                        );
+                    }
+                }
+                None => pending.push(pack),
+            }
+        }
+        let pending: Box<[Type<'db>]> = pending.into_boxed_slice();
+
+        if &mapped == schema && &pending == packs {
+            return self;
+        }
+
+        Self::new(
+            db,
+            self.name(db),
+            DynamicTypedDictAnchor::Synthesized {
+                scope: *scope,
+                range: *range,
+                schema: mapped,
+                packs: pending,
+            },
+            self.typed_dict_module(db),
+        )
     }
 }
 
@@ -942,6 +1022,22 @@ impl<'db> DynamicTypedDictLiteral<'db> {
             }
             DynamicTypedDictAnchor::ScopeOffset { schema, .. }
             | DynamicTypedDictAnchor::Synthesized { schema, .. } => schema,
+        }
+    }
+
+    /// basedpython: the fields and still-pending `{**Kwargs}` packs of a dict-literal type, if
+    /// this `TypedDict` was synthesized from one.
+    ///
+    /// The generated class name says nothing, so this is what such a `TypedDict` displays as.
+    pub(crate) fn synthesized_shape(
+        self,
+        db: &'db dyn Db,
+    ) -> Option<(&'db TypedDictSchema<'db>, &'db [Type<'db>])> {
+        match self.anchor(db) {
+            DynamicTypedDictAnchor::Synthesized { schema, packs, .. } => Some((schema, packs)),
+            DynamicTypedDictAnchor::Definition(_) | DynamicTypedDictAnchor::ScopeOffset { .. } => {
+                None
+            }
         }
     }
 

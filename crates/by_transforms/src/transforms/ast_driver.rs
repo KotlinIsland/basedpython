@@ -488,7 +488,7 @@ pub(crate) fn run_against_source<'a>(
     let extension_block_pass = extension::ExtensionBlockPass::new(source_ref);
     let extension_call_pass = extension::ExtensionCallPass;
     let frameworks_pass = frameworks::FrameworksPass::new(source_ref);
-    let variance_pass = decl_site_variance::VarianceStripPass::new();
+    let variance_pass = decl_site_variance::VarianceStripPass::new(source_ref);
     let anon_named_tuple_pass =
         anon_named_tuple::AnonNamedTuplePass::new(source_ref, config.clone());
 

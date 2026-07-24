@@ -8199,6 +8199,7 @@ impl<'db> VarianceInferable<'db> for Type<'db> {
             Type::Deferred(deferred) => deferred.reduced(db).variance_of(db, typevar),
             Type::KnownInstance(known_instance) => known_instance.variance_of(db, typevar),
             Type::TypeAlias(alias) => alias.variance_of(db, typevar),
+            Type::TypedDict(typed_dict) => typed_dict.variance_of(db, typevar),
             Type::Dynamic(_)
             | Type::Divergent(_)
             | Type::Never
@@ -8213,7 +8214,6 @@ impl<'db> VarianceInferable<'db> for Type<'db> {
             | Type::AlwaysTruthy
             | Type::BoundSuper(_)
             | Type::TypeVar(_)
-            | Type::TypedDict(_)
             | Type::NewTypeInstance(_) => TypeVarVariance::Bivariant,
         };
 

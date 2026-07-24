@@ -1231,6 +1231,13 @@ impl<'db> ClassType<'db> {
         visitor: &ApplyTypeMappingVisitor<'db>,
     ) -> Self {
         match self {
+            // basedpython: a `{"key": T}` literal synthesizes a non-generic class whose schema
+            // can still mention type variables, so the mapping has to reach inside it
+            Self::NonGeneric(ClassLiteral::DynamicTypedDict(typeddict)) => {
+                Self::NonGeneric(ClassLiteral::DynamicTypedDict(
+                    typeddict.apply_type_mapping_impl(db, type_mapping, tcx, visitor),
+                ))
+            }
             Self::NonGeneric(_) => self,
             Self::Generic(generic) => {
                 Self::Generic(generic.apply_type_mapping_impl(db, type_mapping, tcx, visitor))

@@ -118,11 +118,33 @@ transpiles to:
 def __init__(self, **kwargs: Kwargs.kwargs) -> None: ...
 ```
 
+## splicing into a dict literal type
+
+`{**Kwargs}` contributes the pack's fields to a [dict literal type](typed-dict-literal.md). the
+pack contributes nothing until it is specialized, and it is spliced in after the keys written
+inline, so a field it carries wins over a key of the same name:
+
+```by
+class A[**Kwargs]:
+    init(**args: **Kwargs)
+    def get(self) -> {"tag": int, **Kwargs}: ...
+
+a = A(a=1, b="s")
+reveal_type(a.get())  # {"a": int, "b": str, "tag": int}
+```
+
+before specialization the pack shows as a pending splice — `{"tag": int, **Kwargs@A}`
+
 ## limitations
 
-- a pack cannot be spliced into a [dict literal type](typed-dict-literal.md) (`{**Kwargs}`). a
-    synthesized `TypedDict` is a non-generic class by construction, so a specialization never
-    reaches its schema; the same gap leaves `T` unsubstituted in `{"a": T}`
+- a declared type does not drive a constructor call's arity. `A[foo=int]()` correctly reports the
+    missing `foo` argument, because the pack is already concrete when the parameters are matched;
+    `a: A[foo=int] = A()` does not, because the pack is only pinned afterwards, by inference. worse,
+    the declared pack is then adopted unchecked, so `a: A[foo=int] = A(bar=1)` is accepted
+- a type variable reachable only through a `{**Kwargs}` splice reads as bivariant, so a class whose
+    only use of its pack is `{**Kwargs}` does not reject a mismatched specialization. giving the
+    pack a variance there is what surfaces the adoption bug above, so the two have to be fixed
+    together. spelling the pack in an [arrow](callable.md) as well restores invariance
 - a pack cannot yet be *forwarded* as a type argument (`A[**Kwargs]` inside another signature)
 - a pack cannot have a default (`class D[**Kwargs = ()]`)
 - a generic context containing a pack skips literal promotion for its other type variables, so

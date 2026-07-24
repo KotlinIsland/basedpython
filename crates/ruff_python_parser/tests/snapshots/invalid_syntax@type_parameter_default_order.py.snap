@@ -63,6 +63,12 @@ Module(
                                     },
                                 ),
                             ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
                         },
                     ),
                     arguments: None,
@@ -163,6 +169,12 @@ Module(
                                     },
                                 ),
                             ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
                         },
                     ),
                     arguments: None,
@@ -236,6 +248,12 @@ Module(
                                     },
                                 ),
                             ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
                         },
                     ),
                     parameters: Parameters {
@@ -320,6 +338,12 @@ Module(
                                     },
                                 ),
                             ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
                         },
                     ),
                     value: EllipsisLiteral(

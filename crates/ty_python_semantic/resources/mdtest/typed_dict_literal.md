@@ -52,6 +52,85 @@ def f(x: {"name": str, **: int}) -> None:
     reveal_type(x["name"])  # revealed: str
 ```
 
+## Display
+
+A synthesized `TypedDict` reads back as the shape it was written as — its generated class name is a
+hash and says nothing. Keys are quoted the way the source spells them.
+
+```by
+def f(x: {"name": str, "age": int}) -> None:
+    reveal_type(x)  # revealed: {"age": int, "name": str}
+```
+
+Fields are ordered by key, so two spellings of the same shape display identically.
+
+```by
+def f(x: {"b": str, "a": int}) -> None:
+    reveal_type(x)  # revealed: {"a": int, "b": str}
+```
+
+## Type variables in a dict literal type
+
+A dict-literal type is not a generic class of its own, but its fields can mention the type variables
+of the scope it is written in. Specializing that scope substitutes them.
+
+### Specializing the enclosing class
+
+```by
+class B[T]:
+    def get(self) -> {"a": T}:
+        raise NotImplementedError
+
+def f(b: B[int]):
+    reveal_type(b.get())  # revealed: {"a": int}
+    reveal_type(b.get()["a"])  # revealed: int
+```
+
+### Unspecialized, the type variable stays
+
+```by
+class B[T]:
+    def get(self) -> {"a": T}:
+        reveal_type(self.get())  # revealed: {"a": T@B}
+        raise NotImplementedError
+```
+
+### A generic function
+
+```by
+def g[T](x: T) -> {"value": T}:
+    raise NotImplementedError
+
+def f(s: str, i: int):
+    reveal_type(g(s))  # revealed: {"value": str}
+    reveal_type(g(i)["value"])  # revealed: int
+```
+
+### Nested in another type
+
+```by
+class B[T]:
+    def get(self) -> list[{"a": T}]:
+        raise NotImplementedError
+
+def f(b: B[str]):
+    reveal_type(b.get())  # revealed: list[{"a": str}]
+```
+
+### Variance
+
+A type variable that only ever appears inside a dict literal type still has a variance. Its fields
+are mutable, so it is invariant in them.
+
+```by
+class B[T]:
+    def get(self) -> {"a": T}:
+        raise NotImplementedError
+
+def f(b: B[int]):
+    x: B[str] = b  # error: [invalid-assignment]
+```
+
 ## Python-passthrough — dict literal in type position is still an error
 
 ```py

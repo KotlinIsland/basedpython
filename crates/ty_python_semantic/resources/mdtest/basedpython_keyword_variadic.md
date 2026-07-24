@@ -115,12 +115,73 @@ class A[**Kwargs]:
     def __init__(self, **kwargs: *Kwargs) -> None: ...
 ```
 
-## unpacking a pack into a dict literal type is not yet supported
+## unpacking a pack into a dict literal type
+
+`{**Kwargs}` splices the pack's fields into a [dict literal type](typed_dict_literal.md). the pack
+contributes nothing until it is specialized, so the fields appear once the class is
+
+### the pack's fields become the shape
 
 ```by
 class A[**Kwargs]:
-    # error: [invalid-type-form] "Unpacking a keyword-variadic pack into a dict literal type is not yet supported"
-    def get(self) -> {**Kwargs}: ...
+    def __init__(self, **kwargs: **Kwargs) -> None: ...
+    def get(self) -> {**Kwargs}:
+        raise NotImplementedError
+
+def f():
+    a = A(a=1, b="s")
+    reveal_type(a.get())  # revealed: {"a": int, "b": str}
+    reveal_type(a.get()["a"])  # revealed: int
+    reveal_type(a.get()["b"])  # revealed: str
+```
+
+### alongside declared fields
+
+a pack splices in beside ordinary keys, and the whole shape is ordered by key
+
+```by
+class A[**Kwargs]:
+    def __init__(self, **kwargs: **Kwargs) -> None: ...
+    def get(self) -> {"tag": int, **Kwargs}:
+        raise NotImplementedError
+
+def f():
+    reveal_type(A(zzz=1).get())  # revealed: {"tag": int, "zzz": int}
+```
+
+### unspecialized, the pack stays pending
+
+```by
+class A[**Kwargs]:
+    def get(self) -> {"tag": int, **Kwargs}:
+        reveal_type(self.get())  # revealed: {"tag": int, **Kwargs@A}
+        raise NotImplementedError
+```
+
+### the empty pack contributes no fields
+
+```by
+class A[**Kwargs]:
+    def __init__(self, **kwargs: **Kwargs) -> None: ...
+    def get(self) -> {"tag": int, **Kwargs}:
+        raise NotImplementedError
+
+def f():
+    reveal_type(A().get())  # revealed: {"tag": int}
+```
+
+### a pack field shadows a declared key
+
+the pack is spliced last, so a field it carries wins over the key written inline
+
+```by
+class A[**Kwargs]:
+    def __init__(self, **kwargs: **Kwargs) -> None: ...
+    def get(self) -> {"tag": int, **Kwargs}:
+        raise NotImplementedError
+
+def f():
+    reveal_type(A(tag="s").get())  # revealed: {"tag": str}
 ```
 
 ## the empty pack

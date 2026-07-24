@@ -492,6 +492,7 @@ impl ast::TypeParams {
             range: _,
             node_index: _,
             type_params,
+            separators: _,
         } = self;
 
         for type_param in type_params {

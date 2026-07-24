@@ -6993,23 +6993,31 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         Some(Type::tuple(tt))
     }
 
-    /// basedpython: whether `expr` names a keyword-variadic pack, as `{**Kwargs}` does.
+    /// basedpython: the keyword-variadic pack `expr` names, as `{**Kwargs}` does.
     ///
-    /// Inferred without storing, so the caller's diagnostic is the only one reported.
-    fn is_keyword_pack_reference(&mut self, expr: &ast::Expr) -> bool {
+    /// A bare pack is not a type, so it is inferred with `ALLOW_PARAMSPEC_TYPE_EXPR` to reach the
+    /// pack itself rather than the diagnostic that spelling normally earns. The probe does not
+    /// store, so a `**` value that turns out to be something else is left for the caller's
+    /// fallback path to infer.
+    fn keyword_pack_reference(&mut self, expr: &ast::Expr) -> Option<Type<'db>> {
         if !matches!(expr, ast::Expr::Name(_)) {
-            return false;
+            return None;
         }
         let previously_allowed_paramspec = self
             .context
             .inference_flags
             .replace(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, true);
         let ty = self.infer_type_expression_no_store(expr);
+        let is_pack =
+            matches!(ty, Type::TypeVar(typevar) if typevar.is_keyword_variadic(self.db()));
+        if is_pack {
+            self.infer_type_expression(expr);
+        }
         self.context.inference_flags.set(
             InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR,
             previously_allowed_paramspec,
         );
-        matches!(ty, Type::TypeVar(typevar) if typevar.is_keyword_variadic(self.db()))
+        is_pack.then_some(ty)
     }
 
     /// basedpython: synthesize a `TypedDict` class from a `{"key": T, ...}`
@@ -7030,6 +7038,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         let db = self.db();
         let mut schema = TypedDictSchema::default();
+        let mut packs: Vec<Type<'db>> = Vec::new();
         let mut hasher = DefaultHasher::new();
         for item in &dict.items {
             let Some(key_expr) = item.key.as_ref() else {
@@ -7045,22 +7054,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     "**".hash(&mut hasher);
                     continue;
                 }
-                // basedpython `{**Kwargs}`: splicing a keyword-variadic pack's fields into a
-                // dict-literal type. a synthesized `TypedDict` is a `ClassType::NonGeneric` by
-                // construction, so a specialization never reaches its schema — supporting this
-                // needs synthesized `TypedDict`s to become generic-aware first (the same gap
-                // makes `{"a": T}` leave `T` unsubstituted)
-                if self.is_keyword_pack_reference(&item.value) {
-                    if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, &item.value)
-                    {
-                        let mut diagnostic = builder.into_diagnostic(
-                            "Unpacking a keyword-variadic pack into a dict literal type is not \
-                             yet supported",
-                        );
-                        diagnostic
-                            .info("A synthesized `TypedDict` cannot yet depend on a type variable");
-                    }
-                    return Some(Type::unknown());
+                // basedpython `{**Kwargs}`: the pack contributes no fields until it is
+                // specialized, so it is carried on the anchor and spliced in by the type mapping
+                if let Some(pack) = self.keyword_pack_reference(&item.value) {
+                    pack.display(db).to_string().hash(&mut hasher);
+                    packs.push(pack);
+                    continue;
                 }
                 return None;
             };
@@ -7086,6 +7085,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             scope: module_scope,
             range: dict.range(),
             schema,
+            packs: packs.into_boxed_slice(),
         };
         let td = DynamicTypedDictLiteral::new(db, class_name, anchor, TypedDictModule::Typing);
         Type::ClassLiteral(ClassLiteral::DynamicTypedDict(td)).to_instance_approximation(db)
@@ -12452,6 +12452,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             range: _,
             node_index: _,
             type_params,
+            separators: _,
         } = type_parameters;
         for type_param in type_params {
             match type_param {

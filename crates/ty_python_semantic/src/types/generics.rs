@@ -379,6 +379,15 @@ impl<'db> InferableTypeVars<'db> {
 pub struct GenericContext<'db> {
     #[returns(ref)]
     variables_inner: FxOrderMap<BoundTypeVarIdentity<'db>, BoundTypeVarInstance<'db>>,
+
+    /// basedpython: how the `/` and bare `*` separators of the declaring type parameter list
+    /// split these variables.
+    ///
+    /// Only a context built straight from a type parameter list carries them — anything derived
+    /// (merged, filtered, freshened) renumbers the variables, so it falls back to the unseparated
+    /// split where every variable may be given either way.
+    #[returns(copy)]
+    separators: ast::TypeParamSeparators,
 }
 
 pub(super) fn walk_generic_context<'db, V: TypeVisitor<'db> + ?Sized>(
@@ -406,7 +415,13 @@ impl<'db> GenericContext<'db> {
             Self::variable_from_type_param(db, index, binding_context, type_param)
         });
 
-        Self::from_typevar_instances(db, variables)
+        Self::new_internal(
+            db,
+            variables
+                .map(|variable| (variable.identity(db), variable))
+                .collect::<FxOrderMap<_, _>>(),
+            type_params_node.separators,
+        )
     }
 
     pub(crate) fn of_node(
@@ -448,7 +463,18 @@ impl<'db> GenericContext<'db> {
                 .into_iter()
                 .map(|variable| (variable.identity(db), variable))
                 .collect::<FxOrderMap<_, _>>(),
+            ast::TypeParamSeparators::default(),
         )
+    }
+
+    /// basedpython: the [`ast::TypeParamKind`] of the type parameter at `index`.
+    pub(crate) fn type_param_kind(self, db: &'db dyn Db, index: usize) -> ast::TypeParamKind {
+        self.separators(db).kind_at(index)
+    }
+
+    /// basedpython: whether the declaring list used a `/` or bare `*` separator at all.
+    pub(crate) fn has_type_param_separators(self, db: &'db dyn Db) -> bool {
+        !self.separators(db).is_empty()
     }
 
     /// Merge this generic context with another, returning a new generic context that

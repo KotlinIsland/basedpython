@@ -51,4 +51,6 @@ all-positional subscripts are untouched
 
 ## see also
 
+- [type parameter separators](type-param-separators.md) — `/` and `*` restrict which type
+    parameters may be given by name
 - [tuple member access (`expr.N`)](tuple-index.md) — dot-indexing companion form

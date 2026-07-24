@@ -40,6 +40,12 @@ Module(
                                     },
                                 ),
                             ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
                         },
                     ),
                     value: Name(
@@ -92,6 +98,12 @@ Module(
                                     },
                                 ),
                             ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
                         },
                     ),
                     value: Name(
@@ -149,6 +161,12 @@ Module(
                                     },
                                 ),
                             ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
                         },
                     ),
                     value: Name(
@@ -215,6 +233,12 @@ Module(
                                     },
                                 ),
                             ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
                         },
                     ),
                     value: Name(
