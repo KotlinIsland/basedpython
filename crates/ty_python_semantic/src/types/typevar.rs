@@ -20,7 +20,10 @@ use crate::{
         UnionType, any_over_type, binding_type, definition_expression_type,
         tuple::Tuple,
         variance::VarianceInferable,
-        visitor::{self, TypeCollector, TypeVisitor, walk_type_with_recursion_guard},
+        visitor::{
+            self, TypeCollector, TypeVisitor, any_over_type_with_opaque_self,
+            walk_type_with_recursion_guard,
+        },
     },
 };
 use ty_python_core::{
@@ -74,6 +77,38 @@ impl<'db> Type<'db> {
                 Type::KnownInstance(KnownInstanceType::TypeVar(_)) | Type::TypeVar(_)
             )
         })
+    }
+
+    /// Like [`Self::has_typevar_or_typevar_instance`], but ignores `Self`.
+    ///
+    /// `Self` is bound by the enclosing class rather than by the generic context currently being
+    /// defined, so a type mentioning only `Self` leaves nothing unsolved in that context.
+    pub(crate) fn has_non_self_typevar_or_typevar_instance(self, db: &'db dyn Db) -> bool {
+        any_over_type_with_opaque_self(db, self, |ty| match ty {
+            Type::TypeVar(bound_typevar) => !bound_typevar.typevar(db).is_self(db),
+            Type::KnownInstance(KnownInstanceType::TypeVar(_)) => true,
+            _ => false,
+        })
+    }
+
+    /// Whether this is a type variable that can only ever be solved to a `TypedDict`.
+    ///
+    /// Such a type variable is a stand-in for an as-yet-unknown `TypedDict`, so a construct that
+    /// requires one (`**kwargs: Unpack[T]`) can accept it and defer until it is solved.
+    pub(crate) fn is_typed_dict_bounded_typevar(self, db: &'db dyn Db) -> bool {
+        let Type::TypeVar(bound_typevar) = self else {
+            return false;
+        };
+        match bound_typevar.typevar(db).bound_or_constraints(db) {
+            Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
+                bound.resolve_type_alias(db).is_typed_dict()
+            }
+            Some(TypeVarBoundOrConstraints::Constraints(constraints)) => constraints
+                .elements(db)
+                .iter()
+                .all(|constraint| constraint.resolve_type_alias(db).is_typed_dict()),
+            None => false,
+        }
     }
 
     pub(crate) fn has_unspecialized_type_var(self, db: &'db dyn Db) -> bool {
@@ -451,7 +486,10 @@ impl<'db> TypeVarInstance<'db> {
             ty: Type<'db>,
             self_identity: TypeVarIdentity<'db>,
         ) -> bool {
-            any_over_type(state.db, ty, false, |inner_ty| match inner_ty {
+            // `Self` is opaque here: its upper bound names the enclosing class's own type
+            // parameters, so descending into it would make `class C[T = Self]` look like a
+            // typevar whose default refers back to itself.
+            any_over_type_with_opaque_self(state.db, ty, |inner_ty| match inner_ty {
                 Type::TypeVar(bound_typevar) => typevar_default_is_self_referential(
                     state,
                     bound_typevar.typevar(state.db),
@@ -515,7 +553,9 @@ impl<'db> TypeVarInstance<'db> {
     fn lazy_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
         let bound = self.lazy_bound_unchecked(db)?;
 
-        if bound.has_typevar_or_typevar_instance(db) {
+        // a generic bound is reported as an error and dropped, but `Self` is a legitimate bound:
+        // it is bound by the enclosing class, and is substituted when the method binds its receiver
+        if bound.has_non_self_typevar_or_typevar_instance(db) {
             return None;
         }
 
@@ -1235,6 +1275,15 @@ impl<'db> BoundTypeVarInstance<'db> {
             TypeMapping::BindSelf(binding) => {
                 if binding.should_bind(db, self) {
                     binding.self_type()
+                } else if self.bound_or_constraints_mention_self(db) {
+                    // a type variable can be bounded by `Self` (`def method[T: Self]`). that bound
+                    // only constrains anything once its `Self` has been bound to the receiver too
+                    Type::TypeVar(self.with_mapped_bound_and_default(
+                        db,
+                        self.freshness(db),
+                        type_mapping,
+                        visitor,
+                    ))
                 } else {
                     Type::TypeVar(self)
                 }
@@ -1255,7 +1304,7 @@ impl<'db> BoundTypeVarInstance<'db> {
                 delta,
             } => {
                 if generic_context.contains(db, self.identity(db)) && !self.is_parameter_pack(db) {
-                    Type::TypeVar(self.freshen_with_mapping(
+                    Type::TypeVar(self.with_mapped_bound_and_default(
                         db,
                         self.freshness(db).add(*delta),
                         type_mapping,
@@ -1328,7 +1377,24 @@ impl<'db> BoundTypeVarInstance<'db> {
         )
     }
 
-    fn freshen_with_mapping(
+    /// Whether this type variable's bound or constraints mention `Self`.
+    ///
+    /// A lazily-evaluated bound is invisible to [`Type::contains_self`], so callers that need to
+    /// know whether `Self` binding has any work to do must ask this separately
+    pub(crate) fn bound_or_constraints_mention_self(self, db: &'db dyn Db) -> bool {
+        match self.typevar(db).bound_or_constraints(db) {
+            None => false,
+            Some(TypeVarBoundOrConstraints::UpperBound(bound)) => bound.contains_self(db),
+            Some(TypeVarBoundOrConstraints::Constraints(constraints)) => constraints
+                .elements(db)
+                .iter()
+                .any(|constraint| constraint.contains_self(db)),
+        }
+    }
+
+    /// Rewrite this type variable's bound, constraints, and default through `type_mapping`,
+    /// and give the result `nonce` as its freshness.
+    fn with_mapped_bound_and_default(
         self,
         db: &'db dyn Db,
         nonce: TypeVarNonce,

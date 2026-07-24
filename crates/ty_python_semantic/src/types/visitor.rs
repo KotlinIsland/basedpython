@@ -583,6 +583,53 @@ pub(super) fn any_over_type<'db>(
     any_over_type_impl(db, ty, should_visit_lazy_type_attributes, query)
 }
 
+/// Like [`any_over_type`], but treats `Self` as an atom: `query` still sees it, but its upper
+/// bound is not visited.
+///
+/// `Self`'s upper bound is the enclosing class specialized with that class's *own* type
+/// parameters. Visiting it reports those type parameters as though they occurred wherever `Self`
+/// does, which makes a type that merely mentions `Self` look generic or self-referential. Callers
+/// asking "which type variables does this type leave unsolved?" want `Self` treated as one atom.
+pub(super) fn any_over_type_with_opaque_self<'db>(
+    db: &'db dyn Db,
+    ty: Type<'db>,
+    query: impl Fn(Type<'db>) -> bool,
+) -> bool {
+    struct OpaqueSelfVisitor<'db, 'a> {
+        query: &'a dyn Fn(Type<'db>) -> bool,
+        recursion_guard: TypeCollector<'db>,
+        found: Cell<bool>,
+    }
+
+    impl<'db> TypeVisitor<'db> for OpaqueSelfVisitor<'db, '_> {
+        fn should_visit_lazy_type_attributes(&self) -> bool {
+            false
+        }
+
+        fn visit_type(&self, db: &'db dyn Db, ty: Type<'db>) {
+            if self.found.get() {
+                return;
+            }
+            if (self.query)(ty) {
+                self.found.set(true);
+                return;
+            }
+            if matches!(ty, Type::TypeVar(typevar) if typevar.typevar(db).is_self(db)) {
+                return;
+            }
+            walk_type_with_recursion_guard(db, ty, self, &self.recursion_guard);
+        }
+    }
+
+    let visitor = OpaqueSelfVisitor {
+        query: &query,
+        recursion_guard: TypeCollector::default(),
+        found: Cell::new(false),
+    };
+    visitor.visit_type(db, ty);
+    visitor.found.get()
+}
+
 /// Recurse into a type and calls the passed-in closure on every nested type
 /// encountered, returning the first non-`None` value returned by the closure.
 ///

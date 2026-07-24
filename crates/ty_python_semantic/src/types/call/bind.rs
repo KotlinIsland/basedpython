@@ -29,6 +29,7 @@ use crate::db::Db;
 use crate::dunder_all::dunder_all_names;
 use crate::place::{DefinedPlace, Definedness, Place};
 use crate::subscript::PyIndex;
+use crate::types::TypedDictType;
 use crate::types::call::arguments::{CallArgumentTypes, Expansion, is_expandable_type};
 use crate::types::callable::CallableTypeKind;
 use crate::types::constraints::{
@@ -59,7 +60,20 @@ use crate::types::signatures::{
     PartialApplication, PartialSignatureApplication,
 };
 use crate::types::tuple::{TupleLength, TupleSpec, TupleType, VariableSegment};
-use crate::types::typed_dict::{TypedDictOpenness, extract_unpacked_typed_dict_from_value_type};
+use crate::types::typed_dict::{
+    TypedDictFieldBuilder, TypedDictOpenness, TypedDictSchema,
+    extract_unpacked_typed_dict_from_value_type,
+};
+
+/// How a keyword-variadic parameter annotated with a type variable aggregates the keyword
+/// arguments that reach it, so the type variable is solved from all of them at once.
+#[derive(Clone, Copy)]
+enum KeywordAggregateKind {
+    /// basedpython's `**kwargs: *Kwargs`.
+    ParameterPack,
+    /// `**kwargs: Unpack[T]` where `T` is bounded by `TypedDict`.
+    TypedDict,
+}
 use crate::types::typevar::{BoundTypeVarIdentity, TypeVarNonceGenerator};
 use crate::types::visitor::{
     TypeCollector, TypeKind, TypeVisitor, any_over_type, walk_non_atomic_type,
@@ -69,7 +83,7 @@ use crate::types::{
     BindingContext, BoundMethodType, BoundTypeVarInstance, CallableType, CallableTypes,
     ClassLiteral, DATACLASS_FLAGS, DataclassFlags, DataclassParams, DynamicType, GenericAlias,
     InternedConstraintSet, IntersectionType, KnownBoundMethodType, KnownClass, KnownInstanceType,
-    LiteralValueTypeKind, NominalInstanceType, PropertyInstanceType, SpecialFormType,
+    LiteralValueTypeKind, NominalInstanceType, PropertyInstanceType, SelfBinding, SpecialFormType,
     TypeAliasType, TypeContext, TypeMapping, TypeVarBoundOrConstraints, TypeVarVariance,
     UnionAccumulator, UnionBuilder, UnionType, UnsafeUnionType, WrapperDescriptorKind, enums,
     list_members,
@@ -3326,6 +3340,8 @@ impl<'db> CallableBinding<'db> {
                     .signature
                     .bind_self_with_receiver(db, Some(bound_self), Some(typing_self));
             overload.return_ty = overload.initial_return_type(db);
+            overload.receiver_self_type = Some(typing_self);
+            overload.rebind_self_in_return_type(db);
             overload.source_parameter_index_offset += usize::from(removed_receiver);
         }
     }
@@ -5608,17 +5624,17 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
     ) -> bool {
         let parameters = self.signature.parameters();
 
-        // basedpython: a `**kwargs: *Kwargs` parameter is solved from *all* the keyword arguments
-        // that reached it, as one pack value. inferring per-argument like an ordinary annotation
-        // would instead solve the pack to a single field's type
-        let keyword_pack_parameter = parameters.iter().position(|parameter| {
-            parameter.is_keyword_variadic()
-                && parameter.has_starred_annotation()
-                && matches!(
-                    parameter.annotated_type(),
-                    Type::TypeVar(typevar) if typevar.is_keyword_variadic(self.db)
-                )
-        });
+        // A keyword-variadic parameter annotated with a type variable is solved from *all* the
+        // keyword arguments that reached it, as one aggregate value. Inferring per-argument like
+        // an ordinary annotation would instead solve the type variable to a single field's type.
+        //
+        // basedpython spells this `**kwargs: *Kwargs` (a parameter pack); the typing-standard
+        // spelling is `**kwargs: Unpack[T]` with `T` bounded by `TypedDict`.
+        let keyword_aggregate = parameters
+            .iter()
+            .enumerate()
+            .find_map(|(index, parameter)| Some((index, self.keyword_aggregate_kind(parameter)?)));
+        let keyword_pack_parameter = keyword_aggregate.map(|(index, _)| index);
         let mut keyword_pack_fields: Vec<Parameter<'db>> = Vec::new();
 
         for (argument_index, adjusted_argument_index, argument, argument_types) in
@@ -5680,12 +5696,31 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             }
         }
 
-        if let Some(parameter_index) = keyword_pack_parameter {
-            let pack_value =
-                Type::paramspec_value_callable(self.db, Parameters::standard(keyword_pack_fields));
-            if let Err(error) =
-                builder.infer(parameters[parameter_index].annotated_type(), pack_value)
-            {
+        if let Some((parameter_index, kind)) = keyword_aggregate {
+            let aggregate_value = match kind {
+                KeywordAggregateKind::ParameterPack => Type::paramspec_value_callable(
+                    self.db,
+                    Parameters::standard(keyword_pack_fields),
+                ),
+                KeywordAggregateKind::TypedDict => {
+                    // every key was actually passed, so each is required
+                    let schema: TypedDictSchema<'db> = keyword_pack_fields
+                        .iter()
+                        .filter_map(|field| {
+                            let name = field.keyword_name()?.clone();
+                            let declared = TypedDictFieldBuilder::new(field.annotated_type())
+                                .required(true)
+                                .build();
+                            Some((name, declared))
+                        })
+                        .collect();
+                    Type::TypedDict(TypedDictType::from_schema_items(self.db, schema))
+                }
+            };
+            if let Err(error) = builder.infer(
+                parameters[parameter_index].annotated_type(),
+                aggregate_value,
+            ) {
                 specialization_errors.push(BindingError::SpecializationError {
                     error,
                     argument_index: None,
@@ -5714,6 +5749,15 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
         let parameters = self.signature.parameters();
         let parameter = &parameters[parameter_index];
         if self.is_gradual_variadic_parameter(parameter_index) {
+            return;
+        }
+        // `**kwargs: Unpack[T]` with an unsolved `T` is solved *from* these very keyword
+        // arguments, so each one conforms by construction; checking them individually against
+        // `T` would compare a field's type against the whole `TypedDict`.
+        if matches!(
+            self.keyword_aggregate_kind(parameter),
+            Some(KeywordAggregateKind::TypedDict)
+        ) {
             return;
         }
 
@@ -5828,6 +5872,28 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             self.parameter_ty_builders[parameter_index] = Some(builder);
         } else {
             self.parameter_tys[parameter_index] = Some(argument_type);
+        }
+    }
+
+    /// How this parameter aggregates the keyword arguments that reach it, if it does.
+    ///
+    /// A keyword-variadic parameter annotated with a type variable stands for the *whole* set of
+    /// keyword arguments, so the type variable is solved from all of them at once rather than
+    /// per-argument.
+    fn keyword_aggregate_kind(&self, parameter: &Parameter<'db>) -> Option<KeywordAggregateKind> {
+        if !parameter.is_keyword_variadic() {
+            return None;
+        }
+        match parameter.annotated_type() {
+            Type::TypeVar(typevar)
+                if parameter.has_starred_annotation() && typevar.is_keyword_variadic(self.db) =>
+            {
+                Some(KeywordAggregateKind::ParameterPack)
+            }
+            annotated if annotated.is_typed_dict_bounded_typevar(self.db) => {
+                Some(KeywordAggregateKind::TypedDict)
+            }
+            _ => None,
         }
     }
 
@@ -6540,6 +6606,13 @@ pub(crate) struct Binding<'db> {
 
     /// Call binding errors, if any.
     errors: Vec<BindingError<'db>>,
+
+    /// The type `Self` denotes for the receiver this call is bound to.
+    ///
+    /// Specializing this binding can *introduce* `Self`, because a class type parameter's default
+    /// can be `Self` (`class C[T = Self]`). Receiver binding has already happened by then, so the
+    /// receiver is kept here and `Self` is re-bound whenever the return type is specialized.
+    receiver_self_type: Option<Type<'db>>,
 }
 
 impl<'db> Binding<'db> {
@@ -6559,7 +6632,28 @@ impl<'db> Binding<'db> {
             variadic_argument_matched_to_variadic_parameter: false,
             parameter_tys: Box::from([]),
             errors: vec![],
+            receiver_self_type: None,
         }
+    }
+
+    /// Re-binds `Self` in the return type, for a `Self` that specialization has just introduced.
+    ///
+    /// Specializing a call can introduce `Self` that was not in the signature when the receiver
+    /// was bound, because a class type parameter's default can be `Self` (`class C[T = Self]`).
+    fn rebind_self_in_return_type(&mut self, db: &'db dyn Db) {
+        if !self.return_ty.contains_self(db) {
+            return;
+        }
+        let receiver_self_type = match (self.receiver_self_type, self.callable_type) {
+            (Some(receiver_self_type), _) => receiver_self_type,
+            (None, Type::BoundMethod(bound_method)) => bound_method.typing_self_type(db),
+            (None, _) => return,
+        };
+        self.return_ty = self.return_ty.apply_type_mapping(
+            db,
+            &TypeMapping::BindSelf(SelfBinding::new(db, receiver_self_type, None)),
+            TypeContext::default(),
+        );
     }
 
     /// Returns the matched-argument entry for a source call argument.
@@ -7003,6 +7097,9 @@ impl<'db> Binding<'db> {
         checker.check_argument_types(constraints);
 
         (self.inferable_typevars, self.inference, self.return_ty) = checker.finish();
+        // Inference can substitute a class type parameter whose default is `Self`, so a `Self`
+        // that was not there when the receiver was bound can appear here.
+        self.rebind_self_in_return_type(db);
     }
 
     fn check_keyword_unpack_key_types(

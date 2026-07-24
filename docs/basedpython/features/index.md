@@ -46,6 +46,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 
 - [generics](generics.md)
 - [explicit typevar constraints](constraints.md)
+- [`TypedDict` and `Self` in type parameters](typeddict-self-bounds.md)
 - [keyword-variadic packs](keyword-variadic.md)
 - [typevar variance keywords](variance.md)
 - [safe variance](safe-variance.md)

@@ -1,3 +1,4 @@
+use crate::types::any_over_type;
 use crate::{
     Db,
     reachability::ReachabilityConstraintsExtension,
@@ -948,6 +949,31 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .remove(InferenceFlags::IN_PARAMETER_ANNOTATION);
     }
 
+    /// Whether the type variable annotating `**kwargs` also annotates another parameter.
+    ///
+    /// Mirrors the deferral rule in `Parameters::from_annotation`: an unpacked type variable can
+    /// only be solved from the keyword arguments when nothing else pins it down first.
+    fn typevar_used_by_another_parameter(
+        &mut self,
+        annotated_type: Type<'db>,
+        parameters: &ast::Parameters,
+        kwargs_annotation: &ast::Expr,
+    ) -> bool {
+        let Type::TypeVar(typevar) = annotated_type else {
+            return false;
+        };
+        let identity = typevar.identity(self.db());
+        parameters
+            .iter()
+            .filter_map(ruff_python_ast::AnyParameterRef::annotation)
+            .filter(|annotation| !std::ptr::eq(*annotation, kwargs_annotation))
+            .any(|annotation| {
+                any_over_type(self.db(), self.file_expression_type(annotation), false, |ty| {
+                    matches!(ty, Type::TypeVar(other) if other.identity(self.db()) == identity)
+                })
+            })
+    }
+
     fn validate_unpacked_typed_dict_kwargs(&mut self, parameters: &ast::Parameters) {
         let Some(kwargs) = parameters.kwarg.as_ref() else {
             return;
@@ -966,6 +992,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             annotated_type,
             Type::TypeVar(typevar) if typevar.is_keyword_variadic(self.db())
         ) {
+            return;
+        }
+        // A type variable bounded by `TypedDict` will be solved to one, from these very keyword
+        // arguments; there are no keys to check against the other parameters until then. This
+        // only works while the keywords are the sole source of the type variable -- if another
+        // parameter also mentions it, fall through and report the unpacked value as invalid.
+        if annotated_type.is_typed_dict_bounded_typevar(self.db())
+            && !self.typevar_used_by_another_parameter(annotated_type, parameters, annotation)
+        {
             return;
         }
         let Some(unpacked_keys) = extract_unpacked_typed_dict_keys_from_kwargs_annotation(

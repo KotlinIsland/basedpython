@@ -3995,10 +3995,13 @@ accepts_optional_kwargs(a="bad")
 
 These signatures should be rejected. Some of them use a well-formed `Unpack[...]` expression, but
 the overall `**kwargs` signature is still invalid: mixing explicit parameters with conflicting
-unpacked names, using a type variable, or using a union instead of a concrete `TypedDict`.
+unpacked names, or using a union instead of a concrete `TypedDict`.
+
+Note that a type variable bounded by a `TypedDict` _is_ accepted, unlike in the typing spec; see
+[`TypedDict` and `Self` as type variable bounds](generics/typeddict_and_self_bounds.md).
 
 ```py
-from typing import TypeVar, Union
+from typing import Union
 from typing_extensions import NotRequired, TypedDict, Unpack
 
 class TD1(TypedDict):
@@ -4012,11 +4015,6 @@ class DunderTD(TypedDict):
     __x: int
 
 def func5(v1: int, **kwargs: Unpack[TD1]) -> None:  # error: [invalid-type-form]
-    pass
-
-T = TypeVar("T", bound=TD1)
-
-def func6(**kwargs: Unpack[T]) -> None:  # error: [invalid-type-form]
     pass
 
 TDUnion = Union[TD1, TD2]

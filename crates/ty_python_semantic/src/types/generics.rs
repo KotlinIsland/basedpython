@@ -117,7 +117,7 @@ pub(crate) fn bind_typevar<'db>(
 
         // Handle `Self` directly in class body annotations (not inside a method).
         let scope = index.scope(containing_scope);
-        if let Some(class_node) = scope.node().as_class() {
+        if let Some(class_node) = scope.node().as_class_or_class_type_parameters() {
             let definition = index.expect_single_definition(class_node);
             return Some(typevar.with_binding_context(db, definition));
         }
@@ -193,6 +193,13 @@ pub(crate) fn typing_self<'db>(
 ) -> Option<BoundTypeVarInstance<'db>> {
     let file = scope_id.file(db);
     let index = semantic_index(db, file);
+    // `Self` in a class's own type parameter list cannot be bounded by the class's *identity*
+    // specialization: that names the very type parameters being declared, so `class C[T = Self]`
+    // would define `T` through `T`. Bound it by the unspecialized class instead.
+    let in_own_type_params = matches!(
+        index.scope(scope_id.file_scope_id(db)).node(),
+        NodeWithScopeKind::ClassTypeParameters(_)
+    );
 
     let identity = TypeVarIdentity::new(
         db,
@@ -222,7 +229,13 @@ pub(crate) fn typing_self<'db>(
                 crate::types::class::based_enum_variant_union(db, static_class)
             }
         })
-        .unwrap_or_else(|| Type::instance(db, class.identity_specialization(db)));
+        .unwrap_or_else(|| {
+            if in_own_type_params {
+                Type::instance(db, class.unknown_specialization(db))
+            } else {
+                Type::instance(db, class.identity_specialization(db))
+            }
+        });
     let bounds = TypeVarBoundOrConstraints::UpperBound(self_bound);
     let typevar = TypeVarInstance::new(
         db,
