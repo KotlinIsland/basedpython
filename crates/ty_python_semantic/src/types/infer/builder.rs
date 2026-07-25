@@ -11748,7 +11748,29 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
     fn infer_name_expression(&mut self, name: &ast::ExprName) -> Type<'db> {
         match name.ctx {
-            ExprContext::Load => self.infer_name_load(name),
+            ExprContext::Load => {
+                let ty = self.infer_name_load(name);
+                // basedpython: a `type def` has no runtime existence — the
+                // declaration is erased when transpiling — so naming one in a value
+                // position would emit python that raises `NameError`
+                if ty.is_type_fn(self.db())
+                    && !self
+                        .context
+                        .inference_flags
+                        .contains(InferenceFlags::IN_TYPE_EXPRESSION)
+                    && let Some(builder) = self
+                        .context
+                        .report_lint(&crate::types::diagnostic::INVALID_TYPE_FORM, name)
+                {
+                    builder.into_diagnostic(format_args!(
+                        "`{}` is a `type def`; it can only be applied in a type \
+                         expression, not used as a value",
+                        name.id
+                    ));
+                    return Type::unknown();
+                }
+                ty
+            }
             ExprContext::Store => Type::Never,
             ExprContext::Del => {
                 self.infer_name_load(name);

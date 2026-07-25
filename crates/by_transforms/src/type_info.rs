@@ -171,6 +171,12 @@ pub(crate) trait TypeInfo {
     /// hash to the same class shape.
     fn promoted_type_display(&self, expr: &Expr) -> Option<String>;
 
+    /// whether `expr` is an application of a `type def` — `F[bool]` where `F` is
+    /// a type function. such an application lowers to the type the type function
+    /// returned, read back through
+    /// [`symbolic_type_fold`](TypeInfo::symbolic_type_fold)
+    fn is_type_fn_application(&self, expr: &Expr) -> bool;
+
     /// rendered exact (non-promoted) type of `expr` in a type position. used to
     /// fold symbolic operations such as `1 + 1` → `Literal[2]` or `A + B` →
     /// `Literal[3]`: ty already evaluates these in `infer_type_expression`, so
@@ -346,6 +352,16 @@ pub(crate) use ty_python_semantic::types::soundness::CastCheck;
 pub(crate) use ty_python_semantic::types::FrameworkRole;
 
 impl TypeInfo for SemanticModel<'_> {
+    fn is_type_fn_application(&self, expr: &Expr) -> bool {
+        let Expr::Subscript(subscript) = expr else {
+            return false;
+        };
+        subscript
+            .value
+            .inferred_type(self)
+            .is_some_and(|ty| ty.is_type_fn(self.db()))
+    }
+
     fn subscript_is_type_context(&self, name: &ExprName) -> bool {
         match name.inferred_type(self) {
             Some(ty) => ty.is_subscript_type_context(),

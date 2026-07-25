@@ -594,6 +594,11 @@ impl<'src> GenericPolyfill<'src> {
         let Some(tp) = &func.type_params else {
             return;
         };
+        // basedpython: a `type def` is erased by its own pass, so polyfilling its
+        // type parameters would leave an orphan `TypeVar` behind
+        if ruff_python_ast::helpers::is_type_def(func) {
+            return;
+        }
         if has_parameters_bound(&tp.type_params) {
             self.parameters_targets
                 .insert(func.name.id.as_str().to_owned());

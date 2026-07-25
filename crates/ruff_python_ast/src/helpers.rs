@@ -2304,6 +2304,29 @@ pub fn is_dotted_name(expr: &ast::Expr) -> bool {
     }
 }
 
+/// The synthetic marker decorator the parser attaches to a `type def`.
+///
+/// A `type def` is parsed as an ordinary [`crate::StmtFunctionDef`] tagged with
+/// this marker — a zero-binding `Name` with [`crate::ExprContext::Invalid`], whose range
+/// covers the `type` keyword text. Every consumer (the type checker, the
+/// transpiler's erasure pass, the reification pass, the formatter) must agree on
+/// the spelling, so they all go through [`is_type_def`] rather than matching the
+/// string themselves.
+pub const TYPE_FN_MARKER: &str = "type_fn";
+
+/// Whether `function` came from basedpython's `type def` — a type function,
+/// applied with `[]` in a type expression and evaluated by executing its body.
+pub fn is_type_def(function: &crate::StmtFunctionDef) -> bool {
+    function.decorator_list.iter().any(|decorator| {
+        matches!(
+            &decorator.expression,
+            crate::Expr::Name(name)
+                if name.id.as_str() == TYPE_FN_MARKER
+                    && matches!(name.ctx, crate::ExprContext::Invalid)
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;

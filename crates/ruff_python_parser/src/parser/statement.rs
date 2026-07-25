@@ -472,6 +472,16 @@ impl<'src> Parser<'src> {
                 }
                 Stmt::ClassDef(self.parse_class_definition(DecoratorList::new(), start))
             }
+            // basedpython: `type def F[X]:` is a type function — a compound
+            // statement, unlike the `type X = ...` alias handled with the simple
+            // statements below
+            TokenKind::Type if self.peek() == TokenKind::Def => {
+                self.error_if_not_basedpython(
+                    "`type def` is a basedpython declaration and is not valid in .py files"
+                        .to_string(),
+                );
+                self.parse_type_def(start)
+            }
             TokenKind::Try => Stmt::Try(self.parse_try_statement()),
             TokenKind::With => Stmt::With(self.parse_with_statement(start)),
             TokenKind::At => self.parse_decorators(),
@@ -1577,6 +1587,95 @@ impl<'src> Parser<'src> {
             type_params: type_params.map(Box::new),
             arguments: None,
             body,
+            node_index: AtomicNodeIndex::NONE,
+        })
+    }
+
+    /// Parses a `type def Name[X]:` declaration — a user-defined type function
+    /// whose body is executed to produce a type at each application.
+    ///
+    /// Produces a [`FunctionDef`] carrying a synthetic `type_fn` marker
+    /// decorator and an empty parameter list: the type parameters are the
+    /// function's parameters, and the application `Name[int]` is its call.
+    ///
+    /// [`FunctionDef`]: ast::StmtFunctionDef
+    fn parse_type_def(&mut self, start: TextSize) -> Stmt {
+        let marker_start = self.current_token_range().start();
+        self.bump(TokenKind::Type);
+        let marker_range = TextRange::new(marker_start, self.current_token_range().start());
+        self.bump(TokenKind::Def);
+
+        let mut decorators = DecoratorList::new();
+        decorators.push(ast::Decorator {
+            expression: Expr::Name(ast::ExprName {
+                id: Name::new_static(ruff_python_ast::helpers::TYPE_FN_MARKER),
+                ctx: ExprContext::Invalid,
+                range: marker_range,
+                node_index: AtomicNodeIndex::NONE,
+            }),
+            range: marker_range,
+            node_index: AtomicNodeIndex::NONE,
+        });
+
+        let name = self.parse_identifier();
+        let type_params = self.try_parse_type_params();
+        if type_params.is_none() {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "`type def` requires a type parameter list, e.g. `type def F[X]:`".to_string(),
+                ),
+                self.current_token_range(),
+            );
+        }
+
+        // the type parameters *are* the parameters; a `(...)` list would be a
+        // second, meaningless signature
+        if self.at(TokenKind::Lpar) {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "`type def` takes its parameters from the type parameter list, not `(...)`"
+                        .to_string(),
+                ),
+                self.current_token_range(),
+            );
+        }
+
+        let returns = self.eat(TokenKind::Rarrow).then(|| {
+            Box::new(
+                self.parse_expression_list(ExpressionContext::default())
+                    .expr,
+            )
+        });
+
+        let body = if self.eat(TokenKind::Colon) {
+            self.parse_body(Clause::FunctionDef)
+        } else {
+            self.add_error(
+                ParseErrorType::OtherError("Expected `:` after `type def` declaration".to_string()),
+                self.current_token_range(),
+            );
+            Suite::new()
+        };
+
+        Stmt::FunctionDef(ast::StmtFunctionDef {
+            range: self.node_range(start),
+            is_async: false,
+            decorator_list: decorators,
+            name,
+            type_params: type_params.map(Box::new),
+            parameters: Box::new(ast::Parameters {
+                range: TextRange::empty(start),
+                node_index: AtomicNodeIndex::NONE,
+                posonlyargs: std::iter::empty().collect(),
+                args: std::iter::empty().collect(),
+                vararg: None,
+                kwonlyargs: std::iter::empty().collect(),
+                kwarg: None,
+            }),
+            returns,
+            body,
+            is_trailing_lambda: false,
+            is_asserts_return: false,
             node_index: AtomicNodeIndex::NONE,
         })
     }

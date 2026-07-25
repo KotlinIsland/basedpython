@@ -191,6 +191,22 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     ) -> Type<'db> {
         let value_ty = self.infer_expression(&subscript.value, TypeContext::default());
 
+        // basedpython: `F[int]` where `F` is a `type def` is a *type* expression form.
+        // used as a value it has no runtime meaning — the declaration is erased by the
+        // transpiler, so the emitted python would raise `NameError`
+        if value_ty.is_type_fn(self.db()) {
+            self.infer_expression(&subscript.slice, TypeContext::default());
+            if let Some(builder) = self
+                .context
+                .report_lint(&crate::types::diagnostic::INVALID_TYPE_FORM, subscript)
+            {
+                builder.into_diagnostic(
+                    "a `type def` can only be applied in a type expression, not used as a value",
+                );
+            }
+            return Type::unknown();
+        }
+
         // basedpython `a?.b[0]`: the `?.` short-circuit covers the subscript too, matching the
         // `None if a is None else a.b[0]` lowering, so index the present-receiver value and
         // let the `None` ride out to the end of the chain

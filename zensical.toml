@@ -114,5 +114,6 @@ development = [
   { "how transpilation works" = "development/how-transpilation-works.md" },
   { "reverse transforms" = "development/reverse-transforms.md" },
   { "sourcemaps" = "development/sourcemaps.md" },
+  { "type functions" = "development/type-def-design.md" },
   { "typeshed patches" = "development/typeshed-patches.md" },
 ]

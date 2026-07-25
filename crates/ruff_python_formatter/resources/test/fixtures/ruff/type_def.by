@@ -1,0 +1,19 @@
+type def F[X]:
+    if X <= int:
+        return int
+    return str
+
+
+type def OneLine[X]: return int
+
+
+type def Annotated[X] -> int | str:
+    return int
+
+
+class Holder:
+    type def Nested[X]:
+        return X
+
+
+def f(a: F[bool]) -> None: ...

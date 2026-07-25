@@ -1,0 +1,50 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/type_def.by
+---
+## Input
+```bython
+type def F[X]:
+    if X <= int:
+        return int
+    return str
+
+
+type def OneLine[X]: return int
+
+
+type def Annotated[X] -> int | str:
+    return int
+
+
+class Holder:
+    type def Nested[X]:
+        return X
+
+
+def f(a: F[bool]) -> None: ...
+```
+
+## Output
+```bython
+type def F[X]:
+    if X <= int:
+        return int
+    return str
+
+
+type def OneLine[X]:
+    return int
+
+
+type def Annotated[X] -> int | str:
+    return int
+
+
+class Holder:
+    type def Nested[X]:
+        return X
+
+
+def f(a: F[bool]) -> None: ...
+```

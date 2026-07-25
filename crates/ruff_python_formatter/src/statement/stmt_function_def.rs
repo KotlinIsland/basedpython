@@ -176,7 +176,14 @@ fn format_function_header(f: &mut PyFormatter, item: &StmtFunctionDef) -> Format
     }
 
     let format_inner = format_with(|f: &mut PyFormatter| {
-        parameters.format().fmt(f)?;
+        // basedpython: a `type def` takes its parameters from the type-parameter
+        // list and has no `(...)`. its synthetic marker decorator already printed
+        // the `type` keyword verbatim, so emitting the (empty, zero-width)
+        // parameter list here would turn `type def F[X]:` into `type def F[X]():`,
+        // which does not parse
+        if !ruff_python_ast::helpers::is_type_def(item) {
+            parameters.format().fmt(f)?;
+        }
 
         if let Some(return_annotation) = returns.as_deref() {
             write!(f, [space(), token("->"), space()])?;

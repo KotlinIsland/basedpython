@@ -201,6 +201,7 @@ pub(crate) mod trailing_lambda;
 mod tuple;
 pub(crate) mod type_alias;
 mod type_expansion;
+pub(crate) mod type_fn;
 mod type_form;
 mod typed_dict;
 mod typevar;
@@ -2297,6 +2298,13 @@ impl<'db> Type<'db> {
 
     /// Returns the fallback instance type that a literal is an instance of, or `None` if the type
     /// is not a literal.
+    /// basedpython: whether this is a `type def` — a type function, applied with
+    /// `[]` in a type expression and evaluated by executing its body
+    pub fn is_type_fn(self, db: &'db dyn Db) -> bool {
+        matches!(self, Type::FunctionLiteral(function)
+            if function.has_known_decorator(db, crate::types::function::FunctionDecorators::TYPE_FN))
+    }
+
     pub(crate) fn literal_fallback_instance(self, db: &'db dyn Db) -> Option<Type<'db>> {
         // There are other literal types that could conceivable be included here: class literals
         // falling back to `type[X]`, for instance. For now, there is not much rigorous thought put

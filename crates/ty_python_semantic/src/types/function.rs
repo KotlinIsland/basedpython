@@ -164,7 +164,7 @@ pub(crate) struct FunctionSpans {
 
 bitflags! {
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Default, Hash)]
-    pub struct FunctionDecorators: u8 {
+    pub struct FunctionDecorators: u16 {
         /// `@classmethod`
         const CLASSMETHOD = 1 << 0;
         /// `@typing.no_type_check`
@@ -181,6 +181,9 @@ bitflags! {
         const OVERRIDE = 1 << 6;
         /// `@typing.type_check_only`
         const TYPE_CHECK_ONLY = 1 << 7;
+        /// basedpython: the function is a `type def` — a type function, applied
+        /// with `[]` in a type expression and evaluated by executing its body
+        const TYPE_FN = 1 << 8;
     }
 }
 
