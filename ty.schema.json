@@ -89,13 +89,6 @@
             "null"
           ]
         },
-        "infer-parameter-type-from-default": {
-          "description": "Whether an unannotated parameter that has a default value should be given the (promoted)\ntype of that default, rather than an implicit gradual type. This is a basedpython feature.\n\nWhen set to `true`, this deliberately breaks the gradual guarantee: `def f(a=1)` declares\n`a` as `int` instead of leaving it unannotated, so passing a `str` at a call site is an\nerror.\n\nDefaults to `false`.",
-          "type": [
-            "boolean",
-            "null"
-          ]
-        },
         "replace-imports-with-any": {
           "description": "A list of module glob patterns whose imports should be replaced with `typing.Any`.\n\nUnlike `allowed-unresolved-imports`, this setting replaces the module's type information\nwith `typing.Any` even if the module can be resolved. Import diagnostics are\nunconditionally suppressed for matching modules.\n\n- Prefix a pattern with `!` to exclude matching modules\n\nWhen multiple patterns match, later entries take precedence.\n\nGlob patterns can be used in combinations with each other. For example, to suppress errors for\nany module where the first component contains the substring `test`, use `*test*.**`.\n\nWhen multiple patterns match, later entries take precedence.",
           "type": [
@@ -108,6 +101,13 @@
         },
         "respect-type-ignore-comments": {
           "description": "Whether ty should respect `type: ignore` comments.\n\nWhen set to `false`, `type: ignore` comments are treated like any other normal\ncomment and can't be used to suppress ty errors (you have to use `ty: ignore` instead).\n\nSetting this option can be useful when using ty alongside other type checkers or when\nyou prefer using `ty: ignore` over `type: ignore`.\n\nDefaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "sound-types": {
+          "description": "Whether to infer sound (non-gradual) types wherever a precise type is available. This is a\nbasedpython feature.\n\nPython's gradual guarantee requires a type checker to fall back to a gradual type whenever\nan annotation is missing, even when a precise type could be inferred. In a fully typed\nproject that is pure boilerplate: it forces an annotation to be written for something the\nchecker already knows. When set to `true`, this option deliberately breaks the gradual\nguarantee and uses the precise type instead. It affects:\n\n- **Unannotated parameters with a default**: `def f(a=1)` declares `a` as `int`, so passing\n  a `str` at a call site is an error. This applies to lambdas too (`lambda a=1: ...`).\n- **Unannotated methods that override a base method**: the parameter and return types are\n  inherited from the overridden method, including from `Protocol` members and\n  `abstractmethod` declarations.\n- **Bare `ClassVar` annotations**: `x: ClassVar = 1` declares `int` rather than the union of\n  `Unknown` and the inferred type.\n- **Unsolved type variables**: a type variable that a call leaves unsolved is solved to\n  `Never` rather than `Unknown`.\n\nAn explicit annotation always takes priority over any of the above.\n\nDefaults to `false`.",
           "type": [
             "boolean",
             "null"

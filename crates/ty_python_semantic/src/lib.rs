@@ -127,13 +127,15 @@ pub struct AnalysisSettings {
     /// later uses of a binding; each binding keeps its creation-time specialization.
     pub disable_fluid_specializations: bool,
 
-    /// Whether an unannotated parameter with a default value is given the (promoted) type of
-    /// that default, rather than an implicit gradual type.
+    /// Whether to infer sound (non-gradual) types wherever a precise type is available, rather
+    /// than falling back to a gradual type because an annotation is missing.
     ///
-    /// This deliberately breaks the gradual guarantee: with it enabled, `def f(a=1)` declares
-    /// `a` as `int` instead of leaving it unannotated, so passing a `str` at the call site is
-    /// an error.
-    pub infer_parameter_type_from_default: bool,
+    /// This deliberately breaks the gradual guarantee. With it enabled: an unannotated parameter
+    /// with a default is declared with the default's promoted type (`def f(a=1)` declares `int`),
+    /// an unannotated method inherits the signature of the base method it overrides, a bare
+    /// `ClassVar` declares its inferred type instead of `Unknown | <inferred>`, and a type
+    /// variable left unsolved by a call is solved to `Never` rather than `Unknown`.
+    pub sound_types: bool,
 }
 
 impl Default for AnalysisSettings {
@@ -144,7 +146,7 @@ impl Default for AnalysisSettings {
             allowed_unresolved_imports: ModuleGlobSet::empty(),
             replace_imports_with_any: ModuleGlobSet::empty(),
             disable_fluid_specializations: false,
-            infer_parameter_type_from_default: false,
+            sound_types: false,
         }
     }
 }

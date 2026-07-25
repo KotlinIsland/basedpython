@@ -645,3 +645,76 @@ error[invalid-type-form]: Variable of type `Never` is not allowed in a parameter
   |
 help: The variable may have been inferred as `Never` because its definition was inferred as being unreachable
 ```
+
+## Type-checker directives are never terminal
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+A statement-level call whose return type is `Never` makes the rest of the scope unreachable. That is
+correct for a function declared to return `Never`, but `reveal_type` and `assert_type` are
+directives that return their argument unchanged — the runtime call always returns. Their *generic*
+return type nevertheless specializes to `Never` whenever the argument is `Never`.
+
+Treating them as terminal would silently mark everything after them unreachable, so every later
+`reveal_type` would report `Never` and every later diagnostic would disappear.
+
+```py
+from typing import Never, assert_type
+
+def first[T](xs: list[T]) -> T:
+    return xs[0]
+
+ns: list[Never] = []
+ss: list[str] = []
+
+reveal_type(first(ns))  # revealed: Never
+# the call above must not truncate control flow:
+reveal_type(first(ss))  # revealed: str
+
+n: Never = first(ns)
+assert_type(n, Never)
+reveal_type(first(ss))  # revealed: str
+
+x: int = "still checked"  # error: [invalid-assignment]
+```
+
+## A declared `Never` return still terminates
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+```py
+from typing import Never
+
+def bail() -> Never:
+    raise RuntimeError
+
+def f(a: str) -> None:
+    bail()
+    reveal_type(a)  # revealed: Never
+```
+
+## A generic call specializing to `Never` still terminates
+
+```toml
+[environment]
+python-version = "3.12"
+```
+
+No value can flow past it, so the remainder of the scope is genuinely unreachable.
+
+```py
+from typing import Never
+
+def first[T](xs: list[T]) -> T:
+    return xs[0]
+
+def g(ns: list[Never], s: str) -> None:
+    first(ns)
+    reveal_type(s)  # revealed: Never
+```

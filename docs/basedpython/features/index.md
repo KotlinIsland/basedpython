@@ -16,6 +16,7 @@ the basedpython language reference
 type-checking improvements with no new syntax — they work in `.by` and `.py` files alike
 
 - [fluid specializations](fluid-specializations.md)
+- [sound types](sound-types.md) — infer precise types instead of gradual ones
 
 ## type system
 

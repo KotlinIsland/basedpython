@@ -257,7 +257,7 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
         allowed_unresolved_imports: allowed_unresolved_imports_default,
         replace_imports_with_any: replace_imports_with_any_default,
         disable_fluid_specializations: disable_fluid_specializations_default,
-        infer_parameter_type_from_default: infer_parameter_type_from_default_default,
+        sound_types: sound_types_default,
     } = AnalysisSettings::default();
 
     let allowed_unresolved_imports =
@@ -298,9 +298,7 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
         disable_fluid_specializations: options
             .disable_fluid_specializations
             .unwrap_or(disable_fluid_specializations_default),
-        infer_parameter_type_from_default: options
-            .infer_parameter_type_from_default
-            .unwrap_or(infer_parameter_type_from_default_default),
+        sound_types: options.sound_types.unwrap_or(sound_types_default),
     }
 }
 

@@ -118,41 +118,6 @@ Defaults to `false`.
 
 ---
 
-### `infer-parameter-type-from-default`
-
-Whether an unannotated parameter that has a default value should be given the (promoted)
-type of that default, rather than an implicit gradual type. This is a basedpython feature.
-
-When set to `true`, this deliberately breaks the gradual guarantee: `def f(a=1)` declares
-`a` as `int` instead of leaving it unannotated, so passing a `str` at a call site is an
-error.
-
-Defaults to `false`.
-
-**Default value**: `false`
-
-**Type**: `bool`
-
-**Example usage**:
-
-=== "pyproject.toml"
-
-    ```toml
-    [tool.ty.analysis]
-    # Infer unannotated parameter types from their defaults
-    infer-parameter-type-from-default = true
-    ```
-
-=== "ty.toml"
-
-    ```toml
-    [analysis]
-    # Infer unannotated parameter types from their defaults
-    infer-parameter-type-from-default = true
-    ```
-
----
-
 ### `replace-imports-with-any`
 
 A list of module glob patterns whose imports should be replaced with `typing.Any`.
@@ -226,6 +191,55 @@ Defaults to `true`.
     [analysis]
     # Disable support for `type: ignore` comments
     respect-type-ignore-comments = false
+    ```
+
+---
+
+### `sound-types`
+
+Whether to infer sound (non-gradual) types wherever a precise type is available. This is a
+basedpython feature.
+
+Python's gradual guarantee requires a type checker to fall back to a gradual type whenever
+an annotation is missing, even when a precise type could be inferred. In a fully typed
+project that is pure boilerplate: it forces an annotation to be written for something the
+checker already knows. When set to `true`, this option deliberately breaks the gradual
+guarantee and uses the precise type instead. It affects:
+
+- **Unannotated parameters with a default**: `def f(a=1)` declares `a` as `int`, so passing
+  a `str` at a call site is an error. This applies to lambdas too (`lambda a=1: ...`).
+- **Unannotated methods that override a base method**: the parameter and return types are
+  inherited from the overridden method, including from `Protocol` members and
+  `abstractmethod` declarations.
+- **Bare `ClassVar` annotations**: `x: ClassVar = 1` declares `int` rather than the union of
+  `Unknown` and the inferred type.
+- **Unsolved type variables**: a type variable that a call leaves unsolved is solved to
+  `Never` rather than `Unknown`.
+
+An explicit annotation always takes priority over any of the above.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Infer sound (non-gradual) types wherever a precise type is available
+    sound-types = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Infer sound (non-gradual) types wherever a precise type is available
+    sound-types = true
     ```
 
 ---
@@ -788,41 +802,6 @@ Defaults to `false`.
 
 ---
 
-#### `infer-parameter-type-from-default`
-
-Whether an unannotated parameter that has a default value should be given the (promoted)
-type of that default, rather than an implicit gradual type. This is a basedpython feature.
-
-When set to `true`, this deliberately breaks the gradual guarantee: `def f(a=1)` declares
-`a` as `int` instead of leaving it unannotated, so passing a `str` at a call site is an
-error.
-
-Defaults to `false`.
-
-**Default value**: `false`
-
-**Type**: `bool`
-
-**Example usage**:
-
-=== "pyproject.toml"
-
-    ```toml
-    [tool.ty.overrides.analysis]
-    # Infer unannotated parameter types from their defaults
-    infer-parameter-type-from-default = true
-    ```
-
-=== "ty.toml"
-
-    ```toml
-    [overrides.analysis]
-    # Infer unannotated parameter types from their defaults
-    infer-parameter-type-from-default = true
-    ```
-
----
-
 #### `replace-imports-with-any`
 
 A list of module glob patterns whose imports should be replaced with `typing.Any`.
@@ -896,6 +875,55 @@ Defaults to `true`.
     [overrides.analysis]
     # Disable support for `type: ignore` comments
     respect-type-ignore-comments = false
+    ```
+
+---
+
+#### `sound-types`
+
+Whether to infer sound (non-gradual) types wherever a precise type is available. This is a
+basedpython feature.
+
+Python's gradual guarantee requires a type checker to fall back to a gradual type whenever
+an annotation is missing, even when a precise type could be inferred. In a fully typed
+project that is pure boilerplate: it forces an annotation to be written for something the
+checker already knows. When set to `true`, this option deliberately breaks the gradual
+guarantee and uses the precise type instead. It affects:
+
+- **Unannotated parameters with a default**: `def f(a=1)` declares `a` as `int`, so passing
+  a `str` at a call site is an error. This applies to lambdas too (`lambda a=1: ...`).
+- **Unannotated methods that override a base method**: the parameter and return types are
+  inherited from the overridden method, including from `Protocol` members and
+  `abstractmethod` declarations.
+- **Bare `ClassVar` annotations**: `x: ClassVar = 1` declares `int` rather than the union of
+  `Unknown` and the inferred type.
+- **Unsolved type variables**: a type variable that a call leaves unsolved is solved to
+  `Never` rather than `Unknown`.
+
+An explicit annotation always takes priority over any of the above.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # Infer sound (non-gradual) types wherever a precise type is available
+    sound-types = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # Infer sound (non-gradual) types wherever a precise type is available
+    sound-types = true
     ```
 
 ---
