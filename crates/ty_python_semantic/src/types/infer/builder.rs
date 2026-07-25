@@ -67,9 +67,10 @@ use crate::types::diagnostic::{
     INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE,
     INVALID_TYPE_FORM, INVALID_TYPE_VARIABLE_BOUND, INVALID_TYPE_VARIABLE_CONSTRAINTS,
     NON_OVERLAPPING_CAST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
-    POSSIBLY_MISSING_SUBMODULE, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD, UNDEFINED_REVEAL,
-    UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC,
-    UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, hint_if_stdlib_attribute_exists_on_other_versions,
+    POSSIBLY_MISSING_SUBMODULE, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
+    UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
+    UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR,
+    UNUSED_AWAITABLE, hint_if_stdlib_attribute_exists_on_other_versions,
     report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
     report_bad_dunder_delete_call, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
@@ -11378,6 +11379,26 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             _ => return None,
         };
+
+        // `super` needs the implicit arguments a method supplies — the `__class__`
+        // cell and the receiver. directly in a class body there is neither, so
+        // `super().x` there raises at runtime; report it rather than lower it
+        let reaches_a_function = self
+            .index
+            .ancestor_scopes(self.scope().file_scope_id(db))
+            .take_while(|(_, ancestor)| ancestor.node().as_class().is_none())
+            .any(|(_, ancestor)| ancestor.node().as_function().is_some());
+        if !reaches_a_function {
+            if let Some(builder) = self
+                .context
+                .report_lint(&UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, value)
+            {
+                builder.into_diagnostic(
+                    "Cannot determine implicit arguments for `super` outside a method",
+                );
+            }
+            return None;
+        }
 
         let enclosing = nearest_enclosing_class(db, self.index, self.scope())?;
         let enclosing_class = ClassLiteral::Static(enclosing).default_specialization(db);

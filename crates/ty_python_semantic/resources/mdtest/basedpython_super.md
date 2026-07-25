@@ -104,3 +104,36 @@ class B(A):
         reveal_type(prefix)  # revealed: str
         return prefix + "!"
 ```
+
+## `super` outside a method
+
+`super` needs the implicit arguments a method supplies — the `__class__` cell and the receiver.
+Directly in a class body there is neither, so it is reported rather than lowered (a `super()`
+emitted there raises at runtime).
+
+```by
+class A:
+    let a: int
+        get() = 1
+
+class B(A):
+    # error: [unavailable-implicit-super-arguments]
+    # error: [unresolved-attribute]
+    override let a = super.a + 1
+```
+
+## `super` in a property accessor
+
+An accessor is a method like any other, so `super` stays available there.
+
+```by
+class A:
+    let a: int
+        get() = 1
+
+class B(A):
+    override let a
+        get() = super.a + 1
+
+assert B().a == 2
+```
