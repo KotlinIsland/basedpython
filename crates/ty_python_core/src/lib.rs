@@ -342,6 +342,13 @@ pub struct SemanticIndex<'db> {
     /// Set of all asynchronous comprehensions in this file.
     async_comprehensions: FrozenSet<FileScopeId>,
 
+    /// basedpython: the call expressions this file makes as bare statements.
+    ///
+    /// An assertion guard narrows only when it is called as a statement, so this is what
+    /// tells a checker that a guard call was used as a value instead. Only collected for
+    /// basedpython files, where such a guard can be declared.
+    basedpython_statement_calls: FrozenSet<ExpressionNodeKey>,
+
     /// Narrowing alias metadata for predicate leaf names.
     /// When a predicate references an alias variable (e.g., `is_none` from `is_none = x is None`),
     /// the alias Name node is mapped to its aliased expression for constraint-generation time.
@@ -362,6 +369,11 @@ impl<'db> SemanticIndex<'db> {
     #[track_caller]
     pub fn place_table(&self, scope_id: FileScopeId) -> &PlaceTable {
         &self.place_tables[scope_id]
+    }
+
+    /// basedpython: whether this call expression is made as a bare statement.
+    pub fn is_statement_call(&self, key: impl Into<ExpressionNodeKey>) -> bool {
+        self.basedpython_statement_calls.contains(&key.into())
     }
 
     /// Returns alias metadata for an alias Name node in a predicate, if one exists.

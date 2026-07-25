@@ -129,6 +129,15 @@ pub enum PredicateNode<'db> {
     /// call is `Unknown`/`Any`, because that would result in too many false
     /// positives.
     IsNonTerminalCall(CallableAndCallExpr<'db>),
+    /// basedpython: a statement-level call that may be a call to an assertion guard
+    /// (`def f(x) -> asserts x`).
+    ///
+    /// The guard names a place the call narrows once it returns, which is the whole of the
+    /// code that follows the call statement — so unlike an ordinary call, this predicate is
+    /// recorded as a narrowing constraint on the statement's own flow. Whether the callee is
+    /// an assertion guard at all is resolved during type checking; a call to anything else
+    /// narrows nothing.
+    AssertsCall(CallableAndCallExpr<'db>),
     /// Whether an iterable is statically known to yield at least one item.
     ///
     /// Currently, this predicate is only emitted for direct `range(...)` calls. It is resolved

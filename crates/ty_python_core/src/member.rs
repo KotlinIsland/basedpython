@@ -1,5 +1,6 @@
 use ruff_index::{IndexVec, newtype_index};
 use ruff_python_ast as ast;
+use ruff_python_ast::name::Name;
 use ruff_text_size::{TextLen as _, TextRange, TextSize};
 
 use bitflags::bitflags;
@@ -294,6 +295,24 @@ impl MemberExprBuilder {
             }
             _ => None,
         }
+    }
+
+    /// A builder for the bare symbol `name`, with no segments yet.
+    pub(super) fn from_symbol(name: &Name) -> MemberExprBuilder {
+        MemberExprBuilder {
+            path: CharStr::from(name.clone()),
+            segments: SmallVec::new_const(),
+        }
+    }
+
+    /// Extends `value` with the attribute segment `attr`, as `.y` extends `x` into `x.y`.
+    pub(super) fn visit_attribute(value: &MemberExprBuilder, attr: &str) -> MemberExprBuilder {
+        let start_offset = value.path.text_len();
+        let path = CharStr::concat(&[value.path.as_str(), attr]);
+        let mut segments = value.segments.clone();
+        segments.push(SegmentInfo::new(SegmentKind::Attribute, start_offset));
+
+        MemberExprBuilder { path, segments }
     }
 
     pub(super) fn visit_subscript_expr(

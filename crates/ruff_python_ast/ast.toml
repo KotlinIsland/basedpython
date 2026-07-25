@@ -100,6 +100,11 @@ is the synthetic `__trailing_lambda__`, and `decorator_list` holds exactly one
 synthetic decorator whose expression is the called expression from the source
 (no `@` is present). Lowered to a `def` followed by the call with the function
 appended as its last argument""" },
+  { name = "is_asserts_return", type = "bool", doc = """basedpython: when true, the return annotation is an assertion guard
+(`def f(x) -> asserts x` / `-> asserts not x`) rather than a type. `returns`
+holds the asserted expression — a name, or `not` applied to a name — which
+names the place the caller narrows once the call returns. Lowered to `None`,
+which is what such a function returns""" },
 ]
 
 [Stmt.nodes.StmtClassDef]

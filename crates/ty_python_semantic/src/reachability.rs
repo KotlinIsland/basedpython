@@ -534,9 +534,8 @@ const REACHABILITY_EVALUATION_CHUNK_SIZE: usize = 256;
 fn predicate_scope<'db>(db: &'db dyn Db, predicate: &Predicate<'db>) -> ScopeId<'db> {
     match predicate.node {
         PredicateNode::Expression(expression) => expression.scope(db),
-        PredicateNode::IsNonTerminalCall(CallableAndCallExpr { callable, .. }) => {
-            callable.scope(db)
-        }
+        PredicateNode::IsNonTerminalCall(CallableAndCallExpr { callable, .. })
+        | PredicateNode::AssertsCall(CallableAndCallExpr { callable, .. }) => callable.scope(db),
         PredicateNode::Pattern(pattern) => pattern.scope(db),
         PredicateNode::SubjectElementPattern(subject_element) => subject_element.pattern.scope(db),
         PredicateNode::IsNonEmptyIterable(expression) => expression.scope(db),
@@ -1527,6 +1526,9 @@ fn analyze_single(db: &dyn Db, predicate: &Predicate) -> Truthiness {
             is_await,
         }) => analyze_non_terminal_call(db, callable, call_expr, is_await)
             .negate_if(!predicate.is_positive),
+        // basedpython: an assertion guard is recorded as an unconditional narrowing
+        // constraint, so its truth value is the fact that the call returned
+        PredicateNode::AssertsCall(_) => Truthiness::AlwaysTrue.negate_if(!predicate.is_positive),
         PredicateNode::Pattern(inner) => analyze_pattern_predicate(db, inner),
         PredicateNode::SubjectElementPattern(subject_element) => {
             analyze_pattern_predicate(db, subject_element.pattern)

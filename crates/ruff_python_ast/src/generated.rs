@@ -9419,6 +9419,12 @@ pub struct StmtFunctionDef {
     /// (no `@` is present). Lowered to a `def` followed by the call with the function
     /// appended as its last argument
     pub is_trailing_lambda: bool,
+    /// basedpython: when true, the return annotation is an assertion guard
+    /// (`def f(x) -> asserts x` / `-> asserts not x`) rather than a type. `returns`
+    /// holds the asserted expression — a name, or `not` applied to a name — which
+    /// names the place the caller narrows once the call returns. Lowered to `None`,
+    /// which is what such a function returns
+    pub is_asserts_return: bool,
 }
 
 /// See also [ClassDef](https://docs.python.org/3/library/ast.html#ast.ClassDef)
@@ -10301,6 +10307,7 @@ impl StmtFunctionDef {
             returns,
             body,
             is_trailing_lambda: _,
+            is_asserts_return: _,
             range: _,
             node_index: _,
         } = self;

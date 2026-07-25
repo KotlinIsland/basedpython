@@ -437,7 +437,7 @@ pub(crate) fn run_against_source<'a>(
     let dynamic_keyword_pass = dynamic_keyword::DynamicKeywordPass::new();
     let character_type_pass = character_type::CharacterTypePass::new();
     let grapheme_string_pass = grapheme_string::GraphemeStringPass::new();
-    let type_is_pass = type_is::TypeIs::new();
+    let type_is_pass = type_is::TypeIs::new(source_ref);
     let top_star_pass = top_star::TopStar::new();
     let identity_swap_pass = identity_swap::IdentitySwap::new(source_ref);
     let compat_pass = compat::CompatRewrite::new(source_ref, config.clone());

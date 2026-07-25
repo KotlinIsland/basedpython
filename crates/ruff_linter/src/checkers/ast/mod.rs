@@ -32,7 +32,9 @@ use smallvec::SmallVec;
 use ruff_db::diagnostic::{Annotation, Diagnostic, DiagnosticTag, IntoDiagnosticMessage, Span};
 use ruff_diagnostics::{Applicability, Fix, IsolationLevel};
 use ruff_notebook::{CellOffsets, NotebookIndex};
-use ruff_python_ast::helpers::{collect_import_from_member, is_docstring_stmt, to_module_path};
+use ruff_python_ast::helpers::{
+    ReturnGuardForm, collect_import_from_member, is_docstring_stmt, return_guards, to_module_path,
+};
 use ruff_python_ast::identifier::Identifier;
 use ruff_python_ast::name::QualifiedName;
 use ruff_python_ast::str::Quote;
@@ -1342,7 +1344,28 @@ impl<'a> Visitor<'a> for Checker<'a> {
                         }
                     }
                 }
-                if let Some(expr) = returns {
+                // basedpython: a narrowing return annotation names the place a call narrows,
+                // which is not a reference the enclosing scope can resolve — visiting it
+                // would report the named parameter as undefined. The type it tests against
+                // is a real annotation, and that part is visited as one
+                let guards = self
+                    .source_type
+                    .is_basedpython()
+                    .then(|| return_guards(function_def))
+                    .flatten();
+                let annotations: Vec<&Expr> = match (guards, returns.as_deref()) {
+                    (Some(guards), _) => guards
+                        .into_iter()
+                        .filter_map(|guard| match guard.form {
+                            ReturnGuardForm::AssertsType { ty, .. }
+                            | ReturnGuardForm::Predicate { ty } => Some(ty),
+                            ReturnGuardForm::Asserts { .. } => None,
+                        })
+                        .collect(),
+                    (None, Some(returns)) => vec![returns],
+                    (None, None) => Vec::new(),
+                };
+                for expr in annotations {
                     if singledispatch {
                         self.visit_runtime_required_annotation(expr);
                     } else {

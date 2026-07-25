@@ -44,6 +44,7 @@ use crate::types::{
     VarianceInferable, infer_complete_scope_types, todo_type,
 };
 use crate::{Db, FxOrderSet};
+use ruff_python_ast::helpers::ReturnGuardForm;
 use ruff_python_ast::{self as ast, name::Name};
 use ty_python_core::definition::Definition;
 
@@ -337,6 +338,7 @@ impl<'db> CallableSignature<'db> {
                             tcx,
                             visitor,
                         ),
+                        narrowing_guards: self_signature.narrowing_guards.clone(),
                     }))
                 }
                 Type::Callable(callable)
@@ -376,6 +378,7 @@ impl<'db> CallableSignature<'db> {
                                 tcx,
                                 visitor,
                             ),
+                            narrowing_guards: signature.narrowing_guards.clone(),
                         }),
                     ))
                 }
@@ -568,6 +571,100 @@ pub struct Signature<'db> {
 
     /// Return type. If no annotation was provided, this is `Unknown`.
     pub(crate) return_ty: Type<'db>,
+
+    /// basedpython: the places named by a narrowing return annotation.
+    pub(crate) narrowing_guards: Box<[NarrowingGuard<'db>]>,
+}
+
+/// basedpython: a narrowing target named in a function's return annotation.
+///
+/// `def f(x) -> x is int` and `def f(x) -> asserts x` both name the place a call narrows.
+/// The place is resolved at each call site: against the argument matched to a parameter of
+/// that name (or the receiver, for the first parameter of a bound method), and otherwise
+/// against a place of that name in the calling scope.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) struct NarrowingGuard<'db> {
+    /// The root name of the narrowed place.
+    pub(crate) name: Name,
+    /// The attribute segments below the root: `data` for `self.data`.
+    pub(crate) members: Box<[Name]>,
+    /// Whether the root names the function's first declared parameter, which a bound call
+    /// consumes as its receiver rather than passing as an argument.
+    pub(crate) root_is_first_parameter: bool,
+    pub(crate) kind: NarrowingGuardKind<'db>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue)]
+pub(crate) enum NarrowingGuardKind<'db> {
+    /// `-> place is T`: PEP 742 narrowing, applied where the call evaluates truthy.
+    Predicate,
+    /// `-> asserts place` (`is_positive`) or `-> asserts not place`: the call returns `None`,
+    /// and the narrowing applies to everything that follows the call statement.
+    Asserts { is_positive: bool },
+    /// `-> asserts place is T` (`is_positive`) or `-> asserts place is not T`: the same reach
+    /// as [`Self::Asserts`], narrowing by a type rather than by truthiness.
+    AssertsType { is_positive: bool, ty: Type<'db> },
+}
+
+impl<'db> NarrowingGuard<'db> {
+    /// Whether this guard narrows once the call returns, rather than when it evaluates truthy.
+    pub(crate) fn is_assertion(&self) -> bool {
+        matches!(
+            self.kind,
+            NarrowingGuardKind::Asserts { .. } | NarrowingGuardKind::AssertsType { .. }
+        )
+    }
+
+    /// The guards named by a function's return annotation.
+    ///
+    /// `return_ty` is the annotation's inferred type; a predicate guard is only recognised
+    /// when the annotation really did produce one, so that a `place is T` comparison which
+    /// failed to resolve doesn't leave a dangling target behind.
+    fn from_return_annotation(
+        db: &'db dyn Db,
+        definition: Definition<'db>,
+        function_node: &ast::StmtFunctionDef,
+        return_ty: Type<'db>,
+    ) -> Box<[Self]> {
+        let Some(guards) = ruff_python_ast::helpers::return_guards(function_node) else {
+            return Box::default();
+        };
+        let first_parameter = function_node
+            .parameters
+            .iter()
+            .next()
+            .map(ast::AnyParameterRef::name);
+
+        guards
+            .into_iter()
+            .filter_map(|guard| {
+                let kind = match guard.form {
+                    ReturnGuardForm::Asserts { is_positive } => {
+                        NarrowingGuardKind::Asserts { is_positive }
+                    }
+                    ReturnGuardForm::AssertsType { is_positive, ty } => {
+                        NarrowingGuardKind::AssertsType {
+                            is_positive,
+                            ty: function_signature_expression_type(db, definition, ty),
+                        }
+                    }
+                    ReturnGuardForm::Predicate { .. } => {
+                        if !matches!(return_ty, Type::TypeIs(_) | Type::TypeGuard(_)) {
+                            return None;
+                        }
+                        NarrowingGuardKind::Predicate
+                    }
+                };
+                let (name, members) = guard.place_parts();
+                Some(Self {
+                    name: name.clone(),
+                    members: members.into_iter().cloned().collect(),
+                    root_is_first_parameter: first_parameter.is_some_and(|first| first.id == *name),
+                    kind,
+                })
+            })
+            .collect()
+    }
 }
 
 /// Whether one callable signature's parameters are compatible with another's.
@@ -711,6 +808,7 @@ impl<'db> Signature<'db> {
             receiver_constraints: None,
             parameters,
             return_ty,
+            narrowing_guards: Box::default(),
         }
     }
 
@@ -725,6 +823,7 @@ impl<'db> Signature<'db> {
             receiver_constraints: None,
             parameters,
             return_ty,
+            narrowing_guards: Box::default(),
         }
     }
 
@@ -736,6 +835,7 @@ impl<'db> Signature<'db> {
             receiver_constraints: None,
             parameters: Parameters::gradual_form(),
             return_ty: signature_type,
+            narrowing_guards: Box::default(),
         }
     }
 
@@ -754,11 +854,19 @@ impl<'db> Signature<'db> {
             function_node.parameters.as_ref(),
             has_implicitly_positional_first_parameter,
         );
-        let return_ty = function_node
-            .returns
-            .as_ref()
-            .map(|returns| function_signature_expression_type(db, definition, returns.as_ref()))
-            .unwrap_or_else(Type::unknown);
+        let return_ty = if function_node.is_asserts_return {
+            // basedpython: `-> asserts x` names a place, not a type. such a function
+            // returns `None` — it raises when the assertion doesn't hold
+            Type::none(db)
+        } else {
+            function_node
+                .returns
+                .as_ref()
+                .map(|returns| function_signature_expression_type(db, definition, returns.as_ref()))
+                .unwrap_or_else(Type::unknown)
+        };
+        let narrowing_guards =
+            NarrowingGuard::from_return_annotation(db, definition, function_node, return_ty);
         let legacy_generic_context =
             GenericContext::from_function_params(db, definition, &parameters, return_ty);
         let full_generic_context = GenericContext::merge_pep695_and_legacy(
@@ -789,6 +897,7 @@ impl<'db> Signature<'db> {
             receiver_constraints: None,
             parameters,
             return_ty,
+            narrowing_guards,
         }
     }
 
@@ -862,6 +971,7 @@ impl<'db> Signature<'db> {
             receiver_constraints: self.receiver_constraints.clone(),
             parameters,
             return_ty,
+            narrowing_guards: self.narrowing_guards.clone(),
         }
     }
 
@@ -892,6 +1002,7 @@ impl<'db> Signature<'db> {
             receiver_constraints: self.receiver_constraints.clone(),
             parameters,
             return_ty,
+            narrowing_guards: self.narrowing_guards.clone(),
         })
     }
 
@@ -914,6 +1025,7 @@ impl<'db> Signature<'db> {
             return_ty: self
                 .return_ty
                 .apply_type_mapping_impl(db, type_mapping, tcx, visitor),
+            narrowing_guards: self.narrowing_guards.clone(),
         }
     }
 
@@ -1193,6 +1305,7 @@ impl<'db> Signature<'db> {
             receiver_constraints,
             parameters,
             return_ty,
+            narrowing_guards: self.narrowing_guards.clone(),
         }
     }
 
@@ -1368,6 +1481,7 @@ impl<'db> Signature<'db> {
             receiver_constraints,
             parameters,
             return_ty,
+            narrowing_guards: self.narrowing_guards.clone(),
         }
     }
 

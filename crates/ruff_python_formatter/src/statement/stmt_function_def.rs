@@ -160,6 +160,7 @@ fn format_function_header(f: &mut PyFormatter, item: &StmtFunctionDef) -> Format
         returns,
         body: _,
         is_trailing_lambda: _,
+        is_asserts_return,
     } = item;
 
     let comments = f.context().comments().clone();
@@ -179,6 +180,12 @@ fn format_function_header(f: &mut PyFormatter, item: &StmtFunctionDef) -> Format
 
         if let Some(return_annotation) = returns.as_deref() {
             write!(f, [space(), token("->"), space()])?;
+
+            // basedpython: `-> asserts x` — the keyword lives on the function, so it
+            // has to be written back before the asserted expression
+            if *is_asserts_return {
+                write!(f, [token("asserts"), space()])?;
+            }
 
             if return_annotation.is_tuple_expr() {
                 let parentheses = if comments.has_leading(return_annotation) {

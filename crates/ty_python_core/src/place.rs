@@ -10,6 +10,7 @@ use crate::{Db, PossiblyNarrowedPlaces};
 use ruff_db::parsed::ParsedModuleRef;
 use ruff_index::IndexVec;
 use ruff_python_ast as ast;
+use ruff_python_ast::name::Name;
 use smallvec::SmallVec;
 use std::hash::Hash;
 use std::iter::FusedIterator;
@@ -33,6 +34,13 @@ pub(crate) fn match_subject_place_expressions(subject: &ast::Expr) -> SmallVec<[
         _ => {}
     }
     expressions
+}
+
+/// Extends `builder` with one attribute segment per entry in `members`.
+fn extend_with_members(builder: MemberExprBuilder, members: &[Name]) -> MemberExprBuilder {
+    members.iter().fold(builder, |builder, member| {
+        MemberExprBuilder::visit_attribute(&builder, member.as_str())
+    })
 }
 
 /// An expression that can be the target of a `Definition`.
@@ -79,6 +87,34 @@ impl PlaceExpr {
         }
 
         MemberExprBuilder::visit_expr(expr).and_then(Self::try_from_member_expr)
+    }
+
+    /// basedpython: the place `members` names below the place `expr` denotes.
+    ///
+    /// `h` extended by `["data"]` is `h.data`. Returns `None` if `expr` is not a place.
+    pub fn try_from_expr_with_members<'e>(
+        expr: impl Into<ast::ExprRef<'e>>,
+        members: &[Name],
+    ) -> Option<Self> {
+        let expr = expr.into();
+        if members.is_empty() {
+            return Self::try_from_expr(expr);
+        }
+        Self::try_from_member_expr(extend_with_members(
+            MemberExprBuilder::visit_expr(expr)?,
+            members,
+        ))
+    }
+
+    /// basedpython: the place `members` names below the symbol `name`.
+    pub fn from_symbol_with_members(name: &Name, members: &[Name]) -> Option<Self> {
+        if members.is_empty() {
+            return Some(PlaceExpr::Symbol(Symbol::new(name.clone())));
+        }
+        Self::try_from_member_expr(extend_with_members(
+            MemberExprBuilder::from_symbol(name),
+            members,
+        ))
     }
 
     /// Tries to create a `PlaceExpr` from a member expression.
@@ -714,6 +750,11 @@ impl<'db, 'a> PossiblyNarrowedPlacesBuilder<'db, 'a> {
         }
 
         places
+    }
+
+    /// Compute possibly narrowed places for a call predicate.
+    pub(crate) fn call(self, expr_call: &ast::ExprCall) -> PossiblyNarrowedPlaces {
+        self.expr_call(expr_call)
     }
 
     /// Call expressions can narrow their first argument (isinstance, issubclass, hasattr, len)
