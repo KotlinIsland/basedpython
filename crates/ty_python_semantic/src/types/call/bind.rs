@@ -5319,7 +5319,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
 
     fn specialization(&self) -> Option<Specialization<'db>> {
         self.inference
-            .map(|inference| inference.specialization(self.db))
+            .map(|inference| call_specialization(self.db, self.signature, inference))
     }
 
     fn infer_specialization(&mut self, constraints: &ConstraintSetBuilder<'db>) {
@@ -5593,7 +5593,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
                 builder.build_diagnostic_inference_with(generic_context, argument_relations, choose)
             }
         };
-        let specialization = inference.specialization(self.db);
+        let specialization = call_specialization(self.db, self.signature, inference);
 
         self.return_ty = self.return_ty.apply_specialization(self.db, specialization);
         self.inference = Some(inference);
@@ -6449,6 +6449,43 @@ fn inferable_typevar_occurrences<'db>(
     };
     visitor.visit_type(db, ty);
     visitor.count.get()
+}
+
+/// Project a call's type-variable inference into a specialization.
+///
+/// basedpython: under `sound-types`, a type variable that the call left entirely unsolved is
+/// solved to `Never` — the precise type of "no value ever reaches this position" — rather than
+/// the gradual `Unknown`. This mirrors what fluid specializations already do for an empty
+/// collection literal.
+///
+/// Every consumer of a call's specialization must go through here, or the return type and the
+/// binding's reported specialization would disagree about the same call.
+fn call_specialization<'db>(
+    db: &'db dyn Db,
+    signature: &Signature<'db>,
+    inference: TypeVarInference<'db>,
+) -> Specialization<'db> {
+    let sound_types = signature
+        .definition()
+        .is_some_and(|definition| db.analysis_settings(definition.file(db)).sound_types);
+    if !sound_types {
+        return inference.specialization(db);
+    }
+
+    inference.specialization_with(db, |typevar, inferred| {
+        if inferred.is_some()
+            || typevar.default_type(db).is_some()
+            // `ParamSpec` / `TypeVarTuple` specializations are callable- and tuple-shaped rather
+            // than plain types; `Never` is not a valid value for them
+            || typevar.is_paramspec(db)
+            || typevar.is_parameter_pack(db)
+            || typevar.is_typevartuple(db)
+        {
+            None
+        } else {
+            Some(Type::Never)
+        }
+    })
 }
 
 /// Binding information for one of the overloads of a callable.
@@ -7328,7 +7365,8 @@ impl<'db> Binding<'db> {
     }
 
     pub(crate) fn specialization(&self, db: &'db dyn Db) -> Option<Specialization<'db>> {
-        self.inference.map(|inference| inference.specialization(db))
+        self.inference
+            .map(|inference| call_specialization(db, &self.signature, inference))
     }
 
     pub(crate) fn errors(&self) -> &[BindingError<'db>] {

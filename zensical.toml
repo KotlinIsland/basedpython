@@ -31,6 +31,7 @@ features = [
   { "runtime type-soundness checks" = "features/soundness.md" },
   { "api lockfile" = "features/api-lock.md" },
   { "fluid specializations" = "features/fluid-specializations.md" },
+  { "sound types" = "features/sound-types.md" },
   { "tuple type literals" = "features/tuple-types.md" },
   { "callable arrow syntax" = "features/callable.md" },
   { "intersection types" = "features/intersection.md" },

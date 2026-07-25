@@ -205,3 +205,78 @@ fn overrides_inherit_global() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// `sound-types` is resolved per module: the module that *declares* a construct governs how its
+/// types are inferred, and consumers see the result regardless of their own setting.
+#[test]
+fn sound_types_is_per_module() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.ty.environment]
+            python-version = "3.13"
+
+            [[tool.ty.overrides]]
+            include = ["sound/**"]
+
+            [tool.ty.overrides.analysis]
+            sound-types = true
+            "#,
+        ),
+        (
+            "sound/lib.py",
+            r#"
+            def f(a=1) -> None: ...
+            "#,
+        ),
+        (
+            "gradual/lib.py",
+            r#"
+            def g(a=1) -> None: ...
+            "#,
+        ),
+        (
+            "gradual/main.py",
+            r#"
+            from sound.lib import f
+
+            # `f` is declared in a sound module, so its signature is precise even here
+            f("wrong")
+            "#,
+        ),
+        (
+            "sound/main.py",
+            r#"
+            from gradual.lib import g
+
+            # `g` is declared in a gradual module, so its parameter stays gradual even here
+            g("fine")
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @r#"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    error[invalid-argument-type]: Argument to function `f` is incorrect
+     --> gradual/main.py:5:3
+      |
+    5 | f("wrong")
+      |   ^^^^^^^ Expected `int`, found `Literal["wrong"]`
+      |
+    info: Function defined here
+     --> sound/lib.py:2:5
+      |
+    2 | def f(a=1) -> None: ...
+      |     ^ --- Parameter declared here
+      |
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    "#);
+
+    Ok(())
+}

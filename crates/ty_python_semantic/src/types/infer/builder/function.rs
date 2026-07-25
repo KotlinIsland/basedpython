@@ -1184,7 +1184,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // overload parameter types. when the impl also supplies a default
             // value, the default is folded into the inherited base only if it
             // doesn't already fit
-            let inherited = self.inherited_overload_parameter_type(parameter);
+            let inherited = self.inherited_parameter_type(parameter);
             let ty = if let Some(default_expr) = default_expr {
                 let default_ty = self.file_expression_type(default_expr);
                 if let Some(base) = inherited {
@@ -1193,7 +1193,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     } else {
                         UnionType::from_two_elements(db, base, default_ty)
                     }
-                } else if self.settings().infer_parameter_type_from_default {
+                } else if self.settings().sound_types {
                     // basedpython: give the parameter the default's (promoted) type instead of
                     // folding an implicit gradual `Unknown` in. deliberately breaks the gradual
                     // guarantee (`def f(a=1)` sees `a: int` in the body)
@@ -1228,17 +1228,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         pytest::injected_parameter_type(db, function, parameter.name.as_str())
     }
 
-    /// basedpython: for an unannotated parameter inside the implementation of
-    /// an overloaded function, look up the corresponding parameter type
-    /// inherited from the sibling overloads via the impl's
-    /// [`OverloadLiteral::raw_signature`]. matching is by name
-    fn inherited_overload_parameter_type(&self, parameter: &ast::Parameter) -> Option<Type<'db>> {
+    /// basedpython: for an unannotated parameter, look up the type that
+    /// [`OverloadLiteral::raw_signature`] filled in for it — from the sibling overloads when this
+    /// is an overload implementation, or (under `sound-types`) from the overridden base method.
+    /// matching is by name
+    ///
+    /// A parameter that received no inherited annotation still has its implicit `Unknown`, which
+    /// `should_annotation_be_displayed` reports as not displayable, so this returns `None` for it.
+    fn inherited_parameter_type(&self, parameter: &ast::Parameter) -> Option<Type<'db>> {
         let db = self.db();
         let enclosing = nearest_enclosing_function(db, self.index, self.scope())?;
-        let (overloads, implementation) = enclosing.overloads_and_implementation(db);
-        if overloads.is_empty() || implementation.is_none() {
-            return None;
-        }
         let signature =
             enclosing.last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public);
         let matched = signature
@@ -1594,7 +1593,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             parameter_type
         } else if let Some(default_expr) = default_expr {
             let default_ty = self.file_expression_type(default_expr);
-            UnionType::from_two_elements(self.db(), Type::unknown(), default_ty)
+            if self.settings().sound_types {
+                // basedpython: same rule as an unannotated function parameter with a default —
+                // the parameter takes the default's promoted type instead of folding in `Unknown`
+                default_ty.promote(self.db())
+            } else {
+                UnionType::from_two_elements(self.db(), Type::unknown(), default_ty)
+            }
         } else {
             Type::unknown()
         };

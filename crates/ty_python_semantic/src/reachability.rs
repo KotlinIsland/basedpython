@@ -195,6 +195,7 @@
 
 use std::cell::RefCell;
 
+use crate::types::function::KnownFunction;
 use crate::{
     Db,
     dunder_all::dunder_all_names,
@@ -1450,6 +1451,21 @@ fn analyze_non_terminal_call<'db>(
     // so heavily congested because there are only very few dynamic types, in which case Salsa's
     // sharding the locks by value doesn't help much. See <https://github.com/astral-sh/ty/issues/968>.
     if matches!(ty, Type::Dynamic(_)) {
+        return Truthiness::AlwaysTrue;
+    }
+
+    // `reveal_type` and `assert_type` are type-checker directives that return their argument
+    // unchanged; the runtime call always returns. Their generic return type nevertheless
+    // specializes to `Never` whenever the argument is `Never` — including when that `Never` is an
+    // artifact of inference rather than a claim about control flow. Treating them as terminal
+    // would silently mark the rest of the scope unreachable, so every later `reveal_type` reports
+    // `Never` and every later diagnostic disappears.
+    if let Type::FunctionLiteral(function) = ty
+        && matches!(
+            function.known(db),
+            Some(KnownFunction::RevealType | KnownFunction::AssertType)
+        )
+    {
         return Truthiness::AlwaysTrue;
     }
 

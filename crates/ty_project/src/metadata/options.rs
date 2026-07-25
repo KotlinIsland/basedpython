@@ -1602,12 +1602,26 @@ pub struct AnalysisOptions {
     )]
     pub disable_fluid_specializations: Option<bool>,
 
-    /// Whether an unannotated parameter that has a default value should be given the (promoted)
-    /// type of that default, rather than an implicit gradual type. This is a basedpython feature.
+    /// Whether to infer sound (non-gradual) types wherever a precise type is available. This is a
+    /// basedpython feature.
     ///
-    /// When set to `true`, this deliberately breaks the gradual guarantee: `def f(a=1)` declares
-    /// `a` as `int` instead of leaving it unannotated, so passing a `str` at a call site is an
-    /// error.
+    /// Python's gradual guarantee requires a type checker to fall back to a gradual type whenever
+    /// an annotation is missing, even when a precise type could be inferred. In a fully typed
+    /// project that is pure boilerplate: it forces an annotation to be written for something the
+    /// checker already knows. When set to `true`, this option deliberately breaks the gradual
+    /// guarantee and uses the precise type instead. It affects:
+    ///
+    /// - **Unannotated parameters with a default**: `def f(a=1)` declares `a` as `int`, so passing
+    ///   a `str` at a call site is an error. This applies to lambdas too (`lambda a=1: ...`).
+    /// - **Unannotated methods that override a base method**: the parameter and return types are
+    ///   inherited from the overridden method, including from `Protocol` members and
+    ///   `abstractmethod` declarations.
+    /// - **Bare `ClassVar` annotations**: `x: ClassVar = 1` declares `int` rather than the union of
+    ///   `Unknown` and the inferred type.
+    /// - **Unsolved type variables**: a type variable that a call leaves unsolved is solved to
+    ///   `Never` rather than `Unknown`.
+    ///
+    /// An explicit annotation always takes priority over any of the above.
     ///
     /// Defaults to `false`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1615,11 +1629,11 @@ pub struct AnalysisOptions {
         default = r#"false"#,
         value_type = "bool",
         example = r#"
-        # Infer unannotated parameter types from their defaults
-        infer-parameter-type-from-default = true
+        # Infer sound (non-gradual) types wherever a precise type is available
+        sound-types = true
         "#
     )]
-    pub infer_parameter_type_from_default: Option<bool>,
+    pub sound_types: Option<bool>,
 
     /// A list of module glob patterns for which `unresolved-import` diagnostics should be suppressed.
     ///
@@ -1683,7 +1697,7 @@ impl AnalysisOptions {
             allowed_unresolved_imports,
             replace_imports_with_any,
             disable_fluid_specializations,
-            infer_parameter_type_from_default,
+            sound_types,
         } = self;
 
         let AnalysisSettings {
@@ -1692,7 +1706,7 @@ impl AnalysisOptions {
             allowed_unresolved_imports: allowed_unresolved_imports_default,
             replace_imports_with_any: replace_imports_with_any_default,
             disable_fluid_specializations: disable_fluid_specializations_default,
-            infer_parameter_type_from_default: infer_parameter_type_from_default_default,
+            sound_types: sound_types_default,
         } = AnalysisSettings::default();
 
         let allowed_unresolved_imports =
@@ -1726,8 +1740,7 @@ impl AnalysisOptions {
             replace_imports_with_any,
             disable_fluid_specializations: disable_fluid_specializations
                 .unwrap_or(disable_fluid_specializations_default),
-            infer_parameter_type_from_default: infer_parameter_type_from_default
-                .unwrap_or(infer_parameter_type_from_default_default),
+            sound_types: sound_types.unwrap_or(sound_types_default),
         }
     }
 }

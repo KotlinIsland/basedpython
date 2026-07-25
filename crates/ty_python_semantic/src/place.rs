@@ -1143,6 +1143,11 @@ pub(crate) fn place_by_id<'db>(
             .with_qualifiers(qualifiers);
     }
 
+    // basedpython: under `sound-types` a bare `ClassVar` uses the inferred type directly, the
+    // same way an unannotated class-body assignment already does. Otherwise adding `ClassVar` —
+    // a strengthening of intent — would degrade `x = 1` from `int` to `Unknown | Literal[1]`
+    let sound_types = db.analysis_settings(scope.file(db)).sound_types;
+
     match declared {
         // Handle bare `ClassVar` annotations by falling back to the union of `Unknown` and the
         // inferred type.
@@ -1166,10 +1171,18 @@ pub(crate) fn place_by_id<'db>(
                     provenance: inferred_provenance,
                     ..
                 }) => Place::Defined(DefinedPlace {
-                    ty: UnionType::from_two_elements(db, Type::unknown(), inferred),
+                    ty: if sound_types {
+                        inferred
+                    } else {
+                        UnionType::from_two_elements(db, Type::unknown(), inferred)
+                    },
                     origin,
                     definedness: boundness,
-                    public_type_policy: PublicTypePolicy::Raw,
+                    public_type_policy: if sound_types {
+                        PublicTypePolicy::Promote
+                    } else {
+                        PublicTypePolicy::Raw
+                    },
                     provenance: inferred_provenance.or(declared_provenance),
                 })
                 .with_qualifiers(qualifiers),

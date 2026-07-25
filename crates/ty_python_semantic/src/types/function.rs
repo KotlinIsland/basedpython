@@ -88,13 +88,13 @@ use crate::types::relation::TypeRelationChecker;
 use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope, Signature};
 use crate::types::tuple::TupleSpec;
 use crate::types::variance::{TypeVarVariance, VarianceInferable};
-use crate::types::visitor::non_any_dynamic_content;
+use crate::types::visitor::{any_over_type, non_any_dynamic_content};
 use crate::types::{
     ApplyTypeMappingVisitor, BoundMethodType, BoundTypeVarIdentity, BoundTypeVarInstance,
     CallableType, ClassBase, ClassLiteral, ClassType, FindLegacyTypeVarsVisitor,
-    IntersectionBuilder, KnownClass, KnownInstanceType, SpecialFormType, SubclassOfInner,
-    SubclassOfType, Truthiness, Type, TypeContext, TypeMapping, TypeVarBoundOrConstraints,
-    UnionBuilder, UnionType, definition_expression_type, walk_signature,
+    IntersectionBuilder, KnownClass, KnownInstanceType, MemberLookupPolicy, SpecialFormType,
+    SubclassOfInner, SubclassOfType, Truthiness, Type, TypeContext, TypeMapping,
+    TypeVarBoundOrConstraints, UnionBuilder, UnionType, definition_expression_type, walk_signature,
 };
 use crate::{Db, FxOrderSet};
 use ty_python_core::ast_ids::HasScopedUseId;
@@ -978,7 +978,68 @@ impl<'db> OverloadLiteral<'db> {
             }
         }
 
+        // basedpython: under `sound-types`, an unannotated method inherits its parameter and
+        // return types from the method it overrides, so `def m(self, a)` over
+        // `def m(self, a: int) -> bytes` sees `a: int` and returns `bytes`
+        if db.analysis_settings(self.file(db)).sound_types
+            && raw_signature.has_inherited_annotations_to_fill(function_stmt_node.returns.is_none())
+            && let Some(base_signature) = self.overridden_signature(db)
+        {
+            raw_signature.inherit_unannotated_from_overloads(
+                db,
+                std::slice::from_ref(&base_signature),
+                function_stmt_node.returns.is_none(),
+            );
+        }
+
         raw_signature
+    }
+
+    /// basedpython: the signature of the method that this method overrides, resolved by looking
+    /// `self`'s name up in the enclosing class's MRO starting *after* the class itself — the same
+    /// lookup `super()` performs.
+    ///
+    /// Returns `None` when this function is not a method, when nothing in the MRO defines the
+    /// name, when the base is overloaded, or when the base signature mentions a type variable.
+    /// Type variables (including the implicit `Self`) are bound to the *base* method's scope, so
+    /// copying them into this signature would silently rebind them.
+    fn overridden_signature(self, db: &'db dyn Db) -> Option<Signature<'db>> {
+        let definition = self.definition(db);
+        let file = definition.file(db);
+        let index = semantic_index(db, file);
+
+        let class_scope_id = definition.scope(db);
+        let class_scope = index.scope(class_scope_id.file_scope_id(db));
+        let class_node = class_scope.node().as_class()?;
+        let class_def = index.expect_single_definition(class_node);
+        let class_literal = original_class_type(db, class_def)?;
+
+        let name = self.name(db);
+        // skip the class itself, so we find what this method overrides rather than the method
+        let mro = class_literal.iter_mro(db).skip(1);
+        let member =
+            class_literal.class_member_from_mro(db, name, MemberLookupPolicy::default(), mro);
+
+        let Type::FunctionLiteral(base) = member.place.ignore_possibly_undefined()? else {
+            return None;
+        };
+
+        let [signature] = base.signature(db).overloads.as_slice() else {
+            return None;
+        };
+
+        let mentions_typevar =
+            |ty: Type<'db>| any_over_type(db, ty, false, |ty| matches!(ty, Type::TypeVar(_)));
+        if mentions_typevar(signature.return_ty)
+            || signature
+                .parameters()
+                .iter()
+                .any(|param| mentions_typevar(param.annotated_type()))
+        {
+            return None;
+        }
+
+        Some(signature.clone())
     }
 
     pub(crate) fn parameter_span(

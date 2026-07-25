@@ -8025,6 +8025,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             None
         };
 
+        // basedpython: under `sound-types` an *empty* collection literal has element type `Never`
+        // even outside fluid mode, so `first([])` solves `T` to `Never` rather than leaking
+        // `Unknown` into the call. Only emptiness qualifies — a non-empty literal's element
+        // typevar also reaches the fallback below while a type context drives the solve, and
+        // pinning it to `Never` there would discard the context's answer.
+        let sound_empty_literal = elts.is_empty() && self.settings().sound_types;
+
         for (elts_index, elts) in elts.iter().enumerate() {
             // An unpacking expression for a dictionary.
             if let &[None, Some(value_expr)] = elts.as_slice() {
@@ -8148,7 +8155,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         // empty collection literal (e.g. `a = []`). Solve it to `Never` — the
                         // precise element type of an empty collection — rather than the gradual
                         // `Unknown`; later uses widen it from there.
-                        return fluid_def.is_some().then_some(Type::Never);
+                        return (fluid_def.is_some() || sound_empty_literal).then_some(Type::Never);
                     };
 
                     // Fluid element types are promoted, same as non-fluid collection literals:
@@ -8810,10 +8817,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
         .map(Parameter::annotated_type);
 
-        // resolve parameter type: prefer explicit annotation, then callable_tcx, else unannotated
+        // resolve parameter type: prefer explicit annotation, then callable_tcx, then (under
+        // `sound-types`) the promoted type of the default, else unannotated
         let resolve_param_annotation = |builder: &mut Self,
                                         param: &ast::ParameterWithDefault,
-                                        ctx_ty: Option<Type<'db>>|
+                                        ctx_ty: Option<Type<'db>>,
+                                        default_ty: Option<Type<'db>>|
          -> Option<Type<'db>> {
             if let Some(annotation) = &param.parameter.annotation {
                 Some(
@@ -8824,8 +8833,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         )
                         .inner_type(),
                 )
+            } else if let Some(ctx_ty) = ctx_ty {
+                Some(ctx_ty)
+            } else if builder.settings().sound_types {
+                // basedpython: mirrors the unannotated function parameter rule, so that a
+                // lambda's own signature is checked at its call sites
+                default_ty.map(|default_ty| default_ty.promote(builder.db()))
             } else {
-                ctx_ty
+                None
             }
         };
 
@@ -8835,12 +8850,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 .iter()
                 .map(|param| {
                     let ctx_ty = parameter_types.next();
+                    let default_ty = param.default().map(|default_expr| {
+                        self.infer_expression(default_expr, TypeContext::default())
+                            .replace_parameter_defaults(self.db())
+                    });
                     let parameter_base = Parameter::positional_only(Some(param.name().id.clone()))
-                        .with_optional_default_type(param.default().map(|default_expr| {
-                            self.infer_expression(default_expr, TypeContext::default())
-                                .replace_parameter_defaults(self.db())
-                        }));
-                    if let Some(ty) = resolve_param_annotation(self, param, ctx_ty) {
+                        .with_optional_default_type(default_ty);
+                    if let Some(ty) = resolve_param_annotation(self, param, ctx_ty, default_ty) {
                         parameter_base.with_annotated_type(ty)
                     } else {
                         parameter_base
@@ -8852,12 +8868,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 .iter()
                 .map(|param| {
                     let ctx_ty = parameter_types.next();
+                    let default_ty = param.default().map(|default_expr| {
+                        self.infer_expression(default_expr, TypeContext::default())
+                            .replace_parameter_defaults(self.db())
+                    });
                     let parameter_base = Parameter::positional_or_keyword(param.name().id.clone())
-                        .with_optional_default_type(param.default().map(|default_expr| {
-                            self.infer_expression(default_expr, TypeContext::default())
-                                .replace_parameter_defaults(self.db())
-                        }));
-                    if let Some(ty) = resolve_param_annotation(self, param, ctx_ty) {
+                        .with_optional_default_type(default_ty);
+                    if let Some(ty) = resolve_param_annotation(self, param, ctx_ty, default_ty) {
                         parameter_base.with_annotated_type(ty)
                     } else {
                         parameter_base
@@ -8877,12 +8894,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 .kwonlyargs
                 .iter()
                 .map(|param| {
+                    let default_ty = param.default().map(|default_expr| {
+                        self.infer_expression(default_expr, TypeContext::default())
+                            .replace_parameter_defaults(self.db())
+                    });
                     let parameter_base = Parameter::keyword_only(param.name().id.clone())
-                        .with_optional_default_type(param.default().map(|default_expr| {
-                            self.infer_expression(default_expr, TypeContext::default())
-                                .replace_parameter_defaults(self.db())
-                        }));
-                    if let Some(ty) = resolve_param_annotation(self, param, None) {
+                        .with_optional_default_type(default_ty);
+                    if let Some(ty) = resolve_param_annotation(self, param, None, default_ty) {
                         parameter_base.with_annotated_type(ty)
                     } else {
                         parameter_base

@@ -1048,6 +1048,18 @@ impl<'db> Signature<'db> {
     /// ```
     /// type-check `i` as `str | int` and validate `return` statements against
     /// `int | str`
+    /// Whether [`Signature::inherit_unannotated_from_overloads`] could still fill anything in —
+    /// that is, whether some parameter is awaiting an inferred annotation, or the return type is.
+    ///
+    /// Used to avoid an MRO walk for the common case of a fully annotated method.
+    pub(crate) fn has_inherited_annotations_to_fill(&self, inherit_return: bool) -> bool {
+        inherit_return
+            || self
+                .parameters
+                .iter()
+                .any(|param| param.inferred_annotation && param.annotated_type.is_unknown())
+    }
+
     pub(crate) fn inherit_unannotated_from_overloads(
         &mut self,
         db: &'db dyn Db,
@@ -4929,7 +4941,7 @@ impl<'db> Parameter<'db> {
             } else if let Some(default_type) = kind.default_type()
                 && db
                     .analysis_settings(function_definition.file(db))
-                    .infer_parameter_type_from_default
+                    .sound_types
             {
                 // basedpython: an unannotated parameter with a default is declared with the
                 // default's promoted type, so call sites are checked against it. deliberately
