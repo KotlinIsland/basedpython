@@ -58,6 +58,7 @@ pub(crate) mod top_star;
 pub(crate) mod trailing_lambda;
 pub(crate) mod tuple_index;
 pub(crate) mod type_expr_walker;
+pub(crate) mod type_fn;
 pub(crate) mod type_is;
 pub(crate) mod type_reification;
 pub(crate) mod typed_dict_literal;

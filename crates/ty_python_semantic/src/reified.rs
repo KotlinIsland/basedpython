@@ -22,6 +22,12 @@ pub fn reified_type_param_names(source: &str, function: &ast::StmtFunctionDef) -
     let Some(type_params) = function.type_params.as_deref() else {
         return Vec::new();
     };
+    // basedpython: a `type def` is not a runtime function — its type parameters are
+    // the type arguments of an application, and the declaration is erased by the
+    // transpiler, so there is nothing to reify
+    if ast::helpers::is_type_def(function) {
+        return Vec::new();
+    }
     let candidates: Vec<&Name> = type_params
         .type_params
         .iter()

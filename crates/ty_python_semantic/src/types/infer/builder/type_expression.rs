@@ -16,12 +16,17 @@ use crate::types::diagnostic::{
     report_invalid_arguments_to_callable, report_invalid_concatenate_last_arg,
     report_missing_type_arguments, report_unsupported_binary_operation,
 };
+use crate::types::function::{FunctionDecorators, FunctionType};
 use crate::types::infer::builder::subscript::AnnotatedExprContext;
 use crate::types::infer::{InferenceFlags, TypeExpressionFlags};
 use crate::types::signatures::{ConcatenateTail, Signature};
 use crate::types::special_form::{AliasSpec, LegacyStdlibAlias};
 use crate::types::string_annotation::parse_string_annotation;
 use crate::types::tuple::{TupleSpecBuilder, TupleType};
+use crate::types::type_fn::{
+    TypeFnArguments, TypeFnOutcome, arity_mismatch, declared_return_type, evaluate_type_fn,
+    first_bound_violation,
+};
 use ty_python_core::scope::ScopeKind;
 
 use crate::types::{
@@ -1985,6 +1990,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 self.infer_type_expression(elt)
             });
         }
+        // basedpython: `F[bool]` where `F` is a `type def` applies the type
+        // function — its body is executed and the result is the type
+        if let Type::FunctionLiteral(function) = value_ty
+            && function.has_known_decorator(self.db(), FunctionDecorators::TYPE_FN)
+        {
+            return self.infer_type_fn_application(subscript, slice, function);
+        }
+
         match value_ty {
             Type::ClassLiteral(class_literal) => match class_literal.known(self.db()) {
                 Some(KnownClass::Tuple) => Type::tuple(self.infer_tuple_type_expression(subscript)),
@@ -1992,6 +2005,90 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 _ => self.infer_subscript_type_expression(subscript, value_ty),
             },
             _ => self.infer_subscript_type_expression(subscript, value_ty),
+        }
+    }
+
+    /// basedpython: evaluates an application of a `type def`.
+    ///
+    /// Proof of concept — the arguments are inferred as ordinary type
+    /// expressions and the function's body is executed once per application.
+    /// See [`crate::types::type_fn`] for what is deliberately missing.
+    fn infer_type_fn_application(
+        &mut self,
+        subscript: &ast::ExprSubscript,
+        slice: &ast::Expr,
+        function: FunctionType<'db>,
+    ) -> Type<'db> {
+        let db = self.db();
+        let arguments: Vec<Type<'db>> = match slice {
+            ast::Expr::Tuple(tuple) if !tuple.parenthesized => tuple
+                .elts
+                .iter()
+                .map(|element| self.infer_type_expression(element))
+                .collect(),
+            single => vec![self.infer_type_expression(single)],
+        };
+
+        // arity is checked before bounds (and before execution): passing the wrong
+        // number of arguments would otherwise reach the interpreter and come back
+        // as a python traceback rather than a diagnostic
+        if let Some((expected, actual)) = arity_mismatch(db, function, &arguments)
+            && let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, subscript)
+        {
+            builder.into_diagnostic(format_args!(
+                "`{}` takes {expected} type argument{}, but {actual} {} given",
+                function.name(db),
+                if expected == 1 { "" } else { "s" },
+                if actual == 1 { "was" } else { "were" },
+            ));
+            return Type::unknown();
+        }
+
+        // a bound is a precondition: it is checked before the function runs, so an
+        // impossible argument costs no interpreter. it is also the only check that
+        // works on a symbolic argument, so it happens before the deferral below
+        if let Some((index, argument, bound)) = first_bound_violation(db, function, &arguments)
+            && let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, subscript)
+        {
+            builder.into_diagnostic(format_args!(
+                "argument {} to `{}` is `{}`, which is not assignable to its bound `{}`",
+                index + 1,
+                function.name(db),
+                argument.display(db),
+                bound.display(db),
+            ));
+            return Type::unknown();
+        }
+
+        // an argument that still mentions a type parameter cannot be evaluated —
+        // `F[T]` inside a generic function is only knowable once `T` is
+        // substituted. keep the application symbolic; `DeferredType` re-runs it on
+        // specialization, and until then it behaves as the declared return type
+        if DeferredType::is_deferred(db, &arguments) {
+            let mut operands = Vec::with_capacity(arguments.len() + 1);
+            operands.push(Type::FunctionLiteral(function));
+            operands.extend_from_slice(&arguments);
+            return DeferredType::build(db, DeferredOperation::TypeFn, operands.into_boxed_slice());
+        }
+
+        let interned = TypeFnArguments::new(db, arguments.into_boxed_slice());
+        match evaluate_type_fn(db, function, interned) {
+            TypeFnOutcome::Type(ty) => *ty,
+            TypeFnOutcome::TypeError(message) => {
+                if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, subscript) {
+                    builder.into_diagnostic(message.clone());
+                }
+                declared_return_type(db, function).unwrap_or_else(Type::unknown)
+            }
+            TypeFnOutcome::Failed(message) => {
+                if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, subscript) {
+                    builder.into_diagnostic(format_args!(
+                        "`{}` could not be evaluated: {message}",
+                        function.name(db)
+                    ));
+                }
+                declared_return_type(db, function).unwrap_or_else(Type::unknown)
+            }
         }
     }
 

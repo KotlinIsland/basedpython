@@ -31,6 +31,9 @@ use super::infer::{deferred_comparison, literal_binary_op, literal_unary_op};
 use super::visitor::{self, any_over_type};
 use crate::Db;
 use crate::types::call::CallArguments;
+use crate::types::type_fn::{
+    TypeFnArguments, TypeFnOutcome, declared_return_type, evaluate_type_fn,
+};
 use crate::types::{KnownClass, TypeContext};
 
 /// The kind of a [`DeferredType`]'s pending operation. Each variant fixes how many
@@ -46,6 +49,12 @@ pub enum DeferredOperation {
     /// `callee(arg0, arg1, ...)`; operands are `[callee, arg0, arg1, ...]`. Covers
     /// method calls too — the callee is the (typevar-receiver) bound method.
     Call,
+    /// basedpython: `F[arg0, arg1, ...]` where `F` is a `type def`; operands are
+    /// `[Type::FunctionLiteral(F), arg0, arg1, ...]`. Unlike the other kinds this
+    /// one cannot be reduced by evaluating against upper bounds — running the
+    /// function is the only way to know its result — so its reduced form is the
+    /// function's declared return type instead (see `DeferredType::reduced`).
+    TypeFn,
 }
 
 // The Salsa heap is tracked separately.
@@ -107,6 +116,18 @@ impl<'db> DeferredType<'db> {
     /// delegates here, so a deferred operation is indistinguishable from its reduced
     /// form everywhere except under type-mapping.
     pub(crate) fn reduced(self, db: &'db dyn Db) -> Type<'db> {
+        // a `type def` cannot be reduced by substituting bounds: running the body is
+        // the only way to learn its result, and running it against a bound would
+        // answer a question nobody asked. its declared return type is the reduced
+        // form, which is why annotating a type function is what makes generic code
+        // using it checkable
+        if self.operation(db) == DeferredOperation::TypeFn {
+            let [Type::FunctionLiteral(function), ..] = self.operands(db) else {
+                return Type::unknown();
+            };
+            return declared_return_type(db, *function).unwrap_or_else(Type::unknown);
+        }
+
         let operands: Box<[Type<'db>]> = self
             .operands(db)
             .iter()
@@ -187,6 +208,20 @@ fn evaluate<'db>(
                 .try_call(db, &CallArguments::positional(args.iter().copied()))
                 .ok()
                 .map(|bindings| bindings.return_type(db))
+        }
+        DeferredOperation::TypeFn => {
+            let [Type::FunctionLiteral(function), arguments @ ..] = operands else {
+                return None;
+            };
+            let arguments = TypeFnArguments::new(db, arguments.to_vec().into_boxed_slice());
+            match evaluate_type_fn(db, *function, arguments) {
+                TypeFnOutcome::Type(ty) => Some(*ty),
+                // a re-evaluated application has no diagnostic sink — the error was
+                // either already reported at a ground application site or belongs to a
+                // specialization that cannot host a diagnostic. degrade to the
+                // declared return rather than reporting nothing and inferring a type
+                TypeFnOutcome::TypeError(_) | TypeFnOutcome::Failed(_) => None,
+            }
         }
         DeferredOperation::Compare(op) => {
             let [left, right] = operands else { return None };

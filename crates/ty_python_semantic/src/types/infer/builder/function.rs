@@ -593,6 +593,29 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             {
                 continue;
             }
+            // `type def` parses as a synthetic `type_fn` marker. it is not a
+            // runtime decorator — it records that applying this function with
+            // `[]` in a type expression evaluates it
+            if let ast::Expr::Name(n) = &decorator.expression
+                && matches!(n.ctx, ast::ExprContext::Invalid)
+                && n.id.as_str() == "type_fn"
+            {
+                // proof of concept: the body's parameters are types, not the
+                // `TypeInfo` values it actually receives, so checking it as
+                // ordinary code reports nonsense (`X <= int` on a typevar).
+                // until the parameters are typed, the body is unchecked
+                // a `type def` carries its own flag, so consumers can tell it apart
+                // from an ordinary function. it *additionally* borrows
+                // `NO_TYPE_CHECK` because its body genuinely cannot be checked yet:
+                // the parameters are the type arguments of an application rather
+                // than the `TypeInfo` values the body receives, and `->` declares the
+                // resulting type rather than a value-level return. both must be
+                // modelled before this can come off
+                function_decorators |= FunctionDecorators::TYPE_FN;
+                function_decorators |= FunctionDecorators::NO_TYPE_CHECK;
+                self.context.inference_flags |= InferenceFlags::IN_NO_TYPE_CHECK;
+                continue;
+            }
 
             let decorator_type = decorator_inference
                 .as_ref()

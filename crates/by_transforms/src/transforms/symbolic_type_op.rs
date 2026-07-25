@@ -120,6 +120,10 @@ impl TypeExprVisitor for FoldCollector<'_> {
                     && call.arguments.keywords.is_empty()
                     && !call.arguments.args.iter().any(Expr::is_starred_expr)
             }
+            // basedpython: `F[bool]` where `F` is a `type def` folds to the type
+            // the type function returned, so the emitted python names a real type
+            // and carries no trace of the type function
+            Expr::Subscript(_) => self.types.is_type_fn_application(expr),
             _ => false,
         };
         if !foldable {
@@ -127,6 +131,19 @@ impl TypeExprVisitor for FoldCollector<'_> {
         }
         let Some(rendered) = self.types.symbolic_type_fold(expr) else {
             return Recurse::Descend;
+        };
+        // a `type def` application must always be replaced: its declaration is
+        // erased, so leaving the source alone would emit a dangling name. an
+        // application that stayed deferred (a non-ground argument, or a type
+        // function with no declared return) resolves to `Unknown`, which is not a
+        // runtime name — `Any` is the honest spelling of it
+        let rendered = if rendered == "Unknown" {
+            if !self.types.is_type_fn_application(expr) {
+                return Recurse::Descend;
+            }
+            "Any".to_string()
+        } else {
+            rendered
         };
         // the special float-literal types render as the bare names `inf` /
         // `-inf` / `nan`, which have no python literal syntax — leave them for

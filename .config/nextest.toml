@@ -27,9 +27,15 @@ final-status-level = "slow"
 # it still spends up to a minute or two spawning ~200 transpile/python subprocess
 # pairs (plus a possible one-off uv python download), so exempt it from the
 # aggressive 60s deadlock cutoff that would otherwise kill it mid-run.
+#
+# The budget grows with every basedpython feature that adds mdtest blocks — it was
+# already at 152s of the previous 180s ceiling — so the ceiling is deliberately
+# well clear of the current cost rather than just above it. `type def` blocks are
+# the most expensive kind, because transpiling one evaluates its type functions,
+# and each evaluation spawns an interpreter.
 [[profile.ci.overrides]]
 filter = 'test(clean_mdtest_blocks_run)'
-slow-timeout = { period = "60s", terminate-after = 3 }
+slow-timeout = { period = "60s", terminate-after = 6 }
 
 # External-dependency mdtests provision a real virtualenv with `uv` (a network
 # install of the framework plus its stubs) before type-checking, so on the fork's
