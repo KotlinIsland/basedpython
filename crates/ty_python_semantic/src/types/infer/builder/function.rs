@@ -48,6 +48,7 @@ use ty_python_core::{
 use ruff_db::diagnostic::{Annotation, Span};
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
+use ruff_python_ast::helpers::{ReturnGuardForm, return_guards};
 use ruff_text_size::Ranged;
 use rustc_hash::FxHashSet;
 
@@ -542,6 +543,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             body: _,
             decorator_list,
             is_trailing_lambda,
+            is_asserts_return: _,
         } = function;
 
         let db = self.db();
@@ -830,7 +832,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let previous_typevar_binding_context = self.typevar_binding_context.replace(definition);
 
         if !has_type_params {
-            self.infer_return_type_annotation(function.returns.as_deref());
+            self.infer_return_type_annotation(function);
             self.infer_parameters(function.parameters.as_ref());
         }
 
@@ -887,16 +889,53 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         self.typevar_binding_context = previous_typevar_binding_context;
     }
 
-    fn infer_return_type_annotation(&mut self, returns: Option<&ast::Expr>) {
-        if let Some(returns) = returns {
-            self.context.inference_flags |= InferenceFlags::IN_RETURN_TYPE;
-            self.infer_type_expression_with_state(
-                returns,
-                DeferredExpressionState::from(self.defer_annotations()),
-            );
-            self.context
-                .inference_flags
-                .remove(InferenceFlags::IN_RETURN_TYPE);
+    fn infer_return_type_annotation(&mut self, function: &ast::StmtFunctionDef) {
+        let Some(returns) = function.returns.as_deref() else {
+            return;
+        };
+
+        // basedpython: `-> asserts x` names the place a call narrows, so the annotation
+        // is not a type expression. the name is resolved against the callee's parameters
+        // (or the calling scope) at each call site, not here
+        if function.is_asserts_return {
+            self.infer_asserts_return_annotation(function, returns);
+            return;
+        }
+
+        self.context.inference_flags |= InferenceFlags::IN_RETURN_TYPE;
+        self.infer_type_expression_with_state(
+            returns,
+            DeferredExpressionState::from(self.defer_annotations()),
+        );
+        self.context
+            .inference_flags
+            .remove(InferenceFlags::IN_RETURN_TYPE);
+    }
+
+    /// Infer what an assertion guard's annotation does contain — the asserted type of
+    /// `-> asserts x is T` — and report one that doesn't name a place.
+    fn infer_asserts_return_annotation(
+        &mut self,
+        function: &ast::StmtFunctionDef,
+        returns: &ast::Expr,
+    ) {
+        let Some(guards) = return_guards(function) else {
+            if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, returns) {
+                builder.into_diagnostic(
+                    "`asserts` must name a place, optionally negated with `not` \
+                     or tested against a type with `is`",
+                );
+            }
+            return;
+        };
+
+        for guard in guards {
+            if let ReturnGuardForm::AssertsType { ty, .. } = guard.form {
+                self.infer_type_expression_with_state(
+                    ty,
+                    DeferredExpressionState::from(self.defer_annotations()),
+                );
+            }
         }
     }
 
@@ -909,7 +948,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let binding_context = self.index.expect_single_definition(function);
         let previous_typevar_binding_context =
             self.typevar_binding_context.replace(binding_context);
-        self.infer_return_type_annotation(function.returns.as_deref());
+        self.infer_return_type_annotation(function);
         self.infer_type_parameters(type_params);
         self.infer_parameters(&function.parameters);
         self.typevar_binding_context = previous_typevar_binding_context;

@@ -203,6 +203,7 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
                 node_index: _,
                 is_async: _,
                 is_trailing_lambda: _,
+                is_asserts_return: _,
             }) => {
                 self.possibly_add_export(&name.id, PossibleExportKind::Normal);
                 for decorator in decorator_list {

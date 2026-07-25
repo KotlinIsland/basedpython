@@ -47,6 +47,7 @@ Module(
                     returns: None,
                     body: [],
                     is_trailing_lambda: false,
+                    is_asserts_return: false,
                 },
             ),
             With(
@@ -122,6 +123,7 @@ Module(
                     returns: None,
                     body: [],
                     is_trailing_lambda: false,
+                    is_asserts_return: false,
                 },
             ),
             Assign(

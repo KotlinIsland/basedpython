@@ -379,6 +379,25 @@ if True:
         Ok(())
     }
 
+    /// basedpython: an assertion guard's `asserts` keyword lives on the function, not in
+    /// its return annotation, so the formatter has to write it back.
+    #[test]
+    fn asserts_return_round_trip() -> Result<()> {
+        for input in [
+            "def f(x: int | None) -> asserts x: ...\n",
+            "def f(x: int | None) -> asserts not x: ...\n",
+            "def f(x: int | None) -> asserts x is int: ...\n",
+            "def f(x: int | None) -> asserts x is not None: ...\n",
+            "def f(self) -> asserts self.data is not None: ...\n",
+            "def f(a: int | None, b: str | None) -> asserts a is int and b: ...\n",
+        ] {
+            let options = PyFormatOptions::from_extension(Path::new("test.by"));
+            let actual = format_module_source(input, options)?.as_code().to_string();
+            assert_eq!(input, actual);
+        }
+        Ok(())
+    }
+
     /// Use this test to debug the formatting of some snipped
     #[ignore]
     #[test]

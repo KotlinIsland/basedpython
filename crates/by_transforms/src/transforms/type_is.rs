@@ -14,30 +14,49 @@
 //! `identity_swap`). running before `identity_swap` in the `AstPass` list so
 //! type-position rewrites win the first-wins overlap dedup
 
+use ruff_python_ast::helpers::{ReturnGuardForm, return_guards};
+use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{
-    AtomicNodeIndex, CmpOp, Expr, ExprContext, ExprName, ExprSubscript, ModModule, Stmt, name::Name,
+    AtomicNodeIndex, CmpOp, Expr, ExprContext, ExprName, ExprSubscript, ModModule, Stmt,
+    StmtFunctionDef, name::Name,
 };
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext, render_expr};
-use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions};
+use super::type_expr_walker::{Recurse, TypeExprVisitor, TypePos, walk_type_positions_skipping};
 
-pub(crate) struct TypeIs;
+pub(crate) struct TypeIs<'src> {
+    src: &'src str,
+}
 
-impl TypeIs {
-    pub(crate) fn new() -> Self {
-        Self
+impl<'src> TypeIs<'src> {
+    pub(crate) fn new(src: &'src str) -> Self {
+        Self { src }
     }
 }
 
-impl AstPass for TypeIs {
+impl AstPass for TypeIs<'_> {
     fn run(&self, module: &mut ModModule, ctx: &mut PassContext) {
         let mut state = State {
             edits: Vec::new(),
             needs_import: false,
         };
         let body: &[Stmt] = &module.body;
-        walk_type_positions(body, None, &mut state);
+
+        // narrowing annotations that name a place python can't: an assertion guard, and a
+        // predicate on something other than a parameter. both lower to what the function
+        // returns, and their ranges are claimed so the `TypeIs[T]` rewrite below skips them
+        let mut guards = ReturnGuards {
+            src: self.src,
+            edits: Vec::new(),
+            claimed: Vec::new(),
+        };
+        for stmt in body {
+            guards.visit_stmt(stmt);
+        }
+        state.edits.append(&mut guards.edits);
+
+        walk_type_positions_skipping(body, None, &guards.claimed, &mut state);
         ctx.text_edits.extend(state.edits);
         if state.needs_import {
             // typing.TypeIs landed in 3.13 (PEP 742). on older runtimes the
@@ -51,6 +70,65 @@ impl AstPass for TypeIs {
 struct State {
     edits: Vec<(TextRange, String)>,
     needs_import: bool,
+}
+
+/// lowers the narrowing return annotations that have no `TypeIs` spelling
+struct ReturnGuards<'src> {
+    src: &'src str,
+    edits: Vec<(TextRange, String)>,
+    claimed: Vec<TextRange>,
+}
+
+impl ReturnGuards<'_> {
+    fn function(&mut self, function: &StmtFunctionDef) {
+        let Some(returns) = function.returns.as_deref() else {
+            return;
+        };
+
+        // `def f(x) -> asserts x` raises when the assertion doesn't hold, and returns
+        // `None` when it does. the keyword is not part of `returns`, so the edit starts
+        // at the keyword itself
+        if function.is_asserts_return {
+            let keyword_start = self.src[..usize::from(returns.range().start())]
+                .rfind("asserts")
+                .map(|offset| TextSize::try_from(offset).expect("offset fits u32"))
+                .unwrap_or_else(|| returns.range().start());
+            self.edits.push((
+                TextRange::new(keyword_start, returns.range().end()),
+                "None".to_owned(),
+            ));
+            self.claimed.push(returns.range());
+            return;
+        }
+
+        // `def f() -> a is int` narrows a place rather than an argument, and
+        // `-> self.data is str` narrows a member of one. `TypeIs` can only name a bare
+        // parameter, so anything else lowers to the `bool` the function returns
+        if let Some(guards) = return_guards(function)
+            && let [guard] = guards.as_slice()
+            && matches!(guard.form, ReturnGuardForm::Predicate { .. })
+        {
+            let (name, members) = guard.place_parts();
+            let narrows_a_parameter = members.is_empty()
+                && function
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.name().id == *name);
+            if !narrows_a_parameter {
+                self.edits.push((returns.range(), "bool".to_owned()));
+                self.claimed.push(returns.range());
+            }
+        }
+    }
+}
+
+impl<'ast> Visitor<'ast> for ReturnGuards<'_> {
+    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
+        if let Stmt::FunctionDef(function) = stmt {
+            self.function(function);
+        }
+        walk_stmt(self, stmt);
+    }
 }
 
 impl TypeExprVisitor for State {
@@ -123,6 +201,92 @@ mod tests {
             indoc! {"
                 from typing_extensions import TypeIs
                 def is_str(x) -> TypeIs[str]: ...
+            "},
+        );
+    }
+
+    #[test]
+    fn asserts_returns_none() {
+        check(
+            "def check(x: int | None) -> asserts x:\n    if x is None:\n        raise ValueError\n",
+            indoc! {"
+                def check(x: int | None) -> None:
+                    if x is None:
+                        raise ValueError
+            "},
+        );
+    }
+
+    #[test]
+    fn negated_asserts_returns_none() {
+        check(
+            "def check(x: int | None) -> asserts not x: ...\n",
+            indoc! {"
+                def check(x: int | None) -> None: ...
+            "},
+        );
+    }
+
+    #[test]
+    fn typed_asserts_returns_none() {
+        check(
+            "def check(x: int | None) -> asserts x is int: ...\n",
+            indoc! {"
+                def check(x: int | None) -> None: ...
+            "},
+        );
+        check(
+            "def check(x: int | None) -> asserts x is not None: ...\n",
+            indoc! {"
+                def check(x: int | None) -> None: ...
+            "},
+        );
+    }
+
+    #[test]
+    fn member_guards_lower_to_what_they_return() {
+        // `TypeIs` can only name a bare parameter, so a member predicate lowers to `bool`
+        check(
+            "class C:\n    data: str | None = None\n    def ensure(self) -> asserts self.data is not None: ...\n    def loaded(self) -> self.data is str: ...\n",
+            indoc! {"
+                class C:
+                    data: str | None = None
+                    def ensure(self) -> None: ...
+                    def loaded(self) -> bool: ...
+            "},
+        );
+    }
+
+    #[test]
+    fn several_asserted_places_return_none() {
+        check(
+            "def check(a: int | None, b: str | None) -> asserts a is int and b: ...\n",
+            indoc! {"
+                def check(a: int | None, b: str | None) -> None: ...
+            "},
+        );
+    }
+
+    #[test]
+    fn asserts_method_returns_none() {
+        check(
+            "class C:\n    def check(self, y: int | None) -> asserts y: ...\n",
+            indoc! {"
+                class C:
+                    def check(self, y: int | None) -> None: ...
+            "},
+        );
+    }
+
+    #[test]
+    fn non_parameter_predicate_returns_bool() {
+        // `TypeIs` can only name a parameter, so a predicate on a place lowers to `bool`
+        check(
+            "a = 1\ndef f() -> a is int:\n    return True\n",
+            indoc! {"
+                a = 1
+                def f() -> bool:
+                    return True
             "},
         );
     }

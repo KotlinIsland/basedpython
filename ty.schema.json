@@ -1301,6 +1301,16 @@
             }
           ]
         },
+        "narrowing-guard-as-value": {
+          "title": "detects an assertion guard whose result is used as a value",
+          "description": "## What it does\nChecks for a call to a basedpython assertion guard whose result is used as a value.\n\n## Why is this bad?\nAn assertion guard narrows once it *returns*, so it is written as a statement:\n`check(x)`. Its value is `None` — it raises when the assertion doesn't hold — so\ntesting that value (`if check(x):`) or binding it (`ok = check(x)`) never gets the\nnarrowing, and the test is always false.\n\n## Example\n\n```by\ndef check(x: int | None) -> asserts x:\n    if x is None:\n        raise ValueError\n\ndef f(a: int | None):\n    if check(a):  # error: the guard narrows as a statement, not as a test\n        ...\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "no-matching-overload": {
           "title": "detects calls that do not match any overload",
           "description": "## What it does\n\nChecks for calls to an overloaded function that do not match any of the overloads.\n\n## Why is this bad?\n\nFailing to provide the correct arguments to one of the overloads will raise a `TypeError`\nat runtime.\n\n## Examples\n\n```python\nfrom typing import overload\n\n\n@overload\ndef func(x: int): ...\n@overload\ndef func(x: bool): ...\ndef func(x: int | bool): ...\n\n\nfunc(\"string\")  # error: [no-matching-overload]\n```",
@@ -1714,6 +1724,16 @@
         "unresolved-import": {
           "title": "detects unresolved imports",
           "description": "## What it does\n\nChecks for import statements for which the module cannot be resolved.\n\n## Why is this bad?\n\nImporting a module that cannot be resolved will raise a `ModuleNotFoundError`\nat runtime.\n\n## Examples\n\n```python\n# ModuleNotFoundError: No module named 'foo'\nimport foo  # error\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unresolved-narrowing-guard": {
+          "title": "detects a narrowing return annotation that names no place",
+          "description": "## What it does\nChecks for a basedpython narrowing return annotation whose place doesn't exist.\n\n## Why is this bad?\n`-> asserts x` and `-> x is T` name the place a call narrows. The name is\nresolved against the function's parameters, and otherwise against the places\nvisible where the guard is written. A name that is neither — a typo, or a\nparameter that was later renamed — silently narrows nothing at every call site.\n\n## Example\n\n```by\ndef check(value: int | None) -> asserts values:  # error: `values` is nothing\n    if value is None:\n        raise ValueError\n```",
           "default": "error",
           "oneOf": [
             {

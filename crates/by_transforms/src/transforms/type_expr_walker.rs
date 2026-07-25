@@ -297,7 +297,10 @@ impl<'ast> Visitor<'ast> for TypePosWalker<'_> {
             }
             Stmt::FunctionDef(f) => {
                 self.visit_parameters(&f.parameters);
-                if let Some(ret) = &f.returns {
+                // `-> asserts x` names a place to narrow; it is not a type position at all
+                if let Some(ret) = &f.returns
+                    && !f.is_asserts_return
+                {
                     self.visit_type_expr(ret, TypePos::Root);
                 }
                 if let Some(tp) = &f.type_params {

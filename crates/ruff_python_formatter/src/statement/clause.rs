@@ -146,6 +146,7 @@ impl<'a> ClauseHeader<'a> {
                 returns,
                 body: _,
                 is_trailing_lambda: _,
+                is_asserts_return: _,
             }) => {
                 if let Some(type_params) = type_params.as_deref() {
                     visit(type_params, visitor);

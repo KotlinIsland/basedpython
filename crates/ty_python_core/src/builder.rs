@@ -5,6 +5,7 @@ use except_handlers::TryNodeContextStackManager;
 use itertools::Itertools;
 use ruff_python_ast::helpers::{
     Truthiness, any_over_expr, is_dotted_name, last_bound_parameter, parameter_modifiers,
+    return_guards,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -13,7 +14,9 @@ use ruff_db::parsed::ParsedModuleRef;
 use ruff_db::source::{SourceText, source_text};
 use ruff_index::IndexVec;
 use ruff_python_ast::name::Name;
-use ruff_python_ast::visitor::{Visitor, walk_expr, walk_keyword, walk_pattern, walk_stmt};
+use ruff_python_ast::visitor::{
+    Visitor, walk_body, walk_expr, walk_keyword, walk_pattern, walk_stmt,
+};
 use ruff_python_ast::{self as ast, AtomicNodeIndex, NodeIndex, PySourceType, PythonVersion};
 use ruff_python_parser::semantic_errors::{
     LazyImportContext, SemanticSyntaxChecker, SemanticSyntaxContext, SemanticSyntaxError,
@@ -299,6 +302,8 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     ///
     /// [generator functions]: https://docs.python.org/3/glossary.html#term-generator
     generator_functions: FxHashSet<FileScopeId>,
+    /// basedpython: the call expressions this file makes as bare statements.
+    basedpython_statement_calls: FxHashSet<ExpressionNodeKey>,
     /// Hashset of all [`FileScopeId`]s that correspond to asynchronous comprehensions.
     async_comprehensions: FxHashSet<FileScopeId>,
     /// Snapshots of enclosing-scope place states visible from nested scopes.
@@ -312,6 +317,10 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
 
     /// Alias metadata for predicate leaf names in the current file.
     alias_predicates: FxHashMap<ExpressionNodeKey, NarrowingAliasPredicate<'db>>,
+
+    /// basedpython: places this file's narrowing return annotations name, computed on
+    /// demand. See [`Self::basedpython_guard_targets`].
+    basedpython_guard_targets: Option<GuardTargets>,
 }
 
 impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
@@ -352,6 +361,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             seen_submodule_imports: FxHashSet::default(),
             imported_modules: FxHashSet::default(),
             generator_functions: FxHashSet::default(),
+            basedpython_statement_calls: FxHashSet::default(),
             async_comprehensions: FxHashSet::default(),
 
             enclosing_snapshots: FxHashMap::default(),
@@ -363,6 +373,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             semantic_syntax_errors: RefCell::default(),
             narrowing_aliases: FxHashMap::default(),
             alias_predicates: FxHashMap::default(),
+            basedpython_guard_targets: None,
         };
 
         builder.push_scope_with_parent(NodeWithScopeRef::Module, None);
@@ -2122,6 +2133,93 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             .record_narrowing_constraint_for_places(predicate, places);
     }
 
+    /// basedpython: the places this file's narrowing return annotations name.
+    ///
+    /// `def f() -> a is int` narrows a place no call site mentions, and
+    /// `def m(self) -> asserts self.data` narrows a member of one, so neither target can be
+    /// read off a call's arguments. Resolving them needs the callee's signature, which isn't
+    /// available while the semantic index is being built, so every place and every member
+    /// chain a guard in this file names is a candidate at every call. A guard declared in
+    /// another file names a place in *that* module, which is a different symbol from a
+    /// same-named place here, so it is not a candidate.
+    fn basedpython_guard_targets(&mut self) -> &GuardTargets {
+        if self.basedpython_guard_targets.is_none() {
+            let mut targets = GuardTargets::default();
+            if self.source_type.is_basedpython() {
+                walk_body(
+                    &mut GuardTargetCollector {
+                        targets: &mut targets,
+                    },
+                    &self.module.syntax().body,
+                );
+                targets.scope_places.sort_unstable();
+                targets.scope_places.dedup();
+                targets.member_chains.sort_unstable();
+                targets.member_chains.dedup();
+            }
+            self.basedpython_guard_targets = Some(targets);
+        }
+        self.basedpython_guard_targets
+            .as_ref()
+            .expect("guard targets were just computed")
+    }
+
+    /// Register the file's basedpython guard targets in the current scope so a call predicate
+    /// can narrow them, and return their places.
+    fn possible_guard_target_places(
+        &mut self,
+        predicate: &PredicateOrLiteral<'db>,
+    ) -> Vec<ScopedPlaceId> {
+        let PredicateOrLiteral::Predicate(predicate) = predicate else {
+            return Vec::new();
+        };
+        let (PredicateNode::Expression(expression)
+        | PredicateNode::AssertsCall(CallableAndCallExpr {
+            call_expr: expression,
+            ..
+        })) = predicate.node
+        else {
+            return Vec::new();
+        };
+        let (scope_targets, member_chains) = {
+            let targets = self.basedpython_guard_targets();
+            if targets.is_empty() {
+                return Vec::new();
+            }
+            (targets.scope_places.clone(), targets.member_chains.clone())
+        };
+
+        let node = expression.node_ref(self.db).node(self.module);
+        let mut collector = CallCollector { calls: Vec::new() };
+        collector.visit_expr(node);
+        if collector.calls.is_empty() {
+            return Vec::new();
+        }
+
+        // a guard on a parameter or a receiver narrows a member of whatever the call passes
+        // there, so every root the call mentions is paired with every member chain
+        let member_places: Vec<PlaceExpr> = collector
+            .calls
+            .iter()
+            .flat_map(|call| call_roots(call))
+            .flat_map(|root| {
+                member_chains
+                    .iter()
+                    .filter_map(move |chain| PlaceExpr::try_from_expr_with_members(root, chain))
+            })
+            .collect();
+        let scope_places: Vec<PlaceExpr> = scope_targets
+            .iter()
+            .filter_map(|(name, members)| PlaceExpr::from_symbol_with_members(name, members))
+            .collect();
+
+        scope_places
+            .into_iter()
+            .chain(member_places)
+            .map(|place| self.add_place(place))
+            .collect()
+    }
+
     /// Adds and records a narrowing constraint for only the places that could possibly be narrowed.
     ///
     /// Returns the `ScopedPredicateId` for the positive predicate, which can later be passed to
@@ -2130,7 +2228,9 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         &mut self,
         predicate: PredicateOrLiteral<'db>,
     ) -> ScopedPredicateId {
-        let possibly_narrowed = self.compute_possibly_narrowed_places(&predicate);
+        let guard_targets = self.possible_guard_target_places(&predicate);
+        let mut possibly_narrowed = self.compute_possibly_narrowed_places(&predicate);
+        possibly_narrowed.extend(guard_targets);
         let use_def = self.current_use_def_map_mut();
         let predicate_id = use_def.add_predicate(predicate);
         use_def.record_narrowing_constraint_for_places(predicate_id, &possibly_narrowed);
@@ -2163,6 +2263,15 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         PossiblyNarrowedPlacesBuilder::new(self.db, place_table)
                             .pattern(pattern, module)
                     }
+                    // basedpython: an assertion guard narrows the argument it was passed
+                    PredicateNode::AssertsCall(CallableAndCallExpr { call_expr, .. }) => {
+                        match asserted_call(call_expr.node_ref(self.db).node(self.module)) {
+                            Some(call) => {
+                                PossiblyNarrowedPlacesBuilder::new(self.db, place_table).call(call)
+                            }
+                            None => PossiblyNarrowedPlaces::default(),
+                        }
+                    }
                     PredicateNode::SubjectElementPattern(_)
                     | PredicateNode::IsNonTerminalCall(_)
                     | PredicateNode::IsNonEmptyIterable(_)
@@ -2186,7 +2295,9 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         predicate: PredicateOrLiteral<'db>,
         predicate_id: ScopedPredicateId,
     ) {
-        let possibly_narrowed = self.compute_possibly_narrowed_places(&predicate);
+        let guard_targets = self.possible_guard_target_places(&predicate);
+        let mut possibly_narrowed = self.compute_possibly_narrowed_places(&predicate);
+        possibly_narrowed.extend(guard_targets);
         self.current_use_def_map_mut()
             .record_negated_narrowing_constraint_for_places(predicate_id, &possibly_narrowed);
     }
@@ -2901,6 +3012,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             enclosing_snapshots: FrozenMap::from(self.enclosing_snapshots),
             semantic_syntax_errors,
             generator_functions: FrozenSet::from(self.generator_functions),
+            basedpython_statement_calls: FrozenSet::from(self.basedpython_statement_calls),
             async_comprehensions: FrozenSet::from(self.async_comprehensions),
             narrowing_alias_predicates: FrozenMap::from(self.alias_predicates),
         }
@@ -2935,6 +3047,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     body,
                     is_async: _,
                     is_trailing_lambda,
+                    is_asserts_return: _,
                     range: _,
                     node_index: _,
                 } = function_def;
@@ -4483,6 +4596,28 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                             self.current_use_def_map_mut()
                                 .record_narrowing_constraint_for_all_places(narrowing_constraint);
                         }
+
+                        // basedpython: the same call may be a call to an assertion guard
+                        // (`def f(x) -> asserts x`), which narrows once it returns — that is,
+                        // for the rest of this flow rather than inside a branch
+                        if self.source_type.is_basedpython() {
+                            // record the call itself, which is what a checker sees; `expr`
+                            // is the `await` for an awaited call
+                            if let Some(call) = asserted_call(expr) {
+                                self.basedpython_statement_calls
+                                    .insert(ExpressionNodeKey::from(call));
+                            }
+                            self.record_narrowing_constraint(PredicateOrLiteral::Predicate(
+                                Predicate {
+                                    node: PredicateNode::AssertsCall(CallableAndCallExpr {
+                                        callable,
+                                        call_expr,
+                                        is_await,
+                                    }),
+                                    is_positive: true,
+                                },
+                            ));
+                        }
                     }
                 }
             }
@@ -5641,6 +5776,94 @@ fn dunder_all_extend_argument(value: &ast::Expr) -> Option<&ast::Expr> {
     let ast::ExprAttribute { value, attr, .. } = single_argument.as_attribute_expr()?;
 
     (attr == "__all__").then_some(value)
+}
+
+/// basedpython: the places this file's narrowing return annotations name.
+#[derive(Debug, Default)]
+struct GuardTargets {
+    /// Guards whose root is not a parameter of the annotated function, as a root name and
+    /// the attribute segments below it.
+    scope_places: Vec<(Name, Box<[Name]>)>,
+    /// The attribute segments of guards rooted at a parameter, which apply below whatever
+    /// a call passes for that parameter.
+    member_chains: Vec<Box<[Name]>>,
+}
+
+impl GuardTargets {
+    fn is_empty(&self) -> bool {
+        self.scope_places.is_empty() && self.member_chains.is_empty()
+    }
+}
+
+/// basedpython: collects the places this file's narrowing return annotations name.
+struct GuardTargetCollector<'a> {
+    targets: &'a mut GuardTargets,
+}
+
+impl<'ast> Visitor<'ast> for GuardTargetCollector<'_> {
+    fn visit_stmt(&mut self, stmt: &'ast ast::Stmt) {
+        if let ast::Stmt::FunctionDef(function) = stmt
+            && let Some(guards) = return_guards(function)
+        {
+            for guard in guards {
+                let (name, members) = guard.place_parts();
+                let members: Box<[Name]> = members.into_iter().cloned().collect();
+                if function
+                    .parameters
+                    .iter()
+                    .any(|parameter| parameter.name().id == *name)
+                {
+                    if !members.is_empty() {
+                        self.targets.member_chains.push(members);
+                    }
+                } else {
+                    self.targets.scope_places.push((name.clone(), members));
+                }
+            }
+        }
+        walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, _expr: &'ast ast::Expr) {
+        // annotations live on statements; expressions can't declare a guard
+    }
+}
+
+/// Collects every call expression in a predicate, including the predicate itself.
+struct CallCollector<'ast> {
+    calls: Vec<&'ast ast::ExprCall>,
+}
+
+impl<'ast> Visitor<'ast> for CallCollector<'ast> {
+    fn visit_expr(&mut self, expr: &'ast ast::Expr) {
+        if let ast::Expr::Call(call) = expr {
+            self.calls.push(call);
+        }
+        walk_expr(self, expr);
+    }
+}
+
+/// The expressions a call binds its leading parameters to: its receiver, when the callee is
+/// an attribute access, and its plain arguments.
+fn call_roots(call: &ast::ExprCall) -> impl Iterator<Item = &ast::Expr> {
+    let receiver = match call.func.as_ref() {
+        ast::Expr::Attribute(attribute) => Some(&*attribute.value),
+        _ => None,
+    };
+    receiver.into_iter().chain(
+        call.arguments
+            .args
+            .iter()
+            .chain(call.arguments.keywords.iter().map(|keyword| &keyword.value)),
+    )
+}
+
+/// The call a statement-level call expression makes, looking through `await`.
+fn asserted_call(expr: &ast::Expr) -> Option<&ast::ExprCall> {
+    match expr {
+        ast::Expr::Await(await_expr) => await_expr.value.as_call_expr(),
+        expr => expr.as_call_expr(),
+    }
 }
 
 /// Returns `true` for syntactically direct `range(...)` calls.

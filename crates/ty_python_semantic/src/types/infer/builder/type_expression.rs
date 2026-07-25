@@ -1286,10 +1286,10 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 if self.is_basedpython_file()
                     && compare.ops.len() == 1
                     && matches!(compare.ops[0], ast::CmpOp::Is)
-                    && matches!(compare.left.as_ref(), ast::Expr::Name(_))
+                    && is_narrowing_predicate_place(compare.left.as_ref())
                     && let [target] = compare.comparators.as_ref()
                 {
-                    // skip resolving the lhs name — `a is T` in return-type
+                    // skip resolving the lhs place — `a is T` in return-type
                     // position is a labeled annotation, not a reference; the
                     // forward transpile drops the name when lowering to
                     // `TypeIs[T]`. we don't infer the name here, but we
@@ -4138,5 +4138,15 @@ fn resolve_use_site_variance<'db, 'ast>(
     match resolve_use_site_variance_class(db, value_ty, elements, infer_inner) {
         Some(class_type) => Type::instance(db, class_type),
         None => Type::unknown(),
+    }
+}
+
+/// basedpython: whether `expr` is a place a narrowing predicate annotation can name — a
+/// bare name, or an attribute chain rooted at one (`self.data`).
+fn is_narrowing_predicate_place(expr: &ast::Expr) -> bool {
+    match expr {
+        ast::Expr::Name(_) => true,
+        ast::Expr::Attribute(attribute) => is_narrowing_predicate_place(&attribute.value),
+        _ => false,
     }
 }

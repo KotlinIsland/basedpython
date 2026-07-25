@@ -163,6 +163,7 @@ mod member;
 mod method;
 mod mro;
 pub(crate) mod narrow;
+pub(crate) mod narrowing_guards;
 mod newtype;
 mod overlapping;
 mod overrides;

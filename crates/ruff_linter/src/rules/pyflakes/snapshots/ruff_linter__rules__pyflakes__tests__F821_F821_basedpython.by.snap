@@ -38,4 +38,15 @@ F821 Undefined name `UndefinedType`
 26 | # but an undefined *type* argument to the cast is still a real reference
 27 | bad_cast = val cast UndefinedType
    |                     ^^^^^^^^^^^^^
+28 |
+29 | # `-> asserts x` names the place a call narrows, not a type: the name is the
+   |
+
+F821 Undefined name `UndefinedGuardType`
+  --> F821_basedpython.by:45:43
+   |
+44 | # the type in `asserts x is T` is a real type reference — flagged when undefined
+45 | def check_type(x: object) -> asserts x is UndefinedGuardType:
+   |                                           ^^^^^^^^^^^^^^^^^^
+46 |     raise ValueError
    |

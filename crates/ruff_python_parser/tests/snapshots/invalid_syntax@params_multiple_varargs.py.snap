@@ -93,6 +93,7 @@ Module(
                         ),
                     ],
                     is_trailing_lambda: false,
+                    is_asserts_return: false,
                 },
             ),
             FunctionDef(
@@ -178,6 +179,7 @@ Module(
                         ),
                     ],
                     is_trailing_lambda: false,
+                    is_asserts_return: false,
                 },
             ),
             FunctionDef(
@@ -279,6 +281,7 @@ Module(
                         ),
                     ],
                     is_trailing_lambda: false,
+                    is_asserts_return: false,
                 },
             ),
         ],

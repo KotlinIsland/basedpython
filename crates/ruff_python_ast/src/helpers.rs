@@ -937,6 +937,125 @@ impl ParameterModifiers {
     }
 }
 
+/// basedpython: how a narrowing return annotation applies at a call site.
+#[derive(Debug, Clone, Copy)]
+pub enum ReturnGuardForm<'a> {
+    /// `-> place is T`: narrows where the call evaluates truthy.
+    Predicate { ty: &'a Expr },
+    /// `-> asserts name` (`is_positive`) or `-> asserts not name`: narrows the place by
+    /// truthiness once the call returns.
+    Asserts { is_positive: bool },
+    /// `-> asserts name is T` (`is_positive`) or `-> asserts name is not T`: narrows the
+    /// place by `ty` once the call returns.
+    AssertsType { is_positive: bool, ty: &'a Expr },
+}
+
+/// basedpython: one narrowing target named by a return annotation.
+#[derive(Debug, Clone, Copy)]
+pub struct ReturnGuard<'a> {
+    /// The place the guard narrows: a name, or an attribute chain rooted at one.
+    pub place: &'a Expr,
+    pub form: ReturnGuardForm<'a>,
+}
+
+impl<'a> ReturnGuard<'a> {
+    /// The root name of the narrowed place, and the attribute segments below it.
+    ///
+    /// `self.data` is the name `self` and the segment `data`.
+    pub fn place_parts(&self) -> (&'a Name, Vec<&'a Name>) {
+        let mut segments = Vec::new();
+        let mut expr = self.place;
+        while let Expr::Attribute(attribute) = expr {
+            segments.push(&attribute.attr.id);
+            expr = &attribute.value;
+        }
+        segments.reverse();
+        let name = expr
+            .as_name_expr()
+            .map(|name| &name.id)
+            .expect("a guard place is rooted at a name");
+        (name, segments)
+    }
+}
+
+/// Whether `expr` is a place a narrowing return annotation can name.
+fn is_guard_place(expr: &Expr) -> bool {
+    match expr {
+        Expr::Name(_) => true,
+        Expr::Attribute(attribute) => is_guard_place(&attribute.value),
+        _ => false,
+    }
+}
+
+/// basedpython: what a function's return annotation names as its narrowing targets.
+///
+/// `def f(x) -> x is int` and `def f(x) -> asserts x` both name the place a call narrows;
+/// `-> asserts a is int and b` names several. This is the surface syntax alone: whether the
+/// annotation really produced a narrowing type is up to the type checker.
+///
+/// Returns `None` when the annotation names no place at all — for an `asserts` annotation
+/// that is an error, and for any other annotation it is just an ordinary type.
+pub fn return_guards(function: &ast::StmtFunctionDef) -> Option<Vec<ReturnGuard<'_>>> {
+    let returns = function.returns.as_deref()?;
+
+    if function.is_asserts_return {
+        // `asserts a is int and b` asserts every term of the conjunction
+        let terms: Vec<&Expr> = match returns {
+            Expr::BoolOp(ast::ExprBoolOp {
+                op: ast::BoolOp::And,
+                values,
+                ..
+            }) => values.iter().collect(),
+            term => vec![term],
+        };
+        return terms.into_iter().map(asserted_guard).collect();
+    }
+
+    let Expr::Compare(compare) = returns else {
+        return None;
+    };
+    if !matches!(&*compare.ops, [ast::CmpOp::Is]) || !is_guard_place(&compare.left) {
+        return None;
+    }
+    let [ty] = &*compare.comparators else {
+        return None;
+    };
+    Some(vec![ReturnGuard {
+        place: &compare.left,
+        form: ReturnGuardForm::Predicate { ty },
+    }])
+}
+
+/// One term of an `asserts` annotation: a place, a negated place, or a place tested with `is`.
+fn asserted_guard(term: &Expr) -> Option<ReturnGuard<'_>> {
+    if let Expr::Compare(compare) = term
+        && let [op @ (ast::CmpOp::Is | ast::CmpOp::IsNot)] = &*compare.ops
+        && let [ty] = &*compare.comparators
+        && is_guard_place(&compare.left)
+    {
+        return Some(ReturnGuard {
+            place: &compare.left,
+            form: ReturnGuardForm::AssertsType {
+                is_positive: matches!(op, ast::CmpOp::Is),
+                ty,
+            },
+        });
+    }
+
+    let (place, is_positive) = match term {
+        Expr::UnaryOp(ast::ExprUnaryOp {
+            op: ast::UnaryOp::Not,
+            operand,
+            ..
+        }) => (operand.as_ref(), false),
+        place => (place, true),
+    };
+    is_guard_place(place).then_some(ReturnGuard {
+        place,
+        form: ReturnGuardForm::Asserts { is_positive },
+    })
+}
+
 /// basedpython: detect `local` / `once` modifiers on `param`, read from `source`
 /// (the file the parameter was parsed from).
 ///

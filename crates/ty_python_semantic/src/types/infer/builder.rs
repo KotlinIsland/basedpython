@@ -65,13 +65,14 @@ use crate::types::diagnostic::{
     GeneratorMismatchKind, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT,
     INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_FIELD_LOOKUP,
     INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE,
-    INVALID_TYPE_FORM, INVALID_TYPE_VARIABLE_CONSTRAINTS, NON_OVERLAPPING_CAST,
-    OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
-    TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS,
-    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
-    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
-    hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
-    report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_call_to_abstract_method,
+    INVALID_TYPE_FORM, INVALID_TYPE_VARIABLE_CONSTRAINTS, NARROWING_GUARD_AS_VALUE,
+    NON_OVERLAPPING_CAST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
+    POSSIBLY_MISSING_SUBMODULE, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
+    UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
+    UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR,
+    UNUSED_AWAITABLE, hint_if_stdlib_attribute_exists_on_other_versions,
+    report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
+    report_bad_dunder_delete_call, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
     report_invalid_class_match_pattern, report_invalid_exception_caught,
     report_invalid_exception_cause, report_invalid_exception_raised,
@@ -108,7 +109,7 @@ use crate::types::narrow::pattern_success_types;
 use crate::types::newtype::NewType;
 use crate::types::reified_infer::{self, ReifiedInferenceError};
 use crate::types::set_theoretic::RecursivelyDefined;
-use crate::types::signatures::{CallableSignature, ReturnCallableTypeVarScope};
+use crate::types::signatures::{CallableSignature, NarrowingGuard, ReturnCallableTypeVarScope};
 use crate::types::soundness::{
     cast_is_redundant, cast_target_is_unverifiable_protocol, erases_type_arguments,
     runtime_check_target,
@@ -10259,7 +10260,51 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             _ => return_ty,
         };
 
-        typeguard::bind_type_guard_return_type(db, self.scope(), return_ty, &bindings, arguments)
+        self.check_narrowing_guard_as_value(call_expression, &bindings);
+
+        typeguard::bind_type_guard_return_type(
+            db,
+            self.scope(),
+            return_ty,
+            &bindings,
+            call_expression,
+        )
+    }
+
+    /// basedpython: report a call to an assertion guard whose result is used as a value.
+    ///
+    /// An assertion guard narrows once it returns, so it only says anything when it is
+    /// called as a statement. Its value is the `None` it returns.
+    fn check_narrowing_guard_as_value(
+        &self,
+        call_expression: &ast::ExprCall,
+        bindings: &Bindings<'db>,
+    ) {
+        if self.index.is_statement_call(call_expression) {
+            return;
+        }
+        let asserts = bindings
+            .single_element()
+            .and_then(|binding| binding.matching_overloads().next())
+            .is_some_and(|(_, overload)| {
+                overload
+                    .signature
+                    .narrowing_guards
+                    .iter()
+                    .any(NarrowingGuard::is_assertion)
+            });
+        if !asserts {
+            return;
+        }
+        if let Some(builder) = self
+            .context
+            .report_lint(&NARROWING_GUARD_AS_VALUE, call_expression)
+        {
+            builder.into_diagnostic(
+                "an assertion guard narrows when it is called as a statement, \
+                 and its value is only the `None` it returns",
+            );
+        }
     }
 
     fn infer_starred_expression(

@@ -252,6 +252,7 @@ fn function(
                 returns: Some(Box::new(return_type)),
                 type_params: None,
                 is_trailing_lambda: false,
+                is_asserts_return: false,
                 range: TextRange::default(),
                 node_index: ruff_python_ast::AtomicNodeIndex::NONE,
             });
@@ -269,6 +270,7 @@ fn function(
         returns: None,
         type_params: None,
         is_trailing_lambda: false,
+        is_asserts_return: false,
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
     });

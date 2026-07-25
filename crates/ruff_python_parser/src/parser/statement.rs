@@ -339,6 +339,7 @@ fn build_property_fn(
         is_async: false,
         returns: returns.map(Box::new),
         is_trailing_lambda: false,
+        is_asserts_return: false,
         range,
         node_index: AtomicNodeIndex::NONE,
     })
@@ -3811,7 +3812,23 @@ impl<'src> Parser<'src> {
         // x = 10
         let parameters = self.parse_parameters(FunctionKind::FunctionDef);
 
+        let mut is_asserts_return = false;
         let returns = if self.eat(TokenKind::Rarrow) {
+            // basedpython `def f(x) -> asserts x` / `-> asserts not x`: the return
+            // annotation is an assertion guard, not a type. the keyword is consumed
+            // here and recorded on the function; the asserted expression takes the
+            // place of the annotation. a bare `-> asserts` is still the type `asserts`
+            if self.at(TokenKind::Name)
+                && self.src_text(self.current_token_range()) == "asserts"
+                && (EXPR_SET.contains(self.peek()) || self.peek().is_soft_keyword())
+            {
+                self.error_if_not_basedpython(
+                    "`asserts` return annotations are not valid in .py files".to_string(),
+                );
+                self.bump(TokenKind::Name);
+                is_asserts_return = true;
+            }
+
             if self.at_expr() {
                 // test_ok function_def_valid_return_expr
                 // def foo() -> int | str: ...
@@ -3900,6 +3917,7 @@ impl<'src> Parser<'src> {
             is_async: false,
             returns,
             is_trailing_lambda: false,
+            is_asserts_return,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         }
@@ -3987,6 +4005,7 @@ impl<'src> Parser<'src> {
                 node_index: AtomicNodeIndex::NONE,
             }))),
             is_trailing_lambda: false,
+            is_asserts_return: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         }
@@ -4766,6 +4785,7 @@ impl<'src> Parser<'src> {
             is_async: false,
             returns: None,
             is_trailing_lambda: true,
+            is_asserts_return: false,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         }
@@ -5760,6 +5780,7 @@ impl<'src> Parser<'src> {
                     range,
                     is_async: false,
                     is_trailing_lambda: false,
+                    is_asserts_return: false,
                     decorator_list: decorators,
                     name: ast::Identifier {
                         id: Name::empty(),

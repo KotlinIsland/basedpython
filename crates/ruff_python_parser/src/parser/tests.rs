@@ -250,6 +250,49 @@ fn basedpython_local_once_param_rejected_in_py() {
 }
 
 #[test]
+fn basedpython_asserts_return_annotation() {
+    // `-> asserts x` records the keyword on the function and keeps the asserted
+    // expression as the annotation
+    for (source, asserts) in [
+        ("def f(x) -> asserts x: ...", true),
+        ("def f(x) -> asserts not x: ...", true),
+        ("def f(x) -> asserts x is int: ...", true),
+        ("def f(x) -> asserts x is not None: ...", true),
+        // a bare `asserts` is the ordinary type named `asserts`
+        ("def f(x) -> asserts: ...", false),
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::FunctionDef(func)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single FunctionDef for `{source}`");
+        };
+        assert_eq!(
+            func.is_asserts_return, asserts,
+            "unexpected assertion guard for `{source}`"
+        );
+        assert!(
+            func.returns.is_some(),
+            "the asserted expression is the annotation in `{source}`"
+        );
+    }
+}
+
+#[test]
+fn basedpython_asserts_return_rejected_in_py() {
+    // the keyword is `.by`-only; a `.py` file using it collects a
+    // `BasedPythonOnly` gate error
+    let source = "def f(x) -> asserts x: ...";
+    let parsed = crate::Parser::new(source, ParseOptions::from(Mode::Module))
+        .parse()
+        .try_into_module()
+        .expect("recovers to a module");
+    assert!(
+        parsed.errors().iter().any(ParseError::is_basedpython_only),
+        "expected a BasedPythonOnly error for `{source}`, got {:?}",
+        parsed.errors()
+    );
+}
+
+#[test]
 fn basedpython_local_once_in_callable_type() {
     // `local` / `once` modifiers inside a callable-type parameter list parse
     // cleanly (stripped, no AST field), on the first and subsequent elements

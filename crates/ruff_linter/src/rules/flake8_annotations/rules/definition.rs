@@ -649,6 +649,7 @@ pub(crate) fn definition(
         returns,
         body,
         is_trailing_lambda: _,
+        is_asserts_return: _,
     } = function;
 
     let is_method = definition.is_method();

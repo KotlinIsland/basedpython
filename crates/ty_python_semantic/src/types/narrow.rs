@@ -4,8 +4,11 @@ use std::collections::{BTreeMap, btree_map::Entry as BTreeEntry, hash_map::Entry
 use crate::Db;
 use crate::reachability::{narrow_type_by_constraint, type_narrowed_by_previous_patterns};
 use crate::subscript::PyIndex;
+use crate::types::callable::CallableTypes;
 use crate::types::function::KnownFunction;
 use crate::types::infer::{ExpressionInference, infer_same_file_expression_type};
+use crate::types::narrowing_guards::{GuardRoot, guard_root, narrowed_place, narrowed_scope_place};
+use crate::types::signatures::NarrowingGuardKind;
 use crate::types::special_form::TypeQualifier;
 use crate::types::tuple::{TupleLength, TupleSpec, TupleSpecBuilder, TupleType, TupleUnpacker};
 use crate::types::typed_dict::{
@@ -102,6 +105,29 @@ pub(crate) fn infer_narrowing_constraints<'db>(
             .and_then(|constraints| constraints.get(&place).cloned());
             (positive, None)
         }
+        // basedpython: a call to a function declared `-> asserts x` narrows the place it
+        // names for everything that follows the call statement, which is exactly the reach
+        // of this predicate
+        PredicateNode::AssertsCall(CallableAndCallExpr {
+            callable,
+            call_expr,
+            ..
+        }) => {
+            let narrowed = asserts_guard_targets(db, callable, call_expr)
+                .iter()
+                .filter(|(target, _)| *target == place)
+                .map(|(_, ty)| *ty)
+                .reduce(|left, right| {
+                    IntersectionBuilder::new(db)
+                        .add_positive(left)
+                        .add_positive(right)
+                        .build()
+                });
+            match narrowed {
+                Some(ty) => (Some(NarrowingConstraint::intersection(ty)), None),
+                None => (None, None),
+            }
+        }
         PredicateNode::IsNonTerminalCall(_)
         | PredicateNode::IsNonEmptyIterable(_)
         | PredicateNode::StarImportPlaceholder(_) => (None, None),
@@ -112,6 +138,112 @@ pub(crate) fn infer_narrowing_constraints<'db>(
     } else {
         (constraints.1, constraints.0)
     }
+}
+
+/// basedpython: the places a statement-level call asserts, and what it narrows each to.
+///
+/// `def f(x) -> asserts x` narrows the argument the call passes for `x`, `-> asserts self.d`
+/// narrows a member of the receiver, and a guard that names no parameter at all narrows a
+/// place of that name in the calling scope.
+///
+/// A call whose arguments are unpacked (`*args` / `**kwargs`) doesn't say which argument
+/// reaches the parameter, and an overloaded callable doesn't say which signature applies, so
+/// neither narrows anything.
+#[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
+fn asserts_guard_targets<'db>(
+    db: &'db dyn Db,
+    callable: Expression<'db>,
+    call_expr: Expression<'db>,
+) -> Box<[(ScopedPlaceId, Type<'db>)]> {
+    let scope = callable.scope(db);
+    // `asserts` is basedpython surface syntax, so this lookup costs other files nothing
+    if !scope.file(db).source_type(db).is_basedpython() {
+        return Box::default();
+    }
+
+    let callable_ty = infer_same_file_expression_type(db, callable, TypeContext::default());
+    if matches!(callable_ty, Type::Dynamic(_)) {
+        return Box::default();
+    }
+    let Some(callable_ty) = callable_ty
+        .try_upcast_to_callable(db)
+        .and_then(CallableTypes::exactly_one)
+    else {
+        return Box::default();
+    };
+    let [signature] = callable_ty.signatures(db).overloads.as_slice() else {
+        return Box::default();
+    };
+    if signature.narrowing_guards.is_empty() {
+        return Box::default();
+    }
+
+    let module = parsed_module(db, call_expr.file(db)).load(db);
+    let call = match call_expr.node_ref(db).node(&module) {
+        ast::Expr::Await(await_expr) => await_expr.value.as_call_expr(),
+        node => node.as_call_expr(),
+    };
+    let Some(call) = call else {
+        return Box::default();
+    };
+
+    signature
+        .narrowing_guards
+        .iter()
+        .filter_map(|guard| {
+            let narrowed_to = match guard.kind {
+                NarrowingGuardKind::Asserts { is_positive } => {
+                    if is_positive {
+                        Type::AlwaysFalsy.negate(db)
+                    } else {
+                        Type::AlwaysTruthy.negate(db)
+                    }
+                }
+                // a guard type that still mentions a type variable isn't resolved against the
+                // call's specialization here, so it says nothing about the argument
+                NarrowingGuardKind::AssertsType { ty, .. } if ty.has_typevar(db) => return None,
+                NarrowingGuardKind::AssertsType { is_positive, ty } => {
+                    ty.negate_if(db, !is_positive)
+                }
+                NarrowingGuardKind::Predicate => return None,
+            };
+
+            let target = match guard_root(guard, signature.parameters(), call) {
+                GuardRoot::Parameter(parameter_index) => {
+                    let argument = asserted_argument(call, parameter_index, &guard.name)?;
+                    narrowed_place(db, scope, guard, argument)?
+                }
+                GuardRoot::Receiver(receiver) => narrowed_place(db, scope, guard, receiver)?,
+                GuardRoot::Scope => narrowed_scope_place(db, scope, guard)?,
+            };
+
+            Some((target, narrowed_to))
+        })
+        .collect()
+}
+
+/// The argument `call` supplies for the parameter at `parameter_index`, named `name`.
+fn asserted_argument<'ast>(
+    call: &'ast ast::ExprCall,
+    parameter_index: usize,
+    name: &Name,
+) -> Option<&'ast ast::Expr> {
+    if let Some(keyword) = call.arguments.find_keyword(name.as_str()) {
+        return Some(&keyword.value);
+    }
+    if call
+        .arguments
+        .keywords
+        .iter()
+        .any(|keyword| keyword.arg.is_none())
+    {
+        return None;
+    }
+    let positional = call.arguments.args.get(..=parameter_index)?;
+    if positional.iter().any(ast::Expr::is_starred_expr) {
+        return None;
+    }
+    positional.last()
 }
 
 #[salsa::tracked(returns(as_ref), heap_size=ruff_memory_usage::heap_size)]
@@ -1088,7 +1220,7 @@ impl<'db, 'ast> NarrowingConstraintsBuilder<'db, 'ast> {
             PredicateNode::SubjectElementPattern(subject_element) => {
                 self.evaluate_subject_element_pattern(subject_element)
             }
-            PredicateNode::IsNonTerminalCall(_) => return None,
+            PredicateNode::AssertsCall(_) | PredicateNode::IsNonTerminalCall(_) => return None,
             PredicateNode::IsNonEmptyIterable(_) => return None,
             PredicateNode::StarImportPlaceholder(_) => return None,
         };
@@ -2673,7 +2805,8 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
             PredicateNode::SubjectElementPattern(subject_element) => {
                 subject_element.pattern.scope(self.db)
             }
-            PredicateNode::IsNonTerminalCall(CallableAndCallExpr { callable, .. }) => {
+            PredicateNode::IsNonTerminalCall(CallableAndCallExpr { callable, .. })
+            | PredicateNode::AssertsCall(CallableAndCallExpr { callable, .. }) => {
                 callable.scope(self.db)
             }
             PredicateNode::IsNonEmptyIterable(expression) => expression.scope(self.db),

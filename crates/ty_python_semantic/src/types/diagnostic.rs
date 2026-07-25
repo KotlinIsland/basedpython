@@ -145,6 +145,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&ONCE_CALLED_TWICE);
     registry.register_lint(&TRAILING_LAMBDA_CONTROL_FLOW);
     registry.register_lint(&TRAILING_LAMBDA_RETURN_TYPE);
+    registry.register_lint(&UNRESOLVED_NARROWING_GUARD);
+    registry.register_lint(&NARROWING_GUARD_AS_VALUE);
     registry.register_lint(&ESCAPING_LOOP_VARIABLE);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&NON_OVERLAPPING_CAST);
@@ -1295,6 +1297,58 @@ declare_lint! {
     /// ```
     pub(crate) static TRAILING_LAMBDA_CONTROL_FLOW = {
         summary: "detects non-local control flow in a non-`once` trailing-lambda block",
+        status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a basedpython narrowing return annotation whose place doesn't exist.
+    ///
+    /// ## Why is this bad?
+    /// `-> asserts x` and `-> x is T` name the place a call narrows. The name is
+    /// resolved against the function's parameters, and otherwise against the places
+    /// visible where the guard is written. A name that is neither — a typo, or a
+    /// parameter that was later renamed — silently narrows nothing at every call site.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def check(value: int | None) -> asserts values:  # error: `values` is nothing
+    ///     if value is None:
+    ///         raise ValueError
+    /// ```
+    pub(crate) static UNRESOLVED_NARROWING_GUARD = {
+        summary: "detects a narrowing return annotation that names no place",
+        status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a call to a basedpython assertion guard whose result is used as a value.
+    ///
+    /// ## Why is this bad?
+    /// An assertion guard narrows once it *returns*, so it is written as a statement:
+    /// `check(x)`. Its value is `None` — it raises when the assertion doesn't hold — so
+    /// testing that value (`if check(x):`) or binding it (`ok = check(x)`) never gets the
+    /// narrowing, and the test is always false.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def check(x: int | None) -> asserts x:
+    ///     if x is None:
+    ///         raise ValueError
+    ///
+    /// def f(a: int | None):
+    ///     if check(a):  # error: the guard narrows as a statement, not as a test
+    ///         ...
+    /// ```
+    pub(crate) static NARROWING_GUARD_AS_VALUE = {
+        summary: "detects an assertion guard whose result is used as a value",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
     }

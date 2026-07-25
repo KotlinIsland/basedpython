@@ -343,6 +343,7 @@ impl<'a> Generator<'a> {
                 returns,
                 decorator_list,
                 type_params,
+                is_asserts_return,
                 ..
             }) => {
                 self.newlines(if self.indent_depth == 0 { 2 } else { 1 });
@@ -364,7 +365,11 @@ impl<'a> Generator<'a> {
                     self.p("(");
                     self.unparse_parameters(parameters);
                     self.p(")");
-                    if let Some(returns) = returns {
+                    if *is_asserts_return {
+                        // basedpython: `-> asserts x` names a place, not a type. the
+                        // generator emits python, and such a function returns `None`
+                        self.p(" -> None");
+                    } else if let Some(returns) = returns {
                         self.p(" -> ");
                         // render at the same precedence as a variable annotation
                         // so a union return type stays unparenthesised
@@ -2359,6 +2364,32 @@ if True:
             based_round_trip(contents),
             contents.replace('\n', LineEnding::default().as_str())
         );
+    }
+
+    /// basedpython: `-> asserts x` names a place, not a type, so the generator — which
+    /// emits python — renders it as the `None` such a function returns. the formatter is
+    /// what preserves the surface form
+    #[test]
+    fn asserts_return_renders_as_none() {
+        for (contents, expected) in [
+            (
+                "def f(x) -> asserts x:\n    ...",
+                "def f(x) -> None:\n    ...",
+            ),
+            (
+                "def f(x) -> asserts not x:\n    ...",
+                "def f(x) -> None:\n    ...",
+            ),
+            (
+                "def f(x) -> asserts x is int:\n    ...",
+                "def f(x) -> None:\n    ...",
+            ),
+        ] {
+            assert_eq!(
+                based_round_trip(contents),
+                expected.replace('\n', LineEnding::default().as_str())
+            );
+        }
     }
 
     /// infix bitwise-xor must NOT be swallowed by the postfix `^` operator

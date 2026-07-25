@@ -25,3 +25,32 @@ ok_cast = val cast int
 ok_try = val cast? int
 # but an undefined *type* argument to the cast is still a real reference
 bad_cast = val cast UndefinedType
+
+# `-> asserts x` names the place a call narrows, not a type: the name is the
+# callee's own parameter, so it must not be resolved in the enclosing scope
+def check(x: int | None) -> asserts x:
+    if x is None:
+        raise ValueError
+
+def check_empty(x: str | None) -> asserts not x:
+    if x:
+        raise ValueError
+
+# a `name is T` predicate names its target the same way, so it isn't resolved
+# in the enclosing scope either
+def guard() -> undefined_place is int:
+    return True
+
+# the type in `asserts x is T` is a real type reference — flagged when undefined
+def check_type(x: object) -> asserts x is UndefinedGuardType:
+    raise ValueError
+
+# a guard on a member names a place, not a reference — `self` is not resolved here
+class Guarded:
+    data: str | None = None
+
+    def ensure(self) -> asserts self.data is not None:
+        raise ValueError
+
+    def loaded(self) -> self.data is str:
+        return True
