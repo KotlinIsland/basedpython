@@ -296,3 +296,84 @@ an annotated `**name: T` is an ordinary keyword-variadic parameter, not a pack u
 def h(cb: (**kwargs: str) -> int):
     reveal_type(cb)  # revealed: (**kwargs: str) -> int
 ```
+
+## `(**TD)` unpacks a `TypedDict`
+
+a bare name in the `**` position is an unpack — the same reading a parameter pack gets. the
+`TypedDict`'s keys become keyword parameters, matching `def f(**kwargs: Unpack[TD])`
+
+```by
+type TD = {"a": int}
+
+def f(fn: (**TD) -> None):
+    reveal_type(fn)  # revealed: (*, a: int, **kwargs: object) -> None
+    fn(a=1)
+    fn()  # error: [missing-argument]
+    fn(a="wrong")  # error: [invalid-argument-type]
+```
+
+## `(**TD)` agrees with the `def` spelling
+
+```by
+from typing import Unpack
+
+type TD = {"a": int}
+
+def base(**kwargs: Unpack[TD]) -> None: ...
+
+def bare(fn: (**TD) -> None): ...
+
+def labelled(fn: (**kwargs: Unpack[TD]) -> None): ...
+
+def anonymous(fn: (**: Unpack[TD]) -> None): ...
+
+reveal_type(base)  # revealed: def base(*, a: int, **kwargs: object) -> None
+reveal_type(bare)  # revealed: def bare(fn: (*, a: int, **kwargs: object) -> None) -> Unknown
+reveal_type(labelled)  # revealed: def labelled(fn: (*, a: int, **kwargs: object) -> None) -> Unknown
+reveal_type(anonymous)  # revealed: def anonymous(fn: (*, a: int, **kwargs: object) -> None) -> Unknown
+```
+
+## `(**P)` unpacks a protocol's data members
+
+```by
+protocol P:
+    b: str
+
+def f(fn: (**P) -> None):
+    reveal_type(fn)  # revealed: (*, b: str) -> None
+    fn(b="s")
+    # error: [missing-argument]
+    # error: [unknown-argument]
+    fn(a=1)
+```
+
+a method describes how the value behaves rather than a keyword a caller can pass, so it contributes
+no parameter
+
+```by
+protocol Q:
+    b: str
+
+    def run(self) -> None: ...
+
+def g(fn: (**Q) -> None):
+    reveal_type(fn)  # revealed: (*, b: str) -> None
+```
+
+## a labelled `**kwargs: X` is never an unpack
+
+only the bare and anonymous spellings unpack, so a labelled parameter is how a `TypedDict` or
+protocol is spelled as the *value* type of every keyword
+
+```by
+type TD = {"a": int}
+
+protocol P:
+    b: str
+
+def f(fn: (**kwargs: TD) -> None):
+    reveal_type(fn)  # revealed: (**kwargs: TD) -> None
+
+def g(fn: (**kwargs: P) -> None):
+    reveal_type(fn)  # revealed: (**kwargs: P) -> None
+```

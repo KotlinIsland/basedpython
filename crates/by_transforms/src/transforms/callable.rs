@@ -31,7 +31,7 @@ use super::ast_driver::{PassContext, TypeAwarePass};
 use super::intersection::{collect_intersect, collect_union, is_intersection_node};
 use super::just_float::rewrite_type_expr_with_imports;
 use super::wrapped_runtime::OPTIONAL_RUNTIME;
-use crate::type_info::TypeInfo;
+use crate::type_info::{TypeInfo, UnpackedKwargsLowering};
 
 #[expect(
     clippy::struct_excessive_bools,
@@ -139,6 +139,51 @@ impl<'src> CallableSyntax<'src> {
         }
     }
 
+    /// Whether a starred parameter-list element unpacks a variadic type (`(*Ts) -> R`)
+    /// rather than declaring an anonymous variadic (`(*: T) -> R`). The two spell
+    /// identically, so this resolves them the way ty does — on whether the operand is a
+    /// `TypeVarTuple`
+    fn is_unpacked_variadic(&self, expr: &Expr) -> bool {
+        self.types.is_some_and(|types| types.is_typevartuple(expr))
+    }
+
+    /// How the operand of a bare `**X` expands, per ty's classifier.
+    fn unpacked_kwargs(&self, expr: &Expr) -> Option<UnpackedKwargsLowering> {
+        self.types.and_then(|types| types.unpacked_kwargs(expr))
+    }
+
+    /// `(prefix, paramspec_name)` if the last arrow parameter is a bare `**P` naming an
+    /// actual parameter pack, and the prefix is plain positional types with no `/` / `*`
+    /// markers — the `ParamSpec` (empty prefix) or `Concatenate` form. A `**X` naming
+    /// anything else unpacks into an explicit parameter list instead, so it is left to the
+    /// `Protocol.__call__` synthesis
+    fn paramspec_tail<'ct>(&self, ct: &'ct ExprCallableType) -> Option<(&'ct [Expr], &'ct Expr)> {
+        if ct.parameter_slash.is_some() || ct.parameter_star.is_some() {
+            return None;
+        }
+        let (last, prefix) = ct.args.split_last()?;
+        let Expr::Starred(outer) = last else {
+            return None;
+        };
+        let Expr::Starred(inner) = outer.value.as_ref() else {
+            return None;
+        };
+        if !matches!(inner.value.as_ref(), Expr::Name(_)) {
+            return None;
+        }
+        if self.unpacked_kwargs(&inner.value) != Some(UnpackedKwargsLowering::ParameterPack) {
+            return None;
+        }
+        // a `Concatenate` prefix is plain positional types (no named/variadic params)
+        if prefix
+            .iter()
+            .any(|a| matches!(a, Expr::Named(_) | Expr::Starred(_)))
+        {
+            return None;
+        }
+        Some((prefix, inner.value.as_ref()))
+    }
+
     /// True iff the callable signature can't be expressed by `Callable[[T,
     /// ...], R]` and needs a `Protocol.__call__` synthesis: any named
     /// parameter, marker, variadic, or kwargs catch-all
@@ -225,12 +270,44 @@ impl<'src> CallableSyntax<'src> {
                 }
                 Expr::Starred(s) => match s.value.as_ref() {
                     Expr::Starred(inner) => {
-                        let ty = quote_forward_ref(&self.rewrite_or_leaf(&inner.value));
-                        parts.push(format!("**kwargs: {ty}"));
+                        // `(**TD)` / `(**P)` unpack into keyword parameters. python spells the
+                        // `TypedDict` case `Unpack[TD]`, but has nothing for a protocol, so its
+                        // members are emitted one by one
+                        match self.unpacked_kwargs(&inner.value) {
+                            Some(UnpackedKwargsLowering::TypedDict) => {
+                                let ty = quote_forward_ref(&format!(
+                                    "Unpack[{}]",
+                                    self.rewrite_or_leaf(&inner.value)
+                                ));
+                                self.extra_imports
+                                    .push("from typing import Unpack\n".to_owned());
+                                parts.push(format!("**kwargs: {ty}"));
+                            }
+                            Some(UnpackedKwargsLowering::Protocol(members)) => {
+                                if !star_emitted {
+                                    parts.push("*".to_owned());
+                                    star_emitted = true;
+                                }
+                                for (name, member_ty) in members {
+                                    parts
+                                        .push(format!("{name}: {}", quote_forward_ref(&member_ty)));
+                                }
+                            }
+                            Some(UnpackedKwargsLowering::ParameterPack) | None => {
+                                let ty = quote_forward_ref(&self.rewrite_or_leaf(&inner.value));
+                                parts.push(format!("**kwargs: {ty}"));
+                            }
+                        }
                     }
                     _ => {
                         star_emitted = true;
-                        let ty = quote_forward_ref(&self.rewrite_or_leaf(&s.value));
+                        // `(*Ts)` unpacks the variadic type — the star belongs to the
+                        // annotation, unlike the anonymous variadic `(*: T)`, whose
+                        // annotation types each individual argument
+                        let unpacks = self.is_unpacked_variadic(&s.value);
+                        let inner = self.rewrite_or_leaf(&s.value);
+                        let ty =
+                            quote_forward_ref(&if unpacks { format!("*{inner}") } else { inner });
                         parts.push(format!("*args: {ty}"));
                     }
                 },
@@ -288,9 +365,9 @@ impl<'src> CallableSyntax<'src> {
         match expr {
             // basedpython ParamSpec/Concatenate: `(**P) -> R` is `Callable[P, R]`
             // and `(T1, …, **P) -> R` is `Callable[Concatenate[T1, …, P], R]`
-            Expr::CallableType(ct) if paramspec_tail(ct).is_some() => {
+            Expr::CallableType(ct) if self.paramspec_tail(ct).is_some() => {
                 self.needs_import = true;
-                let (prefix, paramspec) = paramspec_tail(ct)?;
+                let (prefix, paramspec) = self.paramspec_tail(ct)?;
                 let ret_str = self.rewrite_or_leaf(&ct.returns);
                 let ps = self.rewrite_or_leaf(paramspec);
                 if prefix.is_empty() {
@@ -490,33 +567,6 @@ impl<'src> CallableSyntax<'src> {
 /// render a synthesized annotation as a forward-reference string literal so it
 /// is never evaluated at class-body time (the hoisted protocol class precedes
 /// the definitions its annotations mention)
-/// `(prefix, paramspec_name)` if the last arrow parameter is a bare `**P`
-/// (`Starred(Starred(Name))`) and the prefix is plain positional types with no
-/// `/` / `*` markers — the `ParamSpec` (empty prefix) or `Concatenate` form
-fn paramspec_tail(ct: &ExprCallableType) -> Option<(&[Expr], &Expr)> {
-    if ct.parameter_slash.is_some() || ct.parameter_star.is_some() {
-        return None;
-    }
-    let (last, prefix) = ct.args.split_last()?;
-    let Expr::Starred(outer) = last else {
-        return None;
-    };
-    let Expr::Starred(inner) = outer.value.as_ref() else {
-        return None;
-    };
-    if !matches!(inner.value.as_ref(), Expr::Name(_)) {
-        return None;
-    }
-    // a `Concatenate` prefix is plain positional types (no named/variadic params)
-    if prefix
-        .iter()
-        .any(|a| matches!(a, Expr::Named(_) | Expr::Starred(_)))
-    {
-        return None;
-    }
-    Some((prefix, inner.value.as_ref()))
-}
-
 fn quote_forward_ref(ty: &str) -> String {
     format!("\"{}\"", ty.replace('\\', "\\\\").replace('"', "\\\""))
 }
@@ -919,6 +969,85 @@ mod tests {
         );
         assert!(
             out.starts_with("from typing import Protocol\n"),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn non_denotable_unpacked_typevartuple() {
+        // `(*Args)` unpacks the pack, so the star belongs to the annotation — unlike the
+        // anonymous variadic `(*: int)`, whose annotation types each argument
+        let out = transpile(
+            "def f[*Args](fn: (*Args) -> object): ...\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("def __call__(self, *args: \"*Args\") -> \"object\": ..."),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn non_denotable_unpacked_typevartuple_after_prefix() {
+        let out = transpile(
+            "def f[*Args](fn: (int, *Args) -> object): ...\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("def __call__(self, _0: \"int\", *args: \"*Args\") -> \"object\": ..."),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn non_denotable_anonymous_variadic_keeps_bare_annotation() {
+        let out = transpile("f: (*: int) -> None\n", &Config::test_default()).unwrap();
+        assert!(
+            out.contains("def __call__(self, *args: \"int\") -> \"None\": ..."),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn non_denotable_unpacked_typed_dict_kwargs() {
+        // `(**TD)` unpacks the `TypedDict`'s keys; python spells that `Unpack[TD]`
+        let out = transpile(
+            "type TD = {\"a\": int}\n\ndef f(fn: (**TD) -> None): ...\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("def __call__(self, **kwargs: \"Unpack[TD]\") -> \"None\": ..."),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn non_denotable_unpacked_protocol_kwargs() {
+        // python cannot spell "the keywords of protocol `P`", so the members are emitted
+        let out = transpile(
+            "protocol P:\n    b: str\n\ndef f(fn: (**P) -> None): ...\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("def __call__(self, *, b: \"str\") -> \"None\": ..."),
+            "got: {out}"
+        );
+    }
+
+    #[test]
+    fn labelled_kwargs_of_unpackable_type_stays_a_catch_all() {
+        // only the bare spelling unpacks — `**kwargs: TD` types every keyword's value
+        let out = transpile(
+            "type TD = {\"a\": int}\n\ndef f(fn: (**kwargs: TD) -> None): ...\n",
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("def __call__(self, **kwargs: \"TD\") -> \"None\": ..."),
             "got: {out}"
         );
     }

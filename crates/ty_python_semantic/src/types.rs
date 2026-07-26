@@ -118,6 +118,21 @@ pub(crate) use class::{
 pub use class::{KnownClass, MethodDecorator};
 use instance::Protocol;
 pub use instance::{NominalInstanceType, ProtocolInstanceType};
+use protocol_class::ReifiedMember;
+
+/// basedpython: how a bare `**X` in a callable arrow's parameter list expands.
+/// See [`Type::unpacked_kwargs`].
+pub enum UnpackedKwargs<'db> {
+    /// a `ParamSpec` or keyword-variadic pack — the whole parameter list is the pack,
+    /// so it lowers to `Callable[X, R]`
+    ParameterPack,
+    /// a `TypedDict` — its keys become keyword parameters, spelled `**kwargs: Unpack[X]`
+    /// in python
+    TypedDict,
+    /// a protocol — its data members become keyword parameters. Python has no spelling
+    /// for this, so the lowering emits them explicitly
+    Protocol(Vec<(Name, Type<'db>)>),
+}
 pub(crate) use literal::{
     BytesLiteralType, EnumLiteralType, LiteralValueType, LiteralValueTypeKind, StringLiteralType,
 };
@@ -1732,6 +1747,49 @@ impl<'db> Type<'db> {
             Type::ProtocolInstance(instance) => Some(instance),
             _ => None,
         }
+    }
+
+    /// basedpython: the protocol's data members, as `(name, instance-access type)` pairs —
+    /// the keyword parameters `(**P) -> R` unpacks to. Methods are excluded: they describe
+    /// how the value behaves, not a keyword a caller can pass.
+    pub(crate) fn protocol_data_members(self, db: &'db dyn Db) -> Option<Vec<(Name, Type<'db>)>> {
+        let protocol = self.as_protocol_instance()?;
+        Some(
+            protocol
+                .interface(db)
+                .non_method_members(db)
+                .into_iter()
+                .filter_map(|member| match member.reified_member_shape(db)? {
+                    ReifiedMember::Attribute { ty, .. } => Some((Name::new(member.name()), ty)),
+                    ReifiedMember::Method { .. } => None,
+                })
+                .collect(),
+        )
+    }
+
+    /// basedpython: how a bare `**X` in a callable arrow's parameter list expands.
+    ///
+    /// The type checker and the transpiler must agree on this, or a `.by` file means one
+    /// thing to `by check` and another to whatever reads its lowered `.py` — so both go
+    /// through this one classifier.
+    pub fn unpacked_kwargs(self, db: &'db dyn Db) -> Option<UnpackedKwargs<'db>> {
+        let is_pack = match self {
+            Type::TypeVar(typevar) => typevar.is_parameter_pack(db),
+            Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) => {
+                typevar.is_parameter_pack(db)
+            }
+            _ => false,
+        };
+        if is_pack {
+            return Some(UnpackedKwargs::ParameterPack);
+        }
+        let resolved = self.resolve_type_alias(db);
+        if resolved.as_typed_dict().is_some() {
+            return Some(UnpackedKwargs::TypedDict);
+        }
+        resolved
+            .protocol_data_members(db)
+            .map(UnpackedKwargs::Protocol)
     }
 
     #[cfg(test)]
