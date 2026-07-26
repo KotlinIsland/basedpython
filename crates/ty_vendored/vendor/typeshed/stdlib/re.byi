@@ -109,7 +109,7 @@ backward compatibility.
 
 import enum
 import sys
-from _typeshed import MaybeNone, ReadableBuffer
+from _typeshed import ReadableBuffer
 from collections.abc import Callable, Iterator, Mapping
 from types import GenericAlias
 from typing import Final, Generic, Literal, TypeAlias, TypeVar, final
@@ -211,12 +211,12 @@ final class Match(Generic[AnyStr]):
         Return subgroup(s) of the match by indices or names.
         For 0 returns the entire match.
         """
-    def group(self, group: str | int, /) -> AnyStr | MaybeNone
-    def group(self, group1: str | int, group2: str | int, /, *groups: str | int) -> (*: AnyStr | MaybeNone)
+    def group(self, group: str | int, /) -> AnyStr | None
+    def group(self, group1: str | int, group2: str | int, /, *groups: str | int) -> (*: AnyStr | None)
 
     # Each item of groups()'s return tuple is either "AnyStr" or
     # "AnyStr | None", depending on the pattern.
-    def groups(self) -> (*: AnyStr | MaybeNone):
+    def groups(self) -> (*: AnyStr | None):
         """Return a tuple containing all the subgroups of the match, from 1.
 
         default
@@ -226,7 +226,7 @@ final class Match(Generic[AnyStr]):
 
     # Each value in groupdict()'s return dict is either "AnyStr" or
     # "AnyStr | None", depending on the pattern.
-    def groupdict(self) -> dict[str, AnyStr | MaybeNone]:
+    def groupdict(self) -> dict[str, AnyStr | None]:
         """Return a dictionary containing all the named subgroups of the match, keyed by the subgroup name.
 
         default
@@ -248,7 +248,7 @@ final class Match(Generic[AnyStr]):
     # __getitem__() returns "AnyStr" or "AnyStr | None", depending on the pattern.
     def __getitem__(self, key: 0, /) -> AnyStr:
         """Return self[key]."""
-    def __getitem__(self, key: int | str, /) -> AnyStr | MaybeNone
+    def __getitem__(self, key: int | str, /) -> AnyStr | None
 
     def __copy__(self) -> Match[AnyStr]
     def __deepcopy__(self, memo: dynamic, /) -> Match[AnyStr]
@@ -294,10 +294,10 @@ final class Pattern(Generic[AnyStr]):
     ) -> Match[bytes] | None
     def fullmatch(self, string: AnyStr, pos: int = 0, endpos: int = sys.maxsize) -> Match[AnyStr] | None
 
-    def split(self: Pattern[str], string: str, maxsplit: int = 0) -> list[str | MaybeNone]:
+    def split(self: Pattern[str], string: str, maxsplit: int = 0) -> list[str | None]:
         """Split string by the occurrences of pattern."""
-    def split(self: Pattern[bytes], string: ReadableBuffer, maxsplit: int = 0) -> list[bytes | MaybeNone]
-    def split(self, string: AnyStr, maxsplit: int = 0) -> list[AnyStr | MaybeNone]
+    def split(self: Pattern[bytes], string: ReadableBuffer, maxsplit: int = 0) -> list[bytes | None]
+    def split(self, string: AnyStr, maxsplit: int = 0) -> list[AnyStr | None]
 
     # return type depends on the number of groups in the pattern
     def findall(self: Pattern[str], string: str, pos: int = 0, endpos: int = sys.maxsize) -> list[dynamic]:
@@ -426,7 +426,7 @@ def fullmatch(pattern: str | Pattern[str], string: str, flags: FlagsType = 0) ->
     """
 def fullmatch(pattern: bytes | Pattern[bytes], string: ReadableBuffer, flags: FlagsType = 0) -> Match[bytes] | None
 
-def split(pattern: str | Pattern[str], string: str, maxsplit: int = 0, flags: FlagsType = 0) -> list[str | MaybeNone]:
+def split(pattern: str | Pattern[str], string: str, maxsplit: int = 0, flags: FlagsType = 0) -> list[str | None]:
     """Split the source string by the occurrences of the pattern,
     returning a list containing the resulting substrings.  If
     capturing parentheses are used in pattern, then the text of all
@@ -437,7 +437,7 @@ def split(pattern: str | Pattern[str], string: str, maxsplit: int = 0, flags: Fl
     """
 def split(
     pattern: bytes | Pattern[bytes], string: ReadableBuffer, maxsplit: int = 0, flags: FlagsType = 0
-) -> list[bytes | MaybeNone]
+) -> list[bytes | None]
 
 def findall(pattern: str | Pattern[str], string: str, flags: FlagsType = 0) -> list[dynamic]:
     """Return a list of all non-overlapping matches in the string.

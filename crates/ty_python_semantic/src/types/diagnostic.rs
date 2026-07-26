@@ -137,6 +137,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&MISSING_FRAMEWORK_STUBS);
     registry.register_lint(&INVALID_FIELD_LOOKUP);
     registry.register_lint(&INVALID_FIXTURE_TYPE);
+    registry.register_lint(&INVALID_REGEX);
     registry.register_lint(&UNKNOWN_FIXTURE);
     registry.register_lint(&INVALID_PARAMETRIZE);
     registry.register_lint(&UNANNOTATED_MODEL_FIELD);
@@ -1185,6 +1186,33 @@ declare_lint! {
     /// ```
     pub(crate) static INVALID_FIXTURE_TYPE = {
         summary: "detects a pytest parameter annotation incompatible with its fixture",
+        status: LintStatus::stable("0.0.1-alpha.36"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks a literal regular expression passed to the `re` module: that it
+    /// compiles at all, and that every group a match is asked for exists in it.
+    ///
+    /// ## Why is this bad?
+    /// The stubs type every `re` pattern as a plain `str`, so a pattern that
+    /// `re.compile` rejects, or a `m.group(3)` on a pattern with two groups,
+    /// only fails once the line runs.
+    ///
+    /// ## Example
+    ///
+    /// ```py
+    /// import re
+    ///
+    /// re.compile("(")  # error: missing ), unterminated subpattern at position 0
+    ///
+    /// if m := re.match("(a)(b)", "ab"):
+    ///     m.group(3)  # error: No such group: 3
+    /// ```
+    pub(crate) static INVALID_REGEX = {
+        summary: "detects an invalid regular expression or a reference to a group it has not got",
         status: LintStatus::stable("0.0.1-alpha.36"),
         default_level: Level::Error,
     }

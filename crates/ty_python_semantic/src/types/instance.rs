@@ -23,6 +23,7 @@ use crate::types::protocol_class::{
     ProtocolClass, has_all_protocol_members_defined, walk_protocol_instance_member,
     walk_protocol_interface,
 };
+use crate::types::regex::{RegexGroups, is_regex_class};
 use crate::types::relation::{
     DisjointnessChecker, HasRelationToVisitor, IsDisjointVisitor, TypeRelation,
     TypeRelationChecker, TypeVarEvaluation,
@@ -91,6 +92,22 @@ impl<'db> Type<'db> {
                 }
             }
         }
+    }
+
+    /// An instance of `re.Match` or `re.Pattern` whose pattern's capture groups
+    /// are statically known.
+    ///
+    /// This is a refinement of `Type::instance(db, class)`: it behaves as that
+    /// instance everywhere, and only the `re` members that depend on the group
+    /// shape consult the extra payload.
+    pub(crate) fn regex_instance(
+        db: &'db dyn Db,
+        class: ClassType<'db>,
+        groups: RegexGroups<'db>,
+    ) -> Self {
+        Type::NominalInstance(NominalInstanceType(NominalInstanceInner::Regex(
+            RegexInstanceClass::new(db, class, groups),
+        )))
     }
 
     pub(crate) fn tuple(tuple: Option<TupleType<'db>>) -> Self {
@@ -191,6 +208,7 @@ pub(super) fn walk_nominal_instance_type<'db, V: super::visitor::TypeVisitor<'db
         NominalInstanceInner::Object => {}
         NominalInstanceInner::NonTuple(class) => visitor.visit_type(db, class.class(db).into()),
         NominalInstanceInner::SysVersionInfo => {}
+        NominalInstanceInner::Regex(regex) => visitor.visit_type(db, regex.class(db).into()),
     }
 }
 
@@ -243,6 +261,7 @@ impl<'db> NominalInstanceType<'db> {
                 sys_version_info_class(db).unwrap_or_else(|| ClassType::object(db))
             }
             NominalInstanceInner::Object => ClassType::object(db),
+            NominalInstanceInner::Regex(regex) => regex.class(db),
         }
     }
 
@@ -259,6 +278,16 @@ impl<'db> NominalInstanceType<'db> {
             NominalInstanceInner::NonTuple(class) => class.class(db).known(db),
             NominalInstanceInner::SysVersionInfo => Some(KnownClass::VersionInfo),
             NominalInstanceInner::Object => Some(KnownClass::Object),
+            NominalInstanceInner::Regex(regex) => regex.class(db).known(db),
+        }
+    }
+
+    /// The statically-known capture groups, for a `re.Match` / `re.Pattern`
+    /// instance built from a pattern we could read.
+    pub(super) fn regex_groups(self, db: &'db dyn Db) -> Option<RegexGroups<'db>> {
+        match self.0 {
+            NominalInstanceInner::Regex(regex) => Some(regex.groups(db)),
+            _ => None,
         }
     }
 
@@ -281,7 +310,7 @@ impl<'db> NominalInstanceType<'db> {
             NominalInstanceInner::SysVersionInfo => {
                 Some(Cow::Owned(TupleSpec::version_info_spec(db)))
             }
-            NominalInstanceInner::Object => None,
+            NominalInstanceInner::Object | NominalInstanceInner::Regex(_) => None,
             NominalInstanceInner::NonTuple(class) => {
                 let class = class.class(db);
                 // Avoid an expensive MRO traversal for common stdlib classes.
@@ -321,6 +350,7 @@ impl<'db> NominalInstanceType<'db> {
             NominalInstanceInner::ExactTuple(_) => true,
             NominalInstanceInner::SysVersionInfo | NominalInstanceInner::Object => false,
             NominalInstanceInner::NonTuple(class) => class.class(db).is_generic(),
+            NominalInstanceInner::Regex(regex) => regex.class(db).is_generic(),
         }
     }
 
@@ -339,7 +369,8 @@ impl<'db> NominalInstanceType<'db> {
             NominalInstanceInner::ExactTuple(tuple) => Some(Cow::Borrowed(tuple.tuple(db))),
             NominalInstanceInner::NonTuple(_)
             | NominalInstanceInner::SysVersionInfo
-            | NominalInstanceInner::Object => None,
+            | NominalInstanceInner::Object
+            | NominalInstanceInner::Regex(_) => None,
         }
     }
 
@@ -353,7 +384,8 @@ impl<'db> NominalInstanceType<'db> {
             NominalInstanceInner::NonTuple(class) => class.class(db),
             NominalInstanceInner::ExactTuple(_)
             | NominalInstanceInner::SysVersionInfo
-            | NominalInstanceInner::Object => return None,
+            | NominalInstanceInner::Object
+            | NominalInstanceInner::Regex(_) => return None,
         };
         let (class_literal, specialization) = class.static_class_literal(db)?;
         let specialization = specialization?;
@@ -408,6 +440,16 @@ impl<'db> NominalInstanceType<'db> {
                     class.with_class(db, transformed),
                 )))
             }
+            NominalInstanceInner::Regex(regex) => {
+                let transformed = regex
+                    .class(db)
+                    .recursive_type_normalized_impl(db, div, nested)?;
+                Some(Self(NominalInstanceInner::Regex(RegexInstanceClass::new(
+                    db,
+                    transformed,
+                    regex.groups(db),
+                ))))
+            }
         }
     }
 
@@ -418,7 +460,9 @@ impl<'db> NominalInstanceType<'db> {
             // should not be relied on for type narrowing, so we do not treat it as one.
             // See:
             // https://docs.python.org/3/reference/expressions.html#parenthesized-forms
-            NominalInstanceInner::ExactTuple(_) | NominalInstanceInner::Object => false,
+            NominalInstanceInner::ExactTuple(_)
+            | NominalInstanceInner::Object
+            | NominalInstanceInner::Regex(_) => false,
             NominalInstanceInner::SysVersionInfo => true,
             NominalInstanceInner::NonTuple(class) => class
                 .class(db)
@@ -431,7 +475,7 @@ impl<'db> NominalInstanceType<'db> {
     pub(super) fn is_single_valued(self, db: &'db dyn Db) -> bool {
         match self.0 {
             NominalInstanceInner::ExactTuple(tuple) => tuple.is_single_valued(db),
-            NominalInstanceInner::Object => false,
+            NominalInstanceInner::Object | NominalInstanceInner::Regex(_) => false,
             NominalInstanceInner::SysVersionInfo => true,
             NominalInstanceInner::NonTuple(class) => class
                 .class(db)
@@ -460,13 +504,32 @@ impl<'db> NominalInstanceType<'db> {
             NominalInstanceInner::SysVersionInfo => Type::NominalInstance(self),
             NominalInstanceInner::Object => Type::object(),
             NominalInstanceInner::NonTuple(class) => {
+                let mapped_class = class.class(db);
+                // attaching regex groups turns a plain `re.Match` / `re.Pattern`
+                // instance into the refined one; every other mapping just maps
+                // the class through as usual
+                if let TypeMapping::AttachRegexGroups(groups) = type_mapping
+                    && is_regex_class(mapped_class.known(db))
+                {
+                    return Type::regex_instance(db, mapped_class, *groups);
+                }
                 let transformed =
-                    class
-                        .class(db)
-                        .apply_type_mapping_impl(db, type_mapping, tcx, visitor);
+                    mapped_class.apply_type_mapping_impl(db, type_mapping, tcx, visitor);
                 Type::NominalInstance(Self(NominalInstanceInner::NonTuple(
                     class.with_class(db, transformed),
                 )))
+            }
+            NominalInstanceInner::Regex(regex) => {
+                let transformed =
+                    regex
+                        .class(db)
+                        .apply_type_mapping_impl(db, type_mapping, tcx, visitor);
+                let groups = match type_mapping {
+                    // a later, more precise pattern replaces an earlier one
+                    TypeMapping::AttachRegexGroups(groups) => *groups,
+                    _ => regex.groups(db),
+                };
+                Type::regex_instance(db, transformed, groups)
             }
         }
     }
@@ -485,6 +548,11 @@ impl<'db> NominalInstanceType<'db> {
             NominalInstanceInner::SysVersionInfo | NominalInstanceInner::Object => {}
             NominalInstanceInner::NonTuple(class) => {
                 class
+                    .class(db)
+                    .find_legacy_typevars_impl(db, binding_context, typevars, visitor);
+            }
+            NominalInstanceInner::Regex(regex) => {
+                regex
                     .class(db)
                     .find_legacy_typevars_impl(db, binding_context, typevars, visitor);
             }
@@ -958,7 +1026,27 @@ enum NominalInstanceInner<'db> {
     NonTuple(NominalInstanceClass<'db>),
     /// The singleton `sys.version_info` value.
     SysVersionInfo,
+    /// An instance of `re.Match` or `re.Pattern` whose capture groups are known.
+    ///
+    /// This is `NonTuple` plus a payload: every question about the type answers
+    /// from the class, exactly as it would without the groups.
+    Regex(RegexInstanceClass<'db>),
 }
+
+/// The class of a `re.Match` / `re.Pattern` instance, together with the capture
+/// groups of the pattern it came from.
+///
+/// Interning keeps the payload from growing the size of [`Type`].
+#[salsa::interned(debug, heap_size=ruff_memory_usage::heap_size)]
+struct RegexInstanceClass<'db> {
+    #[returns(copy)]
+    class: ClassType<'db>,
+    #[returns(copy)]
+    groups: RegexGroups<'db>,
+}
+
+// The Salsa heap is tracked separately.
+impl get_size2::GetSize for RegexInstanceClass<'_> {}
 
 fn sys_version_info_class(db: &dyn Db) -> Option<ClassType<'_>> {
     KnownClass::VersionInfo

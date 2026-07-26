@@ -59,8 +59,12 @@ def payloads(log: str) -> list[str]:
 
 def unique_value(log: str, pattern: str, label: str) -> str:
     regex = re.compile(pattern)
+    # `pattern` is a parameter, so nothing here knows whether its first group is
+    # optional; a line whose group did not participate carries no value
     values = {
-        match.group(1) for line in payloads(log) if (match := regex.fullmatch(line))
+        value
+        for line in payloads(log)
+        if (match := regex.fullmatch(line)) and (value := match.group(1)) is not None
     }
     if not values:
         raise MetadataError(f"could not find {label} in the Actions log")
@@ -182,7 +186,8 @@ def parse_run_reference(value: str) -> tuple[int, int | None]:
     if value.isdigit():
         return int(value), None
     if match := re.search(r"/actions/runs/(\d+)(?:/attempts/(\d+))?(?:/|$)", value):
-        parsed_attempt = int(match.group(2)) if match.group(2) is not None else None
+        attempt = match.group(2)
+        parsed_attempt = int(attempt) if attempt is not None else None
         return int(match.group(1)), parsed_attempt
     raise MetadataError(f"invalid Actions run ID or URL: {value}")
 

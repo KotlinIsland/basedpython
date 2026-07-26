@@ -21,7 +21,7 @@ use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 use strum::IntoEnumIterator;
-use ty_module_resolver::{KnownModule, ModuleName, resolve_module};
+use ty_module_resolver::{KnownModule, ModuleName, file_to_module, resolve_module};
 use ty_python_core::ast_ids::HasScopedUseId;
 use ty_python_core::statement::StatementInner;
 
@@ -64,13 +64,13 @@ use crate::types::diagnostic::{
     CYCLIC_TYPE_ALIAS_DEFINITION, ERASED_CAST_ARGUMENT, ERASED_TYPE_CHECK, FINAL_ON_VARIABLE,
     GeneratorMismatchKind, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT,
     INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_FIELD_LOOKUP,
-    INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_TYPE_ALIAS_TYPE,
-    INVALID_TYPE_FORM, INVALID_TYPE_VARIABLE_CONSTRAINTS, NARROWING_GUARD_AS_VALUE,
-    NON_OVERLAPPING_CAST, OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL,
-    POSSIBLY_MISSING_SUBMODULE, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
-    UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
-    UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR,
-    UNUSED_AWAITABLE, hint_if_stdlib_attribute_exists_on_other_versions,
+    INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_REGEX,
+    INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM, INVALID_TYPE_VARIABLE_CONSTRAINTS,
+    NARROWING_GUARD_AS_VALUE, NON_OVERLAPPING_CAST, OPTIONAL_OBJECT_CONVERSION,
+    POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE, TypeCheckDiagnostics,
+    UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL,
+    UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC,
+    UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, hint_if_stdlib_attribute_exists_on_other_versions,
     report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
     report_bad_dunder_delete_call, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
@@ -107,6 +107,7 @@ use crate::types::match_pattern::{ClassPatternPositionalResult, class_pattern_po
 use crate::types::narrow::NarrowingEvaluatorExtension;
 use crate::types::narrow::pattern_success_types;
 use crate::types::newtype::NewType;
+use crate::types::regex;
 use crate::types::reified_infer::{self, ReifiedInferenceError};
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{CallableSignature, NarrowingGuard, ReturnCallableTypeVarScope};
@@ -205,10 +206,14 @@ impl<'db> DeclaredAndInferredType<'db> {
     }
 }
 
-fn should_preserve_inferred_binding_type(ty: Type<'_>) -> bool {
+fn should_preserve_inferred_binding_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
     // Dataclass field specifiers carry metadata in the inferred RHS type; replacing it with the
     // declared field type would lose settings like `init=False`.
     matches!(ty, Type::KnownInstance(KnownInstanceType::Field(_)))
+        // A pattern's statically-known capture groups ride on the inferred type
+        // in the same way, and `p: re.Pattern[str] = re.compile("()")` would
+        // otherwise throw them away.
+        || regex::groups_of(db, ty).is_some()
 }
 
 /// Whether `ty` carries an optional layer at its top level: a wrapped optional
@@ -1916,7 +1921,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
                 let declared_type = declared_ty.inner_type();
                 if inferred_ty.is_assignable_to(self.db(), declared_type) {
-                    if !should_preserve_inferred_binding_type(inferred_ty)
+                    if !should_preserve_inferred_binding_type(self.db(), inferred_ty)
                         // TODO We currently can't distinguish here between "no declared type" and
                         // "declared types is `Unknown` (e.g. due to a bad annotation, missing
                         // import, etc.)". Ideally we would still prefer `Unknown` declared type,
@@ -9520,6 +9525,255 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// Refine a call to one of the `re` module functions from the capture groups
+    /// of its pattern argument, and report a pattern that `re.compile` would
+    /// reject.
+    fn check_regex_function_call(
+        &self,
+        function: FunctionType<'db>,
+        overload: &mut Binding<'db>,
+        call_expression: &ast::ExprCall,
+    ) {
+        let db = self.db();
+        if file_to_module(db, function.file(db)).and_then(|module| module.known(db))
+            != Some(KnownModule::Re)
+        {
+            return;
+        }
+        let Some(call) = regex::RegexCall::from_name(function.name(db).as_str()) else {
+            return;
+        };
+        let [Some(pattern_ty), ..] = overload.parameter_types() else {
+            return;
+        };
+        let pattern_ty = *pattern_ty;
+
+        // an already-compiled pattern brought its groups with it
+        let (groups, any_str) = if let Some(groups) = regex::groups_of(db, pattern_ty) {
+            let Some(any_str) = regex::any_str_of(db, pattern_ty) else {
+                return;
+            };
+            (groups, any_str)
+        } else {
+            let Some((text, any_str)) = regex::pattern_source(db, pattern_ty) else {
+                return;
+            };
+            let flags = overload
+                .signature
+                .parameters()
+                .keyword_by_name("flags")
+                .and_then(|(index, _)| {
+                    call_expression
+                        .arguments
+                        .find_argument_value("flags", index)
+                });
+            let Some(verbose) = self.regex_verbose_flag(flags) else {
+                return;
+            };
+            match regex::analyze(&text, verbose) {
+                regex::PatternAnalysis::Groups(parsed) => {
+                    (regex::RegexGroups::from_parsed(db, &parsed), any_str)
+                }
+                regex::PatternAnalysis::Invalid(error) => {
+                    let anchor = call_expression
+                        .arguments
+                        .find_argument_value("pattern", 0)
+                        .map_or(AnyNodeRef::from(call_expression), AnyNodeRef::from);
+                    if let Some(builder) = self.context.report_lint(&INVALID_REGEX, anchor) {
+                        builder.into_diagnostic(error.message());
+                    }
+                    overload.set_return_type(Type::unknown());
+                    return;
+                }
+                regex::PatternAnalysis::Unknown => return,
+            }
+        };
+
+        overload.set_return_type(regex::refined_return(
+            db,
+            call,
+            groups,
+            any_str,
+            overload.return_ty,
+        ));
+    }
+
+    /// Refine a `re.Pattern` or `re.Match` method call from the capture groups
+    /// its receiver is carrying.
+    fn check_regex_method_call(
+        &self,
+        bound_method: crate::types::BoundMethodType<'db>,
+        overload: &mut Binding<'db>,
+        call_expression: &ast::ExprCall,
+    ) {
+        let db = self.db();
+        let receiver = bound_method.self_instance(db);
+        let (Some(groups), Some(any_str)) = (
+            regex::groups_of(db, receiver),
+            regex::any_str_of(db, receiver),
+        ) else {
+            return;
+        };
+        let name = bound_method.function(db).name(db).as_str();
+
+        if regex::is_pattern(db, receiver) {
+            if let Some(call) = regex::RegexCall::from_name(name) {
+                overload.set_return_type(regex::refined_return(
+                    db,
+                    call,
+                    groups,
+                    any_str,
+                    overload.return_ty,
+                ));
+            }
+            return;
+        }
+
+        let Some(member) = regex::MatchMember::from_name(name) else {
+            return;
+        };
+        let arguments = &call_expression.arguments;
+        // `*args` or a keyword would leave us guessing which group is meant
+        if !arguments.keywords.is_empty() || arguments.args.iter().any(ast::Expr::is_starred_expr) {
+            return;
+        }
+
+        match member {
+            regex::MatchMember::Group => {
+                // `m.group()` with no argument is the whole match
+                let Some((first, rest)) = arguments.args.split_first() else {
+                    overload.set_return_type(any_str);
+                    return;
+                };
+                let mut types = Vec::with_capacity(arguments.args.len());
+                for argument in std::iter::once(first).chain(rest) {
+                    let Some(key) = self.regex_group_key(argument) else {
+                        return;
+                    };
+                    let Ok(ty) = regex::group_type(db, groups, any_str, key) else {
+                        self.report_no_such_regex_group(argument.into(), key);
+                        overload.set_return_type(Type::unknown());
+                        return;
+                    };
+                    types.push(ty);
+                }
+                overload.set_return_type(match types[..] {
+                    [single] => single,
+                    _ => Type::heterogeneous_tuple(db, types),
+                });
+            }
+            regex::MatchMember::Groups => {
+                let unset = arguments.args.first().map(|it| self.expression_type(it));
+                overload.set_return_type(regex::groups_type(db, groups, any_str, unset));
+            }
+            regex::MatchMember::GroupDict => {
+                let unset = arguments.args.first().map(|it| self.expression_type(it));
+                if let Some(ty) = regex::group_dict_type(db, groups, any_str, unset) {
+                    overload.set_return_type(ty);
+                }
+            }
+            regex::MatchMember::Position => {
+                if let Some(argument) = arguments.args.first()
+                    && let Some(key) = self.regex_group_key(argument)
+                    && regex::group_type(db, groups, any_str, key).is_err()
+                {
+                    self.report_no_such_regex_group(argument.into(), key);
+                }
+            }
+        }
+    }
+
+    /// The group a `Match` member's argument names, if it names one statically.
+    fn regex_group_key<'a>(&'a self, argument: &ast::Expr) -> Option<regex::GroupKey<'a>> {
+        let ty = self.expression_type(argument);
+        if let Some(literal) = ty.as_string_literal() {
+            return Some(regex::GroupKey::Name(literal.value(self.db())));
+        }
+        u32::try_from(ty.as_int_literal()?)
+            .ok()
+            .map(regex::GroupKey::Number)
+    }
+
+    fn report_no_such_regex_group(&self, anchor: AnyNodeRef<'_>, key: regex::GroupKey<'_>) {
+        if let Some(builder) = self.context.report_lint(&INVALID_REGEX, anchor) {
+            builder.into_diagnostic(format_args!("No such group: {key}"));
+        }
+    }
+
+    /// The capture groups a `sub`/`subn` call should hand to a callable
+    /// replacement, which needs them before its arguments are inferred.
+    fn regex_substitution_groups(
+        &self,
+        callable_type: Type<'db>,
+        arguments: &ast::Arguments,
+    ) -> Option<regex::RegexGroups<'db>> {
+        let db = self.db();
+        let is_substitution =
+            |name: &str| regex::RegexCall::from_name(name) == Some(regex::RegexCall::Substitute);
+
+        match callable_type {
+            Type::BoundMethod(bound_method)
+                if is_substitution(bound_method.function(db).name(db).as_str()) =>
+            {
+                regex::groups_of(db, bound_method.self_instance(db))
+            }
+            Type::FunctionLiteral(function)
+                if is_substitution(function.name(db).as_str())
+                    && file_to_module(db, function.file(db))
+                        .and_then(|module| module.known(db))
+                        == Some(KnownModule::Re) =>
+            {
+                let pattern = arguments.find_argument_value("pattern", 0)?;
+                let pattern_ty = self
+                    .speculate_without_diagnostics()
+                    .infer_expression(pattern, TypeContext::default());
+                if let Some(groups) = regex::groups_of(db, pattern_ty) {
+                    return Some(groups);
+                }
+                let (text, _) = regex::pattern_source(db, pattern_ty)?;
+                // no signature has been matched yet, so the `flags` parameter is
+                // located by its position in `re.sub`/`re.subn` directly
+                let verbose = self.regex_verbose_flag(arguments.find_argument_value("flags", 4))?;
+                match regex::analyze(&text, verbose) {
+                    regex::PatternAnalysis::Groups(parsed) => {
+                        Some(regex::RegexGroups::from_parsed(db, &parsed))
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the `flags` argument of a `re` call turns on verbose mode.
+    ///
+    /// `None` means we could not tell, which has to mean "no refinement":
+    /// verbose mode changes how the pattern itself tokenizes, so a guess here
+    /// would produce confidently wrong group types.
+    fn regex_verbose_flag(&self, flags: Option<&ast::Expr>) -> Option<bool> {
+        let Some(flags) = flags else {
+            return Some(false);
+        };
+        // flags are combined with `|`, and the combination is verbose if any
+        // operand is. any other operator leaves us unable to say
+        if let ast::Expr::BinOp(binop) = flags {
+            if binop.op != ast::Operator::BitOr {
+                return None;
+            }
+            let left = self.regex_verbose_flag(Some(&binop.left))?;
+            let right = self.regex_verbose_flag(Some(&binop.right))?;
+            return Some(left || right);
+        }
+        // the argument may not have been inferred yet — the repl callable of
+        // `re.sub` is refined before the later arguments are visited — so fall
+        // back to a speculative builder when there is no stored type
+        let ty = self.try_expression_type(flags).unwrap_or_else(|| {
+            self.speculate_without_diagnostics()
+                .infer_expression(flags, TypeContext::default())
+        });
+        regex::flag_is_verbose(self.db(), ty)
+    }
+
     fn infer_call_expression_impl(
         &mut self,
         call_expression: &ast::ExprCall,
@@ -10002,10 +10256,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             &bindings,
         );
 
+        // `re.sub(pattern, repl, …)` hands its callable replacement a `Match`,
+        // and the pattern's groups have to reach that callable's parameter
+        // *before* a lambda is inferred against it
+        let substitution_groups = self.regex_substitution_groups(callable_type, arguments);
+
         let bindings_result = self.infer_and_check_argument_types(
             ArgumentsIter::from_ast(arguments),
             &mut call_arguments,
             &mut |builder, (_, expr, tcx)| {
+                let tcx = match substitution_groups {
+                    Some(groups) => tcx.map(|ty| regex::attach_groups(builder.db(), ty, groups)),
+                    None => tcx,
+                };
                 if has_prepared_typed_dict_constructor {
                     builder.get_or_infer_expression(expr, tcx)
                 } else {
@@ -10198,6 +10461,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                 self.file(),
                             );
                         }
+                        self.check_regex_function_call(function_literal, overload, call_expression);
                     }
                     Type::ClassLiteral(class) => {
                         if let Some(known_class) = class.known(self.db()) {
@@ -10211,6 +10475,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     }
                     Type::BoundMethod(bound_method) => {
                         self.check_django_queryset_call(bound_method, call_expression);
+                        self.check_regex_method_call(bound_method, overload, call_expression);
                     }
                     Type::Never => {
                         // In unreachable sections of code, we infer `Never` for symbols that were

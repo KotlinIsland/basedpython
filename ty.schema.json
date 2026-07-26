@@ -1041,6 +1041,16 @@
             }
           ]
         },
+        "invalid-regex": {
+          "title": "detects an invalid regular expression or a reference to a group it has not got",
+          "description": "## What it does\nChecks a literal regular expression passed to the `re` module: that it\ncompiles at all, and that every group a match is asked for exists in it.\n\n## Why is this bad?\nThe stubs type every `re` pattern as a plain `str`, so a pattern that\n`re.compile` rejects, or a `m.group(3)` on a pattern with two groups,\nonly fails once the line runs.\n\n## Example\n\n```py\nimport re\n\nre.compile(\"(\")  # error: missing ), unterminated subpattern at position 0\n\nif m := re.match(\"(a)(b)\", \"ab\"):\n    m.group(3)  # error: No such group: 3\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-return-type": {
           "title": "detects returned values that can't be assigned to the function's annotated return type",
           "description": "## What it does\n\nDetects returned values that can't be assigned to the function's annotated return type.\n\nNote that the special case of a function with a non-`None` return type and an empty body\nis handled by the separate `empty-body` error code.\n\n## Why is this bad?\n\nReturning an object of a type incompatible with the annotated return type\nis unsound, and will lead to ty inferring incorrect types elsewhere.\n\n## Examples\n\n```python\ndef func() -> int:\n    return \"a\"  # error: [invalid-return-type]\n```",

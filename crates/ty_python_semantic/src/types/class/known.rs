@@ -146,6 +146,9 @@ pub enum KnownClass {
     Path,
     // functools
     FunctoolsPartial,
+    // re
+    ReMatch,
+    RePattern,
     // ty_extensions
     Character,
     ConstraintSet,
@@ -302,6 +305,8 @@ impl KnownClass {
             | Self::Specialization
             | Self::ProtocolMeta
             | Self::FunctoolsPartial
+            | Self::ReMatch
+            | Self::RePattern
             | Self::ExtensionTypedDictFallback
             | Self::TypedDictFallback
             | Self::PydanticBaseModel
@@ -430,6 +435,8 @@ impl KnownClass {
             | KnownClass::Template
             | KnownClass::Path
             | KnownClass::FunctoolsPartial
+            | KnownClass::ReMatch
+            | KnownClass::RePattern
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticConfigDict
@@ -553,6 +560,8 @@ impl KnownClass {
             | KnownClass::Template
             | KnownClass::Path
             | KnownClass::FunctoolsPartial
+            | KnownClass::ReMatch
+            | KnownClass::RePattern
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticRootModel
@@ -676,6 +685,8 @@ impl KnownClass {
             | KnownClass::Template
             | KnownClass::Path
             | KnownClass::FunctoolsPartial
+            | KnownClass::ReMatch
+            | KnownClass::RePattern
             | KnownClass::PydanticBaseModel
             | KnownClass::PydanticBaseSettings
             | KnownClass::PydanticConfigDict
@@ -809,6 +820,8 @@ impl KnownClass {
             | Self::Template
             | Self::Path
             | Self::FunctoolsPartial
+            | Self::ReMatch
+            | Self::RePattern
             | Self::Mapping
             | Self::Sequence
             | Self::PydanticBaseModel
@@ -930,6 +943,8 @@ impl KnownClass {
             | KnownClass::Template
             | KnownClass::Path
             | KnownClass::FunctoolsPartial
+            | KnownClass::ReMatch
+            | KnownClass::RePattern
             | KnownClass::Character
             | KnownClass::ConstraintSet
             | KnownClass::ConstraintSetSolution
@@ -1071,6 +1086,8 @@ impl KnownClass {
             Self::Template => "Template",
             Self::Path => "Path",
             Self::FunctoolsPartial => "partial",
+            Self::ReMatch => "Match",
+            Self::RePattern => "Pattern",
             Self::ProtocolMeta => "_ProtocolMeta",
             Self::PydanticBaseModel => "BaseModel",
             Self::PydanticBaseSettings => "BaseSettings",
@@ -1483,6 +1500,7 @@ impl KnownClass {
             Self::Template => KnownModule::Templatelib,
             Self::Path => KnownModule::Pathlib,
             Self::FunctoolsPartial => KnownModule::Functools,
+            Self::ReMatch | Self::RePattern => KnownModule::Re,
             Self::PydanticBaseModel => KnownModule::PydanticMain,
             Self::PydanticBaseSettings => KnownModule::PydanticSettingsMain,
             Self::PydanticConfigDict => KnownModule::PydanticConfig,
@@ -1609,6 +1627,8 @@ impl KnownClass {
             | Self::Path
             | Self::UnionType
             | Self::FunctoolsPartial
+            | Self::ReMatch
+            | Self::RePattern
             | Self::PydanticBaseModel
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
@@ -1737,6 +1757,8 @@ impl KnownClass {
             | Self::Template
             | Self::Path
             | Self::FunctoolsPartial
+            | Self::ReMatch
+            | Self::RePattern
             | Self::PydanticBaseModel
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict
@@ -1863,6 +1885,8 @@ impl KnownClass {
             "Template" => &[Self::Template],
             "Path" => &[Self::Path],
             "partial" => &[Self::FunctoolsPartial],
+            "Match" => &[Self::ReMatch],
+            "Pattern" => &[Self::RePattern],
             "_ProtocolMeta" => &[Self::ProtocolMeta],
             "_TypedDict" => &[Self::ExtensionTypedDictFallback],
             "BaseModel" => &[Self::PydanticBaseModel],
@@ -1979,6 +2003,8 @@ impl KnownClass {
             | Self::Template
             | Self::Path
             | Self::FunctoolsPartial
+            | Self::ReMatch
+            | Self::RePattern
             | Self::PydanticBaseModel
             | Self::PydanticBaseSettings
             | Self::PydanticConfigDict

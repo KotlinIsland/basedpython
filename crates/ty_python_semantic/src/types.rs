@@ -95,6 +95,7 @@ use crate::types::mro::{MroIterator, StaticMroError};
 pub(crate) use crate::types::narrow::{NarrowingConstraint, infer_narrowing_constraints};
 use crate::types::newtype::NewType;
 pub use crate::types::overlapping::OverlappingType;
+use crate::types::regex::RegexGroups;
 use crate::types::signatures::{ConcatenateTail, walk_signature};
 pub(crate) use crate::types::signatures::{Parameter, Parameters};
 use crate::types::special_form::TypeQualifier;
@@ -183,6 +184,7 @@ mod newtype;
 mod overlapping;
 mod overrides;
 mod protocol_class;
+mod regex;
 pub(crate) mod reified_infer;
 pub(crate) mod relation;
 mod relation_error;
@@ -7316,6 +7318,7 @@ impl<'db> Type<'db> {
                 TypeMapping::ReplaceParameterDefaults |
                 TypeMapping::EagerExpansion |
                 TypeMapping::RescopeReturnCallables(_) |
+                TypeMapping::AttachRegexGroups(_) |
                 TypeMapping::Promote(PromotionMode::Off, _) |
                 TypeMapping::Promote(
                     PromotionMode::On,
@@ -7335,7 +7338,8 @@ impl<'db> Type<'db> {
                 TypeMapping::Promote(..) |
                 TypeMapping::ReplaceParameterDefaults |
                 TypeMapping::EagerExpansion |
-                TypeMapping::RescopeReturnCallables(_) => self,
+                TypeMapping::RescopeReturnCallables(_) |
+                TypeMapping::AttachRegexGroups(_) => self,
                 TypeMapping::Materialize(materialization_kind) => match materialization_kind {
                     MaterializationKind::Top => Type::object(),
                     MaterializationKind::Bottom => Type::Never,
@@ -8455,6 +8459,11 @@ pub enum TypeMapping<'a, 'db> {
 
     /// Updates any `Callable` types in a function signature return type to be generic if possible.
     RescopeReturnCallables(&'a FxHashMap<CallableType<'db>, CallableType<'db>>),
+
+    /// Attaches the statically-known capture groups of a regular expression to
+    /// every `re.Match` / `re.Pattern` instance in the type, wherever the `re`
+    /// stubs happen to put it (`Match[str] | None`, `Iterator[Match[str]]`, …).
+    AttachRegexGroups(RegexGroups<'db>),
 }
 
 impl<'db> TypeMapping<'_, 'db> {
@@ -8500,7 +8509,8 @@ impl<'db> TypeMapping<'_, 'db> {
             | TypeMapping::Materialize(_)
             | TypeMapping::ReplaceParameterDefaults
             | TypeMapping::EagerExpansion
-            | TypeMapping::RescopeReturnCallables(_) => context,
+            | TypeMapping::RescopeReturnCallables(_)
+            | TypeMapping::AttachRegexGroups(_) => context,
             TypeMapping::BindSelf(binding) => {
                 if binding.binding_context().is_some() {
                     context.remove_self(db, binding.binding_context())
@@ -8553,7 +8563,8 @@ impl<'db> TypeMapping<'_, 'db> {
             | TypeMapping::ReplaceSelf { .. }
             | TypeMapping::ReplaceParameterDefaults
             | TypeMapping::EagerExpansion
-            | TypeMapping::RescopeReturnCallables(_) => self.clone(),
+            | TypeMapping::RescopeReturnCallables(_)
+            | TypeMapping::AttachRegexGroups(_) => self.clone(),
         }
     }
 }

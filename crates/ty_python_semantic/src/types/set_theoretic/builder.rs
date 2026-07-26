@@ -38,6 +38,7 @@
 
 use super::RecursivelyDefined;
 use crate::types::enums::EnumComplement;
+use crate::types::regex;
 use crate::types::set_theoretic::expand_intersection_typevars_and_newtypes;
 use crate::types::{
     BytesLiteralType, ClassLiteral, EnumLiteralType, IntersectionType, KnownClass,
@@ -1050,6 +1051,16 @@ impl<'db> UnionBuilder<'db> {
             {
                 to_remove.push(i);
                 ty = KnownClass::Range.to_instance(self.db);
+                continue;
+            }
+
+            // Two `re.Match`/`re.Pattern` instances of the same class whose patterns
+            // have different capture groups describe the same set of objects; the
+            // group refinement is what differs, and neither answer holds for the
+            // union, so fall back to the unrefined instance.
+            if let Some(merged_type) = regex::merge_differing_groups(self.db, ty, element_type) {
+                to_remove.push(i);
+                ty = merged_type;
                 continue;
             }
 
