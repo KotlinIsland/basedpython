@@ -124,6 +124,15 @@ pub(crate) trait TypeInfo {
         attribute: &ruff_python_ast::ExprAttribute,
     ) -> Option<ty_python_semantic::ExtensionAttributeInfo>;
 
+    /// whether `attribute` resolves through a basedpython *implicit receiver* —
+    /// `x.fn` where `fn` names a receiver callable (`int.() -> str`) in scope
+    /// rather than a member of `x`. lowered to `fn(x)`
+    fn is_implicit_receiver_attribute(&self, attribute: &ruff_python_ast::ExprAttribute) -> bool;
+
+    /// whether `name` is a member of the enclosing trailing lambda block's
+    /// receiver, used unqualified. lowered to `it.<name>`
+    fn is_implicit_receiver_name(&self, name: &ExprName) -> bool;
+
     /// whether `expr` resolves to `typing.Any` (the explicitly-annotated
     /// dynamic type). distinguishes the special form from a shadowing binding
     /// or the `Unknown` that an unresolved / invalid type expression yields,
@@ -407,6 +416,14 @@ impl TypeInfo for SemanticModel<'_> {
         attribute: &ruff_python_ast::ExprAttribute,
     ) -> Option<ty_python_semantic::ExtensionAttributeInfo> {
         SemanticModel::extension_attribute_info(self, attribute)
+    }
+
+    fn is_implicit_receiver_attribute(&self, attribute: &ruff_python_ast::ExprAttribute) -> bool {
+        SemanticModel::implicit_receiver_attribute(self, attribute)
+    }
+
+    fn is_implicit_receiver_name(&self, name: &ExprName) -> bool {
+        SemanticModel::implicit_receiver_name(self, name)
     }
 
     fn is_any(&self, expr: &Expr) -> bool {

@@ -14,3 +14,16 @@ q: (*args: *Ts) -> int
 
 def takes(cb: (int) -> str) -> str:
     return cb(0)
+
+
+o: int.() -> str
+p: str.(int) -> bytes
+q: int.(str, /, name: bytes) -> None
+q2: int.(str, *, flag: bool) -> None
+r: list[int.() -> str]
+s: int.() -> str.() -> bytes
+t: int.(...) -> str
+
+
+def takes_receiver(cb: int.() -> str) -> str:
+    return cb(0)

@@ -4872,6 +4872,11 @@ pub(crate) struct Parameter<'db> {
     /// declarations in scope at the call site
     is_context: bool,
 
+    /// basedpython: the parameter is the implicit receiver of a
+    /// `T.() -> R` callable — it is bound by an `x.fn()` call and supplies the
+    /// implicit member scope of a trailing lambda block
+    is_receiver: bool,
+
     kind: ParameterKind<'db>,
 }
 
@@ -4904,6 +4909,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
+            is_receiver: false,
             kind: ParameterKind::PositionalOnly {
                 name,
                 default_type: None,
@@ -4918,6 +4924,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
+            is_receiver: false,
             kind: ParameterKind::PositionalOrKeyword {
                 name,
                 default_type: None,
@@ -4932,6 +4939,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
+            is_receiver: false,
             kind: ParameterKind::Variadic { name },
         }
     }
@@ -4943,6 +4951,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
+            is_receiver: false,
             kind: ParameterKind::KeywordOnly {
                 name,
                 default_type: None,
@@ -4957,6 +4966,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: true,
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
+            is_receiver: false,
             kind: ParameterKind::KeywordVariadic { name },
         }
     }
@@ -5053,6 +5063,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: self.inferred_annotation,
             annotation_kind: self.annotation_kind,
             is_context: self.is_context,
+            is_receiver: self.is_receiver,
         }
     }
 
@@ -5069,6 +5080,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: self.inferred_annotation,
             annotation_kind: self.annotation_kind,
             is_context: self.is_context,
+            is_receiver: self.is_receiver,
             kind,
         }
     }
@@ -5085,6 +5097,7 @@ impl<'db> Parameter<'db> {
             annotation_kind,
             inferred_annotation,
             is_context,
+            is_receiver,
             kind,
         } = self;
 
@@ -5146,6 +5159,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation: *inferred_annotation,
             annotation_kind: *annotation_kind,
             is_context: *is_context,
+            is_receiver: *is_receiver,
             kind,
         })
     }
@@ -5210,6 +5224,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation,
             annotation_kind,
             is_context: parameter.is_context,
+            is_receiver: false,
             kind,
         }
     }
@@ -5283,6 +5298,19 @@ impl<'db> Parameter<'db> {
     /// from `context` declarations in scope at the call site
     pub(crate) fn is_context(&self) -> bool {
         self.is_context
+    }
+
+    /// basedpython: whether this is the implicit receiver parameter of a
+    /// `T.() -> R` callable
+    pub(crate) fn is_receiver(&self) -> bool {
+        self.is_receiver
+    }
+
+    /// basedpython: mark this parameter as the implicit receiver of a
+    /// `T.() -> R` callable
+    pub(crate) fn with_receiver(mut self) -> Self {
+        self.is_receiver = true;
+        self
     }
 
     /// Returns the source definition represented by this parameter, if any.
@@ -5522,6 +5550,7 @@ mod tests {
         annotation_kind: ParameterAnnotationKind,
         inferred_annotation: bool,
         is_context: bool,
+        is_receiver: bool,
         kind: &'a ParameterKind<'db>,
     }
 
@@ -5533,6 +5562,7 @@ mod tests {
                 annotation_kind,
                 inferred_annotation,
                 is_context,
+                is_receiver,
                 kind,
             } = parameter;
 
@@ -5541,6 +5571,7 @@ mod tests {
                 annotation_kind: *annotation_kind,
                 inferred_annotation: *inferred_annotation,
                 is_context: *is_context,
+                is_receiver: *is_receiver,
                 kind,
             }
         }

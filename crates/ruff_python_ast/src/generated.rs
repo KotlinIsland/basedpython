@@ -10343,6 +10343,10 @@ pub struct ExprIpyEscapeCommand {
 pub struct ExprCallableType {
     pub node_index: crate::AtomicNodeIndex,
     pub range: ruff_text_size::TextRange,
+    /// basedpython: the implicit receiver of `int.() -> str` — a callable whose
+    /// first argument is bound as the receiver, callable as `x.fn()` and supplying
+    /// the implicit member scope of a trailing lambda block
+    pub receiver: Option<Box<Expr>>,
     pub args: Vec<Expr>,
     pub returns: Box<Expr>,
     /// basedpython: index in `args` of the `/` positional-only marker
@@ -11476,6 +11480,7 @@ impl ExprCallableType {
         V: SourceOrderVisitor<'a> + ?Sized,
     {
         let ExprCallableType {
+            receiver,
             args,
             returns,
             parameter_slash: _,
@@ -11483,6 +11488,10 @@ impl ExprCallableType {
             range: _,
             node_index: _,
         } = self;
+
+        if let Some(receiver) = receiver {
+            visitor.visit_expr(receiver);
+        }
 
         for elm in args {
             visitor.visit_expr(elm);

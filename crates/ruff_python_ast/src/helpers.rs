@@ -431,8 +431,16 @@ where
                         .as_ref()
                         .is_some_and(|value| any_over_expr(value, &mut *func))
             }
-            Expr::CallableType(ast::ExprCallableType { args, returns, .. }) => {
-                args.iter().any(|e| any_over_expr(e, &mut *func))
+            Expr::CallableType(ast::ExprCallableType {
+                receiver,
+                args,
+                returns,
+                ..
+            }) => {
+                receiver
+                    .as_ref()
+                    .is_some_and(|receiver| any_over_expr(receiver, &mut *func))
+                    || args.iter().any(|e| any_over_expr(e, &mut *func))
                     || any_over_expr(returns, &mut *func)
             }
             Expr::ProtocolType(ast::ExprProtocolType { members, .. }) => {

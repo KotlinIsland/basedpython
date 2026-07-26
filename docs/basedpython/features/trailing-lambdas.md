@@ -63,6 +63,13 @@ f(2, a=_trailing_lambda_0)
 comments and nested lowerings inside the block and the call arguments are
 preserved in place
 
+## implicit receivers
+
+when the callback declares an [implicit receiver](implicit-receivers.md)
+(`int.() -> None`), the block body sees that type's members unqualified — `imag`
+means `it.imag`. a name bound anywhere in the lexical chain keeps its ordinary
+meaning, so only names that would otherwise be unresolved resolve this way
+
 ## enclosing scope
 
 a block shares the enclosing scope for its assignments: writing to a name that

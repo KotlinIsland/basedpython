@@ -94,6 +94,12 @@ g: (**kwargs: str) -> int      # named
 f: (int, /, name: str, *args: bool, **kwargs: int) -> None
 ```
 
+### receiver
+
+a type before the parameter list is an [implicit receiver](implicit-receivers.md)
+— `int.() -> str` is a callable that runs against an `int`, which it takes as its
+leading positional parameter
+
 ## scope
 
 arrow form recognized only in syntactic type positions: parameter

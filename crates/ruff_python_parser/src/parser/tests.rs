@@ -325,6 +325,45 @@ fn basedpython_local_once_in_callable_type() {
 }
 
 #[test]
+fn basedpython_receiver_callable_type() {
+    // `T.(...) -> R` records the receiver alongside the ordinary parameter list
+    for (source, receiver, arg_count) in [
+        ("f: int.() -> str", "int", 0usize),
+        ("f: list[int].(str) -> bool", "list[int]", 1),
+        ("f: int.(str, /, name: bytes) -> None", "int", 2),
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::AnnAssign(assign)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single AnnAssign for `{source}`");
+        };
+        let Expr::CallableType(callable) = assign.annotation.as_ref() else {
+            panic!("expected a callable type for `{source}`");
+        };
+        let spelled = callable
+            .receiver
+            .as_ref()
+            .map(|receiver| &source[ruff_text_size::Ranged::range(receiver.as_ref())])
+            .expect("the receiver should be recorded");
+        assert_eq!(spelled, receiver, "receiver for `{source}`");
+        assert_eq!(callable.args.len(), arg_count, "arg count for `{source}`");
+    }
+}
+
+#[test]
+fn basedpython_receiver_callable_rejected_in_py() {
+    // `.` followed by `(` is never valid python, so the form is `.by`-only
+    let parsed = crate::Parser::new("f: int.() -> str", ParseOptions::from(Mode::Module))
+        .parse()
+        .try_into_module()
+        .expect("recovers to a module");
+    assert!(
+        parsed.errors().iter().any(ParseError::is_basedpython_only),
+        "expected a BasedPythonOnly error, got {:?}",
+        parsed.errors()
+    );
+}
+
+#[test]
 fn basedpython_local_in_callable_rejected_in_py() {
     // the modifier is `.by`-only inside a callable type too
     let parsed = crate::Parser::new("f: (local int) -> None", ParseOptions::from(Mode::Module))
@@ -1231,6 +1270,17 @@ fn fstring_conversion_after_ternary_is_not_force_unwrap() {
 fn recursion_limit_nested_parens() {
     let src = format!("{}1{}", "(".repeat(1_000), ")".repeat(1_000));
     let opts = ParseOptions::from(Mode::Module).with_max_recursion_depth(100);
+    let err = parse(&src, opts).unwrap_err();
+    assert!(matches!(err.error, ParseErrorType::RecursionLimitExceeded));
+}
+
+#[test]
+fn recursion_limit_nested_receiver_callables() {
+    // basedpython `T.(...) -> R` opens a bracket and recurses through its
+    // return type, so it needs the same depth guard as a call or subscript
+    let src = format!("f: {}int{} -> str", "a.(".repeat(1_000), ")".repeat(1_000));
+    let opts = ParseOptions::from(ruff_python_ast::PySourceType::BasedPython)
+        .with_max_recursion_depth(100);
     let err = parse(&src, opts).unwrap_err();
     assert!(matches!(err.error, ParseErrorType::RecursionLimitExceeded));
 }

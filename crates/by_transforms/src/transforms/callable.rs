@@ -311,12 +311,17 @@ impl<'src> CallableSyntax<'src> {
     /// `args` / `slash` / `star` are passed separately rather than read off a
     /// node so a protocol method member can hand over the parameters that
     /// follow its receiver, which is a name rather than a type.
+    ///
+    /// `implicit_receiver` is the rendered leading parameter of a basedpython
+    /// implicit receiver (`int.() -> str`), which is a type rather than a name and
+    /// so is spelled by a synthesized parameter.
     pub(crate) fn render_protocol_params(
         &mut self,
         args: &[Expr],
         explicit_slash: Option<usize>,
         star: Option<usize>,
         receiver: &str,
+        implicit_receiver: Option<String>,
     ) -> String {
         let mut parts: Vec<String> = vec![receiver.to_owned()];
         // implicit `/` after the last bare positional (no label) when followed
@@ -339,6 +344,15 @@ impl<'src> CallableSyntax<'src> {
             })
         };
         let slash = explicit_slash.or(implicit_slash);
+        // an implicit receiver leads the parameter list, positional-only. any `/`
+        // the arguments themselves emit comes after the receiver and so already
+        // closes it off — a second one is a `SyntaxError`
+        if let Some(implicit_receiver) = implicit_receiver {
+            parts.push(implicit_receiver);
+            if slash.is_none() {
+                parts.push("/".to_owned());
+            }
+        }
         let mut star_emitted = false;
         for (i, arg) in args.iter().enumerate() {
             if Some(i) == slash {
@@ -485,27 +499,40 @@ impl<'src> CallableSyntax<'src> {
                 let (prefix, paramspec) = self.paramspec_tail(ct)?;
                 let ret_str = self.rewrite_or_leaf(&ct.returns);
                 let ps = self.rewrite_or_leaf(paramspec);
-                if prefix.is_empty() {
+                // an implicit receiver is the callable's leading positional
+                // parameter, so it joins the `Concatenate` prefix
+                let mut prefix_str: Vec<String> = ct
+                    .receiver
+                    .iter()
+                    .map(|receiver| self.rewrite_or_leaf(receiver))
+                    .collect();
+                prefix_str.extend(prefix.iter().map(|a| self.rewrite_or_leaf(a)));
+                if prefix_str.is_empty() {
                     Some(format!("Callable[{ps}, {ret_str}]"))
                 } else {
                     self.needs_concatenate_import = true;
-                    let prefix_str = prefix
-                        .iter()
-                        .map(|a| self.rewrite_or_leaf(a))
-                        .collect::<Vec<_>>()
-                        .join(", ");
                     Some(format!(
-                        "Callable[Concatenate[{prefix_str}, {ps}], {ret_str}]"
+                        "Callable[Concatenate[{}, {ps}], {ret_str}]",
+                        prefix_str.join(", ")
                     ))
                 }
             }
             Expr::CallableType(ct) if self.is_non_denotable(ct) => {
                 self.needs_protocol_import = true;
+                let implicit_receiver = ct.receiver.as_ref().map(|receiver| {
+                    let rendered = self.rewrite_or_leaf(receiver);
+                    format!(
+                        "{}: {}",
+                        receiver_parameter_name(ct),
+                        quote_forward_ref(&rendered)
+                    )
+                });
                 let params = self.render_protocol_params(
                     &ct.args,
                     ct.parameter_slash.map(|i| i as usize),
                     ct.parameter_star.map(|i| i as usize),
                     "self",
+                    implicit_receiver,
                 );
                 let returns = quote_forward_ref(&self.rewrite_or_leaf(&ct.returns));
                 let shape = ProtocolShape { params, returns };
@@ -514,6 +541,9 @@ impl<'src> CallableSyntax<'src> {
             // `(...) -> R` — a single bare ellipsis parameter list is python's
             // "any arguments" callable: `Callable[..., R]`, not the
             // single-`...`-argument `Callable[[...], R]`
+            // a receiver in front of a gradual parameter list is absorbed by it:
+            // `Callable[..., R]` already accepts the receiver-first call, and
+            // `Concatenate[T, ...]` is not spellable on every supported version
             Expr::CallableType(ExprCallableType { args, returns, .. })
                 if matches!(args.as_slice(), [Expr::EllipsisLiteral(_)]) =>
             {
@@ -522,13 +552,19 @@ impl<'src> CallableSyntax<'src> {
                 Some(format!("Callable[..., {ret_str}]"))
             }
 
-            Expr::CallableType(ExprCallableType { args, returns, .. }) => {
+            Expr::CallableType(ExprCallableType {
+                receiver,
+                args,
+                returns,
+                ..
+            }) => {
                 self.needs_import = true;
-                let args_str = args
+                let mut rendered: Vec<String> = receiver
                     .iter()
-                    .map(|a| self.rewrite_or_leaf(a))
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                    .map(|receiver| self.rewrite_or_leaf(receiver))
+                    .collect();
+                rendered.extend(args.iter().map(|a| self.rewrite_or_leaf(a)));
+                let args_str = rendered.join(", ");
                 let ret_str = self.rewrite_or_leaf(returns);
                 Some(format!("Callable[[{args_str}], {ret_str}]"))
             }
@@ -689,6 +725,37 @@ impl<'src> CallableSyntax<'src> {
 /// the definitions its annotations mention)
 fn quote_forward_ref(ty: &str) -> String {
     format!("\"{}\"", ty.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// The synthesized name of a receiver parameter in a protocol `__call__`. The
+/// receiver is unnamed in the surface syntax, so any name works — but a callable
+/// may itself declare a parameter called `_receiver`, and two parameters of the
+/// same name is a `SyntaxError` in the emitted class rather than a parse error
+/// the final verification would catch. Widen until it is free.
+fn receiver_parameter_name(ct: &ExprCallableType) -> String {
+    let mut name = "_receiver".to_owned();
+    while declared_parameter_names(ct).any(|declared| declared == name) {
+        name.push('_');
+    }
+    name
+}
+
+/// The parameter names a callable's arguments spell, in any of the named forms
+/// (`name: T`, `*args: T`, `**kwargs: T`)
+fn declared_parameter_names(ct: &ExprCallableType) -> impl Iterator<Item = &str> {
+    ct.args.iter().filter_map(|arg| {
+        let Expr::Named(named) = arg else {
+            return None;
+        };
+        let target = match named.target.as_ref() {
+            Expr::Starred(starred) => match starred.value.as_ref() {
+                Expr::Starred(inner) => inner.value.as_ref(),
+                value => value,
+            },
+            target => target,
+        };
+        target.as_name_expr().map(|name| name.id.as_str())
+    })
 }
 
 /// whether `expr` is a `Name` / `Attribute` referring to the given identifier

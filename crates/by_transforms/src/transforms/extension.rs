@@ -388,7 +388,7 @@ pub(crate) fn hoist_backing_functions(
 /// does the postfix spine of `expr` contain an optional (`?.`) segment? the
 /// receiver of an extension rewrite must not, because the rewrite hoists the
 /// member access out of the chain's short-circuit
-fn spine_has_optional(expr: &Expr) -> bool {
+pub(super) fn spine_has_optional(expr: &Expr) -> bool {
     match expr {
         Expr::Attribute(attr) => attr.optional || spine_has_optional(&attr.value),
         Expr::Subscript(subscript) => spine_has_optional(&subscript.value),
@@ -399,7 +399,7 @@ fn spine_has_optional(expr: &Expr) -> bool {
 
 /// the source span of a call's arguments (positional and keyword), without
 /// the parentheses. `None` when the call has no arguments
-fn arguments_span(arguments: &ast::Arguments) -> Option<TextRange> {
+pub(super) fn arguments_span(arguments: &ast::Arguments) -> Option<TextRange> {
     let starts = arguments
         .args
         .iter()

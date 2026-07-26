@@ -18,8 +18,8 @@ use crate::place::implicit_globals::all_implicit_module_globals;
 use crate::types::ide_support::{ImportAliasResolution, definition_for_name};
 use crate::types::list_members::{Member, all_members, all_reachable_members};
 use crate::types::{
-    CycleDetector, SpecialFormType, Type, TypeQualifiers, binding_type, infer_complete_scope_types,
-    inferred_declaration,
+    CycleDetector, SpecialFormType, Type, TypeQualifiers, UnionType, binding_type,
+    infer_complete_scope_types, inferred_declaration,
 };
 use ty_python_core::definition::{Definition, DefinitionKind};
 use ty_python_core::place_table;
@@ -155,6 +155,74 @@ impl<'db> SemanticModel<'db> {
             import_from,
             receiver_is_class: receiver_ty.nominal_class(db).is_none(),
         })
+    }
+
+    /// basedpython: whether an attribute access resolves through an *implicit
+    /// receiver* — `x.fn` where `fn` names a receiver callable (`int.() -> str`)
+    /// in scope rather than a member of `x`. The transpiler rewrites those to
+    /// `fn(x)`. Like extensions, a receiver callable never shadows a declared
+    /// member, and an extension member wins over it
+    pub fn implicit_receiver_attribute(&self, attribute: &ast::ExprAttribute) -> bool {
+        let db = self.db;
+        let Some(receiver_ty) = attribute.value.inferred_type(self) else {
+            return false;
+        };
+        // an optional-chain link resolves against the chain's *present* type —
+        // the `None` it short-circuits with is not part of the receiver
+        let receiver_ty = if attribute.optional || spine_has_optional(&attribute.value) {
+            strip_none(db, receiver_ty)
+        } else {
+            receiver_ty
+        };
+        if !receiver_ty
+            .member(db, attribute.attr.as_str())
+            .place
+            .is_undefined()
+        {
+            return false;
+        }
+        // an extension member wins over a receiver callable, matching the order
+        // the two fallbacks run in during inference. resolving again here is
+        // near-free in a file with no extensions: the applicable-extension list
+        // is a cached query that comes back empty
+        if crate::types::extensions::resolve_extension_member(
+            db,
+            self.file,
+            receiver_ty,
+            attribute.attr.as_str(),
+        )
+        .is_some()
+        {
+            return false;
+        }
+        let Some(scope) = self.scope(ast::AnyNodeRef::from(attribute)) else {
+            return false;
+        };
+        crate::types::receivers::resolve_receiver_attribute(
+            db,
+            self.file,
+            scope.to_scope_id(db, self.file),
+            receiver_ty,
+            attribute.attr.as_str(),
+        )
+        .is_some()
+    }
+
+    /// basedpython: whether a bare name resolves to a member of the enclosing
+    /// trailing lambda block's receiver, which the transpiler rewrites to
+    /// `it.<name>`. `false` for every name that resolves any other way — the
+    /// receiver's members are the last fallback
+    pub fn implicit_receiver_name(&self, name: &ast::ExprName) -> bool {
+        let Some(scope) = self.scope(ast::AnyNodeRef::from(name)) else {
+            return false;
+        };
+        crate::types::receivers::implicit_receiver_member(
+            self.db,
+            self.file,
+            scope.to_scope_id(self.db, self.file),
+            name.id.as_str(),
+        )
+        .is_some()
     }
 
     /// basedpython: the bracketed type-argument spelling the transpiler
@@ -782,6 +850,32 @@ impl<'db> SemanticModel<'db> {
 
         infer_complete_scope_types(self.db, scope).try_expected_type(expr)
     }
+}
+
+/// basedpython: whether an access sits on a `?.` optional chain, so its type
+/// carries the `None` the chain short-circuits with
+fn spine_has_optional(expr: &Expr) -> bool {
+    match expr {
+        Expr::Attribute(attribute) => attribute.optional || spine_has_optional(&attribute.value),
+        Expr::Subscript(subscript) => spine_has_optional(&subscript.value),
+        Expr::Call(call) => spine_has_optional(&call.func),
+        _ => false,
+    }
+}
+
+/// basedpython: `ty` without the `None` an optional chain unions in
+fn strip_none<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
+    let Type::Union(union) = ty else {
+        return ty;
+    };
+    UnionType::from_elements(
+        db,
+        union
+            .elements(db)
+            .iter()
+            .copied()
+            .filter(|element| !element.is_none(db)),
+    )
 }
 
 /// The type and definition of a symbol.

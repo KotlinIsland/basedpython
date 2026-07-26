@@ -7689,6 +7689,10 @@ pub(crate) struct ParameterContext {
     name: Option<ParameterDisplayName<Name>>,
     index: usize,
 
+    /// basedpython: the parameter is the implicit receiver of a `T.() -> R`
+    /// callable. It has no name to report, so say what it is instead
+    is_receiver: bool,
+
     /// Was the argument for this parameter passed positionally, and matched to a non-variadic
     /// positional parameter? (If so, we will provide the index in the diagnostic, not just the
     /// name.)
@@ -7702,6 +7706,7 @@ impl ParameterContext {
                 .display_name()
                 .map(ParameterDisplayName::into_owned),
             index,
+            is_receiver: parameter.is_receiver(),
             positional,
         }
     }
@@ -7715,6 +7720,8 @@ impl std::fmt::Display for ParameterContext {
             } else {
                 write!(f, "`{name}`")
             }
+        } else if self.is_receiver {
+            write!(f, "{} (the receiver)", self.index + 1)
         } else {
             write!(f, "{}", self.index + 1)
         }
