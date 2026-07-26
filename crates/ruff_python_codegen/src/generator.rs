@@ -98,6 +98,21 @@ impl Mode {
     }
 }
 
+/// basedpython: does `element`, rendered as the only field of a parameter list, still read
+/// back as a parameter field rather than as a parenthesized expression?
+///
+/// The parser switches a parenthesized list to parameter-spec parsing when it sees a field
+/// label (`name:`, `*name:`, `**name:`) or a double star (`**: T`, `**P`). A field that opens
+/// with neither — a bare positional type, or the anonymous variadic that renders `*T` — is
+/// indistinguishable from an ordinary expression on its own
+fn reparses_as_parameter_field(element: &Expr) -> bool {
+    match element {
+        Expr::Named(_) => true,
+        Expr::Starred(starred) => starred.value.is_starred_expr(),
+        _ => false,
+    }
+}
+
 pub struct Generator<'a> {
     /// The indentation style to use.
     indent: &'a Indentation,
@@ -1467,7 +1482,27 @@ impl<'a> Generator<'a> {
                 self.p("]");
             }
             Expr::Tuple(tuple) => {
-                if tuple.is_empty() {
+                // basedpython: a parameter-shape tuple (`(int, /, name: str)`) shares its
+                // encoding with a callable's parameter list, so render it the same way. the
+                // anonymous named tuple *value* form `(name=expr)` reuses the labelled-field
+                // encoding for a different surface syntax, so it keeps the generic rendering
+                if tuple.has_parameter_shape() && !tuple.is_anon_named_tuple_value {
+                    self.p("(");
+                    self.unparse_parameter_spec(
+                        &tuple.elts,
+                        tuple.parameter_slash,
+                        tuple.parameter_star,
+                    );
+                    // unlike a callable's parameter list, a tuple has no `->` to mark its
+                    // parentheses as a parameter list. a lone field that doesn't start with
+                    // a marker leaves `(x)` looking like a parenthesized expression, so it
+                    // still needs the one-element tuple's trailing comma
+                    let lone_unmarked_field = tuple.parameter_slash.is_none()
+                        && tuple.parameter_star.is_none()
+                        && matches!(tuple.elts.as_slice(), [elt] if !reparses_as_parameter_field(elt));
+                    self.p_if(lone_unmarked_field, ",");
+                    self.p(")");
+                } else if tuple.is_empty() {
                     self.p("()");
                 } else {
                     let lvl = match self.mode {
@@ -1513,28 +1548,51 @@ impl<'a> Generator<'a> {
                     "callable type syntax should be transpiled before codegen"
                 );
                 self.p("(");
-                let slash = callable.parameter_slash.map(|i| i as usize);
-                let star = callable.parameter_star.map(|i| i as usize);
-                for (i, arg) in callable.args.iter().enumerate() {
-                    if i > 0 {
-                        self.p(", ");
-                    }
-                    if Some(i) == slash {
-                        self.p("/, ");
-                    }
-                    if Some(i) == star {
-                        self.p("*, ");
-                    }
-                    self.unparse_parameter_spec_element(arg);
-                }
+                self.unparse_parameter_spec(
+                    &callable.args,
+                    callable.parameter_slash,
+                    callable.parameter_star,
+                );
                 self.p(") -> ");
                 self.unparse_expr(&callable.returns, precedence::EXPR);
             }
         }
     }
 
-    /// basedpython: unparse one element of a callable's parameter list. A labelled field is
-    /// an [`Expr::Named`] whose *target* carries the name and its star count, so it prints
+    /// basedpython: unparse the body of a parameter list — the fields between the parentheses
+    /// of a callable type (`(int, /, name: str) -> bool`) or of a parameter-shape tuple
+    /// (`(int, /, name: str)`), which share one encoding
+    ///
+    /// The `/` and `*` markers carry no field of their own: each is an index into `elts`
+    /// naming the field it precedes, and an index of `elts.len()` puts it last
+    fn unparse_parameter_spec(&mut self, elts: &[Expr], slash: Option<u32>, star: Option<u32>) {
+        let slash = slash.map(|i| i as usize);
+        let star = star.map(|i| i as usize);
+        let mut first = true;
+        for (i, elt) in elts.iter().enumerate() {
+            if Some(i) == slash {
+                self.p_delim(&mut first, ", ");
+                self.p("/");
+            }
+            if Some(i) == star {
+                self.p_delim(&mut first, ", ");
+                self.p("*");
+            }
+            self.p_delim(&mut first, ", ");
+            self.unparse_parameter_spec_element(elt);
+        }
+        if Some(elts.len()) == slash {
+            self.p_delim(&mut first, ", ");
+            self.p("/");
+        }
+        if Some(elts.len()) == star {
+            self.p_delim(&mut first, ", ");
+            self.p("*");
+        }
+    }
+
+    /// basedpython: unparse one field of a parameter list. A labelled field is an
+    /// [`Expr::Named`] whose *target* carries the name and its star count, so it prints
     /// `name: T` / `*name: T` / `**name: T` — not the walrus the generic `Named` rendering
     /// would give. Every other shape (a bare positional type, the anonymous `*: T` / `**: T`,
     /// an unpacked `*Ts`) is already its own expression
@@ -1874,6 +1932,7 @@ mod tests {
     #[test_case::test_case("a: (a: int) -> str" ; "named field")]
     #[test_case::test_case("b: (int, /, name: str) -> bool" ; "positional-only marker")]
     #[test_case::test_case("c: (int, *, name: str) -> bool" ; "keyword-only marker")]
+    #[test_case::test_case("d: (int, /) -> bool" ; "trailing positional-only marker")]
     #[test_case::test_case("g: (*args: int) -> None" ; "named variadic")]
     #[test_case::test_case("k: (*args: *Ts) -> None" ; "named variadic unpacking a pack")]
     #[test_case::test_case("l: (**kwargs: str) -> None" ; "named kwargs")]
@@ -1882,6 +1941,42 @@ mod tests {
     #[test_case::test_case("n: (**P) -> None" ; "bare paramspec")]
     fn basedpython_callable_type_round_trip(contents: &str) {
         assert_eq!(based_round_trip(contents), contents);
+    }
+
+    #[test_case::test_case("a: (a: int)" ; "named field")]
+    #[test_case::test_case("b: (int, /, name: str)" ; "positional-only marker")]
+    #[test_case::test_case("c: (int, *, name: str)" ; "keyword-only marker")]
+    #[test_case::test_case("d: (int, /)" ; "trailing positional-only marker")]
+    #[test_case::test_case("e: (int, *)" ; "trailing keyword-only marker")]
+    #[test_case::test_case("g: (*args: int)" ; "named variadic")]
+    #[test_case::test_case("k: (*args: *Ts)" ; "named variadic unpacking a pack")]
+    #[test_case::test_case("l: (**kwargs: str)" ; "named kwargs")]
+    #[test_case::test_case("m: (name: int, other: str)" ; "every field named")]
+    #[test_case::test_case("o: (int, name: str)" ; "positional then named")]
+    #[test_case::test_case("p: (int, str)" ; "ordinary tuple")]
+    #[test_case::test_case("q: (int,)" ; "ordinary one element tuple")]
+    #[test_case::test_case("r = ()" ; "empty tuple")]
+    fn basedpython_parameter_shape_tuple_round_trip(contents: &str) {
+        assert_eq!(based_round_trip(contents), contents);
+    }
+
+    /// The anonymous variadic (`*: T`) and the kwargs catch-all (`**: T`) share their encoding
+    /// with an unpacked pack (`*Ts`) and a `ParamSpec` (`**P`), so they render as the latter
+    /// spelling. The rendering is stable, and the trailing comma keeps `*T` — which on its own
+    /// would read as a parenthesized starred expression — parsing as a tuple
+    #[test_case::test_case("e: (*: int)", "e: (*int,)" ; "anonymous variadic")]
+    #[test_case::test_case("i: (**: str)", "i: (**str)" ; "anonymous kwargs")]
+    fn basedpython_parameter_shape_tuple_normalizes(contents: &str, expected: &str) {
+        assert_eq!(based_round_trip(contents), expected);
+        assert_eq!(based_round_trip(expected), expected);
+    }
+
+    /// `(name=expr)` is an anonymous named tuple *value*: it reuses the labelled-field encoding
+    /// of a parameter field for a different surface syntax, so it must not pick up the
+    /// parameter-field rendering
+    #[test]
+    fn basedpython_anon_named_tuple_value_is_not_a_parameter_field() {
+        assert!(!based_round_trip("m = (name=1)").contains("name: 1"));
     }
 
     fn jupyter_round_trip(contents: &str) -> String {
