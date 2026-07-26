@@ -52,6 +52,15 @@ repos:
         language: system
         types: [rust]
         priority: 0
+
+      - id: check-docs-nav
+        name: check basedpython docs nav
+        # `--no-project` avoids building ruff from source; tomllib needs 3.11+
+        entry: uv run --no-project --python 3.13 python scripts/check_docs_nav.py
+        language: system
+        files: '^(docs/basedpython/.*\.md|zensical\.toml|scripts/check_docs_nav\.py)$'
+        pass_filenames: false
+        priority: 0
   # Prettier
   - repo: https://github.com/rbubley/mirrors-prettier
     rev: 9337a74165b178ae2c766f60bee7252a0f06f3e8 # frozen: v3.9.5

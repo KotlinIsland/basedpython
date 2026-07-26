@@ -50,6 +50,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [type parameter bound ranges](bound-ranges.md)
 - [`TypedDict` and `Self` in type parameters](typeddict-self-bounds.md)
 - [keyword-variadic packs](keyword-variadic.md)
+- [type parameter separators](type-param-separators.md)
 - [typevar variance keywords](variance.md)
 - [safe variance](safe-variance.md)
 - [overlapping](overlapping.md)
@@ -81,13 +82,16 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [`super` keyword](super.md)
 - [tuple member access (`expr.N`)](tuple-index.md)
 - [keyword arguments in subscripts](kw-subscript.md)
+- [trailing lambda blocks](trailing-lambdas.md)
 - [unpack syntax](unpack-syntax.md)
 - [mutable default arguments](mutable-defaults.md)
 - [dedented triple-quoted strings](dedent-strings.md)
 - [custom string tags](string-tags.md)
+- [strings and characters](character.md) — grapheme-aware `str` api
 - [repeated `_` parameters](repeated-underscore.md)
 - [lazy imports](lazy-imports.md)
 - [extensions](extensions.md)
+- [context parameters](context-parameters.md)
 - [local lifetimes (`local` / `once`)](local-lifetimes.md)
 
 ## planned
