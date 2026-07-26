@@ -86,6 +86,9 @@ pub(crate) use crate::types::generics::GenericContext;
 use crate::types::generics::{
     ApplySpecialization, InferableTypeVars, Specialization, bind_typevar,
 };
+pub use crate::types::implementations::{
+    witness_class_name_of as implementation_witness_name, witness_delegated_dunders,
+};
 use crate::types::infer::InferenceFlags;
 use crate::types::known_instance::{
     InternedConstraintSet, InternedType, SentinelInstance, UnionTypeInstance,
@@ -167,6 +170,7 @@ pub(crate) mod extensions;
 pub(crate) mod function;
 mod generics;
 pub mod ide_support;
+pub(crate) mod implementations;
 mod infer;
 mod instance;
 mod iteration;
@@ -4181,6 +4185,10 @@ impl<'db> Type<'db> {
                 }
 
                 let result = this.fallback_to_getattr(db, name, result, key.policy(db));
+                // basedpython: a witness forwards a member it does not itself
+                // define to the object it wraps — the type-level counterpart of
+                // the `__getattr__` forwarding the emitted witness class does
+                let result = implementations::witness_member_forward(db, this, name_str, result);
                 // An inferred attribute accessed through an instance can resolve to an override
                 // on a subclass, so an exact class object is not a safe public type here.
                 let result = result.map_type(|ty| ty.bind_self_typevars(db, receiver));

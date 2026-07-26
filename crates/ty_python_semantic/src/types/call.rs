@@ -267,6 +267,14 @@ impl<'db> Type<'db> {
 pub(crate) struct CallError<'db>(pub(crate) CallErrorKind, pub(crate) Box<Bindings<'db>>);
 
 impl<'db> CallError<'db> {
+    /// The bindings the failed call produced. A binding error does not mean there
+    /// is no useful binding: basedpython's implementation conversions read the
+    /// matched parameter types out of a call whose argument the checker accepted
+    /// only because a witness converts it.
+    pub(crate) fn into_bindings(self) -> Box<Bindings<'db>> {
+        self.1
+    }
+
     pub(crate) fn return_type(&self, db: &'db dyn Db) -> Type<'db> {
         self.1.return_type(db)
     }

@@ -1,6 +1,7 @@
 //! Abstraction over type/binding information consumed by transforms.
 
-use ruff_python_ast::{Expr, ExprCall, ExprName, StmtClassDef};
+use ruff_python_ast::{Expr, ExprCall, ExprName, Stmt, StmtClassDef};
+use ruff_text_size::TextRange;
 use ty_python_core::scope::ScopeKind;
 use ty_python_core::{global_scope, place_table, semantic_index};
 use ty_python_semantic::types::{
@@ -123,6 +124,34 @@ pub(crate) trait TypeInfo {
         &self,
         attribute: &ruff_python_ast::ExprAttribute,
     ) -> Option<ty_python_semantic::ExtensionAttributeInfo>;
+
+    /// the name of the witness class an `implementation A for B [as N]:` block
+    /// lowers to. resolved by ty so that the emitted class and the constructor
+    /// inserted at a conversion site can never disagree
+    fn implementation_witness_name(&self, class_def: &StmtClassDef) -> Option<String>;
+
+    /// the delegating dunders the witness class for `class_def` may carry: those
+    /// the interface leaves to `object`. Emitting one the interface declares would
+    /// shadow the interface's own version at runtime while the checker still
+    /// resolves the interface's
+    fn implementation_delegated_dunders(&self, class_def: &StmtClassDef) -> Vec<&'static str>;
+
+    /// the witness conversions a statement's value needs: an annotated assignment,
+    /// an attribute assignment, or a `return`. one wrap for a value that converts
+    /// whole, or one per element for a collection literal
+    fn implementation_statement_conversions(
+        &self,
+        stmt: &Stmt,
+    ) -> Vec<(TextRange, ty_python_semantic::ImplementationConversion)>;
+
+    /// the witness conversions a call's arguments need, as `(argument range,
+    /// conversion)` pairs: an `implementation A for B:` in scope makes a `B`
+    /// acceptable where an `A` is asked for, and the argument is wrapped in the
+    /// witness class the implementation lowers to
+    fn implementation_call_conversions(
+        &self,
+        call: &ruff_python_ast::ExprCall,
+    ) -> Vec<(TextRange, ty_python_semantic::ImplementationConversion)>;
 
     /// whether `attribute` resolves through a basedpython *implicit receiver* —
     /// `x.fn` where `fn` names a receiver callable (`int.() -> str`) in scope
@@ -432,6 +461,35 @@ impl TypeInfo for SemanticModel<'_> {
         attribute: &ruff_python_ast::ExprAttribute,
     ) -> Option<ty_python_semantic::ExtensionAttributeInfo> {
         SemanticModel::extension_attribute_info(self, attribute)
+    }
+
+    fn implementation_witness_name(&self, class_def: &StmtClassDef) -> Option<String> {
+        let class = class_def.inferred_type(self)?.as_class_literal()?;
+        ty_python_semantic::types::implementation_witness_name(self.db(), class)
+    }
+
+    fn implementation_delegated_dunders(&self, class_def: &StmtClassDef) -> Vec<&'static str> {
+        let Some(class) = class_def
+            .inferred_type(self)
+            .and_then(ty_python_semantic::types::Type::as_class_literal)
+        else {
+            return Vec::new();
+        };
+        ty_python_semantic::types::witness_delegated_dunders(self.db(), class)
+    }
+
+    fn implementation_statement_conversions(
+        &self,
+        stmt: &Stmt,
+    ) -> Vec<(TextRange, ty_python_semantic::ImplementationConversion)> {
+        SemanticModel::implementation_statement_conversions(self, stmt)
+    }
+
+    fn implementation_call_conversions(
+        &self,
+        call: &ruff_python_ast::ExprCall,
+    ) -> Vec<(TextRange, ty_python_semantic::ImplementationConversion)> {
+        SemanticModel::implementation_call_conversions(self, call)
     }
 
     fn is_implicit_receiver_attribute(&self, attribute: &ruff_python_ast::ExprAttribute) -> bool {

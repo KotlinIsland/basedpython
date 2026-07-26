@@ -37,8 +37,9 @@ def f() -> int?:
 `T?` declares an optional value (Swift-style `Optional<T>`), as in the opening
 example
 
-`T ? E` declares a result with value type `T` and error type `E`
-(Rust-style `Result<T, E>`). **not yet implemented** — the `?`-infix result
+`T ? E` declares a result with value type `T` and error type `E` — a value that
+is either an outcome or a failure, carried in the type rather than raised.
+**not yet implemented** — the `?`-infix result
 form does not parse today (only the `T?` optional form does); the example below
 is the intended design:
 

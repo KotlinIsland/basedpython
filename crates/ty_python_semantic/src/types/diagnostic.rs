@@ -134,6 +134,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&PRIVATE_IMPORT);
     registry.register_lint(&INVALID_EXTENSION);
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
+    registry.register_lint(&INVALID_IMPLEMENTATION);
+    registry.register_lint(&AMBIGUOUS_IMPLEMENTATION);
     registry.register_lint(&MISSING_FRAMEWORK_STUBS);
     registry.register_lint(&INVALID_FIELD_LOOKUP);
     registry.register_lint(&INVALID_FIXTURE_TYPE);
@@ -1060,6 +1062,67 @@ declare_lint! {
     pub(crate) static AMBIGUOUS_EXTENSION_MEMBER = {
         summary: "detects attribute accesses supplied by more than one extension",
         status: LintStatus::stable("0.0.1-alpha.3"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for invalid basedpython `implementation` declarations: an interface
+    /// that is neither an abstract class nor a protocol, an implemented name that
+    /// does not resolve to a class, a type that already satisfies the interface,
+    /// a member that corresponds to nothing on the interface, or a second
+    /// implementation of the same pair in one module.
+    ///
+    /// ## Why is this bad?
+    /// An implementation states that an existing type satisfies an existing
+    /// interface, and lowers to a witness class deriving that interface. An
+    /// interface with stored state has nothing for the witness to hold; a type
+    /// that already conforms would never be converted, so the block would be dead
+    /// code; and a member matching nothing on the interface promises nothing —
+    /// an `extension` adds inherent members instead.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class Concrete:
+    ///     x: int
+    ///
+    /// implementation Concrete for B:  # error: not an abstract class or protocol
+    ///     override def f(self): ...
+    /// ```
+    pub(crate) static INVALID_IMPLEMENTATION = {
+        summary: "detects invalid basedpython implementation declarations",
+        status: LintStatus::stable("0.0.1-alpha.5"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for conversion sites where more than one applicable basedpython
+    /// `implementation` of the same interface and type is in scope.
+    ///
+    /// ## Why is this bad?
+    /// The transpiler wraps the value in a witness class at such a site. When two
+    /// visible implementations supply one, which conversion runs would depend on
+    /// arbitrary ordering. Constrain one of them, or drop the import that brings
+    /// the second into scope.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// implementation A for B:
+    ///     override def f(self): ...
+    ///
+    /// implementation A for B:
+    ///     override def f(self): ...
+    ///
+    /// takes_a(B())  # error: ambiguous implementation
+    /// ```
+    pub(crate) static AMBIGUOUS_IMPLEMENTATION = {
+        summary: "detects conversion sites served by more than one implementation",
+        status: LintStatus::stable("0.0.1-alpha.5"),
         default_level: Level::Error,
     }
 }
@@ -2458,6 +2521,31 @@ pub(super) fn report_invalid_assignment<'db>(
         && is_invalid_typed_dict_literal(context.db(), target_ty, value_node.into())
     {
         return;
+    }
+
+    // basedpython: an assignment is a conversion site — an in-scope
+    // `implementation A for B:` makes a `B` acceptable where an `A` is declared,
+    // and the transpiler wraps the value (or, for a collection literal, each of its
+    // elements) in the witness. `value_conversions` is the same answer the
+    // transpiler emits, so the two cannot disagree about what converts
+    // only the annotated form: for a plain `x = b` against an earlier `x: A` the
+    // declared type lives in another statement, and the transpiler has no way to
+    // recover the same answer — accepting it here would emit an unconverted value
+    if let Some(value_node) = value_node
+        && matches!(definition_kind, DefinitionKind::AnnotatedAssignment(_))
+    {
+        let model = crate::SemanticModel::new(context.db(), context.file());
+        let conversions = crate::types::implementations::value_conversions(
+            context.db(),
+            context.file(),
+            &model,
+            value_node,
+            target_ty,
+        );
+        if let Some((range, repair)) = conversions.first() {
+            crate::types::implementations::report_ambiguous_implementation(context, *range, repair);
+            return;
+        }
     }
 
     let settings =

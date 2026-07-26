@@ -178,12 +178,22 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
                 name,
                 decorator_list,
                 arguments,
+                implementation,
                 type_params: _, // We don't want to visit the type params of the class
                 body: _,        // We don't want to visit the body of the class
                 range: _,
                 node_index: _,
             }) => {
-                self.possibly_add_export(&name.id, PossibleExportKind::Normal);
+                // basedpython: an `implementation A for B:` header's `name` is
+                // the implemented type — a reference, not a binding. only a
+                // named implementation exports anything, under its `as` name
+                if let Some(header) = implementation.as_deref() {
+                    if let Some(witness) = &header.witness {
+                        self.possibly_add_export(&witness.id, PossibleExportKind::Normal);
+                    }
+                } else {
+                    self.possibly_add_export(&name.id, PossibleExportKind::Normal);
+                }
                 for decorator in decorator_list {
                     self.visit_decorator(decorator);
                 }

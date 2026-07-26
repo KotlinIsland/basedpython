@@ -190,6 +190,7 @@ fn create_class_def_stmt(
         body,
         type_params: None,
         decorator_list: ast::DecoratorList::new(),
+        implementation: None,
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
     }

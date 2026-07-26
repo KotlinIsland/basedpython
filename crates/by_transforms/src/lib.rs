@@ -572,6 +572,8 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let mut enums_rev = reverse_transforms::enums::EnumsReverse::new();
     let mut extension_rev =
         reverse_transforms::extension::ExtensionReverse::new(src, module.suite());
+    let mut implementation_rev =
+        reverse_transforms::implementation::ImplementationReverse::new(src, module.suite());
     let mut coalesce_rev = reverse_transforms::coalesce::CoalesceReverse::new(src);
     let mut generics_rev = reverse_transforms::generics::GenericsReverse::new(src);
     let mut auto_quote_rev = reverse_transforms::auto_quote::AutoQuoteReverse::new(src);
@@ -598,6 +600,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         modifiers_rev.visit_stmt(stmt);
         enums_rev.visit_stmt(stmt);
         extension_rev.visit_stmt(stmt);
+        implementation_rev.visit_stmt(stmt);
         coalesce_rev.visit_stmt(stmt);
         auto_quote_rev.visit_stmt(stmt);
         compat_rev.visit_stmt(stmt);
@@ -649,6 +652,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(modifiers_rev.edits);
     fixes.extend(enums_rev.edits);
     fixes.extend(extension_rev.edits);
+    fixes.extend(implementation_rev.edits);
     fixes.extend(coalesce_rev.edits);
     fixes.extend(generics_rev.edits);
     fixes.extend(auto_quote_rev.edits);
@@ -1171,6 +1175,152 @@ mod cross_file {
             ext_out.contains("def _by_ext__list__second(self):"),
             "defining module should lower the block, got:\n{ext_out}"
         );
+    }
+
+    /// a conversion site whose witness class lives in another module must both
+    /// wrap the argument and import the class. the mangled name is computed from
+    /// the checker's answer on both sides — the defining module emits the class,
+    /// the using module constructs it — so the two files must agree exactly
+    #[test]
+    fn imported_implementation_wraps_argument_and_adds_import() {
+        let db = project_db(&[
+            (
+                "/iface.by",
+                "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
+            ),
+            (
+                "/adapters.by",
+                "from iface import A, B\n\nimplementation A for B:\n    override def f(self) -> int:\n        return self.a\n",
+            ),
+            (
+                "/main.by",
+                "import adapters\nfrom iface import A, B\n\ndef takes_a(a: A) -> int:\n    return a.f()\n\nb = B()\ntakes_a(b)\n",
+            ),
+        ]);
+        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        assert!(
+            out.contains("from adapters import _by_impl__A__B"),
+            "witness import should be emitted, got:\n{out}"
+        );
+        assert!(
+            out.contains("takes_a(_by_impl__A__B(b))"),
+            "argument should be wrapped, got:\n{out}"
+        );
+        // the defining module emits the class under the same name
+        let adapters_out = transpile_file(&db, "/adapters.by", &Config::test_default());
+        assert!(
+            adapters_out.contains("class _by_impl__A__B(_by_Implementation, A):"),
+            "defining module should emit the witness class, got:\n{adapters_out}"
+        );
+    }
+
+    /// the synthesized witness import must address the module the way the importing
+    /// file does. ty's absolute module name can be one the interpreter cannot
+    /// resolve — a file under a directory that is not an importable package
+    /// (`target/mod.by` → `target.mod` for the checker, `mod` at runtime)
+    #[test]
+    fn an_imported_witness_is_spelled_as_the_file_imports_it() {
+        let db = project_db(&[
+            (
+                "/nested/iface.by",
+                "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
+            ),
+            (
+                "/nested/adapters.by",
+                "from iface import A, B\n\nimplementation A for B:\n    override def f(self) -> int:\n        return self.a\n",
+            ),
+            (
+                "/nested/main.by",
+                "import adapters\nfrom iface import A, B\n\ndef takes_a(x: A) -> int:\n    return x.f()\n\nb = B()\ntakes_a(b)\n",
+            ),
+        ]);
+        let out = transpile_file(&db, "/nested/main.by", &Config::test_default());
+        assert!(
+            out.contains("from adapters import _by_impl__A__B"),
+            "the import must use the file's own spelling, got:\n{out}"
+        );
+        assert!(
+            !out.contains("nested.adapters"),
+            "an absolute name the interpreter cannot resolve leaked in:\n{out}"
+        );
+    }
+
+    /// a relative import has no absolute spelling at all, so the synthesized one
+    /// must keep the dots
+    #[test]
+    fn a_relatively_imported_witness_keeps_its_dots() {
+        let db = project_db(&[
+            ("/pkg/__init__.by", "\n"),
+            (
+                "/pkg/iface.by",
+                "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
+            ),
+            (
+                "/pkg/adapters.by",
+                "from .iface import A, B\n\nimplementation A for B:\n    override def f(self) -> int:\n        return self.a\n",
+            ),
+            (
+                "/pkg/main.by",
+                "from .adapters import A\nfrom .iface import B\n\ndef takes_a(x: A) -> int:\n    return x.f()\n\ndef main():\n    takes_a(B())\n",
+            ),
+        ]);
+        let out = transpile_file(&db, "/pkg/main.by", &Config::test_default());
+        assert!(
+            out.contains("from .adapters import _by_impl__A__B"),
+            "the relative spelling must be kept, got:\n{out}"
+        );
+    }
+
+    /// a `from mod import X` establishes the dependency just as `import mod` does,
+    /// so it must bring the module's implementations into scope
+    #[test]
+    fn a_from_import_makes_an_implementation_applicable() {
+        let db = project_db(&[
+            (
+                "/iface.by",
+                "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
+            ),
+            (
+                "/adapters.by",
+                "from iface import A, B\n\nimplementation A for B:\n    override def f(self) -> int:\n        return self.a\n",
+            ),
+            (
+                "/main.by",
+                "from adapters import A\nfrom iface import B\n\ndef takes_a(x: A) -> int:\n    return x.f()\n\nb = B()\ntakes_a(b)\n",
+            ),
+        ]);
+        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        assert!(
+            out.contains("from adapters import _by_impl__A__B"),
+            "witness import should be emitted, got:\n{out}"
+        );
+        assert!(
+            out.contains("takes_a(_by_impl__A__B(b))"),
+            "argument should be wrapped, got:\n{out}"
+        );
+    }
+
+    /// without the import the implementation is not applicable, so there is
+    /// nothing to wrap — the checker reports the assignment instead
+    #[test]
+    fn implementation_without_the_import_wraps_nothing() {
+        let db = project_db(&[
+            (
+                "/iface.by",
+                "abstract class A:\n    abstract def f(self) -> int: ...\n\nclass B:\n    a: int = 3\n",
+            ),
+            (
+                "/adapters.by",
+                "from iface import A, B\n\nimplementation A for B:\n    override def f(self) -> int:\n        return self.a\n",
+            ),
+            (
+                "/main.by",
+                "from iface import A, B\n\ndef takes_a(a: A) -> int:\n    return a.f()\n\nb = B()\ntakes_a(b)\n",
+            ),
+        ]);
+        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        assert!(out.contains("takes_a(b)"), "got:\n{out}");
+        assert!(!out.contains("__by_impl__"), "got:\n{out}");
     }
 
     /// the line map must point a runtime statement in the generated python back

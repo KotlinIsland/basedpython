@@ -1355,21 +1355,26 @@ impl<'db> Bindings<'db> {
     ) -> Option<Vec<Option<Type<'db>>>> {
         let binding = self.single_element()?;
         let (_, overload) = binding.matching_overloads().exactly_one().ok()?;
-        let parameters = overload.signature.parameters();
-        Some(
-            (0..argument_count)
-                .map(|index| {
-                    match overload
-                        .matched_argument_for_call_argument(binding, index)?
-                        .parameters
-                        .as_slice()
-                    {
-                        [parameter] => Some(parameters[parameter.index].annotated_type()),
-                        _ => None,
-                    }
-                })
-                .collect(),
-        )
+        Some(overload_parameter_types(binding, overload, argument_count))
+    }
+
+    /// Like [`Self::single_overload_parameter_types`], but for a *non-overloaded*
+    /// callee it reads the parameter types even when the binding has argument
+    /// errors.
+    ///
+    /// basedpython's implementation conversions need this: at a conversion site
+    /// the argument really is not assignable to the parameter — the checker
+    /// accepts it because an in-scope `implementation` converts it, and the
+    /// transpiler then has to know which parameter type it was converted to. An
+    /// argument error disqualifies an overload, so the matching-overloads filter
+    /// hides exactly the binding this case is about.
+    pub(crate) fn plain_callee_parameter_types(
+        &self,
+        argument_count: usize,
+    ) -> Option<Vec<Option<Type<'db>>>> {
+        let binding = self.single_element()?;
+        let overload = binding.overloads.iter().exactly_one().ok()?;
+        Some(overload_parameter_types(binding, overload, argument_count))
     }
 
     /// Report diagnostics for all of the errors that occurred when trying to match actual
@@ -8044,6 +8049,33 @@ impl<'db> BindingError<'db> {
                 // diagnostic being emitted here.
 
                 let range = Self::get_node(node, *argument_index);
+
+                // basedpython: a call argument is a conversion site — an in-scope
+                // `implementation A for B:` makes a `B` acceptable where an `A` is
+                // asked for, and the transpiler wraps the argument in the witness.
+                // `B` is still not a subtype of `A`, so only the positions that ask
+                // this question accept it (see the `implementations` module)
+                //
+                // accept only what the transpiler can actually wrap: a plain callee
+                // (it reads the parameter type from the single matching overload, and
+                // declines for an overloaded or union callee) and an argument whose
+                // whole expression is addressable at the call site. accepting more
+                // here would emit python that type-checks and never converts
+                if matching_overload.is_none()
+                    && Self::argument_is_wrappable(node, *argument_index)
+                    && let Some(repair) = crate::types::implementations::repair_with_implementation(
+                        context.db(),
+                        context.file(),
+                        *provided_ty,
+                        *expected_ty,
+                    )
+                {
+                    crate::types::implementations::report_ambiguous_implementation(
+                        context, range, &repair,
+                    );
+                    return;
+                }
+
                 let Some(builder) = context.report_lint(&INVALID_ARGUMENT_TYPE, range) else {
                     return;
                 };
@@ -8573,6 +8605,24 @@ impl<'db> BindingError<'db> {
         }
     }
 
+    /// basedpython: can the argument at `argument_index` be wrapped in a witness
+    /// class at the call site?
+    ///
+    /// A plain positional or keyword argument can: its whole source expression is
+    /// one thing the transpiler can put a constructor around. An unpacked `*args`
+    /// or `**kwargs` argument cannot — it feeds parameters the call site has no
+    /// separate expression for, and the transpiler's parameter-type lookup returns
+    /// nothing for it. An argument this cannot identify counts as unwrappable, so an
+    /// unknown shape declines the conversion rather than accepting one that would
+    /// never be emitted.
+    fn argument_is_wrappable(node: ast::AnyNodeRef<'_>, argument_index: Option<usize>) -> bool {
+        match Self::get_argument_node(node, argument_index) {
+            Some(ArgOrKeyword::Arg(expr)) => !expr.is_starred_expr(),
+            Some(ArgOrKeyword::Keyword(keyword)) => keyword.arg.is_some(),
+            None => false,
+        }
+    }
+
     fn get_argument_node(
         node: ast::AnyNodeRef<'_>,
         argument_index: Option<usize>,
@@ -8878,4 +8928,27 @@ fn all_arguments_range(node: AnyNodeRef) -> TextRange {
             )
         })
         .unwrap_or(node.range())
+}
+
+/// The annotated parameter type each source-order argument of `overload` was
+/// matched to, as `argument_count` entries. An entry is `None` when the argument
+/// matched zero or several parameters (unpacking).
+fn overload_parameter_types<'db>(
+    binding: &CallableBinding<'db>,
+    overload: &Binding<'db>,
+    argument_count: usize,
+) -> Vec<Option<Type<'db>>> {
+    let parameters = overload.signature.parameters();
+    (0..argument_count)
+        .map(|index| {
+            match overload
+                .matched_argument_for_call_argument(binding, index)?
+                .parameters
+                .as_slice()
+            {
+                [parameter] => Some(parameters[parameter.index].annotated_type()),
+                _ => None,
+            }
+        })
+        .collect()
 }

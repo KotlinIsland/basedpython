@@ -1,7 +1,7 @@
 # postfix await (`.await`)
 
-`expr.await` awaits `expr`, like rust's postfix `.await`. it binds as tightly
-as attribute access, so it chains left-to-right without parentheses:
+`expr.await` awaits `expr`. as a postfix operator it binds as tightly as
+attribute access, so it chains left-to-right without parentheses:
 
 ```by
 async def f():

@@ -577,6 +577,12 @@ impl<'src> Parser<'src> {
             );
             return Some(self.parse_extension_def(start));
         }
+        if kw == "implementation" && self.peek() == TokenKind::Name {
+            self.error_if_not_basedpython(
+                "`implementation` declarations are not valid in .py files".to_string(),
+            );
+            return Some(self.parse_implementation_def(start));
+        }
         // `enum class E:` / `enum class E[T]:` — a "based enum" (an algebraic
         // sum type when its body has payload variants, an idiomatic `Enum` when
         // its variants are all unit). the `class` keyword is part of the
@@ -1523,6 +1529,72 @@ impl<'src> Parser<'src> {
             type_params: type_params.map(Box::new),
             arguments,
             body,
+            implementation: None,
+            node_index: AtomicNodeIndex::NONE,
+        })
+    }
+
+    /// Parses an `implementation Interface for Type[bounds] as Witness:`
+    /// declaration — a retroactive statement that `Type` satisfies `Interface`.
+    ///
+    /// Produces a [`ClassDef`] whose `implementation_interface` holds the
+    /// interface expression (its presence marks the class as an implementation)
+    /// and whose `name` is the *implemented* type, a reference to an existing
+    /// declaration as for an `extension`. `implementation_witness` holds the
+    /// optional `as` name the witness class binds to.
+    ///
+    /// [`ClassDef`]: ast::StmtClassDef
+    fn parse_implementation_def(&mut self, start: TextSize) -> Stmt {
+        self.bump(TokenKind::Name); // consume "implementation"
+
+        let interface = self.parse_conditional_expression_or_higher().expr;
+
+        if !self.eat(TokenKind::For) {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "Expected `for` after the interface of an `implementation` declaration"
+                        .to_string(),
+                ),
+                self.current_token_range(),
+            );
+        }
+
+        let name = self.parse_identifier();
+        let type_params = self.try_parse_type_params();
+
+        let witness = self.eat(TokenKind::As).then(|| self.parse_identifier());
+
+        // the witness class derives the interface; a base list would be a second,
+        // conflicting answer to what it derives
+        if self.at(TokenKind::Lpar) {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "`implementation` declarations cannot have base classes".to_string(),
+                ),
+                self.current_token_range(),
+            );
+        }
+
+        let body = if self.eat(TokenKind::Colon) {
+            self.parse_body(Clause::Class)
+        } else {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "Expected `:` after `implementation` declaration".to_string(),
+                ),
+                self.current_token_range(),
+            );
+            Suite::new()
+        };
+
+        Stmt::ClassDef(ast::StmtClassDef {
+            range: self.node_range(start),
+            decorator_list: DecoratorList::new(),
+            name,
+            type_params: type_params.map(Box::new),
+            arguments: None,
+            body,
+            implementation: Some(Box::new(ast::ImplementationHeader { interface, witness })),
             node_index: AtomicNodeIndex::NONE,
         })
     }
@@ -1587,6 +1659,7 @@ impl<'src> Parser<'src> {
             type_params: type_params.map(Box::new),
             arguments: None,
             body,
+            implementation: None,
             node_index: AtomicNodeIndex::NONE,
         })
     }
@@ -1748,6 +1821,7 @@ impl<'src> Parser<'src> {
             type_params: type_params.map(Box::new),
             arguments: None,
             body,
+            implementation: None,
             node_index: AtomicNodeIndex::NONE,
         })
     }
@@ -1866,6 +1940,7 @@ impl<'src> Parser<'src> {
                         type_params: None,
                         arguments: None,
                         body: Suite::new(),
+                        implementation: None,
                         node_index: AtomicNodeIndex::NONE,
                     })
                 }
@@ -1950,6 +2025,7 @@ impl<'src> Parser<'src> {
             type_params: None,
             arguments: None,
             body,
+            implementation: None,
             node_index: AtomicNodeIndex::NONE,
         })
     }
@@ -4996,6 +5072,7 @@ impl<'src> Parser<'src> {
             type_params: type_params.map(Box::new),
             arguments,
             body,
+            implementation: None,
             node_index: AtomicNodeIndex::NONE,
         }
     }

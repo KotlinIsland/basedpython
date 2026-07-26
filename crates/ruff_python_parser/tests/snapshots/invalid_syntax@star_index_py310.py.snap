@@ -150,6 +150,7 @@ Module(
                             },
                         ),
                     ],
+                    implementation: None,
                 },
             ),
             Expr(

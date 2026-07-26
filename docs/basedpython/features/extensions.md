@@ -1,7 +1,8 @@
 # extensions
 
 an extension adds methods and computed properties to an existing type without
-subclassing it or touching its definition:
+subclassing it or touching its definition (to make a type satisfy an *interface*
+from the outside, see [implementations](implementations.md)):
 
 ```by
 extension list:

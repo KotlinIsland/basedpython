@@ -389,6 +389,7 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
                 body,
                 range: _,
                 node_index: _,
+                implementation: _,
             },
         ) => {
             if checker.is_rule_enabled(Rule::NoClassmethodDecorator) {

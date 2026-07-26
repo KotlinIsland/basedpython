@@ -381,6 +381,16 @@
             }
           ]
         },
+        "ambiguous-implementation": {
+          "title": "detects conversion sites served by more than one implementation",
+          "description": "## What it does\nChecks for conversion sites where more than one applicable basedpython\n`implementation` of the same interface and type is in scope.\n\n## Why is this bad?\nThe transpiler wraps the value in a witness class at such a site. When two\nvisible implementations supply one, which conversion runs would depend on\narbitrary ordering. Constrain one of them, or drop the import that brings\nthe second into scope.\n\n## Example\n\n```by\nimplementation A for B:\n    override def f(self): ...\n\nimplementation A for B:\n    override def f(self): ...\n\ntakes_a(B())  # error: ambiguous implementation\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "ambiguous-protocol-member": {
           "title": "detects protocol classes with ambiguous interfaces",
           "description": "## What it does\n\nChecks for protocol classes with members that will lead to ambiguous interfaces.\n\n## Why is this bad?\n\nAssigning to an undeclared variable in a protocol class, or to an undeclared attribute\nthrough a protocol method's `self` or `cls` receiver, leads to an ambiguous interface\nwhich may lead to the type checker inferring unexpected things. It's recommended to\nensure that all members of a protocol class are explicitly declared.\n\n## Examples\n\n```py\nfrom typing import ClassVar, Protocol\n\n\nclass BaseProto(Protocol):\n    a: int  # fine (explicitly declared as `int`)\n    instance_member: str\n    class_member: ClassVar[str]\n\n    # fine: a method definition using `def` is considered a declaration\n    def method_member(self) -> int: ...\n\n    def method(self) -> None:\n        self.instance_member = \"value\"  # fine (declared in the class body)\n        self.implicit = \"value\"  # error: [ambiguous-protocol-member]\n\n    @classmethod\n    def class_method(cls) -> None:\n        cls.class_member = \"value\"  # fine (declared in the class body)\n        cls.implicit_class = \"value\"  # error: [ambiguous-protocol-member]\n\n    # no explicit declaration, leading to ambiguity\n    c = \"some variable\"  # error\n    # no explicit declaration, leading to ambiguity\n    b = method_member  # error\n\n    # This creates implicit assignments of `d` and `e` in the protocol class body.\n    # Were they really meant to be considered protocol members?\n    # error: \"`d` is not declared as a protocol member\"\n    # error: \"`e` is not declared as a protocol member\"\n    for d, e in enumerate(range(42)):\n        pass\n\n\nclass SubProto(BaseProto, Protocol):\n    a = 42  # fine (declared in superclass)\n```",
@@ -885,6 +895,16 @@
           "title": "detects ignore comments that use invalid syntax",
           "description": "## What it does\n\nChecks for `type: ignore` and `ty: ignore` comments that are syntactically incorrect.\n\n## Why is this bad?\n\nA syntactically incorrect ignore comment is probably a mistake and is useless.\n\n## Examples\n\n```py\n# error\na = 20 / 1  # type: ignoree\n```\n\nUse instead:\n\n```py\na = 20 / 0  # type: ignore\n```",
           "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "invalid-implementation": {
+          "title": "detects invalid basedpython implementation declarations",
+          "description": "## What it does\nChecks for invalid basedpython `implementation` declarations: an interface\nthat is neither an abstract class nor a protocol, an implemented name that\ndoes not resolve to a class, a type that already satisfies the interface,\na member that corresponds to nothing on the interface, or a second\nimplementation of the same pair in one module.\n\n## Why is this bad?\nAn implementation states that an existing type satisfies an existing\ninterface, and lowers to a witness class deriving that interface. An\ninterface with stored state has nothing for the witness to hold; a type\nthat already conforms would never be converted, so the block would be dead\ncode; and a member matching nothing on the interface promises nothing —\nan `extension` adds inherent members instead.\n\n## Example\n\n```by\nclass Concrete:\n    x: int\n\nimplementation Concrete for B:  # error: not an abstract class or protocol\n    override def f(self): ...\n```",
+          "default": "error",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"

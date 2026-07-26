@@ -66,6 +66,7 @@ Module(
                             },
                         ),
                     ],
+                    implementation: None,
                 },
             ),
             FunctionDef(
@@ -142,6 +143,7 @@ Module(
                                         },
                                     ),
                                 ],
+                                implementation: None,
                             },
                         ),
                         ClassDef(
@@ -193,6 +195,7 @@ Module(
                                         },
                                     ),
                                 ],
+                                implementation: None,
                             },
                         ),
                     ],
@@ -273,6 +276,7 @@ Module(
                                         },
                                     ),
                                 ],
+                                implementation: None,
                             },
                         ),
                     ],

@@ -23,6 +23,7 @@ pub(crate) mod enums;
 pub(crate) mod extension;
 pub(crate) mod generics;
 pub(crate) mod identity_swap;
+pub(crate) mod implementation;
 pub(crate) mod intersection;
 pub(crate) mod literal_types;
 pub(crate) mod modifiers;

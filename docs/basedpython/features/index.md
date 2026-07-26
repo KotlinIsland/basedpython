@@ -99,3 +99,4 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 ## planned
 
 - [destructuring with `if let`](if-let.md)
+- [implementations (`implementation A for B`)](implementations.md)

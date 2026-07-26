@@ -1,0 +1,43 @@
+# basedpython `implementation` blocks — every part of the header is a real node
+# with a real range, so it prints from the AST rather than verbatim
+
+implementation A for B:
+    override def f(self):
+        print(self.a)
+
+
+# a named implementation binds its witness class
+implementation A for B as BAsA:
+    override def f(self):
+        print(self.a)
+
+
+# a specialized interface
+implementation Container[int] for B:
+    override def __contains__(self, item: int) -> bool:
+        return item == self.a
+
+
+# a dotted interface
+implementation collections.abc.Sized for B:
+    override def __len__(self) -> int:
+        return 1
+
+
+# a reused-parameter bound on the implemented type narrows where it applies
+implementation Show for list[Element: Show]:
+    override def show(self) -> str:
+        return ", ".join(x.show() for x in self)
+
+
+# a bound plus a witness name
+implementation Show for list[Element: Show] as ShowableList:
+    override def show(self) -> str:
+        return ", ".join(x.show() for x in self)
+
+
+# a computed property formats as an ordinary class-body statement
+implementation Named for B:
+    @property
+    override def name(self) -> str:
+        return f"B({self.a})"
