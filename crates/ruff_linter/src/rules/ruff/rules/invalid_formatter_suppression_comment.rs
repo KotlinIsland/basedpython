@@ -349,6 +349,8 @@ const fn is_valid_enclosing_node(node: AnyNodeRef) -> bool {
         | AnyNodeRef::StringLiteral(_)
         | AnyNodeRef::BytesLiteral(_)
         | AnyNodeRef::Identifier(_)
-        | AnyNodeRef::ExprCallableType(_) => false,
+        | AnyNodeRef::ExprCallableType(_)
+        | AnyNodeRef::ExprProtocolType(_)
+        | AnyNodeRef::ExprProtocolMethod(_) => false,
     }
 }

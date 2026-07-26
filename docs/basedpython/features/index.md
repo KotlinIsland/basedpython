@@ -36,6 +36,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [symbolic operations in types](symbolic-type-ops.md)
 - [typed dict literals](typed-dict-literal.md)
 - [anonymous named tuple types](anonymous-named-tuple.md)
+- [inline protocol types](inline-protocol.md)
 - [wrapped optional and result types](wrapped-results.md)
 - [automatic forward references](forward-references.md)
 - [implicit typing imports](implicit-typing.md)

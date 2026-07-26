@@ -54,3 +54,9 @@ class Guarded:
 
     def loaded(self) -> self.data is str:
         return True
+
+# inline protocol member names and a method's receiver are labels, not
+# references — only the member *types* are real name references
+Defined = int
+good_protocol: protocol(a: Defined; def m(self, n: Defined) -> Defined)
+bad_protocol: protocol(a: UndefinedMember; def m(self) -> UndefinedReturn)

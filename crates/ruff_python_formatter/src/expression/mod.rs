@@ -45,6 +45,8 @@ pub(crate) mod expr_name;
 pub(crate) mod expr_named;
 pub(crate) mod expr_none_literal;
 pub(crate) mod expr_number_literal;
+pub(crate) mod expr_protocol_method;
+pub(crate) mod expr_protocol_type;
 pub(crate) mod expr_set;
 pub(crate) mod expr_set_comp;
 pub(crate) mod expr_slice;
@@ -112,6 +114,8 @@ impl FormatRule<Expr, PyFormatContext<'_>> for FormatExpr {
             Expr::Slice(expr) => expr.format().fmt(f),
             Expr::IpyEscapeCommand(expr) => expr.format().fmt(f),
             Expr::CallableType(expr) => source_text_slice(expr.range()).fmt(f),
+            Expr::ProtocolType(expr) => source_text_slice(expr.range()).fmt(f),
+            Expr::ProtocolMethod(expr) => source_text_slice(expr.range()).fmt(f),
         });
         let parenthesize = match parentheses {
             Parentheses::Preserve => f.context().is_expression_parenthesized(expression.into()),
@@ -293,6 +297,8 @@ fn format_with_parentheses_comments(
         Expr::Slice(expr) => FormatNodeRule::fmt_fields(expr.format().rule(), expr, f),
         Expr::IpyEscapeCommand(expr) => FormatNodeRule::fmt_fields(expr.format().rule(), expr, f),
         Expr::CallableType(expr) => source_text_slice(expr.range()).fmt(f),
+        Expr::ProtocolType(expr) => source_text_slice(expr.range()).fmt(f),
+        Expr::ProtocolMethod(expr) => source_text_slice(expr.range()).fmt(f),
     });
 
     leading_comments(leading_outer).fmt(f)?;
@@ -489,7 +495,9 @@ impl NeedsParentheses for Expr {
             Expr::Tuple(expr) => expr.needs_parentheses(parent, context),
             Expr::Slice(expr) => expr.needs_parentheses(parent, context),
             Expr::IpyEscapeCommand(expr) => expr.needs_parentheses(parent, context),
-            Expr::CallableType(_) => OptionalParentheses::Never,
+            Expr::CallableType(_) | Expr::ProtocolType(_) | Expr::ProtocolMethod(_) => {
+                OptionalParentheses::Never
+            }
         }
     }
 }
@@ -795,7 +803,9 @@ impl<'input> CanOmitOptionalParenthesesVisitor<'input> {
             | Expr::Name(_)
             | Expr::Slice(_)
             | Expr::IpyEscapeCommand(_)
-            | Expr::CallableType(_) => {
+            | Expr::CallableType(_)
+            | Expr::ProtocolType(_)
+            | Expr::ProtocolMethod(_) => {
                 return;
             }
         }
@@ -1319,7 +1329,9 @@ pub(crate) fn is_expression_huggable(expr: &Expr, context: &PyFormatContext) -> 
         | Expr::FString(_)
         | Expr::TString(_)
         | Expr::EllipsisLiteral(_)
-        | Expr::CallableType(_) => false,
+        | Expr::CallableType(_)
+        | Expr::ProtocolType(_)
+        | Expr::ProtocolMethod(_) => false,
     }
 }
 
@@ -1426,7 +1438,7 @@ pub(crate) fn is_splittable_expression(expr: &Expr, context: &PyFormatContext) -
                 || is_splittable_expression(expression.as_ref(), context)
         }
 
-        Expr::CallableType(_) => false,
+        Expr::CallableType(_) | Expr::ProtocolType(_) | Expr::ProtocolMethod(_) => false,
     }
 }
 
@@ -1490,7 +1502,9 @@ pub(crate) fn left_most<'expr>(expression: &'expr Expr, trivia: &TriviaRanges) -
             | Expr::Named(_)
             | Expr::IpyEscapeCommand(_)
             | Expr::Generator(_)
-            | Expr::CallableType(_) => None,
+            | Expr::CallableType(_)
+            | Expr::ProtocolType(_)
+            | Expr::ProtocolMethod(_) => None,
         };
 
         let Some(left) = left else {

@@ -48,6 +48,7 @@ features = [
   { "symbolic operations in types" = "features/symbolic-type-ops.md" },
   { "typed dict literals" = "features/typed-dict-literal.md" },
   { "anonymous named tuple types" = "features/anonymous-named-tuple.md" },
+  { "inline protocol types" = "features/inline-protocol.md" },
   { "wrapped optional and result types" = "features/wrapped-results.md" },
   { "automatic forward references" = "features/forward-references.md" },
   { "implicit typing imports" = "features/implicit-typing.md" },

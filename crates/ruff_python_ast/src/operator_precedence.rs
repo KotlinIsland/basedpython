@@ -128,7 +128,9 @@ impl OperatorPrecedence {
 
             // Not a real python expression, so treat as lowest as well
             ExprRef::IpyEscapeCommand(_) => Self::None,
-            ExprRef::CallableType(_) => Self::None,
+            ExprRef::CallableType(_) | ExprRef::ProtocolType(_) | ExprRef::ProtocolMethod(_) => {
+                Self::None
+            }
         }
     }
 

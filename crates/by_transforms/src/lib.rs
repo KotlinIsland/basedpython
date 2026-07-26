@@ -71,7 +71,7 @@ pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
         return Err(first.clone());
     }
 
-    // --- Phase 2: import-redirect, anon-NT cleanup, lazy-import marking ---
+    // --- Phase 2: import-redirect, surface-syntax cleanup, lazy-import marking ---
     let final_output = run_import_redirect_phase(output, config);
     let final_output = run_anon_named_tuple_cleanup(final_output, config)?;
     let final_output = run_lazy_import_phase(final_output, config);
@@ -237,19 +237,23 @@ fn run_anon_named_tuple_cleanup(mut source: String, config: &Config) -> Result<S
         if let Some(err) = anon.errors.first() {
             return Err(err.clone());
         }
-        if anon.edits.is_empty() && !anon.needs_import {
+        let protocol = transforms::protocol_type::cleanup(src, &model, module.suite(), config)?;
+
+        if anon.edits.is_empty() && !anon.needs_import && protocol.is_none() {
             return Ok(source);
         }
-        let class_defs = anon.class_defs();
-        let needs_import = anon.needs_import;
-
-        let (body, _) = apply_transforms_once(src, anon.edits);
-
         let mut preamble = String::new();
-        if needs_import {
+        if anon.needs_import {
             preamble.push_str("from typing import NamedTuple\n");
-            preamble.push_str(&class_defs);
+            preamble.push_str(&anon.class_defs());
         }
+        let mut edits = anon.edits;
+        if let Some((protocol_edits, protocol_preamble)) = protocol {
+            preamble.push_str(&protocol_preamble);
+            edits.extend(protocol_edits);
+        }
+
+        let (body, _) = apply_transforms_once(src, edits);
         source = if preamble.is_empty() {
             body
         } else {

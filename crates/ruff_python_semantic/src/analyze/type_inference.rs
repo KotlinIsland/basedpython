@@ -360,7 +360,9 @@ impl From<&Expr> for ResolvedPythonType {
             | Expr::Name(_)
             | Expr::Slice(_)
             | Expr::IpyEscapeCommand(_)
-            | Expr::CallableType(_) => ResolvedPythonType::Unknown,
+            | Expr::CallableType(_)
+            | Expr::ProtocolType(_)
+            | Expr::ProtocolMethod(_) => ResolvedPythonType::Unknown,
         }
     }
 }

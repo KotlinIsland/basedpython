@@ -2138,6 +2138,78 @@ impl<'ast> IntoFormat<PyFormatContext<'ast>> for ast::ExprCallableType {
     }
 }
 
+impl FormatRule<ast::ExprProtocolType, PyFormatContext<'_>>
+    for crate::expression::expr_protocol_type::FormatExprProtocolType
+{
+    #[inline]
+    fn fmt(&self, node: &ast::ExprProtocolType, f: &mut PyFormatter) -> FormatResult<()> {
+        FormatNodeRule::<ast::ExprProtocolType>::fmt(self, node, f)
+    }
+}
+impl<'ast> AsFormat<PyFormatContext<'ast>> for ast::ExprProtocolType {
+    type Format<'a> = FormatRefWithRule<
+        'a,
+        ast::ExprProtocolType,
+        crate::expression::expr_protocol_type::FormatExprProtocolType,
+        PyFormatContext<'ast>,
+    >;
+    fn format(&self) -> Self::Format<'_> {
+        FormatRefWithRule::new(
+            self,
+            crate::expression::expr_protocol_type::FormatExprProtocolType::default(),
+        )
+    }
+}
+impl<'ast> IntoFormat<PyFormatContext<'ast>> for ast::ExprProtocolType {
+    type Format = FormatOwnedWithRule<
+        ast::ExprProtocolType,
+        crate::expression::expr_protocol_type::FormatExprProtocolType,
+        PyFormatContext<'ast>,
+    >;
+    fn into_format(self) -> Self::Format {
+        FormatOwnedWithRule::new(
+            self,
+            crate::expression::expr_protocol_type::FormatExprProtocolType::default(),
+        )
+    }
+}
+
+impl FormatRule<ast::ExprProtocolMethod, PyFormatContext<'_>>
+    for crate::expression::expr_protocol_method::FormatExprProtocolMethod
+{
+    #[inline]
+    fn fmt(&self, node: &ast::ExprProtocolMethod, f: &mut PyFormatter) -> FormatResult<()> {
+        FormatNodeRule::<ast::ExprProtocolMethod>::fmt(self, node, f)
+    }
+}
+impl<'ast> AsFormat<PyFormatContext<'ast>> for ast::ExprProtocolMethod {
+    type Format<'a> = FormatRefWithRule<
+        'a,
+        ast::ExprProtocolMethod,
+        crate::expression::expr_protocol_method::FormatExprProtocolMethod,
+        PyFormatContext<'ast>,
+    >;
+    fn format(&self) -> Self::Format<'_> {
+        FormatRefWithRule::new(
+            self,
+            crate::expression::expr_protocol_method::FormatExprProtocolMethod::default(),
+        )
+    }
+}
+impl<'ast> IntoFormat<PyFormatContext<'ast>> for ast::ExprProtocolMethod {
+    type Format = FormatOwnedWithRule<
+        ast::ExprProtocolMethod,
+        crate::expression::expr_protocol_method::FormatExprProtocolMethod,
+        PyFormatContext<'ast>,
+    >;
+    fn into_format(self) -> Self::Format {
+        FormatOwnedWithRule::new(
+            self,
+            crate::expression::expr_protocol_method::FormatExprProtocolMethod::default(),
+        )
+    }
+}
+
 impl FormatRule<ast::ExceptHandlerExceptHandler, PyFormatContext<'_>>
     for crate::other::except_handler_except_handler::FormatExceptHandlerExceptHandler
 {

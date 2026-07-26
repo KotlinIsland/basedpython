@@ -1462,83 +1462,146 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // basedpython: `(int, str) -> bool` sugar for `Callable[[int, str], bool]`
             // `(...) -> R` — a single bare ellipsis parameter list is the
             // gradual "any arguments" callable, equivalent to `Callable[..., R]`
-            ast::Expr::CallableType(callable)
-                if matches!(callable.args.as_slice(), [ast::Expr::EllipsisLiteral(_)]) =>
-            {
-                let db = self.db();
-                let return_type = self.infer_type_expression(&callable.returns);
-                Type::single_callable(db, Signature::new(Parameters::gradual_form(), return_type))
-            }
-            ast::Expr::CallableType(callable) => {
-                let db = self.db();
-                // basedpython: a trailing bare `**P` unpacks a parameter pack —
-                // `(**P) -> R` is `Callable[P, R]` and `(T1, …, **P) -> R` is
-                // `Callable[Concatenate[T1, …, P], R]`. the same spelling unpacks a
-                // keyword-variadic pack, whose value contributes keyword-only
-                // parameters instead of positional ones. `**P` parses to
-                // `Starred(Starred(Name))`; an annotated `**kwargs: T` is a
-                // `Named` node and is left to the ordinary variadic handling
-                if let Some((last, prefix)) = callable.args.split_last()
-                    && let ast::Expr::Starred(outer) = last
-                    && let ast::Expr::Starred(inner) = outer.value.as_ref()
-                    && matches!(inner.value.as_ref(), ast::Expr::Name(_))
-                {
-                    let paramspec_expr = inner.value.as_ref();
-                    // resolve the bare name; only a parameter pack takes this path (a
-                    // plain `**kwargs` that isn't one falls through to the ordinary
-                    // variadic handling below)
-                    let prev = self
-                        .context
-                        .inference_flags
-                        .replace(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, true);
-                    let ps_ty = self.infer_type_expression_no_store(paramspec_expr);
-                    self.context
-                        .inference_flags
-                        .set(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, prev);
-                    if let Type::TypeVar(tv) = ps_ty
-                        && tv.is_parameter_pack(db)
-                    {
-                        // the speculative resolution above deliberately does not store, so the
-                        // fall-through can infer the same node itself. this branch consumes it
-                        // instead, so record the type — the transpiler reads it back to pick
-                        // the matching lowering
-                        self.store_expression_type(paramspec_expr, ps_ty);
-                        let return_type = self.infer_type_expression(&callable.returns);
-                        let parameters = if prefix.is_empty() {
-                            // pure pack `(**P)` — identical to `Callable[P, R]`
-                            Parameters::paramspec(db, tv)
-                        } else {
-                            // `(T1, …, **P)` — `Callable[Concatenate[T1, …, P], R]`
-                            let prefix_params: Vec<Parameter<'db>> = prefix
-                                .iter()
-                                .map(|t| {
-                                    Parameter::positional_only(None)
-                                        .with_annotated_type(self.infer_type_expression(t))
-                                })
-                                .collect();
-                            self.infer_concatenate_tail(paramspec_expr)
-                                .map(|tail| Parameters::concatenate(db, prefix_params, tail))
-                                .unwrap_or_else(Parameters::unknown)
-                        };
-                        return Type::single_callable(db, Signature::new(parameters, return_type));
-                    }
+            ast::Expr::CallableType(callable) => self.infer_callable_arrow(callable, None),
+
+            // basedpython: `protocol(a: int; def f(self) -> int)` — an inline structural protocol
+            ast::Expr::ProtocolType(protocol) => self.synthesize_inline_protocol(protocol),
+
+            // a method member is only meaningful inside `protocol(...)`, which consumes it
+            // directly rather than recursing through this dispatch
+            ast::Expr::ProtocolMethod(method) => {
+                let ty = self.infer_protocol_method_signature(method);
+                if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, method) {
+                    builder.into_diagnostic(
+                        "A `def` method member is only valid inside an inline `protocol(...)` \
+                         type",
+                    );
                 }
-                let params = self.infer_parameter_spec_elements(
-                    &callable.args,
-                    callable.parameter_slash.map(|i| i as usize),
-                    callable.parameter_star.map(|i| i as usize),
-                );
-                let parameters = Parameters::from_annotation(db, params);
-                let return_type = self.infer_type_expression(&callable.returns);
-                let previous = self
-                    .inference_flags()
-                    .replace(InferenceFlags::CHECK_UNBOUND_TYPEVARS, false);
-                let result = Type::single_callable(db, Signature::new(parameters, return_type));
-                self.inference_flags()
-                    .set(InferenceFlags::CHECK_UNBOUND_TYPEVARS, previous);
-                result
+                ty
             }
         }
+    }
+
+    /// basedpython: the callable type of a method member of an inline protocol,
+    /// `def f(self, x: int) -> str`.
+    ///
+    /// The receiver is a parameter *name* rather than a type, so the parser marks it as a label
+    /// and it is turned into an unannotated positional parameter here — under the parameter-spec
+    /// encoding a bare name is a positional-only parameter's *type*, which is what every later
+    /// parameter still means.
+    pub(super) fn infer_protocol_method_signature(
+        &mut self,
+        method: &ast::ExprProtocolMethod,
+    ) -> Type<'db> {
+        let ast::Expr::CallableType(signature) = method.signature.as_ref() else {
+            return self.infer_type_expression(&method.signature);
+        };
+        let receiver = signature.args.first().and_then(|first| match first {
+            ast::Expr::Name(name) if name.ctx.is_invalid() => Some(name),
+            _ => None,
+        });
+        self.infer_callable_arrow(signature, receiver)
+    }
+
+    /// basedpython: `(int, str) -> bool`, sugar for `Callable[[int, str], bool]`.
+    ///
+    /// `receiver` is the implicit first parameter of a protocol method member, which is excluded
+    /// from `callable.args` interpreted as types. It is `None` for a plain callable arrow.
+    fn infer_callable_arrow(
+        &mut self,
+        callable: &ast::ExprCallableType,
+        receiver: Option<&ast::ExprName>,
+    ) -> Type<'db> {
+        let db = self.db();
+        let receiver_offset = usize::from(receiver.is_some());
+        let args = &callable.args[receiver_offset..];
+        let receiver_parameter =
+            || receiver.map(|name| Parameter::positional_or_keyword(name.id.clone()));
+
+        // `(...) -> R` — a single bare ellipsis parameter list is the gradual "any arguments"
+        // callable, equivalent to `Callable[..., R]`. It already accepts the receiver
+        if matches!(args, [ast::Expr::EllipsisLiteral(_)]) {
+            let return_type = self.infer_type_expression(&callable.returns);
+            return Type::single_callable(
+                db,
+                Signature::new(Parameters::gradual_form(), return_type),
+            );
+        }
+
+        // basedpython: a trailing bare `**P` unpacks a parameter pack —
+        // `(**P) -> R` is `Callable[P, R]` and `(T1, …, **P) -> R` is
+        // `Callable[Concatenate[T1, …, P], R]`. the same spelling unpacks a
+        // keyword-variadic pack, whose value contributes keyword-only
+        // parameters instead of positional ones. `**P` parses to
+        // `Starred(Starred(Name))`; an annotated `**kwargs: T` is a
+        // `Named` node and is left to the ordinary variadic handling
+        if let Some((last, prefix)) = args.split_last()
+            && let ast::Expr::Starred(outer) = last
+            && let ast::Expr::Starred(inner) = outer.value.as_ref()
+            && matches!(inner.value.as_ref(), ast::Expr::Name(_))
+        {
+            let paramspec_expr = inner.value.as_ref();
+            // resolve the bare name; only a parameter pack takes this path (a
+            // plain `**kwargs` that isn't one falls through to the ordinary
+            // variadic handling below)
+            let prev = self
+                .context
+                .inference_flags
+                .replace(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, true);
+            let ps_ty = self.infer_type_expression_no_store(paramspec_expr);
+            self.context
+                .inference_flags
+                .set(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR, prev);
+            if let Type::TypeVar(tv) = ps_ty
+                && tv.is_parameter_pack(db)
+            {
+                // the speculative resolution above deliberately does not store, so the
+                // fall-through can infer the same node itself. this branch consumes it
+                // instead, so record the type — the transpiler reads it back to pick
+                // the matching lowering
+                self.store_expression_type(paramspec_expr, ps_ty);
+                let return_type = self.infer_type_expression(&callable.returns);
+                let parameters = if prefix.is_empty() && receiver.is_none() {
+                    // pure pack `(**P)` — identical to `Callable[P, R]`
+                    Parameters::paramspec(db, tv)
+                } else {
+                    // `(T1, …, **P)` — `Callable[Concatenate[T1, …, P], R]`
+                    let prefix_params: Vec<Parameter<'db>> = receiver_parameter()
+                        .into_iter()
+                        .chain(prefix.iter().map(|t| {
+                            Parameter::positional_only(None)
+                                .with_annotated_type(self.infer_type_expression(t))
+                        }))
+                        .collect();
+                    self.infer_concatenate_tail(paramspec_expr)
+                        .map(|tail| Parameters::concatenate(db, prefix_params, tail))
+                        .unwrap_or_else(Parameters::unknown)
+                };
+                return Type::single_callable(db, Signature::new(parameters, return_type));
+            }
+        }
+
+        // the marker indices the parser recorded are relative to the full argument list
+        let shift = |index: Option<u32>| {
+            index.map(|index| (index as usize).saturating_sub(receiver_offset))
+        };
+        let params: Vec<Parameter<'db>> = receiver_parameter()
+            .into_iter()
+            .chain(self.infer_parameter_spec_elements(
+                args,
+                shift(callable.parameter_slash),
+                shift(callable.parameter_star),
+            ))
+            .collect();
+        let parameters = Parameters::from_annotation(db, params);
+        let return_type = self.infer_type_expression(&callable.returns);
+        let previous = self
+            .inference_flags()
+            .replace(InferenceFlags::CHECK_UNBOUND_TYPEVARS, false);
+        let result = Type::single_callable(db, Signature::new(parameters, return_type));
+        self.inference_flags()
+            .set(InferenceFlags::CHECK_UNBOUND_TYPEVARS, previous);
+        result
     }
 
     /// basedpython: builds the parameters of a *parameters spec* — the shared shape behind the

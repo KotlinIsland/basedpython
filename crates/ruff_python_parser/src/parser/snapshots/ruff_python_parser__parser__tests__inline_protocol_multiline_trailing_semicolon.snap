@@ -1,0 +1,91 @@
+---
+source: crates/ruff_python_parser/src/parser/tests.rs
+expression: parsed.syntax()
+---
+ModModule {
+    node_index: NodeIndex(None),
+    range: 0..52,
+    body: [
+        AnnAssign(
+            StmtAnnAssign {
+                node_index: NodeIndex(None),
+                range: 0..51,
+                target: Name(
+                    ExprName {
+                        node_index: NodeIndex(None),
+                        range: 0..1,
+                        id: Name("a"),
+                        ctx: Store,
+                    },
+                ),
+                annotation: ProtocolType(
+                    ExprProtocolType {
+                        node_index: NodeIndex(None),
+                        range: 3..51,
+                        members: [
+                            Named(
+                                ExprNamed {
+                                    node_index: NodeIndex(None),
+                                    range: 17..23,
+                                    target: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 17..18,
+                                            id: Name("a"),
+                                            ctx: Invalid,
+                                        },
+                                    ),
+                                    value: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 20..23,
+                                            id: Name("int"),
+                                            ctx: Load,
+                                        },
+                                    ),
+                                },
+                            ),
+                            ProtocolMethod(
+                                ExprProtocolMethod {
+                                    node_index: NodeIndex(None),
+                                    range: 29..48,
+                                    name: Identifier {
+                                        id: Name("f"),
+                                        range: 33..34,
+                                        node_index: NodeIndex(None),
+                                    },
+                                    signature: CallableType(
+                                        ExprCallableType {
+                                            node_index: NodeIndex(None),
+                                            range: 34..48,
+                                            args: [
+                                                Name(
+                                                    ExprName {
+                                                        node_index: NodeIndex(None),
+                                                        range: 35..39,
+                                                        id: Name("self"),
+                                                        ctx: Invalid,
+                                                    },
+                                                ),
+                                            ],
+                                            returns: NoneLiteral(
+                                                ExprNoneLiteral {
+                                                    node_index: NodeIndex(None),
+                                                    range: 44..48,
+                                                },
+                                            ),
+                                            parameter_slash: None,
+                                            parameter_star: None,
+                                        },
+                                    ),
+                                },
+                            ),
+                        ],
+                    },
+                ),
+                value: None,
+                simple: true,
+            },
+        ),
+    ],
+}

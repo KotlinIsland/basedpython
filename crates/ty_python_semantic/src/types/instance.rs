@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 use ruff_python_ast::name::Name;
 use ty_module_resolver::{ModuleName, file_to_module};
 
-use super::protocol_class::ProtocolInterface;
+use super::protocol_class::{InlineProtocolMember, ProtocolInterface};
 use super::{
     BoundTypeVarIdentity, BoundTypeVarInstance, ClassType, DivergentType, KnownClass,
     MaterializationKind, SubclassOfType, Type, TypeAliasType, TypeVarVariance,
@@ -184,6 +184,22 @@ impl<'db> Type<'db> {
     {
         Self::ProtocolInstance(ProtocolInstanceType::synthesized(
             SynthesizedProtocolType::new(ProtocolInterface::with_methods(db, methods)),
+        ))
+    }
+
+    /// basedpython: synthesize the protocol instance type an inline `protocol(...)` type
+    /// expression denotes.
+    ///
+    /// `packs` holds the `**Kwargs` keyword-variadic packs that are not specialized yet; each one
+    /// contributes an attribute member per field once it is.
+    pub(super) fn inline_protocol<M>(db: &'db dyn Db, members: M, packs: Box<[Type<'db>]>) -> Self
+    where
+        M: IntoIterator<Item = (Name, InlineProtocolMember<'db>)>,
+    {
+        Self::ProtocolInstance(ProtocolInstanceType::synthesized(
+            SynthesizedProtocolType::new(ProtocolInterface::with_inline_members(
+                db, members, packs,
+            )),
         ))
     }
 }

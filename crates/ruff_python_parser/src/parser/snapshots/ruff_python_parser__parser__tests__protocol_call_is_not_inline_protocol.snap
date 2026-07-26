@@ -1,0 +1,245 @@
+---
+source: crates/ruff_python_parser/src/parser/tests.rs
+expression: parsed.syntax()
+---
+ModModule {
+    node_index: NodeIndex(None),
+    range: 0..73,
+    body: [
+        Assign(
+            StmtAssign {
+                node_index: NodeIndex(None),
+                range: 0..15,
+                targets: [
+                    Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 0..1,
+                            id: Name("a"),
+                            ctx: Store,
+                        },
+                    ),
+                ],
+                value: Call(
+                    ExprCall {
+                        node_index: NodeIndex(None),
+                        range: 4..15,
+                        func: Name(
+                            ExprName {
+                                node_index: NodeIndex(None),
+                                range: 4..12,
+                                id: Name("protocol"),
+                                ctx: Load,
+                            },
+                        ),
+                        arguments: Arguments {
+                            range: 12..15,
+                            node_index: NodeIndex(None),
+                            args: [
+                                Name(
+                                    ExprName {
+                                        node_index: NodeIndex(None),
+                                        range: 13..14,
+                                        id: Name("x"),
+                                        ctx: Load,
+                                    },
+                                ),
+                            ],
+                            keywords: [],
+                        },
+                        is_cast: false,
+                        is_checked_cast: false,
+                        is_string_tag: false,
+                    },
+                ),
+            },
+        ),
+        Assign(
+            StmtAssign {
+                node_index: NodeIndex(None),
+                range: 16..30,
+                targets: [
+                    Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 16..17,
+                            id: Name("b"),
+                            ctx: Store,
+                        },
+                    ),
+                ],
+                value: Call(
+                    ExprCall {
+                        node_index: NodeIndex(None),
+                        range: 20..30,
+                        func: Name(
+                            ExprName {
+                                node_index: NodeIndex(None),
+                                range: 20..28,
+                                id: Name("protocol"),
+                                ctx: Load,
+                            },
+                        ),
+                        arguments: Arguments {
+                            range: 28..30,
+                            node_index: NodeIndex(None),
+                            args: [],
+                            keywords: [],
+                        },
+                        is_cast: false,
+                        is_checked_cast: false,
+                        is_string_tag: false,
+                    },
+                ),
+            },
+        ),
+        Assign(
+            StmtAssign {
+                node_index: NodeIndex(None),
+                range: 31..51,
+                targets: [
+                    Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 31..32,
+                            id: Name("c"),
+                            ctx: Store,
+                        },
+                    ),
+                ],
+                value: Call(
+                    ExprCall {
+                        node_index: NodeIndex(None),
+                        range: 35..51,
+                        func: Name(
+                            ExprName {
+                                node_index: NodeIndex(None),
+                                range: 35..43,
+                                id: Name("protocol"),
+                                ctx: Load,
+                            },
+                        ),
+                        arguments: Arguments {
+                            range: 43..51,
+                            node_index: NodeIndex(None),
+                            args: [
+                                Named(
+                                    ExprNamed {
+                                        node_index: NodeIndex(None),
+                                        range: 44..50,
+                                        target: Name(
+                                            ExprName {
+                                                node_index: NodeIndex(None),
+                                                range: 44..45,
+                                                id: Name("y"),
+                                                ctx: Store,
+                                            },
+                                        ),
+                                        value: NumberLiteral(
+                                            ExprNumberLiteral {
+                                                node_index: NodeIndex(None),
+                                                range: 49..50,
+                                                value: Int(
+                                                    1,
+                                                ),
+                                            },
+                                        ),
+                                    },
+                                ),
+                            ],
+                            keywords: [],
+                        },
+                        is_cast: false,
+                        is_checked_cast: false,
+                        is_string_tag: false,
+                    },
+                ),
+            },
+        ),
+        Assign(
+            StmtAssign {
+                node_index: NodeIndex(None),
+                range: 52..72,
+                targets: [
+                    Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 52..53,
+                            id: Name("d"),
+                            ctx: Store,
+                        },
+                    ),
+                ],
+                value: Call(
+                    ExprCall {
+                        node_index: NodeIndex(None),
+                        range: 56..72,
+                        func: Name(
+                            ExprName {
+                                node_index: NodeIndex(None),
+                                range: 56..64,
+                                id: Name("protocol"),
+                                ctx: Load,
+                            },
+                        ),
+                        arguments: Arguments {
+                            range: 64..72,
+                            node_index: NodeIndex(None),
+                            args: [
+                                Subscript(
+                                    ExprSubscript {
+                                        node_index: NodeIndex(None),
+                                        range: 65..71,
+                                        value: Name(
+                                            ExprName {
+                                                node_index: NodeIndex(None),
+                                                range: 65..66,
+                                                id: Name("z"),
+                                                ctx: Load,
+                                            },
+                                        ),
+                                        slice: Slice(
+                                            ExprSlice {
+                                                node_index: NodeIndex(None),
+                                                range: 67..70,
+                                                lower: Some(
+                                                    NumberLiteral(
+                                                        ExprNumberLiteral {
+                                                            node_index: NodeIndex(None),
+                                                            range: 67..68,
+                                                            value: Int(
+                                                                1,
+                                                            ),
+                                                        },
+                                                    ),
+                                                ),
+                                                upper: Some(
+                                                    NumberLiteral(
+                                                        ExprNumberLiteral {
+                                                            node_index: NodeIndex(None),
+                                                            range: 69..70,
+                                                            value: Int(
+                                                                2,
+                                                            ),
+                                                        },
+                                                    ),
+                                                ),
+                                                step: None,
+                                            },
+                                        ),
+                                        ctx: Load,
+                                        is_typeof: false,
+                                    },
+                                ),
+                            ],
+                            keywords: [],
+                        },
+                        is_cast: false,
+                        is_checked_cast: false,
+                        is_string_tag: false,
+                    },
+                ),
+            },
+        ),
+    ],
+}

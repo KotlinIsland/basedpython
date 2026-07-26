@@ -6498,6 +6498,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // the type expression inference path is responsible
                 todo_type!("CallableType in value context")
             }
+            ast::Expr::ProtocolType(_) | ast::Expr::ProtocolMethod(_) => {
+                // inline protocol syntax only valid in annotation position; in value context
+                // the type expression inference path is responsible
+                todo_type!("inline protocol type in value context")
+            }
         };
 
         ty = self.apply_type_context(ty, tcx);
@@ -7124,6 +7129,81 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         };
         let td = DynamicTypedDictLiteral::new(db, class_name, anchor, TypedDictModule::Typing);
         Type::ClassLiteral(ClassLiteral::DynamicTypedDict(td)).to_instance_approximation(db)
+    }
+
+    /// basedpython: synthesize the protocol type an inline `protocol(...)` type expression
+    /// denotes.
+    ///
+    /// The result is a [structural protocol](Type::inline_protocol) rather than a class, so two
+    /// inline protocols with the same members are the same type wherever they are written. A
+    /// duplicate member name is rejected by the parser, so the last binding for a name wins here.
+    fn synthesize_inline_protocol(&mut self, protocol: &ast::ExprProtocolType) -> Type<'db> {
+        use crate::types::protocol_class::InlineProtocolMember;
+
+        let mut members: Vec<(Name, InlineProtocolMember<'db>)> =
+            Vec::with_capacity(protocol.members.len());
+        let mut packs: Vec<Type<'db>> = Vec::new();
+
+        for member in &protocol.members {
+            match member {
+                // `**Kwargs` — a keyword-variadic pack, spliced in field by field once the pack
+                // is specialized. Parsed as `Starred(Starred(_))`, as everywhere `**` unpacks
+                ast::Expr::Starred(outer) => {
+                    let inner = match outer.value.as_ref() {
+                        ast::Expr::Starred(inner) => inner.value.as_ref(),
+                        other => other,
+                    };
+                    if let Some(pack) = self.keyword_pack_reference(inner) {
+                        packs.push(pack);
+                        continue;
+                    }
+                    let ty = self.infer_type_expression(inner);
+                    if let Some(builder) = self
+                        .context
+                        .report_lint(&INVALID_TYPE_FORM, AnyNodeRef::from(member))
+                    {
+                        builder.into_diagnostic(format_args!(
+                            "Only a keyword-variadic pack can be unpacked into an inline \
+                             protocol, not `{}`",
+                            ty.display(self.db())
+                        ));
+                    }
+                }
+                // `def f(self) -> int` — a method member, whose receiver binds on access
+                ast::Expr::ProtocolMethod(method) => {
+                    let ty = self.infer_protocol_method_signature(method);
+                    let member = match ty {
+                        Type::Callable(callable) => InlineProtocolMember::Method(callable),
+                        // the signature is always a callable arrow, so this only happens when its
+                        // own inference already failed and reported
+                        _ => InlineProtocolMember::Attribute(ty),
+                    };
+                    members.push((method.name.id.clone(), member));
+                }
+                // `a: int` — a data member, mutable as in a protocol class body
+                ast::Expr::Named(named) => {
+                    let ty = self.infer_type_expression(&named.value);
+                    if let Some(name) = named.target.as_name_expr() {
+                        members.push((name.id.clone(), InlineProtocolMember::Attribute(ty)));
+                    }
+                }
+                other => {
+                    let ty = self.infer_type_expression(other);
+                    if let Some(builder) = self
+                        .context
+                        .report_lint(&INVALID_TYPE_FORM, AnyNodeRef::from(other))
+                    {
+                        builder.into_diagnostic(format_args!(
+                            "`{}` is not a valid inline protocol member; expected `name: T`, \
+                             `def name(...) -> T`, or `**Pack`",
+                            ty.display(self.db())
+                        ));
+                    }
+                }
+            }
+        }
+
+        Type::inline_protocol(self.db(), members, packs.into_boxed_slice())
     }
 
     fn synthesize_anon_named_tuple_class(

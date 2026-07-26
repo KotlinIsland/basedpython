@@ -169,7 +169,9 @@ pub(crate) fn bit_count(checker: &Checker, call: &ExprCall) {
         | Expr::EllipsisLiteral(_)
         | Expr::Attribute(_)
         | Expr::Subscript(_)
-        | Expr::CallableType(_) => false,
+        | Expr::CallableType(_)
+        | Expr::ProtocolType(_)
+        | Expr::ProtocolMethod(_) => false,
     };
 
     // check if the fix is safe or not

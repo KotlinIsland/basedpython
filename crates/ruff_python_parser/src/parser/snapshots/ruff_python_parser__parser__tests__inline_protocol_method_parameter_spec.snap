@@ -1,0 +1,173 @@
+---
+source: crates/ruff_python_parser/src/parser/tests.rs
+expression: parsed.syntax()
+---
+ModModule {
+    node_index: NodeIndex(None),
+    range: 0..73,
+    body: [
+        AnnAssign(
+            StmtAnnAssign {
+                node_index: NodeIndex(None),
+                range: 0..72,
+                target: Name(
+                    ExprName {
+                        node_index: NodeIndex(None),
+                        range: 0..1,
+                        id: Name("a"),
+                        ctx: Store,
+                    },
+                ),
+                annotation: ProtocolType(
+                    ExprProtocolType {
+                        node_index: NodeIndex(None),
+                        range: 3..72,
+                        members: [
+                            ProtocolMethod(
+                                ExprProtocolMethod {
+                                    node_index: NodeIndex(None),
+                                    range: 12..71,
+                                    name: Identifier {
+                                        id: Name("f"),
+                                        range: 16..17,
+                                        node_index: NodeIndex(None),
+                                    },
+                                    signature: CallableType(
+                                        ExprCallableType {
+                                            node_index: NodeIndex(None),
+                                            range: 17..71,
+                                            args: [
+                                                Name(
+                                                    ExprName {
+                                                        node_index: NodeIndex(None),
+                                                        range: 18..22,
+                                                        id: Name("self"),
+                                                        ctx: Invalid,
+                                                    },
+                                                ),
+                                                Named(
+                                                    ExprNamed {
+                                                        node_index: NodeIndex(None),
+                                                        range: 24..30,
+                                                        target: Name(
+                                                            ExprName {
+                                                                node_index: NodeIndex(None),
+                                                                range: 24..25,
+                                                                id: Name("x"),
+                                                                ctx: Invalid,
+                                                            },
+                                                        ),
+                                                        value: Name(
+                                                            ExprName {
+                                                                node_index: NodeIndex(None),
+                                                                range: 27..30,
+                                                                id: Name("int"),
+                                                                ctx: Load,
+                                                            },
+                                                        ),
+                                                    },
+                                                ),
+                                                Named(
+                                                    ExprNamed {
+                                                        node_index: NodeIndex(None),
+                                                        range: 35..45,
+                                                        target: Starred(
+                                                            ExprStarred {
+                                                                node_index: NodeIndex(None),
+                                                                range: 35..40,
+                                                                value: Name(
+                                                                    ExprName {
+                                                                        node_index: NodeIndex(None),
+                                                                        range: 36..40,
+                                                                        id: Name("args"),
+                                                                        ctx: Invalid,
+                                                                    },
+                                                                ),
+                                                                ctx: Load,
+                                                            },
+                                                        ),
+                                                        value: Name(
+                                                            ExprName {
+                                                                node_index: NodeIndex(None),
+                                                                range: 42..45,
+                                                                id: Name("str"),
+                                                                ctx: Load,
+                                                            },
+                                                        ),
+                                                    },
+                                                ),
+                                                Named(
+                                                    ExprNamed {
+                                                        node_index: NodeIndex(None),
+                                                        range: 49..51,
+                                                        target: Starred(
+                                                            ExprStarred {
+                                                                node_index: NodeIndex(None),
+                                                                range: 49..51,
+                                                                value: Starred(
+                                                                    ExprStarred {
+                                                                        node_index: NodeIndex(None),
+                                                                        range: 49..51,
+                                                                        value: Name(
+                                                                            ExprName {
+                                                                                node_index: NodeIndex(None),
+                                                                                range: 49..51,
+                                                                                id: Name("kw"),
+                                                                                ctx: Invalid,
+                                                                            },
+                                                                        ),
+                                                                        ctx: Load,
+                                                                    },
+                                                                ),
+                                                                ctx: Load,
+                                                            },
+                                                        ),
+                                                        value: Name(
+                                                            ExprName {
+                                                                node_index: NodeIndex(None),
+                                                                range: 53..56,
+                                                                id: Name("int"),
+                                                                ctx: Load,
+                                                            },
+                                                        ),
+                                                    },
+                                                ),
+                                            ],
+                                            returns: BinOp(
+                                                ExprBinOp {
+                                                    node_index: NodeIndex(None),
+                                                    range: 61..71,
+                                                    left: Name(
+                                                        ExprName {
+                                                            node_index: NodeIndex(None),
+                                                            range: 61..64,
+                                                            id: Name("str"),
+                                                            ctx: Load,
+                                                        },
+                                                    ),
+                                                    op: BitOr,
+                                                    right: NoneLiteral(
+                                                        ExprNoneLiteral {
+                                                            node_index: NodeIndex(None),
+                                                            range: 67..71,
+                                                        },
+                                                    ),
+                                                },
+                                            ),
+                                            parameter_slash: Some(
+                                                2,
+                                            ),
+                                            parameter_star: None,
+                                        },
+                                    ),
+                                },
+                            ),
+                        ],
+                    },
+                ),
+                value: None,
+                simple: true,
+            },
+        ),
+    ],
+}
