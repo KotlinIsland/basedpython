@@ -20,6 +20,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use smallvec::{SmallVec, smallvec_inline};
 
 use super::{DynamicType, Type, TypeVarVariance, UnionType, semantic_index};
+use crate::types::UnpackedKwargs;
 use crate::types::callable::{CallableFunctionProvenance, CallableTypeKind};
 use crate::types::constraints::{
     ConstraintSet, ConstraintSetBuilder, IteratorConstraintsExtension, OwnedConstraintSet,
@@ -30,6 +31,7 @@ use crate::types::generics::{
     walk_generic_context,
 };
 use crate::types::infer::{TypeExpressionFlags, infer_deferred_types};
+use crate::types::instance::ProtocolInstanceType;
 use crate::types::relation::{
     HasRelationToVisitor, IsDisjointVisitor, TypeRelation, TypeRelationChecker, TypeVarEvaluation,
 };
@@ -3950,6 +3952,8 @@ impl<'db> Parameters<'db> {
             }
             if let Some(unpacked_typed_dict) = parameter.unpacked_typed_dict(db) {
                 Self::push_unpacked_typed_dict(db, &mut value, &parameter, unpacked_typed_dict);
+            } else if let Some(unpacked_protocol) = parameter.unpacked_protocol(db) {
+                Self::push_unpacked_protocol(db, &mut value, unpacked_protocol);
             } else {
                 value.push(parameter);
             }
@@ -4012,6 +4016,30 @@ impl<'db> Parameters<'db> {
                 Parameter::keyword_variadic(kwargs_name)
                     .with_annotated_type(extra_items.declared_ty),
             );
+        }
+    }
+
+    /// basedpython: expand `(**P) -> R` — each of the protocol's data members becomes a
+    /// required keyword-only parameter. Methods are skipped: they describe how the value
+    /// behaves, not a keyword a caller can pass. Unlike a `TypedDict`, a protocol's members
+    /// are ordered by name rather than by declaration, which is immaterial for parameters
+    /// that can only be passed by keyword
+    fn push_unpacked_protocol(
+        db: &'db dyn Db,
+        value: &mut Vec<Parameter<'db>>,
+        unpacked_protocol: ProtocolInstanceType<'db>,
+    ) {
+        let members = Type::ProtocolInstance(unpacked_protocol)
+            .protocol_data_members(db)
+            .unwrap_or_default();
+        for (name, ty) in members {
+            if value
+                .iter()
+                .any(|existing| existing.callable_by_name(name.as_str()))
+            {
+                continue;
+            }
+            value.push(Parameter::keyword_only(name).with_annotated_type(ty));
         }
     }
 
@@ -4862,6 +4890,10 @@ enum ParameterAnnotationKind {
 
     /// The parameter was declared as `**kwargs: Unpack[TypedDict]`.
     UnpackedTypedDictKwargs,
+
+    /// basedpython: the parameter unpacks a protocol's data members into keyword-only
+    /// parameters, spelled `(**P) -> R` in a callable arrow.
+    UnpackedProtocolKwargs,
 }
 
 impl<'db> Parameter<'db> {
@@ -4940,6 +4972,38 @@ impl<'db> Parameter<'db> {
     pub(crate) fn with_starred_annotation(mut self) -> Self {
         self.annotation_kind = ParameterAnnotationKind::Starred;
         self
+    }
+
+    /// basedpython: mark a keyword-variadic parameter as unpacking its annotation's keys
+    /// into keyword-only parameters. [`Parameters::from_annotation`] performs the expansion,
+    /// the same way it does for a `def`'s `**kwargs: Unpack[TypedDict]`
+    pub(crate) fn with_unpacked_kwargs(mut self, db: &'db dyn Db) -> Self {
+        match self.annotated_type.unpacked_kwargs(db) {
+            Some(UnpackedKwargs::TypedDict) => {
+                self.annotation_kind = ParameterAnnotationKind::UnpackedTypedDictKwargs;
+            }
+            Some(UnpackedKwargs::Protocol(_)) => {
+                self.annotation_kind = ParameterAnnotationKind::UnpackedProtocolKwargs;
+            }
+            Some(UnpackedKwargs::ParameterPack) | None => {}
+        }
+        self
+    }
+
+    /// basedpython: the protocol whose data members this parameter unpacks into keyword-only
+    /// parameters, for a `(**P) -> R` callable arrow.
+    fn unpacked_protocol(&self, db: &'db dyn Db) -> Option<ProtocolInstanceType<'db>> {
+        (self.is_keyword_variadic()
+            && matches!(
+                self.annotation_kind,
+                ParameterAnnotationKind::UnpackedProtocolKwargs
+            ))
+        .then(|| {
+            self.annotated_type
+                .resolve_type_alias(db)
+                .as_protocol_instance()
+        })
+        .flatten()
     }
 
     pub(crate) fn with_default_type(mut self, default: Type<'db>) -> Self {

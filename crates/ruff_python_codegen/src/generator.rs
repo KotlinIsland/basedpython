@@ -1525,12 +1525,39 @@ impl<'a> Generator<'a> {
                     if Some(i) == star {
                         self.p("*, ");
                     }
-                    self.unparse_expr(arg, precedence::EXPR);
+                    self.unparse_parameter_spec_element(arg);
                 }
                 self.p(") -> ");
                 self.unparse_expr(&callable.returns, precedence::EXPR);
             }
         }
+    }
+
+    /// basedpython: unparse one element of a callable's parameter list. A labelled field is
+    /// an [`Expr::Named`] whose *target* carries the name and its star count, so it prints
+    /// `name: T` / `*name: T` / `**name: T` — not the walrus the generic `Named` rendering
+    /// would give. Every other shape (a bare positional type, the anonymous `*: T` / `**: T`,
+    /// an unpacked `*Ts`) is already its own expression
+    fn unparse_parameter_spec_element(&mut self, element: &Expr) {
+        let Expr::Named(named) = element else {
+            self.unparse_expr(element, precedence::EXPR);
+            return;
+        };
+        match named.target.as_ref() {
+            Expr::Starred(starred) => match starred.value.as_ref() {
+                Expr::Starred(inner) => {
+                    self.p("**");
+                    self.unparse_expr(&inner.value, precedence::EXPR);
+                }
+                value => {
+                    self.p("*");
+                    self.unparse_expr(value, precedence::EXPR);
+                }
+            },
+            target => self.unparse_expr(target, precedence::EXPR),
+        }
+        self.p(": ");
+        self.unparse_expr(&named.value, precedence::EXPR);
     }
 
     pub(crate) fn unparse_singleton(&mut self, singleton: Singleton) {
@@ -1841,6 +1868,20 @@ mod tests {
             Generator::new(&indentation, line_ending).with_mode(UnparseMode::BasedPython);
         generator.unparse_suite(&body);
         generator.generate()
+    }
+
+    #[test_case::test_case("f: (int, str) -> bool" ; "positional types")]
+    #[test_case::test_case("a: (a: int) -> str" ; "named field")]
+    #[test_case::test_case("b: (int, /, name: str) -> bool" ; "positional-only marker")]
+    #[test_case::test_case("c: (int, *, name: str) -> bool" ; "keyword-only marker")]
+    #[test_case::test_case("g: (*args: int) -> None" ; "named variadic")]
+    #[test_case::test_case("k: (*args: *Ts) -> None" ; "named variadic unpacking a pack")]
+    #[test_case::test_case("l: (**kwargs: str) -> None" ; "named kwargs")]
+    #[test_case::test_case("i: (*Ts) -> None" ; "unpacked pack")]
+    #[test_case::test_case("j: (int, *Ts) -> None" ; "unpacked pack after a prefix")]
+    #[test_case::test_case("n: (**P) -> None" ; "bare paramspec")]
+    fn basedpython_callable_type_round_trip(contents: &str) {
+        assert_eq!(based_round_trip(contents), contents);
     }
 
     fn jupyter_round_trip(contents: &str) -> String {

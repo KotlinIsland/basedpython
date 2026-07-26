@@ -3,7 +3,9 @@
 use ruff_python_ast::{Expr, ExprCall, ExprName, StmtClassDef};
 use ty_python_core::scope::ScopeKind;
 use ty_python_core::{global_scope, place_table, semantic_index};
-use ty_python_semantic::types::{DynamicType, KnownClass, KnownInstanceType, Type, character};
+use ty_python_semantic::types::{
+    DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
+};
 use ty_python_semantic::{HasType, SemanticModel};
 
 /// How the postfix `^` / `!` operators test the "absent" arm of an operand's
@@ -20,6 +22,22 @@ pub(crate) enum AbsentTest {
     /// result form — guard tests `isinstance(x, BaseException)` and returns
     /// the error value
     Result,
+}
+
+/// How a callable arrow's bare `**X` lowers to python. Mirrors ty's
+/// [`UnpackedKwargs`](ty_python_semantic::types::UnpackedKwargs) with the member types
+/// already rendered as source text.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) enum UnpackedKwargsLowering {
+    /// `Callable[X, R]` — the pack is the whole parameter list. Also the reading for a name
+    /// ty could not resolve at all: a bare `**Name` is overwhelmingly a `ParamSpec`, and the
+    /// file has an unresolved-reference error to fix either way
+    ParameterPack,
+    /// `**kwargs: Unpack[X]`
+    TypedDict,
+    /// keyword-only `(name, rendered type)` parameters; python cannot spell the protocol
+    /// itself in the `**` position
+    Protocol(Vec<(String, String)>),
 }
 
 /// How an assignment inside a trailing-lambda block reaches an enclosing scope,
@@ -112,6 +130,13 @@ pub(crate) trait TypeInfo {
     /// both of which are also dynamic types
     fn is_any(&self, expr: &Expr) -> bool;
 
+    /// whether `expr` resolves to a `TypeVarTuple`. a callable's parameter list spells an
+    /// unpacked variadic and an anonymous variadic identically — `(*Ts)` and `(*: T)` both
+    /// parse to `Starred(_)` — so the lowering resolves them the way ty does: a
+    /// `TypeVarTuple` is never a valid annotation for the individual arguments of a
+    /// `*args`, so a starred one can only be an unpack
+    fn is_typevartuple(&self, expr: &Expr) -> bool;
+
     /// whether `name` is unbound at the scope enclosing `anchor`
     /// (used to pick a fresh temp-variable name)
     fn is_unbound_at(&self, name: &str, anchor: &Expr) -> bool;
@@ -157,6 +182,11 @@ pub(crate) trait TypeInfo {
     /// is a `ParamSpec` (e.g. `class A[**P]` or `class A[P: Parameters]`).
     /// returns `false` when `expr` is not a generic class
     fn class_first_typevar_is_paramspec(&self, expr: &Expr) -> bool;
+
+    /// how the bare `**X` of a callable arrow expands, resolved by the same classifier the
+    /// type checker uses so the lowering can't disagree with it. `None` when `X` is an
+    /// ordinary type, which makes the `**` an untyped-keyword catch-all
+    fn unpacked_kwargs(&self, expr: &Expr) -> Option<UnpackedKwargsLowering>;
 
     /// position of the keyword-variadic pack among the type parameters of the
     /// class referenced by `expr` (`class A[T, **Kwargs]` → `Some(1)`).
@@ -384,6 +414,12 @@ impl TypeInfo for SemanticModel<'_> {
             .is_some_and(|ty| matches!(ty, Type::Dynamic(DynamicType::Any)))
     }
 
+    fn is_typevartuple(&self, expr: &Expr) -> bool {
+        expr.inferred_type(self).is_some_and(
+            |ty| matches!(ty, Type::TypeVar(typevar) if typevar.is_typevartuple(self.db())),
+        )
+    }
+
     fn is_unbound_at(&self, name: &str, anchor: &Expr) -> bool {
         let db = self.db();
         let file = self.file();
@@ -497,6 +533,31 @@ impl TypeInfo for SemanticModel<'_> {
                 })
                 .collect(),
         )
+    }
+
+    fn unpacked_kwargs(&self, expr: &Expr) -> Option<UnpackedKwargsLowering> {
+        let db = self.db();
+        let ty = expr.inferred_type(self)?;
+        // an unresolved name (but not an explicit `Any`) tells us nothing, so keep the
+        // `ParamSpec` reading rather than committing to a shape from a type we don't have
+        if ty.is_dynamic() && !matches!(ty, Type::Dynamic(DynamicType::Any)) {
+            return Some(UnpackedKwargsLowering::ParameterPack);
+        }
+        Some(match ty.unpacked_kwargs(db)? {
+            UnpackedKwargs::ParameterPack => UnpackedKwargsLowering::ParameterPack,
+            UnpackedKwargs::TypedDict => UnpackedKwargsLowering::TypedDict,
+            UnpackedKwargs::Protocol(members) => UnpackedKwargsLowering::Protocol(
+                members
+                    .into_iter()
+                    .map(|(name, ty)| {
+                        (
+                            name.to_string(),
+                            strip_binding_context_suffix(&ty.display(db).to_string()),
+                        )
+                    })
+                    .collect(),
+            ),
+        })
     }
 
     fn class_first_typevar_is_paramspec(&self, expr: &Expr) -> bool {

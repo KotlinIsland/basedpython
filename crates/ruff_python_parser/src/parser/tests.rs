@@ -391,6 +391,41 @@ fn basedpython_paramspec_arrow_params_parse() {
 }
 
 #[test]
+fn basedpython_unpacked_variadic_arrow_params_parse() {
+    // a starred element in an arrow parameter list unpacks a variadic type. the lone
+    // `(*Ts)` group is the interesting one: `(*x)` is otherwise rejected, and the arrow
+    // is only seen after the group has been parsed
+    for source in [
+        "f: (*Ts) -> int\n",
+        "g: (int, *Ts) -> int\n",
+        "h: (*args: *Ts) -> int\n",
+    ] {
+        let parsed = parse(
+            source,
+            ParseOptions::from(Mode::Module).with_basedpython(true),
+        )
+        .expect("should parse");
+        assert!(
+            parsed.errors().is_empty(),
+            "unexpected parse errors in {source:?}: {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+#[test]
+fn basedpython_lone_starred_group_without_arrow_still_errors() {
+    let parsed = parse(
+        "x = (*a)\n",
+        ParseOptions::from(Mode::Module).with_basedpython(true),
+    );
+    assert!(
+        parsed.is_err(),
+        "a parenthesized starred expression is only valid as a callable's parameter list"
+    );
+}
+
+#[test]
 fn basedpython_extension_parses_to_marked_class() {
     let parsed = parse_basedpython_module(
         "extension list:\n    def second(self) -> Element:\n        return self[1]\n",

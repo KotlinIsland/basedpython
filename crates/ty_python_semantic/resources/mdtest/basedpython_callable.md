@@ -187,3 +187,63 @@ b: (int, name: str) -> str = lambda x, name: f"{x}-{name}"
 reveal_type(a)  # revealed: (int, name: str)
 reveal_type(b(a[0], a.name))  # revealed: str
 ```
+
+## unpacked `TypeVarTuple` as the whole parameter list
+
+`(*Ts) -> R` stands for the parameters `Ts` expands to, exactly as `Callable[[*Ts], R]` does
+
+```by
+def f[*Args](fn: (*Args) -> object): ...
+
+f[int, str](lambda a, b: reveal_type((a, b)))  # revealed: (int, str)
+```
+
+## unpacked `TypeVarTuple` after a fixed prefix
+
+```by
+def f[*Args](fn: (int, *Args) -> object): ...
+
+f[str, bytes](lambda i, s, b: reveal_type((i, s, b)))  # revealed: (int, str, bytes)
+```
+
+## unpacked `TypeVarTuple` as a named variadic's annotation
+
+```by
+def f[*Args](fn: (*args: *Args) -> object): ...
+
+f[int, str](lambda a, b: reveal_type((a, b)))  # revealed: (int, str)
+```
+
+## `Unpack` in a callable parameter list
+
+```by
+from typing import Unpack
+
+def f[*Args](fn: (Unpack[Args]) -> object): ...
+
+f[int, str](lambda a, b: reveal_type((a, b)))  # revealed: (int, str)
+```
+
+## unpacked fixed tuple in a callable parameter list
+
+matches `Callable[[Unpack[tuple[int, str]]], object]`, which is also displayed with the tuple left
+unexpanded
+
+```by
+from typing import Unpack
+
+def f(fn: (Unpack[tuple[int, str]]) -> object): ...
+
+reveal_type(f)  # revealed: def f(fn: (*(int, str)) -> object) -> Unknown
+```
+
+## a non-`TypeVarTuple` after `*` stays an anonymous variadic
+
+`(*: T)` annotates each individual argument, so it must not be read as an unpack even when `T` is a
+fixed tuple
+
+```by
+def f(fn: (*: tuple[int, str]) -> object): ...
+
+reveal_type(f)  # revealed: def f(fn: (*args: (int, str)) -> object) -> Unknown
+```

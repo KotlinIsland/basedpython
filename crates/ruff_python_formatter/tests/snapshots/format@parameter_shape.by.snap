@@ -23,6 +23,9 @@ type Mixed = (int, str, *: *, **: *)
 # named variadic and catch-all
 type Named = (*args: int, **kwargs: str)
 
+# a named variadic whose annotation is itself starred — it unpacks a pack
+type UnpackedVariadic = (*args: *Ts)
+
 # positional-only and keyword-only markers
 type Markers = (int, /, str, *, name: bool)
 
@@ -51,6 +54,9 @@ type Mixed = (int, str, *: *, **: *)
 
 # named variadic and catch-all
 type Named = (*args: int, **kwargs: str)
+
+# a named variadic whose annotation is itself starred — it unpacks a pack
+type UnpackedVariadic = (*args: *Ts)
 
 # positional-only and keyword-only markers
 type Markers = (int, /, str, *, name: bool)

@@ -1498,6 +1498,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     if let Type::TypeVar(tv) = ps_ty
                         && tv.is_parameter_pack(db)
                     {
+                        // the speculative resolution above deliberately does not store, so the
+                        // fall-through can infer the same node itself. this branch consumes it
+                        // instead, so record the type — the transpiler reads it back to pick
+                        // the matching lowering
+                        self.store_expression_type(paramspec_expr, ps_ty);
                         let return_type = self.infer_type_expression(&callable.returns);
                         let parameters = if prefix.is_empty() {
                             // pure pack `(**P)` — identical to `Callable[P, R]`
@@ -1544,12 +1549,17 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
     /// Field encodings: a bare type is positional-only (it has no name to be passed by), `name: T`
     /// is `Named(Name, T)`, `*name: T` / `**name: T` are `Named(Starred(..), T)`, and the
     /// anonymous `*: T` / `**: T` are `Starred(T)` / `Starred(Starred(T))`.
+    ///
+    /// A positional field may instead unpack a variadic type — `(*Ts) -> R` and
+    /// `(Unpack[Ts]) -> R` stand for the parameters `Ts` expands to, exactly as
+    /// `Callable[[*Ts], R]` does.
     pub(super) fn infer_parameter_spec_elements(
         &mut self,
         elements: &[ast::Expr],
         slash: Option<usize>,
         star: Option<usize>,
     ) -> Vec<Parameter<'db>> {
+        let db = self.db();
         let mut params: Vec<Parameter<'db>> = Vec::with_capacity(elements.len());
         for (index, element) in elements.iter().enumerate() {
             let after_star = star.is_some_and(|star| index >= star);
@@ -1557,22 +1567,45 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             match element {
                 // `*name: T` / `**name: T` — a named variadic
                 ast::Expr::Named(named) => {
-                    let ty = self.infer_type_expression(&named.value);
                     if let ast::Expr::Starred(starred) = named.target.as_ref() {
-                        let parameter = match starred.value.as_ref() {
-                            ast::Expr::Starred(inner) => Parameter::keyword_variadic(Name::new(
+                        if let ast::Expr::Starred(inner) = starred.value.as_ref() {
+                            // `**kwargs: Unpack[TD]` unpacks the `TypedDict`'s keys into
+                            // keyword parameters exactly as it does on a `def`; a plain
+                            // `**kwargs: T` types each keyword's value instead
+                            let (ty, unpacks) =
+                                self.infer_kwargs_annotation_type_expression(&named.value);
+                            let parameter = Parameter::keyword_variadic(Name::new(
                                 inner
                                     .value
                                     .as_name_expr()
                                     .map_or("kwargs", |n| n.id.as_str()),
-                            )),
-                            value => Parameter::variadic(Name::new(
-                                value.as_name_expr().map_or("args", |n| n.id.as_str()),
-                            )),
-                        };
-                        params.push(parameter.with_annotated_type(ty));
+                            ))
+                            .with_annotated_type(ty);
+                            params.push(if unpacks {
+                                parameter.with_unpacked_kwargs(db)
+                            } else {
+                                parameter
+                            });
+                            continue;
+                        }
+                        // `*args: *Ts` / `*args: Unpack[Ts]` — the annotation is the unpacked
+                        // type the variadic stands for, not the type of each argument
+                        let (ty, unpacks) = self.infer_unpackable_type_expression(&named.value);
+                        let parameter = Parameter::variadic(Name::new(
+                            starred
+                                .value
+                                .as_name_expr()
+                                .map_or("args", |n| n.id.as_str()),
+                        ))
+                        .with_annotated_type(ty);
+                        params.push(if unpacks {
+                            parameter.with_starred_annotation()
+                        } else {
+                            parameter
+                        });
                         continue;
                     }
+                    let ty = self.infer_type_expression(&named.value);
                     let name = Name::new(named.target.as_name_expr().map_or("", |n| n.id.as_str()));
                     let parameter = if after_star {
                         Parameter::keyword_only(name)
@@ -1586,25 +1619,138 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 // `*: T` / `**: T` — an anonymous variadic
                 ast::Expr::Starred(starred) => {
                     let (ty, parameter) = match starred.value.as_ref() {
-                        ast::Expr::Starred(inner) => (
-                            self.infer_type_expression(&inner.value),
-                            Parameter::keyword_variadic(Name::new_static("kwargs")),
-                        ),
-                        value => (
-                            self.infer_type_expression(value),
-                            Parameter::variadic(Name::new_static("args")),
-                        ),
+                        ast::Expr::Starred(inner) => {
+                            // `(**TD)` / `(**P)` contribute the `TypedDict`'s keys or the
+                            // protocol's data members as keyword parameters. a bare name in
+                            // the `**` position is always an unpack — it already is for a
+                            // parameter pack — so only the labelled `**kwargs: T` above types
+                            // each keyword's value
+                            let (ty, unpacks) =
+                                self.infer_kwargs_annotation_type_expression(&inner.value);
+                            let parameter = Parameter::keyword_variadic(Name::new_static("kwargs"))
+                                .with_annotated_type(ty);
+                            let parameter = if unpacks || inner.value.is_name_expr() {
+                                parameter.with_unpacked_kwargs(db)
+                            } else {
+                                parameter
+                            };
+                            params.push(parameter);
+                            continue;
+                        }
+                        value => {
+                            // `*Ts` shares this shape with the anonymous variadic `*: T`, so the
+                            // unpacking reading is taken only for a `TypeVarTuple`, which is never
+                            // a valid annotation for the individual arguments of a `*args`
+                            let ty = self.infer_unpack_operand_type_expression(value);
+                            if let Type::TypeVar(typevar) = ty
+                                && typevar.is_typevartuple(db)
+                            {
+                                params.push(
+                                    Parameter::variadic(Name::new_static("args"))
+                                        .with_annotated_type(ty)
+                                        .with_starred_annotation(),
+                                );
+                                continue;
+                            }
+                            (ty, Parameter::variadic(Name::new_static("args")))
+                        }
                     };
                     params.push(parameter.with_annotated_type(ty));
                 }
-                // a bare type has no name, so it can only be passed positionally
+                // a bare type has no name, so it can only be passed positionally — unless it
+                // unpacks a variadic type, which contributes the parameters it expands to
                 _ => {
-                    let ty = self.infer_type_expression(element);
-                    params.push(Parameter::positional_only(None).with_annotated_type(ty));
+                    let (ty, unpacks) = self.infer_unpackable_type_expression(element);
+                    params.push(if unpacks {
+                        Parameter::variadic(Name::new_static("args"))
+                            .with_annotated_type(ty)
+                            .with_starred_annotation()
+                    } else {
+                        Parameter::positional_only(None).with_annotated_type(ty)
+                    });
                 }
             }
         }
         params
+    }
+
+    /// Infers a type expression that is allowed to unpack a variadic type (`*Ts`, `Unpack[Ts]`,
+    /// `*tuple[int, str]`), reporting whether it did.
+    fn infer_unpackable_type_expression(&mut self, expression: &ast::Expr) -> (Type<'db>, bool) {
+        let previously_in_valid_unpack_context = self
+            .context
+            .inference_flags
+            .replace(InferenceFlags::IN_VALID_UNPACK_CONTEXT, true);
+        let ty = self.infer_type_expression(expression);
+        self.context.inference_flags.set(
+            InferenceFlags::IN_VALID_UNPACK_CONTEXT,
+            previously_in_valid_unpack_context,
+        );
+        let unpacks = self
+            .type_expression_flags(expression)
+            .contains(TypeExpressionFlags::UNPACK)
+            && (matches!(ty, Type::TypeVar(typevar) if typevar.is_typevartuple(self.db()))
+                || ty.exact_tuple_instance_spec(self.db()).is_some());
+        (ty, unpacks)
+    }
+
+    /// Infers a `**kwargs` annotation, reporting whether it was written as an `Unpack[...]`.
+    /// The flag is what lets `Unpack` appear here at all, and it makes `Unpack[TD]` evaluate to
+    /// `TD` itself rather than to an unpacked-tuple form.
+    ///
+    /// A callable arrow is reached from within an enclosing type expression, but its parameter
+    /// annotations are top-level kwargs annotations in their own right — `Unpack` is as welcome
+    /// in `(**kwargs: Unpack[TD]) -> R` as it is on the equivalent `def`. So the enclosing
+    /// nesting is dropped for the annotation, leaving `Unpack`'s own no-nesting rule to apply
+    /// to whatever it contains.
+    fn infer_kwargs_annotation_type_expression(
+        &mut self,
+        expression: &ast::Expr,
+    ) -> (Type<'db>, bool) {
+        let previously_in_kwarg_annotation = self
+            .context
+            .inference_flags
+            .replace(InferenceFlags::IN_KWARG_ANNOTATION, true);
+        let previously_in_type_expression = self
+            .context
+            .inference_flags
+            .replace(InferenceFlags::IN_TYPE_EXPRESSION, false);
+        let previously_in_nested_type_expression = self
+            .context
+            .inference_flags
+            .replace(InferenceFlags::IN_NESTED_TYPE_EXPRESSION, false);
+        let ty = self.infer_type_expression(expression);
+        self.context.inference_flags.set(
+            InferenceFlags::IN_NESTED_TYPE_EXPRESSION,
+            previously_in_nested_type_expression,
+        );
+        self.context.inference_flags.set(
+            InferenceFlags::IN_TYPE_EXPRESSION,
+            previously_in_type_expression,
+        );
+        self.context.inference_flags.set(
+            InferenceFlags::IN_KWARG_ANNOTATION,
+            previously_in_kwarg_annotation,
+        );
+        let unpacks = self
+            .type_expression_flags(expression)
+            .contains(TypeExpressionFlags::UNPACK);
+        (ty, unpacks)
+    }
+
+    /// Infers the operand of a `*` unpack without reporting a bare `TypeVarTuple` as invalid —
+    /// the enclosing `*` is what makes naming it here legal.
+    fn infer_unpack_operand_type_expression(&mut self, expression: &ast::Expr) -> Type<'db> {
+        let previously_in_unpack_type_argument = self
+            .context
+            .inference_flags
+            .replace(InferenceFlags::IN_UNPACK_TYPE_ARGUMENT, true);
+        let ty = self.infer_type_expression(expression);
+        self.context.inference_flags.set(
+            InferenceFlags::IN_UNPACK_TYPE_ARGUMENT,
+            previously_in_unpack_type_argument,
+        );
+        ty
     }
 
     fn infer_starred_type_expression(&mut self, starred: &ast::ExprStarred) -> Type<'db> {

@@ -1000,7 +1000,7 @@ impl<'db> BoundTypeVarInstance<'db> {
         self.kind(db).is_parameter_pack()
     }
 
-    pub(crate) fn is_typevartuple(self, db: &'db dyn Db) -> bool {
+    pub fn is_typevartuple(self, db: &'db dyn Db) -> bool {
         self.kind(db).is_typevartuple()
     }
 

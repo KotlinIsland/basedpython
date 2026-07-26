@@ -7,6 +7,9 @@ k: (**: str) -> int
 l: (int, /, name: str, *args: bool, **kwargs: int) -> None
 m: (...) -> int
 n: (...) -> (int) -> str
+o: (*Ts) -> int
+p: (int, *Ts) -> int
+q: (*args: *Ts) -> int
 
 
 def takes(cb: (int) -> str) -> str:

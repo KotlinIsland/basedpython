@@ -3311,7 +3311,12 @@ impl<'src> Parser<'src> {
             }
             _ => {
                 // grammar: `group`
-                if parsed_expr.expr.is_starred_expr() {
+                // basedpython: `(*Ts) -> R` is a callable whose whole parameter list is an
+                // unpacked variadic type. the arrow is only seen further up in the Pratt
+                // loop, so peek for it here rather than rejecting the lone starred element
+                let is_callable_parameter_list =
+                    self.at(TokenKind::Rpar) && self.peek() == TokenKind::Rarrow;
+                if parsed_expr.expr.is_starred_expr() && !is_callable_parameter_list {
                     self.add_error(ParseErrorType::InvalidStarredExpressionUsage, &parsed_expr);
                 }
 
@@ -3770,8 +3775,11 @@ impl<'src> Parser<'src> {
                 let mut target_name = self.parse_name(ExpressionContext::default());
                 target_name.ctx = ExprContext::Invalid;
                 self.expect(TokenKind::Colon);
-                let inner =
-                    self.parse_conditional_expression_or_higher_impl(ExpressionContext::default());
+                // a variadic's annotation may itself be starred (`*args: *Ts`), just as in
+                // a `def`
+                let inner = self.parse_conditional_expression_or_higher_impl(
+                    ExpressionContext::starred_bitwise_or(),
+                );
                 let starred_range = TextRange::new(field_start, target_name.range.end());
                 elts.push(Expr::Named(ast::ExprNamed {
                     target: Box::new(Expr::Starred(ast::ExprStarred {
