@@ -183,6 +183,12 @@ impl TypePosWalker<'_> {
             // edit (leaving the narrow transform's `needs_import` flag set
             // even though the edit was dropped)
             Expr::Tuple(_) => {}
+            // an inline protocol is hoisted to a synthesized class by
+            // `protocol_type`, which renders every member type through its own
+            // lowerer. descending would let sibling transforms emit narrow
+            // edits inside a span the hoisting edit subsumes — the same reason
+            // a parenthesized tuple stops here
+            Expr::ProtocolType(_) => {}
             _ => {}
         }
     }

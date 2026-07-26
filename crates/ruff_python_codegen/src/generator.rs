@@ -1530,6 +1530,39 @@ impl<'a> Generator<'a> {
                 self.p(") -> ");
                 self.unparse_expr(&callable.returns, precedence::EXPR);
             }
+            Expr::ProtocolType(protocol) => {
+                assert_eq!(
+                    self.mode,
+                    Mode::BasedPython,
+                    "inline protocol type syntax should be transpiled before codegen"
+                );
+                self.p("protocol(");
+                for (i, member) in protocol.members.iter().enumerate() {
+                    if i > 0 {
+                        self.p("; ");
+                    }
+                    // a data member is `Named`, whose default rendering is the
+                    // walrus `target := value` rather than the `name: type` label form
+                    if let Expr::Named(named) = member {
+                        self.unparse_expr(&named.target, precedence::MAX);
+                        self.p(": ");
+                        self.unparse_expr(&named.value, precedence::EXPR);
+                    } else {
+                        self.unparse_expr(member, precedence::EXPR);
+                    }
+                }
+                self.p(")");
+            }
+            Expr::ProtocolMethod(method) => {
+                assert_eq!(
+                    self.mode,
+                    Mode::BasedPython,
+                    "inline protocol type syntax should be transpiled before codegen"
+                );
+                self.p("def ");
+                self.p_id(&method.name);
+                self.unparse_expr(&method.signature, precedence::EXPR);
+            }
         }
     }
 

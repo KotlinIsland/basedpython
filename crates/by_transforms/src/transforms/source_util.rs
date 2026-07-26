@@ -83,3 +83,36 @@ impl<'ast, F: FnMut(&Expr)> Visitor<'ast> for AnnotationWalker<'_, F> {
         }
     }
 }
+
+/// Substitute every whole-word occurrence of a key in `renames` with its value.
+///
+/// Operates on rendered text rather than the AST because the callers re-emit a
+/// type expression into synthesized output — a hoisted class body — where the
+/// PEP 695 polyfill's mangled typevar names are what resolve.
+pub(crate) fn rename_identifiers(
+    text: &str,
+    renames: &std::collections::HashMap<&str, &str>,
+) -> String {
+    if renames.is_empty() {
+        return text.to_owned();
+    }
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c.is_ascii_alphabetic() || c == b'_' {
+            let start = i;
+            i += 1;
+            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
+                i += 1;
+            }
+            let ident = &text[start..i];
+            out.push_str(renames.get(ident).copied().unwrap_or(ident));
+        } else {
+            out.push(c as char);
+            i += 1;
+        }
+    }
+    out
+}

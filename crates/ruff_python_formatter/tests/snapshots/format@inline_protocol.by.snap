@@ -1,0 +1,71 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/inline_protocol.by
+---
+## Input
+```bython
+# basedpython inline protocol types. members are `;`-separated and their
+# spelling has no python equivalent, so the whole `protocol(...)` node formats
+# verbatim from source rather than being rebuilt from the AST
+
+type Data = protocol(a: int; b: str)
+type Method = protocol(def f(self) -> int)
+type Mixed = protocol(a: int; def f(self, x: str) -> bool)
+type Pack = protocol(**Kwargs)
+type WithPack = protocol(tag: int; **Kwargs)
+
+# a full parameter spec on a method member
+type Spec = protocol(def f(self, x: int, /, *args: str, **kw: bytes) -> None)
+
+# nested inside other type syntax
+type Optional = protocol(a: int) | None
+type Nested = protocol(inner: protocol(x: int))
+type InList = list[protocol(a: int)]
+
+
+def f(x: protocol(read: int)) -> protocol(def close(self) -> None): ...
+
+
+# written across several lines, with a trailing `;`
+type Multiline = protocol(
+    a: int;
+    def f(self) -> str;
+)
+
+# `protocol` is a soft keyword — a call still formats as a call
+result = protocol(x)
+```
+
+## Output
+```bython
+# basedpython inline protocol types. members are `;`-separated and their
+# spelling has no python equivalent, so the whole `protocol(...)` node formats
+# verbatim from source rather than being rebuilt from the AST
+
+type Data = protocol(a: int; b: str)
+type Method = protocol(def f(self) -> int)
+type Mixed = protocol(a: int; def f(self, x: str) -> bool)
+type Pack = protocol(**Kwargs)
+type WithPack = protocol(tag: int; **Kwargs)
+
+# a full parameter spec on a method member
+type Spec = protocol(def f(self, x: int, /, *args: str, **kw: bytes) -> None)
+
+# nested inside other type syntax
+type Optional = protocol(a: int) | None
+type Nested = protocol(inner: protocol(x: int))
+type InList = list[protocol(a: int)]
+
+
+def f(x: protocol(read: int)) -> protocol(def close(self) -> None): ...
+
+
+# written across several lines, with a trailing `;`
+type Multiline = protocol(
+    a: int;
+    def f(self) -> str;
+)
+
+# `protocol` is a soft keyword — a call still formats as a call
+result = protocol(x)
+```

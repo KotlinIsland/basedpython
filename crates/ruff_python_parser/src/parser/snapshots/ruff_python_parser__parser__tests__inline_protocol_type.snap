@@ -1,0 +1,115 @@
+---
+source: crates/ruff_python_parser/src/parser/tests.rs
+expression: parsed.syntax()
+---
+ModModule {
+    node_index: NodeIndex(None),
+    range: 0..48,
+    body: [
+        AnnAssign(
+            StmtAnnAssign {
+                node_index: NodeIndex(None),
+                range: 0..47,
+                target: Name(
+                    ExprName {
+                        node_index: NodeIndex(None),
+                        range: 0..1,
+                        id: Name("a"),
+                        ctx: Store,
+                    },
+                ),
+                annotation: ProtocolType(
+                    ExprProtocolType {
+                        node_index: NodeIndex(None),
+                        range: 3..47,
+                        members: [
+                            Named(
+                                ExprNamed {
+                                    node_index: NodeIndex(None),
+                                    range: 12..18,
+                                    target: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 12..13,
+                                            id: Name("a"),
+                                            ctx: Invalid,
+                                        },
+                                    ),
+                                    value: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 15..18,
+                                            id: Name("int"),
+                                            ctx: Load,
+                                        },
+                                    ),
+                                },
+                            ),
+                            Named(
+                                ExprNamed {
+                                    node_index: NodeIndex(None),
+                                    range: 20..26,
+                                    target: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 20..21,
+                                            id: Name("b"),
+                                            ctx: Invalid,
+                                        },
+                                    ),
+                                    value: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 23..26,
+                                            id: Name("str"),
+                                            ctx: Load,
+                                        },
+                                    ),
+                                },
+                            ),
+                            ProtocolMethod(
+                                ExprProtocolMethod {
+                                    node_index: NodeIndex(None),
+                                    range: 28..46,
+                                    name: Identifier {
+                                        id: Name("f"),
+                                        range: 32..33,
+                                        node_index: NodeIndex(None),
+                                    },
+                                    signature: CallableType(
+                                        ExprCallableType {
+                                            node_index: NodeIndex(None),
+                                            range: 33..46,
+                                            args: [
+                                                Name(
+                                                    ExprName {
+                                                        node_index: NodeIndex(None),
+                                                        range: 34..38,
+                                                        id: Name("self"),
+                                                        ctx: Invalid,
+                                                    },
+                                                ),
+                                            ],
+                                            returns: Name(
+                                                ExprName {
+                                                    node_index: NodeIndex(None),
+                                                    range: 43..46,
+                                                    id: Name("int"),
+                                                    ctx: Load,
+                                                },
+                                            ),
+                                            parameter_slash: None,
+                                            parameter_star: None,
+                                        },
+                                    ),
+                                },
+                            ),
+                        ],
+                    },
+                ),
+                value: None,
+                simple: true,
+            },
+        ),
+    ],
+}

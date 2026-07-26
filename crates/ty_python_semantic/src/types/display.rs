@@ -1059,14 +1059,26 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                     f.write_char('<')?;
                     f.with_type(Type::SpecialForm(SpecialFormType::Protocol))
                         .write_str("Protocol")?;
-                    f.write_str(" with members ")?;
                     let interface = synthetic.interface();
                     let member_list = interface.members(self.db);
                     let num_members = member_list.len();
+                    if num_members == 0 && interface.pending_packs(self.db).is_empty() {
+                        return f.write_str(" with no members>");
+                    }
+                    f.write_str(" with members ")?;
+                    // basedpython: an unspecialized `protocol(**Kwargs)` pack contributes no
+                    // members yet, so it is shown as written rather than omitted
+                    let packs = interface.pending_packs(self.db);
                     for (i, member) in member_list.enumerate() {
-                        let is_last = i == num_members - 1;
+                        let is_last = i + 1 == num_members && packs.is_empty();
                         write!(f, "'{}'", member.name())?;
                         if !is_last {
+                            f.write_str(", ")?;
+                        }
+                    }
+                    for (i, pack) in packs.iter().enumerate() {
+                        write!(f, "**{}", pack.display(self.db))?;
+                        if i + 1 != packs.len() {
                             f.write_str(", ")?;
                         }
                     }

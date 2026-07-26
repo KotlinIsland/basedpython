@@ -1,0 +1,56 @@
+---
+source: crates/ruff_python_parser/src/parser/tests.rs
+expression: parsed.syntax()
+---
+ModModule {
+    node_index: NodeIndex(None),
+    range: 0..22,
+    body: [
+        AnnAssign(
+            StmtAnnAssign {
+                node_index: NodeIndex(None),
+                range: 0..21,
+                target: Name(
+                    ExprName {
+                        node_index: NodeIndex(None),
+                        range: 0..1,
+                        id: Name("a"),
+                        ctx: Store,
+                    },
+                ),
+                annotation: ProtocolType(
+                    ExprProtocolType {
+                        node_index: NodeIndex(None),
+                        range: 3..21,
+                        members: [
+                            Starred(
+                                ExprStarred {
+                                    node_index: NodeIndex(None),
+                                    range: 12..20,
+                                    value: Starred(
+                                        ExprStarred {
+                                            node_index: NodeIndex(None),
+                                            range: 14..20,
+                                            value: Name(
+                                                ExprName {
+                                                    node_index: NodeIndex(None),
+                                                    range: 14..20,
+                                                    id: Name("Kwargs"),
+                                                    ctx: Load,
+                                                },
+                                            ),
+                                            ctx: Load,
+                                        },
+                                    ),
+                                    ctx: Load,
+                                },
+                            ),
+                        ],
+                    },
+                ),
+                value: None,
+                simple: true,
+            },
+        ),
+    ],
+}

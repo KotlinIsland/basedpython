@@ -1055,6 +1055,17 @@ pub struct ExprCallableType<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
+pub struct ExprProtocolType<'a> {
+    members: Vec<ComparableExpr<'a>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct ExprProtocolMethod<'a> {
+    name: &'a str,
+    signature: Box<ComparableExpr<'a>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum ComparableExpr<'a> {
     BoolOp(ExprBoolOp<'a>),
     NamedExpr(ExprNamed<'a>),
@@ -1092,6 +1103,8 @@ pub enum ComparableExpr<'a> {
     Slice(ExprSlice<'a>),
     IpyEscapeCommand(ExprIpyEscapeCommand<'a>),
     CallableType(ExprCallableType<'a>),
+    ProtocolType(ExprProtocolType<'a>),
+    ProtocolMethod(ExprProtocolMethod<'a>),
 }
 
 impl<'a> From<&'a Box<ast::Expr>> for Box<ComparableExpr<'a>> {
@@ -1393,6 +1406,22 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
             }) => Self::CallableType(ExprCallableType {
                 args: args.iter().map(ComparableExpr::from).collect(),
                 returns: Box::new(returns.as_ref().into()),
+            }),
+            ast::Expr::ProtocolType(ast::ExprProtocolType {
+                members,
+                range: _,
+                node_index: _,
+            }) => Self::ProtocolType(ExprProtocolType {
+                members: members.iter().map(ComparableExpr::from).collect(),
+            }),
+            ast::Expr::ProtocolMethod(ast::ExprProtocolMethod {
+                name,
+                signature,
+                range: _,
+                node_index: _,
+            }) => Self::ProtocolMethod(ExprProtocolMethod {
+                name: name.as_str(),
+                signature: Box::new(signature.as_ref().into()),
             }),
         }
     }

@@ -63,6 +63,12 @@ pub(crate) struct CallableSyntax<'src> {
     /// sibling per-leaf passes' own edits are dropped inside our wide edit, so
     /// we re-request the imports here to keep the lowered names defined
     extra_imports: Vec<String>,
+    /// source ranges another transform has already resolved to a name — an
+    /// inline `protocol(...)` hoisted to a synthesized class. consulted before
+    /// any structural rewrite AND when rendering a verbatim leaf, so the
+    /// substitution reaches every depth of the recursion below rather than only
+    /// a subtree whose range matches exactly
+    substitutions: Vec<(TextRange, String)>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
@@ -90,7 +96,23 @@ impl<'src> CallableSyntax<'src> {
             protocol_shapes: HashMap::new(),
             protocol_class_defs: String::new(),
             extra_imports: Vec::new(),
+            substitutions: Vec::new(),
         }
+    }
+
+    /// Record that `range` has already been lowered to `name` by another
+    /// transform, so every rendering path below emits the name instead of the
+    /// original source.
+    pub(crate) fn add_substitution(&mut self, range: TextRange, name: String) {
+        self.substitutions.push((range, name));
+    }
+
+    /// The name a substitution assigned to exactly `range`, if any.
+    fn substitution_for(&self, range: TextRange) -> Option<&str> {
+        self.substitutions
+            .iter()
+            .find(|(candidate, _)| *candidate == range)
+            .map(|(_, name)| name.as_str())
     }
 
     pub(crate) fn with_types(mut self, types: &'src dyn TypeInfo) -> Self {
@@ -107,6 +129,50 @@ impl<'src> CallableSyntax<'src> {
         &self.protocol_class_defs
     }
 
+    /// The import lines everything this lowerer emitted needs, including the
+    /// per-leaf rewrites it folded into its own wide replacements.
+    pub(crate) fn take_import_lines(&mut self) -> Vec<String> {
+        let mut lines = Vec::new();
+        for (needed, line) in [
+            (self.needs_import, "from typing import Callable"),
+            (
+                self.needs_concatenate_import,
+                "from typing import Concatenate",
+            ),
+            (self.needs_protocol_import, "from typing import Protocol"),
+            (
+                self.needs_intersection_import,
+                "from ty_extensions import Intersection",
+            ),
+            (self.needs_typeof_import, "from ty_extensions import TypeOf"),
+            (self.needs_not_import, "from ty_extensions import Not"),
+            (self.needs_optional_runtime, OPTIONAL_RUNTIME),
+        ] {
+            if needed {
+                lines.push(line.to_owned());
+            }
+        }
+        lines.append(&mut self.extra_imports);
+        // reset so a second call is a no-op rather than re-emitting every line
+        self.needs_import = false;
+        self.needs_concatenate_import = false;
+        self.needs_protocol_import = false;
+        self.needs_intersection_import = false;
+        self.needs_typeof_import = false;
+        self.needs_not_import = false;
+        self.needs_optional_runtime = false;
+        lines
+    }
+
+    /// Lower a single type expression to python source: the structural forms
+    /// this lowerer owns (`&` / `not` / `?` / callable arrows / subscripts) plus
+    /// the per-leaf rewrites. Public so a transform that re-emits a lowered type
+    /// into synthesized output can drive one lowerer for a whole run and then
+    /// collect its imports and class definitions.
+    pub(crate) fn lower_type_expr(&mut self, expr: &Expr) -> String {
+        self.rewrite_or_leaf(expr)
+    }
+
     fn src(&self, range: TextRange) -> &str {
         &self.source[usize::from(range.start())..usize::from(range.end())]
     }
@@ -119,6 +185,18 @@ impl<'src> CallableSyntax<'src> {
     /// `JustFloat` import. Falls back to verbatim source when no leaf rewrite
     /// applies (or no type info is available).
     fn lower_leaf(&mut self, expr: &Expr) -> String {
+        // a leaf that *contains* an already-lowered subtree is rendered by
+        // sweeping the substitutions over its source instead: the per-leaf
+        // composers below would re-render the subtree from source and leak the
+        // surface syntax the other transform owns. this catches any container
+        // `rewrite` does not descend into
+        if self
+            .substitutions
+            .iter()
+            .any(|(range, _)| expr.range().contains_range(*range) && *range != expr.range())
+        {
+            return self.sweep_substitutions(expr.range());
+        }
         if let Some(types) = self.types
             && let Some((text, imports)) = rewrite_type_expr_with_imports(self.source, types, expr)
         {
@@ -126,6 +204,32 @@ impl<'src> CallableSyntax<'src> {
             return text;
         }
         self.src(expr.range()).to_owned()
+    }
+
+    /// Render `range`'s source with every substitution inside it applied.
+    fn sweep_substitutions(&self, range: TextRange) -> String {
+        let mut subs: Vec<(TextRange, &str)> = self
+            .substitutions
+            .iter()
+            .filter(|(candidate, _)| range.contains_range(*candidate))
+            .map(|(candidate, name)| (*candidate, name.as_str()))
+            .collect();
+        subs.sort_by_key(|(candidate, _)| candidate.start());
+
+        let mut out = String::new();
+        let mut cursor = range.start();
+        for (sub_range, name) in subs {
+            // an outer substitution swallows any nested one; the cursor has
+            // already passed those
+            if sub_range.start() < cursor {
+                continue;
+            }
+            out.push_str(&self.source[usize::from(cursor)..usize::from(sub_range.start())]);
+            out.push_str(name);
+            cursor = sub_range.end();
+        }
+        out.push_str(&self.source[usize::from(cursor)..usize::from(range.end())]);
+        out
     }
 
     /// `rewrite` the expression if it is a callable structural form this pass
@@ -197,27 +301,35 @@ impl<'src> CallableSyntax<'src> {
             .any(|a| matches!(a, Expr::Named(_) | Expr::Starred(_)))
     }
 
-    /// Render a callable's parameter list as a `def __call__(self, ...) ->
-    /// R:` parameter string. Markers and variadic forms map to the
-    /// corresponding Python parameter syntax. Every annotation is emitted as a
+    /// Render a callable's parameter list as a `def` parameter string, after a
+    /// leading `receiver`. Markers and variadic forms map to the corresponding
+    /// Python parameter syntax. Every annotation is emitted as a
     /// forward-reference string: the synthesized class is hoisted to module
     /// top, ahead of any user class its annotations mention, and an unquoted
     /// annotation would be evaluated at class-body time and `NameError`
-    fn render_protocol_params(&mut self, ct: &ExprCallableType) -> String {
-        let mut parts: Vec<String> = vec!["self".to_owned()];
-        let explicit_slash = ct.parameter_slash.map(|i| i as usize);
-        let star = ct.parameter_star.map(|i| i as usize);
+    ///
+    /// `args` / `slash` / `star` are passed separately rather than read off a
+    /// node so a protocol method member can hand over the parameters that
+    /// follow its receiver, which is a name rather than a type.
+    pub(crate) fn render_protocol_params(
+        &mut self,
+        args: &[Expr],
+        explicit_slash: Option<usize>,
+        star: Option<usize>,
+        receiver: &str,
+    ) -> String {
+        let mut parts: Vec<String> = vec![receiver.to_owned()];
         // implicit `/` after the last bare positional (no label) when followed
         // by a named/labelled parameter. bare positionals are positional-only
         let implicit_slash: Option<usize> = if explicit_slash.is_some() {
             None
         } else {
-            let last_bare = ct.args.iter().enumerate().rev().find_map(|(i, a)| {
+            let last_bare = args.iter().enumerate().rev().find_map(|(i, a)| {
                 let is_bare = !matches!(a, Expr::Named(_) | Expr::Starred(_));
                 is_bare.then_some(i)
             });
             last_bare.and_then(|li| {
-                if ct.args.get(li + 1).is_some_and(
+                if args.get(li + 1).is_some_and(
                     |a| matches!(a, Expr::Named(n) if matches!(n.target.as_ref(), Expr::Name(_))),
                 ) {
                     Some(li + 1)
@@ -228,7 +340,7 @@ impl<'src> CallableSyntax<'src> {
         };
         let slash = explicit_slash.or(implicit_slash);
         let mut star_emitted = false;
-        for (i, arg) in ct.args.iter().enumerate() {
+        for (i, arg) in args.iter().enumerate() {
             if Some(i) == slash {
                 parts.push("/".to_owned());
             }
@@ -322,7 +434,7 @@ impl<'src> CallableSyntax<'src> {
             }
         }
         // markers at the very end (slash/star at args.len)
-        let after_last = ct.args.len();
+        let after_last = args.len();
         if Some(after_last) == slash {
             parts.push("/".to_owned());
         }
@@ -362,6 +474,9 @@ impl<'src> CallableSyntax<'src> {
         if self.claimed_ranges.contains(&expr.range()) {
             return None;
         }
+        if let Some(name) = self.substitution_for(expr.range()) {
+            return Some(name.to_owned());
+        }
         match expr {
             // basedpython ParamSpec/Concatenate: `(**P) -> R` is `Callable[P, R]`
             // and `(T1, …, **P) -> R` is `Callable[Concatenate[T1, …, P], R]`
@@ -386,7 +501,12 @@ impl<'src> CallableSyntax<'src> {
             }
             Expr::CallableType(ct) if self.is_non_denotable(ct) => {
                 self.needs_protocol_import = true;
-                let params = self.render_protocol_params(ct);
+                let params = self.render_protocol_params(
+                    &ct.args,
+                    ct.parameter_slash.map(|i| i as usize),
+                    ct.parameter_star.map(|i| i as usize),
+                    "self",
+                );
                 let returns = quote_forward_ref(&self.rewrite_or_leaf(&ct.returns));
                 let shape = ProtocolShape { params, returns };
                 Some(self.class_name_for(shape))
@@ -692,6 +812,12 @@ struct ValueCallableWalker<'a, 'src> {
 
 impl<'ast> ruff_python_ast::visitor::Visitor<'ast> for ValueCallableWalker<'_, '_> {
     fn visit_expr(&mut self, expr: &'ast Expr) {
+        // an inline protocol is lowered whole by `protocol_type`, which renders
+        // its members through its own lowerer — rewriting a method member's
+        // arrow here would only leave an orphan `Callable` import and class
+        if matches!(expr, Expr::ProtocolType(_)) {
+            return;
+        }
         if matches!(expr, Expr::CallableType(_)) {
             if let Some(repl) = self.inner.rewrite(expr) {
                 self.inner
@@ -727,38 +853,12 @@ impl TypeAwarePass for CallableSyntaxPass<'_> {
                 ruff_python_ast::visitor::Visitor::visit_stmt(&mut walker, stmt);
             }
         }
-        if inner.needs_import {
-            ctx.required_imports
-                .push("from typing import Callable".to_owned());
-        }
-        if inner.needs_concatenate_import {
-            ctx.required_imports
-                .push("from typing import Concatenate".to_owned());
-        }
-        if inner.needs_protocol_import {
-            ctx.required_imports
-                .push("from typing import Protocol".to_owned());
-        }
-        if inner.needs_intersection_import {
-            ctx.required_imports
-                .push("from ty_extensions import Intersection".to_owned());
-        }
-        if inner.needs_typeof_import {
-            ctx.required_imports
-                .push("from ty_extensions import TypeOf".to_owned());
-        }
-        if inner.needs_not_import {
-            ctx.required_imports
-                .push("from ty_extensions import Not".to_owned());
-        }
-        if inner.needs_optional_runtime {
-            ctx.required_imports.push(OPTIONAL_RUNTIME.to_owned());
-        }
-        // imports for per-leaf rewrites folded into our wide replacements
-        // (e.g. a `float` arm lowered to `JustFloat` inside a callable type) —
-        // the dedicated leaf passes' own import requests are dropped along with
-        // their edits when our edit wins the overlap, so re-request them here
-        ctx.required_imports.append(&mut inner.extra_imports);
+        // includes the imports for per-leaf rewrites folded into our wide
+        // replacements (e.g. a `float` arm lowered to `JustFloat` inside a
+        // callable type) — the dedicated leaf passes' own import requests are
+        // dropped along with their edits when our edit wins the overlap, so
+        // they are re-requested here
+        ctx.required_imports.extend(inner.take_import_lines());
         let defs = inner.class_defs().to_owned();
         for fix in inner.edits {
             for edit in fix.edits() {

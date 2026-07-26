@@ -650,6 +650,23 @@ pub fn walk_expr<V: Transformer + ?Sized>(visitor: &V, expr: &mut Expr) {
             }
             visitor.visit_expr(returns);
         }
+        Expr::ProtocolType(ast::ExprProtocolType {
+            members,
+            range: _,
+            node_index: _,
+        }) => {
+            for member in members {
+                visitor.visit_expr(member);
+            }
+        }
+        Expr::ProtocolMethod(ast::ExprProtocolMethod {
+            name: _,
+            signature,
+            range: _,
+            node_index: _,
+        }) => {
+            visitor.visit_expr(signature);
+        }
     }
 }
 

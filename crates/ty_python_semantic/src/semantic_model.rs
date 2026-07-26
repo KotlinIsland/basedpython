@@ -935,6 +935,8 @@ impl_expression_has_type!(ast::ExprTuple);
 impl_expression_has_type!(ast::ExprSlice);
 impl_expression_has_type!(ast::ExprIpyEscapeCommand);
 impl_expression_has_type!(ast::ExprCallableType);
+impl_expression_has_type!(ast::ExprProtocolType);
+impl_expression_has_type!(ast::ExprProtocolMethod);
 
 impl HasType for ast::Expr {
     fn inferred_type<'db>(&self, model: &SemanticModel<'db>) -> Option<Type<'db>> {
@@ -973,6 +975,8 @@ impl HasType for ast::Expr {
             Expr::Slice(inner) => inner.inferred_type(model),
             Expr::IpyEscapeCommand(inner) => inner.inferred_type(model),
             Expr::CallableType(inner) => inner.inferred_type(model),
+            Expr::ProtocolType(inner) => inner.inferred_type(model),
+            Expr::ProtocolMethod(inner) => inner.inferred_type(model),
         }
     }
 }

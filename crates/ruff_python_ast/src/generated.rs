@@ -1330,6 +1330,8 @@ pub enum Expr {
     Slice(crate::ExprSlice),
     IpyEscapeCommand(crate::ExprIpyEscapeCommand),
     CallableType(crate::ExprCallableType),
+    ProtocolType(crate::ExprProtocolType),
+    ProtocolMethod(crate::ExprProtocolMethod),
 }
 
 impl From<crate::ExprBoolOp> for Expr {
@@ -1536,6 +1538,18 @@ impl From<crate::ExprCallableType> for Expr {
     }
 }
 
+impl From<crate::ExprProtocolType> for Expr {
+    fn from(node: crate::ExprProtocolType) -> Self {
+        Self::ProtocolType(node)
+    }
+}
+
+impl From<crate::ExprProtocolMethod> for Expr {
+    fn from(node: crate::ExprProtocolMethod) -> Self {
+        Self::ProtocolMethod(node)
+    }
+}
+
 impl ruff_text_size::Ranged for Expr {
     fn range(&self) -> ruff_text_size::TextRange {
         match self {
@@ -1573,6 +1587,8 @@ impl ruff_text_size::Ranged for Expr {
             Self::Slice(node) => node.range(),
             Self::IpyEscapeCommand(node) => node.range(),
             Self::CallableType(node) => node.range(),
+            Self::ProtocolType(node) => node.range(),
+            Self::ProtocolMethod(node) => node.range(),
         }
     }
 }
@@ -1614,6 +1630,8 @@ impl crate::HasNodeIndex for Expr {
             Self::Slice(node) => node.node_index(),
             Self::IpyEscapeCommand(node) => node.node_index(),
             Self::CallableType(node) => node.node_index(),
+            Self::ProtocolType(node) => node.node_index(),
+            Self::ProtocolMethod(node) => node.node_index(),
         }
     }
 }
@@ -2877,6 +2895,80 @@ impl Expr {
             _ => None,
         }
     }
+
+    #[inline]
+    pub const fn is_protocol_type_expr(&self) -> bool {
+        matches!(self, Self::ProtocolType(_))
+    }
+
+    #[inline]
+    pub fn protocol_type_expr(self) -> Option<crate::ExprProtocolType> {
+        match self {
+            Self::ProtocolType(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn expect_protocol_type_expr(self) -> crate::ExprProtocolType {
+        match self {
+            Self::ProtocolType(val) => val,
+            _ => panic!("called expect on {self:?}"),
+        }
+    }
+
+    #[inline]
+    pub fn as_protocol_type_expr_mut(&mut self) -> Option<&mut crate::ExprProtocolType> {
+        match self {
+            Self::ProtocolType(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn as_protocol_type_expr(&self) -> Option<&crate::ExprProtocolType> {
+        match self {
+            Self::ProtocolType(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub const fn is_protocol_method_expr(&self) -> bool {
+        matches!(self, Self::ProtocolMethod(_))
+    }
+
+    #[inline]
+    pub fn protocol_method_expr(self) -> Option<crate::ExprProtocolMethod> {
+        match self {
+            Self::ProtocolMethod(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn expect_protocol_method_expr(self) -> crate::ExprProtocolMethod {
+        match self {
+            Self::ProtocolMethod(val) => val,
+            _ => panic!("called expect on {self:?}"),
+        }
+    }
+
+    #[inline]
+    pub fn as_protocol_method_expr_mut(&mut self) -> Option<&mut crate::ExprProtocolMethod> {
+        match self {
+            Self::ProtocolMethod(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn as_protocol_method_expr(&self) -> Option<&crate::ExprProtocolMethod> {
+        match self {
+            Self::ProtocolMethod(val) => Some(val),
+            _ => None,
+        }
+    }
 }
 
 /// See also [excepthandler](https://docs.python.org/3/library/ast.html#ast.excepthandler)
@@ -3976,6 +4068,18 @@ impl ruff_text_size::Ranged for crate::ExprCallableType {
     }
 }
 
+impl ruff_text_size::Ranged for crate::ExprProtocolType {
+    fn range(&self) -> ruff_text_size::TextRange {
+        self.range
+    }
+}
+
+impl ruff_text_size::Ranged for crate::ExprProtocolMethod {
+    fn range(&self) -> ruff_text_size::TextRange {
+        self.range
+    }
+}
+
 impl ruff_text_size::Ranged for crate::ExceptHandlerExceptHandler {
     fn range(&self) -> ruff_text_size::TextRange {
         self.range
@@ -4546,6 +4650,18 @@ impl crate::HasNodeIndex for crate::ExprCallableType {
     }
 }
 
+impl crate::HasNodeIndex for crate::ExprProtocolType {
+    fn node_index(&self) -> &crate::AtomicNodeIndex {
+        &self.node_index
+    }
+}
+
+impl crate::HasNodeIndex for crate::ExprProtocolMethod {
+    fn node_index(&self) -> &crate::AtomicNodeIndex {
+        &self.node_index
+    }
+}
+
 impl crate::HasNodeIndex for crate::ExceptHandlerExceptHandler {
     fn node_index(&self) -> &crate::AtomicNodeIndex {
         &self.node_index
@@ -4840,6 +4956,8 @@ impl Expr {
             Expr::Slice(node) => node.visit_source_order(visitor),
             Expr::IpyEscapeCommand(node) => node.visit_source_order(visitor),
             Expr::CallableType(node) => node.visit_source_order(visitor),
+            Expr::ProtocolType(node) => node.visit_source_order(visitor),
+            Expr::ProtocolMethod(node) => node.visit_source_order(visitor),
         }
     }
 }
@@ -5323,6 +5441,10 @@ pub enum ExprRef<'a> {
     IpyEscapeCommand(&'a crate::ExprIpyEscapeCommand),
     #[is(name = "callable_type_expr")]
     CallableType(&'a crate::ExprCallableType),
+    #[is(name = "protocol_type_expr")]
+    ProtocolType(&'a crate::ExprProtocolType),
+    #[is(name = "protocol_method_expr")]
+    ProtocolMethod(&'a crate::ExprProtocolMethod),
 }
 
 impl<'a> From<&'a Expr> for ExprRef<'a> {
@@ -5362,6 +5484,8 @@ impl<'a> From<&'a Expr> for ExprRef<'a> {
             Expr::Slice(node) => ExprRef::Slice(node),
             Expr::IpyEscapeCommand(node) => ExprRef::IpyEscapeCommand(node),
             Expr::CallableType(node) => ExprRef::CallableType(node),
+            Expr::ProtocolType(node) => ExprRef::ProtocolType(node),
+            Expr::ProtocolMethod(node) => ExprRef::ProtocolMethod(node),
         }
     }
 }
@@ -5570,6 +5694,18 @@ impl<'a> From<&'a crate::ExprCallableType> for ExprRef<'a> {
     }
 }
 
+impl<'a> From<&'a crate::ExprProtocolType> for ExprRef<'a> {
+    fn from(node: &'a crate::ExprProtocolType) -> Self {
+        Self::ProtocolType(node)
+    }
+}
+
+impl<'a> From<&'a crate::ExprProtocolMethod> for ExprRef<'a> {
+    fn from(node: &'a crate::ExprProtocolMethod) -> Self {
+        Self::ProtocolMethod(node)
+    }
+}
+
 impl ruff_text_size::Ranged for ExprRef<'_> {
     fn range(&self) -> ruff_text_size::TextRange {
         match self {
@@ -5607,6 +5743,8 @@ impl ruff_text_size::Ranged for ExprRef<'_> {
             Self::Slice(node) => node.range(),
             Self::IpyEscapeCommand(node) => node.range(),
             Self::CallableType(node) => node.range(),
+            Self::ProtocolType(node) => node.range(),
+            Self::ProtocolMethod(node) => node.range(),
         }
     }
 }
@@ -5648,6 +5786,8 @@ impl crate::HasNodeIndex for ExprRef<'_> {
             Self::Slice(node) => node.node_index(),
             Self::IpyEscapeCommand(node) => node.node_index(),
             Self::CallableType(node) => node.node_index(),
+            Self::ProtocolType(node) => node.node_index(),
+            Self::ProtocolMethod(node) => node.node_index(),
         }
     }
 }
@@ -5966,6 +6106,8 @@ pub enum AnyNodeRef<'a> {
     ExprSlice(&'a crate::ExprSlice),
     ExprIpyEscapeCommand(&'a crate::ExprIpyEscapeCommand),
     ExprCallableType(&'a crate::ExprCallableType),
+    ExprProtocolType(&'a crate::ExprProtocolType),
+    ExprProtocolMethod(&'a crate::ExprProtocolMethod),
     ExceptHandlerExceptHandler(&'a crate::ExceptHandlerExceptHandler),
     InterpolatedElement(&'a crate::InterpolatedElement),
     InterpolatedStringLiteralElement(&'a crate::InterpolatedStringLiteralElement),
@@ -6166,6 +6308,8 @@ impl<'a> From<&'a Expr> for AnyNodeRef<'a> {
             Expr::Slice(node) => AnyNodeRef::ExprSlice(node),
             Expr::IpyEscapeCommand(node) => AnyNodeRef::ExprIpyEscapeCommand(node),
             Expr::CallableType(node) => AnyNodeRef::ExprCallableType(node),
+            Expr::ProtocolType(node) => AnyNodeRef::ExprProtocolType(node),
+            Expr::ProtocolMethod(node) => AnyNodeRef::ExprProtocolMethod(node),
         }
     }
 }
@@ -6207,6 +6351,8 @@ impl<'a> From<ExprRef<'a>> for AnyNodeRef<'a> {
             ExprRef::Slice(node) => AnyNodeRef::ExprSlice(node),
             ExprRef::IpyEscapeCommand(node) => AnyNodeRef::ExprIpyEscapeCommand(node),
             ExprRef::CallableType(node) => AnyNodeRef::ExprCallableType(node),
+            ExprRef::ProtocolType(node) => AnyNodeRef::ExprProtocolType(node),
+            ExprRef::ProtocolMethod(node) => AnyNodeRef::ExprProtocolMethod(node),
         }
     }
 }
@@ -6248,6 +6394,8 @@ impl<'a> AnyNodeRef<'a> {
             Self::ExprSlice(node) => Some(ExprRef::Slice(node)),
             Self::ExprIpyEscapeCommand(node) => Some(ExprRef::IpyEscapeCommand(node)),
             Self::ExprCallableType(node) => Some(ExprRef::CallableType(node)),
+            Self::ExprProtocolType(node) => Some(ExprRef::ProtocolType(node)),
+            Self::ExprProtocolMethod(node) => Some(ExprRef::ProtocolMethod(node)),
 
             _ => None,
         }
@@ -6764,6 +6912,18 @@ impl<'a> From<&'a crate::ExprCallableType> for AnyNodeRef<'a> {
     }
 }
 
+impl<'a> From<&'a crate::ExprProtocolType> for AnyNodeRef<'a> {
+    fn from(node: &'a crate::ExprProtocolType) -> AnyNodeRef<'a> {
+        AnyNodeRef::ExprProtocolType(node)
+    }
+}
+
+impl<'a> From<&'a crate::ExprProtocolMethod> for AnyNodeRef<'a> {
+    fn from(node: &'a crate::ExprProtocolMethod) -> AnyNodeRef<'a> {
+        AnyNodeRef::ExprProtocolMethod(node)
+    }
+}
+
 impl<'a> From<&'a crate::ExceptHandlerExceptHandler> for AnyNodeRef<'a> {
     fn from(node: &'a crate::ExceptHandlerExceptHandler) -> AnyNodeRef<'a> {
         AnyNodeRef::ExceptHandlerExceptHandler(node)
@@ -7032,6 +7192,8 @@ impl ruff_text_size::Ranged for AnyNodeRef<'_> {
             AnyNodeRef::ExprSlice(node) => node.range(),
             AnyNodeRef::ExprIpyEscapeCommand(node) => node.range(),
             AnyNodeRef::ExprCallableType(node) => node.range(),
+            AnyNodeRef::ExprProtocolType(node) => node.range(),
+            AnyNodeRef::ExprProtocolMethod(node) => node.range(),
             AnyNodeRef::ExceptHandlerExceptHandler(node) => node.range(),
             AnyNodeRef::InterpolatedElement(node) => node.range(),
             AnyNodeRef::InterpolatedStringLiteralElement(node) => node.range(),
@@ -7134,6 +7296,8 @@ impl crate::HasNodeIndex for AnyNodeRef<'_> {
             AnyNodeRef::ExprSlice(node) => node.node_index(),
             AnyNodeRef::ExprIpyEscapeCommand(node) => node.node_index(),
             AnyNodeRef::ExprCallableType(node) => node.node_index(),
+            AnyNodeRef::ExprProtocolType(node) => node.node_index(),
+            AnyNodeRef::ExprProtocolMethod(node) => node.node_index(),
             AnyNodeRef::ExceptHandlerExceptHandler(node) => node.node_index(),
             AnyNodeRef::InterpolatedElement(node) => node.node_index(),
             AnyNodeRef::InterpolatedStringLiteralElement(node) => node.node_index(),
@@ -7236,6 +7400,8 @@ impl AnyNodeRef<'_> {
             AnyNodeRef::ExprSlice(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::ExprIpyEscapeCommand(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::ExprCallableType(node) => std::ptr::NonNull::from(*node).cast(),
+            AnyNodeRef::ExprProtocolType(node) => std::ptr::NonNull::from(*node).cast(),
+            AnyNodeRef::ExprProtocolMethod(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::ExceptHandlerExceptHandler(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::InterpolatedElement(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::InterpolatedStringLiteralElement(node) => {
@@ -7344,6 +7510,8 @@ impl<'a> AnyNodeRef<'a> {
             AnyNodeRef::ExprSlice(node) => node.visit_source_order(visitor),
             AnyNodeRef::ExprIpyEscapeCommand(node) => node.visit_source_order(visitor),
             AnyNodeRef::ExprCallableType(node) => node.visit_source_order(visitor),
+            AnyNodeRef::ExprProtocolType(node) => node.visit_source_order(visitor),
+            AnyNodeRef::ExprProtocolMethod(node) => node.visit_source_order(visitor),
             AnyNodeRef::ExceptHandlerExceptHandler(node) => node.visit_source_order(visitor),
             AnyNodeRef::InterpolatedElement(node) => node.visit_source_order(visitor),
             AnyNodeRef::InterpolatedStringLiteralElement(node) => node.visit_source_order(visitor),
@@ -7462,6 +7630,8 @@ impl AnyNodeRef<'_> {
                 | AnyNodeRef::ExprSlice(_)
                 | AnyNodeRef::ExprIpyEscapeCommand(_)
                 | AnyNodeRef::ExprCallableType(_)
+                | AnyNodeRef::ExprProtocolType(_)
+                | AnyNodeRef::ExprProtocolMethod(_)
         )
     }
 }
@@ -8311,6 +8481,26 @@ impl<'a> TryFrom<AnyRootNodeRef<'a>> for &'a crate::ExprCallableType {
     fn try_from(node: AnyRootNodeRef<'a>) -> Result<&'a crate::ExprCallableType, ()> {
         match node {
             AnyRootNodeRef::Expr(Expr::CallableType(node)) => Ok(node),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<AnyRootNodeRef<'a>> for &'a crate::ExprProtocolType {
+    type Error = ();
+    fn try_from(node: AnyRootNodeRef<'a>) -> Result<&'a crate::ExprProtocolType, ()> {
+        match node {
+            AnyRootNodeRef::Expr(Expr::ProtocolType(node)) => Ok(node),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<AnyRootNodeRef<'a>> for &'a crate::ExprProtocolMethod {
+    type Error = ();
+    fn try_from(node: AnyRootNodeRef<'a>) -> Result<&'a crate::ExprProtocolMethod, ()> {
+        match node {
+            AnyRootNodeRef::Expr(Expr::ProtocolMethod(node)) => Ok(node),
             _ => Err(()),
         }
     }
@@ -9237,6 +9427,8 @@ pub enum NodeKind {
     ExprSlice,
     ExprIpyEscapeCommand,
     ExprCallableType,
+    ExprProtocolType,
+    ExprProtocolMethod,
     ExceptHandlerExceptHandler,
     InterpolatedElement,
     InterpolatedStringLiteralElement,
@@ -9337,6 +9529,8 @@ impl AnyNodeRef<'_> {
             AnyNodeRef::ExprSlice(_) => NodeKind::ExprSlice,
             AnyNodeRef::ExprIpyEscapeCommand(_) => NodeKind::ExprIpyEscapeCommand,
             AnyNodeRef::ExprCallableType(_) => NodeKind::ExprCallableType,
+            AnyNodeRef::ExprProtocolType(_) => NodeKind::ExprProtocolType,
+            AnyNodeRef::ExprProtocolMethod(_) => NodeKind::ExprProtocolMethod,
             AnyNodeRef::ExceptHandlerExceptHandler(_) => NodeKind::ExceptHandlerExceptHandler,
             AnyNodeRef::InterpolatedElement(_) => NodeKind::InterpolatedElement,
             AnyNodeRef::InterpolatedStringLiteralElement(_) => {
@@ -10155,6 +10349,41 @@ pub struct ExprCallableType {
     pub parameter_slash: Option<u32>,
     /// basedpython: index in `args` of the bare `*` keyword-only marker
     pub parameter_star: Option<u32>,
+}
+
+/// basedpython inline protocol type expression:
+/// `protocol(a: int; b: str; def f(self) -> int; **Kwargs)`.
+///
+/// Each member of `members` is one of:
+/// - `Expr::Named` — a data member `a: int`, where `target` is the member name
+///   (an `Expr::Name` with `ExprContext::Invalid`, since the name is a label and
+///   neither a binding nor a reference) and `value` is its type expression,
+/// - `Expr::ProtocolMethod` — a method member `def f(self) -> int`,
+/// - `Expr::Starred(Expr::Starred(..))` — a `**Kwargs` keyword-pack unpack,
+///   matching the `**` encoding used by dict-literal types and callable arrows.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub struct ExprProtocolType {
+    pub node_index: crate::AtomicNodeIndex,
+    pub range: ruff_text_size::TextRange,
+    pub members: Vec<Expr>,
+}
+
+/// basedpython method member of an inline protocol type:
+/// `def f(self, x: int) -> str`.
+///
+/// `signature` is always an [`ExprCallableType`](crate::ExprCallableType) built
+/// from the parameter list and return annotation, so a method member's type is
+/// inferred by the same code path as the callable arrow `(...) -> ...`. Unlike a
+/// data member whose type happens to be a callable, a method member binds its
+/// first parameter to the receiver.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub struct ExprProtocolMethod {
+    pub node_index: crate::AtomicNodeIndex,
+    pub range: ruff_text_size::TextRange,
+    pub name: crate::Identifier,
+    pub signature: Box<Expr>,
 }
 
 /// See also [MatchValue](https://docs.python.org/3/library/ast.html#ast.MatchValue)
@@ -11259,6 +11488,39 @@ impl ExprCallableType {
             visitor.visit_expr(elm);
         }
         visitor.visit_expr(returns);
+    }
+}
+
+impl ExprProtocolType {
+    pub(crate) fn visit_source_order<'a, V>(&'a self, visitor: &mut V)
+    where
+        V: SourceOrderVisitor<'a> + ?Sized,
+    {
+        let ExprProtocolType {
+            members,
+            range: _,
+            node_index: _,
+        } = self;
+
+        for elm in members {
+            visitor.visit_expr(elm);
+        }
+    }
+}
+
+impl ExprProtocolMethod {
+    pub(crate) fn visit_source_order<'a, V>(&'a self, visitor: &mut V)
+    where
+        V: SourceOrderVisitor<'a> + ?Sized,
+    {
+        let ExprProtocolMethod {
+            name,
+            signature,
+            range: _,
+            node_index: _,
+        } = self;
+        visitor.visit_identifier(name);
+        visitor.visit_expr(signature);
     }
 }
 

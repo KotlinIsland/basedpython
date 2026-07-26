@@ -294,6 +294,25 @@ impl<'db> From<ProtocolClass<'db>> for Type<'db> {
 pub(super) struct ProtocolInterface<'db> {
     #[returns(ref)]
     inner: BTreeMap<Name, ProtocolMemberData<'db>>,
+
+    /// basedpython: keyword-variadic packs spliced into an inline protocol type with
+    /// `protocol(**Kwargs)` whose fields are not known yet.
+    ///
+    /// An unspecialized pack contributes no members, so it is carried here until a type mapping
+    /// resolves it, at which point each of its fields becomes an attribute member. Always empty
+    /// for a protocol written as a class.
+    #[returns(ref)]
+    pub(super) pending_packs: Box<[Type<'db>]>,
+}
+
+/// basedpython: a member of an inline `protocol(...)` type expression, before it is turned into
+/// the [`ProtocolMemberData`] representation shared with class-defined protocols.
+#[derive(Copy, Clone)]
+pub(super) enum InlineProtocolMember<'db> {
+    /// A data member `a: int` — a mutable attribute, as in a protocol class body.
+    Attribute(Type<'db>),
+    /// A method member `def f(self) -> int`, whose receiver is bound away on access.
+    Method(CallableType<'db>),
 }
 
 impl get_size2::GetSize for ProtocolInterface<'_> {}
@@ -305,6 +324,9 @@ pub(super) fn walk_protocol_interface<'db, V: super::visitor::TypeVisitor<'db> +
 ) {
     for member in interface.members(db) {
         walk_protocol_member(db, &member, visitor);
+    }
+    for pack in interface.pending_packs(db) {
+        visitor.visit_type(db, *pack);
     }
 }
 
@@ -329,6 +351,12 @@ pub(super) fn walk_protocol_instance_interface<
 ) {
     for member in interface.members(db) {
         walk_protocol_instance_member(db, &member, receiver_ty, visitor);
+    }
+    // a pending `protocol(**Kwargs)` pack contributes no member yet, but its
+    // typevar is still part of the type — keep this in step with
+    // `walk_protocol_interface`
+    for pack in interface.pending_packs(db) {
+        visitor.visit_type(db, *pack);
     }
 }
 
@@ -394,7 +422,7 @@ impl<'db> ProtocolInterface<'db> {
                 )
             })
             .collect();
-        Self::new(db, members)
+        Self::new(db, members, Box::default())
     }
 
     /// Synthesize a new protocol interface with the given methods.
@@ -411,11 +439,30 @@ impl<'db> ProtocolInterface<'db> {
                 )
             })
             .collect();
-        Self::new(db, members)
+        Self::new(db, members, Box::default())
+    }
+
+    /// basedpython: synthesize the interface of an inline `protocol(...)` type expression.
+    ///
+    /// `packs` holds the keyword-variadic packs unpacked with `**Kwargs` whose fields are not
+    /// known yet; see [`ProtocolInterface::pending_packs`].
+    pub(super) fn with_inline_members<M>(
+        db: &'db dyn Db,
+        members: M,
+        packs: Box<[Type<'db>]>,
+    ) -> Self
+    where
+        M: IntoIterator<Item = (Name, InlineProtocolMember<'db>)>,
+    {
+        let members: BTreeMap<_, _> = members
+            .into_iter()
+            .map(|(name, member)| (name, ProtocolMemberData::from_inline(db, member)))
+            .collect();
+        Self::new(db, members, packs)
     }
 
     fn empty(db: &'db dyn Db) -> Self {
-        Self::new(db, BTreeMap::default())
+        Self::new(db, BTreeMap::default(), Box::default())
     }
 
     fn cycle_normalized(self, db: &'db dyn Db, previous: Self, cycle: &salsa::Cycle) -> Self {
@@ -433,7 +480,7 @@ impl<'db> ProtocolInterface<'db> {
                 (name.clone(), normalized)
             })
             .collect();
-        Self::new(db, members)
+        Self::new(db, members, self.pending_packs(db).clone())
     }
 
     pub(super) fn members<'a>(
@@ -460,6 +507,7 @@ impl<'db> ProtocolInterface<'db> {
                 .filter(|&(name, data)| predicate(&ProtocolMember { name, data }))
                 .map(|(name, data)| (name.clone(), data.clone()))
                 .collect::<BTreeMap<_, _>>(),
+            self.pending_packs(db).clone(),
         )
     }
 
@@ -630,6 +678,7 @@ impl<'db> ProtocolInterface<'db> {
                     ))
                 })
                 .collect::<Option<BTreeMap<_, _>>>()?,
+            self.pending_packs(db).clone(),
         ))
     }
 
@@ -640,18 +689,41 @@ impl<'db> ProtocolInterface<'db> {
         tcx: TypeContext<'db>,
         visitor: &ApplyTypeMappingVisitor<'db>,
     ) -> Self {
-        Self::new(
-            db,
-            self.inner(db)
-                .iter()
-                .map(|(name, data)| {
-                    (
-                        name.clone(),
-                        data.apply_type_mapping_impl(db, type_mapping, tcx, visitor),
-                    )
-                })
-                .collect::<BTreeMap<_, _>>(),
-        )
+        let mut members: BTreeMap<_, _> = self
+            .inner(db)
+            .iter()
+            .map(|(name, data)| {
+                (
+                    name.clone(),
+                    data.apply_type_mapping_impl(db, type_mapping, tcx, visitor),
+                )
+            })
+            .collect();
+
+        // basedpython: a `protocol(**Kwargs)` pack that this mapping specializes contributes one
+        // attribute member per field; one that is still unspecialized stays pending
+        let packs = self.pending_packs(db);
+        let mut pending = Vec::with_capacity(packs.len());
+        for pack in packs {
+            let pack = pack.apply_type_mapping_impl(db, type_mapping, tcx, visitor);
+            match pack.keyword_pack_fields(db) {
+                Some(fields) => {
+                    for (name, field_ty) in fields {
+                        members.insert(
+                            name.clone(),
+                            ProtocolMemberData::attribute(
+                                field_ty,
+                                TypeQualifiers::default(),
+                                None,
+                            ),
+                        );
+                    }
+                }
+                None => pending.push(pack),
+            }
+        }
+
+        Self::new(db, members, pending.into_boxed_slice())
     }
 
     pub(super) fn find_legacy_typevars_impl(
@@ -663,6 +735,9 @@ impl<'db> ProtocolInterface<'db> {
     ) {
         for data in self.inner(db).values() {
             data.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
+        }
+        for pack in self.pending_packs(db) {
+            pack.find_legacy_typevars_impl(db, binding_context, typevars, visitor);
         }
     }
 
@@ -1094,6 +1169,15 @@ impl<'db> ProtocolMemberData<'db> {
             ),
             qualifiers: TypeQualifiers::default(),
             definition,
+        }
+    }
+
+    fn from_inline(db: &'db dyn Db, member: InlineProtocolMember<'db>) -> Self {
+        match member {
+            InlineProtocolMember::Attribute(ty) => {
+                Self::attribute(ty, TypeQualifiers::default(), None)
+            }
+            InlineProtocolMember::Method(callable) => Self::method(db, callable, None),
         }
     }
 
@@ -3146,7 +3230,7 @@ fn cached_protocol_interface<'db>(
         members.insert(name.clone(), member);
     });
 
-    ProtocolInterface::new(db, members)
+    ProtocolInterface::new(db, members, Box::default())
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]

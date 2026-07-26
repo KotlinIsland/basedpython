@@ -50,3 +50,21 @@ F821 Undefined name `UndefinedGuardType`
    |                                           ^^^^^^^^^^^^^^^^^^
 46 |     raise ValueError
    |
+
+F821 Undefined name `UndefinedMember`
+  --> F821_basedpython.by:62:27
+   |
+60 | Defined = int
+61 | good_protocol: protocol(a: Defined; def m(self, n: Defined) -> Defined)
+62 | bad_protocol: protocol(a: UndefinedMember; def m(self) -> UndefinedReturn)
+   |                           ^^^^^^^^^^^^^^^
+   |
+
+F821 Undefined name `UndefinedReturn`
+  --> F821_basedpython.by:62:59
+   |
+60 | Defined = int
+61 | good_protocol: protocol(a: Defined; def m(self, n: Defined) -> Defined)
+62 | bad_protocol: protocol(a: UndefinedMember; def m(self) -> UndefinedReturn)
+   |                                                           ^^^^^^^^^^^^^^^
+   |

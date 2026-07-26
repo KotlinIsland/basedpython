@@ -120,6 +120,12 @@ impl Transformer for Relocator {
             Expr::CallableType(ast::ExprCallableType { range, .. }) => {
                 *range = self.range;
             }
+            Expr::ProtocolType(ast::ExprProtocolType { range, .. }) => {
+                *range = self.range;
+            }
+            Expr::ProtocolMethod(ast::ExprProtocolMethod { range, .. }) => {
+                *range = self.range;
+            }
         }
         walk_expr(self, expr);
     }

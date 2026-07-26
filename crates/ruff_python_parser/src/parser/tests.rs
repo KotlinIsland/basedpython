@@ -1059,6 +1059,42 @@ fn test_anon_named_tuple_mixed_type() {
 }
 
 #[test]
+fn test_inline_protocol_type() {
+    let source = "a: protocol(a: int; b: str; def f(self) -> int)\n";
+    let parsed = parse_basedpython_module(source);
+    insta::assert_debug_snapshot!(parsed.syntax());
+}
+
+#[test]
+fn test_inline_protocol_keyword_pack() {
+    let source = "a: protocol(**Kwargs)\n";
+    let parsed = parse_basedpython_module(source);
+    insta::assert_debug_snapshot!(parsed.syntax());
+}
+
+#[test]
+fn test_inline_protocol_method_parameter_spec() {
+    let source = "a: protocol(def f(self, x: int, /, *args: str, **kw: int) -> str | None)\n";
+    let parsed = parse_basedpython_module(source);
+    insta::assert_debug_snapshot!(parsed.syntax());
+}
+
+#[test]
+fn test_inline_protocol_multiline_trailing_semicolon() {
+    let source = "a: protocol(\n    a: int;\n    def f(self) -> None;\n)\n";
+    let parsed = parse_basedpython_module(source);
+    insta::assert_debug_snapshot!(parsed.syntax());
+}
+
+/// `protocol` is a soft keyword — a call to something named `protocol` still parses as a call.
+#[test]
+fn test_protocol_call_is_not_inline_protocol() {
+    let source = "a = protocol(x)\nb = protocol()\nc = protocol(y := 1)\nd = protocol(z[1:2])\n";
+    let parsed = parse_basedpython_module(source);
+    insta::assert_debug_snapshot!(parsed.syntax());
+}
+
+#[test]
 fn test_top_star_subscript() {
     let source = "a: list[*]\n";
     let parsed = parse_basedpython_module(source);

@@ -40,9 +40,10 @@ use super::{
     generic_call, generics, grapheme_string, identity_swap, implicit_typing, inferred_annotation,
     init_method, just_float, kw_subscript, literal_types, local_once, main_function, modifiers,
     mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await, propagate,
-    properties, reified_generic, repeated_underscore, sentinel, some_ctor, soundness, string_tag,
-    super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_is,
-    type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
+    properties, protocol_type, reified_generic, repeated_underscore, sentinel, some_ctor,
+    soundness, string_tag, super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index,
+    type_is, type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unpack,
+    use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -475,6 +476,7 @@ pub(crate) fn run_against_source<'a>(
     let tuple_types_pass = annotation::TupleLiteralTypePass::new(source_ref);
     let literal_types_pass = literal_types::LiteralTypePass::new(source_ref);
     let callable_pass = callable::CallableSyntaxPass::new(source_ref);
+    let protocol_type_pass = protocol_type::ProtocolTypePass::new(source_ref, config.clone());
     let coalesce_text_pass = coalesce::NoneCoalescePass::new(source_ref);
     let force_unwrap_pass = force_unwrap::ForceUnwrapPass::new(source_ref);
     let some_ctor_pass = some_ctor::SomeCtorPass::new();
@@ -623,6 +625,11 @@ pub(crate) fn run_against_source<'a>(
         &tuple_types_pass,
         &literal_types_pass,
         &callable_pass,
+        // inline protocols hoist to a synthesized `Protocol` class; the wide
+        // replacement covers the whole `protocol(...)` span, so it must follow
+        // `callable` — whose visit of the same member types emits the imports
+        // and `_Callable_*` classes our re-rendered copies name
+        &protocol_type_pass,
         // `T?` → `T | None`; a type-position edit, disjoint from the
         // value-position `??` / `?.` lowerings below
         &optional_type_pass,

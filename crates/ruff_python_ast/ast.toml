@@ -624,6 +624,35 @@ fields = [
   { name = "parameter_star", type = "Option<u32>", doc = "basedpython: index in `args` of the bare `*` keyword-only marker" },
 ]
 
+[Expr.nodes.ExprProtocolType]
+doc = """basedpython inline protocol type expression:
+`protocol(a: int; b: str; def f(self) -> int; **Kwargs)`.
+
+Each member of `members` is one of:
+- `Expr::Named` — a data member `a: int`, where `target` is the member name
+  (an `Expr::Name` with `ExprContext::Invalid`, since the name is a label and
+  neither a binding nor a reference) and `value` is its type expression,
+- `Expr::ProtocolMethod` — a method member `def f(self) -> int`,
+- `Expr::Starred(Expr::Starred(..))` — a `**Kwargs` keyword-pack unpack,
+  matching the `**` encoding used by dict-literal types and callable arrows."""
+fields = [
+  { name = "members", type = "Expr*" },
+]
+
+[Expr.nodes.ExprProtocolMethod]
+doc = """basedpython method member of an inline protocol type:
+`def f(self, x: int) -> str`.
+
+`signature` is always an [`ExprCallableType`](crate::ExprCallableType) built
+from the parameter list and return annotation, so a method member's type is
+inferred by the same code path as the callable arrow `(...) -> ...`. Unlike a
+data member whose type happens to be a callable, a method member binds its
+first parameter to the receiver."""
+fields = [
+  { name = "name", type = "Identifier" },
+  { name = "signature", type = "Expr" },
+]
+
 [ExceptHandler]
 doc = "See also [excepthandler](https://docs.python.org/3/library/ast.html#ast.excepthandler)"
 

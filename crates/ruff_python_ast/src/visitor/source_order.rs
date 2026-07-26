@@ -302,6 +302,8 @@ where
             Expr::Slice(expr) => expr.visit_source_order(visitor),
             Expr::IpyEscapeCommand(expr) => expr.visit_source_order(visitor),
             Expr::CallableType(expr) => expr.visit_source_order(visitor),
+            Expr::ProtocolType(expr) => expr.visit_source_order(visitor),
+            Expr::ProtocolMethod(expr) => expr.visit_source_order(visitor),
         }
     }
 

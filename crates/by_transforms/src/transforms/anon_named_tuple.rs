@@ -218,33 +218,11 @@ impl<'src> AnonNamedTuple<'src> {
     /// references the renamed `_T` instead of the original `T`.
     fn apply_typevar_renames(&self, text: &str) -> String {
         let renames = self.active_typevar_renames();
-        if renames.is_empty() {
-            return text.to_owned();
-        }
-        let bytes = text.as_bytes();
-        let mut out = String::with_capacity(text.len());
-        let mut i = 0;
-        while i < bytes.len() {
-            let c = bytes[i];
-            let starts_ident = c.is_ascii_alphabetic() || c == b'_';
-            if starts_ident {
-                let start = i;
-                i += 1;
-                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                    i += 1;
-                }
-                let ident = &text[start..i];
-                if let Some(replacement) = renames.get(ident) {
-                    out.push_str(replacement);
-                } else {
-                    out.push_str(ident);
-                }
-            } else {
-                out.push(c as char);
-                i += 1;
-            }
-        }
-        out
+        let borrowed: HashMap<&str, &str> = renames
+            .iter()
+            .map(|(from, to)| (from.as_str(), to.as_str()))
+            .collect();
+        super::source_util::rename_identifiers(text, &borrowed)
     }
 
     /// Like `render_subbed` but substitutes value-form constructor calls

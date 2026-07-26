@@ -664,6 +664,23 @@ pub fn walk_expr<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, expr: &'a Expr) {
             }
             visitor.visit_expr(returns);
         }
+        Expr::ProtocolType(ast::ExprProtocolType {
+            members,
+            range: _,
+            node_index: _,
+        }) => {
+            for member in members {
+                visitor.visit_expr(member);
+            }
+        }
+        Expr::ProtocolMethod(ast::ExprProtocolMethod {
+            name: _,
+            signature,
+            range: _,
+            node_index: _,
+        }) => {
+            visitor.visit_expr(signature);
+        }
     }
 }
 

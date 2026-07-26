@@ -362,15 +362,7 @@ impl<'src> Parser<'src> {
                 // parse return type stopping before `|` so the union wraps the whole callable
                 let returns =
                     self.parse_binary_expression_or_higher(OperatorPrecedence::BitOr, context);
-                let is_par = left.is_parenthesized;
-                let lhs_expr = left.expr;
-                let (args, parameter_slash, parameter_star) = if is_par {
-                    (vec![lhs_expr], None, None)
-                } else if let Expr::Tuple(t) = lhs_expr {
-                    (t.elts, t.parameter_slash, t.parameter_star)
-                } else {
-                    (vec![], None, None)
-                };
+                let (args, parameter_slash, parameter_star) = Self::callable_parameter_spec(left);
                 left = ParsedExpr {
                     expr: Expr::CallableType(ast::ExprCallableType {
                         args,
@@ -1092,6 +1084,12 @@ impl<'src> Parser<'src> {
                         node_index: AtomicNodeIndex::NONE,
                         is_typeof: true,
                     })
+                } else if self.at_inline_protocol_type() {
+                    self.error_if_not_basedpython(
+                        "inline protocol type `protocol(...)` is not valid in .py files"
+                            .to_string(),
+                    );
+                    Expr::ProtocolType(self.parse_inline_protocol_type(start))
                 } else {
                     Expr::Name(self.parse_name(context))
                 }
@@ -3122,6 +3120,186 @@ impl<'src> Parser<'src> {
                 "`local` / `once` in a callable type are not valid in .py files".to_string(),
             );
             self.bump(TokenKind::Name);
+        }
+    }
+
+    /// Returns whether the current `protocol` identifier introduces an inline protocol type
+    /// rather than a call to something named `protocol`.
+    ///
+    /// `protocol` is a soft keyword, so `protocol(x)` must keep parsing as a call. Only a
+    /// parenthesized list whose first member is unambiguously a protocol member — `def` or
+    /// `name :` (which no call argument can start with, since `name :=` lexes as one token) —
+    /// takes the protocol path in any file. `protocol()` is a call: an empty protocol declares
+    /// nothing.
+    ///
+    /// A leading `**Pack` is the exception: `protocol(**kwargs)` is also an ordinary call, so it
+    /// only reads as a member list in a `.by` file, where shadowing the `protocol` keyword is
+    /// already discouraged.
+    fn at_inline_protocol_type(&mut self) -> bool {
+        if self.src_text(self.current_token_range()) != "protocol" || self.peek() != TokenKind::Lpar
+        {
+            return false;
+        }
+        match self.peek_nth(1).0 {
+            TokenKind::Def => true,
+            TokenKind::DoubleStar => self.options.is_basedpython,
+            TokenKind::Name => self.peek_nth(2).0 == TokenKind::Colon,
+            _ => false,
+        }
+    }
+
+    /// Reads a parsed parenthesized expression as the parameter list of a callable arrow.
+    ///
+    /// `(int)` parses to a parenthesized expression and is a one-parameter list; anything else
+    /// parenthesized is a tuple, whose elements carry the parameter shape (and whose
+    /// `is_anon_named_tuple` flag is irrelevant here — `name: T` has the same encoding in both).
+    fn callable_parameter_spec(parsed: ParsedExpr) -> (Vec<Expr>, Option<u32>, Option<u32>) {
+        if parsed.is_parenthesized {
+            return (vec![parsed.expr], None, None);
+        }
+        match parsed.expr {
+            Expr::Tuple(t) => (t.elts, t.parameter_slash, t.parameter_star),
+            _ => (vec![], None, None),
+        }
+    }
+
+    /// Parses a basedpython inline protocol type,
+    /// `protocol(a: int; b: str; def f(self) -> int; **Kwargs)`.
+    ///
+    /// The current token is the `protocol` soft keyword and the next one is `(`; the caller has
+    /// already established that the parenthesized list is a member list rather than a call
+    /// argument list.
+    fn parse_inline_protocol_type(&mut self, start: TextSize) -> ast::ExprProtocolType {
+        self.bump(TokenKind::Name); // `protocol`
+        self.bump(TokenKind::Lpar);
+
+        let mut members: Vec<Expr> = vec![];
+        // member names are labels rather than bindings, so a duplicate is never what was meant
+        // and would silently drop one of the two declarations
+        let mut seen: Vec<Name> = vec![];
+        let mut check_duplicate = |parser: &mut Self, name: &Name, range: TextRange| {
+            if seen.contains(name) {
+                parser.add_error(
+                    ParseErrorType::BasedPythonOnly(format!("duplicate protocol member `{name}`")),
+                    range,
+                );
+            } else {
+                seen.push(name.clone());
+            }
+        };
+
+        loop {
+            if self.at(TokenKind::Rpar) {
+                break;
+            }
+
+            let member_start = self.node_start();
+            let member = if self.at(TokenKind::Def) {
+                self.bump(TokenKind::Def);
+                let name = self.parse_identifier();
+                check_duplicate(self, &name.id, name.range);
+
+                let signature_start = self.node_start();
+                // a method's parameter list is unambiguously a parameter spec, so it goes
+                // straight to the spec parser rather than through the parenthesized-expression
+                // dispatch, where `(self, x: int)` would read as an anonymous named tuple
+                self.expect(TokenKind::Lpar);
+                let mut parameters = self.parse_parameters_spec(signature_start, None);
+                // the receiver is a parameter *name*, not a type — mark it a label so it neither
+                // binds a name nor resolves to one, the way an anonymous-named-tuple field name
+                // is. Every later bare name keeps its parameter-spec meaning of a
+                // positional-only parameter's type
+                if let Some(Expr::Name(receiver)) = parameters.elts.first_mut() {
+                    receiver.ctx = ExprContext::Invalid;
+                }
+                let (args, parameter_slash, parameter_star) = (
+                    parameters.elts,
+                    parameters.parameter_slash,
+                    parameters.parameter_star,
+                );
+
+                // unlike the callable arrow `(...) -> T | None`, where `->` binds tighter than
+                // `|` so that the union wraps the whole callable, a method's return annotation
+                // reads as it does on a `def` statement: the union is the return type
+                self.expect(TokenKind::Rarrow);
+                let returns = self
+                    .parse_conditional_expression_or_higher_impl(ExpressionContext::default())
+                    .expr;
+
+                Expr::ProtocolMethod(ast::ExprProtocolMethod {
+                    name,
+                    signature: Box::new(Expr::CallableType(ast::ExprCallableType {
+                        args,
+                        returns: Box::new(returns),
+                        range: self.node_range(signature_start),
+                        node_index: AtomicNodeIndex::NONE,
+                        parameter_slash,
+                        parameter_star,
+                    })),
+                    range: self.node_range(member_start),
+                    node_index: AtomicNodeIndex::NONE,
+                })
+            } else if self.at(TokenKind::DoubleStar) {
+                // `**Kwargs` — a keyword-variadic pack, encoded as `Starred(Starred(_))` the way
+                // `**` unpacks are everywhere else
+                self.bump(TokenKind::DoubleStar);
+                let inner_start = self.node_start();
+                let value = self
+                    .parse_conditional_expression_or_higher_impl(ExpressionContext::default())
+                    .expr;
+                Expr::Starred(ast::ExprStarred {
+                    value: Box::new(Expr::Starred(ast::ExprStarred {
+                        value: Box::new(value),
+                        ctx: ExprContext::Load,
+                        range: self.node_range(inner_start),
+                        node_index: AtomicNodeIndex::NONE,
+                    })),
+                    ctx: ExprContext::Load,
+                    range: self.node_range(member_start),
+                    node_index: AtomicNodeIndex::NONE,
+                })
+            } else {
+                if !(self.at(TokenKind::Name) && self.peek() == TokenKind::Colon) {
+                    self.add_error(
+                        ParseErrorType::BasedPythonOnly(
+                            "expected a protocol member: `name: T`, `def name(...) -> T`, \
+                             or `**Pack`"
+                                .to_string(),
+                        ),
+                        self.current_token_range(),
+                    );
+                }
+                // a member name is a label: it neither binds a name nor refers to one, so it is
+                // marked invalid the way anonymous-named-tuple field names are
+                let mut target = self.parse_name(ExpressionContext::default());
+                target.ctx = ExprContext::Invalid;
+                check_duplicate(self, &target.id, target.range);
+                self.expect(TokenKind::Colon);
+                let value = self
+                    .parse_conditional_expression_or_higher_impl(ExpressionContext::default())
+                    .expr;
+                Expr::Named(ast::ExprNamed {
+                    target: Box::new(Expr::Name(target)),
+                    value: Box::new(value),
+                    range: self.node_range(member_start),
+                    node_index: AtomicNodeIndex::NONE,
+                })
+            };
+
+            members.push(member);
+
+            if self.eat(TokenKind::Semi) {
+                continue;
+            }
+            break;
+        }
+
+        self.expect(TokenKind::Rpar);
+
+        ast::ExprProtocolType {
+            members,
+            range: self.node_range(start),
+            node_index: AtomicNodeIndex::NONE,
         }
     }
 
