@@ -106,6 +106,17 @@ pub(crate) fn trailing_lambda_it_type<'db>(
     Some(signature.parameters().get_positional(0)?.annotated_type())
 }
 
+/// the type the block's callback declares as its *receiver* — the block body then
+/// sees that type's members unqualified. `None` when the callback is an ordinary
+/// callable, which has no implicit member scope
+pub(crate) fn trailing_lambda_receiver_type<'db>(
+    db: &'db dyn Db,
+    callee: Type<'db>,
+) -> Option<Type<'db>> {
+    let parameter = last_parameter(db, callee)?;
+    crate::types::receivers::receiver_type(db, parameter.annotated_type())
+}
+
 /// the declared return type of the callback the callee's last parameter is — the
 /// callable a trailing lambda block fills. A block always returns `None`, so this
 /// must accept `None`. `None` (the option) when the last parameter is not a

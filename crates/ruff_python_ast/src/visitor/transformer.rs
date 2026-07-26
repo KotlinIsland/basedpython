@@ -638,6 +638,7 @@ pub fn walk_expr<V: Transformer + ?Sized>(visitor: &V, expr: &mut Expr) {
         }
         Expr::IpyEscapeCommand(_) => {}
         Expr::CallableType(ast::ExprCallableType {
+            receiver,
             args,
             returns,
             range: _,
@@ -645,6 +646,9 @@ pub fn walk_expr<V: Transformer + ?Sized>(visitor: &V, expr: &mut Expr) {
             parameter_slash: _,
             parameter_star: _,
         }) => {
+            if let Some(receiver) = receiver {
+                visitor.visit_expr(receiver);
+            }
             for arg in args {
                 visitor.visit_expr(arg);
             }

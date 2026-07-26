@@ -16,6 +16,9 @@ use std::process::Command;
 
 use by_transforms::{Config, PythonVersion, transpile};
 
+mod common;
+use common::python;
+
 /// basedpython whose module-level `assert`s exercise the trailing-lambda runtime
 /// contract end to end.
 const PROGRAM: &str = r#"
@@ -65,24 +68,6 @@ assert via_kw() == 7, "keyword-only once callback write-through"
 
 print("ok")
 "#;
-
-/// Locate a usable interpreter: `$PYTHON` first, then common names. Returns
-/// `None` (test skips) when none is found.
-fn python() -> Option<String> {
-    let mut candidates = Vec::new();
-    if let Ok(p) = std::env::var("PYTHON") {
-        candidates.push(p);
-    }
-    candidates.extend(["python3.13", "python3", "python"].map(String::from));
-
-    candidates.into_iter().find(|py| {
-        Command::new(py)
-            .args(["-c", ""])
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false)
-    })
-}
 
 #[test]
 #[expect(

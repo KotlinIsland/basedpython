@@ -1547,6 +1547,11 @@ impl<'a> Generator<'a> {
                     Mode::BasedPython,
                     "callable type syntax should be transpiled before codegen"
                 );
+                // basedpython: the implicit receiver leads the type — `int.() -> str`
+                if let Some(receiver) = &callable.receiver {
+                    self.unparse_expr(receiver, precedence::MAX);
+                    self.p(".");
+                }
                 self.p("(");
                 self.unparse_parameter_spec(
                     &callable.args,
@@ -2525,6 +2530,8 @@ if True:
     #[test_case::test_case("def f(a: int, context b: str):\n    ..." ; "context parameter")]
     #[test_case::test_case("def f(a: int, *, context b: str):\n    ..." ; "keyword-only context parameter")]
     #[test_case::test_case("f = lambda context b: b" ; "lambda context parameter")]
+    #[test_case::test_case("f: int.() -> str" ; "receiver callable")]
+    #[test_case::test_case("f: list[int].(str, bool) -> None" ; "receiver callable with parameters")]
     fn basedpython_wrapped_round_trip(contents: &str) {
         // `based_round_trip` emits the platform line ending, so normalise the
         // expected value the same way (mirrors the other round-trip tests);

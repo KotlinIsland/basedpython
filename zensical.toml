@@ -35,6 +35,7 @@ features = [
   { "regex group types" = "features/regex-groups.md" },
   { "tuple type literals" = "features/tuple-types.md" },
   { "callable arrow syntax" = "features/callable.md" },
+  { "implicit receivers" = "features/implicit-receivers.md" },
   { "intersection types" = "features/intersection.md" },
   { "`or` / `and` type operators" = "features/or-and-types.md" },
   { "negation types" = "features/not-type.md" },

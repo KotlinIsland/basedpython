@@ -175,6 +175,8 @@ impl<'src> ProtocolTypeLowering<'src> {
             shift(signature.parameter_slash),
             shift(signature.parameter_star),
             receiver.unwrap_or("self"),
+            // a protocol method's receiver is its `self` parameter, never an implicit one
+            None,
         );
         let returns = self.callable.lower_type_expr(&signature.returns);
         let line = format!(

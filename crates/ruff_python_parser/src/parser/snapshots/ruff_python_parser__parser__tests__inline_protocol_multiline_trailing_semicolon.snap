@@ -58,6 +58,7 @@ ModModule {
                                         ExprCallableType {
                                             node_index: NodeIndex(None),
                                             range: 34..48,
+                                            receiver: None,
                                             args: [
                                                 Name(
                                                     ExprName {

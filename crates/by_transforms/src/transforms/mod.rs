@@ -23,6 +23,7 @@ pub(crate) mod generic_call;
 pub(crate) mod generics;
 pub(crate) mod grapheme_string;
 pub(crate) mod identity_swap;
+pub(crate) mod implicit_receiver;
 pub(crate) mod implicit_typing;
 pub(crate) mod inferred_annotation;
 pub(crate) mod init_method;

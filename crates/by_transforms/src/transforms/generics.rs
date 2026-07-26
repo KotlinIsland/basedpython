@@ -904,6 +904,9 @@ fn rename_in_expr(expr: &Expr, renames: &HashMap<String, String>, edits: &mut Ve
         // an arrow callable `(**P) -> None` lowers to `Callable[P, None]` via a template edit
         // that passes its operand source through, so a rename on the inner name still lands
         Expr::CallableType(c) => {
+            if let Some(receiver) = &c.receiver {
+                rename_in_expr(receiver, renames, edits);
+            }
             c.args
                 .iter()
                 .for_each(|a| rename_in_expr(a, renames, edits));

@@ -23,6 +23,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 
 - [tuple type literals](tuple-types.md)
 - [callable arrow syntax](callable.md)
+- [implicit receivers (`int.() -> str`)](implicit-receivers.md)
 - [intersection types](intersection.md)
 - [`or` / `and` type operators](or-and-types.md)
 - [negation types (`not T`)](not-type.md)

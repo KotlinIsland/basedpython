@@ -1517,15 +1517,23 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let args = &callable.args[receiver_offset..];
         let receiver_parameter =
             || receiver.map(|name| Parameter::positional_or_keyword(name.id.clone()));
+        // basedpython: the *implicit* receiver of `int.() -> str` — a type rather than a
+        // parameter name, and never spelled on the same callable as a method receiver.
+        // Inferred before any early return so its type expression always gets a type
+        let implicit_receiver = self.infer_receiver_parameter(callable);
 
         // `(...) -> R` — a single bare ellipsis parameter list is the gradual "any arguments"
         // callable, equivalent to `Callable[..., R]`. It already accepts the receiver
         if matches!(args, [ast::Expr::EllipsisLiteral(_)]) {
             let return_type = self.infer_type_expression(&callable.returns);
-            return Type::single_callable(
-                db,
-                Signature::new(Parameters::gradual_form(), return_type),
-            );
+            // an implicit receiver survives the gradual rest as a concatenated prefix
+            let parameters = match implicit_receiver {
+                Some(implicit_receiver) => {
+                    Parameters::concatenate(db, vec![implicit_receiver], ConcatenateTail::Gradual)
+                }
+                None => Parameters::gradual_form(),
+            };
+            return Type::single_callable(db, Signature::new(parameters, return_type));
         }
 
         // basedpython: a trailing bare `**P` unpacks a parameter pack —
@@ -1561,22 +1569,24 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 // the matching lowering
                 self.store_expression_type(paramspec_expr, ps_ty);
                 let return_type = self.infer_type_expression(&callable.returns);
-                let parameters = if prefix.is_empty() && receiver.is_none() {
-                    // pure pack `(**P)` — identical to `Callable[P, R]`
-                    Parameters::paramspec(db, tv)
-                } else {
-                    // `(T1, …, **P)` — `Callable[Concatenate[T1, …, P], R]`
-                    let prefix_params: Vec<Parameter<'db>> = receiver_parameter()
-                        .into_iter()
-                        .chain(prefix.iter().map(|t| {
-                            Parameter::positional_only(None)
-                                .with_annotated_type(self.infer_type_expression(t))
-                        }))
-                        .collect();
-                    self.infer_concatenate_tail(paramspec_expr)
-                        .map(|tail| Parameters::concatenate(db, prefix_params, tail))
-                        .unwrap_or_else(Parameters::unknown)
-                };
+                let parameters =
+                    if prefix.is_empty() && receiver.is_none() && implicit_receiver.is_none() {
+                        // pure pack `(**P)` — identical to `Callable[P, R]`
+                        Parameters::paramspec(db, tv)
+                    } else {
+                        // `(T1, …, **P)` — `Callable[Concatenate[T1, …, P], R]`
+                        let prefix_params: Vec<Parameter<'db>> = receiver_parameter()
+                            .into_iter()
+                            .chain(implicit_receiver)
+                            .chain(prefix.iter().map(|t| {
+                                Parameter::positional_only(None)
+                                    .with_annotated_type(self.infer_type_expression(t))
+                            }))
+                            .collect();
+                        self.infer_concatenate_tail(paramspec_expr)
+                            .map(|tail| Parameters::concatenate(db, prefix_params, tail))
+                            .unwrap_or_else(Parameters::unknown)
+                    };
                 return Type::single_callable(db, Signature::new(parameters, return_type));
             }
         }
@@ -1587,6 +1597,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         };
         let params: Vec<Parameter<'db>> = receiver_parameter()
             .into_iter()
+            .chain(implicit_receiver)
             .chain(self.infer_parameter_spec_elements(
                 args,
                 shift(callable.parameter_slash),
@@ -1602,6 +1613,24 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         self.inference_flags()
             .set(InferenceFlags::CHECK_UNBOUND_TYPEVARS, previous);
         result
+    }
+
+    /// basedpython: the leading parameter an implicit receiver contributes — the
+    /// `int` of `int.() -> str`. It is positional-only (it is passed by position
+    /// when the callable is called directly) and marked as the receiver, which is
+    /// what makes `x.fn()` and a trailing lambda's implicit member scope resolve
+    /// against it.
+    fn infer_receiver_parameter(
+        &mut self,
+        callable: &ast::ExprCallableType,
+    ) -> Option<Parameter<'db>> {
+        let receiver = callable.receiver.as_ref()?;
+        let receiver_type = self.infer_type_expression(receiver);
+        Some(
+            Parameter::positional_only(None)
+                .with_annotated_type(receiver_type)
+                .with_receiver(),
+        )
     }
 
     /// basedpython: builds the parameters of a *parameters spec* — the shared shape behind the

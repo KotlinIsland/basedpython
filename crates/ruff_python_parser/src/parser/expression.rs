@@ -358,20 +358,8 @@ impl<'src> Parser<'src> {
                 self.error_if_not_basedpython(
                     "callable type syntax `(...) -> ...` is not valid in .py files".to_string(),
                 );
-                self.bump(TokenKind::Rarrow);
-                // parse return type stopping before `|` so the union wraps the whole callable
-                let returns =
-                    self.parse_binary_expression_or_higher(OperatorPrecedence::BitOr, context);
-                let (args, parameter_slash, parameter_star) = Self::callable_parameter_spec(left);
                 left = ParsedExpr {
-                    expr: Expr::CallableType(ast::ExprCallableType {
-                        args,
-                        returns: Box::new(returns.expr),
-                        range: self.node_range(start),
-                        node_index: AtomicNodeIndex::NONE,
-                        parameter_slash,
-                        parameter_star,
-                    }),
+                    expr: self.parse_callable_type_arrow(None, left, start, context),
                     is_parenthesized: false,
                 };
                 continue;
@@ -1161,6 +1149,26 @@ impl<'src> Parser<'src> {
                     if context.is_in_type_param_bound() && self.second_dot_is_adjacent() =>
                 {
                     break lhs;
+                }
+                // basedpython: `int.() -> str` — a callable with an implicit
+                // receiver. `.` followed by `(` is never valid python, so the
+                // form is unambiguous; the `->` is consumed here rather than by
+                // the binary loop, which only recognises a parenthesized left
+                TokenKind::Dot if self.peek() == TokenKind::Lpar => {
+                    // the parameter list opens a bracket and the return type
+                    // recurses, so this arm needs the same depth guard as the
+                    // call / subscript arms above
+                    if self.tokens.nesting() > self.max_nesting_depth {
+                        self.report_recursion_limit_exceeded(self.current_token_range());
+                        break lhs;
+                    }
+                    self.error_if_not_basedpython(
+                        "receiver callable type `T.(...) -> ...` is not valid in .py files"
+                            .to_string(),
+                    );
+                    self.bump(TokenKind::Dot);
+                    let params = self.parse_parenthesized_expression();
+                    break self.parse_callable_type_arrow(Some(lhs), params, start, context);
                 }
                 TokenKind::Dot => {
                     // basedpython: postfix `.await` is sugar for a prefix
@@ -3229,6 +3237,9 @@ impl<'src> Parser<'src> {
                 Expr::ProtocolMethod(ast::ExprProtocolMethod {
                     name,
                     signature: Box::new(Expr::CallableType(ast::ExprCallableType {
+                        // a protocol method's receiver is its `self` parameter, not
+                        // an implicit one
+                        receiver: None,
                         args,
                         returns: Box::new(returns),
                         range: self.node_range(signature_start),
@@ -3301,6 +3312,35 @@ impl<'src> Parser<'src> {
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         }
+    }
+
+    /// basedpython: builds a callable type from its already-parsed parameter list,
+    /// with the parser positioned at the `->`. `params` is the parenthesized
+    /// element list — a single parenthesized type, a parenthesized tuple, or a
+    /// parameters spec — and `receiver` is the implicit receiver of the
+    /// `int.() -> str` form.
+    fn parse_callable_type_arrow(
+        &mut self,
+        receiver: Option<Expr>,
+        params: ParsedExpr,
+        start: TextSize,
+        context: ExpressionContext,
+    ) -> Expr {
+        // the receiver form reaches here from the postfix loop, where the `->` is
+        // only expected rather than guaranteed
+        self.expect(TokenKind::Rarrow);
+        // parse return type stopping before `|` so the union wraps the whole callable
+        let returns = self.parse_binary_expression_or_higher(OperatorPrecedence::BitOr, context);
+        let (args, parameter_slash, parameter_star) = Self::callable_parameter_spec(params);
+        Expr::CallableType(ast::ExprCallableType {
+            receiver: receiver.map(Box::new),
+            args,
+            returns: Box::new(returns.expr),
+            range: self.node_range(start),
+            node_index: AtomicNodeIndex::NONE,
+            parameter_slash,
+            parameter_star,
+        })
     }
 
     /// Parses an expression in parentheses, a tuple expression, or a generator expression.

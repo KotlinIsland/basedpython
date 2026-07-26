@@ -37,13 +37,13 @@ use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
     coalesce_chain, compat, context_params, decl_site_variance, decorator_keyword, dedent_string,
     dynamic_keyword, empty_declarations, extension, float_const, force_unwrap, frameworks,
-    generic_call, generics, grapheme_string, identity_swap, implicit_typing, inferred_annotation,
-    init_method, just_float, kw_subscript, literal_types, local_once, main_function, modifiers,
-    mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await, propagate,
-    properties, protocol_type, reified_generic, repeated_underscore, sentinel, some_ctor,
-    soundness, string_tag, super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index,
-    type_is, type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unpack,
-    use_site_variance,
+    generic_call, generics, grapheme_string, identity_swap, implicit_receiver, implicit_typing,
+    inferred_annotation, init_method, just_float, kw_subscript, literal_types, local_once,
+    main_function, modifiers, mutable_defaults, none_chain, optional_type, overload, parametric_is,
+    postfix_await, propagate, properties, protocol_type, reified_generic, repeated_underscore,
+    sentinel, some_ctor, soundness, string_tag, super_keyword, symbolic_type_op, top_star,
+    trailing_lambda, tuple_index, type_is, type_reification, typed_dict_literal, typed_lambda,
+    typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -490,6 +490,7 @@ pub(crate) fn run_against_source<'a>(
     let context_params_pass = context_params::ContextParamsPass::new(source_ref);
     let extension_block_pass = extension::ExtensionBlockPass::new(source_ref);
     let extension_call_pass = extension::ExtensionCallPass;
+    let implicit_receiver_pass = implicit_receiver::ImplicitReceiverPass;
     let frameworks_pass = frameworks::FrameworksPass::new(source_ref);
     let variance_pass = decl_site_variance::VarianceStripPass::new(source_ref);
     let anon_named_tuple_pass =
@@ -594,6 +595,11 @@ pub(crate) fn run_against_source<'a>(
         // type-directed rewrite of attribute accesses ty resolved to
         // extension members (`xs.second()` → `__by_ext__list__second(xs)`)
         &extension_call_pass,
+        // implicit receivers: `x.fn()` → `fn(x)` for a receiver callable in
+        // scope, and a trailing lambda block's unqualified receiver members →
+        // `it.<name>`. same shape as the extension rewrite above, which wins
+        // when both could apply
+        &implicit_receiver_pass,
         &dynamic_keyword_pass,
         // import-only companion to the ty-side implicit `Character` resolution;
         // emits no text edits, so ordering among the type passes is free

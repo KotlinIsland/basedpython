@@ -107,6 +107,7 @@ use crate::types::match_pattern::{ClassPatternPositionalResult, class_pattern_po
 use crate::types::narrow::NarrowingEvaluatorExtension;
 use crate::types::narrow::pattern_success_types;
 use crate::types::newtype::NewType;
+use crate::types::receivers;
 use crate::types::regex;
 use crate::types::reified_infer::{self, ReifiedInferenceError};
 use crate::types::set_theoretic::RecursivelyDefined;
@@ -11147,6 +11148,24 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 } else {
                     Place::Undefined.into()
                 }
+            })
+            // basedpython only: inside a trailing lambda block whose callback
+            // declares a receiver (`int.() -> None`), the receiver's members are
+            // in scope unqualified. reached last, so a name bound anywhere in the
+            // lexical chain — or a builtin — keeps its ordinary meaning
+            .or_fall_back_to(db, || {
+                if self.is_basedpython_file()
+                    && let Some(member) = receivers::implicit_receiver_member(
+                        db,
+                        self.file(),
+                        self.scope(),
+                        symbol_name,
+                    )
+                {
+                    Place::bound(member).into()
+                } else {
+                    Place::Undefined.into()
+                }
             });
 
         let ty =
@@ -12024,6 +12043,22 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
                 fallback_place = Place::bound(resolution.ty).into();
             }
+        }
+
+        // basedpython: `x.fn()` where `fn` is a name in scope declared as a
+        // receiver callable accepting `x` — the access binds the receiver. like
+        // extensions, this never shadows a declared member
+        if self.is_basedpython_file()
+            && fallback_place.place.is_undefined()
+            && let Some(bound) = receivers::resolve_receiver_attribute(
+                db,
+                self.file(),
+                self.scope(),
+                value_type,
+                &attr.id,
+            )
+        {
+            fallback_place = Place::bound(bound).into();
         }
 
         let attr_name = &attr.id;

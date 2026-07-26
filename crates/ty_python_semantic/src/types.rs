@@ -184,6 +184,7 @@ mod newtype;
 mod overlapping;
 mod overrides;
 mod protocol_class;
+pub(crate) mod receivers;
 mod regex;
 pub(crate) mod reified_infer;
 pub(crate) mod relation;

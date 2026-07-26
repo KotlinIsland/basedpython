@@ -1050,6 +1050,7 @@ pub struct ExprIpyEscapeCommand<'a> {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ExprCallableType<'a> {
+    receiver: Option<Box<ComparableExpr<'a>>>,
     args: Vec<ComparableExpr<'a>>,
     returns: Box<ComparableExpr<'a>>,
 }
@@ -1397,6 +1398,7 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
                 node_index: _,
             }) => Self::IpyEscapeCommand(ExprIpyEscapeCommand { kind: *kind, value }),
             ast::Expr::CallableType(ast::ExprCallableType {
+                receiver,
                 args,
                 returns,
                 range: _,
@@ -1404,6 +1406,9 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
                 parameter_slash: _,
                 parameter_star: _,
             }) => Self::CallableType(ExprCallableType {
+                receiver: receiver
+                    .as_ref()
+                    .map(|receiver| Box::new(receiver.as_ref().into())),
                 args: args.iter().map(ComparableExpr::from).collect(),
                 returns: Box::new(returns.as_ref().into()),
             }),

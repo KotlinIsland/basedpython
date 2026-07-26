@@ -618,6 +618,9 @@ fields = [
 [Expr.nodes.ExprCallableType]
 doc = "callable type expression: `(int, str) -> bool`"
 fields = [
+  { name = "receiver", type = "Expr?", doc = """basedpython: the implicit receiver of `int.() -> str` — a callable whose
+first argument is bound as the receiver, callable as `x.fn()` and supplying
+the implicit member scope of a trailing lambda block""" },
   { name = "args", type = "Expr*" },
   { name = "returns", type = "Expr" },
   { name = "parameter_slash", type = "Option<u32>", doc = "basedpython: index in `args` of the `/` positional-only marker" },
