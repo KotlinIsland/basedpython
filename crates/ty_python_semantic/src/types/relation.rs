@@ -1612,6 +1612,18 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                 self.always()
             }
 
+            // basedpython: a bound range `T: Lower..Upper` puts a floor under every
+            // specialization, so `X <: T` holds exactly when `X` is below the smallest `T` there
+            // is — the lower end. this has to come before the source-side rule below: that rule
+            // would widen a typevar source to its own upper bound first, and `Self@m <: T@m`
+            // would compare `D` against the lower bound rather than `Self@m` itself
+            (_, Type::TypeVar(bound_typevar))
+                if !bound_typevar.is_inferable(db, self.inferable)
+                    && let Some(lower_bound) = bound_typevar.typevar(db).lower_bound(db) =>
+            {
+                self.check_type_pair(db, source, lower_bound)
+            }
+
             // A fully static typevar is a subtype of its upper bound, and to something similar to
             // the union of its constraints. An unbound, unconstrained, fully static typevar has an
             // implicit upper bound of `object` (which is handled above).

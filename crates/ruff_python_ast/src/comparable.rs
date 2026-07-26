@@ -1475,6 +1475,7 @@ impl<'a> From<&'a ast::TypeParam> for ComparableTypeParam<'a> {
         match type_param {
             ast::TypeParam::TypeVar(ast::TypeParamTypeVar {
                 name,
+                lower_bound,
                 bound,
                 default,
                 range: _,
@@ -1482,6 +1483,7 @@ impl<'a> From<&'a ast::TypeParam> for ComparableTypeParam<'a> {
                 variance: _,
             }) => Self::TypeVar(TypeParamTypeVar {
                 name: name.as_str(),
+                lower_bound: lower_bound.as_ref().map(Into::into),
                 bound: bound.as_ref().map(Into::into),
                 default: default.as_ref().map(Into::into),
             }),
@@ -1510,6 +1512,7 @@ impl<'a> From<&'a ast::TypeParam> for ComparableTypeParam<'a> {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TypeParamTypeVar<'a> {
     pub name: &'a str,
+    pub lower_bound: Option<Box<ComparableExpr<'a>>>,
     pub bound: Option<Box<ComparableExpr<'a>>>,
     pub default: Option<Box<ComparableExpr<'a>>>,
 }

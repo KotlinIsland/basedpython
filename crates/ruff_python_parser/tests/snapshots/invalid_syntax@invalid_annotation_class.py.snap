@@ -34,6 +34,7 @@ Module(
                                             range: 8..9,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -119,6 +120,7 @@ Module(
                                             range: 35..36,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -199,6 +201,7 @@ Module(
                                             range: 62..63,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -277,6 +280,7 @@ Module(
                                             range: 94..95,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Yield(
                                                 ExprYield {
@@ -350,6 +354,7 @@ Module(
                                             range: 145..146,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Named(
                                                 ExprNamed {
@@ -429,6 +434,7 @@ Module(
                                             range: 201..202,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -508,6 +514,7 @@ Module(
                                             range: 228..229,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Await(
                                                 ExprAwait {

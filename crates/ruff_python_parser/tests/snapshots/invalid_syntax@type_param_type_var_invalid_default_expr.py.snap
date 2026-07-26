@@ -36,6 +36,7 @@ Module(
                                             range: 7..8,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: Some(
                                             Starred(
@@ -103,6 +104,7 @@ Module(
                                             range: 30..31,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: Some(
                                             Yield(
@@ -171,6 +173,7 @@ Module(
                                             range: 56..57,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: Some(
                                             Yield(
@@ -239,6 +242,7 @@ Module(
                                             range: 84..85,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: Some(
                                             YieldFrom(
@@ -305,6 +309,7 @@ Module(
                                             range: 115..116,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: Some(
                                             Name(
@@ -328,6 +333,7 @@ Module(
                                             range: 124..127,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -379,6 +385,7 @@ Module(
                                             range: 142..143,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Name(
                                                 ExprName {

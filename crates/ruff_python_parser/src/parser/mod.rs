@@ -744,6 +744,20 @@ impl<'src> Parser<'src> {
         ts.contains(self.current_token_kind())
     }
 
+    /// basedpython: whether the parser is sitting on the first of two adjacent `.` tokens, which
+    /// spell the `..` of a type-parameter bound range. Adjacency is checked against the source
+    /// because the two dots are separate tokens — `a . . b` is not a range.
+    fn at_adjacent_double_dot(&mut self) -> bool {
+        self.at(TokenKind::Dot) && self.second_dot_is_adjacent()
+    }
+
+    /// The half of [`Parser::at_adjacent_double_dot`] that the caller cannot already know: whether
+    /// the token after the current `.` is a `.` written immediately after it.
+    fn second_dot_is_adjacent(&mut self) -> bool {
+        self.peek() == TokenKind::Dot
+            && self.source[usize::from(self.current_token_range().end())..].starts_with('.')
+    }
+
     fn src_text<T>(&self, ranged: T) -> &'src str
     where
         T: Ranged,

@@ -832,14 +832,29 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Consumes the two adjacent `.` tokens of a bound range, returning their combined range.
+    ///
+    /// The caller must have checked [`Parser::at_adjacent_double_dot`].
+    fn eat_double_dot(&mut self) -> TextRange {
+        let first = self.current_token_range();
+        self.bump(TokenKind::Dot);
+        let second = self.current_token_range();
+        self.bump(TokenKind::Dot);
+        TextRange::new(first.start(), second.end())
+    }
+
     /// Emits a parse error at the current token range if the parser is not in
     /// basedpython mode. Used to gate basedpython-only syntax in `.py` files.
     pub(super) fn error_if_not_basedpython(&mut self, message: String) {
+        let range = self.current_token_range();
+        self.error_if_not_basedpython_at(message, range);
+    }
+
+    /// Like [`Parser::error_if_not_basedpython`], but reports at `range` rather than at the
+    /// current token.
+    fn error_if_not_basedpython_at(&mut self, message: String, range: TextRange) {
         if !self.options.is_basedpython {
-            self.add_error(
-                ParseErrorType::BasedPythonOnly(message),
-                self.current_token_range(),
-            );
+            self.add_error(ParseErrorType::BasedPythonOnly(message), range);
         }
     }
 
@@ -6743,14 +6758,39 @@ impl<'src> Parser<'src> {
 
             let name = self.parse_identifier();
 
-            let bound = if self.eat(TokenKind::Colon) {
+            let (lower_bound, bound) = if self.eat(TokenKind::Colon) {
+                // the lower end is parsed in a context that leaves a following `..` alone, so it
+                // separates the two ends instead of being eaten as a malformed attribute access
                 if self.at_expr() {
                     // test_err type_param_invalid_bound_expr
                     // type X[T: *int] = int
                     // type X[T: yield x] = int
                     // type X[T: yield from x] = int
                     // type X[T: x := int] = int
-                    Some(Box::new(self.parse_conditional_expression_or_higher().expr))
+                    let first = Box::new(
+                        self.parse_conditional_expression_or_higher_impl(
+                            ExpressionContext::default().with_in_type_param_bound(),
+                        )
+                        .expr,
+                    );
+                    if self.at_adjacent_double_dot() {
+                        self.parse_bound_range_upper(first)
+                    } else {
+                        (None, Some(first))
+                    }
+                } else if self.at_adjacent_double_dot() {
+                    // a range needs both ends, so the lower half cannot be elided; `T: ..int`
+                    // is spelled `T: int`
+                    self.error_if_not_basedpython_at(
+                        "type parameter bound ranges are not valid in `.py` files".to_string(),
+                        self.current_token_range(),
+                    );
+                    let dots = self.eat_double_dot();
+                    self.add_error(ParseErrorType::IncompleteTypeParamBoundRange, dots);
+                    let upper = self
+                        .at_expr()
+                        .then(|| Box::new(self.parse_conditional_expression_or_higher().expr));
+                    (None, upper)
                 } else {
                     // test_err type_param_missing_bound
                     // type X[T: ] = int
@@ -6759,10 +6799,10 @@ impl<'src> Parser<'src> {
                         ParseErrorType::ExpectedExpression,
                         self.current_token_range(),
                     );
-                    None
+                    (None, None)
                 }
             } else {
-                None
+                (None, None)
             };
 
             let equal_token_start = self.node_start();
@@ -6814,11 +6854,45 @@ impl<'src> Parser<'src> {
             ast::TypeParam::TypeVar(ast::TypeParamTypeVar {
                 range: self.node_range(start),
                 name,
+                lower_bound,
                 bound,
                 default,
                 variance,
                 node_index: AtomicNodeIndex::NONE,
             })
+        }
+    }
+
+    /// Parses the upper half of a basedpython bound range, with the parser sitting on the `..`
+    /// and `lower` already parsed.
+    ///
+    /// Returns the `(lower_bound, bound)` pair to store on the type parameter. A range that is
+    /// rejected — because an end is missing, or because this is a `.py` file — degrades to a plain
+    /// upper bound so that downstream consumers only ever see a well-formed bound.
+    fn parse_bound_range_upper(
+        &mut self,
+        lower: Box<Expr>,
+    ) -> (Option<Box<Expr>>, Option<Box<Expr>>) {
+        // test_err type_param_bound_range_py
+        // type X[T: int..object] = int
+        let dots = self.eat_double_dot();
+        self.error_if_not_basedpython_at(
+            "type parameter bound ranges are not valid in `.py` files".to_string(),
+            dots,
+        );
+
+        let Some(upper) = self
+            .at_expr()
+            .then(|| Box::new(self.parse_conditional_expression_or_higher().expr))
+        else {
+            self.add_error(ParseErrorType::IncompleteTypeParamBoundRange, dots);
+            return (None, Some(lower));
+        };
+
+        if self.options.is_basedpython {
+            (Some(lower), Some(upper))
+        } else {
+            (None, Some(upper))
         }
     }
 

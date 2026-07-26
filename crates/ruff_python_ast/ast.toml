@@ -688,6 +688,7 @@ doc = "See also [type_param](https://docs.python.org/3/library/ast.html#ast.type
 doc = "See also [TypeVar](https://docs.python.org/3/library/ast.html#ast.TypeVar)"
 fields = [
   { name = "name", type = "Identifier" },
+  { name = "lower_bound", type = "Box<Expr>?", doc = "The lower end of a basedpython bound range `T: Lower..Upper`" },
   { name = "bound", type = "Box<Expr>?" },
   { name = "default", type = "Box<Expr>?" },
   { name = "variance", type = "Variance?", skip_visit = true },

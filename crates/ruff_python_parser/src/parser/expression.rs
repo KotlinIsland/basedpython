@@ -1157,6 +1157,13 @@ impl<'src> Parser<'src> {
                     }
                     Expr::Subscript(self.parse_subscript_expression(lhs, start))
                 }
+                // basedpython: in a bound range `T: Lower..Upper` the `..` separates the two
+                // ends, so the lower end stops rather than reading the dots as attribute access
+                TokenKind::Dot
+                    if context.is_in_type_param_bound() && self.second_dot_is_adjacent() =>
+                {
+                    break lhs;
+                }
                 TokenKind::Dot => {
                     // basedpython: postfix `.await` is sugar for a prefix
                     // `await (expr)`. it binds as tightly as attribute access,
@@ -4784,6 +4791,11 @@ bitflags! {
         /// `!` force-unwrap operator so the trailing `!` stays available as the
         /// conversion flag. A parenthesised `(value!)` resets the context.
         const IN_INTERPOLATION = 1 << 6;
+
+        /// basedpython: set while parsing the lower end of a type-parameter bound range
+        /// (`T: Lower..Upper`). Suppresses the `..` attribute-access recovery so the `..`
+        /// stays available as the range separator.
+        const IN_TYPE_PARAM_BOUND = 1 << 7;
     }
 }
 
@@ -4873,6 +4885,19 @@ impl ExpressionContext {
     /// than the postfix force-unwrap operator
     pub(super) const fn is_in_interpolation(self) -> bool {
         self.0.contains(ExpressionContextFlags::IN_INTERPOLATION)
+    }
+
+    /// basedpython: returns a new context that marks parsing as being inside the lower end of a
+    /// type-parameter bound range
+    pub(super) fn with_in_type_param_bound(self) -> Self {
+        ExpressionContext(self.0 | ExpressionContextFlags::IN_TYPE_PARAM_BOUND)
+    }
+
+    /// basedpython: returns `true` if parsing the lower end of a type-parameter bound range,
+    /// where a following `..` separates the two ends rather than being a malformed attribute
+    /// access
+    pub(super) const fn is_in_type_param_bound(self) -> bool {
+        self.0.contains(ExpressionContextFlags::IN_TYPE_PARAM_BOUND)
     }
 
     /// Returns `true` if starred expressions are allowed.

@@ -137,6 +137,8 @@ pub enum ParseErrorType {
     EmptyTypeParams,
     /// basedpython: a type parameter list repeated a `/` or bare `*` separator.
     DuplicateTypeParamSeparator(&'static str),
+    /// basedpython: a bound range `T: Lower..Upper` was missing one of its ends.
+    IncompleteTypeParamBoundRange,
 
     /// An unparenthesized named expression was found where it is not allowed.
     UnparenthesizedNamedExpression,
@@ -312,6 +314,9 @@ impl std::fmt::Display for ParseErrorType {
                     "Type parameter list cannot have two `{separator}` separators"
                 )
             }
+            ParseErrorType::IncompleteTypeParamBoundRange => f.write_str(
+                "Type parameter bound range requires both a lower and an upper bound, as in `T: int..object`",
+            ),
             ParseErrorType::ParamAfterVarKeywordParam => {
                 f.write_str("Parameter cannot follow var-keyword parameter")
             }

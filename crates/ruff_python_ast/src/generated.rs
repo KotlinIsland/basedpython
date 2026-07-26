@@ -10240,6 +10240,8 @@ pub struct TypeParamTypeVar {
     pub node_index: crate::AtomicNodeIndex,
     pub range: ruff_text_size::TextRange,
     pub name: crate::Identifier,
+    /// The lower end of a basedpython bound range `T: Lower..Upper`
+    pub lower_bound: Option<Box<Expr>>,
     pub bound: Option<Box<Expr>>,
     pub default: Option<Box<Expr>>,
     pub variance: Option<crate::Variance>,
@@ -11384,6 +11386,7 @@ impl TypeParamTypeVar {
     {
         let TypeParamTypeVar {
             name,
+            lower_bound,
             bound,
             default,
             variance: _,
@@ -11391,6 +11394,10 @@ impl TypeParamTypeVar {
             node_index: _,
         } = self;
         visitor.visit_identifier(name);
+
+        if let Some(lower_bound) = lower_bound {
+            visitor.visit_expr(lower_bound);
+        }
 
         if let Some(bound) = bound {
             visitor.visit_expr(bound);

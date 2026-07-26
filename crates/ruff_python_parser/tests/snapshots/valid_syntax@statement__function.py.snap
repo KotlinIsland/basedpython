@@ -2531,6 +2531,7 @@ Module(
                                             range: 1712..1713,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -2627,6 +2628,7 @@ Module(
                                             range: 1747..1748,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Name(
                                                 ExprName {
@@ -2732,6 +2734,7 @@ Module(
                                             range: 1787..1788,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Tuple(
                                                 ExprTuple {
@@ -3121,6 +3124,7 @@ Module(
                                             range: 1946..1947,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -3135,6 +3139,7 @@ Module(
                                             range: 1949..1950,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Name(
                                                 ExprName {

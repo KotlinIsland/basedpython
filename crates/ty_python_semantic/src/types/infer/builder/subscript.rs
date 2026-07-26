@@ -1387,6 +1387,39 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         continue;
                     }
 
+                    // basedpython: a bound range `T: Lower..Upper` also puts a floor under the
+                    // argument, so check that end before the upper end below
+                    if let Some(lower_bound) = typevar.typevar(db).lower_bound(db)
+                        && lower_bound
+                            .when_assignable_to(
+                                db,
+                                provided_type,
+                                &constraints,
+                                InferableTypeVars::None,
+                            )
+                            .is_never_satisfied(db)
+                    {
+                        if let Some(builder) = self
+                            .context
+                            .report_lint(&INVALID_TYPE_ARGUMENTS, type_argument.node)
+                        {
+                            let mut diagnostic = builder.into_diagnostic(format_args!(
+                                "Type `{}` does not satisfy lower bound `{}` \
+                                    of type variable `{}`",
+                                provided_type.display(db),
+                                lower_bound.display(db),
+                                typevar.identity(db).display(db),
+                            ));
+                            add_typevar_definition(db, &mut diagnostic, typevar);
+                            lower_bound
+                                .assignability_error_context(db, provided_type)
+                                .attach_to(db, &mut diagnostic);
+                        }
+                        error = Some(ExplicitSpecializationError::UnsatisfiedBound);
+                        specialization_types.push(Some(Type::unknown()));
+                        continue;
+                    }
+
                     // TODO consider just accepting the given specialization without checking
                     // against bounds/constraints, but recording the expression for deferred
                     // checking at end of scope. This would avoid a lot of cycles caused by eagerly

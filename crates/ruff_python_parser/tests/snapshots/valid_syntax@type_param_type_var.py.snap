@@ -36,6 +36,7 @@ Module(
                                             range: 7..8,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -87,6 +88,7 @@ Module(
                                             range: 23..24,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: Some(
                                             Name(
@@ -147,6 +149,7 @@ Module(
                                             range: 45..46,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Name(
                                                 ExprName {
@@ -216,6 +219,7 @@ Module(
                                             range: 72..73,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Tuple(
                                                 ExprTuple {
@@ -308,6 +312,7 @@ Module(
                                             range: 106..107,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Name(
                                                 ExprName {
@@ -340,6 +345,7 @@ Module(
                                             range: 120..121,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Tuple(
                                                 ExprTuple {

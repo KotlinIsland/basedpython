@@ -2652,23 +2652,24 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             self.push_scope(with_scope);
 
             for type_param in &type_params.type_params {
-                let (name, bound, default) = match type_param {
+                let (name, lower_bound, bound, default) = match type_param {
                     ast::TypeParam::TypeVar(ast::TypeParamTypeVar {
                         range: _,
                         node_index: _,
                         name,
+                        lower_bound,
                         bound,
                         default,
                         variance: _,
-                    }) => (name, bound, default),
+                    }) => (name, lower_bound, bound, default),
                     ast::TypeParam::ParamSpec(ast::TypeParamParamSpec {
                         name, default, ..
-                    }) => (name, &None, default),
+                    }) => (name, &None, &None, default),
                     ast::TypeParam::TypeVarTuple(ast::TypeParamTypeVarTuple {
                         name,
                         default,
                         ..
-                    }) => (name, &None, default),
+                    }) => (name, &None, &None, default),
                 };
                 self.scopes_by_expression
                     .record_expression(name, self.current_scope());
@@ -2678,6 +2679,9 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 // or not a name is "bound" by a typevar declaration; the latter is always true.
                 self.mark_place_bound(symbol.into());
                 self.mark_place_declared(symbol.into());
+                if let Some(lower_bound) = lower_bound {
+                    self.visit_expr(lower_bound);
+                }
                 if let Some(bounds) = bound {
                     self.visit_expr(bounds);
                 }

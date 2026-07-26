@@ -36,6 +36,7 @@ Module(
                                             range: 7..8,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Yield(
                                                 ExprYield {
@@ -105,6 +106,7 @@ Module(
                                             range: 55..56,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: Some(
                                             Yield(
@@ -380,6 +382,7 @@ Module(
                                             range: 315..316,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Await(
                                                 ExprAwait {
