@@ -183,7 +183,10 @@ def format_contents(src: str) -> tuple[str, Sequence[CodeBlockError]]:
                 # blocks so we can return early if the language is not one of these.
                 return f"{match['before']}{match['code']}{match['after']}"
 
-        code = textwrap.dedent(match["code"])
+        # `code` and `indent` are mandatory groups of `SNIPPED_RE`, so they always
+        # participate; the `Match[str]` annotation on this callback is what loses
+        # that, and the fallbacks below are unreachable at runtime
+        code = textwrap.dedent(match["code"] or "")
         try:
             code = format_str(code, extension)
         except InvalidInput as e:
@@ -191,7 +194,7 @@ def format_contents(src: str) -> tuple[str, Sequence[CodeBlockError]]:
         except NotImplementedError as e:
             raise e
 
-        code = textwrap.indent(code, match["indent"])
+        code = textwrap.indent(code, match["indent"] or "")
         return f"{match['before']}{code}{match['after']}"
 
     src = SNIPPED_RE.sub(_snipped_match, src)

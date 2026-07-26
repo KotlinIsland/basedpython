@@ -48,7 +48,14 @@ pub struct Edit {
 pub fn all_patches() -> Vec<Box<dyn Patch>> {
     // patches are added here as upstream syncs surface concrete drift. each
     // entry must have a corresponding module in `src/patches/` with tests
-    vec![Box::new(patches::mapping::MappingKeyCovariance)]
+    vec![
+        Box::new(patches::mapping::MappingKeyCovariance),
+        // `re` capture groups: `AnyStr | MaybeNone` (i.e. `Any`) becomes the
+        // honest `AnyStr | None`. nothing about it depends on the pep 695
+        // conversion, so it belongs in the pass that a re-apply over the
+        // committed tree also runs
+        Box::new(patches::re_optional_groups::ReOptionalGroups),
+    ]
 }
 
 /// registry of every post-conversion patch, applied in pass 3 after the pep 695

@@ -23,6 +23,7 @@ use crate::types::infer::builder::type_expression::{
 };
 use crate::types::infer::builder::{ArgExpr, ArgumentsIter, MultiInferenceGuard};
 use crate::types::infer::{InferenceFlags, TypeExpressionFlags};
+use crate::types::regex;
 use crate::types::special_form::AliasSpec;
 use crate::types::subscript::{LegacyGenericOrigin, SubscriptError, SubscriptErrorKind};
 use crate::types::tuple::{Tuple, TupleSpecBuilder, TupleType, VariableSegment};
@@ -204,7 +205,32 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.infer_subscript_load_impl(value_ty, subscript, tcx)
         };
 
+        // `m[1]` goes through `Match.__getitem__`, whose stub can only say
+        // `AnyStr | None`; the pattern says which of the two it is
+        let ty = self
+            .refine_regex_subscript(value_ty, subscript)
+            .unwrap_or(ty);
+
         self.basedpython_chain_result(subscript, ty, in_chain)
+    }
+
+    /// The type of `m[key]` for a `re.Match` whose capture groups are known.
+    fn refine_regex_subscript(
+        &self,
+        value_ty: Type<'db>,
+        subscript: &ast::ExprSubscript,
+    ) -> Option<Type<'db>> {
+        let db = self.db();
+        let groups = regex::groups_of(db, value_ty)?;
+        let any_str = regex::any_str_of(db, value_ty)?;
+        let key = self.regex_group_key(&subscript.slice)?;
+        match regex::group_type(db, groups, any_str, key) {
+            Ok(ty) => Some(ty),
+            Err(_) => {
+                self.report_no_such_regex_group((&*subscript.slice).into(), key);
+                Some(Type::unknown())
+            }
+        }
     }
 
     pub(super) fn infer_subscript_load_impl(
