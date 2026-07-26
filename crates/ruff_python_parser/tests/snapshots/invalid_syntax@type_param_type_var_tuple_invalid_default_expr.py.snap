@@ -334,6 +334,7 @@ Module(
                                             range: 136..139,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,

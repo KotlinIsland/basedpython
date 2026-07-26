@@ -36,6 +36,7 @@ Module(
                                             range: 7..8,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Starred(
                                                 ExprStarred {
@@ -103,6 +104,7 @@ Module(
                                             range: 29..30,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Yield(
                                                 ExprYield {
@@ -171,6 +173,7 @@ Module(
                                             range: 54..55,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             YieldFrom(
                                                 ExprYieldFrom {
@@ -237,6 +240,7 @@ Module(
                                             range: 84..85,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Name(
                                                 ExprName {
@@ -260,6 +264,7 @@ Module(
                                             range: 92..95,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,

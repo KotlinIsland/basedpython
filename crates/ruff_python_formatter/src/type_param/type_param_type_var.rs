@@ -12,6 +12,7 @@ impl FormatNodeRule<TypeParamTypeVar> for FormatTypeParamTypeVar {
             range: _,
             node_index: _,
             name,
+            lower_bound,
             bound,
             default,
             variance,
@@ -35,7 +36,18 @@ impl FormatNodeRule<TypeParamTypeVar> for FormatTypeParamTypeVar {
             let is_constraints_call = f.options().is_basedpython()
                 && matches!(bound.as_ref(), Expr::Call(call)
                     if call.func.as_name_expr().is_some_and(|n| n.id == "constraints"));
-            if is_constraints_call {
+            if let Some(lower_bound) = lower_bound {
+                write!(
+                    f,
+                    [
+                        token(":"),
+                        space(),
+                        lower_bound.format(),
+                        token(".."),
+                        bound.format()
+                    ]
+                )?;
+            } else if is_constraints_call {
                 write!(
                     f,
                     [

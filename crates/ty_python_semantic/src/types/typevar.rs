@@ -162,6 +162,12 @@ pub struct TypeVarInstance<'db> {
     #[returns(copy)]
     _bound_or_constraints: Option<TypeVarBoundOrConstraintsEvaluation<'db>>,
 
+    /// basedpython: the lower bound of a bound range `T: Lower..Upper`, if any. A lower bound
+    /// only ever accompanies an upper bound, since a range requires both ends. Don't use this
+    /// field directly; use the `lower_bound` method instead (to evaluate any lazy bound).
+    #[returns(copy)]
+    _lower_bound: Option<TypeVarLowerBoundEvaluation<'db>>,
+
     /// The explicitly specified variance of the TypeVar
     #[returns(copy)]
     pub(super) explicit_variance: Option<TypeVarVariance>,
@@ -192,6 +198,16 @@ pub(super) fn walk_type_var_type<'db, V: visitor::TypeVisitor<'db> + ?Sized>(
         }
     } {
         walk_type_var_bounds(db, bound_or_constraints, visitor);
+    }
+    if let Some(lower_bound) = if visitor.should_visit_lazy_type_attributes() {
+        typevar.lower_bound(db)
+    } else {
+        match typevar._lower_bound(db) {
+            Some(TypeVarLowerBoundEvaluation::Eager(lower_bound)) => Some(lower_bound),
+            _ => None,
+        }
+    } {
+        visitor.visit_type(db, lower_bound);
     }
     if let Some(default_type) = if visitor.should_visit_lazy_type_attributes() {
         typevar.default_type(db)
@@ -226,6 +242,7 @@ impl<'db> TypeVarInstance<'db> {
             db,
             self.identity(db).with_name_suffix(db, suffix),
             self._bound_or_constraints(db),
+            self._lower_bound(db),
             self.explicit_variance(db),
             self._default(db),
         )
@@ -236,6 +253,7 @@ impl<'db> TypeVarInstance<'db> {
             db,
             identity,
             self._bound_or_constraints(db),
+            self._lower_bound(db),
             self.explicit_variance(db),
             self._default(db),
         )
@@ -306,6 +324,38 @@ impl<'db> TypeVarInstance<'db> {
         })
     }
 
+    /// basedpython: returns the lower bound of this typevar, if it was declared with a bound
+    /// range `T: Lower..Upper`.
+    pub(crate) fn lower_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
+        match self._lower_bound(db)? {
+            TypeVarLowerBoundEvaluation::Eager(ty) => Some(ty),
+            TypeVarLowerBoundEvaluation::Lazy => self.lazy_lower_bound(db),
+        }
+    }
+
+    #[salsa::tracked(
+        returns(copy),
+        cycle_fn=lazy_lower_bound_cycle_recover,
+        cycle_initial=|_, _, _| None,
+        heap_size=ruff_memory_usage::heap_size
+    )]
+    fn lazy_lower_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
+        let definition = self.definition(db)?;
+        let module = parsed_module(db, definition.file(db)).load(db);
+        let DefinitionKind::TypeVar(typevar) = definition.kind(db) else {
+            return None;
+        };
+        let lower =
+            definition_expression_type(db, definition, typevar.node(&module).lower_bound.as_ref()?);
+
+        // a generic lower bound is reported as an error and dropped, mirroring the upper bound
+        if lower.has_non_self_typevar_or_typevar_instance(db) {
+            return None;
+        }
+
+        Some(lower)
+    }
+
     /// Returns the bounds or constraints of this typevar. If the typevar is unbounded, returns
     /// `object` as its upper bound.
     pub(crate) fn require_bound_or_constraints(
@@ -365,6 +415,15 @@ impl<'db> TypeVarInstance<'db> {
                         })
                     }
                 }),
+            self._lower_bound(db)
+                .and_then(|lower_bound| match lower_bound {
+                    TypeVarLowerBoundEvaluation::Eager(ty) => {
+                        Some(ty.materialize(db, materialization_kind, visitor).into())
+                    }
+                    TypeVarLowerBoundEvaluation::Lazy => self
+                        .lazy_lower_bound(db)
+                        .map(|ty| ty.materialize(db, materialization_kind, visitor).into()),
+                }),
             self.explicit_variance(db),
             self._default(db).and_then(|default| match default {
                 TypeVarDefaultEvaluation::Eager(ty) => {
@@ -386,21 +445,32 @@ impl<'db> TypeVarInstance<'db> {
                 .to_instance(db)?
                 .map(TypeVarBoundOrConstraints::Constraints),
         };
+        let lower_bound = match self.lower_bound(db) {
+            Some(lower_bound) => Some(lower_bound.to_instance(db)?),
+            None => None,
+        };
         let identity = TypeVarIdentity::new(
             db,
             Name::concat(&[self.name(db).as_str(), "'instance"]),
             None, // definition
             self.kind(db),
         );
-        Some(bound_or_constraints.map(|bound_or_constraints| {
+        // the projection is only exact if both ends of the bound project exactly
+        let is_exact = bound_or_constraints.is_exact()
+            && lower_bound
+                .as_ref()
+                .is_none_or(InstanceProjection::is_exact);
+        Some(InstanceProjection::new(
             Self::new(
                 db,
                 identity,
-                Some(bound_or_constraints.into()),
+                Some(bound_or_constraints.into_inner().into()),
+                lower_bound.map(|lower_bound| lower_bound.into_inner().into()),
                 self.explicit_variance(db),
                 None, // _default
-            )
-        }))
+            ),
+            is_exact,
+        ))
     }
 
     fn type_is_self_referential(
@@ -1035,6 +1105,7 @@ impl<'db> BoundTypeVarInstance<'db> {
             db,
             typevar.identity(db),
             Some(TypeVarBoundOrConstraintsEvaluation::Eager(upper_bound)),
+            None, // `P.args` and `P.kwargs` have no lower bound
             typevar.explicit_variance(db),
             None, // `P.args` and `P.kwargs` cannot have defaults even though `P` can
         );
@@ -1069,6 +1140,7 @@ impl<'db> BoundTypeVarInstance<'db> {
                 db,
                 typevar.identity(db),
                 None, // Remove the upper bound set by `with_paramspec_attr`
+                None, // _lower_bound
                 typevar.explicit_variance(db),
                 None, // `P.args` and `P.kwargs` cannot have defaults even though `P` can
             ),
@@ -1097,6 +1169,7 @@ impl<'db> BoundTypeVarInstance<'db> {
             db,
             identity,
             None, // _bound_or_constraints
+            None, // _lower_bound
             Some(variance),
             None, // _default
         );
@@ -1125,6 +1198,7 @@ impl<'db> BoundTypeVarInstance<'db> {
             db,
             identity,
             Some(TypeVarBoundOrConstraints::UpperBound(upper_bound).into()),
+            None, // _lower_bound
             Some(TypeVarVariance::Invariant),
             None, // _default
         );
@@ -1144,6 +1218,7 @@ impl<'db> BoundTypeVarInstance<'db> {
             db,
             typevar.identity(db),
             bound_or_constraints.map(TypeVarBoundOrConstraintsEvaluation::Eager),
+            typevar._lower_bound(db),
             typevar.explicit_variance(db),
             typevar._default(db),
         );
@@ -1275,7 +1350,7 @@ impl<'db> BoundTypeVarInstance<'db> {
             TypeMapping::BindSelf(binding) => {
                 if binding.should_bind(db, self) {
                     binding.self_type()
-                } else if self.bound_or_constraints_mention_self(db) {
+                } else if self.bounds_mention_self(db) {
                     // a type variable can be bounded by `Self` (`def method[T: Self]`). that bound
                     // only constrains anything once its `Self` has been bound to the receiver too
                     Type::TypeVar(self.with_mapped_bound_and_default(
@@ -1378,12 +1453,20 @@ impl<'db> BoundTypeVarInstance<'db> {
         )
     }
 
-    /// Whether this type variable's bound or constraints mention `Self`.
+    /// Whether any end of this type variable's bound, or any of its constraints, mentions `Self`.
     ///
     /// A lazily-evaluated bound is invisible to [`Type::contains_self`], so callers that need to
-    /// know whether `Self` binding has any work to do must ask this separately
-    pub(crate) fn bound_or_constraints_mention_self(self, db: &'db dyn Db) -> bool {
-        match self.typevar(db).bound_or_constraints(db) {
+    /// know whether `Self` binding has any work to do must ask this separately. That covers the
+    /// lower end of a basedpython bound range (`def method[T: Self..object]`), which is lazy too
+    pub(crate) fn bounds_mention_self(self, db: &'db dyn Db) -> bool {
+        let typevar = self.typevar(db);
+        if typevar
+            .lower_bound(db)
+            .is_some_and(|lower_bound| lower_bound.contains_self(db))
+        {
+            return true;
+        }
+        match typevar.bound_or_constraints(db) {
             None => false,
             Some(TypeVarBoundOrConstraints::UpperBound(bound)) => bound.contains_self(db),
             Some(TypeVarBoundOrConstraints::Constraints(constraints)) => constraints
@@ -1404,9 +1487,10 @@ impl<'db> BoundTypeVarInstance<'db> {
     ) -> Self {
         let typevar = self.typevar(db);
         let bound_or_constraints = typevar.bound_or_constraints(db);
+        let lower_bound = typevar.lower_bound(db);
         let default = self.default_type(db);
 
-        if bound_or_constraints.is_none() && default.is_none() {
+        if bound_or_constraints.is_none() && lower_bound.is_none() && default.is_none() {
             return Self::new(
                 db,
                 typevar,
@@ -1422,6 +1506,10 @@ impl<'db> BoundTypeVarInstance<'db> {
             bound_or_constraints.map(|bound_or_constraints| {
                 bound_or_constraints
                     .apply_type_mapping_impl(db, type_mapping, visitor)
+                    .into()
+            }),
+            lower_bound.map(|ty| {
+                ty.apply_type_mapping_impl(db, type_mapping, TypeContext::default(), visitor)
                     .into()
             }),
             typevar.explicit_variance(db),
@@ -1550,6 +1638,22 @@ impl<'db> TypeVarIdentity<'db> {
     fn with_name_suffix(self, db: &'db dyn Db, suffix: &str) -> Self {
         let name = Name::concat(&[self.name(db).as_str(), "'", suffix]);
         Self::new(db, name, self.definition(db), self.kind(db))
+    }
+}
+
+#[expect(clippy::ref_option)]
+fn lazy_lower_bound_cycle_recover<'db>(
+    db: &'db dyn Db,
+    cycle: &salsa::Cycle,
+    previous: &Option<Type<'db>>,
+    current: Option<Type<'db>>,
+    _typevar: TypeVarInstance<'db>,
+) -> Option<Type<'db>> {
+    // Normalize the bound to ensure cycle convergence.
+    match (previous, current) {
+        (Some(prev), Some(current)) => Some(current.cycle_normalized(db, *prev, cycle)),
+        (None, Some(current)) => Some(current.recursive_type_normalized(db, cycle)),
+        (_, None) => None,
     }
 }
 
@@ -1721,6 +1825,21 @@ fn bound_typevar_default_type_cycle_recover<'db>(
         (Some(previous), Some(default)) => Some(default.cycle_normalized(db, *previous, cycle)),
         (None, Some(default)) => Some(default.recursive_type_normalized(db, cycle)),
         (_, None) => None,
+    }
+}
+
+/// Whether a typevar's basedpython lower bound is eagerly specified or lazily evaluated.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
+pub enum TypeVarLowerBoundEvaluation<'db> {
+    /// The lower bound is lazily evaluated.
+    Lazy,
+    /// The lower bound is eagerly specified.
+    Eager(Type<'db>),
+}
+
+impl<'db> From<Type<'db>> for TypeVarLowerBoundEvaluation<'db> {
+    fn from(value: Type<'db>) -> Self {
+        TypeVarLowerBoundEvaluation::Eager(value)
     }
 }
 

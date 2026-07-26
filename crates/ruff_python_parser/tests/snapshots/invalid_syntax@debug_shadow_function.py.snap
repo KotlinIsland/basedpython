@@ -75,6 +75,7 @@ Module(
                                             range: 44..53,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,

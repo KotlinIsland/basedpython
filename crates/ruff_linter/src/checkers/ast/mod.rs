@@ -2480,6 +2480,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
         // Step 2: Traversal
         match type_param {
             ast::TypeParam::TypeVar(ast::TypeParamTypeVar {
+                lower_bound,
                 bound,
                 default,
                 name: _,
@@ -2487,6 +2488,11 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 node_index: _,
                 variance: _,
             }) => {
+                if let Some(expr) = lower_bound {
+                    self.visit
+                        .type_param_definitions
+                        .push((expr, self.semantic.snapshot()));
+                }
                 if let Some(expr) = bound {
                     self.visit
                         .type_param_definitions

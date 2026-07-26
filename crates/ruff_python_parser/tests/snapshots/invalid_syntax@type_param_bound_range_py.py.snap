@@ -1,0 +1,83 @@
+---
+source: crates/ruff_python_parser/tests/fixtures.rs
+input_file: crates/ruff_python_parser/resources/inline/err/type_param_bound_range_py.py
+---
+## AST
+
+```
+Module(
+    ModModule {
+        node_index: NodeIndex(None),
+        range: 0..29,
+        body: [
+            TypeAlias(
+                StmtTypeAlias {
+                    node_index: NodeIndex(None),
+                    range: 0..28,
+                    name: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 5..6,
+                            id: Name("X"),
+                            ctx: Store,
+                        },
+                    ),
+                    type_params: Some(
+                        TypeParams {
+                            range: 6..22,
+                            node_index: NodeIndex(None),
+                            type_params: [
+                                TypeVar(
+                                    TypeParamTypeVar {
+                                        node_index: NodeIndex(None),
+                                        range: 7..21,
+                                        name: Identifier {
+                                            id: Name("T"),
+                                            range: 7..8,
+                                            node_index: NodeIndex(None),
+                                        },
+                                        lower_bound: None,
+                                        bound: Some(
+                                            Name(
+                                                ExprName {
+                                                    node_index: NodeIndex(None),
+                                                    range: 15..21,
+                                                    id: Name("object"),
+                                                    ctx: Load,
+                                                },
+                                            ),
+                                        ),
+                                        default: None,
+                                        variance: None,
+                                    },
+                                ),
+                            ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
+                        },
+                    ),
+                    value: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 25..28,
+                            id: Name("int"),
+                            ctx: Load,
+                        },
+                    ),
+                    is_private: false,
+                },
+            ),
+        ],
+    },
+)
+```
+## Errors
+
+  |
+1 | type X[T: int..object] = int
+  |              ^^ Syntax Error: type parameter bound ranges are not valid in `.py` files
+  |

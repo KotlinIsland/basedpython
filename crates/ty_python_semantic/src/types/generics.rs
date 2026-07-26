@@ -241,6 +241,7 @@ pub(crate) fn typing_self<'db>(
         db,
         identity,
         Some(bounds.into()),
+        None, // _lower_bound
         // According to the [spec], we can consider `Self`
         // equivalent to an invariant type variable
         // [spec]: https://typing.python.org/en/latest/spec/generics.html#self

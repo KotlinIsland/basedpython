@@ -151,6 +151,7 @@ Module(
                                             range: 68..69,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -249,6 +250,7 @@ Module(
                                             range: 108..109,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -300,6 +302,7 @@ Module(
                                             range: 124..125,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -398,6 +401,7 @@ Module(
                                             range: 153..154,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -504,6 +508,7 @@ Module(
                                             range: 186..187,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Name(
                                                 ExprName {
@@ -619,6 +624,7 @@ Module(
                                             range: 224..225,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Tuple(
                                                 ExprTuple {
@@ -757,6 +763,7 @@ Module(
                                             range: 269..270,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: Some(
                                             Name(
@@ -832,6 +839,7 @@ Module(
                                             range: 295..296,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             BinOp(
                                                 ExprBinOp {
@@ -1458,6 +1466,7 @@ Module(
                                             range: 687..688,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -1509,6 +1518,7 @@ Module(
                                             range: 708..709,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -1560,6 +1570,7 @@ Module(
                                             range: 722..723,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -1786,6 +1797,7 @@ Module(
                                             range: 865..866,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
@@ -2059,6 +2071,7 @@ Module(
                                             range: 1011..1012,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Name(
                                                 ExprName {
@@ -2135,6 +2148,7 @@ Module(
                                             range: 1082..1083,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: Some(
                                             Tuple(
                                                 ExprTuple {

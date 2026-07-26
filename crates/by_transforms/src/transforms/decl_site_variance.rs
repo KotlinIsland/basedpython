@@ -3,6 +3,9 @@
 //! on the AST node and consumed by ty's type checker directly — this
 //! only deletes surface bytes so output is valid Python.
 //!
+//! also strips the lower end of a basedpython bound range (`class C[T: int..object]`), which
+//! ty enforces from the AST node; python bounds only have an upper end
+//!
 //! also strips the basedpython `/` and bare `*` type-parameter separators
 //! (`class C[A, /, B, *, D]`). their positional-only / keyword-only meaning is
 //! carried on the AST node and enforced by ty; python's own type-parameter
@@ -92,11 +95,20 @@ impl<'ast> Visitor<'ast> for State<'_> {
 
         if let Some(tp) = type_params {
             for param in &tp.type_params {
-                if let TypeParam::TypeVar(tv) = param
-                    && tv.variance.is_some()
-                {
-                    let prefix = TextRange::new(tv.range().start(), tv.name.range().start());
-                    self.edits.push((prefix, String::new()));
+                if let TypeParam::TypeVar(tv) = param {
+                    if tv.variance.is_some() {
+                        let prefix = TextRange::new(tv.range().start(), tv.name.range().start());
+                        self.edits.push((prefix, String::new()));
+                    }
+                    // `T: int..object` keeps only its upper end, so delete `int..`
+                    if let Some(lower) = &tv.lower_bound
+                        && let Some(bound) = &tv.bound
+                    {
+                        self.edits.push((
+                            TextRange::new(lower.range().start(), bound.range().start()),
+                            String::new(),
+                        ));
+                    }
                 }
             }
             if let Some(slash) = tp.separators.slash_range {
@@ -156,6 +168,80 @@ mod tests {
     #[test]
     fn invariant_typevar_untouched() {
         check_py312("class C[T]: ...\n", "class C[T]: ...\n");
+    }
+
+    #[test]
+    fn strips_lower_bound_end() {
+        check_py312(
+            "class C[T: int..object]: ...\n",
+            "class C[T: object]: ...\n",
+        );
+    }
+
+    #[test]
+    fn strips_lower_bound_end_with_default() {
+        // a typevar default is 3.13, so this goes through the `Generic[...]` polyfill instead of
+        // the surface-byte deletion; the lower end has to be dropped on that path too
+        check_py312(
+            "class C[T: int..object = str]: ...\n",
+            indoc! {"
+                from typing import Generic
+                from typing_extensions import TypeVar
+                _T = TypeVar(\"_T\", bound=object, default=str)
+                class C(Generic[_T]): ...
+            "},
+        );
+    }
+
+    #[test]
+    fn strips_lower_bound_end_under_generic_polyfill() {
+        let config = Config {
+            min_version: PythonVersion::PY311,
+            ..Config::test_default()
+        };
+        assert_eq!(
+            transpile("class C[T: int..object]: ...\n", &config).unwrap(),
+            indoc! {"
+                from typing import TypeVar, Generic
+                _T = TypeVar(\"_T\", bound=object)
+                class C(Generic[_T]): ...
+            "},
+        );
+    }
+
+    #[test]
+    fn strips_lower_bound_end_with_variance() {
+        check_py312(
+            "class C[out T: int..object]: ...\n",
+            "class C[T: object]: ...\n",
+        );
+    }
+
+    #[test]
+    fn strips_lower_bound_end_on_function() {
+        check_py312(
+            indoc! {"
+                def f[T: int..object](x: T) -> T:
+                    return x
+            "},
+            indoc! {"
+                def f[T: object](x: T) -> T:
+                    return x
+            "},
+        );
+    }
+
+    #[test]
+    fn strips_lower_bound_end_for_several_params() {
+        check_py312(
+            "class C[T: int..object, U: str..object]: ...\n",
+            "class C[T: object, U: object]: ...\n",
+        );
+    }
+
+    #[test]
+    fn plain_bound_untouched() {
+        check_py312("class C[T: object]: ...\n", "class C[T: object]: ...\n");
     }
 
     #[test]

@@ -36,6 +36,7 @@ Module(
                                             range: 51..52,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: Some(
                                             Name(
@@ -95,6 +96,7 @@ Module(
                                             range: 72..73,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: Some(
                                             Name(
@@ -170,6 +172,7 @@ Module(
                                             range: 96..97,
                                             node_index: NodeIndex(None),
                                         },
+                                        lower_bound: None,
                                         bound: None,
                                         default: Some(
                                             Name(

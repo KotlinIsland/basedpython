@@ -1,0 +1,75 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/type_param_bound_ranges.by
+---
+## Input
+```bython
+class C[T: int..object]: ...
+
+
+class WithDefault[T: int..object = str]: ...
+
+
+class WithVariance[out T: int..object]: ...
+
+
+class Several[T: int..object, U: str..object]: ...
+
+
+class PlainBoundIsUnchanged[T: object]: ...
+
+
+class ConstraintsAreUnchanged[T: constraints (int, str)]: ...
+
+
+class SelfLowerEnd[T: Self..object]: ...
+
+
+class ComplexEnds[T: (int | str)..object]: ...
+
+
+def f[T: int..object](x: T) -> T:
+    return x
+
+
+class Broken[
+    T: int..object,
+    U: str..object,
+]: ...
+```
+
+## Output
+```bython
+class C[T: int..object]: ...
+
+
+class WithDefault[T: int..object = str]: ...
+
+
+class WithVariance[out T: int..object]: ...
+
+
+class Several[T: int..object, U: str..object]: ...
+
+
+class PlainBoundIsUnchanged[T: object]: ...
+
+
+class ConstraintsAreUnchanged[T: constraints (int, str)]: ...
+
+
+class SelfLowerEnd[T: Self..object]: ...
+
+
+class ComplexEnds[T: (int | str)..object]: ...
+
+
+def f[T: int..object](x: T) -> T:
+    return x
+
+
+class Broken[
+    T: int..object,
+    U: str..object,
+]: ...
+```

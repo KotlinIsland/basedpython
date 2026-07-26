@@ -748,6 +748,7 @@ pub fn walk_type_params<V: Transformer + ?Sized>(visitor: &V, type_params: &mut 
 pub fn walk_type_param<V: Transformer + ?Sized>(visitor: &V, type_param: &mut TypeParam) {
     match type_param {
         TypeParam::TypeVar(TypeParamTypeVar {
+            lower_bound,
             bound,
             default,
             name: _,
@@ -755,6 +756,9 @@ pub fn walk_type_param<V: Transformer + ?Sized>(visitor: &V, type_param: &mut Ty
             node_index: _,
             variance: _,
         }) => {
+            if let Some(expr) = lower_bound {
+                visitor.visit_expr(expr);
+            }
             if let Some(expr) = bound {
                 visitor.visit_expr(expr);
             }

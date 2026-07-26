@@ -1,5 +1,6 @@
 use ruff_python_ast::{
-    Expr, InterpolatedStringElement, IpyEscapeKind, ModModule, Number, Operator, Stmt, UnaryOp,
+    Expr, InterpolatedStringElement, IpyEscapeKind, ModModule, Number, Operator, Stmt, TypeParam,
+    UnaryOp,
 };
 
 use crate::{
@@ -17,6 +18,17 @@ fn parse_basedpython_module(source: &str) -> Parsed<ModModule> {
     .try_into_module()
     .unwrap()
     .into_result()
+    .unwrap()
+}
+
+/// Like [`parse_basedpython_module`], but keeps the parse errors so tests can assert on them.
+fn parse_basedpython_module_with_errors(source: &str) -> Parsed<ModModule> {
+    crate::Parser::new(
+        source,
+        ParseOptions::from(Mode::Module).with_basedpython(true),
+    )
+    .parse()
+    .try_into_module()
     .unwrap()
 }
 
@@ -1400,6 +1412,169 @@ fn recursion_limit_nested_lambda_chain() {
         "expected RecursionLimitExceeded, got {:?}",
         err.error
     );
+}
+
+#[test]
+fn basedpython_type_param_bound_range_parse() {
+    // `T: Lower..Upper` records both ends; `bound` stays the upper end
+    let parsed = parse_basedpython_module("class C[T: int..object]: ...\n");
+    assert!(
+        parsed.errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        parsed.errors()
+    );
+    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single class definition");
+    };
+    let type_params = class.type_params.as_ref().expect("type params");
+    let [TypeParam::TypeVar(type_var)] = type_params.type_params.as_slice() else {
+        panic!("expected a single type variable");
+    };
+    assert_eq!(
+        type_var
+            .lower_bound
+            .as_ref()
+            .and_then(|expr| expr.as_name_expr())
+            .map(|name| name.id.as_str()),
+        Some("int")
+    );
+    assert_eq!(
+        type_var
+            .bound
+            .as_ref()
+            .and_then(|expr| expr.as_name_expr())
+            .map(|name| name.id.as_str()),
+        Some("object")
+    );
+}
+
+#[test]
+fn basedpython_plain_bound_has_no_lower_end() {
+    let parsed = parse_basedpython_module("class C[T: object]: ...\n");
+    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single class definition");
+    };
+    let [TypeParam::TypeVar(type_var)] = class
+        .type_params
+        .as_ref()
+        .expect("type params")
+        .type_params
+        .as_slice()
+    else {
+        panic!("expected a single type variable");
+    };
+    assert!(type_var.lower_bound.is_none());
+    assert!(type_var.bound.is_some());
+}
+
+#[test]
+fn basedpython_type_param_bound_range_requires_both_ends() {
+    // a range needs both ends, and degrades to the end it does have
+    for source in ["class C[T: int..]: ...\n", "class C[T: ..int]: ...\n"] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert!(
+            parsed
+                .errors()
+                .iter()
+                .any(|error| matches!(error.error, ParseErrorType::IncompleteTypeParamBoundRange)),
+            "expected an incomplete-range error for {source:?}, got {:?}",
+            parsed.errors()
+        );
+        let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single class definition");
+        };
+        let [TypeParam::TypeVar(type_var)] = class
+            .type_params
+            .as_ref()
+            .expect("type params")
+            .type_params
+            .as_slice()
+        else {
+            panic!("expected a single type variable");
+        };
+        assert!(type_var.lower_bound.is_none(), "{source:?}");
+        assert!(type_var.bound.is_some(), "{source:?}");
+    }
+}
+
+#[test]
+fn type_param_bound_range_is_basedpython_only() {
+    // in a `.py` file the range is rejected and degrades to its upper end
+    let parsed = crate::Parser::new(
+        "class C[T: int..object]: ...\n",
+        ParseOptions::from(Mode::Module),
+    )
+    .parse()
+    .try_into_module()
+    .expect("expected a module");
+    assert!(
+        parsed
+            .errors()
+            .iter()
+            .any(|error| matches!(error.error, ParseErrorType::BasedPythonOnly(_))),
+        "expected a basedpython-only error, got {:?}",
+        parsed.errors()
+    );
+    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single class definition");
+    };
+    let [TypeParam::TypeVar(type_var)] = class
+        .type_params
+        .as_ref()
+        .expect("type params")
+        .type_params
+        .as_slice()
+    else {
+        panic!("expected a single type variable");
+    };
+    assert!(type_var.lower_bound.is_none());
+    assert_eq!(
+        type_var
+            .bound
+            .as_ref()
+            .and_then(|expr| expr.as_name_expr())
+            .map(|name| name.id.as_str()),
+        Some("object")
+    );
+}
+
+#[test]
+fn type_param_bound_range_missing_end_is_basedpython_only() {
+    // an incomplete range in a `.py` file is rejected for being a range at all, rather than being
+    // told how to complete a range that has no spelling here. the incomplete-range error is
+    // suppressed as a cascade because `add_error` keeps only the first error at an offset
+    let parsed = crate::Parser::new("class C[T: ..int]: ...\n", ParseOptions::from(Mode::Module))
+        .parse()
+        .try_into_module()
+        .expect("expected a module");
+    let kinds: Vec<_> = parsed.errors().iter().map(|error| &error.error).collect();
+    assert!(
+        matches!(kinds.as_slice(), [ParseErrorType::BasedPythonOnly(_)]),
+        "expected only a basedpython-only error, got {kinds:?}"
+    );
+}
+
+#[test]
+fn spaced_dots_are_not_a_bound_range() {
+    // `..` has to be written as one unit; `a . . b` stays a malformed attribute access
+    let parsed = parse_basedpython_module_with_errors("class C[T: int . . object]: ...\n");
+    assert!(
+        !parsed.errors().is_empty(),
+        "expected `int . . object` to be rejected"
+    );
+    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single class definition");
+    };
+    let [TypeParam::TypeVar(type_var)] = class
+        .type_params
+        .as_ref()
+        .expect("type params")
+        .type_params
+        .as_slice()
+    else {
+        panic!("expected a single type variable");
+    };
+    assert!(type_var.lower_bound.is_none());
 }
 
 #[test]

@@ -18,7 +18,7 @@ use crate::{
         },
         typevar::{
             TypeVarBoundOrConstraintsEvaluation, TypeVarConstraints, TypeVarDefaultEvaluation,
-            TypeVarIdentity, TypeVarInstance,
+            TypeVarIdentity, TypeVarInstance, TypeVarLowerBoundEvaluation,
         },
         visitor::find_over_type,
     },
@@ -79,6 +79,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             range: _,
             node_index: _,
             name,
+            lower_bound,
             bound,
             default,
             variance,
@@ -129,7 +130,30 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             Some(_) => Some(TypeVarBoundOrConstraintsEvaluation::LazyUpperBound),
             None => None,
         };
-        if bound_or_constraint.is_some() || default.is_some() {
+        // basedpython: a bound range needs a plain upper end to bound it. the parser guarantees
+        // the syntax is `.by`-only, but `T: int..constraints (str, bytes)` and
+        // `T: int..(*: *, **: *)` still get this far, and dropping their lower end without a word
+        // would leave a confusing downstream error
+        let lower_bound_evaluation = lower_bound.as_deref().and_then(|lower_expr| {
+            if is_by
+                && matches!(
+                    bound_or_constraint,
+                    Some(TypeVarBoundOrConstraintsEvaluation::LazyUpperBound)
+                )
+            {
+                return Some(TypeVarLowerBoundEvaluation::Lazy);
+            }
+            if let Some(builder) = self
+                .context
+                .report_lint(&INVALID_TYPE_VARIABLE_BOUND, lower_expr)
+            {
+                builder.into_diagnostic(
+                    "TypeVar bound range requires a plain upper bound as its upper end",
+                );
+            }
+            None
+        });
+        if bound_or_constraint.is_some() || lower_bound_evaluation.is_some() || default.is_some() {
             self.deferred.insert(definition);
         }
         let explicit_variance = variance.map(|v| match v {
@@ -147,6 +171,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             db,
             identity,
             bound_or_constraint,
+            lower_bound_evaluation,
             explicit_variance,
             default.as_deref().map(|_| TypeVarDefaultEvaluation::Lazy),
         )));
@@ -162,6 +187,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             range: _,
             node_index: _,
             name,
+            lower_bound,
             bound,
             default,
             variance: _,
@@ -169,6 +195,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // basedpython: skip type-expression inference for a top-parameters bound — it denotes a
         // parameter list, not a type
         if self.is_basedpython_file() && is_top_parameters_bound(bound.as_deref()) {
+            // a lower bound is meaningless here, but it still needs a type: every expression in
+            // the definition region must be inferred
+            if let Some(lower_expr) = lower_bound.as_deref() {
+                let _ = self.infer_type_expression(lower_expr);
+            }
             if let Some(default_expr) = default.as_deref() {
                 let _ = self.infer_type_expression(default_expr);
                 let _ = name;
@@ -179,6 +210,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             range: _,
             node_index: _,
             name,
+            lower_bound,
             bound,
             default,
             variance: _,
@@ -279,8 +311,46 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             None => None,
         };
+        // basedpython: the lower end of a bound range is always inferred, even when the range was
+        // rejected above, so that every expression in the definition region has a type
+        let lower_bound_ty = lower_bound.as_deref().map(|lower_expr| {
+            let lower_ty = self.infer_type_variable_bound_end(lower_expr, "lower");
+            if let Some(TypeVarBoundOrConstraints::UpperBound(upper_ty)) = bound_or_constraints
+                && !lower_ty.is_assignable_to(db, upper_ty)
+                && let Some(builder) = self
+                    .context
+                    .report_lint(&INVALID_TYPE_VARIABLE_BOUND, lower_expr)
+            {
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "TypeVar lower bound `{lower}` is not assignable to its upper bound `{upper}`",
+                    lower = lower_ty.display(db),
+                    upper = upper_ty.display(db),
+                ));
+                diagnostic.info(
+                    "no type satisfies this bound range, so the type variable cannot be specialized",
+                );
+            }
+            (lower_expr, lower_ty)
+        });
         if let Some(default_expr) = default.as_deref() {
             let default_ty = self.infer_type_expression(default_expr);
+            // the default is a specialization like any other, so it has to sit above the lower
+            // end too — `validate_typevar_default` only knows about the upper end
+            if let Some((lower_expr, lower_ty)) = lower_bound_ty
+                && !lower_ty.is_assignable_to(db, default_ty)
+                && let Some(builder) = self
+                    .context
+                    .report_lint(&INVALID_TYPE_VARIABLE_DEFAULT, default_expr)
+            {
+                let mut diagnostic = builder.into_diagnostic(
+                    "TypeVar default is not assignable from the TypeVar's lower bound",
+                );
+                diagnostic.annotate(
+                    self.context
+                        .secondary(lower_expr)
+                        .message(format_args!("Lower bound of `{name}`", name = name.id)),
+                );
+            }
             if !self.check_default_for_outer_scope_typevars(default_ty, default_expr, &name.id) {
                 let bound_node = bound_node.map(|n| match n {
                     ast::Expr::Call(call)
@@ -314,6 +384,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// `Self` is exempt from that check: it is bound by the enclosing class, not by the generic
     /// context being defined, so `def method[T: Self](self) -> T` leaves nothing unsolved
     pub(super) fn infer_type_variable_bound(&mut self, bound: &ast::Expr) -> Type<'db> {
+        self.infer_type_variable_bound_end(bound, "upper")
+    }
+
+    /// Infer one end of a type variable's bound, named by `end` in any diagnostic. basedpython
+    /// bound ranges `T: Lower..Upper` have two ends; every other form has only an upper bound.
+    fn infer_type_variable_bound_end(&mut self, bound: &ast::Expr, end: &str) -> Type<'db> {
         let previously_in_type_variable_bound = self
             .context
             .inference_flags
@@ -329,7 +405,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 .context
                 .report_lint(&INVALID_TYPE_VARIABLE_BOUND, bound)
         {
-            builder.into_diagnostic("TypeVar upper bound cannot be generic");
+            builder.into_diagnostic(format_args!("TypeVar {end} bound cannot be generic"));
         }
 
         bound_ty
@@ -731,6 +807,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             db,
             identity,
             None, // ParamSpec, when declared using PEP 695 syntax, has no bounds or constraints
+            None, // _lower_bound
             None, // explicit_variance
             default.as_deref().map(|_| TypeVarDefaultEvaluation::Lazy),
         )));
@@ -859,6 +936,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             db,
             identity,
             None,
+            None, // _lower_bound
             None, // explicit_variance
             default.as_deref().map(|_| TypeVarDefaultEvaluation::Lazy),
         )));
@@ -1180,7 +1258,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             TypeVarKind::LegacyTypeVarTuple,
         );
         Type::KnownInstance(KnownInstanceType::TypeVar(TypeVarInstance::new(
-            db, identity, None, variance, default,
+            db, identity, None, None, variance, default,
         )))
     }
 
@@ -1427,7 +1505,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             TypeVarKind::LegacyParamSpec,
         );
         Type::KnownInstance(KnownInstanceType::TypeVar(TypeVarInstance::new(
-            db, identity, None, variance, default,
+            db, identity, None, None, variance, default,
         )))
     }
 
@@ -1768,6 +1846,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             db,
             identity,
             bound_or_constraints,
+            None, // _lower_bound
             variance,
             default,
         )))

@@ -1699,7 +1699,7 @@ impl<'db> Signature<'db> {
             || self.generic_context.is_some_and(|generic_context| {
                 generic_context
                     .variables(db)
-                    .any(|typevar| typevar.bound_or_constraints_mention_self(db))
+                    .any(|typevar| typevar.bounds_mention_self(db))
             })
     }
 

@@ -3824,10 +3824,21 @@ impl<'db> PathBounds<'db> {
             TypeVarBoundOrConstraints::UpperBound(bound) => {
                 let declared_upper = bound.top_materialization(db);
 
+                // basedpython: a declared lower bound raises the floor of every solution. The
+                // narrowest type above both it and any inferred lower bound is their union
+                let path_lower = match (path_bound.lower, bound_typevar.typevar(db).lower_bound(db))
+                {
+                    (Some(inferred), Some(declared)) => {
+                        Some(UnionType::from_two_elements(db, inferred, declared))
+                    }
+                    (Some(inferred), None) => Some(inferred),
+                    (None, declared) => declared,
+                };
+
                 // Prefer the lower bound (often the concrete actual type seen) over the
                 // upper bound (which may include TypeVar bounds/constraints). The upper bound
                 // should only be used as a fallback when no concrete type was inferred.
-                if let Some(lower) = path_bound.lower {
+                if let Some(lower) = path_lower {
                     if !path_bound.upper.is_satisfied_by(db, lower) {
                         let when_upper = path_bound.upper.when_satisfied_by(db, builder, lower);
                         if when_upper.is_never_satisfied(db) {
@@ -7516,7 +7527,13 @@ impl<'db> BoundTypeVarInstance<'db> {
             None => ALWAYS_TRUE,
             Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
                 let bound = bound.top_materialization(db);
-                Constraint::new_node_with_bounds(db, builder, self, None, Some(bound))
+                // basedpython: a bound range `T: Lower..Upper` also pins the bottom of the
+                // interval. take its bottom materialization, which is the most permissive choice
+                let lower = self
+                    .typevar(db)
+                    .lower_bound(db)
+                    .map(|lower| lower.bottom_materialization(db));
+                Constraint::new_node_with_bounds(db, builder, self, lower, Some(bound))
             }
             Some(TypeVarBoundOrConstraints::Constraints(constraints)) => {
                 let mut specializations = ALWAYS_FALSE;
@@ -7560,8 +7577,14 @@ impl<'db> BoundTypeVarInstance<'db> {
             None => (ALWAYS_TRUE, Vec::new()),
             Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
                 let bound = bound.bottom_materialization(db);
+                // basedpython: mirror `possible_specializations`, but take the most restrictive
+                // choice for the bottom of the interval
+                let lower = self
+                    .typevar(db)
+                    .lower_bound(db)
+                    .map(|lower| lower.top_materialization(db));
                 (
-                    Constraint::new_node_with_bounds(db, builder, self, None, Some(bound)),
+                    Constraint::new_node_with_bounds(db, builder, self, lower, Some(bound)),
                     Vec::new(),
                 )
             }
