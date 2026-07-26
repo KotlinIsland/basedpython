@@ -4558,53 +4558,64 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     //
                     // Note that built-in collection types do not have methods that explicitly
                     // return `Never`, so this rarely has a meaningful semantic impact.
+                    //
+                    // basedpython: the fluid short-circuit is about reachability only. An
+                    // assertion guard called on such a receiver (`a = A(); a.f()`) still has
+                    // to narrow, so its predicate is recorded either way.
+                    let is_terminal_call_candidate = func
+                        .as_attribute_expr()
+                        .and_then(|attribute| self.fluid_candidate_binding(&attribute.value))
+                        .is_none();
+                    let is_guard_call_candidate = self.source_type.is_basedpython();
+
                     if !self.source_type.is_stub()
-                        && func
-                            .as_attribute_expr()
-                            .and_then(|attribute| self.fluid_candidate_binding(&attribute.value))
-                            .is_none()
+                        && (is_terminal_call_candidate || is_guard_call_candidate)
                     {
                         let callable = self.add_standalone_expression(func);
                         let call_expr = self.add_standalone_expression(expr);
 
-                        let predicate = Predicate {
-                            node: PredicateNode::IsNonTerminalCall(CallableAndCallExpr {
-                                callable,
-                                call_expr,
-                                is_await,
-                            }),
-                            is_positive: true,
-                        };
+                        if is_terminal_call_candidate {
+                            let predicate = Predicate {
+                                node: PredicateNode::IsNonTerminalCall(CallableAndCallExpr {
+                                    callable,
+                                    call_expr,
+                                    is_await,
+                                }),
+                                is_positive: true,
+                            };
 
-                        let predicate_id =
-                            self.add_predicate(PredicateOrLiteral::Predicate(predicate));
-                        let narrowing_constraint = self
-                            .current_use_def_map_mut()
-                            .narrowing_constraints
-                            .add_atom(predicate_id);
-
-                        if self.in_function_scope() {
-                            let reachability_constraint = self
-                                .current_reachability_constraints_mut()
+                            let predicate_id =
+                                self.add_predicate(PredicateOrLiteral::Predicate(predicate));
+                            let narrowing_constraint = self
+                                .current_use_def_map_mut()
+                                .narrowing_constraints
                                 .add_atom(predicate_id);
-                            self.current_use_def_map_mut()
-                                .record_non_terminal_call_constraints(
-                                    reachability_constraint,
-                                    narrowing_constraint,
-                                );
-                        } else {
-                            // In non-function scopes, we only record a narrowing constraint
-                            // (not a reachability constraint). Recording reachability for
-                            // calls in module scope is simply too expensive, and it's not
-                            // too important of a use case.
-                            self.current_use_def_map_mut()
-                                .record_narrowing_constraint_for_all_places(narrowing_constraint);
+
+                            if self.in_function_scope() {
+                                let reachability_constraint = self
+                                    .current_reachability_constraints_mut()
+                                    .add_atom(predicate_id);
+                                self.current_use_def_map_mut()
+                                    .record_non_terminal_call_constraints(
+                                        reachability_constraint,
+                                        narrowing_constraint,
+                                    );
+                            } else {
+                                // In non-function scopes, we only record a narrowing constraint
+                                // (not a reachability constraint). Recording reachability for
+                                // calls in module scope is simply too expensive, and it's not
+                                // too important of a use case.
+                                self.current_use_def_map_mut()
+                                    .record_narrowing_constraint_for_all_places(
+                                        narrowing_constraint,
+                                    );
+                            }
                         }
 
                         // basedpython: the same call may be a call to an assertion guard
                         // (`def f(x) -> asserts x`), which narrows once it returns — that is,
                         // for the rest of this flow rather than inside a branch
-                        if self.source_type.is_basedpython() {
+                        if is_guard_call_candidate {
                             // record the call itself, which is what a checker sees; `expr`
                             // is the `await` for an awaited call
                             if let Some(call) = asserted_call(expr) {

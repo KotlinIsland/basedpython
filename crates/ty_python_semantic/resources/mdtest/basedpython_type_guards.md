@@ -398,6 +398,37 @@ def f(a: Holder):
     reveal_type(a.data)  # revealed: str
 ```
 
+## a receiver that was constructed is narrowed too
+
+```by
+class Holder:
+    data: str | None = None
+
+    def ensure(self) -> asserts self.data is not None:
+        if self.data is None:
+            raise ValueError
+
+def f():
+    h = Holder()
+    h.ensure()
+    reveal_type(h.data)  # revealed: str
+```
+
+## a guard called at module level narrows there
+
+```by
+class Holder:
+    data: str | None = "ready"
+
+    def ensure(self) -> asserts self.data is not None:
+        if self.data is None:
+            raise ValueError
+
+h = Holder()
+h.ensure()
+reveal_type(h.data)  # revealed: str
+```
+
 ## `and` asserts every place it names
 
 ```by
