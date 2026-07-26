@@ -115,8 +115,8 @@ def f(local x: BufferedReader) -> Sequence[str]_{x}:
 by the binding `x`. it is stripped in the lowered python — `Sequence[str]_{x}`
 becomes plain `Sequence[str]` — and carries its meaning only through the checker
 
-unlike rust, there is no separate lifetime variable to declare: you name the
-binding directly. the lifetime *is* the parameter. `self` is available inside
+there is no separate lifetime variable to declare: you name the binding
+directly. the lifetime *is* the parameter. `self` is available inside
 methods, which covers the common "a view into me" case:
 
 ```by
@@ -414,5 +414,5 @@ idiomatic static equivalent is `try` / `finally`
 - **`local` locals** — allowing `local y = expr` on an ordinary binding to opt a
     local variable into escape checking, not just parameters
 - **lifetime elision** — whether a function with exactly one `local` parameter
-    should tie an unannotated return to it automatically (rust does; it trades
-    explicitness for brevity, against basedpython's escape-by-default stance)
+    should tie an unannotated return to it automatically (it trades explicitness
+    for brevity, against basedpython's escape-by-default stance)

@@ -348,6 +348,36 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 })
                 .filter(|ty_range| !expected_return.accepts(db, ty_range.ty))
             {
+                // basedpython: a `return` is a conversion site — an in-scope
+                // `implementation A for B:` makes a `B` returnable where an `A` is
+                // declared, and the transpiler wraps the returned value in the
+                // witness. the generator paths above return early, so this is the
+                // plain case where the declared type really is the value's target
+                // only when the type the transpiler will recover for this function is
+                // the one being enforced here; otherwise the wrap it emits would be
+                // built from a different target
+                if crate::types::implementations::function_declared_return_type(
+                    db,
+                    self.file(),
+                    function,
+                ) == Some(declared_ty)
+                    && crate::types::implementations::repair_with_implementation(
+                        db,
+                        self.file(),
+                        invalid.ty,
+                        declared_ty,
+                    )
+                    .is_some_and(|repair| {
+                        crate::types::implementations::report_ambiguous_implementation(
+                            &self.context,
+                            invalid.range,
+                            &repair,
+                        );
+                        true
+                    })
+                {
+                    continue;
+                }
                 report_invalid_return_type(
                     &self.context,
                     invalid.range,

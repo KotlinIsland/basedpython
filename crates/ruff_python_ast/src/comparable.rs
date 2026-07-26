@@ -1459,6 +1459,8 @@ pub struct StmtClassDef<'a> {
     type_params: Option<ComparableTypeParams<'a>>,
     arguments: ComparableArguments<'a>,
     body: Vec<ComparableStmt<'a>>,
+    implementation_interface: Option<ComparableExpr<'a>>,
+    implementation_witness: Option<&'a str>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1736,6 +1738,7 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 body,
                 decorator_list,
                 type_params,
+                implementation,
                 range: _,
                 node_index: _,
             }) => Self::ClassDef(StmtClassDef {
@@ -1744,6 +1747,13 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 body: body.iter().map(Into::into).collect(),
                 decorator_list: decorator_list.iter().map(Into::into).collect(),
                 type_params: type_params.as_ref().map(Into::into),
+                implementation_interface: implementation
+                    .as_deref()
+                    .map(|header| (&header.interface).into()),
+                implementation_witness: implementation
+                    .as_deref()
+                    .and_then(|header| header.witness.as_ref())
+                    .map(ast::Identifier::as_str),
             }),
             ast::Stmt::Return(ast::StmtReturn {
                 value,

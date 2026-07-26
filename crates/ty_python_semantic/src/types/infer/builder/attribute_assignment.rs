@@ -311,8 +311,44 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
         emit_diagnostics: bool,
     ) -> bool {
         let db = self.builder.db();
-        let assignable = value_ty.is_assignable_to(db, target_ty);
-        if !assignable && emit_diagnostics {
+        if value_ty.is_assignable_to(db, target_ty) {
+            return true;
+        }
+        // basedpython: an attribute assignment is a conversion site — an in-scope
+        // `implementation A for B:` makes a `B` assignable where an `A` is declared,
+        // and the transpiler wraps the value in the witness. the same
+        // `value_conversions` answer the transpiler emits, so neither side can
+        // accept what the other cannot
+        let file = self.builder.file();
+        let model = crate::SemanticModel::new(db, file);
+        // the transpiler recovers the target type by looking the attribute up on the
+        // object. accept a conversion only when that agrees with the type actually
+        // being enforced here — for a descriptor or property the two can differ, and
+        // a wrap built from the wrong one would be worse than the plain error
+        let conversions = if self
+            .object_ty
+            .member(db, self.attribute)
+            .place
+            .ignore_possibly_undefined()
+            == Some(target_ty)
+        {
+            crate::types::implementations::value_conversions(
+                db, file, &model, self.value, target_ty,
+            )
+        } else {
+            Vec::new()
+        };
+        if let Some((range, repair)) = conversions.first() {
+            if emit_diagnostics {
+                crate::types::implementations::report_ambiguous_implementation(
+                    &self.builder.context,
+                    *range,
+                    repair,
+                );
+            }
+            return true;
+        }
+        if emit_diagnostics {
             report_invalid_attribute_assignment(
                 &self.builder.context,
                 self.target.range(),
@@ -321,7 +357,7 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
                 self.attribute,
             );
         }
-        assignable
+        false
     }
 
     fn final_assignment_is_valid(

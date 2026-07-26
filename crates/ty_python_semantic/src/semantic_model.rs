@@ -139,11 +139,15 @@ impl<'db> SemanticModel<'db> {
         let import_from = if extension_file == self.file {
             None
         } else {
-            Some(
-                ty_module_resolver::file_to_module(db, extension_file)?
-                    .name(db)
-                    .to_string(),
-            )
+            // spelled the way this file already imports the module: ty's absolute
+            // module name can be one the interpreter cannot resolve (a file under a
+            // directory that is not an importable package), and a relative import has
+            // no absolute spelling at all
+            Some(crate::types::implementations::imported_module_spelling(
+                db,
+                self.file,
+                extension_file,
+            )?)
         };
         Some(crate::types::extensions::ExtensionAttributeInfo {
             function: crate::types::extensions::backing_function_name(
@@ -155,6 +159,153 @@ impl<'db> SemanticModel<'db> {
             import_from,
             receiver_is_class: receiver_ty.nominal_class(db).is_none(),
         })
+    }
+
+    /// basedpython: the witness conversions a call's arguments need, as
+    /// `(argument range, conversion)` pairs.
+    ///
+    /// An `implementation A for B:` in scope makes a `B` acceptable where an `A`
+    /// is asked for; the transpiler wraps such an argument in the witness class.
+    /// The checker accepts exactly the same set — both sides ask
+    /// `repair_with_implementation` with the argument's type and the parameter
+    /// type of the single matching overload, and both decline when the callee is
+    /// overloaded or a union, where no single parameter type is well-defined.
+    pub fn implementation_call_conversions(
+        &self,
+        call: &ast::ExprCall,
+    ) -> Vec<(
+        ruff_text_size::TextRange,
+        crate::types::implementations::ImplementationConversion,
+    )> {
+        let db = self.db;
+        // near-free in a file with no implementations in scope: a cached query that
+        // comes back empty. without it every call in every `.by` file would be
+        // bound a second time just to look for conversions
+        if crate::types::implementations::applicable_implementations(db, self.file).is_empty() {
+            return Vec::new();
+        }
+        let Some(callable_ty) = call.func.inferred_type(self) else {
+            return Vec::new();
+        };
+        let arguments: Vec<ast::ArgOrKeyword> = call.arguments.iter_source_order().collect();
+        let Some(parameter_types) =
+            crate::types::implementations::call_parameter_types(self, callable_ty, call)
+        else {
+            return Vec::new();
+        };
+        let mut conversions = Vec::new();
+        for (argument, parameter_type) in arguments.iter().zip(parameter_types) {
+            let Some(parameter_type) = parameter_type else {
+                continue;
+            };
+            let value = argument.value();
+            let Some(argument_type) = value.inferred_type(self) else {
+                continue;
+            };
+            let Some(repair) = crate::types::implementations::repair_with_implementation(
+                db,
+                self.file,
+                argument_type,
+                parameter_type,
+            ) else {
+                continue;
+            };
+            if let Some(info) =
+                crate::types::implementations::conversion_info(db, self.file, &repair)
+            {
+                conversions.push((value.range(), info));
+            }
+        }
+        conversions
+    }
+
+    /// basedpython: the witness conversions a statement's value needs, as
+    /// `(range to wrap, conversion)` pairs.
+    ///
+    /// Covers every non-call conversion site: an annotated or plain assignment
+    /// (including to an attribute) and a `return`. For a collection literal the
+    /// wraps are per element. This is the same `value_conversions` answer the
+    /// checker used to accept the statement, so the emitted code converts exactly
+    /// where the checker said it would.
+    pub fn implementation_statement_conversions(
+        &self,
+        stmt: &ast::Stmt,
+    ) -> Vec<(
+        ruff_text_size::TextRange,
+        crate::types::implementations::ImplementationConversion,
+    )> {
+        let db = self.db;
+        if crate::types::implementations::applicable_implementations(db, self.file).is_empty() {
+            return Vec::new();
+        }
+        let Some((value, declared)) = self.conversion_site_of(stmt) else {
+            return Vec::new();
+        };
+        crate::types::implementations::value_conversions(db, self.file, self, value, declared)
+            .into_iter()
+            .filter_map(|(range, repair)| {
+                let info = crate::types::implementations::conversion_info(db, self.file, &repair)?;
+                Some((range, info))
+            })
+            .collect()
+    }
+
+    /// the value expression and the type it is checked against, for a statement
+    /// that is a conversion site
+    fn conversion_site_of<'ast>(
+        &self,
+        stmt: &'ast ast::Stmt,
+    ) -> Option<(&'ast ast::Expr, Type<'db>)> {
+        let db = self.db;
+        match stmt {
+            ast::Stmt::AnnAssign(assignment) => {
+                let value = assignment.value.as_deref()?;
+                let definition = semantic_index(db, self.file).expect_single_definition(assignment);
+                let declared = crate::types::inferred_declaration(db, definition)
+                    .declared()?
+                    .inner_type();
+                Some((value, declared))
+            }
+            ast::Stmt::Assign(assignment) => {
+                // one target only: with several, each could declare a different type
+                // and there would be no single answer for the one value. only an
+                // attribute target — a plain name's declaration lives in another
+                // statement, so the checker declines that case too
+                let [ast::Expr::Attribute(attribute)] = assignment.targets.as_slice() else {
+                    return None;
+                };
+                let object_ty = attribute.value.inferred_type(self)?;
+                let declared = object_ty
+                    .member(db, attribute.attr.as_str())
+                    .place
+                    .ignore_possibly_undefined()?;
+                Some((&assignment.value, declared))
+            }
+            ast::Stmt::Return(ret) => {
+                let value = ret.value.as_deref()?;
+                // the scope has to be found from the *value*: `scope()` falls back to
+                // the global scope for a statement, which names no function
+                let declared = self.declared_return_type(ast::AnyNodeRef::from(value))?;
+                Some((value, declared))
+            }
+            _ => None,
+        }
+    }
+
+    /// the declared return type of the function enclosing `node`
+    fn declared_return_type(&self, node: ast::AnyNodeRef) -> Option<Type<'db>> {
+        let db = self.db;
+        let index = semantic_index(db, self.file);
+        let file_scope = self.scope(node)?;
+        let function_ref = index.scope(file_scope).node().as_function()?;
+        let module = parsed_module(db, self.file).load(db);
+        let function = function_ref.node(&module);
+        // a generator's declared type describes the generator, not the returned
+        // value; the checker checks those against the yield type instead
+        if function.is_async || file_scope.is_generator_function(index) {
+            return None;
+        }
+        crate::types::implementations::function_declared_return_type(db, self.file, function)
     }
 
     /// basedpython: whether an attribute access resolves through an *implicit

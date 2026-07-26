@@ -115,6 +115,12 @@ fields = [
   { name = "type_params", type = "Box<crate::TypeParams>?" },
   { name = "arguments", type = "Box<crate::Arguments>?" },
   { name = "body", type = "ThinVec<Stmt>" },
+  { name = "implementation", type = "Box<crate::ImplementationHeader>?", doc = """basedpython: the header of an `implementation A for B as N:` declaration.
+Its presence is what marks the class as an implementation, and `name` holds the
+*implemented* type (`B`) — a reference to an existing declaration, as for an
+`extension`, so the header introduces no binding for it. Boxed so that the two
+extra pieces of surface cost one pointer rather than growing `Stmt` for every
+statement in every file""" },
 ]
 
 [Stmt.nodes.StmtReturn]

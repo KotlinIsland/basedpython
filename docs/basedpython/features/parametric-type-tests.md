@@ -16,8 +16,8 @@ b is Box[object]   # True — Box is covariant, and int <: object
 
 plain `isinstance` cannot answer a parameterized test — `x is list[int]`:
 `isinstance(x, list[int])` is a runtime `TypeError`, and the builtins erase
-their type arguments anyway. basedpython resolves it rust-style, from static
-types at compile time, keeping a runtime residue only where one is needed
+their type arguments anyway. basedpython resolves it from static types at
+compile time, keeping a runtime residue only where one is needed
 
 ## how a test resolves
 

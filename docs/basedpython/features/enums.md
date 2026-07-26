@@ -1,10 +1,9 @@
 # based enums
 
-basedpython supports algebraic sum types — "based enums" — modeled after
-rust and swift enums but with pythonic surface syntax. variants can carry
-typed payloads, support pattern matching, and integrate with ty's
-exhaustiveness checking. methods, classmethods, properties, and generics
-live directly on the enum body. type-directed emit lowers the surface form
+basedpython supports algebraic sum types — "based enums" — with pythonic
+surface syntax. variants can carry typed payloads, support pattern matching,
+and integrate with ty's exhaustiveness checking. methods, classmethods,
+properties, and generics live directly on the enum body. type-directed emit lowers the surface form
 to a sealed dataclass hierarchy at runtime:
 
 ```by
@@ -20,7 +19,7 @@ enum class Shape:
 
 ## goals
 
-- sum types (tagged unions) like rust/swift
+- sum types (tagged unions)
 - pythonic body: `def` for methods, `[T]` for generics, no foreign keywords
 - type-directed emit: clean surface, valid python 3.10+ runtime
 - no syntax cages: variants can be payload-less or carry typed fields with
