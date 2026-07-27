@@ -237,7 +237,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         .context
                         .inference_flags
                         .replace(InferenceFlags::IN_TYPE_EXPRESSION, true);
-                    let name_ty = self.infer_name_expression(name);
+                    let name_ty = self.infer_name_expression(name, TypeContext::default());
                     self.context.inference_flags.set(
                         InferenceFlags::IN_TYPE_EXPRESSION,
                         previously_in_type_expression,

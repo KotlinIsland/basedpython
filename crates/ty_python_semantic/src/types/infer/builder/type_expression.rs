@@ -242,7 +242,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         match expression {
             ast::Expr::Name(name) => match name.ctx {
                 ast::ExprContext::Load => {
-                    let ty = self.infer_name_expression(name);
+                    let ty = self.infer_name_expression(name, TypeContext::default());
                     if let Some(materialized) = self.intercept_nested_top_bottom(ty) {
                         return materialized;
                     }

@@ -99,6 +99,10 @@ classes at runtime, so `x is Shape.Circle` works (recall `is` is basedpython's
 exact-class check). because variants are qualified, the same variant name may
 appear in two different enums (`A.Same` vs `B.Same`) without collision
 
+where the expected type is the enum, a variant may also be written
+*unqualified* — `s: Shape = Circle(2.0)`, `p: Shape = Point`. see
+[context-sensitive resolution](context-sensitive-resolution.md)
+
 ## methods and other members
 
 the enum body is a regular suite. anything that can appear in a python class

@@ -58,6 +58,7 @@ use crate::types::class::{
 };
 use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
+use crate::types::context_sensitive;
 use crate::types::dedicated::{django, pydantic};
 use crate::types::diagnostic::{
     self, AMBIGUOUS_EXTENSION_MEMBER, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS,
@@ -4971,7 +4972,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // Resolve the target type, assuming a load context.
         let target_type = match &**target {
             ast::Expr::Name(name) => {
-                let previous_value = self.infer_name_load(name);
+                let previous_value = self.infer_name_load(name, TypeContext::default());
                 self.store_expression_type(target, previous_value);
                 previous_value
             }
@@ -6422,7 +6423,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         expression: &ast::Expr,
         tcx: TypeContext<'db>,
     ) -> Type<'db> {
-        if let Some(target) = tcx.annotation
+        if let Some(target) = tcx.annotation()
             && let Some(ty) = self.infer_type_form_contextual_expression(expression, target)
         {
             self.store_expression_type(expression, ty);
@@ -6468,14 +6469,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             ast::Expr::SetComp(setcomp) => self.infer_set_comprehension_expression(setcomp, tcx),
             ast::Expr::Name(name) => {
-                let ty = self.infer_name_expression(name);
-                tcx.annotation.map_or(ty, |target| {
+                let ty = self.infer_name_expression(name, tcx);
+                tcx.annotation().map_or(ty, |target| {
                     self.specialize_generic_class_from_context(ty, target)
                 })
             }
             ast::Expr::Attribute(attribute) => {
                 let ty = self.infer_attribute_expression(attribute);
-                tcx.annotation.map_or(ty, |target| {
+                tcx.annotation().map_or(ty, |target| {
                     self.specialize_generic_class_from_context(ty, target)
                 })
             }
@@ -6518,7 +6519,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             && let Some(candidate_def) = self.index.fluid_candidate_binding(expression)
         {
             if !tcx.inferred_from_argument
-                && let Some(annotation) = tcx.annotation
+                && let Some(annotation) = tcx.annotation()
             {
                 self.fluid_adoptions.insert(expression.into(), annotation);
             }
@@ -6540,7 +6541,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     fn apply_type_context(&mut self, mut ty: Type<'db>, tcx: TypeContext<'db>) -> Type<'db> {
         // Avoid promoting explicitly annotated literal values.
         if let Type::LiteralValue(literal) = ty
-            && let Some(tcx) = tcx.annotation
+            && let Some(tcx) = tcx.annotation()
             && let literal_tcx @ (Type::Union(_) | Type::LiteralValue(_)) = tcx
                 .resolve_type_alias(self.db())
                 .filter_union(self.db(), |ty| ty.as_literal_value().is_some())
@@ -6806,7 +6807,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         literal: &ast::ExprStringLiteral,
         tcx: TypeContext<'db>,
     ) -> Type<'db> {
-        if let Some(expected) = tcx.annotation {
+        if let Some(expected) = tcx.annotation() {
             self.store_maybe_expected_type(ast::ExprRef::from(literal), expected);
         }
 
@@ -7364,7 +7365,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             None
         }
         if let Some(target_instance) = tcx
-            .annotation
+            .annotation()
             .and_then(|a| find_anon_nt_target(self.db(), a))
             && let Type::NominalInstance(instance) = target_instance
             && let crate::types::class::ClassLiteral::DynamicNamedTuple(nt) =
@@ -7589,7 +7590,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         elt_tcx: TypeContext<'db>,
         fallback_tcx: TypeContext<'db>,
     ) -> Type<'db> {
-        let inference_tcx = if elt_tcx.annotation.is_some() {
+        let inference_tcx = if elt_tcx.annotation().is_some() {
             elt_tcx
         } else {
             fallback_tcx
@@ -7599,7 +7600,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // `expected_types` is IDE completion metadata. If normal set inference already has a
         // string-literal context, preserve that semantic context for inference while also offering
         // the transient `TypedDict` key fallback as a completion candidate.
-        if let (Some(elt_ty), Some(fallback_ty)) = (elt_tcx.annotation, fallback_tcx.annotation) {
+        if let (Some(elt_ty), Some(fallback_ty)) = (elt_tcx.annotation(), fallback_tcx.annotation())
+        {
             self.store_expected_type(
                 elt,
                 UnionType::from_two_elements(self.db(), elt_ty, fallback_ty),
@@ -7627,7 +7629,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         TypeContext::new(
-            tcx.annotation
+            tcx.annotation()
                 .and_then(|annotation| self.typed_dict_key_expected_type(annotation)),
         )
     }
@@ -7643,7 +7645,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         // Validate `TypedDict` dictionary literal assignments.
         if let Some(annotation) = tcx
-            .annotation
+            .annotation()
             .map(|annotation| annotation.resolve_type_alias(self.db()))
         {
             if let Some(typed_dict) = annotation.as_typed_dict() {
@@ -7871,7 +7873,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             let mut elt_tcx_variance: FxHashMap<BoundTypeVarIdentity<'_>, TypeVarVariance> =
                 FxHashMap::default();
 
-            if let Some(tcx) = tcx.annotation.map(|tcx| tcx.resolve_type_alias(self.db()))
+            if let Some(tcx) = tcx
+                .annotation()
+                .map(|tcx| tcx.resolve_type_alias(self.db()))
                 && matches!(tcx, Type::NominalInstance(_))
                 && let Some(specialization) = tcx.known_specialization(self.db(), collection_class)
                 && specialization.generic_context(self.db()) == generic_context
@@ -7904,7 +7908,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     elt_tcx_constraints.insert(identity, UnionAccumulator::new(inferred_ty));
                     elt_tcx_variance.insert(identity, typevar.variance(self.db()));
                 }
-            } else if let Some(tcx) = tcx.annotation
+            } else if let Some(tcx) = tcx.annotation()
                 && tcx.class_specialization(self.db()).is_some()
             {
                 let db = self.db();
@@ -7991,7 +7995,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // Avoid projecting and solving a constraint set when contextual inference has already
         // provided the complete specialization and every literal element is compatible with it.
         if !has_dict_unpack
-            && tcx.annotation.is_some()
+            && tcx.annotation().is_some()
             && let Some(specialization) = generic_context
                 .variables(self.db())
                 .map(|typevar| {
@@ -8103,7 +8107,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // candidate, its specialization is solved in two steps: the creation-time
         // solution below retains literal types, and constraints from later uses of the
         // binding are combined with it in `fluid_eventual_type`.
-        let fluid_def = if tcx.annotation.is_none() {
+        let fluid_def = if tcx.annotation().is_none() {
             collection_expr.and_then(|expr| self.fluid_candidate_definition(expr))
         } else {
             None
@@ -8320,7 +8324,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         tcx: TypeContext<'db>,
         evaluation_mode: EvaluationMode,
     ) -> TypeContext<'db> {
-        let Some(annotation) = tcx.annotation else {
+        let Some(annotation) = tcx.annotation() else {
             return TypeContext::default();
         };
 
@@ -8876,7 +8880,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let in_stub = self.in_stub();
         let previous_deferred_state = std::mem::replace(&mut self.deferred_state, in_stub.into());
 
-        let callable_tcx = if let Some(tcx) = tcx.annotation
+        let callable_tcx = if let Some(tcx) = tcx.annotation()
             // TODO: We could perform multi-inference here if there are multiple `Callable` annotations
             // in the union/intersection.
             && let Some(callable) = tcx
@@ -9425,8 +9429,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return UnionType::from_elements(self.db(), [target, Type::none(self.db())]);
         }
 
+        // basedpython carries the call's expected type into the callee so a bare
+        // constructor resolves context-sensitively (`s: Shape = Circle(2.0)`);
+        // nothing else reads it, and a python file is left exactly as it was
+        let callee_tcx = if self.is_basedpython_file() {
+            tcx.for_callee()
+        } else {
+            TypeContext::default()
+        };
         let callable_type =
-            self.infer_maybe_standalone_expression(&call_expression.func, TypeContext::default());
+            self.infer_maybe_standalone_expression(&call_expression.func, callee_tcx);
 
         // basedpython `a?.b()`: the `?.` short-circuit covers the call too, matching the
         // `None if a is None else a.b()` lowering, so call the present-receiver callable and
@@ -10988,7 +11000,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         diag.add_primary_tag(ruff_db::diagnostic::DiagnosticTag::Deprecated);
     }
 
-    fn infer_name_load(&mut self, name_node: &ast::ExprName) -> Type<'db> {
+    fn infer_name_load(&mut self, name_node: &ast::ExprName, tcx: TypeContext<'db>) -> Type<'db> {
         let ast::ExprName {
             range: _,
             node_index: _,
@@ -11172,12 +11184,32 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 } else {
                     Place::Undefined.into()
                 }
+            })
+            // basedpython only: context-sensitive resolution. where the
+            // expression's expected type is known, a name that resolves to
+            // nothing else is looked up as a member of that type — `Red` in a
+            // `Color` context means `Color.Red`. reached last of all, so it is
+            // purely additive: nothing that resolves today changes meaning
+            .or_fall_back_to(db, || {
+                if self.is_basedpython_file()
+                    && let Some(member) = context_sensitive::resolve_in_context(
+                        db,
+                        self.file(),
+                        self.scope(),
+                        tcx,
+                        symbol_name,
+                    )
+                {
+                    Place::bound(member.ty).into()
+                } else {
+                    Place::Undefined.into()
+                }
             });
 
         let ty =
             resolved_after_fallback.unwrap_with_diagnostic(db, |lookup_error| match lookup_error {
                 LookupError::Undefined(qualifiers) => {
-                    self.report_unresolved_reference(name_node);
+                    self.report_unresolved_reference(name_node, tcx);
                     TypeAndQualifiers::new(Type::unknown(), TypeOrigin::Inferred, qualifiers)
                 }
                 LookupError::PossiblyUndefined(type_when_bound) => {
@@ -11666,7 +11698,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         (place, constraint_keys)
     }
 
-    pub(super) fn report_unresolved_reference(&self, expr_name_node: &ast::ExprName) {
+    pub(super) fn report_unresolved_reference(
+        &self,
+        expr_name_node: &ast::ExprName,
+        tcx: TypeContext<'db>,
+    ) {
         let Some(builder) = self
             .context
             .report_lint(&UNRESOLVED_REFERENCE, expr_name_node)
@@ -11677,6 +11713,36 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let ast::ExprName { id, .. } = expr_name_node;
         let mut diagnostic =
             builder.into_diagnostic(format_args!("Name `{id}` used when not defined"));
+
+        // ===
+        // Subdiagnostic (0), basedpython only: the expected type declares a member
+        // of this name, but one of the context-sensitive resolution rules kept it
+        // from answering. Say which, since the qualified spelling always works
+        // ===
+        if self.is_basedpython_file()
+            && let Some(miss) =
+                context_sensitive::explain_miss(self.db(), self.file(), self.scope(), tcx, id)
+        {
+            let db = self.db();
+            match miss {
+                context_sensitive::Miss::Shadowed(enum_class) => diagnostic.info(format_args!(
+                    "`{enum_name}` declares `{id}`, but this scope binds `{id}` itself: \
+                     write `{enum_name}.{id}`",
+                    enum_name = enum_class.name(db)
+                )),
+                context_sensitive::Miss::Unnameable(enum_class) => diagnostic.info(format_args!(
+                    "`{id}` is a member of `{enum_name}`, which is not in scope here \
+                     under that name",
+                    enum_name = enum_class.name(db)
+                )),
+                context_sensitive::Miss::Ambiguous(first, second) => diagnostic.info(format_args!(
+                    "`{first_name}` and `{second_name}` both declare `{id}`: \
+                     write it qualified",
+                    first_name = first.name(db),
+                    second_name = second.name(db)
+                )),
+            }
+        }
 
         // ===
         // Subdiagnostic (1): check to see if it was added as a builtin in a later version of Python.
@@ -11752,10 +11818,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
-    fn infer_name_expression(&mut self, name: &ast::ExprName) -> Type<'db> {
+    fn infer_name_expression(&mut self, name: &ast::ExprName, tcx: TypeContext<'db>) -> Type<'db> {
         match name.ctx {
             ExprContext::Load => {
-                let ty = self.infer_name_load(name);
+                let ty = self.infer_name_load(name, tcx);
                 // basedpython: a `type def` has no runtime existence — the
                 // declaration is erased when transpiling — so naming one in a value
                 // position would emit python that raises `NameError`
@@ -11779,7 +11845,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
             ExprContext::Store => Type::Never,
             ExprContext::Del => {
-                self.infer_name_load(name);
+                self.infer_name_load(name, TypeContext::default());
                 Type::Never
             }
             ExprContext::Invalid => Type::unknown(),
@@ -13989,7 +14055,7 @@ fn is_basedpython_chain_link(expression: &ast::Expr) -> bool {
 /// `list[UnspecializedTypeVar | int]` still carries useful collection structure and concrete type
 /// information.
 fn is_empty_collection_type_context(tcx: TypeContext<'_>) -> bool {
-    tcx.annotation
+    tcx.annotation()
         .is_none_or(|annotation| annotation == Type::Dynamic(DynamicType::UnspecializedTypeVar))
 }
 

@@ -330,7 +330,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         callable_type: Type<'db>,
         tcx: TypeContext<'db>,
     ) -> Type<'db> {
-        let fluid_def = if tcx.annotation.is_none() && callable_type.is_class_literal() {
+        let fluid_def = if tcx.annotation().is_none() && callable_type.is_class_literal() {
             self.fluid_candidate_definition(ast::ExprRef::Call(call_expr))
         } else {
             None
@@ -1147,7 +1147,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         // presents the promoted view of the specialization (what the binding would
         // eventually be), without locking it.
         if !gathered.locked
-            && let Some(annotation) = tcx.annotation
+            && let Some(annotation) = tcx.annotation()
         {
             // An unstructured typevar context (`def id[T](x: T)`, `reveal_type`)
             // places no requirement on the specialization and observes the narrow
