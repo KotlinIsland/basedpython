@@ -117,7 +117,7 @@ pub(crate) trait TypeInfo {
 
     /// when `attribute` resolves to a basedpython `extension` member, the
     /// backing-function rewrite to apply (`xs.second()` →
-    /// `__by_ext__list__second(xs)`). `None` for ordinary attributes —
+    /// `_by_ext__list__second(xs)`). `None` for ordinary attributes —
     /// extensions never shadow declared members
     fn extension_attribute_info(
         &self,

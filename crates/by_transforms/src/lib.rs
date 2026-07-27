@@ -1158,17 +1158,17 @@ mod cross_file {
         ]);
         let out = transpile_file(&db, "/main.by", &Config::test_default());
         assert!(
-            out.contains("from ext import __by_ext__list__second"),
+            out.contains("from ext import _by_ext__list__second"),
             "backing-function import should be emitted, got:\n{out}"
         );
         assert!(
-            out.contains("print(__by_ext__list__second(xs))"),
+            out.contains("print(_by_ext__list__second(xs))"),
             "call should be rewritten, got:\n{out}"
         );
         // the defining module lowers the block itself
         let ext_out = transpile_file(&db, "/ext.by", &Config::test_default());
         assert!(
-            ext_out.contains("def __by_ext__list__second(self):"),
+            ext_out.contains("def _by_ext__list__second(self):"),
             "defining module should lower the block, got:\n{ext_out}"
         );
     }

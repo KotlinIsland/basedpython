@@ -7,17 +7,17 @@
 //!
 //! - each member lowers to a module-level backing function
 //!   (`def second(self)` inside `extension list:` → `def
-//!   __by_ext__list__second(self)`), tagged with a `# basedpython: extension
+//!   _by_ext__list__second(self)`), tagged with a `# basedpython: extension
 //!   <kind> <header>` marker comment carrying the member kind and the original
 //!   header (including any bracket bounds) for the reverse transform
 //! - call sites are rewritten by type: ty resolves `xs.second()` to the
-//!   extension member, and the call lowers to `__by_ext__list__second(xs)`.
+//!   extension member, and the call lowers to `_by_ext__list__second(xs)`.
 //!   a computed property drops the parentheses (`name.shouty` →
-//!   `__by_ext__str__shouty(name)`); an unapplied method reference becomes a
+//!   `_by_ext__str__shouty(name)`); an unapplied method reference becomes a
 //!   `functools.partial`
 //! - when the extension lives in another module, the precise import of the
 //!   backing function is emitted (`from textwrap import
-//!   __by_ext__str__dedented`), so `import textwrap` on the surface carries
+//!   _by_ext__str__dedented`), so `import textwrap` on the surface carries
 //!   the extensions with no runtime cost
 //!
 //! backing functions are plain and unannotated: their annotations reference
@@ -25,7 +25,7 @@
 //! runtime binding at module level. member bodies pass through as
 //! [`Fragment::Src`] spans, so lowerings inside them still compose. when a
 //! module declares more than one extension of the same target, later ones
-//! mangle with an ordinal (`__by_ext2__list__…`) so their members don't
+//! mangle with an ordinal (`_by_ext2__list__…`) so their members don't
 //! collide — the same rule ty uses when resolving call sites
 
 use std::collections::{BTreeSet, HashMap};
@@ -45,12 +45,16 @@ pub(crate) const EXTENSION_MARKER: &str = "# basedpython: extension";
 
 /// the mangled module-level name of an extension member's backing function.
 /// `ordinal` is the extension's occurrence index among same-target extensions
-/// in its module — mirrored by ty's `backing_function_name`
+/// in its module — mirrored by ty's `backing_function_name`.
+///
+/// exactly one leading underscore: python private-name-mangles any `__name`
+/// reference inside a class body, so a two-underscore name would break an
+/// extension call written in one
 pub(crate) fn backing_name(target: &str, ordinal: usize, member: &str) -> String {
     if ordinal == 0 {
-        format!("__by_ext__{target}__{member}")
+        format!("_by_ext__{target}__{member}")
     } else {
-        format!("__by_ext{}__{target}__{member}", ordinal + 1)
+        format!("_by_ext{}__{target}__{member}", ordinal + 1)
     }
 }
 
@@ -285,7 +289,7 @@ impl TypeAwarePass for ExtensionBlockPass<'_> {
 /// compose their edits inside them. but a member may be *called* before that
 /// position — a plain top-level call resolves left-to-right, so the `def` must
 /// precede every use. this runs on the finished output text: it re-parses,
-/// finds the top-level `__by_ext…` functions, and moves their line blocks to
+/// finds the top-level `_by_ext…` functions, and moves their line blocks to
 /// just after the leading imports, permuting the line table identically so
 /// source maps stay aligned
 pub(crate) fn hoist_backing_functions(
@@ -322,7 +326,7 @@ pub(crate) fn hoist_backing_functions(
     let mut backing: Vec<(usize, usize)> = Vec::new();
     for stmt in module {
         if let Stmt::FunctionDef(func) = stmt
-            && func.name.starts_with("__by_ext")
+            && func.name.starts_with("_by_ext")
         {
             let start = func
                 .decorator_list
@@ -579,12 +583,12 @@ mod tests {
             "extension list:\n    def second(self) -> Element:\n        return self[1]\n\nxs = [1, 2, 3]\nprint(xs.second())\n",
         );
         assert!(
-            out.contains("def __by_ext__list__second(self):  # basedpython: extension method list"),
+            out.contains("def _by_ext__list__second(self):  # basedpython: extension method list"),
             "got:\n{out}"
         );
         assert!(out.contains("return self[1]"), "got:\n{out}");
         assert!(
-            out.contains("print(__by_ext__list__second(xs))"),
+            out.contains("print(_by_ext__list__second(xs))"),
             "got:\n{out}"
         );
         assert!(!out.contains("extension list"), "got:\n{out}");
@@ -597,10 +601,10 @@ mod tests {
         let out =
             check("\"asdf\".foo()\n\nextension str:\n    def foo(self):\n        print(\"hi\")\n");
         let def_at = out
-            .find("def __by_ext__str__foo")
+            .find("def _by_ext__str__foo")
             .expect("backing def present");
         let call_at = out
-            .find("__by_ext__str__foo(\"asdf\")")
+            .find("_by_ext__str__foo(\"asdf\")")
             .expect("call rewritten");
         assert!(
             def_at < call_at,
@@ -614,13 +618,13 @@ mod tests {
             "extension list:\n    def first_or(self, default: Element) -> Element:\n        return self[0] if self else default\n\nxs = [1]\nprint(xs.first_or(9))\n",
         );
         assert!(
-            out.contains("print(__by_ext__list__first_or(xs, 9))"),
+            out.contains("print(_by_ext__list__first_or(xs, 9))"),
             "got:\n{out}"
         );
         // annotations are dropped from the backing function — its parameters
         // reference type variables with no runtime binding
         assert!(
-            out.contains("def __by_ext__list__first_or(self, default):"),
+            out.contains("def _by_ext__list__first_or(self, default):"),
             "got:\n{out}"
         );
     }
@@ -631,12 +635,12 @@ mod tests {
             "extension str:\n    @property\n    def shouty(self) -> str:\n        return self.upper()\n\nname = \"hi\"\nprint(name.shouty)\n",
         );
         assert!(
-            out.contains("def __by_ext__str__shouty(self):  # basedpython: extension property str"),
+            out.contains("def _by_ext__str__shouty(self):  # basedpython: extension property str"),
             "got:\n{out}"
         );
         assert!(!out.contains("@property"), "got:\n{out}");
         assert!(
-            out.contains("print(__by_ext__str__shouty(name))"),
+            out.contains("print(_by_ext__str__shouty(name))"),
             "got:\n{out}"
         );
     }
@@ -648,12 +652,12 @@ mod tests {
         );
         assert!(
             out.contains(
-                "def __by_ext__list__total(self):  # basedpython: extension method list[Element: int]"
+                "def _by_ext__list__total(self):  # basedpython: extension method list[Element: int]"
             ),
             "got:\n{out}"
         );
         assert!(
-            out.contains("print(__by_ext__list__total(xs))"),
+            out.contains("print(_by_ext__list__total(xs))"),
             "got:\n{out}"
         );
     }
@@ -664,19 +668,19 @@ mod tests {
             "extension list[Element: int]:\n    def total(self) -> int:\n        return sum(self)\n\nextension list[Element: str]:\n    def total(self) -> str:\n        return \"\".join(self)\n\nints = [1, 2]\nwords = [\"a\"]\nprint(ints.total())\nprint(words.total())\n",
         );
         assert!(
-            out.contains("def __by_ext__list__total(self):"),
+            out.contains("def _by_ext__list__total(self):"),
             "got:\n{out}"
         );
         assert!(
-            out.contains("def __by_ext2__list__total(self):"),
+            out.contains("def _by_ext2__list__total(self):"),
             "got:\n{out}"
         );
         assert!(
-            out.contains("print(__by_ext__list__total(ints))"),
+            out.contains("print(_by_ext__list__total(ints))"),
             "got:\n{out}"
         );
         assert!(
-            out.contains("print(__by_ext2__list__total(words))"),
+            out.contains("print(_by_ext2__list__total(words))"),
             "got:\n{out}"
         );
     }
@@ -687,7 +691,7 @@ mod tests {
             "extension list:\n    def second(self) -> Element:\n        return self[1]\n\nxs = [1, 2]\nf = xs.second\nprint(f())\n",
         );
         assert!(
-            out.contains("f = functools.partial(__by_ext__list__second, xs)"),
+            out.contains("f = functools.partial(_by_ext__list__second, xs)"),
             "got:\n{out}"
         );
         assert!(out.contains("import functools"), "got:\n{out}");
@@ -701,11 +705,11 @@ mod tests {
             "extension list:\n    def head(self) -> Element?:\n        return self[0] if self else None\n\nxs = [1]\nprint(xs.head())\n",
         );
         assert!(
-            out.contains("def __by_ext__list__head(self):"),
+            out.contains("def _by_ext__list__head(self):"),
             "got:\n{out}"
         );
         assert!(
-            out.contains("print(__by_ext__list__head(xs))"),
+            out.contains("print(_by_ext__list__head(xs))"),
             "got:\n{out}"
         );
     }
@@ -716,7 +720,7 @@ mod tests {
             "extension list:\n    def second(self) -> Element:\n        return self[1]\n    def second_twice(self) -> Element:\n        return self.second()\n\nxs = [1, 2]\nprint(xs.second_twice())\n",
         );
         assert!(
-            out.contains("return __by_ext__list__second(self)"),
+            out.contains("return _by_ext__list__second(self)"),
             "got:\n{out}"
         );
     }
@@ -735,24 +739,36 @@ mod tests {
             "extension str:\n    static def joined(parts: list[str]) -> str:\n        return \"-\".join(parts)\n    class def empty(cls) -> str:\n        return cls()\n\nprint(str.joined([\"a\", \"b\"]))\nprint(str.empty())\n",
         );
         assert!(
-            out.contains("def __by_ext__str__joined(parts):  # basedpython: extension static str"),
+            out.contains("def _by_ext__str__joined(parts):  # basedpython: extension static str"),
             "got:\n{out}"
         );
         assert!(
-            out.contains(
-                "def __by_ext__str__empty(cls):  # basedpython: extension classmethod str"
-            ),
+            out.contains("def _by_ext__str__empty(cls):  # basedpython: extension classmethod str"),
             "got:\n{out}"
         );
         // a static member drops the receiver; a classmethod receives the class
         assert!(
-            out.contains("print(__by_ext__str__joined([\"a\", \"b\"]))"),
+            out.contains("print(_by_ext__str__joined([\"a\", \"b\"]))"),
             "got:\n{out}"
         );
         assert!(
-            out.contains("print(__by_ext__str__empty(str))"),
+            out.contains("print(_by_ext__str__empty(str))"),
             "got:\n{out}"
         );
+    }
+
+    #[test]
+    fn a_call_inside_a_class_body_is_not_name_mangled() {
+        // python mangles any `__name` reference in a class body, so the backing
+        // function must carry a single leading underscore
+        let out = check(
+            "extension list:\n    def second(self) -> Element:\n        return self[1]\n\nclass Holder:\n    value: int = [1, 2, 3].second()\n",
+        );
+        assert!(
+            out.contains("value: int = _by_ext__list__second([1, 2, 3])"),
+            "got:\n{out}"
+        );
+        assert!(!out.contains("__by_ext"), "got:\n{out}");
     }
 
     #[test]

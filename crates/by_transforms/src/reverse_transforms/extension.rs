@@ -1,6 +1,6 @@
 //! reverse of `crate::transforms::extension`:
-//!   `def __by_ext__list__second(self): …  # basedpython: extension method list`
-//!   → `extension list:` block, and `__by_ext__list__second(xs)` → `xs.second()`
+//!   `def _by_ext__list__second(self): …  # basedpython: extension method list`
+//!   → `extension list:` block, and `_by_ext__list__second(xs)` → `xs.second()`
 //!
 //! the forward lowering tags each backing function's header line with a
 //! `# basedpython: extension <kind> <header>` marker — provenance carrying the
@@ -45,9 +45,9 @@ fn marker_payload(source: &str, span: TextRange) -> Option<(&str, &str)> {
 }
 
 /// the member name of `name` under the mangle for `target`:
-/// `__by_ext__list__second` / `__by_ext2__list__second` → `second`
+/// `_by_ext__list__second` / `_by_ext2__list__second` → `second`
 fn member_of(name: &str, target: &str) -> Option<String> {
-    let rest = name.strip_prefix("__by_ext")?;
+    let rest = name.strip_prefix("_by_ext")?;
     let rest = rest.trim_start_matches(|c: char| c.is_ascii_digit());
     let rest = rest.strip_prefix("__")?;
     let rest = rest.strip_prefix(target)?;
@@ -225,7 +225,7 @@ impl<'src> ExtensionReverse<'src> {
     }
 
     fn resugar_call(&mut self, call: &ruff_python_ast::ExprCall) {
-        // `functools.partial(__by_ext__list__second, xs)` → `xs.second`
+        // `functools.partial(_by_ext__list__second, xs)` → `xs.second`
         if let Expr::Attribute(attr) = call.func.as_ref()
             && attr.attr.as_str() == "partial"
             && matches!(attr.value.as_ref(), Expr::Name(n) if n.id.as_str() == "functools")
@@ -323,17 +323,17 @@ mod tests {
 
     #[test]
     fn backing_functions_resugar_to_an_extension_block() {
-        let src = "def __by_ext__list__second(self):  # basedpython: extension method list\n    return self[1]\n\nxs = [1, 2]\nprint(__by_ext__list__second(xs))\n";
+        let src = "def _by_ext__list__second(self):  # basedpython: extension method list\n    return self[1]\n\nxs = [1, 2]\nprint(_by_ext__list__second(xs))\n";
         let out = rev(src);
         assert!(out.contains("extension list:"), "got:\n{out}");
         assert!(out.contains("    def second(self):"), "got:\n{out}");
         assert!(out.contains("print(xs.second())"), "got:\n{out}");
-        assert!(!out.contains("__by_ext__"), "got:\n{out}");
+        assert!(!out.contains("_by_ext__"), "got:\n{out}");
     }
 
     #[test]
     fn consecutive_members_share_one_block() {
-        let src = "def __by_ext__list__second(self):  # basedpython: extension method list\n    return self[1]\n\ndef __by_ext__list__third(self):  # basedpython: extension method list\n    return self[2]\n";
+        let src = "def _by_ext__list__second(self):  # basedpython: extension method list\n    return self[1]\n\ndef _by_ext__list__third(self):  # basedpython: extension method list\n    return self[2]\n";
         let out = rev(src);
         assert_eq!(out.matches("extension list:").count(), 1, "got:\n{out}");
         assert!(out.contains("    def second(self):"), "got:\n{out}");
@@ -342,7 +342,7 @@ mod tests {
 
     #[test]
     fn property_resugars_with_decorator_and_bare_access() {
-        let src = "def __by_ext__str__shouty(self):  # basedpython: extension property str\n    return self.upper()\n\nname = \"hi\"\nprint(__by_ext__str__shouty(name))\n";
+        let src = "def _by_ext__str__shouty(self):  # basedpython: extension property str\n    return self.upper()\n\nname = \"hi\"\nprint(_by_ext__str__shouty(name))\n";
         let out = rev(src);
         assert!(out.contains("extension str:"), "got:\n{out}");
         assert!(
@@ -354,25 +354,25 @@ mod tests {
 
     #[test]
     fn bounds_come_back_from_the_marker() {
-        let src = "def __by_ext__list__total(self):  # basedpython: extension method list[Element: int]\n    return sum(self)\n";
+        let src = "def _by_ext__list__total(self):  # basedpython: extension method list[Element: int]\n    return sum(self)\n";
         let out = rev(src);
         assert!(out.contains("extension list[Element: int]:"), "got:\n{out}");
     }
 
     #[test]
     fn partial_reference_resugars_to_bare_attribute() {
-        let src = "import functools\n\ndef __by_ext__list__second(self):  # basedpython: extension method list\n    return self[1]\n\nxs = [1, 2]\nf = functools.partial(__by_ext__list__second, xs)\n";
+        let src = "import functools\n\ndef _by_ext__list__second(self):  # basedpython: extension method list\n    return self[1]\n\nxs = [1, 2]\nf = functools.partial(_by_ext__list__second, xs)\n";
         let out = rev(src);
         assert!(out.contains("f = xs.second"), "got:\n{out}");
     }
 
     #[test]
     fn unmarked_backing_shaped_function_is_ordinary_python() {
-        let src = "def __by_ext__list__second(self):\n    return self[1]\n\nprint(__by_ext__list__second([1, 2]))\n";
+        let src = "def _by_ext__list__second(self):\n    return self[1]\n\nprint(_by_ext__list__second([1, 2]))\n";
         let out = rev(src);
         assert!(!out.contains("extension"), "got:\n{out}");
         assert!(
-            out.contains("print(__by_ext__list__second([1, 2]))"),
+            out.contains("print(_by_ext__list__second([1, 2]))"),
             "got:\n{out}"
         );
     }

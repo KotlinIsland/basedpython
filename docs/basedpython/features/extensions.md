@@ -124,12 +124,16 @@ extension list:
 →
 
 ```python
-def __by_ext__list__second(self):  # basedpython: extension method list
+def _by_ext__list__second(self):  # basedpython: extension method list
     return self[1]
 ```
 
+the name carries a single leading underscore deliberately: python applies
+private-name mangling to any `__name` reference inside a class body, so a
+double-underscore backing name would break an extension call written in one
+
 when a module declares more than one extension of the same target, later
-ones mangle with an ordinal (`__by_ext2__list__…`) so their members don't
+ones mangle with an ordinal (`_by_ext2__list__…`) so their members don't
 collide — conditional extensions of the same method name coexist this way
 
 call sites are rewritten by the type checker. ty already knows the receiver's
@@ -143,11 +147,11 @@ xs.second()
 →
 
 ```python
-__by_ext__list__second(xs)
+_by_ext__list__second(xs)
 ```
 
 computed properties lower the same way, minus the call parentheses:
-`name.shouty` → `__by_ext__str__shouty(name)`
+`name.shouty` → `_by_ext__str__shouty(name)`
 
 because the rewrite is type-directed, an extension call is never confused with a
 real attribute. a method that happens to share a name with a real attribute
@@ -168,9 +172,9 @@ greeting.dedented()
 →
 
 ```python
-from textwrap import __by_ext__str__dedented
+from textwrap import _by_ext__str__dedented
 
-__by_ext__str__dedented(greeting)
+_by_ext__str__dedented(greeting)
 ```
 
 so the surface stays `import textwrap`, and only the functions actually used are
@@ -182,7 +186,7 @@ the reverse transpiler re-sugars both halves from the marker-comment
 provenance: a backing function tagged `# basedpython: extension …` becomes an
 `extension` block (consecutive same-header functions share one block), and a
 call of a same-file backing function becomes receiver-method form —
-`__by_ext__list__second(xs)` → `xs.second()`, property calls drop back to
+`_by_ext__list__second(xs)` → `xs.second()`, property calls drop back to
 bare attributes, `functools.partial(…, xs)` references to `xs.second`.
 backing-shaped functions and calls written by hand without the marker are
 left as ordinary python, and a call of a backing function *imported* from
