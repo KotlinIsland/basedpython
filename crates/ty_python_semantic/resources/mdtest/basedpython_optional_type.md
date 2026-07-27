@@ -203,6 +203,34 @@ def p(r: int | None | TypeError) -> int | None | TypeError:
     return r
 ```
 
+## a wrapped optional has no unwrapping methods
+
+the operators are the whole surface: there is no `get`, `unwrap` or `value` accessor to reach the
+present value with. an attribute lookup on a wrapped optional resolves against the wrapper's own
+members and nothing else, so an invented accessor is an error rather than a silently gradual type
+
+```by
+def f() -> int??:
+    return Some(1)
+
+# error: [unresolved-attribute]
+reveal_type(f().get())  # revealed: Unknown
+# error: [unresolved-attribute]
+reveal_type(f().value)  # revealed: Unknown
+# error: [unresolved-attribute]
+reveal_type(f().unwrap())  # revealed: Unknown
+```
+
+the members the wrapper does have still resolve:
+
+```by
+def f() -> int??:
+    return Some(1)
+
+reveal_type(f().__class__)  # revealed: <class 'object'>
+reveal_type(f().__hash__())  # revealed: int
+```
+
 ## `Some` is magically available
 
 `Some` is the present-case optional constructor. It has no runtime definition in real Python — the

@@ -6071,6 +6071,20 @@ impl<'db> Type<'db> {
                 return Place::Undefined.into();
             }
 
+            // A known instance's meta type is a class literal, so a receiver whose
+            // own class is `object` roots the lookup below at `object` itself —
+            // where `MRO_NO_OBJECT_FALLBACK` is deliberately ignored, so that
+            // `object()` still finds `object.__init__`. That would let
+            // `object.__getattribute__` answer every attribute with `Any`. Such a
+            // receiver has no custom `__getattribute__` to find in the first place.
+            // (Instances of `object` are unaffected: their meta type `type[object]`
+            // is normalized to `type`, which does honor the policy.)
+            if let Type::KnownInstance(known_instance) = self
+                && known_instance.class(db) == KnownClass::Object
+            {
+                return Place::Undefined.into();
+            }
+
             // Skip `object.__getattribute__`, which is the default mechanism we
             // already model via the normal attribute-lookup path.
             self.try_call_dunder_with_policy(
