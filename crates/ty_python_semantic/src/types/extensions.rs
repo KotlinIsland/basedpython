@@ -220,10 +220,14 @@ pub struct ExtensionAttributeInfo {
 }
 
 /// the backing-function name an extension member lowers to:
-/// `__by_ext__list__second`. when a module declares more than one extension
-/// of the same target name, later ones carry an ordinal (`__by_ext2__…`) so
+/// `_by_ext__list__second`. when a module declares more than one extension
+/// of the same target name, later ones carry an ordinal (`_by_ext2__…`) so
 /// their members do not collide. the transpiler's block lowering computes the
-/// same name from the extension file's AST alone
+/// same name from the extension file's AST alone.
+///
+/// exactly one leading underscore: python private-name-mangles any `__name`
+/// reference inside a class body, so a two-underscore name would break an
+/// extension call written in one
 pub(crate) fn backing_function_name<'db>(
     db: &'db dyn Db,
     extension: StaticClassLiteral<'db>,
@@ -236,9 +240,9 @@ pub(crate) fn backing_function_name<'db>(
         .position(|candidate| *candidate == extension)
         .unwrap_or(0);
     if ordinal == 0 {
-        format!("__by_ext__{target}__{member}")
+        format!("_by_ext__{target}__{member}")
     } else {
-        format!("__by_ext{}__{target}__{member}", ordinal + 1)
+        format!("_by_ext{}__{target}__{member}", ordinal + 1)
     }
 }
 

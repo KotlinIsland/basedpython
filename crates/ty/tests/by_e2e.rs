@@ -453,6 +453,40 @@ extension str:
 }
 
 #[test]
+fn extension_member_called_in_a_class_body_runs() {
+    // python private-name-mangles any `__name` reference inside a class body,
+    // so the backing function carries a single leading underscore
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+extension list:
+    def second(self) -> Element:
+        return self[1]
+
+class Holder:
+    value: int = [1, 2, 3].second()
+
+print(Holder.value)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2");
+}
+
+#[test]
 fn imported_extension_runs_across_modules() {
     let dir = tempfile::tempdir().expect("tempdir");
     fs::write(

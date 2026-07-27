@@ -597,7 +597,7 @@ pub(crate) fn run_against_source<'a>(
         // the call rewrites below) still compose
         &extension_block_pass,
         // type-directed rewrite of attribute accesses ty resolved to
-        // extension members (`xs.second()` → `__by_ext__list__second(xs)`)
+        // extension members (`xs.second()` → `_by_ext__list__second(xs)`)
         &extension_call_pass,
         // implicit receivers: `x.fn()` → `fn(x)` for a receiver callable in
         // scope, and a trailing lambda block's unqualified receiver members →
