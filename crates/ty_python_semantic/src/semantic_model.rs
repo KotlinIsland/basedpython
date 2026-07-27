@@ -161,32 +161,41 @@ impl<'db> SemanticModel<'db> {
         })
     }
 
-    /// basedpython: the witness conversions a call's arguments need, as
+    /// basedpython: the conversions a call's arguments need, as
     /// `(argument range, conversion)` pairs.
     ///
-    /// An `implementation A for B:` in scope makes a `B` acceptable where an `A`
-    /// is asked for; the transpiler wraps such an argument in the witness class.
-    /// The checker accepts exactly the same set — both sides ask
-    /// `repair_with_implementation` with the argument's type and the parameter
-    /// type of the single matching overload, and both decline when the callee is
-    /// overloaded or a union, where no single parameter type is well-defined.
-    pub fn implementation_call_conversions(
+    /// An `implementation A for B:` in scope, a `__from__` / `__of__` on the
+    /// parameter type or an `__into__` on the argument's own type all make an
+    /// argument acceptable where it otherwise is not; the transpiler wraps it in
+    /// the call the checker resolved. The checker accepts exactly the same set —
+    /// both sides ask `repair_conversion` with the argument's type and the
+    /// parameter type of the single matching overload, and both decline when the
+    /// callee is overloaded or a union, where no single parameter type is
+    /// well-defined.
+    ///
+    /// Unlike an implementation, a conversion dunder travels with the type rather
+    /// than with imports, so there is no registry of applicable ones to check
+    /// first — that is the cost of the dunders being a property of the type they
+    /// convert to. `call_may_convert` is what keeps it off the hot path instead.
+    /// Measured on a synthetic file of 3000 calls and nothing else, the cost over
+    /// skipping this entirely is ~9% of transpile time, against ~13% ungated.
+    pub fn call_conversions(
         &self,
         call: &ast::ExprCall,
     ) -> Vec<(
         ruff_text_size::TextRange,
-        crate::types::implementations::ImplementationConversion,
+        crate::types::conversions::ConversionInfo,
     )> {
         let db = self.db;
-        // near-free in a file with no implementations in scope: a cached query that
-        // comes back empty. without it every call in every `.by` file would be
-        // bound a second time just to look for conversions
-        if crate::types::implementations::applicable_implementations(db, self.file).is_empty() {
+        if !self.file.source_type(db).is_basedpython() {
             return Vec::new();
         }
         let Some(callable_ty) = call.func.inferred_type(self) else {
             return Vec::new();
         };
+        if !self.call_may_convert(call, callable_ty) {
+            return Vec::new();
+        }
         let arguments: Vec<ast::ArgOrKeyword> = call.arguments.iter_source_order().collect();
         let Some(parameter_types) =
             crate::types::implementations::call_parameter_types(self, callable_ty, call)
@@ -202,24 +211,60 @@ impl<'db> SemanticModel<'db> {
             let Some(argument_type) = value.inferred_type(self) else {
                 continue;
             };
-            let Some(repair) = crate::types::implementations::repair_with_implementation(
+            let Some(repair) = crate::types::conversions::repair_conversion(
                 db,
                 self.file,
                 argument_type,
                 parameter_type,
+                Some(value),
             ) else {
                 continue;
             };
-            if let Some(info) =
-                crate::types::implementations::conversion_info(db, self.file, &repair)
-            {
-                conversions.push((value.range(), info));
-            }
+            conversions.push((
+                value.range(),
+                crate::types::conversions::conversion_info(db, self.file, self, value, &repair),
+            ));
         }
         conversions
     }
 
-    /// basedpython: the witness conversions a statement's value needs, as
+    /// could any conversion apply at this call at all?
+    ///
+    /// Binding the call a second time to find out is the expensive part, and
+    /// almost no call in almost any file converts anything. This answers off
+    /// cached signatures instead: a conversion needs a parameter type that
+    /// declares `__from__` / `__of__`, an argument whose own type declares
+    /// `__into__`, or an implementation in scope. Anything it cannot read
+    /// falls through to the full check, so the gate can only save work — it can
+    /// never change an answer.
+    fn call_may_convert(&self, call: &ast::ExprCall, callable_ty: Type<'db>) -> bool {
+        let db = self.db;
+        if !crate::types::implementations::applicable_implementations(db, self.file).is_empty() {
+            return true;
+        }
+        for argument in call.arguments.iter_source_order() {
+            match argument.value().inferred_type(self) {
+                Some(ty) if crate::types::conversions::may_convert(db, ty) => return true,
+                // an argument whose type is unknown here could be anything
+                None => return true,
+                Some(_) => {}
+            }
+        }
+        let signature = match callable_ty {
+            Type::FunctionLiteral(function) => function.signature(db),
+            Type::BoundMethod(method) => method.function(db).signature(db),
+            // a class, a callable instance, a union: the parameter types are not
+            // one cached signature away, so do the full check
+            _ => return true,
+        };
+        signature.iter().any(|overload| {
+            overload.parameters().iter().any(|parameter| {
+                crate::types::conversions::may_convert(db, parameter.annotated_type())
+            })
+        })
+    }
+
+    /// basedpython: the conversions a statement's value needs, as
     /// `(range to wrap, conversion)` pairs.
     ///
     /// Covers every non-call conversion site: an annotated or plain assignment
@@ -227,25 +272,32 @@ impl<'db> SemanticModel<'db> {
     /// wraps are per element. This is the same `value_conversions` answer the
     /// checker used to accept the statement, so the emitted code converts exactly
     /// where the checker said it would.
-    pub fn implementation_statement_conversions(
+    pub fn statement_conversions(
         &self,
         stmt: &ast::Stmt,
     ) -> Vec<(
         ruff_text_size::TextRange,
-        crate::types::implementations::ImplementationConversion,
+        crate::types::conversions::ConversionInfo,
     )> {
         let db = self.db;
-        if crate::types::implementations::applicable_implementations(db, self.file).is_empty() {
+        if !self.file.source_type(db).is_basedpython() {
             return Vec::new();
         }
         let Some((value, declared)) = self.conversion_site_of(stmt) else {
             return Vec::new();
         };
-        crate::types::implementations::value_conversions(db, self.file, self, value, declared)
+        crate::types::conversions::value_conversions(db, self.file, self, value, declared)
             .into_iter()
-            .filter_map(|(range, repair)| {
-                let info = crate::types::implementations::conversion_info(db, self.file, &repair)?;
-                Some((range, info))
+            .map(|(range, repair)| {
+                // the anchor is the value being wrapped, which decides what the
+                // emitted names have to resolve to — for an element-wise
+                // conversion that is the element, not the whole literal
+                let anchor =
+                    crate::types::conversions::expression_at(value, range).unwrap_or(value);
+                let info = crate::types::conversions::conversion_info(
+                    db, self.file, self, anchor, &repair,
+                );
+                (range, info)
             })
             .collect()
     }

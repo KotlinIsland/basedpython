@@ -332,15 +332,13 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
             .ignore_possibly_undefined()
             == Some(target_ty)
         {
-            crate::types::implementations::value_conversions(
-                db, file, &model, self.value, target_ty,
-            )
+            crate::types::conversions::value_conversions(db, file, &model, self.value, target_ty)
         } else {
             Vec::new()
         };
         if let Some((range, repair)) = conversions.first() {
             if emit_diagnostics {
-                crate::types::implementations::report_ambiguous_implementation(
+                crate::types::conversions::report_ambiguous_conversion(
                     &self.builder.context,
                     *range,
                     repair,

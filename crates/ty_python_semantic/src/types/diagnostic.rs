@@ -135,7 +135,8 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_EXTENSION);
     registry.register_lint(&AMBIGUOUS_EXTENSION_MEMBER);
     registry.register_lint(&INVALID_IMPLEMENTATION);
-    registry.register_lint(&AMBIGUOUS_IMPLEMENTATION);
+    registry.register_lint(&INVALID_CONVERSION);
+    registry.register_lint(&AMBIGUOUS_CONVERSION);
     registry.register_lint(&MISSING_FRAMEWORK_STUBS);
     registry.register_lint(&INVALID_FIELD_LOOKUP);
     registry.register_lint(&INVALID_FIXTURE_TYPE);
@@ -1105,29 +1106,57 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
-    /// Checks for conversion sites where more than one applicable basedpython
-    /// `implementation` of the same interface and type is in scope.
+    /// Checks that the basedpython conversion dunders have the shape their
+    /// lowered call needs: `__from__` and `__of__` are classmethods on the target
+    /// taking one value and returning it, and `__into__` is a plain instance
+    /// method on the source taking nothing.
     ///
     /// ## Why is this bad?
-    /// The transpiler wraps the value in a witness class at such a site. When two
-    /// visible implementations supply one, which conversion runs would depend on
-    /// arbitrary ordering. Constrain one of them, or drop the import that brings
-    /// the second into scope.
+    /// A conversion site lowers to `Target.__from__(value)` or `value.__into__()`.
+    /// A `__from__` that is not a classmethod would bind the value to its first
+    /// parameter, and an overloaded `__into__` would have nothing to dispatch on —
+    /// so a malformed dunder converts nothing, silently, wherever it was meant to.
     ///
     /// ## Example
     ///
     /// ```by
-    /// implementation A for B:
-    ///     override def f(self): ...
-    ///
-    /// implementation A for B:
-    ///     override def f(self): ...
-    ///
-    /// takes_a(B())  # error: ambiguous implementation
+    /// class Fahrenheit:
+    ///     def __from__(cls, value: Celsius) -> Self:  # error: not a classmethod
+    ///         ...
     /// ```
-    pub(crate) static AMBIGUOUS_IMPLEMENTATION = {
-        summary: "detects conversion sites served by more than one implementation",
-        status: LintStatus::stable("0.0.1-alpha.5"),
+    pub(crate) static INVALID_CONVERSION = {
+        summary: "detects malformed basedpython conversion dunders",
+        status: LintStatus::stable("0.0.1-alpha.39"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for conversion sites where more than one conversion applies — two
+    /// dunders, a dunder and an in-scope `implementation`, or two applicable
+    /// `implementation`s of the same interface and type.
+    ///
+    /// ## Why is this bad?
+    /// `__from__` and `__into__` are hand-written bodies that can disagree, so
+    /// which one runs must not depend on arbitrary ordering. Remove one of them,
+    /// or write the conversion you want explicitly.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class Celsius:
+    ///     def __into__(self) -> Fahrenheit: ...
+    ///
+    /// class Fahrenheit:
+    ///     @classmethod
+    ///     def __from__(cls, value: Celsius) -> Self: ...
+    ///
+    /// report(Celsius())  # error: two conversions apply
+    /// ```
+    pub(crate) static AMBIGUOUS_CONVERSION = {
+        summary: "detects conversion sites served by more than one conversion",
+        status: LintStatus::stable("0.0.1-alpha.39"),
         default_level: Level::Error,
     }
 }
@@ -2660,10 +2689,11 @@ pub(super) fn report_invalid_assignment<'db>(
     }
 
     // basedpython: an assignment is a conversion site — an in-scope
-    // `implementation A for B:` makes a `B` acceptable where an `A` is declared,
-    // and the transpiler wraps the value (or, for a collection literal, each of its
-    // elements) in the witness. `value_conversions` is the same answer the
-    // transpiler emits, so the two cannot disagree about what converts
+    // `implementation A for B:` or a conversion dunder makes the value acceptable
+    // where it otherwise is not, and the transpiler emits the conversion for the
+    // value (or, for a collection literal, for each of its elements).
+    // `value_conversions` is the same answer the transpiler emits, so the two
+    // cannot disagree about what converts
     // only the annotated form: for a plain `x = b` against an earlier `x: A` the
     // declared type lives in another statement, and the transpiler has no way to
     // recover the same answer — accepting it here would emit an unconverted value
@@ -2671,7 +2701,7 @@ pub(super) fn report_invalid_assignment<'db>(
         && matches!(definition_kind, DefinitionKind::AnnotatedAssignment(_))
     {
         let model = crate::SemanticModel::new(context.db(), context.file());
-        let conversions = crate::types::implementations::value_conversions(
+        let conversions = crate::types::conversions::value_conversions(
             context.db(),
             context.file(),
             &model,
@@ -2679,7 +2709,7 @@ pub(super) fn report_invalid_assignment<'db>(
             target_ty,
         );
         if let Some((range, repair)) = conversions.first() {
-            crate::types::implementations::report_ambiguous_implementation(context, *range, repair);
+            crate::types::conversions::report_ambiguous_conversion(context, *range, repair);
             return;
         }
     }
