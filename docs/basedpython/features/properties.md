@@ -73,6 +73,7 @@ class Person:
 | `let x: T = init`               | read-only instance attribute           |
 | `var x: T = init` + `get`/`set` | `@property` with backing storage `__x` |
 | `let x: T = init` + `get`       | `@property` with getter only           |
+| `static let x: T` + `get`       | class-level property (descriptor)      |
 
 `let` at class scope used to lower to `x: Final = ...` (see [modifiers](modifiers.md)).
 property lowering supersedes that: inside a class body `let x: T = init` now
@@ -288,6 +289,58 @@ abstract getter and abstract setter. the modifiers apply to a declaration that
 carries an accessor block; `abstract let x: int` on its own (no accessors) is
 still a plain annotated attribute, not a property
 
+## `static` — a class-level property
+
+`static let` declares a computed property on the *class*:
+
+```by
+class Config:
+    static let default_name: str
+        get() = "config"
+
+print(Config.default_name)
+```
+
+the getter receives the owning class under the implicit name `cls`, the way an
+instance accessor receives `self`:
+
+```by
+class Widget:
+    static let label: str
+        get() = cls.__name__
+```
+
+reading it works on the class and on an instance — `Config.default_name` and
+`Config().default_name` both give `str`
+
+python has no class-level `property`: chaining `classmethod` onto `property` was
+deprecated in 3.11 and removed in 3.13. so the construct lowers to a small
+read-only descriptor emitted into the preamble rather than to `property`:
+
+```python
+class _by_static_property:
+    def __init__(self, fget):
+        self._fget = fget
+    def __get__(self, instance, owner=None):
+        return self._fget(owner if owner is not None else type(instance))
+
+class Config:
+    @_by_static_property
+    def default_name(cls) -> str:
+        return "config"
+```
+
+a `static` property is read-only and purely computed. a descriptor's `__set__`
+never fires for an assignment through the class (`Config.default_name = x`
+rebinds the class attribute outright), and there is no per-instance slot for a
+class-level property to store in, so `static var`, a `set` accessor, a `field`
+declaration, and an initialiser are each rejected rather than silently ignored.
+honouring any of them would mean installing a metaclass
+
+inside an [extension](extensions.md) the same declaration needs no descriptor at
+all — the access site is rewritten at transpile time, so the backing function
+just receives the class
+
 ## `private`
 
 `private` shifts the whole construct one level of underscore deeper — the property
@@ -442,6 +495,11 @@ no `Final`, no `cached_property` — neither is emitted by this feature
     → parse error
 - accessor block declaring explicit `field` but referencing it nowhere
     → parse error
+- `static var`, or `static let` with `set` / `field` / an initialiser → parse
+    error: a class-level property is read-only and purely computed
+- `class let` / `class var` → parse error naming `static` as the modifier. the
+    `class` keyword is a modifier for `class def` (a classmethod) and
+    `class x = 1` (a `ClassVar`), but not for a declaration with accessors
 
 ## why
 

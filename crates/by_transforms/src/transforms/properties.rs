@@ -60,14 +60,45 @@ impl<'src> PropertiesPass<'src> {
     }
 }
 
-/// The range the parser recorded on a getter's `__property__` marker: the whole
-/// `var`/`let` declaration plus its accessor suite. `None` for any other
-/// function.
-fn property_marker(func: &StmtFunctionDef) -> Option<TextRange> {
+/// The runtime half of a `static let` property. Python dropped `classmethod`
+/// chaining onto `property` in 3.13, and a read-only class-level property needs
+/// nothing else a metaclass would offer, so a plain non-data descriptor is the
+/// whole implementation. Mirrors `_by_static_property` in `ty_extensions._internal`,
+/// which is ty's type-only view of the same thing.
+pub(crate) const STATIC_PROPERTY_HELPER: &str = "\
+class _by_static_property:
+    def __init__(self, fget):
+        self._fget = fget
+    def __get__(self, instance, owner=None):
+        return self._fget(owner if owner is not None else type(instance))
+";
+
+/// A property accessor block's marker, as recorded by the parser on the getter.
+struct PropertyMarker {
+    /// The whole `var`/`let` declaration plus its accessor suite — the span the
+    /// lowering replaces.
+    construct: TextRange,
+    /// `static let`: a class-level property, lowered to [`STATIC_PROPERTY_HELPER`]
+    /// rather than to `property`.
+    is_static: bool,
+}
+
+/// The property marker on `func`, or `None` for any other function.
+fn property_marker(func: &StmtFunctionDef) -> Option<PropertyMarker> {
     func.decorator_list
         .iter()
         .find_map(|dec| match &dec.expression {
-            Expr::Name(name) if name.id.as_str() == "__property__" => Some(dec.range()),
+            Expr::Name(name) => match name.id.as_str() {
+                "__property__" => Some(PropertyMarker {
+                    construct: dec.range(),
+                    is_static: false,
+                }),
+                "__static_property__" => Some(PropertyMarker {
+                    construct: dec.range(),
+                    is_static: true,
+                }),
+                _ => None,
+            },
             _ => None,
         })
 }
@@ -141,7 +172,11 @@ fn indent_block(rendered: &str, indent: &str) -> String {
 /// Renders an accessor body at `indent`. An empty body (only reachable when the
 /// accessor itself failed to parse) becomes `...` so the emitted `def` is still
 /// syntactically complete.
-fn render_body(body: &[Stmt], indent: &str) -> String {
+///
+/// Shared with the extension lowering, which owns accessor-block members declared
+/// inside an `extension` body and has the same reason to render rather than pass
+/// the source through: a `get() = expr` accessor's `return` exists only in the AST.
+pub(crate) fn render_body(body: &[Stmt], indent: &str) -> String {
     if body.is_empty() {
         return format!("{indent}...");
     }
@@ -285,7 +320,11 @@ impl PropertiesPass<'_> {
             let Stmt::FunctionDef(getter) = member else {
                 continue;
             };
-            let Some(construct) = property_marker(getter) else {
+            let Some(PropertyMarker {
+                construct,
+                is_static,
+            }) = property_marker(getter)
+            else {
                 continue;
             };
             let prop = getter.name.as_str();
@@ -412,9 +451,16 @@ impl PropertiesPass<'_> {
                 }
             }
 
-            // getter
+            // getter. a `static` property is a descriptor taking the owning class
+            // rather than a `property` taking an instance
+            let (decorator, receiver) = if is_static {
+                ctx.required_imports.push(STATIC_PROPERTY_HELPER.to_owned());
+                ("_by_static_property", "cls")
+            } else {
+                ("property", "self")
+            };
             frags.push(Fragment::Lit(format!(
-                "@property\n{indent}{accessor_decorators}def {prop}(self)"
+                "@{decorator}\n{indent}{accessor_decorators}def {prop}({receiver})"
             )));
             if let Some(returns) = &getter.returns {
                 frags.push(Fragment::Lit(" -> ".to_owned()));
@@ -598,6 +644,14 @@ struct ClassFinder<'a> {
 impl<'ast> Visitor<'ast> for ClassFinder<'ast> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         if let Stmt::ClassDef(class) = stmt {
+            // an `extension` body's members belong to the extension lowering, which
+            // replaces the whole block. this pass's template edits inside that span
+            // are dropped as contained, but its side channels (`required_imports`,
+            // the `private` renames) are not — so skip the body outright rather than
+            // emit a helper nothing ends up referencing
+            if class.is_extension() {
+                return;
+            }
             self.classes.push(class);
         }
         walk_stmt(self, stmt);
@@ -654,6 +708,31 @@ mod tests {
                     @property
                     def area(self) -> int:
                         return self.w * self.h
+            "},
+        );
+    }
+
+    /// `static let` is a class-level computed property: python has no such thing,
+    /// so it lowers to a descriptor emitted into the preamble
+    #[test]
+    fn static_property_lowers_to_a_descriptor() {
+        check(
+            indoc! {"
+                class Config:
+                    static let name: str
+                        get() = \"config\"
+            "},
+            indoc! {"
+                class _by_static_property:
+                    def __init__(self, fget):
+                        self._fget = fget
+                    def __get__(self, instance, owner=None):
+                        return self._fget(owner if owner is not None else type(instance))
+
+                class Config:
+                    @_by_static_property
+                    def name(cls) -> str:
+                        return \"config\"
             "},
         );
     }

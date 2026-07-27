@@ -190,3 +190,60 @@ an extension adds behaviour, not state
 extension list:
     count = 0  # error: [invalid-extension]
 ```
+
+## an accessor-block property
+
+a computed property may be written as an accessor block rather than a decorated `def`.
+
+```by
+class Box: ...
+
+extension Box:
+    let size: int
+        get() = 1
+
+reveal_type(Box().size)  # revealed: int
+```
+
+## a `static let` property reads off the class
+
+a class-level computed property needs no descriptor here: the access site is rewritten, so the
+backing function simply receives the class. it answers on an instance receiver too.
+
+```by
+class Widget: ...
+
+extension Widget:
+    static let kind: str
+        get() = "widget"
+
+reveal_type(Widget.kind)  # revealed: str
+reveal_type(Widget().kind)  # revealed: str
+```
+
+## a `static let` property receives the extended class
+
+```by
+class Thing: ...
+
+extension Thing:
+    static let name: str
+        get() = cls.__name__
+
+reveal_type(Thing.name)  # revealed: str
+```
+
+## an instance property is not reachable on the class
+
+only the class-level member kinds answer on a class receiver.
+
+```by
+class Crate: ...
+
+extension Crate:
+    let size: int
+        get() = 1
+
+# error: [unresolved-attribute]
+reveal_type(Crate.size)  # revealed: Unknown
+```

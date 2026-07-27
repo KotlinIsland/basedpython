@@ -31,7 +31,7 @@ use ty_python_core::{global_scope, place_table, semantic_index};
 use crate::Db;
 use crate::place::{builtins_symbol, global_symbol};
 use crate::types::Type;
-use crate::types::class::{ClassLiteral, ClassType, StaticClassLiteral};
+use crate::types::class::{ClassLiteral, ClassType, KnownClass, StaticClassLiteral};
 use crate::types::class_base::ClassBase;
 use crate::types::context::InferContext;
 use crate::types::diagnostic::INVALID_EXTENSION;
@@ -202,6 +202,9 @@ pub enum ExtensionMemberKind {
     Property,
     StaticMethod,
     ClassMethod,
+    /// a `static let` computed property: read off the class, like a `class def`
+    /// member, but without call parentheses
+    StaticProperty,
 }
 
 /// how the transpiler rewrites an attribute access that resolved to an
@@ -293,7 +296,9 @@ pub(crate) fn resolve_extension_member<'db>(
         if instance.is_none()
             && !matches!(
                 kind,
-                ExtensionMemberKind::StaticMethod | ExtensionMemberKind::ClassMethod
+                ExtensionMemberKind::StaticMethod
+                    | ExtensionMemberKind::ClassMethod
+                    | ExtensionMemberKind::StaticProperty
             )
         {
             continue;
@@ -465,6 +470,9 @@ fn classify_member<'db>(db: &'db dyn Db, member: Type<'db>) -> ExtensionMemberKi
             ExtensionMemberKind::ClassMethod
         }
         Type::PropertyInstance(_) => ExtensionMemberKind::Property,
+        _ if member.is_instance_of(db, KnownClass::ByStaticProperty) => {
+            ExtensionMemberKind::StaticProperty
+        }
         _ => ExtensionMemberKind::Method,
     }
 }

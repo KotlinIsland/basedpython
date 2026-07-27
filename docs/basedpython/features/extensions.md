@@ -87,6 +87,23 @@ extension str:
         return self.upper()
 ```
 
+a computed property may equally be written as a [property](properties.md)
+accessor block, including the class-level `static let` form:
+
+```by
+class Widget: ...
+
+extension Widget:
+    let size: int
+        get() = 1
+    static let kind: str
+        get() = "widget"
+```
+
+a `static let` in an extension needs none of the descriptor machinery the same
+declaration requires in a plain class: the access site is rewritten at transpile
+time, so `Widget.kind` simply passes the class to the backing function
+
 ## implicit imports
 
 importing a module makes its extensions applicable — there is no per-extension
@@ -153,6 +170,11 @@ _by_ext__list__second(xs)
 
 computed properties lower the same way, minus the call parentheses:
 `name.shouty` → `_by_ext__str__shouty(name)`
+
+a `static let` property passes the class rather than an instance, so
+`Widget.kind` → `_by_ext__Widget__kind(Widget)`. read through an instance it is
+widened the way a `class def` receiver is: `Widget().kind` →
+`_by_ext__Widget__kind(type(Widget()))`
 
 because the rewrite is type-directed, an extension call is never confused with a
 real attribute. a method that happens to share a name with a real attribute

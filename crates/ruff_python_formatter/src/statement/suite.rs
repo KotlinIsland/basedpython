@@ -968,7 +968,7 @@ impl Format<PyFormatContext<'_>> for SuiteChildStatement<'_> {
 /// several class-body members (a backing field, a getter, a setter), none of which
 /// has an AST-faithful surface printer — their `self` parameters and backing
 /// attributes are synthetic and zero-width. The getter leads the group and carries
-/// a synthetic `__property__` marker whose range spans the whole construct, so the
+/// a synthetic property marker whose range spans the whole construct, so the
 /// suite formatter can emit that source verbatim and swallow the rest of the group,
 /// exactly as it does for a `# fmt: skip` region.
 fn property_construct_range(stmt: &Stmt) -> Option<TextRange> {
@@ -979,8 +979,11 @@ fn property_construct_range(stmt: &Stmt) -> Option<TextRange> {
         .decorator_list
         .iter()
         .find_map(|decorator| match &decorator.expression {
+            // `__static_property__` is the `static let` (class-level) variant; both
+            // are synthesised the same way and neither has a surface printer
             Expr::Name(name)
-                if name.id.as_str() == "__property__" && name.ctx == ExprContext::Invalid =>
+                if matches!(name.id.as_str(), "__property__" | "__static_property__")
+                    && name.ctx == ExprContext::Invalid =>
             {
                 Some(decorator.range())
             }
