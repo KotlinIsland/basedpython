@@ -34,7 +34,7 @@ use crate::Db;
 use crate::place::{PlaceAndQualifiers, builtins_symbol, global_symbol};
 use crate::types::class::{ClassLiteral, ClassType, StaticClassLiteral};
 use crate::types::context::InferContext;
-use crate::types::diagnostic::{AMBIGUOUS_IMPLEMENTATION, INVALID_IMPLEMENTATION};
+use crate::types::diagnostic::{AMBIGUOUS_CONVERSION, INVALID_IMPLEMENTATION};
 use crate::types::{KnownClass, Type};
 
 /// the member every witness carries: the object it wraps. an implementation body
@@ -431,7 +431,7 @@ pub(crate) fn report_ambiguous_implementation<'db>(
     let Some(other) = repair.ambiguous_with else {
         return;
     };
-    let Some(builder) = context.report_lint(&AMBIGUOUS_IMPLEMENTATION, node.range()) else {
+    let Some(builder) = context.report_lint(&AMBIGUOUS_CONVERSION, node.range()) else {
         return;
     };
     let mut diagnostic = builder.into_diagnostic(format_args!(
@@ -688,76 +688,13 @@ pub(crate) fn function_declared_return_type<'db>(
     Some(overload.return_ty)
 }
 
-/// the conversions the value expression `value` needs so that it satisfies
-/// `declared`, as `(range to wrap, conversion)` in source order.
-///
-/// This is the single answer both sides use at every conversion site: the checker
-/// asks whether it is non-empty (and suppresses the assignment error if so), and
-/// the transpiler emits exactly these wraps. Two shapes are possible:
-///
-/// - the value itself converts — one wrap around the whole expression
-/// - the value is a collection *literal* (or comprehension) whose elements
-///   convert — one wrap per element. this is where the variance restriction is
-///   lifted, and only here: the elements are right there in the source, so
-///   wrapping each one is an honest element-wise conversion rather than a hidden
-///   O(n) copy of some other collection
-pub(crate) fn value_conversions<'db>(
-    db: &'db dyn Db,
-    file: File,
-    model: &crate::SemanticModel<'db>,
-    value: &ast::Expr,
-    declared: Type<'db>,
-) -> Vec<(ruff_text_size::TextRange, ImplementationRepair<'db>)> {
-    let Some(value_ty) = crate::HasType::inferred_type(value, model) else {
-        return Vec::new();
-    };
-    if let Some(repair) = repair_with_implementation(db, file, value_ty, declared) {
-        return vec![(value.range(), repair)];
-    }
-    element_conversions(db, file, model, value, declared)
-}
-
-/// the per-element conversions a collection literal needs to satisfy `declared`.
-///
-/// Empty unless *every* element either already fits or converts: a partial answer
-/// would leave the value unassignable, and the ordinary error is the right report
-pub(crate) fn element_conversions<'db>(
-    db: &'db dyn Db,
-    file: File,
-    model: &crate::SemanticModel<'db>,
-    value: &ast::Expr,
-    declared: Type<'db>,
-) -> Vec<(ruff_text_size::TextRange, ImplementationRepair<'db>)> {
-    let Some(elements) = addressable_elements(value) else {
-        return Vec::new();
-    };
-    let Some(element_target) = declared_element_type(db, declared) else {
-        return Vec::new();
-    };
-    let mut conversions = Vec::new();
-    for element in elements {
-        let Some(element_ty) = crate::HasType::inferred_type(element, model) else {
-            return Vec::new();
-        };
-        if element_ty.is_assignable_to(db, element_target) {
-            continue;
-        }
-        match repair_with_implementation(db, file, element_ty, element_target) {
-            Some(repair) => conversions.push((element.range(), repair)),
-            // one element that neither fits nor converts sinks the whole value
-            None => return Vec::new(),
-        }
-    }
-    conversions
-}
-
 /// the element expressions of a collection literal, when each one is a whole
 /// expression the transpiler can wrap.
 ///
 /// `None` for anything else — including a literal containing an unpack
 /// (`[*bs]`, `{**d}`), whose elements come from another collection and so have no
 /// expression of their own at this site
-fn addressable_elements(value: &ast::Expr) -> Option<Vec<&ast::Expr>> {
+pub(crate) fn addressable_elements(value: &ast::Expr) -> Option<Vec<&ast::Expr>> {
     fn plain(elements: &[ast::Expr]) -> Option<Vec<&ast::Expr>> {
         elements
             .iter()
@@ -784,7 +721,10 @@ fn addressable_elements(value: &ast::Expr) -> Option<Vec<&ast::Expr>> {
 
 /// the type a declared collection's elements must satisfy: a mapping's *value*
 /// type, else what iterating the declared type yields
-fn declared_element_type<'db>(db: &'db dyn Db, declared: Type<'db>) -> Option<Type<'db>> {
+pub(crate) fn declared_element_type<'db>(
+    db: &'db dyn Db,
+    declared: Type<'db>,
+) -> Option<Type<'db>> {
     // a mapping is keyed, and only its values sit at the literal's element
     // positions (`{"k": b}`); iterating one would give the *key* type
     if let Some((_, value)) = declared.unpack_keys_and_items(db) {
@@ -898,7 +838,7 @@ pub(crate) fn call_parameter_types<'db>(
 
 /// how the transpiler materializes a witness at one conversion site
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImplementationConversion {
+pub(crate) struct ImplementationConversion {
     /// the witness class to construct
     pub witness: String,
     /// the module to import the witness class from, when the implementation is

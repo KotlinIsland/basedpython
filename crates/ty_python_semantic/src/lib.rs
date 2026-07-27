@@ -43,6 +43,7 @@ pub use ty_site_packages::{
     PythonEnvironment, PythonVersionFileSource, PythonVersionSource, PythonVersionWithSource,
     SitePackagesPaths, SysPrefixPathOrigin,
 };
+pub use types::conversions::{ConversionImport, ConversionInfo};
 pub use types::extensions::{ExtensionAttributeInfo, ExtensionMemberKind};
 pub use types::ide_support::{
     ImportAliasResolution, ResolvedDefinition, TypeHierarchyClass, definitions_for_attribute,
@@ -50,7 +51,6 @@ pub use types::ide_support::{
     definitions_for_unary_op, map_stub_definition, type_hierarchy_prepare, type_hierarchy_subtypes,
     type_hierarchy_supertypes,
 };
-pub use types::implementations::ImplementationConversion;
 pub use types::reified_infer::{
     ArgVariance, ErasedTargetReason, ParametricIsPlan, ProtocolMemberCheck,
 };

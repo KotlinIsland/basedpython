@@ -35,9 +35,9 @@ use ruff_text_size::{Ranged, TextRange};
 
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
-    coalesce_chain, compat, context_params, decl_site_variance, decorator_keyword, dedent_string,
-    dynamic_keyword, empty_declarations, extension, float_const, force_unwrap, frameworks,
-    generic_call, generics, grapheme_string, identity_swap, if_let, implementation,
+    coalesce_chain, compat, context_params, conversion, decl_site_variance, decorator_keyword,
+    dedent_string, dynamic_keyword, empty_declarations, extension, float_const, force_unwrap,
+    frameworks, generic_call, generics, grapheme_string, identity_swap, if_let, implementation,
     implicit_receiver, implicit_typing, inferred_annotation, init_method, just_float, kw_subscript,
     literal_types, local_once, main_function, match_type, modifiers, mutable_defaults, none_chain,
     optional_type, overload, parametric_is, postfix_await, propagate, properties, protocol_type,
@@ -506,8 +506,7 @@ pub(crate) fn run_against_source<'a>(
     let extension_block_pass = extension::ExtensionBlockPass::new(source_ref);
     let extension_call_pass = extension::ExtensionCallPass;
     let implementation_block_pass = implementation::ImplementationBlockPass::new(source_ref);
-    let implementation_conversion_pass =
-        implementation::ImplementationConversionPass::new(source_ref);
+    let conversion_pass = conversion::ConversionPass::new(source_ref);
     let implicit_receiver_pass = implicit_receiver::ImplicitReceiverPass;
     let frameworks_pass = frameworks::FrameworksPass::new(source_ref);
     let variance_pass = decl_site_variance::VarianceStripPass::new(source_ref);
@@ -639,7 +638,7 @@ pub(crate) fn run_against_source<'a>(
         // ranges, so they run alongside the extension passes and before the
         // AST-mutating ones
         &implementation_block_pass,
-        &implementation_conversion_pass,
+        &conversion_pass,
         // implicit receivers: `x.fn()` → `fn(x)` for a receiver callable in
         // scope, and a trailing lambda block's unqualified receiver members →
         // `it.<name>`. same shape as the extension rewrite above, which wins

@@ -292,7 +292,7 @@ either, because the adaptation reaches no further than the modules that import
 it
 
 when two applicable implementations of the same interface-and-type pair are
-visible at one conversion site, that is an error (`ambiguous-implementation`).
+visible at one conversion site, that is an error (`ambiguous-conversion`).
 constrain one with a bracket bound, or drop the import that brings the second
 into scope
 
@@ -410,10 +410,10 @@ the marker stays ordinary python
 
 ## diagnostics
 
-| lint                       | default | fires on                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| -------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `invalid-implementation`   | error   | interface is not an abstract class or protocol; interface has stored instance state; either operand does not resolve to a class; a bracket parameter the type does not declare; an abstract member left unimplemented; a block member matching nothing on the interface; a duplicate implementation of the same pair in one module; a type that already satisfies the interface; a delegated dunder the interface declares and the block does not override |
-| `ambiguous-implementation` | error   | a conversion site where two visible implementations of the same pair apply                                                                                                                                                                                                                                                                                                                                                                                 |
+| lint                     | default | fires on                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `invalid-implementation` | error   | interface is not an abstract class or protocol; interface has stored instance state; either operand does not resolve to a class; a bracket parameter the type does not declare; an abstract member left unimplemented; a block member matching nothing on the interface; a duplicate implementation of the same pair in one module; a type that already satisfies the interface; a delegated dunder the interface declares and the block does not override |
+| `ambiguous-conversion`   | error   | a conversion site where two visible implementations of the same pair apply                                                                                                                                                                                                                                                                                                                                                                                 |
 
 a failed assignment that an out-of-reach implementation would have repaired
 keeps its usual error (`invalid-argument-type` and friends) and gains a
@@ -491,7 +491,7 @@ settling separately. adding inherent members is what extensions are for
         `` `main.by`: ``, one `##` header per example) for: `import impl` makes an
         implementation applicable; without the import the conversion does not
         happen and the assignment errors; the same pair implemented in two
-        imported modules is `ambiguous-implementation`; an implementation applying
+        imported modules is `ambiguous-conversion`; an implementation applying
         in one module and not its sibling
     - **transpiler** — the `cross_file` module in `by_transforms/src/lib.rs`
         (`project_db` + `transpile_typed`), beside

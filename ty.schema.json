@@ -378,9 +378,9 @@
             }
           ]
         },
-        "ambiguous-extension-member": {
-          "title": "detects attribute accesses supplied by more than one extension",
-          "description": "## What it does\nChecks for attribute accesses that resolve to a member supplied by more\nthan one applicable basedpython extension.\n\n## Why is this bad?\nWhen two extensions in scope both add the same member to the receiver's\ntype, the access is ambiguous — which implementation runs would depend\non arbitrary ordering. Constrain one of the extensions (or drop the\nimport that brings the second into scope) so exactly one applies.\n\n## Example\n\n```by\nextension list:\n    def second(self) -> Element: ...\n\nextension list:\n    def second(self) -> Element: ...\n\n[1, 2].second()  # error: ambiguous extension member\n```",
+        "ambiguous-conversion": {
+          "title": "detects conversion sites served by more than one conversion",
+          "description": "## What it does\nChecks for conversion sites where more than one conversion applies — two\ndunders, a dunder and an in-scope `implementation`, or two applicable\n`implementation`s of the same interface and type.\n\n## Why is this bad?\n`__from__` and `__into__` are hand-written bodies that can disagree, so\nwhich one runs must not depend on arbitrary ordering. Remove one of them,\nor write the conversion you want explicitly.\n\n## Example\n\n```by\nclass Celsius:\n    def __into__(self) -> Fahrenheit: ...\n\nclass Fahrenheit:\n    @classmethod\n    def __from__(cls, value: Celsius) -> Self: ...\n\nreport(Celsius())  # error: two conversions apply\n```",
           "default": "error",
           "oneOf": [
             {
@@ -388,9 +388,9 @@
             }
           ]
         },
-        "ambiguous-implementation": {
-          "title": "detects conversion sites served by more than one implementation",
-          "description": "## What it does\nChecks for conversion sites where more than one applicable basedpython\n`implementation` of the same interface and type is in scope.\n\n## Why is this bad?\nThe transpiler wraps the value in a witness class at such a site. When two\nvisible implementations supply one, which conversion runs would depend on\narbitrary ordering. Constrain one of them, or drop the import that brings\nthe second into scope.\n\n## Example\n\n```by\nimplementation A for B:\n    override def f(self): ...\n\nimplementation A for B:\n    override def f(self): ...\n\ntakes_a(B())  # error: ambiguous implementation\n```",
+        "ambiguous-extension-member": {
+          "title": "detects attribute accesses supplied by more than one extension",
+          "description": "## What it does\nChecks for attribute accesses that resolve to a member supplied by more\nthan one applicable basedpython extension.\n\n## Why is this bad?\nWhen two extensions in scope both add the same member to the receiver's\ntype, the access is ambiguous — which implementation runs would depend\non arbitrary ordering. Constrain one of the extensions (or drop the\nimport that brings the second into scope) so exactly one applies.\n\n## Example\n\n```by\nextension list:\n    def second(self) -> Element: ...\n\nextension list:\n    def second(self) -> Element: ...\n\n[1, 2].second()  # error: ambiguous extension member\n```",
           "default": "error",
           "oneOf": [
             {
@@ -771,6 +771,16 @@
         "invalid-context-manager": {
           "title": "detects expressions used in with statements that don't implement the context manager protocol",
           "description": "## What it does\n\nChecks for expressions used in `with` statements\nthat do not implement the context manager protocol.\n\n## Why is this bad?\n\nSuch a statement will raise `TypeError` at runtime.\n\n## Examples\n\n```python\n# TypeError: 'int' object does not support the context manager protocol\nwith 1:  # error\n    print(2)\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "invalid-conversion": {
+          "title": "detects malformed basedpython conversion dunders",
+          "description": "## What it does\nChecks that the basedpython conversion dunders have the shape their\nlowered call needs: `__from__` and `__of__` are classmethods on the target\ntaking one value and returning it, and `__into__` is a plain instance\nmethod on the source taking nothing.\n\n## Why is this bad?\nA conversion site lowers to `Target.__from__(value)` or `value.__into__()`.\nA `__from__` that is not a classmethod would bind the value to its first\nparameter, and an overloaded `__into__` would have nothing to dispatch on —\nso a malformed dunder converts nothing, silently, wherever it was meant to.\n\n## Example\n\n```by\nclass Fahrenheit:\n    def __from__(cls, value: Celsius) -> Self:  # error: not a classmethod\n        ...\n```",
           "default": "error",
           "oneOf": [
             {

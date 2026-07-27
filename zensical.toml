@@ -100,6 +100,7 @@ features = [
   { "repeated `_` parameters" = "features/repeated-underscore.md" },
   { "lazy imports" = "features/lazy-imports.md" },
   { "extensions" = "features/extensions.md" },
+  { "conversions (`__from__` / `__into__` / `__of__`)" = "features/conversions.md" },
   { "context parameters" = "features/context-parameters.md" },
   { "local lifetimes (`local` / `once`)" = "features/local-lifetimes.md" },
   { "exception tracking (`raises`)" = "features/exceptions.md" },

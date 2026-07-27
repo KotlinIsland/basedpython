@@ -1270,6 +1270,95 @@ mod cross_file {
         );
     }
 
+    /// a conversion dunder travels with the type rather than with imports, so a
+    /// `__from__` on an imported class converts here even though this file never
+    /// mentions the target by name. the lowering then has to bring the class in
+    /// itself — that import is the whole difference from the single-file case
+    #[test]
+    fn imported_from_converts_and_imports_the_target() {
+        let db = project_db(&[
+            (
+                "/temps.by",
+                "class Celsius:\n    degrees: float = 0.0\n\n\
+                 class Fahrenheit:\n    degrees: float = 0.0\n\n    \
+                 @classmethod\n    def __from__(cls, value: Celsius) -> Self:\n        return cls()\n\n\
+                 def report(t: Fahrenheit) -> None: ...\n",
+            ),
+            (
+                "/main.by",
+                "from temps import Celsius, report\n\nreport(Celsius())\n",
+            ),
+        ]);
+        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        assert!(
+            out.contains("from temps import Fahrenheit as _by_conv__Fahrenheit"),
+            "the target class should be imported under its alias, got:\n{out}"
+        );
+        assert!(
+            out.contains("report(_by_conv__Fahrenheit.__from__(Celsius()))"),
+            "argument should be converted, got:\n{out}"
+        );
+    }
+
+    /// a cross-module target is *always* imported under a mangled alias, even
+    /// when the file already binds its own name. importing the bare name would
+    /// rebind whatever this file already means by it
+    #[test]
+    fn an_already_imported_target_still_uses_its_alias() {
+        let db = project_db(&[
+            (
+                "/temps.by",
+                "class Celsius:\n    degrees: float = 0.0\n\n\
+                 class Fahrenheit:\n    degrees: float = 0.0\n\n    \
+                 @classmethod\n    def __from__(cls, value: Celsius) -> Self:\n        return cls()\n",
+            ),
+            (
+                "/main.by",
+                "from temps import Celsius, Fahrenheit\n\n\
+                 def report(t: Fahrenheit) -> None: ...\n\nreport(Celsius())\n",
+            ),
+        ]);
+        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        assert!(
+            out.contains("report(_by_conv__Fahrenheit.__from__(Celsius()))"),
+            "argument should be converted through the alias, got:\n{out}"
+        );
+        assert!(
+            !out.contains("from temps import Fahrenheit\n"),
+            "the bare name must never be rebound, got:\n{out}"
+        );
+    }
+
+    /// a file with its own, unrelated class of the target's name must still
+    /// convert correctly: the bare import would be shadowed by that class, and
+    /// the call would reach the wrong object at runtime
+    #[test]
+    fn a_local_class_of_the_same_name_does_not_capture_the_conversion() {
+        let db = project_db(&[
+            (
+                "/temps.by",
+                "class Celsius:\n    degrees: float = 0.0\n\n\
+                 class Fahrenheit:\n    degrees: float = 0.0\n\n    \
+                 @classmethod\n    def __from__(cls, value: Celsius) -> Self:\n        return cls()\n\n\
+                 def report(t: Fahrenheit) -> None: ...\n",
+            ),
+            (
+                "/main.by",
+                "from temps import Celsius, report\n\n\
+                 class Fahrenheit:\n    unrelated: int = 0\n\nreport(Celsius())\n",
+            ),
+        ]);
+        let out = transpile_file(&db, "/main.by", &Config::test_default());
+        assert!(
+            out.contains("from temps import Fahrenheit as _by_conv__Fahrenheit"),
+            "the alias keeps the local class intact, got:\n{out}"
+        );
+        assert!(
+            out.contains("report(_by_conv__Fahrenheit.__from__(Celsius()))"),
+            "the conversion must not go through the local class, got:\n{out}"
+        );
+    }
+
     /// the synthesized witness import must address the module the way the importing
     /// file does. ty's absolute module name can be one the interpreter cannot
     /// resolve — a file under a directory that is not an importable package
