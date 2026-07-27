@@ -2344,11 +2344,9 @@ pub fn inferred_override<'db>(
 /// basedpython: the parameter a trailing lambda block binds implicitly, as its
 /// name and the type the callee gives it.
 ///
-/// A callback that declares an [implicit receiver] runs *against* a value, so
-/// the block binds that receiver, spelled `self`. An ordinary callback binds the
-/// argument it is passed, spelled `it`.
-///
-/// [implicit receiver]: crate::types::receivers
+/// A callback that declares an implicit receiver (`int.() -> str`) runs
+/// *against* a value, so the block binds that receiver, spelled `self`. An
+/// ordinary callback binds the argument it is passed, spelled `it`.
 pub fn trailing_lambda_implicit_parameter<'db>(
     model: &SemanticModel<'db>,
     function: &ast::StmtFunctionDef,

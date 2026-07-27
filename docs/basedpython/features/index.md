@@ -76,6 +76,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 
 ## expressions and statements
 
+- [context-sensitive resolution](context-sensitive-resolution.md) — `a: Color = Red`
 - [identity and isinstance (`===` / `!==` / `is`)](identity-swap.md)
 - [optional chaining (`?.`)](optional-chaining.md)
 - [none-coalesce operator (`??`)](none-coalesce.md)

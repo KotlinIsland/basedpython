@@ -535,7 +535,7 @@ impl<'db> InferExpression<'db> {
         expression: Expression<'db>,
         tcx: TypeContext<'db>,
     ) -> InferExpression<'db> {
-        if tcx.annotation.is_some() {
+        if tcx.annotation().is_some() {
             InferExpression::WithContext(ExpressionWithContext::new(db, expression, tcx))
         } else {
             InferExpression::Bare(expression)
@@ -574,7 +574,7 @@ impl<'db> InferScope<'db> {
         scope: ScopeId<'db>,
         tcx: TypeContext<'db>,
     ) -> InferScope<'db> {
-        if tcx.annotation.is_some() {
+        if tcx.annotation().is_some() {
             InferScope::WithContext(ScopeWithContext::new(db, scope, tcx))
         } else {
             InferScope::Bare(scope)
@@ -600,7 +600,9 @@ impl<'db> InferScope<'db> {
     Default, Copy, Clone, Debug, PartialEq, Eq, Hash, get_size2::GetSize, salsa::SalsaValue,
 )]
 pub(crate) struct TypeContext<'db> {
-    pub(crate) annotation: Option<Type<'db>>,
+    /// Read through [`Self::annotation`] rather than directly: for a callee it
+    /// describes the *result* of the call, not the callee itself.
+    target: Option<Type<'db>>,
     /// Retain literal types when solving an inferred specialization. Used for fluid
     /// specialization candidates, whose literal types are promoted lazily on the first
     /// widening event rather than at creation time.
@@ -610,15 +612,57 @@ pub(crate) struct TypeContext<'db> {
     /// is not an external observer of the argument's type, so it must not adopt
     /// and lock a fluid specialization.
     pub(crate) inferred_from_argument: bool,
+    /// basedpython: [`Self::target`] is then the expected type of the value a *call*
+    /// of this expression produces, carried into the callee so that
+    /// [context-sensitive resolution] reaches a constructor
+    /// (`s: Shape = Circle(2.0)`). It is not an annotation on the callee itself,
+    /// so only that resolution reads it.
+    ///
+    /// A flag rather than a second `Option<Type>` because [`TypeContext`] is
+    /// passed by value through every frame of expression inference: growing it
+    /// costs ~8% of the recursion budget, which the deep-binop stack canaries
+    /// (`can_handle_large_binop_expressions`, `pull_diagnostics::stack_size`)
+    /// measure. This fits in the padding the two flags above already occupy.
+    ///
+    /// [context-sensitive resolution]: crate::types::context_sensitive
+    describes_call_result: bool,
 }
 
 impl<'db> TypeContext<'db> {
     pub(crate) fn new(annotation: Option<Type<'db>>) -> Self {
         Self {
-            annotation,
+            target: annotation,
             preserve_literals: false,
             inferred_from_argument: false,
+            describes_call_result: false,
         }
+    }
+
+    /// basedpython: this context as it reaches the *callee* of a call — the
+    /// annotation describes the call's result, not the callee, so it is marked
+    /// [`Self::describes_call_result`], which hides it from [`Self::annotation`]
+    /// and leaves only context-sensitive resolution reading it
+    pub(crate) fn for_callee(self) -> Self {
+        Self {
+            target: self.annotation(),
+            describes_call_result: true,
+            ..Self::default()
+        }
+    }
+
+    /// The type annotation this expression is checked against, if any.
+    pub(crate) fn annotation(self) -> Option<Type<'db>> {
+        if self.describes_call_result {
+            return None;
+        }
+        self.target
+    }
+
+    /// basedpython: the expected type a bare name in this context resolves
+    /// against — the annotation, or the result type of the call this expression
+    /// is the callee of
+    pub(crate) fn context_sensitive_target(self) -> Option<Type<'db>> {
+        self.target
     }
 
     /// If the type annotation is a specialized instance of the given `KnownClass`, returns the
@@ -628,26 +672,27 @@ impl<'db> TypeContext<'db> {
         db: &'db dyn Db,
         known_class: KnownClass,
     ) -> Option<Specialization<'db>> {
-        self.annotation
+        self.annotation()
             .and_then(|ty| ty.known_specialization(db, known_class))
     }
 
     pub(crate) fn map(self, f: impl FnOnce(Type<'db>) -> Type<'db>) -> Self {
         Self {
-            annotation: self.annotation.map(f),
+            target: self.target.map(f),
             preserve_literals: self.preserve_literals,
             inferred_from_argument: self.inferred_from_argument,
+            describes_call_result: self.describes_call_result,
         }
     }
 
     pub(crate) fn is_typealias(&self) -> bool {
-        self.annotation
+        self.annotation()
             .is_some_and(|ty| ty.is_typealias_special_form())
     }
 
     /// If the type annotation is a union, returns the target elements that it can be narrowed to.
     pub(crate) fn narrow_targets(&self, db: &'db dyn Db) -> Option<Cow<'db, [Type<'db>]>> {
-        let union = self.annotation?.as_union_like(db)?;
+        let union = self.annotation()?.as_union_like(db)?;
 
         let targets = if union.has_aliases(db) {
             let expanded = union.expand_aliases(db);

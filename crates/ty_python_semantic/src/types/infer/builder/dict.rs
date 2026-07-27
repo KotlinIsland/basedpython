@@ -24,7 +24,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         // Fast-path dict(...) in TypedDict context: infer keyword values against fields,
         // then validate and return the TypedDict type. This also covers `dict(**src)` when `src`
         // is `TypedDict`-shaped.
-        if let Some(tcx) = call_expression_tcx.annotation
+        if let Some(tcx) = call_expression_tcx.annotation()
             && let Some(typed_dict) = tcx
                 .filter_union(self.db(), Type::is_typed_dict)
                 .as_typed_dict()

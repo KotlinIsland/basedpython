@@ -376,6 +376,21 @@ impl<'db> SemanticModel<'db> {
         .is_some()
     }
 
+    /// basedpython: the enum a *context-sensitively* resolved name must be
+    /// qualified with in the emitted python — `Red` in a `Color` context lowers
+    /// to `Color.Red`. `None` for every name that resolves the ordinary way
+    pub fn context_sensitive_qualifier(&self, name: &ast::ExprName) -> Option<String> {
+        let scope = self.scope(ast::AnyNodeRef::from(name))?;
+        crate::types::context_sensitive::qualifier_for_unbound_name(
+            self.db,
+            self.file,
+            scope.to_scope_id(self.db, self.file),
+            name.id.as_str(),
+            || name.inferred_type(self),
+        )
+        .map(Name::to_string)
+    }
+
     /// basedpython: the bracketed type-argument spelling the transpiler
     /// injects at a bare constructor call of a generic class (`A(1)` →
     /// `"int"`), read from the inferred type of the constructed instance.
