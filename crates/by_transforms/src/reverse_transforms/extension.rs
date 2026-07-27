@@ -197,6 +197,33 @@ impl<'src> ExtensionReverse<'src> {
             ExtensionMemberKind::Property => format!("    @property\n{result}"),
             ExtensionMemberKind::StaticMethod => result.replacen("    def ", "    static def ", 1),
             ExtensionMemberKind::ClassMethod => result.replacen("    def ", "    class def ", 1),
+            // a class-level property has no decorated spelling to go back to — it
+            // only exists as an accessor block, so rebuild one around the backing
+            // function's body. the declaration carries no type: the lowering drops
+            // annotations, so there is none to recover
+            ExtensionMemberKind::StaticProperty => {
+                let Some(first) = func.body.first() else {
+                    return result;
+                };
+                let body_start = line_start(self.source, first.range().start());
+                let body = &self.source[usize::from(body_start)..usize::from(func.range().end())];
+                let dedent = body
+                    .lines()
+                    .filter(|line| !line.trim().is_empty())
+                    .map(|line| line.len() - line.trim_start().len())
+                    .min()
+                    .unwrap_or(0);
+                let mut out = format!("    static let {member}\n        get():");
+                for line in body.lines() {
+                    out.push('\n');
+                    if line.trim().is_empty() {
+                        continue;
+                    }
+                    out.push_str("            ");
+                    out.push_str(&line[dedent..]);
+                }
+                out
+            }
         }
     }
 
@@ -264,7 +291,9 @@ impl<'src> ExtensionReverse<'src> {
             spans.join(", ")
         };
         let replacement = match function.kind {
-            ExtensionMemberKind::Property => {
+            // both property kinds read as `receiver.member`; a static one's receiver
+            // is the class object the forward lowering passed in
+            ExtensionMemberKind::Property | ExtensionMemberKind::StaticProperty => {
                 let [receiver] = call.arguments.args.as_ref() else {
                     return;
                 };

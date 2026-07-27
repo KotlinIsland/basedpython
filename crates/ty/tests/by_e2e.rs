@@ -422,6 +422,52 @@ print(\"quiet\".shouty)
 }
 
 #[test]
+fn static_property_reads_off_the_class_and_the_instance() {
+    // a `static let` accessor block is a class-level computed property: in a plain
+    // class it lowers to a descriptor, in an extension to a backing call taking the
+    // class. both spellings have to answer on a class *and* an instance receiver
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+class Config:
+    static let default_name: str
+        get() = \"config\"
+
+class Widget: ...
+
+extension Widget:
+    static let kind: str
+        get() = \"widget\"
+
+print(Config.default_name)
+print(Config().default_name)
+print(Widget.kind)
+print(Widget().kind)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "config\nconfig\nwidget\nwidget"
+    );
+}
+
+#[test]
 fn extension_member_called_before_its_block_runs() {
     // the backing function is hoisted above the call, so a member used before
     // the `extension` block's source position resolves at runtime

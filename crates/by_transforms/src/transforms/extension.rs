@@ -69,6 +69,10 @@ fn member_kind(func: &ast::StmtFunctionDef, source: &str) -> ExtensionMemberKind
             match name.id.as_str() {
                 "static" => return ExtensionMemberKind::StaticMethod,
                 "classmethod" => return ExtensionMemberKind::ClassMethod,
+                // an accessor block writes no `@`, so its getter carries a
+                // synthetic marker where a decorated member would say `@property`
+                "__property__" => return ExtensionMemberKind::Property,
+                "__static_property__" => return ExtensionMemberKind::StaticProperty,
                 _ => {}
             }
         } else if name.id.as_str() == "property" {
@@ -78,12 +82,23 @@ fn member_kind(func: &ast::StmtFunctionDef, source: &str) -> ExtensionMemberKind
     ExtensionMemberKind::Method
 }
 
+/// Whether `func` is the getter the parser synthesized for a property accessor
+/// block, rather than a member the author wrote as a `def`.
+fn is_accessor_block_member(func: &ast::StmtFunctionDef, source: &str) -> bool {
+    func.decorator_list.iter().any(|decorator| {
+        is_synthetic_decorator(source, decorator)
+            && matches!(&decorator.expression, Expr::Name(name)
+                if matches!(name.id.as_str(), "__property__" | "__static_property__"))
+    })
+}
+
 fn kind_word(kind: ExtensionMemberKind) -> &'static str {
     match kind {
         ExtensionMemberKind::Method => "method",
         ExtensionMemberKind::Property => "property",
         ExtensionMemberKind::StaticMethod => "static",
         ExtensionMemberKind::ClassMethod => "classmethod",
+        ExtensionMemberKind::StaticProperty => "staticproperty",
     }
 }
 
@@ -93,6 +108,7 @@ pub(crate) fn parse_kind_word(word: &str) -> Option<ExtensionMemberKind> {
         "property" => Some(ExtensionMemberKind::Property),
         "static" => Some(ExtensionMemberKind::StaticMethod),
         "classmethod" => Some(ExtensionMemberKind::ClassMethod),
+        "staticproperty" => Some(ExtensionMemberKind::StaticProperty),
         _ => None,
     }
 }
@@ -237,6 +253,17 @@ impl<'a> ExtensionBlockPass<'a> {
                 fragments.push(Fragment::Lit(format!(": ...  {marker}")));
                 continue;
             };
+            // an accessor block's body is synthesized (a `get() = expr` accessor's
+            // `return` is nowhere in the source), so it has to be rendered rather
+            // than passed through. same trade-off the properties pass already
+            // makes: a basedpython construct inside an accessor body is not lowered
+            if is_accessor_block_member(func, source) {
+                fragments.push(Fragment::Lit(format!(
+                    ":  {marker}\n{}",
+                    super::properties::render_body(&func.body, "    ")
+                )));
+                continue;
+            }
             let body_line_start = line_start(source, first_stmt.range().start());
             let inline = source
                 [usize::from(body_line_start)..usize::from(first_stmt.range().start())]
@@ -477,7 +504,10 @@ impl<'ast> Visitor<'ast> for ExtensionCallLower<'_> {
                 if let Expr::Attribute(attr) = call.func.as_ref()
                     && attr.ctx.is_load()
                     && let Some(info) = self.types.extension_attribute_info(attr)
-                    && info.kind != ExtensionMemberKind::Property
+                    && !matches!(
+                        info.kind,
+                        ExtensionMemberKind::Property | ExtensionMemberKind::StaticProperty
+                    )
                 {
                     if attr.optional || spine_has_optional(&attr.value) {
                         self.errors.push(format!(
@@ -522,6 +552,20 @@ impl<'ast> Visitor<'ast> for ExtensionCallLower<'_> {
                             ExtensionMemberKind::Property => {
                                 fragments.push(Fragment::Lit(format!("{}(", info.function)));
                                 fragments.push(Fragment::Src(attr.value.range()));
+                                fragments.push(Fragment::Lit(")".to_owned()));
+                            }
+                            // a class-level property reads like an instance one but
+                            // its backing function takes the class, so an instance
+                            // receiver has to be widened the way a `class def` is
+                            ExtensionMemberKind::StaticProperty => {
+                                fragments.push(Fragment::Lit(format!("{}(", info.function)));
+                                if info.receiver_is_class {
+                                    fragments.push(Fragment::Src(attr.value.range()));
+                                } else {
+                                    fragments.push(Fragment::Lit("type(".to_owned()));
+                                    fragments.push(Fragment::Src(attr.value.range()));
+                                    fragments.push(Fragment::Lit(")".to_owned()));
+                                }
                                 fragments.push(Fragment::Lit(")".to_owned()));
                             }
                             ExtensionMemberKind::StaticMethod => {
@@ -643,6 +687,42 @@ mod tests {
             out.contains("print(_by_ext__str__shouty(name))"),
             "got:\n{out}"
         );
+    }
+
+    /// an accessor block's body is synthesized, so it is rendered rather than passed
+    /// through — a `get() = expr` accessor's `return` exists only in the AST
+    #[test]
+    fn accessor_block_property_keeps_its_return() {
+        let out = check(
+            "class A: ...\n\nextension A:\n    let size: int\n        get() = 1\n\nprint(A().size)\n",
+        );
+        assert!(
+            out.contains("def _by_ext__A__size(self):  # basedpython: extension property A"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("    return 1"), "got:\n{out}");
+        assert!(out.contains("print(_by_ext__A__size(A()))"), "got:\n{out}");
+    }
+
+    /// a `static let` member needs no descriptor in an extension: the access site is
+    /// rewritten, so the class object is simply passed to the backing function
+    #[test]
+    fn static_property_passes_the_class() {
+        let out = check(
+            "class A: ...\n\nextension A:\n    static let kind: str\n        get() = \"a\"\n\nprint(A.kind)\nprint(A().kind)\n",
+        );
+        assert!(
+            out.contains("def _by_ext__A__kind(cls):  # basedpython: extension staticproperty A"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("print(_by_ext__A__kind(A))"), "got:\n{out}");
+        // an instance receiver is widened to its class, like a `class def` member
+        assert!(
+            out.contains("print(_by_ext__A__kind(type(A())))"),
+            "got:\n{out}"
+        );
+        // the plain-class descriptor is not needed here and must not be emitted
+        assert!(!out.contains("class _by_static_property"), "got:\n{out}");
     }
 
     #[test]

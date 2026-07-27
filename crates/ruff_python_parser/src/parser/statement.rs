@@ -470,6 +470,26 @@ impl<'src> Parser<'src> {
                 if self.peek() == TokenKind::Name && self.peek2().1 == TokenKind::Equal {
                     return self.parse_class_var_decl(start);
                 }
+                // `class let x: T` / `class var x: T` — reads as a class-level
+                // declaration by analogy with `class def`, but the modifier for
+                // that is `static`. otherwise it parses as a nested class named
+                // `let`, whose cascade of errors says nothing about the real
+                // mistake. report it, then carry on from the binding keyword so
+                // the declaration it meant is what gets parsed
+                if self.peek() == TokenKind::Name && self.peek2().1 == TokenKind::Name {
+                    let keyword_range = self.peek_nth(0).1;
+                    let keyword = self.src_text(keyword_range).to_owned();
+                    if matches!(keyword.as_str(), "let" | "var") {
+                        self.add_error(
+                            ParseErrorType::OtherError(format!(
+                                "`class {keyword}` is not a declaration; write `static {keyword}`"
+                            )),
+                            TextRange::new(start, keyword_range.end()),
+                        );
+                        self.bump(TokenKind::Class);
+                        return self.parse_statement();
+                    }
+                }
                 Stmt::ClassDef(self.parse_class_definition(DecoratorList::new(), start))
             }
             // basedpython: `type def F[X]:` is a type function — a compound
@@ -1510,7 +1530,12 @@ impl<'src> Parser<'src> {
             .at(TokenKind::Lpar)
             .then(|| Box::new(self.parse_arguments(ArgumentsContext::ClassDefinition)));
         let body = if self.eat(TokenKind::Colon) {
-            self.parse_body(Clause::Class)
+            // a protocol body is a class body: the depth-gated class-body forms
+            // (`init(...)`, property accessor blocks) must fire inside it too
+            self.class_body_depth += 1;
+            let body = self.parse_body(Clause::Class);
+            self.class_body_depth -= 1;
+            body
         } else {
             self.eat(TokenKind::Newline);
             Suite::new()
@@ -1569,7 +1594,12 @@ impl<'src> Parser<'src> {
         }
 
         let body = if self.eat(TokenKind::Colon) {
-            self.parse_body(Clause::Class)
+            // an extension body is a class body: the depth-gated class-body forms
+            // (property accessor blocks in particular) must fire inside it too
+            self.class_body_depth += 1;
+            let body = self.parse_body(Clause::Class);
+            self.class_body_depth -= 1;
+            body
         } else {
             self.add_error(
                 ParseErrorType::OtherError(
@@ -4282,6 +4312,12 @@ impl<'src> Parser<'src> {
         let is_let = prefix.split_whitespace().any(|word| word == "let");
         let is_var = prefix.split_whitespace().any(|word| word == "var");
         let is_late = prefix.split_whitespace().any(|word| word == "late");
+        // `static let x: T` + `get()` is a *class-level* computed property. python
+        // has no such thing (chaining `classmethod` onto `property` was removed in
+        // 3.13), so it lowers to a small descriptor instead of `property`. that
+        // descriptor can only implement `__get__`: assigning through `A.x = v`
+        // bypasses any `__set__`, which is why the mutable forms are rejected below
+        let is_static = prefix.split_whitespace().any(|word| word == "static");
         if !is_let && !is_var {
             self.add_error(
                 ParseErrorType::OtherError(
@@ -4578,9 +4614,56 @@ impl<'src> Parser<'src> {
                 construct_range,
             );
         }
+        if is_static {
+            // a class-level property is read-only and purely computed: there is no
+            // per-instance slot to store in, and a descriptor cannot intercept
+            // `A.x = v`. each of these would need a metaclass to be honest about
+            if is_var {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "a `static` property is read-only; use `static let`".to_string(),
+                    ),
+                    construct_range,
+                );
+            }
+            if setter.is_some() {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "a `static` property cannot define a setter".to_string(),
+                    ),
+                    construct_range,
+                );
+            }
+            if field_decl.is_some() || references_field {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "a `static` property has no backing `field`".to_string(),
+                    ),
+                    construct_range,
+                );
+            }
+            if prop_init.is_some() {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "a `static` property is computed by `get`; it takes no initialiser"
+                            .to_string(),
+                    ),
+                    construct_range,
+                );
+            }
+            if getter.is_none() {
+                self.add_error(
+                    ParseErrorType::OtherError("a `static` property must define `get`".to_string()),
+                    construct_range,
+                );
+            }
+        }
 
         // ---- synthesise the python members -------------------------------
-        let has_backing = references_field || field_decl.is_some();
+        // a static property's rejected extras are dropped rather than synthesized:
+        // a backing `self.__x` in a `cls`-receiver getter, or a `@x.setter` on the
+        // descriptor, would each add a second round of errors about the first one
+        let has_backing = !is_static && (references_field || field_decl.is_some());
 
         // a getter that only reads the field lets the class see storage at its own
         // type; one with real logic must keep being called, so it stays public-typed
@@ -4692,11 +4775,17 @@ impl<'src> Parser<'src> {
             }
         }
 
-        // the getter carries the `__property__` marker, whose range spans the
-        // whole construct so the lowering knows exactly what source to replace
+        // the getter carries the property marker, whose range spans the whole
+        // construct so the lowering knows exactly what source to replace. the
+        // `static` variant resolves to the class-level descriptor rather than to
+        // `builtins.property`
         let marker = ast::Decorator {
             expression: Expr::Name(ast::ExprName {
-                id: Name::new_static("__property__"),
+                id: if is_static {
+                    Name::new_static("__static_property__")
+                } else {
+                    Name::new_static("__property__")
+                },
                 ctx: ExprContext::Invalid,
                 range: construct_range,
                 node_index: AtomicNodeIndex::NONE,
@@ -4720,8 +4809,14 @@ impl<'src> Parser<'src> {
                 TextRange::empty(start),
             ),
         };
+        // a class-level getter receives the owning class, not an instance
+        let getter_receiver = if is_static { "cls" } else { "self" };
         let getter_params = synth_property_parameters(
-            vec![synth_property_param("self", None, getter_range.start())],
+            vec![synth_property_param(
+                getter_receiver,
+                None,
+                getter_range.start(),
+            )],
             getter_range.start(),
         );
         members.push(build_property_fn(
@@ -4743,7 +4838,7 @@ impl<'src> Parser<'src> {
         // a mutable property gets a setter: the author's, or a pass-through when
         // only `get` was written. a computed property (no backing storage) has
         // nothing to write, so it stays read-only
-        let wants_setter = is_var && (setter.is_some() || has_backing);
+        let wants_setter = !is_static && is_var && (setter.is_some() || has_backing);
         if wants_setter {
             let (setter_body, setter_param, setter_range) = match setter {
                 Some((body, param, range)) => (body, param, range),

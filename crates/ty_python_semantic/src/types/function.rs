@@ -184,6 +184,11 @@ bitflags! {
         /// basedpython: the function is a `type def` — a type function, applied
         /// with `[]` in a type expression and evaluated by executing its body
         const TYPE_FN = 1 << 8;
+        /// basedpython: the getter of a `static let` property accessor block. the
+        /// descriptor calls it with the owning class, so its implicit first
+        /// parameter is `type[Self]` like a classmethod's — but the decorated
+        /// member is the descriptor, not a bound method, so this is its own flag
+        const BY_STATIC_PROPERTY = 1 << 9;
     }
 }
 
@@ -204,6 +209,10 @@ impl FunctionDecorators {
             Type::ClassLiteral(class) => match class.known(db) {
                 Some(KnownClass::Classmethod) => FunctionDecorators::CLASSMETHOD,
                 Some(KnownClass::Staticmethod) => FunctionDecorators::STATICMETHOD,
+                // basedpython: not `CLASSMETHOD` — that would make ty bind the
+                // member as a classmethod and bypass the descriptor. the flag only
+                // decides the implicit receiver's type
+                Some(KnownClass::ByStaticProperty) => FunctionDecorators::BY_STATIC_PROPERTY,
                 _ => FunctionDecorators::empty(),
             },
             _ => FunctionDecorators::empty(),
@@ -264,6 +273,10 @@ pub(crate) fn synthetic_decorator_target_type<'db>(
         // the surface syntax. resolving it to the builtin makes ty's existing
         // property handling apply to the accessor form unchanged
         "__property__" => (&[KnownModule::Builtins], "property"),
+        // basedpython: `static let x: T` + `get()` is a class-level computed
+        // property, which `builtins.property` cannot express — see the descriptor's
+        // docstring in `ty_extensions._internal`
+        "__static_property__" => (&[KnownModule::TyExtensionsInternal], "_by_static_property"),
         _ => return None,
     };
     modules.iter().find_map(|module| {
@@ -618,6 +631,14 @@ impl<'db> OverloadLiteral<'db> {
             || is_implicit_classmethod(self.name(db))
     }
 
+    /// basedpython: whether this overload is the getter of a `static let` property.
+    /// Its implicit first parameter is the owning class, like a classmethod's, but
+    /// the member it decorates is a descriptor rather than a bound method.
+    pub(crate) fn takes_implicit_class_receiver(self, db: &dyn Db) -> bool {
+        self.is_classmethod(db)
+            || self.has_known_decorator(db, FunctionDecorators::BY_STATIC_PROPERTY)
+    }
+
     /// Returns true if this overload has an implicit `self` or `cls` receiver parameter.
     pub(crate) fn has_implicit_receiver(self, db: &'db dyn Db) -> bool {
         self.body_scope(db).is_method_scope(db) && !self.is_staticmethod(db)
@@ -896,7 +917,7 @@ impl<'db> OverloadLiteral<'db> {
                 && static_literal.is_extension(db)
             {
                 let body_view = crate::types::extensions::body_view_class(db, static_literal)?;
-                return Some(if self.is_classmethod(db) {
+                return Some(if self.takes_implicit_class_receiver(db) {
                     SubclassOfType::from(db, SubclassOfInner::Class(body_view))
                 } else {
                     Type::instance(db, body_view)
@@ -936,7 +957,7 @@ impl<'db> OverloadLiteral<'db> {
                      for an implicit self: Self annotation",
                     );
 
-                if self.is_classmethod(db) {
+                if self.takes_implicit_class_receiver(db) {
                     Some(SubclassOfType::from(
                         db,
                         SubclassOfInner::TypeVar(typing_self),
@@ -947,7 +968,7 @@ impl<'db> OverloadLiteral<'db> {
             } else {
                 // If skip creating the typevar, we use "instance of class" or "subclass of
                 // class" as the implicit annotation instead.
-                if self.is_classmethod(db) {
+                if self.takes_implicit_class_receiver(db) {
                     Some(SubclassOfType::from(
                         db,
                         SubclassOfInner::Class(ClassType::NonGeneric(class_literal)),

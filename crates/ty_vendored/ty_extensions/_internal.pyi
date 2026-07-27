@@ -1,5 +1,6 @@
 # ruff: noqa: PYI021
 import types
+from collections.abc import Callable
 from enum import Enum
 from typing import Any, Protocol, _SpecialForm
 
@@ -173,6 +174,18 @@ class ConstraintSet:
         constraint sets are rendered. But it can be useful to see the full
         detail for debugging purposes.
         """
+
+class _by_static_property[T]:
+    """The descriptor a basedpython `static let` property accessor block lowers to.
+
+    Python has no class-level `property`: chaining `classmethod` onto `property`
+    was deprecated in 3.11 and removed in 3.13. This descriptor fills the gap for
+    the read-only case, which needs nothing a metaclass would provide — only
+    `__get__`, called with the owning class.
+    """
+
+    def __init__(self, fget: Callable[..., T], /) -> None: ...
+    def __get__(self, instance: object, owner: type | None = None, /) -> T: ...
 
 class GenericContext:
     """

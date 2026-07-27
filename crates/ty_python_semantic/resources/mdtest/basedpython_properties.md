@@ -422,3 +422,67 @@ class A:
 
 reveal_type(A().shout)  # revealed: str
 ```
+
+## `static let` is a class-level computed property
+
+python has no class-level `property` (chaining `classmethod` onto `property` was removed in 3.13),
+so the construct lowers to a descriptor instead. it answers on the class and on an instance.
+
+```by
+class Config:
+    static let name: str
+        get() = "config"
+
+reveal_type(Config.name)  # revealed: str
+reveal_type(Config().name)  # revealed: str
+```
+
+## `static let` computes from the owning class
+
+the getter receives the class, under the implicit name `cls`.
+
+```by
+class Widget:
+    static let label: str
+        get() = cls.__name__
+
+reveal_type(Widget.label)  # revealed: str
+```
+
+## a `static` property is read-only and purely computed
+
+a descriptor cannot intercept `A.x = v`, so the mutable and stored forms are rejected rather than
+silently ignored.
+
+```by
+class A:
+    # error: [invalid-syntax] "a `static` property is read-only; use `static let`"
+    static var count: int
+        get() = 1
+        set(value):
+            field = value
+```
+
+## a `static` property rejects a backing `field`
+
+there is no per-instance slot for a class-level property to store in.
+
+```by
+class B:
+    # error: [invalid-syntax] "a `static` property has no backing `field`"
+    static let size: int
+        # error: [invalid-syntax] "explicit `field` declaration is never referenced by an accessor"
+        field: int = 0
+        get() = 1
+```
+
+## `class let` is not the spelling
+
+the modifier is `static`, matching `static def`.
+
+```by
+class C:
+    # error: [invalid-syntax] "`class let` is not a declaration; write `static let`"
+    class let size: int
+        get() = 1
+```

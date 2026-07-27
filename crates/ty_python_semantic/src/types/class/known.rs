@@ -159,6 +159,8 @@ pub enum KnownClass {
     TyExtensionsAsyncIterator,
     TyExtensionsIterable,
     TyExtensionsIterator,
+    /// basedpython: the descriptor a `static let` property accessor block lowers to
+    ByStaticProperty,
     // Pydantic
     PydanticBaseModel,
     PydanticBaseSettings,
@@ -323,7 +325,8 @@ impl KnownClass {
             | Self::DjangoQuerySet
             | Self::SqlalchemyDeclarativeBase
             | Self::SqlalchemyMappedAsDataclass
-            | Self::SqlalchemyMapped => Some(Truthiness::Ambiguous),
+            | Self::SqlalchemyMapped
+            | Self::ByStaticProperty => Some(Truthiness::Ambiguous),
 
             Self::Tuple => None,
         }
@@ -451,7 +454,8 @@ impl KnownClass {
             | KnownClass::DjangoQuerySet
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
-            | KnownClass::SqlalchemyMapped => false,
+            | KnownClass::SqlalchemyMapped
+            | KnownClass::ByStaticProperty => false,
         }
     }
 
@@ -575,7 +579,8 @@ impl KnownClass {
             | KnownClass::DjangoQuerySet
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
-            | KnownClass::SqlalchemyMapped => false,
+            | KnownClass::SqlalchemyMapped
+            | KnownClass::ByStaticProperty => false,
 
             KnownClass::PydanticConfigDict => true,
         }
@@ -701,7 +706,8 @@ impl KnownClass {
             | KnownClass::DjangoQuerySet
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
-            | KnownClass::SqlalchemyMapped => false,
+            | KnownClass::SqlalchemyMapped
+            | KnownClass::ByStaticProperty => false,
         }
     }
 
@@ -838,7 +844,8 @@ impl KnownClass {
             | Self::DjangoQuerySet
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
-            | KnownClass::SqlalchemyMapped => false,
+            | KnownClass::SqlalchemyMapped
+            | KnownClass::ByStaticProperty => false,
         }
     }
 
@@ -964,7 +971,8 @@ impl KnownClass {
             | KnownClass::DjangoQuerySet
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
-            | KnownClass::SqlalchemyMapped => false,
+            | KnownClass::SqlalchemyMapped
+            | KnownClass::ByStaticProperty => false,
             KnownClass::NamedTupleFallback
             | KnownClass::TypedDictFallback
             | KnownClass::ExtensionTypedDictFallback => true,
@@ -1059,6 +1067,7 @@ impl KnownClass {
             Self::TyExtensionsIterable => "Iterable",
             Self::Iterator => "Iterator",
             Self::TyExtensionsIterator => "Iterator",
+            Self::ByStaticProperty => "_by_static_property",
             Self::AsyncIterator => "AsyncIterator",
             Self::Sequence => "Sequence",
             Self::Mapping => "Mapping",
@@ -1496,7 +1505,8 @@ impl KnownClass {
             | Self::TyExtensionsAsyncIterable
             | Self::TyExtensionsAsyncIterator
             | Self::TyExtensionsIterable
-            | Self::TyExtensionsIterator => KnownModule::TyExtensionsInternal,
+            | Self::TyExtensionsIterator
+            | Self::ByStaticProperty => KnownModule::TyExtensionsInternal,
             Self::Template => KnownModule::Templatelib,
             Self::Path => KnownModule::Pathlib,
             Self::FunctoolsPartial => KnownModule::Functools,
@@ -1643,7 +1653,8 @@ impl KnownClass {
             | Self::DjangoQuerySet
             | Self::SqlalchemyDeclarativeBase
             | Self::SqlalchemyMappedAsDataclass
-            | Self::SqlalchemyMapped => Some(false),
+            | Self::SqlalchemyMapped
+            | Self::ByStaticProperty => Some(false),
 
             Self::Tuple => None,
         }
@@ -1773,7 +1784,8 @@ impl KnownClass {
             | Self::DjangoQuerySet
             | KnownClass::SqlalchemyDeclarativeBase
             | KnownClass::SqlalchemyMappedAsDataclass
-            | KnownClass::SqlalchemyMapped => false,
+            | KnownClass::SqlalchemyMapped
+            | KnownClass::ByStaticProperty => false,
         }
     }
 
@@ -1881,6 +1893,7 @@ impl KnownClass {
             "ConstraintSetSolution" => &[Self::ConstraintSetSolution],
             "GenericContext" => &[Self::GenericContext],
             "Specialization" => &[Self::Specialization],
+            "_by_static_property" => &[Self::ByStaticProperty],
             "TypedDictFallback" => &[Self::TypedDictFallback],
             "Template" => &[Self::Template],
             "Path" => &[Self::Path],
@@ -2019,7 +2032,8 @@ impl KnownClass {
             | Self::DjangoQuerySet
             | Self::SqlalchemyDeclarativeBase
             | Self::SqlalchemyMappedAsDataclass
-            | Self::SqlalchemyMapped => module == self.canonical_module(db),
+            | Self::SqlalchemyMapped
+            | Self::ByStaticProperty => module == self.canonical_module(db),
             Self::NoneType => matches!(module, KnownModule::Typeshed | KnownModule::Types),
             Self::SpecialForm
             | Self::TypeAliasType

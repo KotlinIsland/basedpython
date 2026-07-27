@@ -646,7 +646,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
                 _ => {}
             }
-            if !decorator_function_decorator.is_empty() {
+            // a decorator that maps to a flag is a marker: recording it is the whole
+            // effect, so it is not applied. basedpython's static-property marker is
+            // the exception — the flag only says how the getter's receiver is typed,
+            // while the descriptor it resolves to is the member's actual type
+            if !decorator_function_decorator
+                .difference(FunctionDecorators::BY_STATIC_PROPERTY)
+                .is_empty()
+            {
                 continue;
             }
 
@@ -1561,7 +1568,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     return None;
                 }
 
-                is_classmethod |= known_class == KnownClass::Classmethod;
+                // basedpython: a `static let` getter is called with the owning
+                // class, so its first parameter is typed like a classmethod's
+                is_classmethod |= matches!(
+                    known_class,
+                    KnownClass::Classmethod | KnownClass::ByStaticProperty
+                );
             }
         }
 
