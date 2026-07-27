@@ -105,6 +105,11 @@ pub(crate) fn check_static_class_definitions<'db>(
         implementations::validate_implementation_declaration(context, class, class_node);
     }
 
+    // basedpython: the conversion dunders have to have the shape their lowered
+    // call needs — a `__from__` that is not a classmethod would bind the value to
+    // its first parameter, and converts nothing anywhere
+    crate::types::conversions::validate_conversion_dunders(context, class, class_node);
+
     // Check that the class does not have a cyclic definition
     if let Some(inheritance_cycle) = class.inheritance_cycle(db) {
         if inheritance_cycle.is_participant()

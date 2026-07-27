@@ -148,22 +148,22 @@ pub(crate) trait TypeInfo {
     /// resolves the interface's
     fn implementation_delegated_dunders(&self, class_def: &StmtClassDef) -> Vec<&'static str>;
 
-    /// the witness conversions a statement's value needs: an annotated assignment,
-    /// an attribute assignment, or a `return`. one wrap for a value that converts
+    /// the conversions a statement's value needs: an annotated assignment, an
+    /// attribute assignment, or a `return`. one wrap for a value that converts
     /// whole, or one per element for a collection literal
-    fn implementation_statement_conversions(
+    fn statement_conversions(
         &self,
         stmt: &Stmt,
-    ) -> Vec<(TextRange, ty_python_semantic::ImplementationConversion)>;
+    ) -> Vec<(TextRange, ty_python_semantic::ConversionInfo)>;
 
-    /// the witness conversions a call's arguments need, as `(argument range,
-    /// conversion)` pairs: an `implementation A for B:` in scope makes a `B`
-    /// acceptable where an `A` is asked for, and the argument is wrapped in the
-    /// witness class the implementation lowers to
-    fn implementation_call_conversions(
+    /// the conversions a call's arguments need, as `(argument range, conversion)`
+    /// pairs: an `implementation A for B:` in scope, a `__from__` / `__of__` on
+    /// the parameter type or an `__into__` on the argument's own type all make an
+    /// argument acceptable where it otherwise is not
+    fn call_conversions(
         &self,
         call: &ruff_python_ast::ExprCall,
-    ) -> Vec<(TextRange, ty_python_semantic::ImplementationConversion)>;
+    ) -> Vec<(TextRange, ty_python_semantic::ConversionInfo)>;
 
     /// whether `attribute` resolves through a basedpython *implicit receiver* —
     /// `x.fn` where `fn` names a receiver callable (`int.() -> str`) in scope
@@ -528,18 +528,18 @@ impl TypeInfo for SemanticModel<'_> {
         ty_python_semantic::types::witness_delegated_dunders(self.db(), class)
     }
 
-    fn implementation_statement_conversions(
+    fn statement_conversions(
         &self,
         stmt: &Stmt,
-    ) -> Vec<(TextRange, ty_python_semantic::ImplementationConversion)> {
-        SemanticModel::implementation_statement_conversions(self, stmt)
+    ) -> Vec<(TextRange, ty_python_semantic::ConversionInfo)> {
+        SemanticModel::statement_conversions(self, stmt)
     }
 
-    fn implementation_call_conversions(
+    fn call_conversions(
         &self,
         call: &ruff_python_ast::ExprCall,
-    ) -> Vec<(TextRange, ty_python_semantic::ImplementationConversion)> {
-        SemanticModel::implementation_call_conversions(self, call)
+    ) -> Vec<(TextRange, ty_python_semantic::ConversionInfo)> {
+        SemanticModel::call_conversions(self, call)
     }
 
     fn is_implicit_receiver_attribute(&self, attribute: &ruff_python_ast::ExprAttribute) -> bool {

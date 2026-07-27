@@ -636,7 +636,7 @@ from iface import A, B
 def takes_a(a: A) -> int:
     return a.f()
 
-# error: [ambiguous-implementation] "More than one applicable implementation converts `B` here"
+# error: [ambiguous-conversion] "More than one applicable implementation converts `B` here"
 takes_a(B())
 ```
 

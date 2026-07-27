@@ -97,6 +97,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [repeated `_` parameters](repeated-underscore.md)
 - [lazy imports](lazy-imports.md)
 - [extensions](extensions.md)
+- [conversions (`__from__` / `__into__` / `__of__`)](conversions.md)
 - [context parameters](context-parameters.md)
 - [local lifetimes (`local` / `once`)](local-lifetimes.md)
 - [exception tracking (`raises`)](exceptions.md)

@@ -8051,10 +8051,11 @@ impl<'db> BindingError<'db> {
                 let range = Self::get_node(node, *argument_index);
 
                 // basedpython: a call argument is a conversion site — an in-scope
-                // `implementation A for B:` makes a `B` acceptable where an `A` is
-                // asked for, and the transpiler wraps the argument in the witness.
-                // `B` is still not a subtype of `A`, so only the positions that ask
-                // this question accept it (see the `implementations` module)
+                // `implementation A for B:`, a `__from__` / `__of__` on the parameter
+                // type or an `__into__` on the argument's own type makes it
+                // acceptable, and the transpiler emits the conversion the checker
+                // resolved. None of them is a subtype relation, so only the positions
+                // that ask this question accept it (see the `conversions` module)
                 //
                 // accept only what the transpiler can actually wrap: a plain callee
                 // (it reads the parameter type from the single matching overload, and
@@ -8063,16 +8064,15 @@ impl<'db> BindingError<'db> {
                 // here would emit python that type-checks and never converts
                 if matching_overload.is_none()
                     && Self::argument_is_wrappable(node, *argument_index)
-                    && let Some(repair) = crate::types::implementations::repair_with_implementation(
+                    && let Some(repair) = crate::types::conversions::repair_conversion(
                         context.db(),
                         context.file(),
                         *provided_ty,
                         *expected_ty,
+                        Self::get_argument_node(node, *argument_index).map(ArgOrKeyword::value),
                     )
                 {
-                    crate::types::implementations::report_ambiguous_implementation(
-                        context, range, &repair,
-                    );
+                    crate::types::conversions::report_ambiguous_conversion(context, range, &repair);
                     return;
                 }
 
