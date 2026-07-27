@@ -39,14 +39,17 @@ use ruff_python_ast as ast;
 use ruff_python_ast::name::Name;
 
 use super::Type;
-use super::infer::{deferred_comparison, literal_binary_op, literal_unary_op};
+use super::infer::{
+    deferred_comparison, fold_tuple_concat, fold_tuple_repeat, literal_binary_op, literal_unary_op,
+};
 use super::visitor::{self, any_over_type};
 use crate::Db;
 use crate::types::call::CallArguments;
+use crate::types::match_type::{MatchTypeOutcome, evaluate_match_type};
 use crate::types::type_fn::{
     TypeFnArguments, TypeFnOutcome, declared_return_type, evaluate_type_fn,
 };
-use crate::types::{KnownClass, TypeContext};
+use crate::types::{KnownClass, KnownInstanceType, TypeContext};
 
 /// The kind of a [`DeferredType`]'s pending operation. Each variant fixes how many
 /// operands the deferral carries and which value-level fold re-evaluates it.
@@ -75,6 +78,26 @@ pub enum DeferredOperation {
     /// function is the only way to know its result — so its reduced form is the
     /// function's declared return type instead (see `DeferredType::reduced`).
     TypeFn,
+    /// basedpython: `M[arg0, arg1, ...]` where `M` is a match type; operands are
+    /// `[Type::KnownInstance(TypeAliasType(M)), arg0, arg1, ...]`, with `M` left
+    /// unspecialized so that only the arguments are substituted. Which `case`
+    /// applies is undecidable until the arguments are known, so this one has no
+    /// reduced form at all (see `DeferredType::reduced`).
+    MatchType,
+}
+
+impl DeferredOperation {
+    /// The operands that decide whether the operation can be evaluated yet.
+    ///
+    /// For most kinds that is every operand. A [`DeferredOperation::MatchType`] carries the
+    /// match type itself as its first operand, which is not something a specialization
+    /// substitutes and must not keep the operation symbolic on its own.
+    fn deferring_operands<'a, 'db>(&self, operands: &'a [Type<'db>]) -> &'a [Type<'db>] {
+        match self {
+            DeferredOperation::MatchType => operands.get(1..).unwrap_or_default(),
+            _ => operands,
+        }
+    }
 }
 
 #[salsa::interned(debug, heap_size = ruff_memory_usage::heap_size)]
@@ -110,7 +133,8 @@ impl<'db> DeferredType<'db> {
         operation: &DeferredOperation,
         operands: Box<[Type<'db>]>,
     ) -> Type<'db> {
-        if operands
+        if operation
+            .deferring_operands(&operands)
             .iter()
             .any(|operand| operand_is_symbolic(db, *operand))
         {
@@ -138,6 +162,12 @@ impl<'db> DeferredType<'db> {
         // answer a question nobody asked. its declared return type is the reduced
         // form, which is why annotating a type function is what makes generic code
         // using it checkable
+        // a match type has no bound to substitute either: every case body is a different
+        // type, and picking one is the whole question. an unresolved application is gradual
+        if matches!(self.operation(db), DeferredOperation::MatchType) {
+            return Type::unknown();
+        }
+
         if matches!(self.operation(db), DeferredOperation::TypeFn) {
             let [Type::FunctionLiteral(function), ..] = self.operands(db) else {
                 return Type::unknown();
@@ -189,6 +219,15 @@ fn evaluate<'db>(
         DeferredOperation::Binary(op) => {
             let [left, right] = operands else { return None };
             literal_binary_op(db, *left, *right, op, true)
+                // the same tuple folds the value inferrer applies: without them
+                // `(X,) * Dim` would re-evaluate through typeshed's `tuple.__mul__` and
+                // widen to `tuple[X, ...]`, throwing away the length the fold just learned
+                .or_else(|| match op {
+                    ast::Operator::Mult => fold_tuple_repeat(db, *left, *right)
+                        .or_else(|| fold_tuple_repeat(db, *right, *left)),
+                    ast::Operator::Add => fold_tuple_concat(db, *left, *right),
+                    _ => None,
+                })
                 .or_else(|| Type::try_call_bin_op_return_type(db, *left, op, *right))
         }
         DeferredOperation::Attribute(ref name) => {
@@ -247,6 +286,28 @@ fn evaluate<'db>(
                 // specialization that cannot host a diagnostic. degrade to the
                 // declared return rather than reporting nothing and inferring a type
                 TypeFnOutcome::TypeError(_) | TypeFnOutcome::Failed(_) => None,
+            }
+        }
+        DeferredOperation::MatchType => {
+            let [
+                Type::KnownInstance(KnownInstanceType::TypeAliasType(alias)),
+                arguments @ ..,
+            ] = operands
+            else {
+                return None;
+            };
+            let alias = alias.as_pep_695_type_alias()?;
+            let specialized = alias.apply_specialization(db, |generic_context| {
+                generic_context.specialize(db, arguments.to_vec())
+            });
+            match evaluate_match_type(db, specialized)? {
+                MatchTypeOutcome::Matched(ty) => Some(*ty),
+                // a specialization that decides no case has no value; `Unknown` keeps it
+                // gradual rather than inventing one. the mismatch is reported where the
+                // application is written
+                MatchTypeOutcome::Unresolved
+                | MatchTypeOutcome::NoCaseMatched
+                | MatchTypeOutcome::TooLarge => None,
             }
         }
         DeferredOperation::Compare(op) => {

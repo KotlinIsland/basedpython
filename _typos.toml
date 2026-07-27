@@ -40,3 +40,4 @@ extend-ignore-re = [
 
 [default.extend-identifiers]
 "FrIeNdLy" = "FrIeNdLy"
+"NDTuple" = "NDTuple"  # n-dimensional tuple, the match-type example

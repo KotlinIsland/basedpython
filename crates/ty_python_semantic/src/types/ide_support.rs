@@ -1937,6 +1937,7 @@ mod resolve_definition {
             | DefinitionKind::TypeVar(_)
             | DefinitionKind::ParamSpec(_)
             | DefinitionKind::TypeVarTuple(_)
+            | DefinitionKind::TypeMatchCapture(_)
             | DefinitionKind::LoopHeader(_)
             | DefinitionKind::NestedBindings(_) => {
                 // Not yet implemented

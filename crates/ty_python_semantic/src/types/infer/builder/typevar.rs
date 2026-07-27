@@ -918,12 +918,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             range: _,
             node_index: _,
             name,
+            bound,
             default,
         } = node;
 
         let db = self.db();
 
-        if default.is_some() {
+        if bound.is_some() || default.is_some() {
             self.deferred.insert(definition);
         }
         let identity = TypeVarIdentity::new(
@@ -932,10 +933,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             Some(definition),
             TypeVarKind::Pep695TypeVarTuple,
         );
+        // basedpython: `*Ts: int` bounds every element of the pack, so the bound is stored on
+        // the pack's own typevar and checked element-wise where the pack is specialized
         let ty = Type::KnownInstance(KnownInstanceType::TypeVar(TypeVarInstance::new(
             db,
             identity,
-            None,
+            bound
+                .as_deref()
+                .map(|_| TypeVarBoundOrConstraintsEvaluation::LazyUpperBound),
             None, // _lower_bound
             None, // explicit_variance
             default.as_deref().map(|_| TypeVarDefaultEvaluation::Lazy),
@@ -947,19 +952,56 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         );
     }
 
+    /// basedpython: a name captured by a match type's `case` pattern is a type variable.
+    ///
+    /// The case body is inferred once, in terms of these variables; matching a subject
+    /// against the pattern then produces the specialization that substitutes them. A starred
+    /// capture (`*Rest`) stands for a whole pack, so it is a `TypeVarTuple`.
+    pub(super) fn infer_type_match_capture_definition(
+        &mut self,
+        name: &ast::Identifier,
+        is_variadic: bool,
+        definition: Definition<'db>,
+    ) {
+        let db = self.db();
+        let kind = if is_variadic {
+            TypeVarKind::Pep695TypeVarTuple
+        } else {
+            TypeVarKind::Pep695TypeVar
+        };
+        let ty = Type::KnownInstance(KnownInstanceType::TypeVar(TypeVarInstance::new(
+            db,
+            TypeVarIdentity::new(db, &name.id, Some(definition), kind),
+            None, // _bound_or_constraints
+            None, // _lower_bound
+            None, // explicit_variance
+            None, // _default
+        )));
+        self.add_declaration_with_binding(
+            name.into(),
+            definition,
+            &DeclaredAndInferredType::are_the_same_type(ty),
+        );
+    }
+
     pub(super) fn infer_typevartuple_deferred(&mut self, node: &ast::TypeParamTypeVarTuple) {
         let ast::TypeParamTypeVarTuple {
             range: _,
             node_index: _,
             name,
-            default: Some(default),
-        } = node
-        else {
-            return;
-        };
+            bound,
+            default,
+        } = node;
         let previous_deferred_state =
             std::mem::replace(&mut self.deferred_state, DeferredExpressionState::Deferred);
-        self.infer_typevartuple_default(default, Some(&name.id));
+        // basedpython: `*Ts: int` — the bound is an ordinary type expression, evaluated here
+        // so that `lazy_bound` can read it back
+        if let Some(bound) = bound.as_deref() {
+            let _ = self.infer_type_expression(bound);
+        }
+        if let Some(default) = default.as_deref() {
+            self.infer_typevartuple_default(default, Some(&name.id));
+        }
         self.deferred_state = previous_deferred_state;
     }
 

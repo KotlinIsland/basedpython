@@ -387,6 +387,19 @@ fn property_decl_type(annotation: &Expr) -> Option<Expr> {
     None
 }
 
+/// basedpython: whether this statement parsed as a simple statement but already consumed an
+/// indented suite of its own, so no semicolon or newline terminator follows it.
+///
+/// Two forms do this: a trailing lambda block (`f(2):` and a suite) and a match type alias
+/// (`type X[...] = match S:` and its `case` blocks).
+fn consumed_own_suite(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::FunctionDef(function) => function.is_trailing_lambda,
+        Stmt::TypeAlias(alias) => !alias.cases.is_empty(),
+        _ => false,
+    }
+}
+
 impl ruff_python_ast::visitor::transformer::Transformer for FieldRewriter {
     fn visit_expr(&self, expr: &mut Expr) {
         if let Expr::Name(name) = expr
@@ -715,9 +728,12 @@ impl<'src> Parser<'src> {
                     // a type alias is a *simple* statement, so unlike the
                     // compound `parse_with_modifier` path it must consume its
                     // own terminator here — the caller only does that for the
-                    // fallback path
-                    self.eat(TokenKind::Semi);
-                    self.eat(TokenKind::Newline);
+                    // fallback path. a match type alias is the exception: its
+                    // `case` blocks already consumed the newline and the suite
+                    if alias.cases.is_empty() {
+                        self.eat(TokenKind::Semi);
+                        self.eat(TokenKind::Newline);
+                    }
                     return Some(Stmt::TypeAlias(alias));
                 }
                 TokenKind::Name => {
@@ -2164,10 +2180,10 @@ impl<'src> Parser<'src> {
         let stmt = self.parse_simple_statement();
         self.validate_statement_expressions(&stmt);
 
-        // basedpython: a trailing lambda block is a compound statement — it
-        // consumed its own newline, indent and dedent, so the simple-statement
-        // termination handling below does not apply
-        if matches!(&stmt, Stmt::FunctionDef(function) if function.is_trailing_lambda) {
+        // basedpython: a trailing lambda block and a match type alias are compound
+        // statements — they consumed their own newline, indent and dedent, so the
+        // simple-statement termination handling below does not apply
+        if consumed_own_suite(&stmt) {
             return stmt;
         }
 
@@ -2224,8 +2240,7 @@ impl<'src> Parser<'src> {
             let stmt = self.parse_simple_statement();
             self.validate_statement_expressions(&stmt);
             let statement_expression_suite = std::mem::take(&mut self.expr_consumed_suite);
-            let consumed_suite = matches!(&stmt, Stmt::FunctionDef(function) if function.is_trailing_lambda)
-                || statement_expression_suite;
+            let consumed_suite = consumed_own_suite(&stmt) || statement_expression_suite;
 
             // basedpython: a statement expression's suite begins on the line its
             // statement does, so anything preceding it on that line would end up
@@ -2243,8 +2258,8 @@ impl<'src> Parser<'src> {
 
             self.stmt_scratch.push(stmt);
 
-            // basedpython: a trailing lambda block or a statement expression
-            // consumed its own suite — no semicolon or newline follows it
+            // basedpython: a trailing lambda block, a match type alias or a statement
+            // expression consumed its own suite — no semicolon or newline follows it
             if consumed_suite {
                 return self.stmt_scratch.take_thin_vec(stmts_snapshot);
             }
@@ -3219,6 +3234,25 @@ impl<'src> Parser<'src> {
         // type x
         // type x =
 
+        // basedpython: `type X[...] = match S:` opens a match type — the alias's value is
+        // chosen by matching `S` against the `case` patterns that follow. `match` is a soft
+        // keyword, so an alias to a variable actually called `match` must keep parsing as
+        // an ordinary alias; the speculative parse rewinds when no case block follows
+        if self.options.is_basedpython
+            && self.at(TokenKind::Match)
+            && let Some((subject, cases)) = self.try_parse_type_match()
+        {
+            return ast::StmtTypeAlias {
+                name: Box::new(name),
+                type_params: type_params.map(Box::new),
+                value: Box::new(subject),
+                cases,
+                range: self.node_range(start),
+                node_index: AtomicNodeIndex::NONE,
+                is_private: false,
+            };
+        }
+
         // test_err type_alias_invalid_value_expr
         // type x = *y
         // type x = yield y
@@ -3230,9 +3264,92 @@ impl<'src> Parser<'src> {
             name: Box::new(name),
             type_params: type_params.map(Box::new),
             value: Box::new(value.expr),
+            cases: Vec::new(),
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
             is_private: false,
+        }
+    }
+
+    /// basedpython: parses the `match S:` … `case` blocks of a match type alias.
+    ///
+    /// Returns the subject expression and the case blocks, or `None` — with the parser
+    /// rewound — when what follows `match` is not a match block after all, so the caller
+    /// can parse `match` as an ordinary name.
+    ///
+    /// # Panics
+    ///
+    /// If the parser isn't positioned at a `match` token.
+    fn try_parse_type_match(&mut self) -> Option<(Expr, Vec<ast::MatchCase>)> {
+        let checkpoint = self.checkpoint();
+
+        self.bump(TokenKind::Match);
+        let subject = self.parse_type_match_subject_expression();
+
+        if !(self.at(TokenKind::Colon) && self.peek() == TokenKind::Newline) {
+            self.rewind(checkpoint);
+            return None;
+        }
+
+        self.bump(TokenKind::Colon);
+        let cases = self.parse_match_body();
+
+        for case in &cases {
+            self.validate_type_match_case(case);
+        }
+
+        Some((subject, cases))
+    }
+
+    /// basedpython: parses the subject of a match type.
+    ///
+    /// Unlike a `match` statement's subject, a lone starred expression is allowed: matching
+    /// over a type variable tuple — `match *Shape:` — is the whole point of the form.
+    fn parse_type_match_subject_expression(&mut self) -> Expr {
+        let start = self.node_start();
+        let subject =
+            self.parse_named_expression_or_higher(ExpressionContext::starred_bitwise_or());
+
+        if self.at(TokenKind::Comma) {
+            let tuple = self.parse_tuple_expression(subject.expr, start, Parenthesized::No, |p| {
+                p.parse_named_expression_or_higher(ExpressionContext::starred_bitwise_or())
+            });
+            Expr::Tuple(tuple)
+        } else {
+            subject.expr
+        }
+    }
+
+    /// basedpython: reports a match type case block that isn't a single type expression.
+    ///
+    /// A case body stands for the type the alias takes when the pattern matches, so it must
+    /// be exactly one expression — there is nothing for a statement to do at the type level.
+    fn validate_type_match_case(&mut self, case: &ast::MatchCase) {
+        if let Some(guard) = &case.guard {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "a match type case cannot have a guard; a type-level match decides on the \
+                     pattern alone"
+                        .to_string(),
+                ),
+                guard.as_ref(),
+            );
+        }
+
+        match case.body.as_slice() {
+            [ast::Stmt::Expr(_)] => {}
+            [] => {}
+            [first, rest @ ..] => {
+                let range = rest
+                    .last()
+                    .map_or_else(|| first.range(), |last| first.range().cover(last.range()));
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "a match type case body must be a single type expression".to_string(),
+                    ),
+                    range,
+                );
+            }
         }
     }
 
@@ -7144,16 +7261,6 @@ impl<'src> Parser<'src> {
     fn parse_type_param(&mut self) -> ast::TypeParam {
         let start = self.node_start();
 
-        // TODO(dhruvmanila): CPython throws an error if `TypeVarTuple` or `ParamSpec`
-        // has bounds:
-        //
-        //    type X[*T: int] = int
-        //             ^^^^^
-        // SyntaxError: cannot use bound with TypeVarTuple
-        //
-        // We should do the same but currently we can't without throwing away the parsed
-        // expression because the AST can't contain it.
-
         // test_ok type_param_type_var_tuple
         // type X[*Ts] = int
         // type X[*Ts = int] = int
@@ -7162,6 +7269,29 @@ impl<'src> Parser<'src> {
         // type X[T, *Ts = int] = int
         if self.eat(TokenKind::Star) {
             let name = self.parse_identifier();
+
+            // basedpython: `*Ts: int` bounds every element of the pack. CPython rejects a
+            // bound on a `TypeVarTuple`, so this is an error in `.py` files
+            let bound = if self.eat(TokenKind::Colon) {
+                // test_err type_param_type_var_tuple_bound
+                // type X[*T: int] = int
+                self.error_if_not_basedpython(
+                    "a bound on a `TypeVarTuple` is a basedpython feature and is not valid in \
+                     .py files"
+                        .to_string(),
+                );
+                if self.at_expr() {
+                    Some(Box::new(self.parse_conditional_expression_or_higher().expr))
+                } else {
+                    self.add_error(
+                        ParseErrorType::ExpectedExpression,
+                        self.current_token_range(),
+                    );
+                    None
+                }
+            } else {
+                None
+            };
 
             let default = if self.eat(TokenKind::Equal) {
                 if self.at_expr() {
@@ -7191,11 +7321,10 @@ impl<'src> Parser<'src> {
                 None
             };
 
-            // test_err type_param_type_var_tuple_bound
-            // type X[*T: int] = int
             ast::TypeParam::TypeVarTuple(ast::TypeParamTypeVarTuple {
                 range: self.node_range(start),
                 name,
+                bound,
                 default,
                 node_index: AtomicNodeIndex::NONE,
             })

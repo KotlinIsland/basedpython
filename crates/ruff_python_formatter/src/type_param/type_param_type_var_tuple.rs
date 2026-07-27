@@ -12,9 +12,13 @@ impl FormatNodeRule<TypeParamTypeVarTuple> for FormatTypeParamTypeVarTuple {
             range: _,
             node_index: _,
             name,
+            bound,
             default,
         } = item;
         write!(f, [token("*"), name.format()])?;
+        if let Some(bound) = bound {
+            write!(f, [token(":"), space(), bound.format()])?;
+        }
         if let Some(default) = default {
             write!(f, [space(), token("="), space(), default.format()])?;
         }

@@ -68,6 +68,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),

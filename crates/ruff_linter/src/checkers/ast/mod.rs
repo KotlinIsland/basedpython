@@ -1476,6 +1476,11 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 name,
                 type_params,
                 value,
+                // basedpython: a match type's `case` blocks are pure type-level structure —
+                // the captures are type variables and the bodies are type expressions, none
+                // of which any lint has a rule for. leaving them unvisited keeps names like
+                // `Dim` and `*Rest` from reading as undefined references
+                cases: _,
                 is_private: _,
             }) => {
                 self.semantic.push_scope(ScopeKind::Type);
@@ -2514,11 +2519,17 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 }
             }
             ast::TypeParam::TypeVarTuple(ast::TypeParamTypeVarTuple {
+                bound,
                 default,
                 name: _,
                 range: _,
                 node_index: _,
             }) => {
+                if let Some(expr) = bound {
+                    self.visit
+                        .type_param_definitions
+                        .push((expr, self.semantic.snapshot()));
+                }
                 if let Some(expr) = default {
                     self.visit
                         .type_param_definitions
