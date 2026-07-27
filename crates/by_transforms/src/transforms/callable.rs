@@ -780,14 +780,30 @@ fn is_named(expr: &Expr, ident: &str) -> bool {
 /// any synthesized `Protocol` class are emitted by the `callable` pass's own
 /// visit of the same expression — keyed by the same shape hash, so a callable
 /// arrow here resolves to the same hoisted class name — and so are not returned.
+///
+/// `substitutions` are ranges another transform has already lowered — a symbolic
+/// fold (`T.a` → `int`), a typevar rename (`T` → `_T`). They are honoured on every
+/// rendering path, which is what lets one wide edit carry rewrites it subsumes.
 pub(crate) fn lower_type_expr_full(
     source: &str,
     types: &dyn TypeInfo,
     expr: &Expr,
+    substitutions: &[(TextRange, String)],
 ) -> Option<String> {
     let mut inner = CallableSyntax::new(source).with_types(types);
+    for (range, name) in substitutions {
+        inner.add_substitution(*range, name.clone());
+    }
     if let Some(text) = inner.rewrite(expr) {
         return Some(text);
+    }
+    if substitutions
+        .iter()
+        .any(|(range, _)| expr.range().contains_range(*range))
+    {
+        // nothing structural to lower, but a subsumed rewrite still has to reach the
+        // output, so render the expression through the substitution sweep
+        return Some(inner.lower_type_expr(expr));
     }
     // no structural type-form — fall back to the per-leaf composer
     // (`float` → `JustFloat`, a literal → `Literal[…]`, `dynamic` → `Any`)

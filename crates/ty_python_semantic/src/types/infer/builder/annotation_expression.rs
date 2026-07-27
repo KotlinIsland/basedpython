@@ -207,12 +207,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     return TypeAndQualifiers::declared(self.infer_type_expression(annotation));
                 }
                 match attribute.ctx {
-                    ast::ExprContext::Load => infer_name_or_attribute(
-                        self.infer_attribute_expression(attribute),
-                        annotation,
-                        self,
-                        pep_613_policy,
-                    ),
+                    ast::ExprContext::Load => {
+                        // resolve the dotted name as the type expression it is, as the
+                        // bare-name arm below does, so the basedpython forms that only
+                        // exist in a type position — `T.a` attribute types — read the
+                        // same here as they do in a nested type expression
+                        let attribute_ty = self.infer_dotted_type_expression(attribute);
+                        infer_name_or_attribute(attribute_ty, annotation, self, pep_613_policy)
+                    }
                     ast::ExprContext::Invalid => AnnotationExpressionInference::new(
                         TypeAndQualifiers::declared(Type::unknown()),
                     ),

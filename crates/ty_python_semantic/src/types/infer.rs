@@ -2109,6 +2109,17 @@ bitflags::bitflags! {
         /// The bare `TypedDict` special form is only a type expression here, where it denotes
         /// the top of the `TypedDict` lattice
         const IN_TYPE_VARIABLE_BOUND = 1 << 16;
+
+        /// basedpython: set while resolving a dotted name that *is* a type expression,
+        /// which is what makes `T.a` an attribute type there.
+        ///
+        /// [`IN_TYPE_EXPRESSION`](Self::IN_TYPE_EXPRESSION) cannot answer that question:
+        /// it stays set across the nested *value* inference a type expression performs —
+        /// `Annotated`'s metadata elements, most of all — so reading it would give a
+        /// runtime value the meaning of a type. This is set around exactly one dotted
+        /// name's inference instead, and a dotted name contains no arbitrary values to
+        /// leak into.
+        const RESOLVING_DOTTED_TYPE_EXPRESSION = 1 << 17;
     }
 }
 

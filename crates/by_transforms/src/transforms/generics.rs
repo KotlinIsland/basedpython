@@ -52,6 +52,9 @@ pub(crate) struct GenericPolyfill<'src> {
     /// alias value is subsumed by this pass's whole-statement replacement, so
     /// the rename has to be reapplied there
     private_aliases: HashMap<String, String>,
+    /// `(range, rendered)` for every symbolic fold in the module. A fold inside a
+    /// statement this pass replaces wholesale is dropped unless spliced in here
+    symbolic_substitutions: Vec<(TextRange, String)>,
 }
 
 #[derive(Default)]
@@ -112,7 +115,12 @@ impl ImportNeeds {
 }
 
 impl<'src> GenericPolyfill<'src> {
-    pub(crate) fn new(source: &'src str, types: &'src dyn TypeInfo, config: Config) -> Self {
+    pub(crate) fn new(
+        source: &'src str,
+        types: &'src dyn TypeInfo,
+        config: Config,
+        symbolic_substitutions: Vec<(TextRange, String)>,
+    ) -> Self {
         Self {
             source,
             types,
@@ -126,7 +134,18 @@ impl<'src> GenericPolyfill<'src> {
             needed_imports_any: false,
             generic_class_renames: HashMap::new(),
             private_aliases: HashMap::new(),
+            symbolic_substitutions,
         }
+    }
+
+    /// the symbolic folds that fall inside `range`, ready to splice into a
+    /// replacement that subsumes them
+    fn substitutions_within(&self, range: TextRange) -> Vec<(TextRange, String)> {
+        self.symbolic_substitutions
+            .iter()
+            .filter(|(folded, _)| range.contains_range(*folded))
+            .cloned()
+            .collect()
     }
 
     /// pre-scan for `private type` aliases so a reference inside a later
@@ -325,16 +344,26 @@ impl<'src> GenericPolyfill<'src> {
                                     format!("tuple[{inner}]")
                                 }
                             } else {
-                                lower_type_expr_full(self.source, self.types, bound)
-                                    .unwrap_or_else(|| self.src(bound.range()).to_owned())
+                                lower_type_expr_full(
+                                    self.source,
+                                    self.types,
+                                    bound,
+                                    &self.substitutions_within(bound.range()),
+                                )
+                                .unwrap_or_else(|| self.src(bound.range()).to_owned())
                             };
                             extra_args.push(format!("bound={bound_src}"));
                         }
                     }
 
                     if let Some(default) = &tv.default {
-                        let default_src = lower_type_expr_full(self.source, self.types, default)
-                            .unwrap_or_else(|| self.src(default.range()).to_owned());
+                        let default_src = lower_type_expr_full(
+                            self.source,
+                            self.types,
+                            default,
+                            &self.substitutions_within(default.range()),
+                        )
+                        .unwrap_or_else(|| self.src(default.range()).to_owned());
                         if self.config.min_version < PythonVersion::PY313 {
                             self.needed_imports.typevar_needs_ext = true;
                         }
@@ -677,10 +706,6 @@ impl<'src> GenericPolyfill<'src> {
             self.src(alias.name.range()).to_owned()
         };
         let raw_value_src = self.src(alias.value.range()).to_owned();
-        // Pull in the literal-types + just-float rewrite for the RHS — our
-        // `alias.range()` edit subsumes anything those emitted on the value
-        // alone, so we have to splice the rewrite into our output.
-        let literal_rewrite = lower_type_expr_full(self.source, self.types, &alias.value);
 
         // references to a `private type` alias declared elsewhere in the module
         // also sit inside the subsumed value, so they are renamed here too
@@ -704,26 +729,31 @@ impl<'src> GenericPolyfill<'src> {
             (String::new(), Vec::new())
         };
 
-        // Apply renames inside the value expression inline (value is subsumed
-        // by the alias.range() edit so can't be emitted globally).
-        //
-        // Combining renames with the literal rewrite needs care: the literal
-        // rewrite emits a single replacement covering the whole value, so any
-        // rename edits inside its range would overlap and be lost. For now we
-        // use the literal rewrite when one exists (typical case: the value has
-        // no type-param or private-alias references), and fall back to
-        // renames-only otherwise.
-        let value_src = if let Some(rewrite) = literal_rewrite {
-            rewrite
-        } else {
-            let mut value_renames: Vec<Fix> = Vec::new();
-            rename_in_expr(&alias.value, &rename_map, &mut value_renames);
-            if value_renames.is_empty() {
-                raw_value_src
-            } else {
-                apply_renames_in_slice(&raw_value_src, alias.value.range().start(), &value_renames)
-            }
-        };
+        // Everything that rewrites part of the value has to be spliced here: our
+        // `alias.range()` edit subsumes the value, so an edit another pass emitted
+        // on it alone is dropped. Symbolic folds (`T.a` → `int`, `Dim + 1` → `int`)
+        // and typevar / private-alias renames are collected into one substitution
+        // set so the lowering below honours both, rather than picking one and
+        // silently losing the other.
+        let folded = self.substitutions_within(alias.value.range());
+        let mut value_renames: Vec<Fix> = Vec::new();
+        rename_in_expr(&alias.value, &rename_map, &mut value_renames);
+        let renames = value_renames
+            .iter()
+            .flat_map(ruff_diagnostics::Fix::edits)
+            // a rename inside a folded operation went with the operand it renamed —
+            // `type X[T: A] = T.a` folds to `int`, which mentions no `T` to rename
+            .filter(|edit| {
+                !folded
+                    .iter()
+                    .any(|(range, _)| range.contains_range(edit.range()))
+            })
+            .map(|edit| (edit.range(), edit.content().unwrap_or_default().to_owned()));
+        let substitutions: Vec<(TextRange, String)> =
+            folded.iter().cloned().chain(renames).collect();
+
+        let value_src = lower_type_expr_full(self.source, self.types, &alias.value, &substitutions)
+            .unwrap_or(raw_value_src);
 
         self.needed_imports.typealias_type = true;
 
@@ -1002,25 +1032,6 @@ fn rename_in_stmt(stmt: &Stmt, renames: &HashMap<String, String>, edits: &mut Ve
     }
 }
 
-fn apply_renames_in_slice(text: &str, text_start: TextSize, renames: &[Fix]) -> String {
-    let base = usize::from(text_start);
-    let mut local: Vec<(usize, usize, &str)> = renames
-        .iter()
-        .flat_map(Fix::edits)
-        .filter_map(|e| {
-            let lo = usize::from(e.start()).checked_sub(base)?;
-            let hi = usize::from(e.end()).checked_sub(base)?;
-            (hi <= text.len()).then_some((lo, hi, e.content().unwrap_or_default()))
-        })
-        .collect();
-    local.sort_by_key(|&(lo, ..)| std::cmp::Reverse(lo));
-    let mut result = text.to_owned();
-    for (lo, hi, new) in local {
-        result.replace_range(lo..hi, new);
-    }
-    result
-}
-
 pub(crate) fn mangle(name: &str) -> String {
     if name.starts_with('_') {
         name.to_owned()
@@ -1047,7 +1058,12 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
         types: &dyn TypeInfo,
         ctx: &mut super::ast_driver::PassContext,
     ) {
-        let mut inner = GenericPolyfill::new(self.source, types, self.config.clone());
+        let mut inner = GenericPolyfill::new(
+            self.source,
+            types,
+            self.config.clone(),
+            ctx.symbolic_substitutions.clone(),
+        );
         inner.collect_private_aliases(stmts);
         for stmt in stmts {
             inner.visit_stmt(stmt);

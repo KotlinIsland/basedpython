@@ -1,5 +1,6 @@
 //! Abstraction over type/binding information consumed by transforms.
 
+use ruff_python_ast::helpers::is_dotted_name;
 use ruff_python_ast::{Expr, ExprCall, ExprName, Stmt, StmtClassDef};
 use ruff_text_size::TextRange;
 use ty_python_core::scope::ScopeKind;
@@ -215,6 +216,12 @@ pub(crate) trait TypeInfo {
     /// [`symbolic_type_fold`](TypeInfo::symbolic_type_fold)
     fn is_type_fn_application(&self, expr: &Expr) -> bool;
 
+    /// whether `expr` is an attribute type — `T.a`, the type of member `a` on a type
+    /// parameter. python cannot express the dependency on `T`, so such an annotation
+    /// lowers to the member's type on the parameter's bound, read back through
+    /// [`symbolic_type_fold`](TypeInfo::symbolic_type_fold)
+    fn is_attribute_type(&self, expr: &Expr) -> bool;
+
     /// rendered exact (non-promoted) type of `expr` in a type position. used to
     /// fold symbolic operations such as `1 + 1` → `Literal[2]` or `A + B` →
     /// `Literal[3]`: ty already evaluates these in `infer_type_expression`, so
@@ -398,6 +405,23 @@ impl TypeInfo for SemanticModel<'_> {
             .value
             .inferred_type(self)
             .is_some_and(|ty| ty.is_type_fn(self.db()))
+    }
+
+    fn is_attribute_type(&self, expr: &Expr) -> bool {
+        let Expr::Attribute(attribute) = expr else {
+            return false;
+        };
+        // mirrors ty's rule: in a type position, an attribute on a receiver that is
+        // not a plain dotted name is an attribute type — `X[A].x` — because nothing
+        // else can be written that way. the type-driven test below covers the bare
+        // type-parameter form (`T.a`), whose receiver *is* a dotted name and which
+        // therefore always stays symbolic; a specialized receiver folds in ty the
+        // moment it is ground, so by then there is no `Deferred` left to recognise
+        if !is_dotted_name(&attribute.value) {
+            return true;
+        }
+        expr.inferred_type(self)
+            .is_some_and(|ty| ty.is_attribute_type(self.db()))
     }
 
     fn subscript_is_type_context(&self, name: &ExprName) -> bool {

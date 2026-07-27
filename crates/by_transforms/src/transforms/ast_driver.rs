@@ -108,6 +108,11 @@ pub(crate) struct PassContext {
     /// [`walk_type_positions_skipping`](super::type_expr_walker::walk_type_positions_skipping)
     /// so they don't re-process an operation that no longer appears in the output
     pub(crate) claimed_type_op_ranges: Vec<TextRange>,
+    /// The same operations as `(range, rendered)` pairs. A pass that replaces a
+    /// whole statement subsumes any fold inside it — skipping is not enough, the
+    /// rendered text has to be spliced into the replacement or the operation is
+    /// re-emitted from source and reaches the runtime
+    pub(crate) symbolic_substitutions: Vec<(TextRange, String)>,
 }
 
 /// A single AST-level rewrite pass.
@@ -387,6 +392,7 @@ pub(crate) fn run_against_source<'a>(
     let symbolic_needs_literal_import = symbolic_folds.needs_literal_import;
     let symbolic_needs_any_import = symbolic_folds.needs_any_import;
     ctx.claimed_type_op_ranges = symbolic_folds.claimed_ranges();
+    ctx.symbolic_substitutions = symbolic_folds.substitutions();
     let symbolic_pass = symbolic_type_op::SymbolicTypeOp::new(symbolic_folds);
 
     // a `typeof` nested under a structural type-form (`&` / `or` / `not` / an

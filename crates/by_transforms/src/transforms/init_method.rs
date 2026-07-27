@@ -45,6 +45,7 @@ impl TypeAwarePass for InitMethod<'_> {
         let mut state = State {
             source: self.source,
             types,
+            symbolic_substitutions: ctx.symbolic_substitutions.clone(),
             edits: RefCell::new(Vec::new()),
             errors: RefCell::new(Vec::new()),
         };
@@ -79,6 +80,10 @@ fn is_init_owned_modifier(word: &str) -> bool {
 struct State<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
+    /// `(range, rendered)` for every symbolic fold in the module. the `__init__`
+    /// line is fresh output, so a fold inside a parameter annotation is dropped
+    /// unless it is spliced in here
+    symbolic_substitutions: Vec<(TextRange, String)>,
     edits: RefCell<Vec<(TextRange, String)>>,
     errors: RefCell<Vec<String>>,
 }
@@ -126,7 +131,13 @@ impl State<'_> {
     /// needs to reproduce the lowered text. falls back to the source verbatim
     /// when nothing lowers
     fn lower_annotation(&self, ann: &Expr) -> String {
-        lower_type_expr_full(self.source, self.types, ann).unwrap_or_else(|| {
+        let substitutions: Vec<(TextRange, String)> = self
+            .symbolic_substitutions
+            .iter()
+            .filter(|(range, _)| ann.range().contains_range(*range))
+            .cloned()
+            .collect();
+        lower_type_expr_full(self.source, self.types, ann, &substitutions).unwrap_or_else(|| {
             self.source[usize::from(ann.range().start())..usize::from(ann.range().end())].to_owned()
         })
     }

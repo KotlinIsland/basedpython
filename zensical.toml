@@ -59,6 +59,7 @@ features = [
   { "generics" = "features/generics.md" },
   { "explicit typevar constraints" = "features/constraints.md" },
   { "type parameter bound ranges" = "features/bound-ranges.md" },
+  { "attribute types" = "features/attribute-types.md" },
   { "`TypedDict` and `Self` in type parameters" = "features/typeddict-self-bounds.md" },
   { "keyword-variadic packs" = "features/keyword-variadic.md" },
   { "type parameter separators" = "features/type-param-separators.md" },
