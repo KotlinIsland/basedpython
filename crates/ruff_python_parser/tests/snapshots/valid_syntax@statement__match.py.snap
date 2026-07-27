@@ -8840,6 +8840,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 5641..5660,
+                    pattern: None,
                     test: Named(
                         ExprNamed {
                             node_index: NodeIndex(None),

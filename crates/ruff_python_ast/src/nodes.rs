@@ -158,6 +158,10 @@ impl StmtClassDef {
 pub struct ElifElseClause {
     pub range: TextRange,
     pub node_index: AtomicNodeIndex,
+    /// The pattern of a basedpython `elif let <pattern> := <subject>:` clause.
+    /// When set, `test` is the subject the pattern is matched against rather
+    /// than a condition. Always `None` on an `else` clause
+    pub pattern: Option<Box<Pattern>>,
     pub test: Option<Expr>,
     pub body: Suite,
 }

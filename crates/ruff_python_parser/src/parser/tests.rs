@@ -1952,3 +1952,90 @@ fn basedpython_raises_is_still_an_identifier() {
         parse_basedpython_module(source);
     }
 }
+
+#[test]
+fn basedpython_if_let_clauses_carry_a_pattern() {
+    let parsed = parse_basedpython_module(
+        "if let int(n) := v:\n    pass\nelif let str(s) := v:\n    pass\nelse:\n    pass\n",
+    );
+    let [Stmt::If(if_stmt)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single if statement");
+    };
+    assert!(if_stmt.pattern.is_some(), "the `if` clause has a pattern");
+    assert!(
+        matches!(&*if_stmt.test, Expr::Name(name) if name.id.as_str() == "v"),
+        "the test is the subject the pattern matches against"
+    );
+    let [elif, else_clause] = if_stmt.elif_else_clauses.as_slice() else {
+        panic!("expected an elif and an else clause");
+    };
+    assert!(elif.pattern.is_some(), "the `elif` clause has a pattern");
+    assert!(
+        else_clause.pattern.is_none() && else_clause.test.is_none(),
+        "an `else` clause has neither pattern nor test"
+    );
+}
+
+#[test]
+fn basedpython_if_let_accepts_every_pattern_form() {
+    for source in [
+        "if let 1 := v:\n    pass\n",
+        "if let None := v:\n    pass\n",
+        "if let x := v:\n    pass\n",
+        "if let [a, b] := v:\n    pass\n",
+        "if let a, b := v:\n    pass\n",
+        "if let {'k': a} := v:\n    pass\n",
+        "if let C(x=1) := v:\n    pass\n",
+        "if let int() | str() := v:\n    pass\n",
+        "if let int() as n := v:\n    pass\n",
+        "if let mod.CONST := v:\n    pass\n",
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::If(if_stmt)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single if statement for `{source}`");
+        };
+        assert!(
+            if_stmt.pattern.is_some(),
+            "expected a pattern in `{source}`"
+        );
+    }
+}
+
+#[test]
+fn basedpython_if_let_is_still_an_identifier() {
+    // `let` only introduces a pattern when a complete pattern followed by `:=`
+    // parses; everywhere else it stays an ordinary name
+    for source in [
+        "if let:\n    pass\n",
+        "if let := f():\n    pass\n",
+        "if let == 3:\n    pass\n",
+        "if let(x):\n    pass\n",
+        "if let and other:\n    pass\n",
+        "if x:\n    pass\nelif let:\n    pass\n",
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::If(if_stmt)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single if statement for `{source}`");
+        };
+        assert!(
+            if_stmt.pattern.is_none()
+                && if_stmt
+                    .elif_else_clauses
+                    .iter()
+                    .all(|clause| clause.pattern.is_none()),
+            "`let` should stay an identifier in `{source}`"
+        );
+    }
+}
+
+#[test]
+fn basedpython_if_let_is_basedpython_only() {
+    let has_error = match parse(
+        "if let int(n) := v:\n    pass\n",
+        ParseOptions::from(Mode::Module),
+    ) {
+        Ok(parsed) => !parsed.errors().is_empty(),
+        Err(_) => true,
+    };
+    assert!(has_error, "`if let` should be a .py syntax error");
+}

@@ -680,6 +680,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 391..522,
+                    pattern: None,
                     test: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -726,6 +727,7 @@ Module(
                         ElifElseClause {
                             range: 508..522,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: None,
                             body: [
                                 Pass(

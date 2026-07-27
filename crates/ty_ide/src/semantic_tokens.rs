@@ -31,9 +31,9 @@ use bitflags::bitflags;
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
-use ruff_python_ast::helpers::raises_clause_spans;
+use ruff_python_ast::helpers::{if_let_keyword_range, raises_clause_spans};
 use ruff_python_ast::visitor::source_order::{
-    SourceOrderVisitor, TraversalSignal, walk_arguments, walk_expr,
+    SourceOrderVisitor, TraversalSignal, walk_arguments, walk_elif_else_clause, walk_expr,
     walk_interpolated_string_element, walk_stmt,
 };
 use ruff_python_ast::{
@@ -304,6 +304,21 @@ impl<'db> SemanticTokenVisitor<'db> {
             // a type expression; elsewhere `dynamic` is an ordinary identifier
             "dynamic" => self.in_type_form && self.is_unbound(name),
             _ => false,
+        }
+    }
+
+    /// basedpython: highlight the `let` of an `if let <pattern> := <subject>:`
+    /// clause. Only the pattern reaches the AST, so the keyword is recovered from
+    /// the source between the clause keyword and the pattern
+    fn add_if_let_keyword(&mut self, clause_start: TextSize, pattern: Option<&ast::Pattern>) {
+        if let Some(pattern) = pattern
+            && let Some(keyword) = if_let_keyword_range(self.source, clause_start, pattern)
+        {
+            self.add_token(
+                keyword,
+                SemanticTokenType::Keyword,
+                SemanticTokenModifier::empty(),
+            );
         }
     }
 
@@ -839,6 +854,14 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
         TraversalSignal::Traverse
     }
 
+    fn visit_elif_else_clause(&mut self, elif_else_clause: &ast::ElifElseClause) {
+        self.add_if_let_keyword(
+            elif_else_clause.start(),
+            elif_else_clause.pattern.as_deref(),
+        );
+        walk_elif_else_clause(self, elif_else_clause);
+    }
+
     fn visit_stmt(&mut self, stmt: &Stmt) {
         let expecting_docstring = self.expecting_docstring;
         self.expecting_docstring = false;
@@ -1114,6 +1137,10 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 }
                 walk_stmt(self, stmt);
                 self.in_docstring = false;
+            }
+            ast::Stmt::If(if_stmt) => {
+                self.add_if_let_keyword(if_stmt.start(), if_stmt.pattern.as_deref());
+                walk_stmt(self, stmt);
             }
             _ => {
                 // For all other statement types, let the default visitor handle them
@@ -5179,6 +5206,38 @@ a: dynamic
         assert_snapshot!(test.to_snapshot(&tokens), @r#"
         "sentinel" @ 0..8: Keyword
         "A" @ 9..10: Variable [definition]
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_if_let_keyword() {
+        // the `let` of a pattern-matching clause is a keyword; the pattern and
+        // subject keep their ordinary highlighting
+        let test = SemanticTokenTest::new_by(
+            "
+v: int | str = 1
+if let int(n) := v:
+    pass
+elif let str(s) := v:
+    pass
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "v" @ 1..2: Variable [definition]
+        "int" @ 4..7: Class
+        "str" @ 10..13: Class
+        "1" @ 16..17: Number
+        "let" @ 21..24: Keyword
+        "int" @ 25..28: Class
+        "n" @ 29..30: Variable
+        "v" @ 35..36: Variable
+        "let" @ 52..55: Keyword
+        "str" @ 56..59: Class
+        "s" @ 60..61: Variable
+        "v" @ 66..67: Variable
         "#);
     }
 

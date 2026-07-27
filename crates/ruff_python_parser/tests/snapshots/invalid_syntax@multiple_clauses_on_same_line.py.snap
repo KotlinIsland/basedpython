@@ -14,6 +14,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 0..41,
+                    pattern: None,
                     test: BooleanLiteral(
                         ExprBooleanLiteral {
                             node_index: NodeIndex(None),
@@ -33,6 +34,7 @@ Module(
                         ElifElseClause {
                             range: 14..30,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: Some(
                                 BooleanLiteral(
                                     ExprBooleanLiteral {
@@ -54,6 +56,7 @@ Module(
                         ElifElseClause {
                             range: 31..41,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: None,
                             body: [
                                 Pass(
@@ -71,6 +74,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 42..85,
+                    pattern: None,
                     test: BooleanLiteral(
                         ExprBooleanLiteral {
                             node_index: NodeIndex(None),
@@ -90,6 +94,7 @@ Module(
                         ElifElseClause {
                             range: 57..73,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: Some(
                                 BooleanLiteral(
                                     ExprBooleanLiteral {
@@ -111,6 +116,7 @@ Module(
                         ElifElseClause {
                             range: 75..85,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: None,
                             body: [
                                 Pass(

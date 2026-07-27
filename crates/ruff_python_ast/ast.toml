@@ -197,7 +197,7 @@ fields = [
 [Stmt.nodes.StmtIf]
 doc = "See also [If](https://docs.python.org/3/library/ast.html#ast.If)"
 fields = [
-
+  { name = "pattern", type = "Box<Pattern>?", doc = "The pattern of a basedpython `if let <pattern> := <subject>:` clause. When set, `test` is the subject the pattern is matched against rather than a condition" },
   { name = "test", type = "Expr" },
   { name = "body", type = "ThinVec<Stmt>" },
   { name = "elif_else_clauses", type = "ElifElseClause*" },

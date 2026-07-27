@@ -93,11 +93,21 @@ impl Violation for NeedlessBool {
 pub(crate) fn needless_bool(checker: &Checker, stmt: &Stmt) {
     let Stmt::If(stmt_if) = stmt else { return };
     let ast::StmtIf {
+        pattern,
         test: if_test,
         body: if_body,
         elif_else_clauses,
         ..
     } = stmt_if;
+
+    // a basedpython `if let` clause tests a pattern, not a boolean condition
+    if pattern.is_some()
+        || elif_else_clauses
+            .iter()
+            .any(|clause| clause.pattern.is_some())
+    {
+        return;
+    }
 
     // Extract an `if` or `elif` (that returns) followed by an else (that returns the same value)
     let (if_test, if_body, else_body, range) = match elif_else_clauses.as_slice() {
@@ -133,12 +143,14 @@ pub(crate) fn needless_bool(checker: &Checker, stmt: &Stmt) {
                 body: elif_body,
                 test: Some(elif_test),
                 range: elif_range,
+                pattern: _,
                 node_index: _,
             },
             ElifElseClause {
                 body: else_body,
                 test: None,
                 range: else_range,
+                pattern: _,
                 node_index: _,
             },
         ] => (

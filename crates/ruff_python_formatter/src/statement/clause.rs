@@ -170,20 +170,28 @@ impl<'a> ClauseHeader<'a> {
                 }
             }
             ClauseHeader::If(StmtIf {
+                pattern,
                 test,
                 range: _,
                 node_index: _,
                 body: _,
                 elif_else_clauses: _,
             }) => {
+                if let Some(pattern) = pattern.as_deref() {
+                    visit(pattern, visitor);
+                }
                 visit(test.as_ref(), visitor);
             }
             ClauseHeader::ElifElse(ElifElseClause {
+                pattern,
                 test,
                 range: _,
                 node_index: _,
                 body: _,
             }) => {
+                if let Some(pattern) = pattern.as_deref() {
+                    visit(pattern, visitor);
+                }
                 if let Some(test) = test.as_ref() {
                     visit(test, visitor);
                 }

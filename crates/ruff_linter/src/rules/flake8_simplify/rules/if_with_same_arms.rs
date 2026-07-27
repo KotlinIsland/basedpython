@@ -60,6 +60,12 @@ pub(crate) fn if_with_same_arms(checker: &Checker, stmt_if: &ast::StmtIf) {
             continue;
         };
 
+        // a basedpython pattern branch binds captures; it cannot be merged into
+        // an `or` of conditions
+        if current_branch.pattern.is_some() || following_branch.pattern.is_some() {
+            continue;
+        }
+
         // The bodies must have the same code ...
         if current_branch.body.len() != following_branch.body.len() {
             continue;

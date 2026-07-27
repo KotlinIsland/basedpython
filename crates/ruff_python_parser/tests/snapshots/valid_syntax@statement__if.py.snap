@@ -14,6 +14,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 0..28,
+                    pattern: None,
                     test: NumberLiteral(
                         ExprNumberLiteral {
                             node_index: NodeIndex(None),
@@ -44,6 +45,7 @@ Module(
                         ElifElseClause {
                             range: 9..19,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: Some(
                                 NumberLiteral(
                                     ExprNumberLiteral {
@@ -76,6 +78,7 @@ Module(
                         ElifElseClause {
                             range: 20..28,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: None,
                             body: [
                                 Expr(
@@ -102,6 +105,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 30..52,
+                    pattern: None,
                     test: BooleanLiteral(
                         ExprBooleanLiteral {
                             node_index: NodeIndex(None),
@@ -145,6 +149,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 53..85,
+                    pattern: None,
                     test: Compare(
                         ExprCompare {
                             node_index: NodeIndex(None),
@@ -191,6 +196,7 @@ Module(
                         ElifElseClause {
                             range: 71..85,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: None,
                             body: [
                                 Pass(
@@ -208,6 +214,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 87..117,
+                    pattern: None,
                     test: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -228,6 +235,7 @@ Module(
                         ElifElseClause {
                             range: 102..117,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: Some(
                                 Name(
                                     ExprName {
@@ -260,6 +268,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 119..203,
+                    pattern: None,
                     test: BoolOp(
                         ExprBoolOp {
                             node_index: NodeIndex(None),
@@ -303,6 +312,7 @@ Module(
                         ElifElseClause {
                             range: 139..157,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: Some(
                                 BooleanLiteral(
                                     ExprBooleanLiteral {
@@ -330,6 +340,7 @@ Module(
                         ElifElseClause {
                             range: 158..173,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: Some(
                                 Name(
                                     ExprName {
@@ -358,6 +369,7 @@ Module(
                         ElifElseClause {
                             range: 174..189,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: Some(
                                 Name(
                                     ExprName {
@@ -386,6 +398,7 @@ Module(
                         ElifElseClause {
                             range: 190..203,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: None,
                             body: [
                                 Expr(
@@ -426,6 +439,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 229..260,
+                    pattern: None,
                     test: Named(
                         ExprNamed {
                             node_index: NodeIndex(None),
@@ -466,6 +480,7 @@ Module(
                         ElifElseClause {
                             range: 244..260,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: Some(
                                 Named(
                                     ExprNamed {
@@ -512,6 +527,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 261..302,
+                    pattern: None,
                     test: Lambda(
                         ExprLambda {
                             node_index: NodeIndex(None),
@@ -573,6 +589,7 @@ Module(
                         ElifElseClause {
                             range: 281..302,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: Some(
                                 Lambda(
                                     ExprLambda {
@@ -640,6 +657,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 303..336,
+                    pattern: None,
                     test: Await(
                         ExprAwait {
                             node_index: NodeIndex(None),
@@ -673,6 +691,7 @@ Module(
                         ElifElseClause {
                             range: 319..336,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: Some(
                                 Await(
                                     ExprAwait {
@@ -712,6 +731,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 337..374,
+                    pattern: None,
                     test: Yield(
                         ExprYield {
                             node_index: NodeIndex(None),
@@ -746,6 +766,7 @@ Module(
                         ElifElseClause {
                             range: 355..374,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: Some(
                                 Yield(
                                     ExprYield {

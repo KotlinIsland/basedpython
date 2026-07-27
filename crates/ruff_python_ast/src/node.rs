@@ -13,9 +13,13 @@ impl ast::ElifElseClause {
         let ast::ElifElseClause {
             range: _,
             node_index: _,
+            pattern,
             test,
             body,
         } = self;
+        if let Some(pattern) = pattern {
+            visitor.visit_pattern(pattern);
+        }
         if let Some(test) = test {
             visitor.visit_expr(test);
         }

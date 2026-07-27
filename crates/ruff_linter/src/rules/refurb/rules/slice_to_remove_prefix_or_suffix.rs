@@ -183,12 +183,16 @@ fn affix_removal_data_expr(if_expr: &ast::ExprIf) -> Option<RemoveAffixData<'_>>
 /// bound of the slice. Otherwise, returns `None`.
 fn affix_removal_data_stmt(if_stmt: &ast::StmtIf) -> Option<RemoveAffixData<'_>> {
     let ast::StmtIf {
-        test,
+        pattern: _,
+        test: _,
         body,
         elif_else_clauses,
         range: _,
         node_index: _,
     } = if_stmt;
+
+    // a basedpython `if let` clause tests a pattern, not an affix call
+    let test = if_stmt.condition()?;
 
     // Cannot safely transform, e.g.,
     // ```python

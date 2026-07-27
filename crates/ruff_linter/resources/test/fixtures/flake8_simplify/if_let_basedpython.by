@@ -1,0 +1,53 @@
+# a basedpython `if let` clause binds captures, so no rule may merge it with
+# another condition or rewrite it as an expression. the plain chains alongside
+# each case must still be flagged
+
+# SIM102: collapsible if
+if a:
+    if let int(n) := b:
+        print(n)
+
+if let int(n) := b:
+    if a:
+        print(n)
+
+if a:
+    if b:
+        print(1)
+
+# SIM103: needless bool
+def f1():
+    if let int(n) := b:
+        return True
+    else:
+        return False
+
+
+def f2():
+    if a:
+        return True
+    else:
+        return False
+
+
+# SIM108: if-else block instead of if-expression
+if let int(n) := b:
+    x = 1
+else:
+    x = 2
+
+if a:
+    y = 1
+else:
+    y = 2
+
+# SIM114: if with same arms
+if let int(n) := b:
+    print("same")
+elif a:
+    print("same")
+
+if a:
+    print("twin")
+elif b:
+    print("twin")

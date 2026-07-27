@@ -480,6 +480,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 241..313,
+                    pattern: None,
                     test: BooleanLiteral(
                         ExprBooleanLiteral {
                             node_index: NodeIndex(None),
@@ -523,6 +524,7 @@ Module(
                         ElifElseClause {
                             range: 299..313,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: None,
                             body: [
                                 Pass(

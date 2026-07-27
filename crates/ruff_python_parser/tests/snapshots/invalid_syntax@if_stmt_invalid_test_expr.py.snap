@@ -14,6 +14,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 0..10,
+                    pattern: None,
                     test: Starred(
                         ExprStarred {
                             node_index: NodeIndex(None),
@@ -50,6 +51,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 11..26,
+                    pattern: None,
                     test: Yield(
                         ExprYield {
                             node_index: NodeIndex(None),
@@ -87,6 +89,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 27..47,
+                    pattern: None,
                     test: YieldFrom(
                         ExprYieldFrom {
                             node_index: NodeIndex(None),

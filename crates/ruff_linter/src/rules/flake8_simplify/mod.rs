@@ -17,6 +17,11 @@ mod tests {
 
     #[test_case(Rule::DuplicateIsinstanceCall, Path::new("SIM101.py"))]
     #[test_case(Rule::CollapsibleIf, Path::new("SIM102.py"))]
+    // basedpython: a pattern-matching clause is never merged or rewritten
+    #[test_case(Rule::CollapsibleIf, Path::new("if_let_basedpython.by"))]
+    #[test_case(Rule::NeedlessBool, Path::new("if_let_basedpython.by"))]
+    #[test_case(Rule::IfElseBlockInsteadOfIfExp, Path::new("if_let_basedpython.by"))]
+    #[test_case(Rule::IfWithSameArms, Path::new("if_let_basedpython.by"))]
     #[test_case(Rule::NeedlessBool, Path::new("SIM103.py"))]
     #[test_case(Rule::SuppressibleException, Path::new("SIM105_0.py"))]
     #[test_case(Rule::SuppressibleException, Path::new("SIM105_1.py"))]

@@ -1,0 +1,19 @@
+def f() -> int | None:
+    return 1
+
+
+v: int | str = 1
+
+# a pattern clause binds captures that outlive the statement, so the clause is
+# neither deleted nor reduced to its subject
+if let int(n) := f():
+    pass
+
+print(n)
+
+if let int(m) := v:
+    pass
+
+# a plain condition is still reported
+if f():
+    pass

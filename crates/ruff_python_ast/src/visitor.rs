@@ -126,6 +126,9 @@ pub fn walk_elif_else_clause<'a, V: Visitor<'a> + ?Sized>(
     visitor: &mut V,
     elif_else_clause: &'a ElifElseClause,
 ) {
+    if let Some(pattern) = &elif_else_clause.pattern {
+        visitor.visit_pattern(pattern);
+    }
     if let Some(test) = &elif_else_clause.test {
         visitor.visit_expr(test);
     }
@@ -257,12 +260,16 @@ pub fn walk_stmt<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, stmt: &'a Stmt) {
             visitor.visit_body(orelse);
         }
         Stmt::If(ast::StmtIf {
+            pattern,
             test,
             body,
             elif_else_clauses,
             range: _,
             node_index: _,
         }) => {
+            if let Some(pattern) = pattern {
+                visitor.visit_pattern(pattern);
+            }
             visitor.visit_expr(test);
             visitor.visit_body(body);
             for clause in elif_else_clauses {
