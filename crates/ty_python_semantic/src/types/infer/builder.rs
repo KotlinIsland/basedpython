@@ -127,10 +127,10 @@ use crate::types::typevar::{BoundTypeVarIdentity, TypeVarConstraints, TypeVarIde
 use crate::types::unpacker::UnpackResult;
 use crate::types::{
     BoundTypeVarInstance, CallDunderError, CallableBinding, CallableType, CallableTypes, ClassType,
-    DynamicType, InferenceFlags, InternedConstraintSet, InternedType, IntersectionBuilder,
-    IntersectionType, KnownClass, KnownInstanceType, KnownUnion, LiteralValueType,
-    LiteralValueTypeKind, MemberLookupPolicy, ParamSpecAttrKind, Parameter, Parameters,
-    SentinelInstance, Signature, SpecialFormType, SubclassOfType, Type, TypeAliasType,
+    DeferredOperation, DeferredType, DynamicType, InferenceFlags, InternedConstraintSet,
+    InternedType, IntersectionBuilder, IntersectionType, KnownClass, KnownInstanceType, KnownUnion,
+    LiteralValueType, LiteralValueTypeKind, MemberLookupPolicy, ParamSpecAttrKind, Parameter,
+    Parameters, SentinelInstance, Signature, SpecialFormType, SubclassOfType, Type, TypeAliasType,
     TypeAndQualifiers, TypeContext, TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind,
     TypeVarVariance, TypedDictModule, TypedDictType, UnionAccumulator, UnionBuilder, UnionType,
     any_over_type, binding_type, extract_fixed_length_iterable_element_types,
@@ -12010,17 +12010,35 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             return self.basedpython_chain_result(attribute, element_ty, none_chain_was_optional);
         }
 
-        if let Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) = value_type
-            && typevar.is_paramspec(db)
-            && let Some(bound_typevar) = bind_typevar(
-                db,
-                self.index,
-                self.scope().file_scope_id(db),
-                self.typevar_binding_context,
-                typevar,
-            )
-        {
-            value_type = Type::TypeVar(bound_typevar);
+        // basedpython: `T.a` in a type expression is an *attribute type* — the type of
+        // member `a` on whatever `T` is specialized to. only a dotted name that *is* the
+        // type expression qualifies, never one reached through nested value inference
+        // (`Annotated`'s metadata). a parameter pack is excluded too: `P.args` /
+        // `**Kwargs` name a pack's components rather than a member of it
+        let mut attribute_type_receiver = None;
+        if let Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) = value_type {
+            let is_attribute_type = self.is_basedpython_file()
+                && self
+                    .inference_flags()
+                    .contains(InferenceFlags::RESOLVING_DOTTED_TYPE_EXPRESSION)
+                && !typevar.is_parameter_pack(db)
+                && !typevar.is_typevartuple(db);
+            // binding the type parameter runs the lookup below — and any diagnostic for
+            // a member the parameter cannot have — against its bound
+            if (typevar.is_paramspec(db) || is_attribute_type)
+                && let Some(bound_typevar) = bind_typevar(
+                    db,
+                    self.index,
+                    self.scope().file_scope_id(db),
+                    self.typevar_binding_context,
+                    typevar,
+                )
+            {
+                value_type = Type::TypeVar(bound_typevar);
+                if is_attribute_type {
+                    attribute_type_receiver = Some(value_type);
+                }
+            }
         }
 
         let mut assigned_type = None;
@@ -12328,6 +12346,23 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let resolved_type = resolved_type.inner_type();
 
         self.check_deprecated(attr, resolved_type);
+
+        // basedpython: an attribute type stays symbolic until the type parameter is
+        // substituted, so `B[A2]().x` reads `a` off `A2` rather than off the bound the
+        // lookup above resolved it against. it still goes through the chain result, so
+        // a `?.` access composes here exactly as it does for every other receiver
+        if let Some(receiver) = attribute_type_receiver {
+            let attribute_type = DeferredType::build(
+                db,
+                &DeferredOperation::Attribute(attr.id.clone()),
+                Box::from([receiver]),
+            );
+            return self.basedpython_chain_result(
+                attribute,
+                attribute_type,
+                none_chain_was_optional,
+            );
+        }
 
         // Even if we can obtain the attribute type based on the assignments, we still perform default type inference
         // (to report errors).

@@ -2310,6 +2310,13 @@ impl<'db> Type<'db> {
             if function.has_known_decorator(db, crate::types::function::FunctionDecorators::TYPE_FN))
     }
 
+    /// basedpython: whether this is an *attribute type* — the member lookup `T.a` on a
+    /// type parameter, kept symbolic until the parameter is substituted. Python has no
+    /// way to spell the dependency, so the transpiler folds these to their reduced form.
+    pub fn is_attribute_type(self, db: &'db dyn Db) -> bool {
+        matches!(self, Type::Deferred(deferred) if deferred.is_attribute(db))
+    }
+
     pub(crate) fn literal_fallback_instance(self, db: &'db dyn Db) -> Option<Type<'db>> {
         // There are other literal types that could conceivable be included here: class literals
         // falling back to `type[X]`, for instance. For now, there is not much rigorous thought put

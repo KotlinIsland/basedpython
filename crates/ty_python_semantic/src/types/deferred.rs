@@ -20,11 +20,23 @@
 //! is re-run against the substituted operands with the very same fold the value-level
 //! inferrer uses, so `Dim + 1` with `Dim = 5` folds to `Literal[6]`.
 //!
+//! the same reasoning covers an *attribute type* — `T.a`, the type of member `a` on
+//! whatever `T` turns out to be:
+//!
+//! ```by
+//! class B[T: A1]:
+//!     x: T.a
+//! ```
+//!
+//! reducing it eagerly to `A1`'s `a` would make `B[A2]().x` read as `A1.a`'s type even
+//! when `A2` redeclares `a`.
+//!
 //! this is one mechanism spanning every foldable operation kind (see
 //! [`DeferredOperation`]); the fold for each kind is shared with value inference
 //! rather than reimplemented here.
 
 use ruff_python_ast as ast;
+use ruff_python_ast::name::Name;
 
 use super::Type;
 use super::infer::{deferred_comparison, literal_binary_op, literal_unary_op};
@@ -38,7 +50,10 @@ use crate::types::{KnownClass, TypeContext};
 
 /// The kind of a [`DeferredType`]'s pending operation. Each variant fixes how many
 /// operands the deferral carries and which value-level fold re-evaluates it.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+// Unlike the Salsa handles in this module, this is a plain payload stored *inside*
+// the interned struct, so its heap (an attribute type's member name) is the interned
+// value's own and is derived rather than tracked separately.
+#[derive(Clone, PartialEq, Eq, Hash, Debug, get_size2::GetSize)]
 pub enum DeferredOperation {
     /// `left op right`; operands are `[left, right]`.
     Binary(ast::Operator),
@@ -46,6 +61,11 @@ pub enum DeferredOperation {
     Unary(ast::UnaryOp),
     /// `left op right`; operands are `[left, right]`.
     Compare(ast::CmpOp),
+    /// basedpython: `receiver.name` in a type expression — an *attribute type*;
+    /// operands are `[receiver]`. Unlike the arithmetic kinds this one is only ever
+    /// built for a type-parameter receiver, because that is the only receiver whose
+    /// members cannot be resolved at definition time.
+    Attribute(Name),
     /// `callee(arg0, arg1, ...)`; operands are `[callee, arg0, arg1, ...]`. Covers
     /// method calls too — the callee is the (typevar-receiver) bound method.
     Call,
@@ -57,12 +77,9 @@ pub enum DeferredOperation {
     TypeFn,
 }
 
-// The Salsa heap is tracked separately.
-impl get_size2::GetSize for DeferredOperation {}
-
 #[salsa::interned(debug, heap_size = ruff_memory_usage::heap_size)]
 pub struct DeferredType<'db> {
-    #[returns(copy)]
+    #[returns(ref)]
     pub(crate) operation: DeferredOperation,
     #[returns(deref)]
     pub(crate) operands: Box<[Type<'db>]>,
@@ -90,14 +107,14 @@ impl<'db> DeferredType<'db> {
     /// (non-literal) result (`int + Literal[1]` → `int`).
     pub(crate) fn build(
         db: &'db dyn Db,
-        operation: DeferredOperation,
+        operation: &DeferredOperation,
         operands: Box<[Type<'db>]>,
     ) -> Type<'db> {
         if operands
             .iter()
             .any(|operand| operand_is_symbolic(db, *operand))
         {
-            return Type::Deferred(Self::new(db, operation, operands));
+            return Type::Deferred(Self::new(db, operation.clone(), operands));
         }
         evaluate(db, operation, &operands).unwrap_or_else(Type::unknown)
     }
@@ -121,7 +138,7 @@ impl<'db> DeferredType<'db> {
         // answer a question nobody asked. its declared return type is the reduced
         // form, which is why annotating a type function is what makes generic code
         // using it checkable
-        if self.operation(db) == DeferredOperation::TypeFn {
+        if matches!(self.operation(db), DeferredOperation::TypeFn) {
             let [Type::FunctionLiteral(function), ..] = self.operands(db) else {
                 return Type::unknown();
             };
@@ -142,6 +159,11 @@ impl<'db> DeferredType<'db> {
     pub(crate) fn re_evaluate(self, db: &'db dyn Db, operands: Box<[Type<'db>]>) -> Type<'db> {
         Self::build(db, self.operation(db), operands)
     }
+
+    /// basedpython: whether this deferral is an attribute type (`T.a`).
+    pub(crate) fn is_attribute(self, db: &'db dyn Db) -> bool {
+        matches!(self.operation(db), DeferredOperation::Attribute(_))
+    }
 }
 
 impl<'db> Type<'db> {
@@ -160,14 +182,18 @@ impl<'db> Type<'db> {
 /// is genuinely unsupported between the operands.
 fn evaluate<'db>(
     db: &'db dyn Db,
-    operation: DeferredOperation,
+    operation: &DeferredOperation,
     operands: &[Type<'db>],
 ) -> Option<Type<'db>> {
-    match operation {
+    match *operation {
         DeferredOperation::Binary(op) => {
             let [left, right] = operands else { return None };
             literal_binary_op(db, *left, *right, op, true)
                 .or_else(|| Type::try_call_bin_op_return_type(db, *left, op, *right))
+        }
+        DeferredOperation::Attribute(ref name) => {
+            let [receiver] = operands else { return None };
+            receiver.member(db, name).ignore_possibly_undefined()
         }
         DeferredOperation::Unary(op) => {
             let [operand] = operands else { return None };

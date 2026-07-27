@@ -12,7 +12,7 @@ use crate::types::ClassType;
 use crate::types::call::CallArguments;
 use crate::types::diagnostic::{
     self, EXPERIMENTAL_SYNTAX, INVALID_TYPE_FORM, NOT_SUBSCRIPTABLE, UNBOUND_TYPE_VARIABLE,
-    UNSUPPORTED_OPERATOR, report_invalid_argument_number_to_special_form,
+    UNRESOLVED_ATTRIBUTE, UNSUPPORTED_OPERATOR, report_invalid_argument_number_to_special_form,
     report_invalid_arguments_to_callable, report_invalid_concatenate_last_arg,
     report_missing_type_arguments, report_unsupported_binary_operation,
 };
@@ -115,14 +115,67 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             })
     }
 
+    /// basedpython: an [attribute type](crate::types::deferred) whose receiver is
+    /// itself a type expression — `X[A].x` is the type of `X`'s member `x` when `T`
+    /// is `A`. The receiver is resolved as a type rather than as a value, so the
+    /// lookup runs against an instance of it, exactly as it does for the bare
+    /// type-parameter form.
+    ///
+    /// A receiver that still mentions a type parameter (`X[T].x`) keeps the whole
+    /// thing symbolic; a ground one folds here and now.
+    fn infer_attribute_type_expression(&mut self, attribute: &ast::ExprAttribute) -> Type<'db> {
+        let receiver = self.infer_type_expression(&attribute.value);
+        let db = self.db();
+        let member = &attribute.attr.id;
+        if receiver.member(db, member).place.is_undefined() {
+            if let Some(builder) = self.context.report_lint(&UNRESOLVED_ATTRIBUTE, attribute) {
+                builder.into_diagnostic(format_args!(
+                    "Object of type `{}` has no attribute `{member}`",
+                    receiver.display(db),
+                ));
+            }
+            return Type::unknown();
+        }
+        DeferredType::build(
+            db,
+            &DeferredOperation::Attribute(member.clone()),
+            Box::from([receiver]),
+        )
+    }
+
+    /// Infer a dotted name that *is* a type expression, as opposed to one reached
+    /// through a type expression's nested value inference. Only here does basedpython
+    /// read `T.a` as an [attribute type](crate::types::deferred).
+    pub(super) fn infer_dotted_type_expression(
+        &mut self,
+        attribute: &ast::ExprAttribute,
+    ) -> Type<'db> {
+        let previously_resolving = self
+            .context
+            .inference_flags
+            .replace(InferenceFlags::RESOLVING_DOTTED_TYPE_EXPRESSION, true);
+        let ty = self.infer_attribute_expression(attribute);
+        self.context.inference_flags.set(
+            InferenceFlags::RESOLVING_DOTTED_TYPE_EXPRESSION,
+            previously_resolving,
+        );
+        ty
+    }
+
     pub(super) fn infer_name_or_attribute_type_expression(
         &self,
         ty: Type<'db>,
         annotation: &ast::Expr,
     ) -> Type<'db> {
+        // a dotted name whose lookup already produced a type names that type directly;
+        // there is no value whose type-expression meaning still has to be taken. that
+        // covers `P.args` / `P.kwargs` and basedpython's `T.a` attribute types
         if annotation.is_attribute_expr()
-            && let Type::TypeVar(tvar) = ty
-            && tvar.paramspec_attr(self.db()).is_some()
+            && match ty {
+                Type::TypeVar(tvar) => tvar.paramspec_attr(self.db()).is_some(),
+                Type::Deferred(deferred) => deferred.is_attribute(self.db()),
+                _ => false,
+            }
         {
             return ty;
         }
@@ -202,6 +255,17 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             },
 
             ast::Expr::Attribute(attribute_expression) => {
+                // basedpython: an attribute type over a receiver that is not a plain
+                // dotted name — `X[A].x`, and the chains built on it. a dotted name
+                // has an established meaning (`mod.Class`, `Outer.Inner`) that the
+                // attribute-type reading must not take over, but nothing else here
+                // has any meaning at all: this is otherwise the error path below
+                if self.is_basedpython_file()
+                    && matches!(attribute_expression.ctx, ast::ExprContext::Load)
+                    && !is_dotted_name(&attribute_expression.value)
+                {
+                    return self.infer_attribute_type_expression(attribute_expression);
+                }
                 if is_dotted_name(expression) {
                     match attribute_expression.ctx {
                         ast::ExprContext::Load => {
@@ -227,7 +291,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                                 // already inferred, so it isn't inferred twice
                                 self.infer_attribute_load_impl(attribute_expression, receiver)
                             } else {
-                                self.infer_attribute_expression(attribute_expression)
+                                self.infer_dotted_type_expression(attribute_expression)
                             };
                             if let Some(materialized) = self.intercept_nested_top_bottom(ty) {
                                 return materialized;
@@ -598,7 +662,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                             if DeferredType::is_deferred(db, &operands) {
                                 return DeferredType::build(
                                     db,
-                                    DeferredOperation::Binary(op),
+                                    &DeferredOperation::Binary(op),
                                     Box::new(operands),
                                 );
                             }
@@ -1069,7 +1133,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     if DeferredType::is_deferred(db, &operands) {
                         return DeferredType::build(
                             db,
-                            DeferredOperation::Unary(unary.op),
+                            &DeferredOperation::Unary(unary.op),
                             Box::new(operands),
                         );
                     }
@@ -1330,7 +1394,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     let right_ty = self.infer_type_expression(comparator);
                     return DeferredType::build(
                         db,
-                        DeferredOperation::Compare(compare.ops[0]),
+                        &DeferredOperation::Compare(compare.ops[0]),
                         Box::new([left_ty, right_ty]),
                     );
                 }
@@ -1382,7 +1446,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     }
                     return DeferredType::build(
                         db,
-                        DeferredOperation::Call,
+                        &DeferredOperation::Call,
                         operands.into_boxed_slice(),
                     );
                 }
@@ -2068,7 +2132,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             let mut operands = Vec::with_capacity(arguments.len() + 1);
             operands.push(Type::FunctionLiteral(function));
             operands.extend_from_slice(&arguments);
-            return DeferredType::build(db, DeferredOperation::TypeFn, operands.into_boxed_slice());
+            return DeferredType::build(
+                db,
+                &DeferredOperation::TypeFn,
+                operands.into_boxed_slice(),
+            );
         }
 
         let interned = TypeFnArguments::new(db, arguments.into_boxed_slice());

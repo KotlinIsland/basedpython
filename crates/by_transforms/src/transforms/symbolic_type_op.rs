@@ -58,6 +58,18 @@ impl SymbolicFolds {
     pub(crate) fn claimed_ranges(&self) -> Vec<TextRange> {
         self.folds.keys().copied().collect()
     }
+
+    /// each fold as a `(range, rendered)` substitution. a pass whose own edit
+    /// *subsumes* a folded operation — the `TypeAliasType` polyfill rewrites the
+    /// whole `type X = …` statement — would otherwise re-emit the operand from
+    /// source and drop the fold, leaving `_T.a` / `_Dim + 1` to be evaluated at
+    /// runtime. such a pass splices these in instead
+    pub(crate) fn substitutions(&self) -> Vec<(TextRange, String)> {
+        self.folds
+            .iter()
+            .map(|(range, fold)| (*range, fold.rendered.clone()))
+            .collect()
+    }
 }
 
 /// Walk every type position and resolve each non-union/non-intersection binary
@@ -124,6 +136,10 @@ impl TypeExprVisitor for FoldCollector<'_> {
             // the type function returned, so the emitted python names a real type
             // and carries no trace of the type function
             Expr::Subscript(_) => self.types.is_type_fn_application(expr),
+            // basedpython: an attribute type (`T.a`) folds to the member's type on the
+            // type parameter's bound — python cannot express the dependency on `T`, and
+            // the bound's member type is the guarantee every specialization satisfies
+            Expr::Attribute(_) => self.types.is_attribute_type(expr),
             _ => false,
         };
         if !foldable {
@@ -131,19 +147,6 @@ impl TypeExprVisitor for FoldCollector<'_> {
         }
         let Some(rendered) = self.types.symbolic_type_fold(expr) else {
             return Recurse::Descend;
-        };
-        // a `type def` application must always be replaced: its declaration is
-        // erased, so leaving the source alone would emit a dangling name. an
-        // application that stayed deferred (a non-ground argument, or a type
-        // function with no declared return) resolves to `Unknown`, which is not a
-        // runtime name — `Any` is the honest spelling of it
-        let rendered = if rendered == "Unknown" {
-            if !self.types.is_type_fn_application(expr) {
-                return Recurse::Descend;
-            }
-            "Any".to_string()
-        } else {
-            rendered
         };
         // the special float-literal types render as the bare names `inf` /
         // `-inf` / `nan`, which have no python literal syntax — leave them for
@@ -153,11 +156,34 @@ impl TypeExprVisitor for FoldCollector<'_> {
         if matches!(rendered.as_str(), "inf" | "-inf" | "nan") {
             return Recurse::Descend;
         }
-        // the rendered type must itself parse as a type expression; if ty
-        // produced something we can't splice back (unexpected for arithmetic),
-        // leave the source untouched
-        let Ok(parsed) = parse_expression(&rendered) else {
-            return Recurse::Descend;
+        // the rendered type must itself parse as a type expression, and `Unknown`
+        // is not a runtime name either
+        let (rendered, parsed) = match parse_expression(&rendered) {
+            Ok(parsed) if rendered != "Unknown" => (rendered, parsed),
+            // some forms *must* be replaced, because their source spelling names
+            // nothing at runtime: a `type def` application (its declaration is
+            // erased, so the name would dangle) and an attribute type (`T.a` is an
+            // attribute access on a `TypeVar` object). `Any` is the honest
+            // spelling when the resolved type has none — a deferred application,
+            // or a member python cannot write down such as a bound method or a
+            // callable, which ty renders in arrow form. anything else keeps its
+            // source so ty's own diagnostic stands.
+            //
+            // the widening is deliberately silent: it is the same trade every
+            // deferred operation already makes when it lowers to its reduced form
+            // (`Array[Dim + 1]` → `Array[int]`), the `.by` file keeps the precise
+            // type either way, and the transpiler has no warning channel — only
+            // hard errors, which would reject perfectly good source
+            _ => {
+                if !(self.types.is_type_fn_application(expr) || self.types.is_attribute_type(expr))
+                {
+                    return Recurse::Descend;
+                }
+                let Ok(parsed) = parse_expression("Any") else {
+                    return Recurse::Descend;
+                };
+                ("Any".to_string(), parsed)
+            }
         };
         if rendered.contains("Literal[") {
             self.needs_literal_import = true;
@@ -538,6 +564,246 @@ mod tests {
     fn value_position_unchanged() {
         // a binary operation in value position is ordinary arithmetic
         check("x = 1 + 1\n", "x = 1 + 1\n");
+    }
+
+    #[test]
+    fn attribute_type_folds_to_the_bound_member() {
+        check_py312(
+            indoc! {"
+                class A:
+                    a: int
+
+                class B[T: A]:
+                    x: T.a
+            "},
+            indoc! {"
+                class A:
+                    a: int
+
+                class B[T: A]:
+                    x: int
+            "},
+        );
+    }
+
+    #[test]
+    fn attribute_type_in_signature_and_subscript() {
+        check_py312(
+            indoc! {"
+                class A:
+                    a: int
+
+                def f[T: A](t: T, v: T.a) -> list[T.a]:
+                    return [v]
+            "},
+            indoc! {"
+                class A:
+                    a: int
+
+                def f[T: A](t: T, v: int) -> list[int]:
+                    return [v]
+            "},
+        );
+    }
+
+    #[test]
+    fn ordinary_dotted_annotation_unchanged() {
+        // a dotted name that already denotes a type is not an attribute type —
+        // folding it would emit a name that is not in scope
+        check_py312(
+            indoc! {"
+                class Outer:
+                    class Inner:
+                        pass
+
+                x: Outer.Inner
+            "},
+            indoc! {"
+                class Outer:
+                    class Inner:
+                        pass
+
+                x: Outer.Inner
+            "},
+        );
+    }
+
+    #[test]
+    fn attribute_type_at_the_typevar_lowering() {
+        // the default target polyfills the type parameter to `_T = TypeVar(...)`;
+        // an unfolded `T.a` would emit `_T.a`, an `AttributeError` on the `TypeVar`
+        // object when the class body runs
+        check(
+            indoc! {"
+                class A:
+                    a: int
+
+                class B[T: A]:
+                    x: T.a
+
+                def f[T: A](v: T.a) -> T.a:
+                    return v
+            "},
+            indoc! {"
+                from typing import TypeVar, Generic
+                class A:
+                    a: int
+
+                _T = TypeVar(\"_T\", bound=A)
+                class B(Generic[_T]):
+                    x: int
+
+                def f(v: int) -> int:
+                    return v
+            "},
+        );
+    }
+
+    #[test]
+    fn attribute_type_over_a_specialized_receiver() {
+        // a ground receiver folds in ty the moment it is written, so there is no
+        // `Deferred` left for the type-driven test — the shape is what marks it. an
+        // unfolded `X[A].x` is an `AttributeError` on the generic alias at runtime
+        check_py312(
+            indoc! {"
+                class A:
+                    a: int
+
+                class X[T: A]:
+                    x: T
+                    y: T.a
+
+                class Z:
+                    plain: X[A].x
+                    composed: X[A].y
+                    chained: X[A].x.a
+                    nested: list[X[A].y]
+            "},
+            indoc! {"
+                class A:
+                    a: int
+
+                class X[T: A]:
+                    x: T
+                    y: int
+
+                class Z:
+                    plain: A
+                    composed: int
+                    chained: int
+                    nested: list[int]
+            "},
+        );
+    }
+
+    #[test]
+    fn attribute_type_in_a_generic_type_alias() {
+        // the `TypeAliasType` polyfill replaces the whole statement, so it has to
+        // splice the fold in — otherwise `_T.a` is evaluated at import
+        check(
+            indoc! {"
+                class A:
+                    a: int
+
+                type Alias[T: A] = T.a
+            "},
+            indoc! {"
+                from typing import TypeVar
+                from typing_extensions import TypeAliasType
+                class A:
+                    a: int
+
+                _T = TypeVar(\"_T\", bound=A)
+                Alias = TypeAliasType(\"Alias\", int, type_params=(_T,))
+            "},
+        );
+    }
+
+    #[test]
+    fn type_alias_composes_a_fold_with_a_typevar_rename() {
+        // the alias polyfill renames `T` to `_T` *and* splices the `T.a` fold; before
+        // these shared one substitution set it could only apply one of the two
+        check(
+            indoc! {"
+                class A:
+                    a: int
+
+                type Alias[T: A] = dict[T, T.a]
+            "},
+            indoc! {"
+                from typing import TypeVar
+                from typing_extensions import TypeAliasType
+                class A:
+                    a: int
+
+                _T = TypeVar(\"_T\", bound=A)
+                Alias = TypeAliasType(\"Alias\", dict[_T, int], type_params=(_T,))
+            "},
+        );
+    }
+
+    #[test]
+    fn arithmetic_type_alias_is_folded_too() {
+        // the same subsumption applied to the sibling deferred-operation feature:
+        // `_D + 1` would be a `TypeError` at import
+        check(
+            indoc! {"
+                type Arith[D: int] = D + 1
+            "},
+            indoc! {"
+                from typing import TypeVar
+                from typing_extensions import TypeAliasType
+                _D = TypeVar(\"_D\", bound=int)
+                Arith = TypeAliasType(\"Arith\", int, type_params=(_D,))
+            "},
+        );
+    }
+
+    #[test]
+    fn attribute_type_without_a_python_spelling_degrades_to_any() {
+        // a method member's type is a bound method, which python cannot write
+        // down. leaving `T.m` in place would evaluate an attribute access on a
+        // `TypeVar` object when the class body runs
+        check_py312(
+            indoc! {"
+                class A:
+                    def m(self) -> str:
+                        return \"\"
+
+                class B[T: A]:
+                    z: T.m
+            "},
+            indoc! {"
+                from typing import Any
+                class A:
+                    def m(self) -> str:
+                        return \"\"
+
+                class B[T: A]:
+                    z: Any
+            "},
+        );
+    }
+
+    #[test]
+    fn attribute_type_value_position_unchanged() {
+        // outside a type position `T.a` is an ordinary attribute access
+        check_py312(
+            indoc! {"
+                class A:
+                    a: int
+
+                def f[T: A](t: T):
+                    return t.a
+            "},
+            indoc! {"
+                class A:
+                    a: int
+
+                def f[T: A](t: T):
+                    return t.a
+            "},
+        );
     }
 
     #[test]
