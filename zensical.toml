@@ -89,6 +89,7 @@ features = [
   { "`super` keyword" = "features/super.md" },
   { "tuple member access" = "features/tuple-index.md" },
   { "keyword arguments in subscripts" = "features/kw-subscript.md" },
+  { "statement expressions" = "features/statement-expressions.md" },
   { "trailing lambda blocks" = "features/trailing-lambdas.md" },
   { "unpack syntax" = "features/unpack-syntax.md" },
   { "mutable default arguments" = "features/mutable-defaults.md" },

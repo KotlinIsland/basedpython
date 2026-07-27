@@ -145,6 +145,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNANNOTATED_MODEL_FIELD);
     registry.register_lint(&ESCAPING_LOCAL);
     registry.register_lint(&UNDECLARED_RAISE);
+    registry.register_lint(&NON_EXHAUSTIVE_STATEMENT_EXPRESSION);
     registry.register_lint(&OVERRIDE_RAISE);
     registry.register_lint(&UNHANDLED_EXCEPTION);
     registry.register_lint(&INVALID_RAISES_CLAUSE);
@@ -1262,6 +1263,31 @@ declare_lint! {
     pub(crate) static UNDECLARED_RAISE = {
         summary: "detects an exception a `raises` clause does not include",
         status: LintStatus::stable("0.0.1-alpha.37"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a basedpython statement expression that can complete without
+    /// producing a value.
+    ///
+    /// ## Why is this bad?
+    /// A statement expression stands where a value is expected. If some path
+    /// through it reaches the end of the statement without evaluating a tail
+    /// expression or a `break <value>`, there is no value to stand in.
+    ///
+    /// ## Examples
+    /// ```by
+    /// def f(x: int | str) -> int:
+    ///     # error: no value when `x` is a `str`
+    ///     return match x:
+    ///         case int():
+    ///             1
+    /// ```
+    pub(crate) static NON_EXHAUSTIVE_STATEMENT_EXPRESSION = {
+        summary: "detects a statement expression that can complete without a value",
+        status: LintStatus::stable("0.0.1-alpha.39"),
         default_level: Level::Error,
     }
 }

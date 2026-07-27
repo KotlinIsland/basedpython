@@ -124,6 +124,11 @@ pub struct Generator<'a> {
     indent_depth: usize,
     num_newlines: usize,
     initial: bool,
+    /// basedpython: when set, the next statement continues the current line
+    /// instead of starting one of its own. Set while unparsing a
+    /// [statement expression](ast::ExprStatement), whose wrapped statement
+    /// begins where the expression does.
+    inline_statement: bool,
 }
 
 impl<'a> From<&'a Stylist<'a>> for Generator<'a> {
@@ -136,6 +141,7 @@ impl<'a> From<&'a Stylist<'a>> for Generator<'a> {
             indent_depth: 0,
             num_newlines: 0,
             initial: true,
+            inline_statement: false,
         }
     }
 }
@@ -152,6 +158,7 @@ impl<'a> Generator<'a> {
             indent_depth: 0,
             num_newlines: 0,
             initial: true,
+            inline_statement: false,
         }
     }
 
@@ -274,8 +281,10 @@ impl<'a> Generator<'a> {
     pub(crate) fn unparse_stmt(&mut self, ast: &Stmt) {
         macro_rules! statement {
             ($body:block) => {{
-                self.newline();
-                self.p(&self.indent.deref().repeat(self.indent_depth));
+                if !std::mem::take(&mut self.inline_statement) {
+                    self.newline();
+                    self.p(&self.indent.deref().repeat(self.indent_depth));
+                }
                 $body
                 self.initial = false;
             }};
@@ -862,9 +871,13 @@ impl<'a> Generator<'a> {
                     self.p("pass");
                 });
             }
-            Stmt::Break(_) => {
+            Stmt::Break(ast::StmtBreak { value, .. }) => {
                 statement!({
                     self.p("break");
+                    if let Some(value) = value {
+                        self.p(" ");
+                        self.unparse_expr(value, precedence::EXPR);
+                    }
                 });
             }
             Stmt::Continue(_) => {
@@ -1638,6 +1651,15 @@ impl<'a> Generator<'a> {
                 self.p("def ");
                 self.p_id(&method.name);
                 self.unparse_expr(&method.signature, precedence::EXPR);
+            }
+            Expr::Statement(statement) => {
+                assert_eq!(
+                    self.mode,
+                    Mode::BasedPython,
+                    "statement expressions should be transpiled before codegen"
+                );
+                self.inline_statement = true;
+                self.unparse_stmt(&statement.stmt);
             }
         }
     }

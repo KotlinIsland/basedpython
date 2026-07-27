@@ -156,6 +156,7 @@ Module(
                             StmtBreak {
                                 node_index: NodeIndex(None),
                                 range: 101..106,
+                                value: None,
                             },
                         ),
                     ],
@@ -195,6 +196,7 @@ Module(
                             StmtBreak {
                                 node_index: NodeIndex(None),
                                 range: 133..138,
+                                value: None,
                             },
                         ),
                     ],

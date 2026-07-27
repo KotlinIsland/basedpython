@@ -131,6 +131,10 @@ impl OperatorPrecedence {
             ExprRef::CallableType(_) | ExprRef::ProtocolType(_) | ExprRef::ProtocolMethod(_) => {
                 Self::None
             }
+
+            // a statement expression extends to the end of its suite, so it binds
+            // more loosely than anything that could follow it
+            ExprRef::Statement(_) => Self::None,
         }
     }
 

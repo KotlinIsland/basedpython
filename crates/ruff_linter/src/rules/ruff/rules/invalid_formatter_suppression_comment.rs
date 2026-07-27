@@ -351,6 +351,7 @@ const fn is_valid_enclosing_node(node: AnyNodeRef) -> bool {
         | AnyNodeRef::Identifier(_)
         | AnyNodeRef::ExprCallableType(_)
         | AnyNodeRef::ExprProtocolType(_)
-        | AnyNodeRef::ExprProtocolMethod(_) => false,
+        | AnyNodeRef::ExprProtocolMethod(_)
+        | AnyNodeRef::ExprStatement(_) => false,
     }
 }

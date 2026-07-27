@@ -5,7 +5,7 @@ use except_handlers::TryNodeContextStackManager;
 use itertools::Itertools;
 use ruff_python_ast::helpers::{
     Truthiness, any_over_expr, is_dotted_name, last_bound_parameter, parameter_modifiers,
-    return_guards,
+    return_guards, statement_expression_values,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -257,6 +257,8 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     current_statements: Vec<CurrentStatement<'ast, 'db>>,
     /// The match case we're currently visiting.
     current_match_case: Option<CurrentMatchCase<'ast, 'db>>,
+    /// The statement expressions we're currently visiting, innermost last.
+    current_statement_expressions: Vec<CurrentStatementExpression>,
     /// The name of the first function parameter of the innermost function that we're currently visiting.
     current_first_parameter_name: Option<&'ast str>,
 
@@ -334,6 +336,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             current_assignments: Vec::new(),
             current_statements: Vec::new(),
             current_match_case: None,
+            current_statement_expressions: Vec::new(),
             current_first_parameter_name: None,
             try_node_context_stack_manager: TryNodeContextStackManager::default(),
 
@@ -1397,6 +1400,104 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         self.current_use_def_map_mut().record_use(place_id, use_id);
     }
 
+    /// basedpython: records `expr` as a value of the statement expression whose
+    /// place is `place`.
+    ///
+    /// Never inlined: this runs from the tail of [`Self::visit_expr`], so its
+    /// locals would otherwise sit in the frame of every expression visited.
+    #[inline(never)]
+    fn record_statement_expression_value(&mut self, expr: &'ast ast::Expr, place: ScopedPlaceId) {
+        // not keyed by AST node (see `is_statement_expression_value`), so the
+        // single-definition-per-node invariant `add_definition` checks does not apply
+        self.push_additional_definition(place, DefinitionNodeRef::StatementExpressionValue(expr));
+    }
+
+    /// basedpython: reports a `break <value>` whose value nothing reads.
+    ///
+    /// A value only means something when the loop the `break` leaves is a
+    /// statement expression, which is exactly when the value was registered as
+    /// one of that statement's value positions.
+    ///
+    /// Never inlined, for the same reason as
+    /// [`Self::record_statement_expression_value`] — [`Visitor::visit_stmt`] is
+    /// recursive too.
+    #[inline(never)]
+    fn check_break_value(&mut self, stmt: &'ast ast::Stmt, value: &'ast ast::Expr) {
+        let key = ExpressionNodeKey::from(value);
+        if self
+            .current_statement_expressions
+            .iter()
+            .any(|current| current.values.contains(&key))
+        {
+            return;
+        }
+        self.report_semantic_error(SemanticSyntaxError {
+            kind: SemanticSyntaxErrorKind::DiscardedBreakValue,
+            range: stmt.range(),
+            python_version: self.python_version,
+        });
+    }
+
+    /// basedpython: `a ?? b`, whose right operand is a branch.
+    ///
+    /// Kept out of [`Self::visit_expr`] — and never inlined back into it —
+    /// because the snapshots it holds would otherwise sit in the stack frame of
+    /// *every* expression visited. `visit_expr` recurses once per nesting level,
+    /// so a long operator chain multiplies whatever this arm costs (see the
+    /// `stack_size` server test, a 2000-deep `1 + 1 + …`).
+    #[inline(never)]
+    fn visit_coalesce_expression(&mut self, left: &'ast ast::Expr, right: &'ast ast::Expr) {
+        self.visit_expr(left);
+        let left_was_not_none = self.flow_snapshot();
+
+        // whether the left operand is `None` is not expressible as a narrowing
+        // predicate here, so *both* paths are recorded as ambiguous. they have to
+        // be complementary: leaving the right-operand-skipped path unconstrained
+        // would make the implicit `unbound` binding definitely visible alongside a
+        // binding made in the right operand, which is a contradiction
+        self.record_ambiguous_reachability();
+        self.visit_expr(right);
+        let right_ran = self.flow_snapshot();
+
+        self.flow_restore(left_was_not_none);
+        self.record_ambiguous_reachability();
+        self.flow_merge(right_ran);
+    }
+
+    /// basedpython: a statement expression's wrapped statement is visited as an
+    /// ordinary statement, so everything it binds and narrows is recorded in the
+    /// enclosing scope. Its *value* is modelled as a synthetic place written at
+    /// each of the statement's value positions and read at the expression itself,
+    /// which gives exhaustiveness and the union of branch types from the existing
+    /// flow analysis.
+    ///
+    /// Kept out of [`Self::visit_expr`] for the same reason as
+    /// [`Self::visit_coalesce_expression`].
+    #[inline(never)]
+    fn visit_statement_expression(
+        &mut self,
+        expr: &'ast ast::Expr,
+        statement: &'ast ast::ExprStatement,
+    ) {
+        let place = self
+            .add_symbol(Name::new(format!(
+                "<statement-expression:{}>",
+                statement.range.start().to_u32()
+            )))
+            .into();
+        let values = statement_expression_values(&statement.stmt)
+            .into_iter()
+            .map(|value| ExpressionNodeKey::from(value.expr()))
+            .collect();
+        self.current_statement_expressions
+            .push(CurrentStatementExpression { place, values });
+
+        self.visit_stmt(&statement.stmt);
+
+        self.current_statement_expressions.pop();
+        self.record_place_use(place, expr);
+    }
+
     fn record_place_definition(&mut self, place_id: ScopedPlaceId, expr: &'ast ast::Expr) {
         match self.current_assignment() {
             Some(CurrentAssignment::Assign { node, unpack }) => {
@@ -1542,14 +1643,16 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         // Note `definition_node` is guaranteed to be a child of `self.module`
         let kind = definition_node.into_owned(self.module);
         let is_loop_header = kind.is_loop_header();
+        let is_statement_expression_value = kind.is_statement_expression_value();
         let is_reexported = kind.is_reexported();
 
         let definition: Definition<'db> =
             Definition::new(self.db, self.current_scope_id(), place, kind, is_reexported);
 
-        let num_definitions = if is_loop_header {
+        let num_definitions = if is_loop_header || is_statement_expression_value {
             // Loop headers are internal use-def definitions. They are retrieved through the loop
-            // token rather than by their AST node.
+            // token rather than by their AST node. Statement expression values are likewise read
+            // back through the statement expression's use.
             0
         } else {
             let definitions = self.add_entry_for_definition_key(definition_node.key());
@@ -4438,7 +4541,13 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 self.mark_unreachable();
             }
 
-            ast::Stmt::Break(_) => {
+            ast::Stmt::Break(ast::StmtBreak { value, .. }) => {
+                // the value is evaluated before control leaves the loop, so it is
+                // visited before the break's flow effect is recorded
+                if let Some(value) = value {
+                    self.check_break_value(stmt, value);
+                    self.visit_expr(value);
+                }
                 let snapshot = self.flow_snapshot();
                 if let Some(current_loop) = self.current_loop_mut() {
                     current_loop.push_break(snapshot);
@@ -5217,6 +5326,15 @@ impl<'ast> Visitor<'ast> for SemanticIndexBuilder<'_, 'ast> {
                         .insert(bool_op_key, ConditionFlowSnapshots { truthy, falsy });
                 }
             }
+            // basedpython: `a ?? b` evaluates `b` only when `a` is `None`, so `b`
+            // is a branch — a binding it makes is only possibly bound afterwards,
+            // and a `raise` or `return` in it does not end the enclosing flow
+            ast::Expr::BinOp(ast::ExprBinOp {
+                left,
+                op: ast::Operator::Coalesce,
+                right,
+                ..
+            }) => self.visit_coalesce_expression(left, right),
             ast::Expr::StringLiteral(_) => {
                 walk_expr(self, expr);
             }
@@ -5231,9 +5349,24 @@ impl<'ast> Visitor<'ast> for SemanticIndexBuilder<'_, 'ast> {
                 self.mark_current_comprehension_async();
                 walk_expr(self, expr);
             }
+            // basedpython: a statement expression's wrapped statement is visited
+            // as an ordinary statement, so everything it binds and narrows is
+            // recorded in the enclosing scope. Its *value* is modelled as a
+            // synthetic place written at each of the statement's value positions
+            // and read at the expression itself, which gives exhaustiveness and
+            // the union of branch types from the existing flow analysis.
+            ast::Expr::Statement(statement) => self.visit_statement_expression(expr, statement),
             _ => {
                 walk_expr(self, expr);
             }
+        }
+
+        // basedpython: this expression may produce the value of the statement
+        // expression currently being visited
+        if let Some(current) = self.current_statement_expressions.last()
+            && current.values.contains(&ExpressionNodeKey::from(expr))
+        {
+            self.record_statement_expression_value(expr, current.place);
         }
     }
 
@@ -5790,6 +5923,23 @@ impl<'ast, 'db> CurrentMatchCase<'ast, 'db> {
     fn new(pattern: &'ast ast::Pattern, predicate: PatternPredicate<'db>) -> Self {
         Self { pattern, predicate }
     }
+}
+
+/// basedpython: the state of a [statement expression](ast::ExprStatement) whose
+/// wrapped statement is currently being visited.
+#[derive(Debug)]
+struct CurrentStatementExpression {
+    /// The synthetic place holding the statement expression's value.
+    place: ScopedPlaceId,
+
+    /// Every expression whose evaluation produces the statement expression's
+    /// value: the tail expression of each branch, plus the operand of each
+    /// `break <value>` targeting the loop the statement expression wraps.
+    ///
+    /// The value is *possibly unbound* at the use exactly when some path through
+    /// the statement reaches its end without passing one of these — which is
+    /// what makes the statement expression non-exhaustive.
+    values: FxHashSet<ExpressionNodeKey>,
 }
 
 enum Unpackable<'ast> {

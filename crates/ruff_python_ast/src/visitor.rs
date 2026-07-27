@@ -358,7 +358,16 @@ pub fn walk_stmt<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, stmt: &'a Stmt) {
             range: _,
             node_index: _,
         }) => visitor.visit_expr(value),
-        Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) | Stmt::IpyEscapeCommand(_) => {}
+        Stmt::Break(ast::StmtBreak {
+            value,
+            range: _,
+            node_index: _,
+        }) => {
+            if let Some(value) = value {
+                visitor.visit_expr(value);
+            }
+        }
+        Stmt::Pass(_) | Stmt::Continue(_) | Stmt::IpyEscapeCommand(_) => {}
     }
 }
 
@@ -691,6 +700,13 @@ pub fn walk_expr<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, expr: &'a Expr) {
             node_index: _,
         }) => {
             visitor.visit_expr(signature);
+        }
+        Expr::Statement(ast::ExprStatement {
+            stmt,
+            range: _,
+            node_index: _,
+        }) => {
+            visitor.visit_stmt(stmt);
         }
     }
 }

@@ -802,6 +802,7 @@ impl SemanticSyntaxContext for Checker<'_> {
             | SemanticSyntaxErrorKind::ReboundComprehensionVariable
             | SemanticSyntaxErrorKind::LazyImportNotAllowed { .. }
             | SemanticSyntaxErrorKind::LazyImportStar
+            | SemanticSyntaxErrorKind::DiscardedBreakValue
             | SemanticSyntaxErrorKind::LazyFutureImport
             | SemanticSyntaxErrorKind::DuplicateTypeParameter
             | SemanticSyntaxErrorKind::MultipleCaseAssignment(_)

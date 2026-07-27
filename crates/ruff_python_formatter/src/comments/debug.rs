@@ -200,6 +200,7 @@ mod tests {
         };
 
         let break_statement = StmtBreak {
+            value: None,
             range: TextRange::new(TextSize::new(55), TextSize::new(60)),
             node_index: AtomicNodeIndex::NONE,
         };

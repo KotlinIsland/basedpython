@@ -343,7 +343,8 @@ fn is_allowed_value(expr: &Expr) -> bool {
         | Expr::IpyEscapeCommand(_)
         | Expr::CallableType(_)
         | Expr::ProtocolType(_)
-        | Expr::ProtocolMethod(_) => false,
+        | Expr::ProtocolMethod(_)
+        | Expr::Statement(_) => false,
     }
 }
 

@@ -86,6 +86,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [`super` keyword](super.md)
 - [tuple member access (`expr.N`)](tuple-index.md)
 - [keyword arguments in subscripts](kw-subscript.md)
+- [statement expressions](statement-expressions.md)
 - [trailing lambda blocks](trailing-lambdas.md)
 - [unpack syntax](unpack-syntax.md)
 - [mutable default arguments](mutable-defaults.md)

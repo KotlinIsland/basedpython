@@ -362,7 +362,8 @@ impl From<&Expr> for ResolvedPythonType {
             | Expr::IpyEscapeCommand(_)
             | Expr::CallableType(_)
             | Expr::ProtocolType(_)
-            | Expr::ProtocolMethod(_) => ResolvedPythonType::Unknown,
+            | Expr::ProtocolMethod(_)
+            | Expr::Statement(_) => ResolvedPythonType::Unknown,
         }
     }
 }
