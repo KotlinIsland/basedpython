@@ -172,6 +172,11 @@ pub(crate) trait TypeInfo {
     /// receiver, used unqualified. lowered to `it.<name>`
     fn is_implicit_receiver_name(&self, name: &ExprName) -> bool;
 
+    /// the enum a *context-sensitively* resolved name must be qualified with —
+    /// `Red` in a `Color` context lowers to `Color.Red`. `None` for every name
+    /// that resolves the ordinary way
+    fn context_sensitive_qualifier(&self, name: &ExprName) -> Option<String>;
+
     /// whether `expr` resolves to `typing.Any` (the explicitly-annotated
     /// dynamic type). distinguishes the special form from a shadowing binding
     /// or the `Unknown` that an unresolved / invalid type expression yields,
@@ -542,6 +547,10 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn is_implicit_receiver_name(&self, name: &ExprName) -> bool {
         SemanticModel::implicit_receiver_name(self, name)
+    }
+
+    fn context_sensitive_qualifier(&self, name: &ExprName) -> Option<String> {
+        SemanticModel::context_sensitive_qualifier(self, name)
     }
 
     fn is_any(&self, expr: &Expr) -> bool {

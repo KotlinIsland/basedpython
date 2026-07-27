@@ -904,7 +904,7 @@ impl<'db> FixedLengthTuple<Type<'db>> {
         visitor: &ApplyTypeMappingVisitor<'db>,
     ) -> Self {
         let tcx_tuple = tcx
-            .annotation
+            .annotation()
             .and_then(|annotation| annotation.known_specialization(db, KnownClass::Tuple))
             .and_then(|specialization| {
                 specialization

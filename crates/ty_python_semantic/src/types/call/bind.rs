@@ -5348,7 +5348,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             return;
         };
 
-        let return_with_tcx = Some(self.return_ty).zip(self.call_expression_tcx.annotation);
+        let return_with_tcx = Some(self.return_ty).zip(self.call_expression_tcx.annotation());
 
         self.inferable_typevars = generic_context.inferable_typevars(self.db);
         let mut builder = SpecializationBuilder::new(self.db, constraints, self.inferable_typevars);
@@ -6933,7 +6933,7 @@ impl<'db> Binding<'db> {
 
         let mut return_type_solutions: FxHashMap<BoundTypeVarIdentity<'db>, Type<'db>> =
             FxHashMap::default();
-        if let Some(declared_return_ty) = call_expression_tcx.annotation {
+        if let Some(declared_return_ty) = call_expression_tcx.annotation() {
             let normalized_return_ty = self
                 .normalized_constructor_return(db)
                 .unwrap_or(self.signature.return_ty);

@@ -4046,6 +4046,27 @@ pub(crate) fn based_enum_variant_union<'db>(
     (!elements.is_empty()).then(|| UnionType::from_elements(db, elements))
 }
 
+/// The based enum a variant class belongs to — the class whose body declares it.
+/// Returns `None` for a class that is not a based-enum variant.
+pub(crate) fn based_enum_of_variant<'db>(
+    db: &'db dyn Db,
+    variant: StaticClassLiteral<'db>,
+) -> Option<StaticClassLiteral<'db>> {
+    if !variant.is_enum_variant(db) {
+        return None;
+    }
+    let file = variant.file(db);
+    let index = semantic_index(db, file);
+    index
+        .ancestor_scopes(variant.body_scope(db).file_scope_id(db))
+        .skip(1)
+        .find_map(|(_, ancestor_scope)| {
+            let class = ancestor_scope.node().as_class()?;
+            let definition = index.expect_single_definition(class);
+            original_class_type(db, definition)?.as_static()
+        })
+}
+
 /// The payload-less (unit) variant names of a based enum, in declaration order —
 /// its enum-literal members, reached qualified as `A.Baz`. Returns `None` for a
 /// class that is not a based enum or that has no unit variants.

@@ -79,6 +79,7 @@ features = [
   { "main function" = "features/main-function.md" },
   { "`sentinel` declarations" = "features/sentinel.md" },
   { "decorator keyword" = "features/decorator-keyword.md" },
+  { "context-sensitive resolution" = "features/context-sensitive-resolution.md" },
   { "identity and isinstance" = "features/identity-swap.md" },
   { "optional chaining (`?.`)" = "features/optional-chaining.md" },
   { "none-coalesce operator (`??`)" = "features/none-coalesce.md" },

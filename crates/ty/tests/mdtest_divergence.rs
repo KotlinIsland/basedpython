@@ -1,9 +1,9 @@
 //! checker/runtime divergence harness.
 //!
 //! every `.by` code block in the basedpython mdtests that the checker accepts
-//! (no `# error:` assertions) must also transpile and *execute* cleanly: the
-//! mdtest framework verifies ty's diagnostics, this test verifies the runtime
-//! half of the contract. divergences of the form "checks clean but crashes at
+//! (no `# error:` or `# snapshot` assertions) must also transpile and *execute*
+//! cleanly: the mdtest framework verifies ty's diagnostics, this test verifies
+//! the runtime half of the contract. divergences of the form "checks clean but crashes at
 //! runtime" (enum constants becoming members, transform composition leaks,
 //! unsound lowerings) are exactly the bug class this catches.
 //!
@@ -115,6 +115,15 @@ fn by_blocks(markdown: &str) -> Vec<(String, bool)> {
         .into_iter()
         .map(|(b, s)| (b, multi_file_sections.contains(&s)))
         .collect()
+}
+
+/// Whether the block asserts diagnostics of its own, and so has intentionally
+/// unspecified runtime behaviour. A `# snapshot` marker counts exactly as an
+/// `# error:` one does: it *replaces* the error assertion, so a block carrying
+/// only snapshots is not checker-clean either — and a snapshot of an
+/// `unresolved-reference` names something that is undefined at runtime too.
+fn has_expected_diagnostics(block: &str) -> bool {
+    block.contains("# error:") || block.contains("# snapshot")
 }
 
 fn transpile(source: &str, min_version: &str) -> Result<String, String> {
@@ -242,7 +251,7 @@ fn clean_mdtest_blocks_run() {
         let name = file.file_name().unwrap().to_string_lossy().into_owned();
         let markdown = fs::read_to_string(file).expect("read mdtest");
         for (i, (block, multi_file)) in by_blocks(&markdown).into_iter().enumerate() {
-            if block.contains("# error:") || multi_file {
+            if has_expected_diagnostics(&block) || multi_file {
                 continue;
             }
             items.push((name.clone(), i, block));

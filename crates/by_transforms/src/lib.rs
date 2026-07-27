@@ -33,6 +33,27 @@ pub(crate) fn make_in_memory_db(source: &str) -> (TestDb, File) {
     (db, file)
 }
 
+/// Qualify every context-sensitively resolved name (`a: Color = Red` →
+/// `Color.Red`) against the *original* source — before the enum lowering
+/// rewrites `enum class` to python, so ty resolves the same source it checks.
+///
+/// `project`, when `Some`, supplies the real project db + file so an enum
+/// imported from another module resolves. Returns a borrowed `Cow` when nothing
+/// was qualified, which is also the signal that the caller's db still matches
+/// the source.
+fn run_context_sensitive_phase<'a>(
+    source: &'a str,
+    db: &dyn ty_python_semantic::Db,
+    file: File,
+) -> std::borrow::Cow<'a, str> {
+    let parsed = ruff_db::parsed::parsed_module(db, file).load(db);
+    if !parsed.errors().is_empty() {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    let model = ty_python_semantic::SemanticModel::new(db, file);
+    transforms::context_sensitive::qualify(source, parsed.suite(), &model)
+}
+
 /// Transpile `.by` source text to python without a project db (single-file:
 /// type-aware passes see only this file). Used for stdin input and tests; the
 /// file-backed [`transpile_typed`] resolves cross-module types.
@@ -40,6 +61,18 @@ pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
     if config.is_python {
         return Ok(source.to_owned());
     }
+
+    // one db over the original source, shared by the qualification phase below
+    // and — as long as nothing rewrites the source — by phase 0's type-aware
+    // passes, which would otherwise build an identical one of their own
+    let (local_db, local_file) = make_in_memory_db(source);
+
+    // --- Context-sensitive resolution: qualify names resolved against their
+    // expected type (`a: Color = Red` → `Color.Red`) while the source is still
+    // the one ty checks ---
+    let qualified = run_context_sensitive_phase(source, &local_db, local_file);
+    let qualified_changed = matches!(qualified, std::borrow::Cow::Owned(_));
+    let source = qualified.as_ref();
 
     // --- Enum lowering: rewrite `enum` sum types to Python before the main
     // pipeline, so member bodies (copied verbatim) are lowered downstream ---
@@ -50,8 +83,13 @@ pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
     let source = enum_lowered.output.as_ref();
 
     // --- Phase 0: AST rewrite passes ---
-    let (source, ast_errors, _phase0_map) =
-        transforms::ast_driver::run_against_source(source, config, None);
+    let unchanged =
+        !qualified_changed && matches!(enum_lowered.output, std::borrow::Cow::Borrowed(_));
+    let (source, ast_errors, _phase0_map) = transforms::ast_driver::run_against_source(
+        source,
+        config,
+        unchanged.then_some((&local_db as &dyn ty_python_semantic::Db, local_file)),
+    );
     if let Some(first) = ast_errors.first() {
         return Err(first.clone());
     }
@@ -121,20 +159,38 @@ pub fn transpile_typed_with_map(
         return Ok((out, source_map::line_table(original_source, &[])));
     }
 
+    // context-sensitive resolution: qualify names resolved against their expected
+    // type (`a: Color = Red` → `Color.Red`) against the source ty checks, before
+    // the enum lowering rewrites it. a within-line rewrite, so line
+    // correspondence is unaffected
+    let qualified = run_context_sensitive_phase(original_source, db, file);
+    let qualified_changed = matches!(qualified, std::borrow::Cow::Owned(_));
+
     // enum lowering: rewrite `enum` sum types to Python first. when it fires,
     // the working source differs from the project file, so type-aware passes
     // and the final lowering run against a single-file db built from it
-    let enum_lowered = transforms::enums::lower(original_source, config.min_version);
+    let enum_lowered = transforms::enums::lower(qualified.as_ref(), config.min_version);
     if let Some(first) = enum_lowered.errors.first() {
         return Err(first.clone().into());
     }
     let working_source = enum_lowered.output.as_ref();
+    // two independent facts, deliberately kept apart: `enum_changed` says the
+    // enum phase *renumbered lines*, so the final map must compose through its
+    // line map (which is empty when it didn't fire, and would map every line to
+    // nothing). `source_changed` says the working source no longer matches the
+    // project file, so a single-file db is needed. qualification changes the
+    // second without changing the first — it only ever edits within a line
     let enum_changed = matches!(enum_lowered.output, std::borrow::Cow::Owned(_));
+    let source_changed = qualified_changed || enum_changed;
 
     // phase 0: AST passes. with the project db (no enums) type-aware passes
     // resolve cross-module imports; `phase0_map` maps spliced lines → working
     // (post-enum) lines
-    let project = if enum_changed { None } else { Some((db, file)) };
+    let project = if source_changed {
+        None
+    } else {
+        Some((db, file))
+    };
     let (spliced, ast_errors, phase0_map) =
         transforms::ast_driver::run_against_source(working_source, config, project);
     if let Some(first) = ast_errors.first() {
@@ -150,7 +206,7 @@ pub fn transpile_typed_with_map(
         let LoweringResult { output, errors } =
             run_lowering_phase(src, module.suite(), config, &model);
         (output, errors)
-    } else if enum_changed {
+    } else if source_changed {
         // ast_driver made no further changes, but the working source differs
         // from the project file — parse it in a single-file db
         let (local_db, local_file) = make_in_memory_db(working_source);
