@@ -1,0 +1,9 @@
+# a basedpython pattern clause matches its subject, so a tuple there is an
+# ordinary value rather than an always-true test
+if let (a, b) := (1, 2):
+    pass
+
+if (3, 4):
+    pass
+elif let (a, b) := (5, 6):
+    pass

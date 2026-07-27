@@ -14,6 +14,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 0..45,
+                    pattern: None,
                     test: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -34,6 +35,7 @@ Module(
                         ElifElseClause {
                             range: 15..30,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: Some(
                                 Name(
                                     ExprName {
@@ -56,6 +58,7 @@ Module(
                         ElifElseClause {
                             range: 31..45,
                             node_index: NodeIndex(None),
+                            pattern: None,
                             test: None,
                             body: [
                                 Pass(

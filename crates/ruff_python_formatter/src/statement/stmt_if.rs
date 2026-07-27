@@ -1,12 +1,52 @@
 use ruff_formatter::{format_args, write};
-use ruff_python_ast::{AnyNodeRef, ElifElseClause, StmtIf};
+use ruff_python_ast::{AnyNodeRef, ElifElseClause, Expr, Pattern, StmtIf};
 use ruff_text_size::Ranged;
 
 use crate::expression::maybe_parenthesize_expression;
 use crate::expression::parentheses::Parenthesize;
+use crate::pattern::maybe_parenthesize_pattern;
 use crate::prelude::*;
 use crate::statement::clause::{ClauseHeader, clause};
 use crate::statement::suite::SuiteKind;
+
+/// Formats the condition of an `if` / `elif` clause: a plain expression, or the
+/// basedpython pattern-matching form `let <pattern> := <subject>`
+fn format_if_condition<'a>(
+    pattern: Option<&'a Pattern>,
+    test: &'a Expr,
+    parent: AnyNodeRef<'a>,
+) -> FormatIfCondition<'a> {
+    FormatIfCondition {
+        pattern,
+        test,
+        parent,
+    }
+}
+
+struct FormatIfCondition<'a> {
+    pattern: Option<&'a Pattern>,
+    test: &'a Expr,
+    parent: AnyNodeRef<'a>,
+}
+
+impl Format<PyFormatContext<'_>> for FormatIfCondition<'_> {
+    fn fmt(&self, f: &mut PyFormatter) -> FormatResult<()> {
+        if let Some(pattern) = self.pattern {
+            write!(
+                f,
+                [
+                    token("let"),
+                    space(),
+                    maybe_parenthesize_pattern(pattern, self.parent),
+                    space(),
+                    token(":="),
+                    space(),
+                ]
+            )?;
+        }
+        maybe_parenthesize_expression(self.test, self.parent, Parenthesize::IfBreaks).fmt(f)
+    }
+}
 
 #[derive(Default)]
 pub struct FormatStmtIf;
@@ -16,6 +56,7 @@ impl FormatNodeRule<StmtIf> for FormatStmtIf {
         let StmtIf {
             range: _,
             node_index: _,
+            pattern,
             test,
             body,
             elif_else_clauses,
@@ -31,7 +72,7 @@ impl FormatNodeRule<StmtIf> for FormatStmtIf {
                 &format_args![
                     token("if"),
                     space(),
-                    maybe_parenthesize_expression(test, item, Parenthesize::IfBreaks),
+                    format_if_condition(pattern.as_deref(), test, item.into()),
                 ],
                 trailing_colon_comment,
                 body,
@@ -65,6 +106,7 @@ pub(crate) fn format_elif_else_clause(
     let ElifElseClause {
         range: _,
         node_index: _,
+        pattern,
         test,
         body,
     } = item;
@@ -90,7 +132,7 @@ pub(crate) fn format_elif_else_clause(
                             [
                                 token("elif"),
                                 space(),
-                                maybe_parenthesize_expression(test, item, Parenthesize::IfBreaks),
+                                format_if_condition(pattern.as_deref(), test, item.into()),
                             ]
                         )
                     } else {

@@ -42,6 +42,10 @@ impl Violation for IfTuple {
 /// F634
 pub(crate) fn if_tuple(checker: &Checker, stmt_if: &StmtIf) {
     for branch in if_elif_branches(stmt_if) {
+        // a pattern branch matches its subject, so a tuple there is a real value
+        if branch.pattern.is_some() {
+            continue;
+        }
         let Expr::Tuple(tuple) = &branch.test else {
             continue;
         };

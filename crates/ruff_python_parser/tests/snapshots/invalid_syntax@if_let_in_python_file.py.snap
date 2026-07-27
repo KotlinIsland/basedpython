@@ -1,0 +1,83 @@
+---
+source: crates/ruff_python_parser/tests/fixtures.rs
+input_file: crates/ruff_python_parser/resources/inline/err/if_let_in_python_file.py
+---
+## AST
+
+```
+Module(
+    ModModule {
+        node_index: NodeIndex(None),
+        range: 0..32,
+        body: [
+            If(
+                StmtIf {
+                    node_index: NodeIndex(None),
+                    range: 0..31,
+                    pattern: Some(
+                        MatchClass(
+                            PatternMatchClass {
+                                node_index: NodeIndex(None),
+                                range: 7..14,
+                                cls: Name(
+                                    ExprName {
+                                        node_index: NodeIndex(None),
+                                        range: 7..11,
+                                        id: Name("Some"),
+                                        ctx: Load,
+                                    },
+                                ),
+                                arguments: PatternArguments {
+                                    range: 11..14,
+                                    node_index: NodeIndex(None),
+                                    patterns: [
+                                        MatchAs(
+                                            PatternMatchAs {
+                                                node_index: NodeIndex(None),
+                                                range: 12..13,
+                                                pattern: None,
+                                                name: Some(
+                                                    Identifier {
+                                                        id: Name("x"),
+                                                        range: 12..13,
+                                                        node_index: NodeIndex(None),
+                                                    },
+                                                ),
+                                            },
+                                        ),
+                                    ],
+                                    keywords: [],
+                                },
+                            },
+                        ),
+                    ),
+                    test: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 18..21,
+                            id: Name("opt"),
+                            ctx: Load,
+                        },
+                    ),
+                    body: [
+                        Pass(
+                            StmtPass {
+                                node_index: NodeIndex(None),
+                                range: 27..31,
+                            },
+                        ),
+                    ],
+                    elif_else_clauses: [],
+                },
+            ),
+        ],
+    },
+)
+```
+## Errors
+
+  |
+1 | if let Some(x) := opt:
+  |    ^^^^^^^^^^^ Syntax Error: pattern-matching `if let` is not valid in .py files
+2 |     pass
+  |

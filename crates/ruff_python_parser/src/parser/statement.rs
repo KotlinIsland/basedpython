@@ -4,7 +4,7 @@ use ruff_python_ast::name::Name;
 use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::{
     self as ast, AtomicNodeIndex, DecoratorList, ExceptHandler, Expr, ExprContext, IpyEscapeKind,
-    Operator, PythonVersion, Stmt, Suite, Variance, WithItem,
+    Operator, Pattern, PythonVersion, Stmt, Suite, Variance, WithItem,
 };
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
@@ -3421,6 +3421,7 @@ impl<'src> Parser<'src> {
 
         // test_err if_stmt_missing_test
         // if : ...
+        let pattern = self.parse_if_let_pattern();
         let test = self.parse_named_expression_or_higher(ExpressionContext::default());
 
         // test_err if_stmt_missing_colon
@@ -3454,12 +3455,54 @@ impl<'src> Parser<'src> {
         }
 
         ast::StmtIf {
+            pattern: pattern.map(Box::new),
             test: Box::new(test.expr),
             body,
             elif_else_clauses: self.elif_else_scratch.take(elif_else_snapshot),
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         }
+    }
+
+    /// Parses the `let <pattern> :=` prefix of a basedpython pattern-matching
+    /// `if` / `elif` clause, leaving the parser positioned at the subject
+    /// expression. Returns `None` — with the parser rewound — when the clause is
+    /// an ordinary condition.
+    ///
+    /// `let` is an ordinary identifier in python (`if let := f():` is valid), so
+    /// the form is only committed to once a complete pattern followed by `:=` has
+    /// been parsed. No such sequence is a valid python condition, which is why
+    /// the basedpython gate below can be applied after the fact
+    fn parse_if_let_pattern(&mut self) -> Option<Pattern> {
+        if !(self.at(TokenKind::Name) && self.src_text(self.current_token_range()) == "let") {
+            return None;
+        }
+
+        let checkpoint = self.checkpoint();
+        let let_range = self.current_token_range();
+        self.bump(TokenKind::Name);
+
+        if !self.at_pattern_start() {
+            self.rewind(checkpoint);
+            return None;
+        }
+
+        let pattern = self.parse_match_patterns();
+
+        if !self.eat(TokenKind::ColonEqual) {
+            self.rewind(checkpoint);
+            return None;
+        }
+
+        // test_err if_let_in_python_file
+        // if let Some(x) := opt:
+        //     pass
+        self.error_if_not_basedpython_at(
+            "pattern-matching `if let` is not valid in .py files".to_string(),
+            TextRange::new(let_range.start(), pattern.end()),
+        );
+
+        Some(pattern)
     }
 
     /// Parses an `elif` or `else` clause.
@@ -3471,7 +3514,7 @@ impl<'src> Parser<'src> {
         let start = self.node_start();
         self.bump(kind.as_token_kind());
 
-        let test = if kind.is_elif() {
+        let (pattern, test) = if kind.is_elif() {
             // test_err if_stmt_invalid_elif_test_expr
             // if x:
             //     pass
@@ -3479,12 +3522,16 @@ impl<'src> Parser<'src> {
             //     pass
             // elif yield x:
             //     pass
-            Some(
-                self.parse_named_expression_or_higher(ExpressionContext::default())
-                    .expr,
+            let pattern = self.parse_if_let_pattern();
+            (
+                pattern,
+                Some(
+                    self.parse_named_expression_or_higher(ExpressionContext::default())
+                        .expr,
+                ),
             )
         } else {
-            None
+            (None, None)
         };
 
         // test_err if_stmt_elif_missing_colon
@@ -3499,6 +3546,7 @@ impl<'src> Parser<'src> {
         let body = self.parse_body(kind.as_clause());
 
         ast::ElifElseClause {
+            pattern: pattern.map(Box::new),
             test,
             body,
             range: self.node_range(start),

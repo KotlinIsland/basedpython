@@ -618,6 +618,7 @@ impl<'a> Generator<'a> {
                 }
             }
             Stmt::If(ast::StmtIf {
+                pattern,
                 test,
                 body,
                 elif_else_clauses,
@@ -626,7 +627,7 @@ impl<'a> Generator<'a> {
             }) => {
                 statement!({
                     self.p("if ");
-                    self.unparse_expr(test, precedence::IF);
+                    self.unparse_if_condition(pattern.as_deref(), test);
                     self.p(":");
                 });
                 self.body(body);
@@ -635,7 +636,7 @@ impl<'a> Generator<'a> {
                     if let Some(test) = &clause.test {
                         statement!({
                             self.p("elif ");
-                            self.unparse_expr(test, precedence::IF);
+                            self.unparse_if_condition(clause.pattern.as_deref(), test);
                             self.p(":");
                         });
                     } else {
@@ -998,6 +999,19 @@ impl<'a> Generator<'a> {
                 }
             }
         }
+    }
+
+    /// Unparses the header of an `if` / `elif` clause: a plain condition, or the
+    /// basedpython `let <pattern> := <subject>` pattern-matching form. The
+    /// pattern is emitted in either mode — dropping it would silently turn a
+    /// destructuring clause into a truthiness test
+    fn unparse_if_condition(&mut self, pattern: Option<&Pattern>, test: &Expr) {
+        if let Some(pattern) = pattern {
+            self.p("let ");
+            self.unparse_pattern(pattern);
+            self.p(" := ");
+        }
+        self.unparse_expr(test, precedence::IF);
     }
 
     fn unparse_match_case(&mut self, ast: &MatchCase) {

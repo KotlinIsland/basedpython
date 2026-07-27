@@ -610,6 +610,7 @@ impl<'a> From<&'a ast::InterpolatedElement> for ComparableInterpolatedStringElem
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct ComparableElifElseClause<'a> {
+    pattern: Option<ComparablePattern<'a>>,
     test: Option<ComparableExpr<'a>>,
     body: Vec<ComparableStmt<'a>>,
 }
@@ -619,10 +620,12 @@ impl<'a> From<&'a ast::ElifElseClause> for ComparableElifElseClause<'a> {
         let ast::ElifElseClause {
             range: _,
             node_index: _,
+            pattern,
             test,
             body,
         } = elif_else_clause;
         Self {
+            pattern: pattern.as_deref().map(Into::into),
             test: test.as_ref().map(Into::into),
             body: body.iter().map(Into::into).collect(),
         }
@@ -1605,6 +1608,7 @@ pub struct StmtWhile<'a> {
 
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StmtIf<'a> {
+    pattern: Option<ComparablePattern<'a>>,
     test: ComparableExpr<'a>,
     body: Vec<ComparableStmt<'a>>,
     elif_else_clauses: Vec<ComparableElifElseClause<'a>>,
@@ -1844,12 +1848,14 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 orelse: orelse.iter().map(Into::into).collect(),
             }),
             ast::Stmt::If(ast::StmtIf {
+                pattern,
                 test,
                 body,
                 elif_else_clauses,
                 range: _,
                 node_index: _,
             }) => Self::If(StmtIf {
+                pattern: pattern.as_deref().map(Into::into),
                 test: test.into(),
                 body: body.iter().map(Into::into).collect(),
                 elif_else_clauses: elif_else_clauses.iter().map(Into::into).collect(),

@@ -417,9 +417,12 @@ pub fn is_mutable_expr(expr: &Expr, semantic: &SemanticModel) -> bool {
 
 /// Return `true` if [`ast::StmtIf`] is a guard for a type-checking block.
 pub fn is_type_checking_block(stmt: &ast::StmtIf, semantic: &SemanticModel) -> bool {
-    let ast::StmtIf { test, .. } = stmt;
+    // a basedpython `if let` clause matches a pattern; its `test` is the subject
+    let Some(test) = stmt.condition() else {
+        return false;
+    };
 
-    match test.as_ref() {
+    match test {
         // As long as the symbol's name is "TYPE_CHECKING" we will treat it like `typing.TYPE_CHECKING`
         // for this specific check even if it's defined somewhere else, like the current module.
         // Ex) `if TYPE_CHECKING:`

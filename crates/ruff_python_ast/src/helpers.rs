@@ -678,19 +678,27 @@ where
                     || any_over_body(orelse, &mut *func)
             }
             Stmt::If(ast::StmtIf {
+                pattern,
                 test,
                 body,
                 elif_else_clauses,
                 range: _,
                 node_index: _,
             }) => {
-                any_over_expr(test, &mut *func)
+                pattern
+                    .as_deref()
+                    .is_some_and(|pattern| any_over_pattern(pattern, &mut *func))
+                    || any_over_expr(test, &mut *func)
                     || any_over_body(body, &mut *func)
                     || elif_else_clauses.iter().any(|clause| {
                         clause
-                            .test
-                            .as_ref()
-                            .is_some_and(|test| any_over_expr(test, &mut *func))
+                            .pattern
+                            .as_deref()
+                            .is_some_and(|pattern| any_over_pattern(pattern, &mut *func))
+                            || clause
+                                .test
+                                .as_ref()
+                                .is_some_and(|test| any_over_expr(test, &mut *func))
                             || any_over_body(&clause.body, &mut *func)
                     })
             }
@@ -1134,6 +1142,26 @@ pub fn raises_clause_spans(
         keyword: keyword.range,
         clause: TextRange::new(keyword.range.start(), end),
     })
+}
+
+/// basedpython: the range of the `let` keyword introducing a pattern-matching
+/// `if let <pattern> := <subject>:` clause, read from `source`.
+///
+/// The AST holds only the pattern, so the keyword is recovered by tokenizing the
+/// gap between the clause keyword (`if` / `elif`, at `clause_start`) and the
+/// pattern. Returns `None` when the source does not have that shape.
+pub fn if_let_keyword_range(
+    source: &str,
+    clause_start: TextSize,
+    pattern: &Pattern,
+) -> Option<TextRange> {
+    if clause_start >= pattern.start() {
+        return None;
+    }
+    SimpleTokenizer::new(source, TextRange::new(clause_start, pattern.start()))
+        .skip_trivia()
+        .find(|token| token.kind == SimpleTokenKind::Name && &source[token.range] == "let")
+        .map(|token| token.range)
 }
 
 /// basedpython: detect `local` / `once` modifiers on `param`, read from `source`

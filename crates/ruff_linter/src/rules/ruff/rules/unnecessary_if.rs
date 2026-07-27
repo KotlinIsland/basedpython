@@ -76,11 +76,16 @@ impl AlwaysFixableViolation for UnnecessaryIf {
 /// RUF050
 pub(crate) fn unnecessary_if(checker: &Checker, stmt: &StmtIf) {
     let StmtIf {
-        test,
         body,
         elif_else_clauses,
         ..
     } = stmt;
+
+    // a basedpython `if let` clause binds captures that outlive the statement, so
+    // neither deleting it nor reducing it to its subject preserves behaviour
+    let Some(test) = stmt.condition() else {
+        return;
+    };
 
     // Only handle bare `if` blocks — `elif`/`else` branches are handled by
     // RUF047 (needless-else)

@@ -101,6 +101,7 @@ impl<'ast> SourceOrderVisitor<'ast> for Collector<'_> {
                 }
             }
             Stmt::If(ast::StmtIf {
+                pattern: _,
                 test,
                 body,
                 elif_else_clauses,

@@ -1399,8 +1399,15 @@ impl RecoveryContextKind {
                     //     case a, b: ...
                     //     case a, b if x: ...
                     //     case a: ...
-                    matches!(p.current_token_kind(), TokenKind::Colon | TokenKind::If)
-                        .then_some(ListTerminatorKind::Regular)
+
+                    // basedpython: `:=` ends the pattern of an `if let a, b := t:`
+                    // clause. A `case` pattern is never followed by one, so this
+                    // only affects an already-invalid `match` arm
+                    matches!(
+                        p.current_token_kind(),
+                        TokenKind::Colon | TokenKind::If | TokenKind::ColonEqual
+                    )
+                    .then_some(ListTerminatorKind::Regular)
                 }
                 Some(parentheses) => {
                     // test_ok match_sequence_pattern_parentheses_terminator

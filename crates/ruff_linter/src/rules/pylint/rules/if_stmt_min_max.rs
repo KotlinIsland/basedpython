@@ -84,12 +84,18 @@ impl Violation for IfStmtMinMax {
 /// PLR1730, PLR1731
 pub(crate) fn if_stmt_min_max(checker: &Checker, stmt_if: &ast::StmtIf) {
     let ast::StmtIf {
-        test,
+        pattern: _,
+        test: _,
         body,
         elif_else_clauses,
         range: _,
         node_index: _,
     } = stmt_if;
+
+    // a basedpython `if let` clause tests a pattern, not a comparison
+    let Some(test) = stmt_if.condition() else {
+        return;
+    };
 
     if !elif_else_clauses.is_empty() {
         return;

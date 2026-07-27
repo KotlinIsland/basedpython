@@ -1,0 +1,24 @@
+---
+source: crates/ruff_linter/src/rules/flake8_simplify/mod.rs
+---
+SIM103 [*] Return the condition `bool(a)` directly
+  --> if_let_basedpython.by:27:5
+   |
+26 |   def f2():
+27 | /     if a:
+28 | |         return True
+29 | |     else:
+30 | |         return False
+   | |____________________^
+   |
+help: Replace with `return bool(a)`
+   |
+26 | def f2():
+   -     if a:
+   -         return True
+   -     else:
+   -         return False
+27 +     return bool(a)
+28 |
+   |
+note: This is an unsafe fix and may change runtime behavior

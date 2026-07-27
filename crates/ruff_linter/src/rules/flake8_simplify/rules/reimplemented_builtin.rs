@@ -288,6 +288,7 @@ fn match_loop(stmt: &Stmt) -> Option<Loop<'_>> {
     // the body.
     let [
         Stmt::If(ast::StmtIf {
+            pattern: None,
             body: nested_body,
             test: nested_test,
             elif_else_clauses: nested_elif_else_clauses,
