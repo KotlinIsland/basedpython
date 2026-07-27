@@ -1432,6 +1432,9 @@ impl Display for SemanticSyntaxError {
                 f.write_str("lazy from __future__ import is not allowed")
             }
             SemanticSyntaxErrorKind::BreakOutsideLoop => f.write_str("`break` outside loop"),
+            SemanticSyntaxErrorKind::DiscardedBreakValue => f.write_str(
+                "`break` with a value must be inside a loop used as a statement expression",
+            ),
             SemanticSyntaxErrorKind::ContinueOutsideLoop => f.write_str("`continue` outside loop"),
             SemanticSyntaxErrorKind::GlobalParameter(name) => {
                 write!(
@@ -1468,6 +1471,18 @@ pub enum SemanticSyntaxErrorKind {
 
     /// Represents the use of `lazy from ... import *`.
     LazyImportStar,
+
+    /// basedpython: represents a `break <value>` whose value nothing reads,
+    /// because the loop it leaves is not used as a
+    /// [statement expression](ruff_python_ast::ExprStatement).
+    ///
+    /// ## Examples
+    ///
+    /// ```by
+    /// for x in xs:
+    ///     break x  # nothing receives `x`
+    /// ```
+    DiscardedBreakValue,
 
     /// Represents the use of `lazy from __future__ import ...`.
     LazyFutureImport,

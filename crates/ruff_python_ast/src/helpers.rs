@@ -126,6 +126,8 @@ impl SideEffect {
             | Expr::YieldFrom(_)
             | Expr::IpyEscapeCommand(_) => Self::Present,
             Expr::CallableType(_) | Expr::ProtocolType(_) | Expr::ProtocolMethod(_) => Self::Absent,
+            // a statement expression runs arbitrary statements
+            Expr::Statement(_) => Self::Present,
 
             // Side-effect-free expressions — continue walking child nodes.
             Expr::BoolOp(_)
@@ -189,6 +191,7 @@ const fn is_known_safe_binop_operand(expr: &Expr) -> bool {
         | Expr::CallableType(_)
         | Expr::ProtocolType(_)
         | Expr::ProtocolMethod(_)
+        | Expr::Statement(_)
         | Expr::TString(_) => false,
     }
 }
@@ -449,6 +452,7 @@ where
             Expr::ProtocolMethod(ast::ExprProtocolMethod { signature, .. }) => {
                 any_over_expr(signature, &mut *func)
             }
+            Expr::Statement(ast::ExprStatement { stmt, .. }) => any_over_stmt(stmt, &mut *func),
             Expr::Name(_)
             | Expr::StringLiteral(_)
             | Expr::BytesLiteral(_)
@@ -789,12 +793,147 @@ where
                 range: _,
                 node_index: _,
             }) => any_over_expr(value, func),
-            Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => false,
+            Stmt::Break(ast::StmtBreak { value, .. }) => value
+                .as_ref()
+                .is_some_and(|value| any_over_expr(value, func)),
+            Stmt::Pass(_) | Stmt::Continue(_) => false,
             Stmt::IpyEscapeCommand(_) => false,
         }
     }
 
     inner(stmt, &mut func)
+}
+
+/// basedpython: one place that produces the value of a statement used as a
+/// [statement expression](crate::ExprStatement).
+#[derive(Debug, Clone, Copy)]
+pub enum StatementExpressionValue<'a> {
+    /// The tail expression of a branch, reached by falling off its end.
+    Tail(&'a Expr),
+    /// A `break <value>` targeting the statement's own loop, with the operand it
+    /// carries. Both are needed: the operand is the value, and the statement is
+    /// what a lowering has to rewrite.
+    Break(&'a crate::StmtBreak, &'a Expr),
+}
+
+impl<'a> StatementExpressionValue<'a> {
+    /// The expression whose type the statement expression takes on.
+    pub fn expr(self) -> &'a Expr {
+        match self {
+            StatementExpressionValue::Tail(expr) | StatementExpressionValue::Break(_, expr) => expr,
+        }
+    }
+}
+
+/// basedpython: collects, in source order, the places that produce the value of
+/// `stmt` when it is used as a [statement expression](crate::ExprStatement).
+///
+/// These are the tail expression of each branch and, for the loop forms, each
+/// `break <value>` targeting that loop. A branch that cannot complete — it
+/// raises, returns, or breaks out — contributes nothing, which is correct: it
+/// never produces a value.
+///
+/// The value is *missing* exactly when some path through `stmt` reaches its end
+/// without passing one of these, which is what makes a statement expression
+/// non-exhaustive.
+pub fn statement_expression_values(stmt: &Stmt) -> Vec<StatementExpressionValue<'_>> {
+    let mut values = Vec::new();
+    collect_statement_expression_values(stmt, &mut values);
+    values
+}
+
+fn collect_statement_expression_values<'a>(
+    stmt: &'a Stmt,
+    values: &mut Vec<StatementExpressionValue<'a>>,
+) {
+    match stmt {
+        Stmt::If(ast::StmtIf {
+            body,
+            elif_else_clauses,
+            ..
+        }) => {
+            collect_tail_value(body, values);
+            for clause in elif_else_clauses {
+                collect_tail_value(&clause.body, values);
+            }
+        }
+        Stmt::Match(ast::StmtMatch { cases, .. }) => {
+            for case in cases {
+                collect_tail_value(&case.body, values);
+            }
+        }
+        Stmt::For(ast::StmtFor { body, orelse, .. })
+        | Stmt::While(ast::StmtWhile { body, orelse, .. }) => {
+            collect_break_values(body, values);
+            collect_tail_value(orelse, values);
+        }
+        // `raise` and `return` never complete
+        _ => {}
+    }
+}
+
+/// Collects the value produced by falling off the end of `body`.
+fn collect_tail_value<'a>(body: &'a [Stmt], values: &mut Vec<StatementExpressionValue<'a>>) {
+    match body.last() {
+        Some(Stmt::Expr(ast::StmtExpr { value, .. })) => {
+            values.push(StatementExpressionValue::Tail(value));
+        }
+        // a trailing compound statement is itself the branch's value, so its own
+        // branches are recursed into. this is what lets a nested `match` in tail
+        // position be written without repeating the assignment
+        Some(stmt) => collect_statement_expression_values(stmt, values),
+        None => {}
+    }
+}
+
+/// Collects every `break <value>` in `body` that targets the loop `body` belongs
+/// to.
+///
+/// Nested loops are skipped: a `break` inside one targets that loop, not ours.
+/// Function and class bodies are skipped for the same reason — a `break` cannot
+/// cross them.
+fn collect_break_values<'a>(body: &'a [Stmt], values: &mut Vec<StatementExpressionValue<'a>>) {
+    for stmt in body {
+        match stmt {
+            Stmt::Break(break_stmt) => {
+                if let Some(value) = &break_stmt.value {
+                    values.push(StatementExpressionValue::Break(break_stmt, value));
+                }
+            }
+            Stmt::If(ast::StmtIf {
+                body,
+                elif_else_clauses,
+                ..
+            }) => {
+                collect_break_values(body, values);
+                for clause in elif_else_clauses {
+                    collect_break_values(&clause.body, values);
+                }
+            }
+            Stmt::Match(ast::StmtMatch { cases, .. }) => {
+                for case in cases {
+                    collect_break_values(&case.body, values);
+                }
+            }
+            Stmt::With(ast::StmtWith { body, .. }) => collect_break_values(body, values),
+            Stmt::Try(ast::StmtTry {
+                body,
+                handlers,
+                orelse,
+                finalbody,
+                ..
+            }) => {
+                collect_break_values(body, values);
+                for handler in handlers {
+                    let ast::ExceptHandler::ExceptHandler(handler) = handler;
+                    collect_break_values(&handler.body, values);
+                }
+                collect_break_values(orelse, values);
+                collect_break_values(finalbody, values);
+            }
+            _ => {}
+        }
+    }
 }
 
 pub fn any_over_body<F>(body: &[Stmt], mut func: F) -> bool
@@ -2117,6 +2256,7 @@ fn is_non_empty_f_string(expr: &ast::ExprFString) -> bool {
             Expr::CallableType(_) => false,
             Expr::ProtocolType(_) => false,
             Expr::ProtocolMethod(_) => false,
+            Expr::Statement(_) => false,
 
             // These literals may or may not be empty.
             Expr::FString(f_string) => is_non_empty_f_string(f_string),

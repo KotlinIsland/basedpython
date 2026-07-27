@@ -27,6 +27,7 @@ Module(
                             StmtBreak {
                                 node_index: NodeIndex(None),
                                 range: 9..14,
+                                value: None,
                             },
                         ),
                         Continue(
@@ -51,6 +52,7 @@ Module(
                             StmtBreak {
                                 node_index: NodeIndex(None),
                                 range: 40..45,
+                                value: None,
                             },
                         ),
                     ],

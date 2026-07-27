@@ -19,7 +19,7 @@ use crate::token_set::TokenSet;
 use crate::{Mode, ParseErrorType, UnsupportedSyntaxErrorKind};
 
 use super::Parenthesized;
-use super::expression::ExpressionContext;
+use super::expression::{ExpressionContext, starts_statement_expression};
 
 /// Tokens that represent compound statements.
 const COMPOUND_STMT_SET: TokenSet = TokenSet::new([
@@ -2090,6 +2090,71 @@ impl<'src> Parser<'src> {
         })
     }
 
+    /// basedpython: whether only whitespace precedes `offset` on its line.
+    fn starts_its_line(&self, offset: TextSize) -> bool {
+        let offset = usize::from(offset);
+        let line_start = self.source[..offset]
+            .rfind('\n')
+            .map_or(0, |newline| newline + 1);
+        self.source[line_start..offset]
+            .bytes()
+            .all(|byte| byte.is_ascii_whitespace())
+    }
+
+    /// basedpython: reports any [statement expression](ast::ExprStatement) in
+    /// `stmt` that stands where its value could not be computed before the rest
+    /// of the statement runs.
+    ///
+    /// A statement expression stands for a statement, so it owns the tail of the
+    /// statement it appears in: it must be the statement's value expression, or
+    /// reachable from it through the operators that merely *choose* between
+    /// operands (`and`, `or`, `??`, the conditional expression, and the walrus).
+    /// Anywhere else the surrounding expression would have to be evaluated around
+    /// it, and there is no order in which that means anything.
+    ///
+    /// The forms that carry a suite are held to the stricter rule of being the
+    /// value expression itself: a suite cannot be nested inside the branch of a
+    /// choosing operator without being re-indented.
+    fn validate_statement_expressions(&mut self, stmt: &Stmt) {
+        let tail = match stmt {
+            Stmt::Assign(assign) => Some(&*assign.value),
+            Stmt::AnnAssign(assign) => assign.value.as_deref(),
+            Stmt::AugAssign(assign) => Some(&*assign.value),
+            Stmt::Return(ret) => ret.value.as_deref(),
+            Stmt::Expr(expr) => Some(&*expr.value),
+            _ => None,
+        };
+
+        let mut allowed = Vec::new();
+        if let Some(tail) = tail {
+            collect_tail_positions(tail, &mut allowed);
+        }
+
+        let mut found = Vec::new();
+        collect_statement_expressions(stmt, &mut found);
+        for statement in found {
+            let expr_ref: &Expr = statement.0;
+            let in_tail = allowed.iter().any(|a| std::ptr::eq(*a, expr_ref));
+            let is_root = tail.is_some_and(|tail| std::ptr::eq(tail, expr_ref));
+            let carries_suite = !matches!(&*statement.1.stmt, Stmt::Raise(_) | Stmt::Return(_));
+            let message = if carries_suite && !is_root {
+                "a statement expression with a suite must be the whole value of its statement"
+            } else if carries_suite && !self.starts_its_line(stmt.range().start()) {
+                // the suite continues the line the statement starts on, so anything
+                // already there would end up in front of a compound statement
+                "a statement expression with a suite must be the first statement on its line"
+            } else if !in_tail {
+                "a statement expression must be the tail of its statement"
+            } else {
+                continue;
+            };
+            self.add_error(
+                ParseErrorType::OtherError(message.to_string()),
+                statement.1.range,
+            );
+        }
+    }
+
     /// Parses a single simple statement.
     ///
     /// This statement must be terminated by a newline or semicolon.
@@ -2097,11 +2162,18 @@ impl<'src> Parser<'src> {
     /// Use [`Parser::parse_simple_statements`] to parse a sequence of simple statements.
     fn parse_single_simple_statement(&mut self) -> Stmt {
         let stmt = self.parse_simple_statement();
+        self.validate_statement_expressions(&stmt);
 
         // basedpython: a trailing lambda block is a compound statement — it
         // consumed its own newline, indent and dedent, so the simple-statement
         // termination handling below does not apply
         if matches!(&stmt, Stmt::FunctionDef(function) if function.is_trailing_lambda) {
+            return stmt;
+        }
+
+        // basedpython: likewise for a statement expression whose suite already
+        // swallowed this statement's newline
+        if std::mem::take(&mut self.expr_consumed_suite) {
             return stmt;
         }
 
@@ -2144,18 +2216,36 @@ impl<'src> Parser<'src> {
     fn parse_simple_statements(&mut self) -> Suite {
         let stmts_snapshot = self.stmt_scratch.snapshot();
         let mut progress = ParserProgress::default();
+        let mut is_first = true;
 
         loop {
             progress.assert_progressing(self);
 
             let stmt = self.parse_simple_statement();
-            let is_trailing_lambda =
-                matches!(&stmt, Stmt::FunctionDef(function) if function.is_trailing_lambda);
+            self.validate_statement_expressions(&stmt);
+            let statement_expression_suite = std::mem::take(&mut self.expr_consumed_suite);
+            let consumed_suite = matches!(&stmt, Stmt::FunctionDef(function) if function.is_trailing_lambda)
+                || statement_expression_suite;
+
+            // basedpython: a statement expression's suite begins on the line its
+            // statement does, so anything preceding it on that line would end up
+            // in front of a compound statement
+            if statement_expression_suite && !is_first {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "a statement expression with a suite must be the first statement on its line"
+                            .to_string(),
+                    ),
+                    stmt.range(),
+                );
+            }
+            is_first = false;
+
             self.stmt_scratch.push(stmt);
 
-            // basedpython: a trailing lambda block consumed its own suite —
-            // no semicolon or newline follows it
-            if is_trailing_lambda {
+            // basedpython: a trailing lambda block or a statement expression
+            // consumed its own suite — no semicolon or newline follows it
+            if consumed_suite {
                 return self.stmt_scratch.take_thin_vec(stmts_snapshot);
             }
 
@@ -2423,13 +2513,17 @@ impl<'src> Parser<'src> {
         let start = self.node_start();
         self.bump(TokenKind::Return);
 
+        // basedpython: a statement expression may supply the returned value, and
+        // its keyword does not otherwise start an expression
+        let at_value = self.at_expr() || starts_statement_expression(self.current_token_kind());
+
         // test_err return_stmt_invalid_expr
         // return *
         // return yield x
         // return yield from x
         // return x := 1
         // return *x and y
-        let value = self.at_expr().then(|| {
+        let value = at_value.then(|| {
             let parsed_expr = self.parse_expression_list(ExpressionContext::starred_bitwise_or());
 
             // test_ok iter_unpack_return_py37
@@ -2885,10 +2979,72 @@ impl<'src> Parser<'src> {
     fn parse_break_statement(&mut self) -> ast::StmtBreak {
         let start = self.node_start();
         self.bump(TokenKind::Break);
+
+        // basedpython: `break <value>` yields a value out of a loop used as a
+        // statement expression
+        let value = self.at_expr().then(|| {
+            self.error_if_not_basedpython(
+                "`break` with a value is not valid in .py files".to_string(),
+            );
+            Box::new(
+                self.parse_expression_list(ExpressionContext::default())
+                    .expr,
+            )
+        });
+
         ast::StmtBreak {
+            value,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         }
+    }
+
+    /// basedpython: parses a compound statement written where an expression is
+    /// expected — a [statement expression](ast::ExprStatement).
+    ///
+    /// Only called in basedpython mode; in a `.py` file these keywords keep
+    /// python's own error recovery.
+    ///
+    /// Returns `None` when the current token is the `match` soft keyword being
+    /// used as an ordinary identifier, in which case nothing has been consumed.
+    ///
+    /// # Panics
+    ///
+    /// If the parser isn't positioned at a token that can start a statement
+    /// expression.
+    pub(super) fn parse_statement_expression(&mut self) -> Option<ast::ExprStatement> {
+        let start = self.node_start();
+
+        // the suite-bearing forms end with a `Dedent`, having already eaten the
+        // newline that terminates the statement they are part of
+        let (stmt, consumed_suite) = match self.current_token_kind() {
+            TokenKind::Match => {
+                let stmt = match self.classify_match_token() {
+                    MatchTokenKind::Keyword => self.parse_match_statement(),
+                    MatchTokenKind::KeywordOrIdentifier => self.try_parse_match_statement()?,
+                    MatchTokenKind::Identifier => return None,
+                };
+                (Stmt::Match(stmt), true)
+            }
+            TokenKind::If => (Stmt::If(self.parse_if_statement()), true),
+            TokenKind::For => (Stmt::For(self.parse_for_statement(start)), true),
+            TokenKind::While => (Stmt::While(self.parse_while_statement()), true),
+            TokenKind::Raise => (Stmt::Raise(self.parse_raise_statement()), false),
+            TokenKind::Return => (Stmt::Return(self.parse_return_statement()), false),
+            // `parse_atom` only enters here at one of the tokens above; `match` is
+            // the only one that can turn out not to start a statement expression
+            _ => return None,
+        };
+
+        if consumed_suite {
+            self.expr_consumed_suite = true;
+        }
+
+        Some(ast::ExprStatement {
+            stmt: Box::new(stmt),
+            range: self.node_range(start),
+            node_index: AtomicNodeIndex::NONE,
+        })
     }
 
     /// Parses an `assert` statement.
@@ -7614,6 +7770,60 @@ enum AllowStarAnnotation {
     KeywordPackOnly,
 }
 
+/// basedpython: collects the expressions that hold the value of `expr` — `expr`
+/// itself, and, for operators that choose between operands rather than combining
+/// them, the operands they may choose.
+///
+/// These are the positions a [statement expression](ast::ExprStatement) may
+/// occupy; see [`Parser::validate_statement_expressions`].
+fn collect_tail_positions<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    out.push(expr);
+    match expr {
+        Expr::BoolOp(bool_op) => {
+            for value in &bool_op.values {
+                collect_tail_positions(value, out);
+            }
+        }
+        Expr::If(if_expr) => {
+            collect_tail_positions(&if_expr.body, out);
+            collect_tail_positions(&if_expr.orelse, out);
+        }
+        Expr::Named(named) => collect_tail_positions(&named.value, out),
+        // `??` chooses its right operand only when the left one is `None`
+        Expr::BinOp(bin_op) if matches!(bin_op.op, ast::Operator::Coalesce) => {
+            collect_tail_positions(&bin_op.right, out);
+        }
+        _ => {}
+    }
+}
+
+/// basedpython: collects every statement expression directly in `stmt`, paired
+/// with the [`Expr`] node wrapping it.
+///
+/// A statement expression's own suite is not descended into: the statements in
+/// it are validated when they are parsed.
+fn collect_statement_expressions<'a>(
+    stmt: &'a Stmt,
+    out: &mut Vec<(&'a Expr, &'a ast::ExprStatement)>,
+) {
+    struct Finder<'a, 'b> {
+        out: &'b mut Vec<(&'a Expr, &'a ast::ExprStatement)>,
+    }
+
+    impl<'a> ruff_python_ast::visitor::Visitor<'a> for Finder<'a, '_> {
+        fn visit_expr(&mut self, expr: &'a Expr) {
+            if let Expr::Statement(statement) = expr {
+                self.out.push((expr, statement));
+                return;
+            }
+            ruff_python_ast::visitor::walk_expr(self, expr);
+        }
+    }
+
+    let mut finder = Finder { out };
+    ruff_python_ast::visitor::walk_stmt(&mut finder, stmt);
+}
+
 /// basedpython: whether a `context` prefix may mark this parameter. `No` for
 /// `*args` / `**kwargs`, where an implicit keyword argument cannot land
 #[derive(Debug, Copy, Clone)]
@@ -7882,6 +8092,152 @@ mod property_tests {
     fn accessor_block_rejected_in_python_file() {
         let (_, errors) = class_body(
             "class A:\n    var x: int = 0\n        get() = field\n",
+            PySourceType::Python,
+        );
+        assert!(!errors.is_empty(), "expected a .py rejection");
+    }
+
+    /// a module-level parse, for the statement-expression tests below
+    fn parse_module(source: &str, source_type: PySourceType) -> (Vec<Stmt>, Vec<String>) {
+        let parsed = parse_unchecked_source(source, source_type);
+        let errors = parsed.errors().iter().map(ToString::to_string).collect();
+        (parsed.syntax().body.iter().cloned().collect(), errors)
+    }
+
+    /// the assignment's value is an `ExprStatement` wrapping the `match`
+    #[test]
+    fn statement_expression_wraps_the_statement() {
+        let (body, errors) = parse_module(
+            "a = match x:\n    case 1:\n        2\n",
+            PySourceType::BasedPython,
+        );
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let Some(Stmt::Assign(assign)) = body.first() else {
+            panic!("expected an assignment, got: {body:?}")
+        };
+        let ruff_python_ast::Expr::Statement(statement) = assign.value.as_ref() else {
+            panic!("expected a statement expression, got: {:?}", assign.value)
+        };
+        assert!(statement.stmt.is_match_stmt(), "got: {:?}", statement.stmt);
+    }
+
+    /// the suite swallows the statement's newline, so nothing follows it
+    #[test]
+    fn statement_expression_consumes_its_own_terminator() {
+        let (body, errors) = parse_module(
+            "a = if c:\n    1\nelse:\n    2\nb = 3\n",
+            PySourceType::BasedPython,
+        );
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(body.len(), 2, "got: {body:?}");
+    }
+
+    /// `match` used as an ordinary name is still an ordinary name
+    #[test]
+    fn match_as_an_identifier_is_not_a_statement_expression() {
+        let (body, errors) = parse_module("a = match\n", PySourceType::BasedPython);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        let Some(Stmt::Assign(assign)) = body.first() else {
+            panic!("expected an assignment, got: {body:?}")
+        };
+        assert!(assign.value.is_name_expr(), "got: {:?}", assign.value);
+    }
+
+    /// `break` may carry a value, which a loop expression reads
+    #[test]
+    fn break_carries_a_value() {
+        let (body, errors) = parse_module(
+            "a = for i in xs:\n    break i\nelse:\n    0\n",
+            PySourceType::BasedPython,
+        );
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert_eq!(body.len(), 1, "got: {body:?}");
+    }
+
+    /// a form with a suite has to be the whole value of its statement
+    #[test]
+    fn suite_form_off_the_tail_is_rejected() {
+        let (_, errors) = parse_module(
+            "a = 1 + if c:\n    1\nelse:\n    2\n",
+            PySourceType::BasedPython,
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("whole value of its statement")),
+            "errors: {errors:?}"
+        );
+    }
+
+    /// a diverging form still has to be in tail position
+    #[test]
+    fn diverging_form_off_the_tail_is_rejected() {
+        let (_, errors) = parse_module("a = [raise ValueError()]\n", PySourceType::BasedPython);
+        assert!(
+            errors.iter().any(|e| e.contains("tail of its statement")),
+            "errors: {errors:?}"
+        );
+    }
+
+    /// a diverging form is allowed under the operators that choose an operand
+    #[test]
+    fn diverging_form_under_a_choosing_operator() {
+        for source in [
+            "a = b or raise ValueError()\n",
+            "a = b ?? raise ValueError()\n",
+            "a = b if c else raise ValueError()\n",
+            "a = b ?? return None\n",
+        ] {
+            let (_, errors) = parse_module(source, PySourceType::BasedPython);
+            assert!(errors.is_empty(), "{source:?} gave errors: {errors:?}");
+        }
+    }
+
+    /// a suite continues the line its statement starts on, so nothing may precede it
+    #[test]
+    fn suite_form_after_another_statement_on_the_line_is_rejected() {
+        let (_, errors) = parse_module(
+            "p = 1; q = match x:\n    case _:\n        2\n",
+            PySourceType::BasedPython,
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("first statement on its line")),
+            "errors: {errors:?}"
+        );
+    }
+
+    /// a one-line suite is the same rule
+    #[test]
+    fn suite_form_after_another_statement_in_a_block_is_rejected() {
+        let (_, errors) = parse_module(
+            "if c: p = 1; q = match x:\n    case _:\n        2\n",
+            PySourceType::BasedPython,
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("first statement on its line")),
+            "errors: {errors:?}"
+        );
+    }
+
+    /// a diverging form has no suite, so it is unaffected by the line rule
+    #[test]
+    fn diverging_form_after_another_statement_on_the_line_is_allowed() {
+        let (_, errors) = parse_module(
+            "p = 1; q = b or raise ValueError()\n",
+            PySourceType::BasedPython,
+        );
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+    }
+
+    /// statement expressions are basedpython-only syntax
+    #[test]
+    fn statement_expression_rejected_in_python_file() {
+        let (_, errors) = parse_module(
+            "a = match x:\n    case 1:\n        2\n",
             PySourceType::Python,
         );
         assert!(!errors.is_empty(), "expected a .py rejection");

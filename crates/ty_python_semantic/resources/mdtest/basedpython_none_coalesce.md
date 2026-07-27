@@ -33,3 +33,36 @@ def f(a: int | None, b: int | None, c: int) -> int:
     reveal_type(result)  # revealed: int
     return result
 ```
+
+## the right operand is a branch
+
+`a ?? b` evaluates `b` only when `a` is `None`, so `b` is not part of the flow that continues when
+`a` is not `None`.
+
+A binding made there is only possibly bound afterwards:
+
+```by
+def g() -> int:
+    return 1
+
+def f(a: int | None) -> int:
+    result = a ?? (fallback := g())
+    # error: [possibly-unresolved-reference]
+    return result + fallback
+```
+
+And a diverging right operand does not end the enclosing flow:
+
+```by
+def f(a: int | None) -> int:
+    result = a ?? raise ValueError()
+    reveal_type(result)  # revealed: int
+    return result
+```
+
+```by
+def f(a: int | None) -> int:
+    result = a ?? return 0
+    reveal_type(result)  # revealed: int
+    return result
+```

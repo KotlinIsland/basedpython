@@ -1,0 +1,26 @@
+def f(c: bool, x: int | str, xs: list[int], table: dict[str, int], k: str) -> object:
+    a = if c:
+        # keep this comment
+        1
+    else:
+        2
+    b = match x:
+        case int():
+            1
+        case str():
+            "s"
+    d = for v in xs:
+        if v:
+            break v
+    else:
+        0
+    e = table.get(k) ?? raise KeyError(k)
+    g = x if c else raise ValueError(x)
+    return (a, b, d, e, g)
+
+
+def h(c: bool) -> int:
+    return if c:
+        1
+    else:
+        2

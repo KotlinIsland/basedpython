@@ -1070,6 +1070,11 @@ pub struct ExprProtocolMethod<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
+pub struct ExprStatement<'a> {
+    stmt: Box<ComparableStmt<'a>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum ComparableExpr<'a> {
     BoolOp(ExprBoolOp<'a>),
     NamedExpr(ExprNamed<'a>),
@@ -1109,6 +1114,7 @@ pub enum ComparableExpr<'a> {
     CallableType(ExprCallableType<'a>),
     ProtocolType(ExprProtocolType<'a>),
     ProtocolMethod(ExprProtocolMethod<'a>),
+    Statement(ExprStatement<'a>),
 }
 
 impl<'a> From<&'a Box<ast::Expr>> for Box<ComparableExpr<'a>> {
@@ -1431,6 +1437,13 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
                 name: name.as_str(),
                 signature: Box::new(signature.as_ref().into()),
             }),
+            ast::Expr::Statement(ast::ExprStatement {
+                stmt,
+                range: _,
+                node_index: _,
+            }) => Self::Statement(ExprStatement {
+                stmt: Box::new(stmt.as_ref().into()),
+            }),
         }
     }
 }
@@ -1678,6 +1691,11 @@ pub struct StmtExpr<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
+pub struct StmtBreak<'a> {
+    value: Option<ComparableExpr<'a>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub struct StmtIpyEscapeCommand<'a> {
     kind: ast::IpyEscapeKind,
     value: &'a str,
@@ -1708,7 +1726,7 @@ pub enum ComparableStmt<'a> {
     IpyEscapeCommand(StmtIpyEscapeCommand<'a>),
     Expr(StmtExpr<'a>),
     Pass,
-    Break,
+    Break(StmtBreak<'a>),
     Continue,
 }
 
@@ -1963,7 +1981,13 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 value: value.into(),
             }),
             ast::Stmt::Pass(_) => Self::Pass,
-            ast::Stmt::Break(_) => Self::Break,
+            ast::Stmt::Break(ast::StmtBreak {
+                value,
+                range: _,
+                node_index: _,
+            }) => Self::Break(StmtBreak {
+                value: value.as_ref().map(Into::into),
+            }),
             ast::Stmt::Continue(_) => Self::Continue,
         }
     }

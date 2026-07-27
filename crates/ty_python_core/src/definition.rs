@@ -343,6 +343,7 @@ pub(crate) enum DefinitionNodeRef<'ast, 'db> {
     Class(&'ast ast::StmtClassDef),
     TypeAlias(&'ast ast::StmtTypeAlias),
     NamedExpression(&'ast ast::ExprNamed),
+    StatementExpressionValue(&'ast ast::Expr),
     Assignment(AssignmentDefinitionNodeRef<'ast, 'db>),
     AnnotatedAssignment(AnnotatedAssignmentDefinitionNodeRef<'ast>),
     AugmentedAssignment(&'ast ast::StmtAugAssign),
@@ -683,6 +684,9 @@ impl<'db> DefinitionNodeRef<'_, 'db> {
             DefinitionNodeRef::NamedExpression(named) => {
                 DefinitionKind::NamedExpression(AstNodeRef::new(parsed, named))
             }
+            DefinitionNodeRef::StatementExpressionValue(value) => {
+                DefinitionKind::StatementExpressionValue(AstNodeRef::new(parsed, value))
+            }
             DefinitionNodeRef::Assignment(AssignmentDefinitionNodeRef {
                 unpack,
                 value,
@@ -830,6 +834,7 @@ impl<'db> DefinitionNodeRef<'_, 'db> {
             Self::Class(node) => node.into(),
             Self::TypeAlias(node) => node.into(),
             Self::NamedExpression(node) => node.into(),
+            Self::StatementExpressionValue(node) => DefinitionNodeKey(NodeKey::from_node(node)),
             Self::Assignment(AssignmentDefinitionNodeRef {
                 value: _,
                 unpack: _,
@@ -923,6 +928,7 @@ pub enum DefinitionKind<'db> {
     Class(AstNodeRef<ast::StmtClassDef>),
     TypeAlias(AstNodeRef<ast::StmtTypeAlias>),
     NamedExpression(AstNodeRef<ast::ExprNamed>),
+    StatementExpressionValue(AstNodeRef<ast::Expr>),
     Assignment(AssignmentDefinitionKind<'db>),
     AnnotatedAssignment(AnnotatedAssignmentDefinitionKind),
     AugmentedAssignment(AstNodeRef<ast::StmtAugAssign>),
@@ -999,12 +1005,26 @@ impl<'db> DefinitionKind<'db> {
         matches!(self, DefinitionKind::LoopHeader(_))
     }
 
+    /// Returns `true` if this definition writes the value of a basedpython
+    /// [statement expression](ruff_python_ast::ExprStatement).
+    ///
+    /// Like loop headers, these are internal use-def definitions: they are read
+    /// back through the statement expression's use, never looked up by AST node
+    /// (several of them share one statement expression, and the node they are
+    /// keyed on may already carry a definition of its own — a walrus in tail
+    /// position, say).
+    pub const fn is_statement_expression_value(&self) -> bool {
+        matches!(self, DefinitionKind::StatementExpressionValue(_))
+    }
+
     /// Returns `true` if this definition is user-visible (i.e., not an internal
     /// synthetic definition like a loop header or nested bindings definition).
     pub const fn is_user_visible(&self) -> bool {
         !matches!(
             self,
-            DefinitionKind::LoopHeader(_) | DefinitionKind::NestedBindings(_)
+            DefinitionKind::LoopHeader(_)
+                | DefinitionKind::NestedBindings(_)
+                | DefinitionKind::StatementExpressionValue(_)
         )
     }
 
@@ -1022,6 +1042,7 @@ impl<'db> DefinitionKind<'db> {
             DefinitionKind::Class(class) => class.node(module).name.range(),
             DefinitionKind::TypeAlias(type_alias) => type_alias.node(module).name.range(),
             DefinitionKind::NamedExpression(named) => named.node(module).target.range(),
+            DefinitionKind::StatementExpressionValue(value) => value.node(module).range(),
             DefinitionKind::Assignment(assignment) => assignment.target(module).range(),
             DefinitionKind::AnnotatedAssignment(assign) => assign.target(module).range(),
             DefinitionKind::AugmentedAssignment(aug_assign) => {
@@ -1072,6 +1093,7 @@ impl<'db> DefinitionKind<'db> {
             DefinitionKind::Class(class) => class.node(module).range(),
             DefinitionKind::TypeAlias(type_alias) => type_alias.node(module).range(),
             DefinitionKind::NamedExpression(named) => named.node(module).range(),
+            DefinitionKind::StatementExpressionValue(value) => value.node(module).range(),
             DefinitionKind::Assignment(assign) => {
                 let target_range = assign.target(module).range();
                 let value_range = assign.value(module).range();
@@ -1153,6 +1175,7 @@ impl<'db> DefinitionKind<'db> {
             // all of these bind values without declaring a type
             DefinitionKind::DictKeyAssignment(_)
             | DefinitionKind::NamedExpression(_)
+            | DefinitionKind::StatementExpressionValue(_)
             | DefinitionKind::Assignment(_)
             | DefinitionKind::AugmentedAssignment(_)
             | DefinitionKind::For(_)

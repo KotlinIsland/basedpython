@@ -42,9 +42,9 @@ use super::{
     literal_types, local_once, main_function, modifiers, mutable_defaults, none_chain,
     optional_type, overload, parametric_is, postfix_await, propagate, properties, protocol_type,
     raises_clause, reified_generic, repeated_underscore, sentinel, some_ctor, soundness,
-    string_tag, super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_fn,
-    type_is, type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unpack,
-    use_site_variance,
+    statement_expression, string_tag, super_keyword, symbolic_type_op, top_star, trailing_lambda,
+    tuple_index, type_fn, type_is, type_reification, typed_dict_literal, typed_lambda,
+    typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -232,8 +232,9 @@ fn materialize_fragments(
 /// in position order) that fall inside the span applied, first-wins on
 /// overlap. Nested templates recurse; a same-start insertion at depth ≥ 2 is
 /// emitted ahead of its nested template rather than absorbed into it (only the
-/// top-level claim pass implements absorption — no current pass nests
-/// templates, so the simpler rule suffices here). `include_end` controls
+/// top-level claim pass implements absorption). `statement_expression` nests
+/// templates — one statement expression inside another's suite, and any pass
+/// whose template lands inside the suite it passes through. `include_end` controls
 /// whether a zero-width insertion exactly at `e0` is emitted here (see
 /// [`materialize_fragments`]).
 fn apply_within(
@@ -499,6 +500,7 @@ pub(crate) fn run_against_source<'a>(
     let checked_cast_pass = checked_cast::CheckedCastPass::new(config.checked_cast);
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
     let if_let_pass = if_let::IfLetPass::new(source_ref, config.min_version);
+    let statement_expression_pass = statement_expression::StatementExpressionPass::new(source_ref);
     let context_params_pass = context_params::ContextParamsPass::new(source_ref);
     let extension_block_pass = extension::ExtensionBlockPass::new(source_ref);
     let extension_call_pass = extension::ExtensionCallPass;
@@ -518,6 +520,10 @@ pub(crate) fn run_against_source<'a>(
     // Expr wholesale, its range is `TextRange::default()` and source lookups
     // are invalid.
     let passes: &[&dyn AstPass] = &[
+        // a statement expression moves its enclosing statement's assignment
+        // below a suite; every other lowering inside that suite composes through
+        // the passthrough spans it emits, so it goes first
+        &statement_expression_pass,
         // text-edit-emitting passes first (read source ranges).
         // type_is must run before identity_swap so type-position `a is T`
         // wins the first-wins overlap dedup over identity_swap's

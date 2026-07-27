@@ -1,0 +1,183 @@
+# statement expressions
+
+a compound statement can stand where a value is expected. the value is whatever
+its branches evaluate last:
+
+```by
+direction = match command:
+    case "up":
+        1
+    case "down":
+        -1
+    case _:
+        0
+```
+
+each branch's value is the expression it ends on — no `return`, no assignment
+repeated per arm. the type is the union of the branch values, so `direction`
+above is `Literal[1, -1, 0]`
+
+the forms that carry a suite are `if`, `match`, `for` and `while`. `raise` and
+`return` are also expressions; they never produce a value, so they type as
+`Never`
+
+## `if`
+
+```by
+label = if count == 0:
+    "none"
+elif count == 1:
+    "one"
+else:
+    "many"
+```
+
+an `if` expression needs an `else`: without one the statement can finish having
+evaluated nothing, and there is no value to stand in. that is reported as
+`non-exhaustive-statement-expression`
+
+the branches are ordinary suites, so they can do work before their value:
+
+```by
+scaled = if noisy:
+    log("scaling")
+    value * 2
+else:
+    value
+```
+
+## `match`
+
+```by
+size = match shape:
+    case Circle(r):
+        3.14 * r * r
+    case Square(s):
+        s * s
+```
+
+the same exhaustiveness rule applies, and it is the type checker's ordinary
+one: the arms have to cover the subject's type. a `case _:` always suffices
+
+## `for` and `while`
+
+a loop yields a value through `break`:
+
+```by
+first_even = for n in numbers:
+    if n % 2 == 0:
+        break n
+else:
+    -1
+```
+
+`break <value>` leaves the loop with that value. the `else` clause — which runs
+when the loop finishes without breaking — supplies the value for that path, so
+a loop expression without `else` is non-exhaustive
+
+a `break` inside a nested loop belongs to *that* loop, exactly as it does in a
+statement
+
+a `break` may only carry a value where something reads it — in a loop that is
+not a statement expression there is nowhere for the value to go, and it is
+rejected
+
+## `raise` and `return`
+
+both are `Never`, so they can stand in for a value that will never be produced:
+
+```by
+def lookup(table: dict[str, int], key: str) -> int:
+    return table.get(key) ?? raise KeyError(key)
+
+def parse_port(raw: str?) -> int:
+    text = raw ?? return 0
+    return int(text)
+```
+
+because they are `Never`, the surrounding expression's type is just the other
+branch's — `table.get(key) ?? raise ...` is `int`, not `int | None`
+
+## nesting
+
+a branch that ends on another compound statement takes *its* value, so the
+inner form does not have to be spelled as an expression:
+
+```by
+kind = if isinstance(x, str):
+    match len(x):
+        case 0:
+            "empty"
+        case _:
+            "text"
+else:
+    "other"
+```
+
+## where they can appear
+
+a statement expression owns the tail of the statement it appears in. a form
+with a suite must be the whole value of its statement, and must be the first
+statement on its line — its suite continues that line, so nothing may precede
+it there:
+
+```by
+a = match x:           # ok
+    case _:
+        1
+
+a = 1 + match x:       # error: must be the whole value of its statement
+    case _:
+        1
+```
+
+`raise` and `return` carry no suite, so they may also appear inside the
+operators that *choose* between operands — `and`, `or`, `??`, the conditional
+expression, and the walrus:
+
+```by
+value = maybe() ?? raise Missing()
+value = cached or raise Missing()
+value = x if x > 0 else raise ValueError(x)
+value = (found := lookup() ?? raise Missing())
+```
+
+anywhere else — as a call argument, inside a list, as an operand of `+` — the
+surrounding expression would have to be evaluated around the statement, and is
+rejected
+
+## lowering
+
+a statement expression lowers to the statement it always was, with the
+assignment moved below it:
+
+```by
+a = match command:
+    case "up":
+        1
+    case _:
+        0
+```
+
+```py
+match command:
+    case "up":
+        _by_stmt_expr_0 = 1
+    case _:
+        _by_stmt_expr_0 = 0
+a = _by_stmt_expr_0
+```
+
+`break <value>` becomes an assignment followed by a bare `break`. a diverging
+statement expression under a choosing operator becomes the guard it implies:
+
+```by
+v = table.get(k) ?? raise KeyError(k)
+```
+
+```py
+_by_stmt_expr_0 = table.get(k)
+if _by_stmt_expr_0 is None:
+    raise KeyError(k)
+v = _by_stmt_expr_0
+```

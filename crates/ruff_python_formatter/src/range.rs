@@ -732,7 +732,8 @@ impl Format<PyFormatContext<'_>> for FormatEnclosingNode<'_> {
             | AnyNodeRef::BytesLiteral(_)
             | AnyNodeRef::ExprCallableType(_)
             | AnyNodeRef::ExprProtocolType(_)
-            | AnyNodeRef::ExprProtocolMethod(_) => {
+            | AnyNodeRef::ExprProtocolMethod(_)
+            | AnyNodeRef::ExprStatement(_) => {
                 panic!("Range formatting only supports formatting logical lines")
             }
         }
