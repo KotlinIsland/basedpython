@@ -99,12 +99,19 @@ impl Violation for IfElseBlockInsteadOfIfExp {
 /// SIM108
 pub(crate) fn if_else_block_instead_of_if_exp(checker: &Checker, stmt_if: &ast::StmtIf) {
     let ast::StmtIf {
-        test,
+        pattern: _,
+        test: _,
         body,
         elif_else_clauses,
         range: _,
         node_index: _,
     } = stmt_if;
+
+    // a basedpython `if let` clause binds the pattern's captures, so its body
+    // cannot collapse into a conditional expression
+    let Some(test) = stmt_if.condition() else {
+        return;
+    };
 
     // `test: None` to only match an `else` clause
     let [

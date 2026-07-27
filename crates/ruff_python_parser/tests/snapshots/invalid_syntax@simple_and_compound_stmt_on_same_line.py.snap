@@ -28,6 +28,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 3..16,
+                    pattern: None,
                     test: Name(
                         ExprName {
                             node_index: NodeIndex(None),

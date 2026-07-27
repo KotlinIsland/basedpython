@@ -1,0 +1,24 @@
+---
+source: crates/ruff_linter/src/rules/flake8_simplify/mod.rs
+---
+SIM102 [*] Use a single `if` statement instead of nested `if` statements
+  --> if_let_basedpython.by:14:1
+   |
+12 |           print(n)
+13 |
+14 | / if a:
+15 | |     if b:
+   | |_________^
+16 |           print(1)
+   |
+help: Combine `if` statements using `and`
+   |
+13 |
+   - if a:
+   -     if b:
+   -         print(1)
+14 + if a and b:
+15 +     print(1)
+16 |
+   |
+note: This is an unsafe fix and may change runtime behavior

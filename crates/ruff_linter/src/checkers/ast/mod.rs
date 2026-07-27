@@ -1635,6 +1635,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
             }
             Stmt::If(
                 stmt_if @ ast::StmtIf {
+                    pattern,
                     test,
                     body,
                     elif_else_clauses,
@@ -1642,7 +1643,14 @@ impl<'a> Visitor<'a> for Checker<'a> {
                     node_index: _,
                 },
             ) => {
-                self.visit_boolean_test(test);
+                // basedpython: an `if let <pattern> := <subject>:` clause matches
+                // its subject against the pattern rather than testing it
+                if let Some(pattern) = pattern {
+                    self.visit_expr(test);
+                    self.visit_pattern(pattern);
+                } else {
+                    self.visit_boolean_test(test);
+                }
 
                 self.semantic.push_branch();
                 if typing::is_type_checking_block(stmt_if, &self.semantic) {
@@ -2740,7 +2748,12 @@ impl<'a> Checker<'a> {
     /// Visit an [`ElifElseClause`]
     fn visit_elif_else_clause(&mut self, clause: &'a ElifElseClause) {
         if let Some(test) = &clause.test {
-            self.visit_boolean_test(test);
+            if let Some(pattern) = &clause.pattern {
+                self.visit_expr(test);
+                self.visit_pattern(pattern);
+            } else {
+                self.visit_boolean_test(test);
+            }
         }
         self.visit_body(&clause.body);
     }

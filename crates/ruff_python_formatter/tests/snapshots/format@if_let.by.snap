@@ -1,0 +1,111 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/if_let.by
+---
+## Input
+```bython
+if let int(n) := value:
+    print(n)
+
+if let str(s) := value:
+    print(s)
+elif let int(n) := value:
+    print(n)
+else:
+    print("none")
+
+if let (first, second) := pair:
+    print(first, second)
+
+if let {"key": found} := mapping:
+    print(found)
+
+if let int() | str() as scalar := value:
+    print(scalar)
+
+if let Point(x=px, y=py) := point:  # trailing comment
+    print(px, py)
+
+if flag:
+    pass
+elif let int(n) := value:
+    print(n)
+
+if let int(n) := some_extremely_long_function_name(argument_one, argument_two, argument_three):
+    print(n)
+
+if let SomeVeryLongClassName(first_capture, second_capture, third_capture, fourth) := subject:
+    pass
+
+if let (
+    a,
+    b,
+) := pair:
+    pass
+
+if let VeryLongAlternativeOne() | VeryLongAlternativeTwo() | VeryLongAlternativeThree() := v:
+    pass
+
+if let {
+    # a comment inside the pattern
+    "key": found
+} := mapping:
+    pass
+```
+
+## Output
+```bython
+if let int(n) := value:
+    print(n)
+
+if let str(s) := value:
+    print(s)
+elif let int(n) := value:
+    print(n)
+else:
+    print("none")
+
+if let (first, second) := pair:
+    print(first, second)
+
+if let {"key": found} := mapping:
+    print(found)
+
+if let int() | str() as scalar := value:
+    print(scalar)
+
+if let Point(x=px, y=py) := point:  # trailing comment
+    print(px, py)
+
+if flag:
+    pass
+elif let int(n) := value:
+    print(n)
+
+if let int(n) := some_extremely_long_function_name(
+    argument_one, argument_two, argument_three
+):
+    print(n)
+
+if let SomeVeryLongClassName(
+    first_capture, second_capture, third_capture, fourth
+) := subject:
+    pass
+
+if let (
+    a,
+    b,
+) := pair:
+    pass
+
+if let (
+    VeryLongAlternativeOne() | VeryLongAlternativeTwo() | VeryLongAlternativeThree()
+) := v:
+    pass
+
+if let {
+    # a comment inside the pattern
+    "key": found
+} := mapping:
+    pass
+```

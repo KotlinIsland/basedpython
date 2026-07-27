@@ -1,0 +1,18 @@
+---
+source: crates/ruff_linter/src/rules/ruff/mod.rs
+---
+RUF050 [*] Empty `if` statement
+  --> RUF050_basedpython.by:18:1
+   |
+17 |   # a plain condition is still reported
+18 | / if f():
+19 | |     pass
+   | |________^
+   |
+help: Remove the `if` statement
+   |
+17 | # a plain condition is still reported
+   - if f():
+   -     pass
+18 + f()
+   |

@@ -37,13 +37,14 @@ use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
     coalesce_chain, compat, context_params, decl_site_variance, decorator_keyword, dedent_string,
     dynamic_keyword, empty_declarations, extension, float_const, force_unwrap, frameworks,
-    generic_call, generics, grapheme_string, identity_swap, implementation, implicit_receiver,
-    implicit_typing, inferred_annotation, init_method, just_float, kw_subscript, literal_types,
-    local_once, main_function, modifiers, mutable_defaults, none_chain, optional_type, overload,
-    parametric_is, postfix_await, propagate, properties, protocol_type, raises_clause,
-    reified_generic, repeated_underscore, sentinel, some_ctor, soundness, string_tag,
-    super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_fn, type_is,
-    type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
+    generic_call, generics, grapheme_string, identity_swap, if_let, implementation,
+    implicit_receiver, implicit_typing, inferred_annotation, init_method, just_float, kw_subscript,
+    literal_types, local_once, main_function, modifiers, mutable_defaults, none_chain,
+    optional_type, overload, parametric_is, postfix_await, propagate, properties, protocol_type,
+    raises_clause, reified_generic, repeated_underscore, sentinel, some_ctor, soundness,
+    string_tag, super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_fn,
+    type_is, type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unpack,
+    use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -497,6 +498,7 @@ pub(crate) fn run_against_source<'a>(
     let soundness_pass = soundness::SoundnessPass::new(source_ref, config);
     let checked_cast_pass = checked_cast::CheckedCastPass::new(config.checked_cast);
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
+    let if_let_pass = if_let::IfLetPass::new(source_ref, config.min_version);
     let context_params_pass = context_params::ContextParamsPass::new(source_ref);
     let extension_block_pass = extension::ExtensionBlockPass::new(source_ref);
     let extension_call_pass = extension::ExtensionCallPass;
@@ -606,6 +608,10 @@ pub(crate) fn run_against_source<'a>(
         // so lowerings inside them (including nested trailing lambdas) are
         // claimed and materialized in place
         &trailing_lambda_pass,
+        // `if let <pattern> := <subject>:` chains flatten onto a selector
+        // variable. only the clause headers are replaced, so every body keeps
+        // its source bytes and the lowerings inside them compose
+        &if_let_pass,
         // context parameters: strip `context` prefixes, lower `context NAME =`
         // declarations, and append the resolved implicit arguments before each
         // call's closing paren. single insertions, so they compose inside any

@@ -150,6 +150,7 @@ impl<'a> Visitor<'a> for GroupNameFinder<'a> {
                 self.nested = false;
             }
             Stmt::If(ast::StmtIf {
+                pattern: _,
                 test,
                 body,
                 elif_else_clauses,

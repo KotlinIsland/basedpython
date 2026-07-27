@@ -1085,6 +1085,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 612..632,
+                    pattern: None,
                     test: Attribute(
                         ExprAttribute {
                             node_index: NodeIndex(None),

@@ -2295,36 +2295,42 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let ast::StmtIf {
             range: _,
             node_index: _,
+            pattern,
             test,
             body,
             elif_else_clauses,
         } = if_statement;
 
-        let test_ty = self.infer_standalone_expression(test, TypeContext::default());
-
-        if let Err(err) = test_ty.try_bool(self.db()) {
-            err.report_diagnostic(&self.context, &**test);
-        }
-
+        self.infer_if_condition(pattern.as_deref(), test);
         self.infer_body(body);
 
         for clause in elif_else_clauses {
             let ast::ElifElseClause {
                 range: _,
                 node_index: _,
+                pattern,
                 test,
                 body,
             } = clause;
 
             if let Some(test) = &test {
-                let test_ty = self.infer_standalone_expression(test, TypeContext::default());
-
-                if let Err(err) = test_ty.try_bool(self.db()) {
-                    err.report_diagnostic(&self.context, test);
-                }
+                self.infer_if_condition(pattern.as_deref(), test);
             }
 
             self.infer_body(body);
+        }
+    }
+
+    /// Infers the condition of an `if` / `elif` clause. With a pattern the clause
+    /// is a basedpython `if let <pattern> := <subject>:` — the subject is matched
+    /// against the pattern rather than tested for truthiness
+    fn infer_if_condition(&mut self, pattern: Option<&ast::Pattern>, test: &ast::Expr) {
+        let test_ty = self.infer_standalone_expression(test, TypeContext::default());
+
+        if let Some(pattern) = pattern {
+            self.infer_match_pattern(pattern);
+        } else if let Err(err) = test_ty.try_bool(self.db()) {
+            err.report_diagnostic(&self.context, test);
         }
     }
 

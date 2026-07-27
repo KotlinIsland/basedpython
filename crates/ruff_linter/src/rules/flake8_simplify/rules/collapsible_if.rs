@@ -215,12 +215,20 @@ fn nested_if_body(stmt_if: &ast::StmtIf) -> Option<NestedIf<'_>> {
     // depends on the outer of the two conditions
     let (test, nested_if) = if let Some(clause) = elif_else_clauses.last() {
         if let Some(test) = &clause.test {
+            // a basedpython pattern clause binds captures; its condition cannot
+            // be `and`-ed with the nested one
+            if clause.pattern.is_some() {
+                return None;
+            }
             (test, NestedIf::Elif(clause))
         } else {
             // The last condition is an `else` (different rule)
             return None;
         }
     } else {
+        if stmt_if.pattern.is_some() {
+            return None;
+        }
         (test.as_ref(), NestedIf::If(stmt_if))
     };
 
@@ -256,6 +264,7 @@ fn nested_if_body(stmt_if: &ast::StmtIf) -> Option<NestedIf<'_>> {
 fn find_last_nested_if(body: &[Stmt]) -> Option<&Expr> {
     let [
         Stmt::If(ast::StmtIf {
+            pattern,
             test,
             body: inner_body,
             elif_else_clauses,
@@ -265,7 +274,7 @@ fn find_last_nested_if(body: &[Stmt]) -> Option<&Expr> {
     else {
         return None;
     };
-    if !elif_else_clauses.is_empty() {
+    if !elif_else_clauses.is_empty() || pattern.is_some() {
         return None;
     }
     find_last_nested_if(inner_body).or(Some(test))

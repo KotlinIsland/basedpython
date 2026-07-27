@@ -1,6 +1,5 @@
 use ruff_formatter::{FormatOwnedWithRule, FormatRefWithRule, FormatRule, FormatRuleWithOptions};
-use ruff_python_ast::{AnyNodeRef, Expr, PatternMatchAs};
-use ruff_python_ast::{MatchCase, Pattern};
+use ruff_python_ast::{AnyNodeRef, Expr, Pattern, PatternMatchAs};
 use ruff_python_trivia::{
     BackwardsTokenizer, CommentRanges, SimpleToken, SimpleTokenKind, first_non_trivia_token,
 };
@@ -155,20 +154,23 @@ impl NeedsParentheses for Pattern {
 
 pub(crate) fn maybe_parenthesize_pattern<'a>(
     pattern: &'a Pattern,
-    case: &'a MatchCase,
+    parent: impl Into<AnyNodeRef<'a>>,
 ) -> MaybeParenthesizePattern<'a> {
-    MaybeParenthesizePattern { pattern, case }
+    MaybeParenthesizePattern {
+        pattern,
+        parent: parent.into(),
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct MaybeParenthesizePattern<'a> {
     pattern: &'a Pattern,
-    case: &'a MatchCase,
+    parent: AnyNodeRef<'a>,
 }
 
 impl Format<PyFormatContext<'_>> for MaybeParenthesizePattern<'_> {
     fn fmt(&self, f: &mut Formatter<PyFormatContext<'_>>) -> FormatResult<()> {
-        let MaybeParenthesizePattern { pattern, case } = self;
+        let MaybeParenthesizePattern { pattern, parent } = self;
 
         let comments = f.context().comments();
         let pattern_comments = comments.leading_dangling_trailing(*pattern);
@@ -180,7 +182,7 @@ impl Format<PyFormatContext<'_>> for MaybeParenthesizePattern<'_> {
             return pattern.format().with_options(Parentheses::Always).fmt(f);
         }
 
-        let needs_parentheses = pattern.needs_parentheses(AnyNodeRef::from(*case), f.context());
+        let needs_parentheses = pattern.needs_parentheses(*parent, f.context());
 
         match needs_parentheses {
             OptionalParentheses::Always => {

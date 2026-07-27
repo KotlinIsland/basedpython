@@ -2465,6 +2465,133 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         }
     }
 
+    /// Collects the places a pattern match against `subject` can narrow, together
+    /// with the bindings each place is read from. A subject is evaluated once, so
+    /// retaining those bindings keeps a pattern predicate constraining the value
+    /// that was matched rather than a later rebinding.
+    ///
+    /// The second element covers the elements of a list/tuple subject display,
+    /// which a sequence pattern narrows individually.
+    fn match_subject_targets(&mut self, subject: &'ast ast::Expr) -> MatchSubjectTargets {
+        let subject_places = match_subject_place_expressions(subject)
+            .into_iter()
+            .filter_map(|expression| {
+                let place = PlaceExpr::try_from_expr(expression)
+                    .and_then(|place| self.current_place_table().place_id((&place).into()))?;
+                Some((place, self.current_ast_ids().try_use_id(expression)))
+            })
+            .collect::<SmallVec<[_; 2]>>();
+        let mut subject_targets =
+            SmallVec::<[(ScopedPlaceId, SmallVec<[ScopedDefinitionId; 2]>); 2]>::new();
+        for &(place, use_id) in &subject_places {
+            let bindings = if let Some(use_id) = use_id {
+                self.current_use_def_map()
+                    .bindings_at_use(use_id)
+                    .map(LiveBinding::binding)
+                    .collect()
+            } else {
+                // A named-expression subject creates its target binding instead of reading
+                // one, so snapshot the binding that was just created.
+                self.current_use_def_map_mut()
+                    .current_bindings(place)
+                    .map(|binding| LiveBinding::binding(&binding))
+                    .collect()
+            };
+            subject_targets.push((place, bindings));
+        }
+
+        let places = self.current_place_table();
+        let ast_ids = self.current_ast_ids();
+        let mut sequence_subject_targets =
+            SmallVec::<[(ScopedPlaceId, ScopedUseId, ExpressionNodeKey); 2]>::new();
+        let mut subject_elements: Vec<&ast::Expr> = match subject {
+            ast::Expr::List(list) => list.elts.iter().collect(),
+            ast::Expr::Tuple(tuple) => tuple.elts.iter().collect(),
+            _ => Vec::new(),
+        };
+        while let Some(element) = subject_elements.pop() {
+            match element {
+                ast::Expr::List(list) => subject_elements.extend(&list.elts),
+                ast::Expr::Tuple(tuple) => subject_elements.extend(&tuple.elts),
+                _ => {
+                    let Some(target) = PlaceExpr::try_from_expr(element)
+                        .and_then(|place| places.place_id((&place).into()))
+                        .zip(ast_ids.try_use_id(element))
+                    else {
+                        continue;
+                    };
+                    sequence_subject_targets.push((
+                        target.0,
+                        target.1,
+                        ExpressionNodeKey::from(element),
+                    ));
+                }
+            }
+        }
+
+        (subject_targets, sequence_subject_targets)
+    }
+
+    /// Visits the condition of an `if` / `elif` clause and records its narrowing
+    /// constraints, leaving the flow in the truthy branch. Returns the falsy
+    /// snapshot and the clause's predicate.
+    ///
+    /// With a pattern the clause is a basedpython `if let <pattern> := <subject>:`
+    /// and records exactly what a single `match` case against `subject` records:
+    /// the captures are bound in the enclosing scope and the subject is narrowed
+    /// by the pattern (negated on the way into the following clauses).
+    fn visit_if_condition(
+        &mut self,
+        pattern: Option<&'ast ast::Pattern>,
+        test: &'ast ast::Expr,
+    ) -> (FlowSnapshot, PredicateOrLiteral<'db>, ScopedPredicateId) {
+        let pattern = pattern.map(|pattern| (pattern, self.add_standalone_expression(test)));
+
+        self.visit_expr(test);
+
+        let pattern =
+            pattern.map(|(pattern, subject)| (pattern, subject, self.match_subject_targets(test)));
+
+        // A condition is evaluated whether or not its branch is taken.
+        let condition_flow_snapshot = self.flow_snapshot_for_condition(test);
+        let falsy = if let Some(snapshots) = condition_flow_snapshot.into_branches() {
+            self.flow_restore(snapshots.truthy);
+            snapshots.falsy
+        } else {
+            self.flow_snapshot()
+        };
+
+        let (predicate, narrowing_id) = if let Some((
+            pattern,
+            subject,
+            (subject_targets, sequence_subject_targets),
+        )) = pattern
+        {
+            let pattern_predicate = self.create_pattern_predicate(subject, pattern, None, None);
+            let outer_match_case = self
+                .current_match_case
+                .replace(CurrentMatchCase::new(pattern, pattern_predicate));
+            self.visit_pattern(pattern);
+            self.current_match_case = outer_match_case;
+            // never a catchall, even for an irrefutable pattern. That shortcut
+            // exists so an *exhaustive* `match` collapses `P1 OR (~P1 AND P2) OR
+            // (~P1 AND ~P2)` back to the pre-match type; an `if` chain has no
+            // such collapse to preserve, because the merge of its clause
+            // snapshots (plus the synthesized no-op `else`) already restores the
+            // subject's type after the statement
+            self.add_pattern_narrowing_constraint(
+                pattern_predicate,
+                &subject_targets,
+                &sequence_subject_targets,
+                false,
+            )
+        } else {
+            self.record_expression_narrowing_constraint(test)
+        };
+
+        (falsy, predicate, narrowing_id)
+    }
+
     fn create_pattern_predicate(
         &mut self,
         subject: Expression<'db>,
@@ -3701,16 +3828,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 }
             }
             ast::Stmt::If(node) => {
-                self.visit_expr(&node.test);
-                let condition_flow_snapshot = self.flow_snapshot_for_condition(&node.test);
-                let mut falsy = if let Some(snapshots) = condition_flow_snapshot.into_branches() {
-                    self.flow_restore(snapshots.truthy);
-                    snapshots.falsy
-                } else {
-                    self.flow_snapshot()
-                };
-                let (mut last_predicate, mut last_narrowing_id) =
-                    self.record_expression_narrowing_constraint(&node.test);
+                let (mut falsy, mut last_predicate, mut last_narrowing_id) =
+                    self.visit_if_condition(node.pattern.as_deref(), &node.test);
                 let mut last_reachability_constraint =
                     self.record_reachability_constraint(last_predicate);
 
@@ -3727,10 +3846,15 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 self.visit_body(&node.body);
 
                 let mut post_clauses: Vec<FlowSnapshot> = vec![];
-                let elif_else_clauses = node
-                    .elif_else_clauses
-                    .iter()
-                    .map(|clause| (clause.test.as_ref(), clause.body.as_slice()));
+                let elif_else_clauses = node.elif_else_clauses.iter().map(|clause| {
+                    (
+                        clause
+                            .test
+                            .as_ref()
+                            .map(|test| (clause.pattern.as_deref(), test)),
+                        clause.body.as_slice(),
+                    )
+                });
                 let has_else = node
                     .elif_else_clauses
                     .last()
@@ -3754,20 +3878,10 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     self.record_negated_narrowing_constraint(last_predicate, last_narrowing_id);
                     self.record_negated_reachability_constraint(last_reachability_constraint);
 
-                    let next_falsy = if let Some(elif_test) = clause_test {
-                        self.visit_expr(elif_test);
-                        // A test expression is evaluated whether the branch is taken or not
-                        let condition_flow_snapshot = self.flow_snapshot_for_condition(elif_test);
-                        let next_falsy =
-                            if let Some(snapshots) = condition_flow_snapshot.into_branches() {
-                                self.flow_restore(snapshots.truthy);
-                                snapshots.falsy
-                            } else {
-                                self.flow_snapshot()
-                            };
-
-                        (last_predicate, last_narrowing_id) =
-                            self.record_expression_narrowing_constraint(elif_test);
+                    let next_falsy = if let Some((clause_pattern, elif_test)) = clause_test {
+                        let next_falsy;
+                        (next_falsy, last_predicate, last_narrowing_id) =
+                            self.visit_if_condition(clause_pattern, elif_test);
 
                         last_reachability_constraint =
                             self.record_reachability_constraint(last_predicate);
@@ -3778,7 +3892,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     };
 
                     // Determine if this clause is in type checking context
-                    let clause_in_type_checking = if let Some(elif_test) = clause_test {
+                    let clause_in_type_checking = if let Some((_, elif_test)) = clause_test {
                         if is_if_type_checking(elif_test) {
                             // This block has "TYPE_CHECKING" condition
                             true
@@ -4048,63 +4162,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     return;
                 }
 
-                // A match subject is evaluated once. Retain the bindings read by each place so
-                // that case predicates constrain those values rather than later rebindings.
-                let subject_places = match_subject_place_expressions(subject)
-                    .into_iter()
-                    .filter_map(|expression| {
-                        let place = PlaceExpr::try_from_expr(expression).and_then(|place| {
-                            self.current_place_table().place_id((&place).into())
-                        })?;
-                        Some((place, self.current_ast_ids().try_use_id(expression)))
-                    })
-                    .collect::<SmallVec<[_; 2]>>();
-                let mut subject_targets =
-                    SmallVec::<[(ScopedPlaceId, SmallVec<[ScopedDefinitionId; 2]>); 2]>::new();
-                for &(place, use_id) in &subject_places {
-                    let bindings = if let Some(use_id) = use_id {
-                        self.current_use_def_map()
-                            .bindings_at_use(use_id)
-                            .map(LiveBinding::binding)
-                            .collect()
-                    } else {
-                        // A named-expression subject creates its target binding instead of reading
-                        // one, so snapshot the binding that was just created.
-                        self.current_use_def_map_mut()
-                            .current_bindings(place)
-                            .map(|binding| LiveBinding::binding(&binding))
-                            .collect()
-                    };
-                    subject_targets.push((place, bindings));
-                }
-                let places = self.current_place_table();
-                let ast_ids = self.current_ast_ids();
-                let mut sequence_subject_targets =
-                    SmallVec::<[(ScopedPlaceId, ScopedUseId, ExpressionNodeKey); 2]>::new();
-                let mut subject_elements: Vec<&ast::Expr> = match subject.as_ref() {
-                    ast::Expr::List(list) => list.elts.iter().collect(),
-                    ast::Expr::Tuple(tuple) => tuple.elts.iter().collect(),
-                    _ => Vec::new(),
-                };
-                while let Some(element) = subject_elements.pop() {
-                    match element {
-                        ast::Expr::List(list) => subject_elements.extend(&list.elts),
-                        ast::Expr::Tuple(tuple) => subject_elements.extend(&tuple.elts),
-                        _ => {
-                            let Some(target) = PlaceExpr::try_from_expr(element)
-                                .and_then(|place| places.place_id((&place).into()))
-                                .zip(ast_ids.try_use_id(element))
-                            else {
-                                continue;
-                            };
-                            sequence_subject_targets.push((
-                                target.0,
-                                target.1,
-                                ExpressionNodeKey::from(element),
-                            ));
-                        }
-                    }
-                }
+                let (subject_targets, sequence_subject_targets) =
+                    self.match_subject_targets(subject);
 
                 let mut no_case_matched = self.flow_snapshot();
 
@@ -5708,6 +5767,15 @@ impl<'ast> Visitor<'ast> for FluidUseClassifier<'ast> {
         self.stack.pop();
     }
 }
+
+/// The places a pattern match against a subject can narrow: the subject's own
+/// places with the bindings each was read from, and — for a list/tuple subject
+/// display — its individual elements. See
+/// [`SemanticIndexBuilder::match_subject_targets`].
+type MatchSubjectTargets = (
+    SmallVec<[(ScopedPlaceId, SmallVec<[ScopedDefinitionId; 2]>); 2]>,
+    SmallVec<[(ScopedPlaceId, ScopedUseId, ExpressionNodeKey); 2]>,
+);
 
 #[derive(Debug, PartialEq)]
 struct CurrentMatchCase<'ast, 'db> {

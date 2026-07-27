@@ -3001,6 +3001,7 @@ Module(
                 StmtIf {
                     node_index: NodeIndex(None),
                     range: 1643..1661,
+                    pattern: None,
                     test: Named(
                         ExprNamed {
                             node_index: NodeIndex(None),

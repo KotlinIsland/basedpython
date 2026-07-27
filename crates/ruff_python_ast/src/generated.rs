@@ -9748,6 +9748,8 @@ pub struct StmtWhile {
 pub struct StmtIf {
     pub node_index: crate::AtomicNodeIndex,
     pub range: ruff_text_size::TextRange,
+    /// The pattern of a basedpython `if let <pattern> := <subject>:` clause. When set, `test` is the subject the pattern is matched against rather than a condition
+    pub pattern: Option<Box<Pattern>>,
     pub test: Box<Expr>,
     pub body: thin_vec::ThinVec<Stmt>,
     pub elif_else_clauses: Vec<crate::ElifElseClause>,
@@ -10782,12 +10784,18 @@ impl StmtIf {
         V: SourceOrderVisitor<'a> + ?Sized,
     {
         let StmtIf {
+            pattern,
             test,
             body,
             elif_else_clauses,
             range: _,
             node_index: _,
         } = self;
+
+        if let Some(pattern) = pattern {
+            visitor.visit_pattern(pattern);
+        }
+
         visitor.visit_expr(test);
         visitor.visit_body(body);
 
