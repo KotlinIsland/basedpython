@@ -368,7 +368,8 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
             | ast::Expr::Await(_)
             | ast::Expr::CallableType(_)
             | ast::Expr::ProtocolType(_)
-            | ast::Expr::ProtocolMethod(_) => walk_expr(self, expr),
+            | ast::Expr::ProtocolMethod(_)
+            | ast::Expr::Statement(_) => walk_expr(self, expr),
         }
     }
 }
@@ -438,7 +439,8 @@ impl<'db> Visitor<'db> for WalrusFinder<'_, 'db> {
             | ast::Expr::Await(_)
             | ast::Expr::CallableType(_)
             | ast::Expr::ProtocolType(_)
-            | ast::Expr::ProtocolMethod(_) => walk_expr(self, expr),
+            | ast::Expr::ProtocolMethod(_)
+            | ast::Expr::Statement(_) => walk_expr(self, expr),
         }
     }
 }

@@ -27,6 +27,9 @@ fn should_consider_definition(kind: &DefinitionKind<'_>) -> bool {
         | DefinitionKind::MatchPattern(_)
         | DefinitionKind::ExceptHandler(_) => true,
 
+        // synthetic: the value of a statement expression is always read
+        DefinitionKind::StatementExpressionValue(_) => false,
+
         DefinitionKind::Import(_)
         | DefinitionKind::ImportFrom(_)
         | DefinitionKind::ImportFromSubmodule(_)

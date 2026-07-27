@@ -114,6 +114,12 @@ pub(crate) struct Parser<'src> {
     /// by [`Parser::parse_body`].
     pub(super) pending_narrow_props: Vec<statement::PropertyRetarget>,
 
+    /// basedpython: set when a [statement expression](ruff_python_ast::ExprStatement)
+    /// just parsed as part of a simple statement swallowed that statement's
+    /// terminating newline along with its suite. The simple-statement parsers
+    /// take this flag instead of demanding a newline of their own.
+    pub(super) expr_consumed_suite: bool,
+
     /// Current parser recursion depth remaining before the depth limit is exceeded.
     depth_remaining: u16,
 
@@ -170,6 +176,7 @@ impl<'src> Parser<'src> {
             class_body_depth: 0,
             pending_members: Vec::new(),
             pending_narrow_props: Vec::new(),
+            expr_consumed_suite: false,
             depth_remaining,
             max_nesting_depth,
             expr_scratch: ScratchBuffer::with_capacity(16),
@@ -993,6 +1000,7 @@ impl<'src> Parser<'src> {
             current_token_id: self.current_token_id,
             prev_token_end: self.prev_token_end,
             recovery_context: self.recovery_context,
+            expr_consumed_suite: self.expr_consumed_suite,
         }
     }
 
@@ -1005,6 +1013,7 @@ impl<'src> Parser<'src> {
             current_token_id,
             prev_token_end,
             recovery_context,
+            expr_consumed_suite,
         } = checkpoint;
 
         self.tokens.rewind(tokens);
@@ -1014,6 +1023,7 @@ impl<'src> Parser<'src> {
         self.current_token_id = current_token_id;
         self.prev_token_end = prev_token_end;
         self.recovery_context = recovery_context;
+        self.expr_consumed_suite = expr_consumed_suite;
     }
 }
 
@@ -1044,6 +1054,7 @@ struct ParserCheckpoint {
     current_token_id: TokenId,
     prev_token_end: TextSize,
     recovery_context: RecoveryContext,
+    expr_consumed_suite: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]

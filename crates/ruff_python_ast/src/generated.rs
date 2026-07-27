@@ -1332,6 +1332,7 @@ pub enum Expr {
     CallableType(crate::ExprCallableType),
     ProtocolType(crate::ExprProtocolType),
     ProtocolMethod(crate::ExprProtocolMethod),
+    Statement(crate::ExprStatement),
 }
 
 impl From<crate::ExprBoolOp> for Expr {
@@ -1550,6 +1551,12 @@ impl From<crate::ExprProtocolMethod> for Expr {
     }
 }
 
+impl From<crate::ExprStatement> for Expr {
+    fn from(node: crate::ExprStatement) -> Self {
+        Self::Statement(node)
+    }
+}
+
 impl ruff_text_size::Ranged for Expr {
     fn range(&self) -> ruff_text_size::TextRange {
         match self {
@@ -1589,6 +1596,7 @@ impl ruff_text_size::Ranged for Expr {
             Self::CallableType(node) => node.range(),
             Self::ProtocolType(node) => node.range(),
             Self::ProtocolMethod(node) => node.range(),
+            Self::Statement(node) => node.range(),
         }
     }
 }
@@ -1632,6 +1640,7 @@ impl crate::HasNodeIndex for Expr {
             Self::CallableType(node) => node.node_index(),
             Self::ProtocolType(node) => node.node_index(),
             Self::ProtocolMethod(node) => node.node_index(),
+            Self::Statement(node) => node.node_index(),
         }
     }
 }
@@ -2969,6 +2978,43 @@ impl Expr {
             _ => None,
         }
     }
+
+    #[inline]
+    pub const fn is_statement_expr(&self) -> bool {
+        matches!(self, Self::Statement(_))
+    }
+
+    #[inline]
+    pub fn statement_expr(self) -> Option<crate::ExprStatement> {
+        match self {
+            Self::Statement(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn expect_statement_expr(self) -> crate::ExprStatement {
+        match self {
+            Self::Statement(val) => val,
+            _ => panic!("called expect on {self:?}"),
+        }
+    }
+
+    #[inline]
+    pub fn as_statement_expr_mut(&mut self) -> Option<&mut crate::ExprStatement> {
+        match self {
+            Self::Statement(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn as_statement_expr(&self) -> Option<&crate::ExprStatement> {
+        match self {
+            Self::Statement(val) => Some(val),
+            _ => None,
+        }
+    }
 }
 
 /// See also [excepthandler](https://docs.python.org/3/library/ast.html#ast.excepthandler)
@@ -4080,6 +4126,12 @@ impl ruff_text_size::Ranged for crate::ExprProtocolMethod {
     }
 }
 
+impl ruff_text_size::Ranged for crate::ExprStatement {
+    fn range(&self) -> ruff_text_size::TextRange {
+        self.range
+    }
+}
+
 impl ruff_text_size::Ranged for crate::ExceptHandlerExceptHandler {
     fn range(&self) -> ruff_text_size::TextRange {
         self.range
@@ -4662,6 +4714,12 @@ impl crate::HasNodeIndex for crate::ExprProtocolMethod {
     }
 }
 
+impl crate::HasNodeIndex for crate::ExprStatement {
+    fn node_index(&self) -> &crate::AtomicNodeIndex {
+        &self.node_index
+    }
+}
+
 impl crate::HasNodeIndex for crate::ExceptHandlerExceptHandler {
     fn node_index(&self) -> &crate::AtomicNodeIndex {
         &self.node_index
@@ -4958,6 +5016,7 @@ impl Expr {
             Expr::CallableType(node) => node.visit_source_order(visitor),
             Expr::ProtocolType(node) => node.visit_source_order(visitor),
             Expr::ProtocolMethod(node) => node.visit_source_order(visitor),
+            Expr::Statement(node) => node.visit_source_order(visitor),
         }
     }
 }
@@ -5445,6 +5504,8 @@ pub enum ExprRef<'a> {
     ProtocolType(&'a crate::ExprProtocolType),
     #[is(name = "protocol_method_expr")]
     ProtocolMethod(&'a crate::ExprProtocolMethod),
+    #[is(name = "statement_expr")]
+    Statement(&'a crate::ExprStatement),
 }
 
 impl<'a> From<&'a Expr> for ExprRef<'a> {
@@ -5486,6 +5547,7 @@ impl<'a> From<&'a Expr> for ExprRef<'a> {
             Expr::CallableType(node) => ExprRef::CallableType(node),
             Expr::ProtocolType(node) => ExprRef::ProtocolType(node),
             Expr::ProtocolMethod(node) => ExprRef::ProtocolMethod(node),
+            Expr::Statement(node) => ExprRef::Statement(node),
         }
     }
 }
@@ -5706,6 +5768,12 @@ impl<'a> From<&'a crate::ExprProtocolMethod> for ExprRef<'a> {
     }
 }
 
+impl<'a> From<&'a crate::ExprStatement> for ExprRef<'a> {
+    fn from(node: &'a crate::ExprStatement) -> Self {
+        Self::Statement(node)
+    }
+}
+
 impl ruff_text_size::Ranged for ExprRef<'_> {
     fn range(&self) -> ruff_text_size::TextRange {
         match self {
@@ -5745,6 +5813,7 @@ impl ruff_text_size::Ranged for ExprRef<'_> {
             Self::CallableType(node) => node.range(),
             Self::ProtocolType(node) => node.range(),
             Self::ProtocolMethod(node) => node.range(),
+            Self::Statement(node) => node.range(),
         }
     }
 }
@@ -5788,6 +5857,7 @@ impl crate::HasNodeIndex for ExprRef<'_> {
             Self::CallableType(node) => node.node_index(),
             Self::ProtocolType(node) => node.node_index(),
             Self::ProtocolMethod(node) => node.node_index(),
+            Self::Statement(node) => node.node_index(),
         }
     }
 }
@@ -6108,6 +6178,7 @@ pub enum AnyNodeRef<'a> {
     ExprCallableType(&'a crate::ExprCallableType),
     ExprProtocolType(&'a crate::ExprProtocolType),
     ExprProtocolMethod(&'a crate::ExprProtocolMethod),
+    ExprStatement(&'a crate::ExprStatement),
     ExceptHandlerExceptHandler(&'a crate::ExceptHandlerExceptHandler),
     InterpolatedElement(&'a crate::InterpolatedElement),
     InterpolatedStringLiteralElement(&'a crate::InterpolatedStringLiteralElement),
@@ -6310,6 +6381,7 @@ impl<'a> From<&'a Expr> for AnyNodeRef<'a> {
             Expr::CallableType(node) => AnyNodeRef::ExprCallableType(node),
             Expr::ProtocolType(node) => AnyNodeRef::ExprProtocolType(node),
             Expr::ProtocolMethod(node) => AnyNodeRef::ExprProtocolMethod(node),
+            Expr::Statement(node) => AnyNodeRef::ExprStatement(node),
         }
     }
 }
@@ -6353,6 +6425,7 @@ impl<'a> From<ExprRef<'a>> for AnyNodeRef<'a> {
             ExprRef::CallableType(node) => AnyNodeRef::ExprCallableType(node),
             ExprRef::ProtocolType(node) => AnyNodeRef::ExprProtocolType(node),
             ExprRef::ProtocolMethod(node) => AnyNodeRef::ExprProtocolMethod(node),
+            ExprRef::Statement(node) => AnyNodeRef::ExprStatement(node),
         }
     }
 }
@@ -6396,6 +6469,7 @@ impl<'a> AnyNodeRef<'a> {
             Self::ExprCallableType(node) => Some(ExprRef::CallableType(node)),
             Self::ExprProtocolType(node) => Some(ExprRef::ProtocolType(node)),
             Self::ExprProtocolMethod(node) => Some(ExprRef::ProtocolMethod(node)),
+            Self::ExprStatement(node) => Some(ExprRef::Statement(node)),
 
             _ => None,
         }
@@ -6924,6 +6998,12 @@ impl<'a> From<&'a crate::ExprProtocolMethod> for AnyNodeRef<'a> {
     }
 }
 
+impl<'a> From<&'a crate::ExprStatement> for AnyNodeRef<'a> {
+    fn from(node: &'a crate::ExprStatement) -> AnyNodeRef<'a> {
+        AnyNodeRef::ExprStatement(node)
+    }
+}
+
 impl<'a> From<&'a crate::ExceptHandlerExceptHandler> for AnyNodeRef<'a> {
     fn from(node: &'a crate::ExceptHandlerExceptHandler) -> AnyNodeRef<'a> {
         AnyNodeRef::ExceptHandlerExceptHandler(node)
@@ -7194,6 +7274,7 @@ impl ruff_text_size::Ranged for AnyNodeRef<'_> {
             AnyNodeRef::ExprCallableType(node) => node.range(),
             AnyNodeRef::ExprProtocolType(node) => node.range(),
             AnyNodeRef::ExprProtocolMethod(node) => node.range(),
+            AnyNodeRef::ExprStatement(node) => node.range(),
             AnyNodeRef::ExceptHandlerExceptHandler(node) => node.range(),
             AnyNodeRef::InterpolatedElement(node) => node.range(),
             AnyNodeRef::InterpolatedStringLiteralElement(node) => node.range(),
@@ -7298,6 +7379,7 @@ impl crate::HasNodeIndex for AnyNodeRef<'_> {
             AnyNodeRef::ExprCallableType(node) => node.node_index(),
             AnyNodeRef::ExprProtocolType(node) => node.node_index(),
             AnyNodeRef::ExprProtocolMethod(node) => node.node_index(),
+            AnyNodeRef::ExprStatement(node) => node.node_index(),
             AnyNodeRef::ExceptHandlerExceptHandler(node) => node.node_index(),
             AnyNodeRef::InterpolatedElement(node) => node.node_index(),
             AnyNodeRef::InterpolatedStringLiteralElement(node) => node.node_index(),
@@ -7402,6 +7484,7 @@ impl AnyNodeRef<'_> {
             AnyNodeRef::ExprCallableType(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::ExprProtocolType(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::ExprProtocolMethod(node) => std::ptr::NonNull::from(*node).cast(),
+            AnyNodeRef::ExprStatement(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::ExceptHandlerExceptHandler(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::InterpolatedElement(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::InterpolatedStringLiteralElement(node) => {
@@ -7512,6 +7595,7 @@ impl<'a> AnyNodeRef<'a> {
             AnyNodeRef::ExprCallableType(node) => node.visit_source_order(visitor),
             AnyNodeRef::ExprProtocolType(node) => node.visit_source_order(visitor),
             AnyNodeRef::ExprProtocolMethod(node) => node.visit_source_order(visitor),
+            AnyNodeRef::ExprStatement(node) => node.visit_source_order(visitor),
             AnyNodeRef::ExceptHandlerExceptHandler(node) => node.visit_source_order(visitor),
             AnyNodeRef::InterpolatedElement(node) => node.visit_source_order(visitor),
             AnyNodeRef::InterpolatedStringLiteralElement(node) => node.visit_source_order(visitor),
@@ -7632,6 +7716,7 @@ impl AnyNodeRef<'_> {
                 | AnyNodeRef::ExprCallableType(_)
                 | AnyNodeRef::ExprProtocolType(_)
                 | AnyNodeRef::ExprProtocolMethod(_)
+                | AnyNodeRef::ExprStatement(_)
         )
     }
 }
@@ -8501,6 +8586,16 @@ impl<'a> TryFrom<AnyRootNodeRef<'a>> for &'a crate::ExprProtocolMethod {
     fn try_from(node: AnyRootNodeRef<'a>) -> Result<&'a crate::ExprProtocolMethod, ()> {
         match node {
             AnyRootNodeRef::Expr(Expr::ProtocolMethod(node)) => Ok(node),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<AnyRootNodeRef<'a>> for &'a crate::ExprStatement {
+    type Error = ();
+    fn try_from(node: AnyRootNodeRef<'a>) -> Result<&'a crate::ExprStatement, ()> {
+        match node {
+            AnyRootNodeRef::Expr(Expr::Statement(node)) => Ok(node),
             _ => Err(()),
         }
     }
@@ -9429,6 +9524,7 @@ pub enum NodeKind {
     ExprCallableType,
     ExprProtocolType,
     ExprProtocolMethod,
+    ExprStatement,
     ExceptHandlerExceptHandler,
     InterpolatedElement,
     InterpolatedStringLiteralElement,
@@ -9531,6 +9627,7 @@ impl AnyNodeRef<'_> {
             AnyNodeRef::ExprCallableType(_) => NodeKind::ExprCallableType,
             AnyNodeRef::ExprProtocolType(_) => NodeKind::ExprProtocolType,
             AnyNodeRef::ExprProtocolMethod(_) => NodeKind::ExprProtocolMethod,
+            AnyNodeRef::ExprStatement(_) => NodeKind::ExprStatement,
             AnyNodeRef::ExceptHandlerExceptHandler(_) => NodeKind::ExceptHandlerExceptHandler,
             AnyNodeRef::InterpolatedElement(_) => NodeKind::InterpolatedElement,
             AnyNodeRef::InterpolatedStringLiteralElement(_) => {
@@ -9876,6 +9973,9 @@ pub struct StmtPass {
 pub struct StmtBreak {
     pub node_index: crate::AtomicNodeIndex,
     pub range: ruff_text_size::TextRange,
+    /// basedpython: the value this `break` yields out of an enclosing loop used as a
+    /// [statement expression](crate::ExprStatement). `None` for a plain `break`.
+    pub value: Option<Box<Expr>>,
 }
 
 /// See also [Continue](https://docs.python.org/3/library/ast.html#ast.Continue)
@@ -10403,6 +10503,30 @@ pub struct ExprProtocolMethod {
     pub range: ruff_text_size::TextRange,
     pub name: crate::Identifier,
     pub signature: Box<Expr>,
+}
+
+/// basedpython statement expression: a compound statement written where an
+/// expression is expected.
+///
+/// ```by
+/// a = match command:
+///     case "up":
+///         1
+///     case "down":
+///         -1
+/// ```
+///
+/// `stmt` is the wrapped statement, one of `if`, `match`, `for`, `while`, `raise`
+/// or `return`. the value of the expression is the union of the values produced by
+/// the wrapped statement's tail expressions — and, for the loop forms, of every
+/// `break <value>` targeting that loop. `raise` and `return` never complete, so
+/// they type as `Never`.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub struct ExprStatement {
+    pub node_index: crate::AtomicNodeIndex,
+    pub range: ruff_text_size::TextRange,
+    pub stmt: Box<Stmt>,
 }
 
 /// See also [MatchValue](https://docs.python.org/3/library/ast.html#ast.MatchValue)
@@ -11012,14 +11136,19 @@ impl StmtPass {
 }
 
 impl StmtBreak {
-    pub(crate) fn visit_source_order<'a, V>(&'a self, _: &mut V)
+    pub(crate) fn visit_source_order<'a, V>(&'a self, visitor: &mut V)
     where
         V: SourceOrderVisitor<'a> + ?Sized,
     {
         let StmtBreak {
+            value,
             range: _,
             node_index: _,
         } = self;
+
+        if let Some(value) = value {
+            visitor.visit_expr(value);
+        }
     }
 }
 

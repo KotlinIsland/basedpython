@@ -42,7 +42,9 @@ use crate::place::{
     module_type_implicit_global_symbol, place_by_id, place_from_bindings_with_reachability_cache,
     place_from_declarations_with_reachability_cache, typing_extensions_symbol, typing_symbol,
 };
-use crate::reachability::{ReachabilityEvaluationCache, evaluate_reachability_with_cache};
+use crate::reachability::{
+    ReachabilityEvaluationCache, evaluate_reachability, evaluate_reachability_with_cache,
+};
 use crate::subscript::PyIndex;
 use crate::types::add_inferred_python_version_hint_to_diagnostic;
 use crate::types::attribute_write::{AssignmentAttributeMembers, assignment_attribute_members};
@@ -67,13 +69,13 @@ use crate::types::diagnostic::{
     INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_FIELD_LOOKUP,
     INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_REGEX,
     INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM, INVALID_TYPE_VARIABLE_CONSTRAINTS,
-    NARROWING_GUARD_AS_VALUE, NON_OVERLAPPING_CAST, OPTIONAL_OBJECT_CONVERSION,
-    POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE, TypeCheckDiagnostics,
-    UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL,
-    UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC,
-    UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE, hint_if_stdlib_attribute_exists_on_other_versions,
-    report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
-    report_bad_dunder_delete_call, report_call_to_abstract_method,
+    NARROWING_GUARD_AS_VALUE, NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST,
+    OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
+    TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS,
+    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
+    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
+    hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
+    report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
     report_invalid_class_match_pattern, report_invalid_exception_caught,
     report_invalid_exception_cause, report_invalid_exception_raised,
@@ -1339,6 +1341,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     named_expression.node(self.module()),
                     definition,
                 );
+            }
+            DefinitionKind::StatementExpressionValue(value) => {
+                let ty = self.infer_expression(value.node(self.module()), TypeContext::default());
+                self.bindings.insert(definition, ty);
             }
             DefinitionKind::Comprehension(comprehension) => {
                 self.infer_comprehension_definition(comprehension, definition);
@@ -6511,6 +6517,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // the type expression inference path is responsible
                 todo_type!("inline protocol type in value context")
             }
+            ast::Expr::Statement(statement) => self.infer_statement_expression(statement),
         };
 
         ty = self.apply_type_context(ty, tcx);
@@ -8813,6 +8820,89 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let ty = self.infer_expression(value, add.type_context());
         self.store_expression_type(target, ty);
         add.insert(self, ty)
+    }
+
+    /// basedpython: infers the type of a [statement expression](ast::ExprStatement).
+    ///
+    /// The wrapped statement is inferred as an ordinary statement. Its *value* was
+    /// modelled by the semantic index as a synthetic place written at each of the
+    /// statement's value positions, so the union of the branch types and whether
+    /// the statement is exhaustive both fall out of ordinary place resolution:
+    /// a value that is possibly undefined at this read means some path completes
+    /// the statement without producing one.
+    fn infer_statement_expression(&mut self, statement: &ast::ExprStatement) -> Type<'db> {
+        self.infer_statement(&statement.stmt);
+
+        // `raise` and `return` never complete, so they have no value position to
+        // bind and are not subject to the exhaustiveness check
+        if matches!(&*statement.stmt, ast::Stmt::Raise(_) | ast::Stmt::Return(_)) {
+            return Type::Never;
+        }
+
+        let db = self.db();
+        let file_scope_id = self.scope().file_scope_id(db);
+        let use_def = self.index.use_def_map(file_scope_id);
+        let use_id = ast::ExprRef::Statement(statement).scoped_use_id(db, self.file());
+        let place = place_from_bindings_with_reachability_cache(
+            db,
+            use_def.bindings_at_use(use_id),
+            self.reachability_cache(),
+        )
+        .place;
+
+        match place {
+            Place::Defined(defined) if defined.definedness == Definedness::AlwaysDefined => {
+                defined.ty
+            }
+            Place::Defined(defined) => {
+                self.report_non_exhaustive_statement_expression(statement);
+                defined.ty
+            }
+            // every branch diverges: no path reaches the value, so the expression
+            // is `Never` rather than a value that went missing
+            Place::Undefined
+                if !use_def.bindings_at_use(use_id).any(|binding| {
+                    evaluate_reachability(db, use_def, binding.reachability_constraint)
+                        .may_be_true()
+                }) =>
+            {
+                Type::Never
+            }
+            Place::Undefined => {
+                self.report_non_exhaustive_statement_expression(statement);
+                Type::unknown()
+            }
+        }
+    }
+
+    fn report_non_exhaustive_statement_expression(&self, statement: &ast::ExprStatement) {
+        let Some(builder) = self
+            .context
+            .report_lint(&NON_EXHAUSTIVE_STATEMENT_EXPRESSION, statement)
+        else {
+            return;
+        };
+        let kind = match &*statement.stmt {
+            ast::Stmt::If(_) => "`if`",
+            ast::Stmt::Match(_) => "`match`",
+            ast::Stmt::For(_) => "`for`",
+            ast::Stmt::While(_) => "`while`",
+            _ => "statement",
+        };
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "this {kind} expression can complete without producing a value"
+        ));
+        match &*statement.stmt {
+            ast::Stmt::If(_) | ast::Stmt::Match(_) => {
+                diagnostic.info("every branch must end in an expression, and the branches must cover every case");
+            }
+            ast::Stmt::For(_) | ast::Stmt::While(_) => {
+                diagnostic.info(
+                    "add an `else` clause to give the loop a value when it completes without `break`",
+                );
+            }
+            _ => {}
+        }
     }
 
     fn infer_if_expression(

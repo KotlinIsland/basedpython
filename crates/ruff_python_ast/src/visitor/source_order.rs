@@ -321,6 +321,7 @@ where
             Expr::CallableType(expr) => expr.visit_source_order(visitor),
             Expr::ProtocolType(expr) => expr.visit_source_order(visitor),
             Expr::ProtocolMethod(expr) => expr.visit_source_order(visitor),
+            Expr::Statement(expr) => expr.visit_source_order(visitor),
         }
     }
 

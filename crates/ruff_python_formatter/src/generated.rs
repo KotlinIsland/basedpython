@@ -2210,6 +2210,42 @@ impl<'ast> IntoFormat<PyFormatContext<'ast>> for ast::ExprProtocolMethod {
     }
 }
 
+impl FormatRule<ast::ExprStatement, PyFormatContext<'_>>
+    for crate::expression::expr_statement::FormatExprStatement
+{
+    #[inline]
+    fn fmt(&self, node: &ast::ExprStatement, f: &mut PyFormatter) -> FormatResult<()> {
+        FormatNodeRule::<ast::ExprStatement>::fmt(self, node, f)
+    }
+}
+impl<'ast> AsFormat<PyFormatContext<'ast>> for ast::ExprStatement {
+    type Format<'a> = FormatRefWithRule<
+        'a,
+        ast::ExprStatement,
+        crate::expression::expr_statement::FormatExprStatement,
+        PyFormatContext<'ast>,
+    >;
+    fn format(&self) -> Self::Format<'_> {
+        FormatRefWithRule::new(
+            self,
+            crate::expression::expr_statement::FormatExprStatement::default(),
+        )
+    }
+}
+impl<'ast> IntoFormat<PyFormatContext<'ast>> for ast::ExprStatement {
+    type Format = FormatOwnedWithRule<
+        ast::ExprStatement,
+        crate::expression::expr_statement::FormatExprStatement,
+        PyFormatContext<'ast>,
+    >;
+    fn into_format(self) -> Self::Format {
+        FormatOwnedWithRule::new(
+            self,
+            crate::expression::expr_statement::FormatExprStatement::default(),
+        )
+    }
+}
+
 impl FormatRule<ast::ExceptHandlerExceptHandler, PyFormatContext<'_>>
     for crate::other::except_handler_except_handler::FormatExceptHandlerExceptHandler
 {

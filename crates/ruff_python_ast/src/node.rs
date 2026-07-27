@@ -73,6 +73,20 @@ impl ast::ExprBoolOp {
     }
 }
 
+impl ast::ExprStatement {
+    pub(crate) fn visit_source_order<'a, V>(&'a self, visitor: &mut V)
+    where
+        V: SourceOrderVisitor<'a> + ?Sized,
+    {
+        let ast::ExprStatement {
+            stmt,
+            range: _,
+            node_index: _,
+        } = self;
+        visitor.visit_stmt(stmt);
+    }
+}
+
 impl ast::ExprCompare {
     pub(crate) fn visit_source_order<'a, V>(&'a self, visitor: &mut V)
     where

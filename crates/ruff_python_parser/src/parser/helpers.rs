@@ -118,6 +118,7 @@ pub(super) fn detect_invalid_pre_py39_decorator_node(
         Expr::CallableType(_) => "callable type expression",
         Expr::ProtocolType(_) => "inline protocol type expression",
         Expr::ProtocolMethod(_) => "protocol method member",
+        Expr::Statement(_) => "statement expression",
     };
 
     Some((RelaxedDecoratorError::Other(description), expr.range()))

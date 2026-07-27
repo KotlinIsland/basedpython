@@ -274,7 +274,10 @@ fields = []
 
 [Stmt.nodes.StmtBreak]
 doc = "See also [Break](https://docs.python.org/3/library/ast.html#ast.Break)"
-fields = []
+fields = [
+  { name = "value", type = "Expr?", doc = """basedpython: the value this `break` yields out of an enclosing loop used as a
+[statement expression](crate::ExprStatement). `None` for a plain `break`.""" },
+]
 
 [Stmt.nodes.StmtContinue]
 doc = "See also [Continue](https://docs.python.org/3/library/ast.html#ast.Continue)"
@@ -666,6 +669,26 @@ fields = [
   { name = "name", type = "Identifier" },
   { name = "signature", type = "Expr" },
 ]
+
+[Expr.nodes.ExprStatement]
+doc = """basedpython statement expression: a compound statement written where an
+expression is expected.
+
+```by
+a = match command:
+    case "up":
+        1
+    case "down":
+        -1
+```
+
+`stmt` is the wrapped statement, one of `if`, `match`, `for`, `while`, `raise`
+or `return`. the value of the expression is the union of the values produced by
+the wrapped statement's tail expressions — and, for the loop forms, of every
+`break <value>` targeting that loop. `raise` and `return` never complete, so
+they type as `Never`."""
+fields = [{ name = "stmt", type = "Stmt" }]
+custom_source_order = true
 
 [ExceptHandler]
 doc = "See also [excepthandler](https://docs.python.org/3/library/ast.html#ast.excepthandler)"

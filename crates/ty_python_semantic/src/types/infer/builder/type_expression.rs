@@ -1505,6 +1505,20 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 Type::unknown()
             }
 
+            ast::Expr::Statement(_) => {
+                // the wrapped statement is not inferred here: a type expression is
+                // not a control-flow position, so the semantic index recorded no
+                // definitions for it
+                self.report_invalid_type_expression(
+                    expression,
+                    format_args!(
+                        "Statement expressions are not allowed in {}s",
+                        self.type_expression_context()
+                    ),
+                );
+                Type::unknown()
+            }
+
             // =================================================================================
             // Branches where we probably should emit diagnostics in some context, but don't yet
             // =================================================================================

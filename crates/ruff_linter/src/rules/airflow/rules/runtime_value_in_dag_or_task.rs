@@ -270,7 +270,8 @@ fn find_runtime_varying_call<'a>(
         | Expr::IpyEscapeCommand(_)
         | Expr::CallableType(_)
         | Expr::ProtocolType(_)
-        | Expr::ProtocolMethod(_) => None,
+        | Expr::ProtocolMethod(_)
+        | Expr::Statement(_) => None,
     }
 }
 

@@ -171,7 +171,8 @@ pub(crate) fn bit_count(checker: &Checker, call: &ExprCall) {
         | Expr::Subscript(_)
         | Expr::CallableType(_)
         | Expr::ProtocolType(_)
-        | Expr::ProtocolMethod(_) => false,
+        | Expr::ProtocolMethod(_)
+        | Expr::Statement(_) => false,
     };
 
     // check if the fix is safe or not

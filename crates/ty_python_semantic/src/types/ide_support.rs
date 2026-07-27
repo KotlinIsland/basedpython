@@ -1922,6 +1922,7 @@ mod resolve_definition {
             | DefinitionKind::ImportFromSubmodule(_)
             | DefinitionKind::StarImport(_)
             | DefinitionKind::NamedExpression(_)
+            | DefinitionKind::StatementExpressionValue(_)
             | DefinitionKind::Assignment(_)
             | DefinitionKind::AnnotatedAssignment(_)
             | DefinitionKind::AugmentedAssignment(_)

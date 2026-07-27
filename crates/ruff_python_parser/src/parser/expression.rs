@@ -117,6 +117,18 @@ pub(super) const END_EXPR_SET: TokenSet = TokenSet::new([
 /// Tokens that can appear at the end of a sequence.
 const END_SEQUENCE_SET: TokenSet = END_EXPR_SET.remove(TokenKind::Comma);
 
+/// basedpython: whether `kind` can start a
+/// [statement expression](ast::ExprStatement).
+///
+/// `match` is a soft keyword and is covered by the soft-keyword checks that
+/// accompany every use of this predicate.
+pub(super) const fn starts_statement_expression(kind: TokenKind) -> bool {
+    matches!(
+        kind,
+        TokenKind::If | TokenKind::For | TokenKind::While | TokenKind::Raise | TokenKind::Return
+    )
+}
+
 impl<'src> Parser<'src> {
     /// Returns `true` if the parser is at a name or keyword (including soft keyword) token.
     pub(super) fn at_name_or_keyword(&self) -> bool {
@@ -510,7 +522,9 @@ impl<'src> Parser<'src> {
             // now — its result-of-optional runtime is still being settled.)
             if current_token == TokenKind::DoubleQuestion
                 && self.options.mode != Mode::Ipython
-                && !(EXPR_SET.contains(self.peek()) || self.peek().is_soft_keyword())
+                && !(EXPR_SET.contains(self.peek())
+                    || self.peek().is_soft_keyword()
+                    || starts_statement_expression(self.peek()))
             {
                 if OperatorPrecedence::Or <= left_precedence {
                     break;
@@ -1080,6 +1094,32 @@ impl<'src> Parser<'src> {
                     Expr::ProtocolType(self.parse_inline_protocol_type(start))
                 } else {
                     Expr::Name(self.parse_name(context))
+                }
+            }
+            // basedpython statement expressions. gated on the source type rather
+            // than reported through `error_if_not_basedpython`: these keywords
+            // already appear in `.py` files being recovered from, and consuming a
+            // whole suite there would replace python's own diagnostics.
+            //
+            // `for` is excluded in the contexts where it delimits a comprehension
+            // clause, so a missing comprehension target still reports as such
+            TokenKind::If
+            | TokenKind::While
+            | TokenKind::Raise
+            | TokenKind::Return
+            | TokenKind::Match
+                if self.options.is_basedpython =>
+            {
+                match self.parse_statement_expression() {
+                    Some(expr) => Expr::Statement(expr),
+                    // the `match` soft keyword was an ordinary identifier
+                    None => Expr::Name(self.parse_name(context)),
+                }
+            }
+            TokenKind::For if self.options.is_basedpython && !context.is_for_excluded() => {
+                match self.parse_statement_expression() {
+                    Some(expr) => Expr::Statement(expr),
+                    None => Expr::Name(self.parse_name(context)),
                 }
             }
             TokenKind::IpyEscapeCommand => {
@@ -4540,7 +4580,13 @@ impl<'src> Parser<'src> {
             return self.parse_yield_from_expression(start);
         }
 
-        let value = self.at_expr().then(|| {
+        // basedpython: a statement expression is not a tail position of the
+        // statement, so `validate_statement_expressions` rejects it — parse it
+        // anyway so that is the diagnostic the user sees, rather than a cascade
+        // from `yield` having been left without a value
+        let at_value = self.at_expr() || starts_statement_expression(self.current_token_kind());
+
+        let value = at_value.then(|| {
             let parsed_expr = self.parse_expression_list(ExpressionContext::starred_bitwise_or());
 
             // test_ok iter_unpack_yield_py37
