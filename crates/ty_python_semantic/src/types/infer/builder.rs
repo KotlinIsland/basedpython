@@ -107,6 +107,7 @@ use crate::types::infer::{
     nearest_enclosing_function, original_class_type,
 };
 use crate::types::match_pattern::{ClassPatternPositionalResult, class_pattern_positional_result};
+use crate::types::match_type::literal_pattern_type;
 use crate::types::narrow::NarrowingEvaluatorExtension;
 use crate::types::narrow::pattern_success_types;
 use crate::types::newtype::NewType;
@@ -165,7 +166,9 @@ use ty_python_core::{ExpressionNodeKey, Statement};
 mod annotation_expression;
 mod attribute_assignment;
 mod binary_expressions;
-pub(crate) use binary_expressions::{literal_binary_op, literal_unary_op};
+pub(crate) use binary_expressions::{
+    fold_tuple_concat, fold_tuple_repeat, literal_binary_op, literal_unary_op,
+};
 mod class;
 mod dict;
 mod dynamic_class;
@@ -1428,6 +1431,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             DefinitionKind::TypeVarTuple(node) => {
                 self.infer_typevartuple_definition(node.node(self.module()), definition);
             }
+            DefinitionKind::TypeMatchCapture(capture) => {
+                self.infer_type_match_capture_definition(
+                    capture.identifier(self.module()),
+                    capture.is_variadic(),
+                    definition,
+                );
+            }
             DefinitionKind::LoopHeader(loop_header) => {
                 self.infer_loop_header_definition(loop_header, definition);
             }
@@ -2008,7 +2018,25 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .inference_flags
             .replace(InferenceFlags::CHECK_UNBOUND_TYPEVARS, true);
         self.context.inference_flags |= InferenceFlags::IN_TYPE_ALIAS;
-        let value_ty = self.infer_type_expression(&type_alias.value);
+        // basedpython: a match type's `value` is the subject its `case` patterns are matched
+        // against, and an unpacked pack (`match *Shape:`) is the ordinary way to write one.
+        // an ordinary alias's value is left alone — its flags are whatever the surrounding
+        // inference set, and forcing one either way here would change unrelated behaviour
+        let value_ty = if type_alias.cases.is_empty() {
+            self.infer_type_expression(&type_alias.value)
+        } else {
+            let previously_in_valid_unpack_context = self
+                .context
+                .inference_flags
+                .replace(InferenceFlags::IN_VALID_UNPACK_CONTEXT, true);
+            let value_ty = self.infer_type_expression(&type_alias.value);
+            self.context.inference_flags.set(
+                InferenceFlags::IN_VALID_UNPACK_CONTEXT,
+                previously_in_valid_unpack_context,
+            );
+            value_ty
+        };
+        self.infer_match_type_cases(type_alias);
         self.context
             .inference_flags
             .remove(InferenceFlags::IN_TYPE_ALIAS);
@@ -2045,6 +2073,168 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // Replace with `Divergent`.
             self.expressions
                 .insert(type_alias.value.as_ref().into(), expanded);
+        }
+    }
+
+    /// basedpython: infers the `case` blocks of a match type alias.
+    ///
+    /// Each body is inferred once, as a type expression written in terms of that case's
+    /// captures. Applying the alias only substitutes those captures, so this is where the
+    /// bodies are checked and where an unusable pattern is reported.
+    fn infer_match_type_cases(&mut self, type_alias: &ast::StmtTypeAlias) {
+        for case in &type_alias.cases {
+            self.report_invalid_match_type_pattern(&case.pattern);
+            self.report_inconsistent_match_type_captures(&case.pattern);
+            for stmt in &case.body {
+                // any other body is a parse error, already reported
+                if let ast::Stmt::Expr(expression) = stmt {
+                    self.infer_type_expression(&expression.value);
+                }
+            }
+        }
+    }
+
+    /// basedpython: reports the pattern forms a match type cannot decide.
+    ///
+    /// A type-level match takes apart a sequence of types, so sequence, capture, literal and
+    /// or-patterns all mean something. A class or mapping pattern destructures a *value*, and
+    /// a bare `*Rest` has no sequence to spread — neither has a meaning here.
+    fn report_invalid_match_type_pattern(&mut self, pattern: &ast::Pattern) {
+        match pattern {
+            ast::Pattern::MatchClass(_) | ast::Pattern::MatchMapping(_) => {
+                if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, pattern) {
+                    builder.into_diagnostic(
+                        "A match type's `case` cannot use a class or mapping pattern; \
+                         it matches types, not values",
+                    );
+                }
+            }
+            ast::Pattern::MatchStar(_) => {
+                if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, pattern) {
+                    builder.into_diagnostic(
+                        "A starred pattern is only valid inside a sequence pattern",
+                    );
+                }
+            }
+            ast::Pattern::MatchSequence(ast::PatternMatchSequence { patterns, .. }) => {
+                let mut stars = patterns.iter().filter(|pattern| pattern.is_match_star());
+                stars.next();
+                for extra in stars {
+                    if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, extra) {
+                        builder.into_diagnostic(
+                            "A sequence pattern can have at most one starred capture",
+                        );
+                    }
+                }
+                for pattern in patterns {
+                    if !pattern.is_match_star() {
+                        self.report_invalid_match_type_pattern(pattern);
+                    }
+                }
+            }
+            ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => {
+                for pattern in patterns {
+                    self.report_invalid_match_type_pattern(pattern);
+                }
+            }
+            ast::Pattern::MatchAs(ast::PatternMatchAs { pattern, .. }) => {
+                if let Some(pattern) = pattern.as_deref() {
+                    self.report_invalid_match_type_pattern(pattern);
+                }
+            }
+            ast::Pattern::MatchValue(ast::PatternMatchValue { value, .. }) => {
+                if literal_pattern_type(self.db(), value).is_none()
+                    && let Some(builder) =
+                        self.context.report_lint(&INVALID_TYPE_FORM, value.as_ref())
+                {
+                    builder.into_diagnostic(
+                        "A match type's `case` value pattern must be a literal type",
+                    );
+                }
+            }
+            ast::Pattern::MatchSingleton(_) => {}
+        }
+    }
+
+    /// basedpython: reports the two ways a `case` pattern can bind names inconsistently.
+    ///
+    /// Both are errors python's own parser rejects, which ruff's does not, so they reach
+    /// inference. Left unreported they would be silent: a duplicate has to pick one of the
+    /// two bindings, and an alternative missing a name leaves the body naming a capture that
+    /// was never bound. Evaluation refuses to answer either way, so the diagnostic is what
+    /// tells the author which one it is.
+    fn report_inconsistent_match_type_captures(&mut self, pattern: &ast::Pattern) {
+        let mut seen: Vec<&ast::Identifier> = Vec::new();
+        self.report_duplicate_match_type_captures(pattern, &mut seen);
+        self.report_uneven_match_type_alternatives(pattern);
+    }
+
+    /// Reports a name captured more than once by the same pattern (`case (A, A)`).
+    fn report_duplicate_match_type_captures<'p>(
+        &mut self,
+        pattern: &'p ast::Pattern,
+        seen: &mut Vec<&'p ast::Identifier>,
+    ) {
+        // an or-pattern's alternatives are exclusive, so each starts from the names bound
+        // before it rather than from the ones its siblings bound
+        if let ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) = pattern {
+            let outer = seen.len();
+            for alternative in patterns {
+                seen.truncate(outer);
+                self.report_duplicate_match_type_captures(alternative, seen);
+            }
+            seen.truncate(outer);
+            return;
+        }
+
+        for name in match_type_pattern_captures(pattern) {
+            if seen.iter().any(|earlier| earlier.id == name.id) {
+                if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, name) {
+                    builder.into_diagnostic(format_args!(
+                        "Multiple assignments to name `{}` in a match type's `case` pattern",
+                        name.id,
+                    ));
+                }
+            } else {
+                seen.push(name);
+            }
+        }
+    }
+
+    /// Reports an or-pattern whose alternatives do not all bind the same names.
+    fn report_uneven_match_type_alternatives(&mut self, pattern: &ast::Pattern) {
+        if let ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) = pattern
+            && let [first, rest @ ..] = patterns.as_slice()
+        {
+            let expected: Vec<&ast::name::Name> = match_type_pattern_captures(first)
+                .map(|name| &name.id)
+                .collect();
+            for alternative in rest {
+                let bound: Vec<&ast::name::Name> = match_type_pattern_captures(alternative)
+                    .map(|name| &name.id)
+                    .collect();
+                let mut missing = expected
+                    .iter()
+                    .filter(|name| !bound.contains(*name))
+                    .chain(bound.iter().filter(|name| !expected.contains(*name)))
+                    .peekable();
+                if missing.peek().is_some()
+                    && let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, alternative)
+                {
+                    let names = missing
+                        .map(|name| format!("`{name}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    builder.into_diagnostic(format_args!(
+                        "Alternative patterns of a match type's `case` must all bind the \
+                         same names; not bound by every alternative: {names}"
+                    ));
+                }
+            }
+        }
+
+        for nested in match_type_subpatterns(pattern) {
+            self.report_uneven_match_type_alternatives(nested);
         }
     }
 
@@ -14692,4 +14882,53 @@ fn attribute_has_covariant_projected_typevar<'db>(
             false
         }
     })
+}
+
+/// basedpython: the names a match type's `case` pattern captures, in source order.
+///
+/// A starred capture (`*Rest`) counts the same as a plain one: both introduce exactly one
+/// type variable, and both have to be bound consistently across an or-pattern's alternatives.
+fn match_type_pattern_captures(
+    pattern: &ast::Pattern,
+) -> Box<dyn Iterator<Item = &ast::Identifier> + '_> {
+    match pattern {
+        ast::Pattern::MatchAs(ast::PatternMatchAs {
+            pattern: inner,
+            name,
+            ..
+        }) => Box::new(
+            inner
+                .as_deref()
+                .into_iter()
+                .flat_map(match_type_pattern_captures)
+                .chain(name.as_ref()),
+        ),
+        ast::Pattern::MatchStar(ast::PatternMatchStar { name, .. }) => {
+            Box::new(name.as_ref().into_iter())
+        }
+        ast::Pattern::MatchSequence(ast::PatternMatchSequence { patterns, .. })
+        | ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => {
+            Box::new(patterns.iter().flat_map(match_type_pattern_captures))
+        }
+        ast::Pattern::MatchValue(_)
+        | ast::Pattern::MatchSingleton(_)
+        | ast::Pattern::MatchClass(_)
+        | ast::Pattern::MatchMapping(_) => Box::new(std::iter::empty()),
+    }
+}
+
+/// basedpython: the patterns nested directly inside `pattern`.
+fn match_type_subpatterns(pattern: &ast::Pattern) -> Box<dyn Iterator<Item = &ast::Pattern> + '_> {
+    match pattern {
+        ast::Pattern::MatchAs(ast::PatternMatchAs { pattern, .. }) => {
+            Box::new(pattern.as_deref().into_iter())
+        }
+        ast::Pattern::MatchSequence(ast::PatternMatchSequence { patterns, .. })
+        | ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => Box::new(patterns.iter()),
+        ast::Pattern::MatchStar(_)
+        | ast::Pattern::MatchValue(_)
+        | ast::Pattern::MatchSingleton(_)
+        | ast::Pattern::MatchClass(_)
+        | ast::Pattern::MatchMapping(_) => Box::new(std::iter::empty()),
+    }
 }

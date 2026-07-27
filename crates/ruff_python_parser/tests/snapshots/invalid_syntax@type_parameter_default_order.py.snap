@@ -366,6 +366,7 @@ Module(
                             range: 110..113,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),

@@ -36,6 +36,7 @@ Module(
                                             range: 8..10,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Starred(
                                                 ExprStarred {
@@ -72,6 +73,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),
@@ -101,6 +103,7 @@ Module(
                                             range: 33..35,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Starred(
                                                 ExprStarred {
@@ -154,6 +157,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),
@@ -183,6 +187,7 @@ Module(
                                             range: 65..67,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Yield(
                                                 ExprYield {
@@ -220,6 +225,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),
@@ -249,6 +255,7 @@ Module(
                                             range: 93..95,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             YieldFrom(
                                                 ExprYieldFrom {
@@ -284,6 +291,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),
@@ -313,6 +321,7 @@ Module(
                                             range: 126..128,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Name(
                                                 ExprName {
@@ -357,6 +366,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),

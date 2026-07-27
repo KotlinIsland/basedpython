@@ -60,3 +60,14 @@ class Guarded:
 Defined = int
 good_protocol: protocol(a: Defined; def m(self, n: Defined) -> Defined)
 bad_protocol: protocol(a: UndefinedMember; def m(self) -> UndefinedReturn)
+
+# a match type's `case` captures are type variables, and its bodies are type
+# expressions — neither is visited, so nothing inside is resolved either way. the
+# bound on a `TypeVarTuple` *is* a real type reference
+type NDTuple[T, *Shape: int] = match *Shape:
+    case ():
+        T
+    case (Dim, *Rest):
+        (NDTuple[T, *Rest],) * Dim
+
+type BadBound[*Ts: UndefinedBound] = tuple[*Ts]

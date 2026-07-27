@@ -73,6 +73,7 @@ Module(
                             ctx: Invalid,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),

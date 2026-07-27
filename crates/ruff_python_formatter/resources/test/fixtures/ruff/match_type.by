@@ -1,0 +1,38 @@
+type NDTuple[T, *Shape: int] = match *Shape:
+    case ():
+        T
+    case (Dim, *Rest):
+        (NDTuple[T, *Rest],) * Dim
+
+
+private type Hidden[*Dims: int] = match *Dims:
+    case ():
+        int
+    case (D, *Rest):
+        D
+
+
+type Pick[T] = match T:
+    # a comment inside the block
+    case int | str:
+        bool
+    case _:
+        T
+
+
+type OneCase[*Ts] = match *Ts:
+    case (A, B): (B, A)
+
+
+type NotAMatch = match
+
+
+class Holder:
+    type Inner[*Ts] = match *Ts:
+        case ():
+            int
+        case _:
+            str
+
+
+def f(a: NDTuple[int, 2, 3]) -> None: ...

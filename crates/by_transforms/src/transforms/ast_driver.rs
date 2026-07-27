@@ -39,7 +39,7 @@ use super::{
     dynamic_keyword, empty_declarations, extension, float_const, force_unwrap, frameworks,
     generic_call, generics, grapheme_string, identity_swap, if_let, implementation,
     implicit_receiver, implicit_typing, inferred_annotation, init_method, just_float, kw_subscript,
-    literal_types, local_once, main_function, modifiers, mutable_defaults, none_chain,
+    literal_types, local_once, main_function, match_type, modifiers, mutable_defaults, none_chain,
     optional_type, overload, parametric_is, postfix_await, propagate, properties, protocol_type,
     raises_clause, reified_generic, repeated_underscore, sentinel, some_ctor, soundness,
     statement_expression, string_tag, super_keyword, symbolic_type_op, top_star, trailing_lambda,
@@ -467,6 +467,7 @@ pub(crate) fn run_against_source<'a>(
     let raises_guard_pass =
         raises_clause::RaisesGuardPass::new(source_ref, config.runtime_raises_checks);
     let type_fn_pass = type_fn::TypeFnPass::new(source_ref);
+    let match_type_pass = match_type::MatchTypePass::new(source_ref);
     let modifiers_pass = modifiers::ModifiersPass::new(source_ref);
     let main_function_pass = main_function::MainFunction::new(source_ref, config.is_stub);
     let empty_declarations_pass = empty_declarations::EmptyDeclarations::new();
@@ -550,6 +551,9 @@ pub(crate) fn run_against_source<'a>(
         // erase `type def` declarations; their applications were already folded to
         // the resolved type by the symbolic pass above
         &type_fn_pass,
+        // replace a match type's `case` blocks with a runtime value, and strip
+        // `TypeVarTuple` bounds wherever they appear
+        &match_type_pass,
         &modifiers_pass,
         // after modifiers so the entry-point guard follows any `__all__` it
         // emits, and before the AST-mutation passes so `main`'s decorator

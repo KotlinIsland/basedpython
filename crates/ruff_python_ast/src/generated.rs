@@ -9771,6 +9771,10 @@ pub struct StmtTypeAlias {
     pub name: Box<Expr>,
     pub type_params: Option<Box<crate::TypeParams>>,
     pub value: Box<Expr>,
+    /// basedpython: the `case` blocks of a match type
+    /// `type X[...] = match S: ...`. Empty for an ordinary alias; when non-empty, `value` is the
+    /// match subject rather than the alias's value, and each case body is a single type expression
+    pub cases: Vec<crate::MatchCase>,
     /// basedpython: when true, this alias was written `private type X = V`.
     /// A type alias has no decorator list, so unlike `def`/`class` the visibility
     /// modifier can't ride along as a synthetic decorator and is recorded here
@@ -10626,6 +10630,9 @@ pub struct TypeParamTypeVarTuple {
     pub node_index: crate::AtomicNodeIndex,
     pub range: ruff_text_size::TextRange,
     pub name: crate::Identifier,
+    /// basedpython: an upper bound applied to every
+    /// element of the pack, written `*Ts: int`. CPython rejects a bound on a `TypeVarTuple`
+    pub bound: Option<Box<Expr>>,
     pub default: Option<Box<Expr>>,
 }
 
@@ -10790,6 +10797,7 @@ impl StmtTypeAlias {
             name,
             type_params,
             value,
+            cases,
             is_private: _,
             range: _,
             node_index: _,
@@ -10801,6 +10809,10 @@ impl StmtTypeAlias {
         }
 
         visitor.visit_expr(value);
+
+        for elm in cases {
+            visitor.visit_match_case(elm);
+        }
     }
 }
 
@@ -11847,11 +11859,16 @@ impl TypeParamTypeVarTuple {
     {
         let TypeParamTypeVarTuple {
             name,
+            bound,
             default,
             range: _,
             node_index: _,
         } = self;
         visitor.visit_identifier(name);
+
+        if let Some(bound) = bound {
+            visitor.visit_expr(bound);
+        }
 
         if let Some(default) = default {
             visitor.visit_expr(default);

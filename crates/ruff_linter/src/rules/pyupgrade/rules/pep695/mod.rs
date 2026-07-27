@@ -197,6 +197,7 @@ impl<'a> From<&'a TypeVar<'a>> for TypeParam {
                 variance: None,
             }),
             TypeParamKind::TypeVarTuple => TypeParam::TypeVarTuple(TypeParamTypeVarTuple {
+                bound: None,
                 range: TextRange::default(),
                 node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                 name: Identifier::new(*name, TextRange::default()),

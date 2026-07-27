@@ -139,6 +139,18 @@ pub(crate) fn bind_typevar<'db>(
             }
             continue;
         }
+        // basedpython: a match type's `case` captures are type variables defined in the
+        // alias's own value scope — not in its type-parameter list — so the alias itself is
+        // what binds them
+        if let NodeWithScopeKind::TypeAlias(type_alias) = ancestor_scope.node()
+            && typevar
+                .definition(db)
+                .is_some_and(|definition| definition.file_scope(db) == ancestor_scope_id)
+        {
+            let definition = index.expect_single_definition(type_alias);
+            return Some(typevar.with_binding_context(db, definition));
+        }
+
         let generic_context = GenericContext::of_node(db, ancestor_scope.node(), index);
         // If we've already crossed a class boundary, skip class-scoped generic contexts.
         // This prevents inner classes from accessing type parameters of outer classes.

@@ -23,6 +23,7 @@ use crate::types::infer::builder::type_expression::{
 };
 use crate::types::infer::builder::{ArgExpr, ArgumentsIter, MultiInferenceGuard};
 use crate::types::infer::{InferenceFlags, TypeExpressionFlags};
+use crate::types::match_type::{MatchTypeOutcome, evaluate_match_type};
 use crate::types::regex;
 use crate::types::special_form::AliasSpec;
 use crate::types::subscript::{LegacyGenericOrigin, SubscriptError, SubscriptErrorKind};
@@ -699,12 +700,31 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             Type::KnownInstance(KnownInstanceType::TypeAliasType(type_alias))
         };
 
-        self.infer_explicit_callable_specialization(
+        let specialized = self.infer_explicit_callable_specialization(
             subscript,
             value_ty,
             generic_context,
             specialize,
-        )
+        );
+
+        // basedpython: a match type whose arguments are all known but match no `case` has no
+        // value. Silently yielding `Unknown` would hide a mistake the author can act on —
+        // either an argument is wrong or the match is missing a case
+        if let Type::KnownInstance(KnownInstanceType::TypeAliasType(type_alias)) = specialized
+            && let Some(alias) = type_alias.as_pep_695_type_alias()
+            && matches!(
+                evaluate_match_type(db, alias),
+                Some(MatchTypeOutcome::NoCaseMatched)
+            )
+            && let Some(builder) = self.context.report_lint(&INVALID_TYPE_ARGUMENTS, subscript)
+        {
+            builder.into_diagnostic(format_args!(
+                "No `case` of match type `{}` matches these type arguments",
+                type_alias.name(db),
+            ));
+        }
+
+        specialized
     }
 
     pub(super) fn infer_explicit_function_specialization(
@@ -1433,6 +1453,56 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         }
                         error = Some(ExplicitSpecializationError::UnsatisfiedBound);
                         specialization_types.push(Some(Type::unknown()));
+                        continue;
+                    }
+
+                    // basedpython: `*Ts: int` bounds every *element* of the pack, so the
+                    // packed tuple is checked element by element. Checking the pack itself
+                    // against the bound below would compare a tuple against `int` and always
+                    // fail
+                    if typevar.is_typevartuple(db)
+                        && let Some(TypeVarBoundOrConstraints::UpperBound(bound)) =
+                            typevar.typevar(db).bound_or_constraints(db)
+                    {
+                        let unbounded_element = provided_type
+                            .exact_tuple_instance_spec(db)
+                            .and_then(|spec| {
+                                spec.fixed_elements()
+                                    .find(|element| {
+                                        element
+                                            .when_assignable_to(
+                                                db,
+                                                bound,
+                                                &constraints,
+                                                InferableTypeVars::None,
+                                            )
+                                            .is_never_satisfied(db)
+                                    })
+                                    .copied()
+                            });
+                        if let Some(element) = unbounded_element {
+                            if let Some(builder) = self
+                                .context
+                                .report_lint(&INVALID_TYPE_ARGUMENTS, type_argument.node)
+                            {
+                                let mut diagnostic = builder.into_diagnostic(format_args!(
+                                    "Type `{}` is not assignable to upper bound `{}` \
+                                        of type variable tuple `{}`",
+                                    element.display(db),
+                                    bound.display(db),
+                                    typevar.identity(db).display(db),
+                                ));
+                                add_typevar_definition(db, &mut diagnostic, typevar);
+                                element
+                                    .assignability_error_context(db, bound)
+                                    .attach_to(db, &mut diagnostic);
+                            }
+                            error = Some(ExplicitSpecializationError::UnsatisfiedBound);
+                        }
+                        // the pack is kept even when an element violates the bound: replacing
+                        // it with `Unknown` would stop it reading as a tuple at all, and a
+                        // match type over it would then report a second, misleading error
+                        specialization_types.push(Some(provided_type));
                         continue;
                     }
 

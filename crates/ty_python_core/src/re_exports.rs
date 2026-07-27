@@ -250,6 +250,7 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
                 name,
                 type_params: _,
                 value: _,
+                cases: _,
                 range: _,
                 node_index: _,
                 is_private: _,

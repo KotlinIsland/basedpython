@@ -701,6 +701,7 @@ impl<'a> Generator<'a> {
                 node_index: _,
                 type_params,
                 value,
+                cases,
                 is_private,
             }) => {
                 statement!({
@@ -713,8 +714,23 @@ impl<'a> Generator<'a> {
                         self.unparse_type_params(type_params);
                     }
                     self.p(" = ");
-                    self.unparse_expr(value, precedence::ASSIGN);
+                    // basedpython: a match type's value is the `case` blocks; `value` is the
+                    // subject they are matched against
+                    if cases.is_empty() {
+                        self.unparse_expr(value, precedence::ASSIGN);
+                    } else {
+                        self.p("match ");
+                        self.unparse_expr(value, precedence::MAX);
+                        self.p(":");
+                    }
                 });
+                for case in cases {
+                    self.indent_depth = self.indent_depth.saturating_add(1);
+                    statement!({
+                        self.unparse_match_case(case);
+                    });
+                    self.indent_depth = self.indent_depth.saturating_sub(1);
+                }
             }
             Stmt::Raise(ast::StmtRaise {
                 exc,
@@ -1066,9 +1082,18 @@ impl<'a> Generator<'a> {
                     self.unparse_expr(expr, precedence::MAX);
                 }
             }
-            TypeParam::TypeVarTuple(TypeParamTypeVarTuple { name, default, .. }) => {
+            TypeParam::TypeVarTuple(TypeParamTypeVarTuple {
+                name,
+                bound,
+                default,
+                ..
+            }) => {
                 self.p("*");
                 self.p_id(name);
+                if let Some(expr) = bound {
+                    self.p(": ");
+                    self.unparse_expr(expr, precedence::MAX);
+                }
                 if let Some(expr) = default {
                     self.p(" = ");
                     self.unparse_expr(expr, precedence::MAX);
@@ -2642,6 +2667,39 @@ if True:
             based_round_trip(contents),
             contents.replace('\n', LineEnding::default().as_str())
         );
+    }
+
+    /// basedpython: a match type is a clause header plus a suite of `case` blocks, and a
+    /// `TypeVarTuple` may carry a bound — both have to survive a re-render, or a pass that
+    /// rewrites an enclosing statement would silently drop them.
+    ///
+    /// A sequence pattern comes back bracketed (`case (A, B)` → `case [A, B]`), which is how
+    /// the generator renders every sequence pattern; the two spell the same pattern.
+    #[test]
+    fn match_type_round_trips() {
+        assert_eq!(
+            based_round_trip(
+                "type NDTuple[T, *Shape: int] = match *Shape:
+    case ():
+        T
+    case (Dim, *Rest):
+        (NDTuple[T, *Rest],) * Dim"
+            ),
+            "type NDTuple[T, *Shape: int] = match *Shape:
+    case []:
+        T
+    case [Dim, *Rest]:
+        (NDTuple[T, *Rest],) * Dim"
+                .replace('\n', LineEnding::default().as_str())
+        );
+        basedpython_wrapped_round_trip(
+            "type Pick[T] = match T:
+    case int | str:
+        bool
+    case _:
+        T",
+        );
+        basedpython_wrapped_round_trip("type Plain[T, *Ts: int] = tuple[T, *Ts]");
     }
 
     /// basedpython: `-> asserts x` names a place, not a type, so the generator — which
