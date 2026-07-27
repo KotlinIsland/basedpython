@@ -54,6 +54,7 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
                 name,
                 decorator_list,
                 returns,
+                raises: _,
                 parameters,
                 body,
                 type_params: _,

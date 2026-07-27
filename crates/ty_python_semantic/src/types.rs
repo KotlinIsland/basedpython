@@ -166,6 +166,7 @@ mod diagnostic;
 pub(crate) mod display;
 pub(crate) mod enums;
 mod equality;
+pub mod exceptions;
 pub(crate) mod extensions;
 pub(crate) mod function;
 mod generics;

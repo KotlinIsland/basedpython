@@ -573,6 +573,7 @@ impl Workspace {
             &InlayHintSettings {
                 variable_types: true,
                 call_argument_names: true,
+                inferred_raises: true,
             },
         );
 
@@ -1432,6 +1433,8 @@ impl From<ty_ide::InlayHintKind> for InlayHintKind {
         match kind {
             ty_ide::InlayHintKind::Type => Self::Type,
             ty_ide::InlayHintKind::CallArgumentName => Self::Parameter,
+            // basedpython: an inferred exception set is a type, like a return type
+            ty_ide::InlayHintKind::Raises => Self::Type,
         }
     }
 }

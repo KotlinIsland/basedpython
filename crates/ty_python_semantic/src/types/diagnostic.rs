@@ -144,6 +144,10 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_PARAMETRIZE);
     registry.register_lint(&UNANNOTATED_MODEL_FIELD);
     registry.register_lint(&ESCAPING_LOCAL);
+    registry.register_lint(&UNDECLARED_RAISE);
+    registry.register_lint(&OVERRIDE_RAISE);
+    registry.register_lint(&UNHANDLED_EXCEPTION);
+    registry.register_lint(&INVALID_RAISES_CLAUSE);
     registry.register_lint(&ONCE_NOT_CALLED);
     registry.register_lint(&ONCE_CALLED_TWICE);
     registry.register_lint(&TRAILING_LAMBDA_CONTROL_FLOW);
@@ -1198,6 +1202,112 @@ declare_lint! {
     pub(crate) static UNANNOTATED_MODEL_FIELD = {
         summary: "detects a pydantic model field specifier without a type annotation",
         status: LintStatus::stable("0.0.1-alpha.4"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a method that can raise an exception the method it overrides
+    /// cannot.
+    ///
+    /// ## Why is this bad?
+    /// A call is checked against the type it can see. When a base-class method
+    /// cannot raise, its callers are told nothing escapes — but a subclass
+    /// substituted for the base can still raise from that call, and no caller
+    /// on the base type has any reason to handle it.
+    ///
+    /// This is off by default: it is a strictness option, and honouring it means
+    /// a base method's exception set bounds every override of it.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class A:
+    ///     def foo(self): ...
+    ///
+    /// class B(A):
+    ///     override def foo(self):
+    ///         raise TypeError  # error: `A.foo` cannot raise
+    ///
+    /// def get() -> A:
+    ///     return B()
+    ///
+    /// def main():
+    ///     get().foo()  # nothing here says this can raise
+    /// ```
+    pub(crate) static OVERRIDE_RAISE = {
+        summary: "detects an override that raises more than the method it overrides",
+        status: LintStatus::stable("0.0.1-alpha.38"),
+        default_level: Level::Ignore,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a basedpython function that can raise an exception its
+    /// `raises` clause does not include.
+    ///
+    /// ## Why is this bad?
+    /// A `raises` clause is the function's contract about what can escape a
+    /// call to it. Callers rely on that set to decide what they must handle, so
+    /// an exception outside it escapes somewhere nobody expects it.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def f() raises TypeError:
+    ///     raise ValueError  # error: `ValueError` is not declared
+    /// ```
+    pub(crate) static UNDECLARED_RAISE = {
+        summary: "detects an exception a `raises` clause does not include",
+        status: LintStatus::stable("0.0.1-alpha.37"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for an exception that can escape a basedpython `main` function.
+    ///
+    /// ## Why is this bad?
+    /// `main` is the program's entry point, so it has no caller to handle what
+    /// it raises. An exception escaping it terminates the program with a
+    /// traceback rather than an error the program chose to report.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def read() raises OSError: ...
+    ///
+    /// def main():
+    ///     read()  # error: `OSError` can escape `main`
+    /// ```
+    pub(crate) static UNHANDLED_EXCEPTION = {
+        summary: "detects an exception escaping the `main` entry point",
+        status: LintStatus::stable("0.0.1-alpha.37"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a basedpython `raises` clause that does not describe a set of
+    /// exceptions.
+    ///
+    /// ## Why is this bad?
+    /// Only a `BaseException` subclass can be raised, so a clause with no
+    /// exception in it can never be satisfied by anything the function does.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def f() raises int:  # error: `int` is not an exception
+    ///     ...
+    /// ```
+    pub(crate) static INVALID_RAISES_CLAUSE = {
+        summary: "detects a `raises` clause that is not a set of exceptions",
+        status: LintStatus::stable("0.0.1-alpha.37"),
         default_level: Level::Error,
     }
 }

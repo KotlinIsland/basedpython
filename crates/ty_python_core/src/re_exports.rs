@@ -207,6 +207,7 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
                 decorator_list,
                 parameters,
                 returns,
+                raises,
                 type_params: _, // We don't want to visit the type params of the function
                 body: _,        // We don't want to visit the body of the function
                 range: _,
@@ -222,6 +223,9 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
                 self.visit_parameters(parameters);
                 if let Some(returns) = returns {
                     self.visit_expr(returns);
+                }
+                if let Some(raises) = raises {
+                    self.visit_expr(raises);
                 }
             }
 

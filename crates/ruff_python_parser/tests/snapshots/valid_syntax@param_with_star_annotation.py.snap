@@ -75,6 +75,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Expr(
                             StmtExpr {
@@ -160,6 +161,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Expr(
                             StmtExpr {

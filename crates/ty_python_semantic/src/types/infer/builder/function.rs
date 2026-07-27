@@ -185,6 +185,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.try_expression_type(expr)
         });
 
+        // basedpython: check the body against the `raises` clause. runs after the
+        // body so callee types are available, and reads this in-progress
+        // inference rather than re-entering it as a query
+        crate::types::exceptions::check_function_exceptions(
+            &self.context,
+            function,
+            self.scope(),
+            self.index.expect_single_definition(function),
+            |expr| self.try_expression_type(expr).unwrap_or_else(Type::unknown),
+        );
+
         // basedpython: a trailing-lambda block in a loop that captures a loop
         // variable is a late-binding trap unless its callee confines it
         // (`local` / `once`) — the type-aware complement to ruff's `B023`
@@ -570,6 +581,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             type_params,
             parameters,
             returns: _,
+            raises: _,
             body: _,
             decorator_list,
             is_trailing_lambda,
@@ -745,8 +757,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // requires getting the signature of this function definition, which in turn requires
         // (lazily) inferring the parameter and return types.) If defaults exist, we also defer so
         // they can be inferred once with type context in the enclosing scope.
-        let has_signature_annotations =
-            function.returns.is_some() || parameters_have_annotations(parameters);
+        let has_signature_annotations = function.returns.is_some()
+            || function.raises.is_some()
+            || parameters_have_annotations(parameters);
         if (type_params.is_none() && has_signature_annotations) || has_defaults {
             self.deferred.insert(definition);
         }
@@ -893,6 +906,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         if !has_type_params {
             self.infer_return_type_annotation(function);
+            self.infer_raises_clause(function);
             self.infer_parameters(function.parameters.as_ref());
         }
 
@@ -947,6 +961,26 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         self.typevar_binding_context = previous_typevar_binding_context;
+    }
+
+    /// basedpython: infer the `raises` clause's type expression.
+    ///
+    /// `raises ...` is the gradual exception set rather than a type expression,
+    /// so the ellipsis is inferred as the plain value it is.
+    fn infer_raises_clause(&mut self, function: &ast::StmtFunctionDef) {
+        let Some(raises) = function.raises.as_deref() else {
+            return;
+        };
+
+        if raises.is_ellipsis_literal_expr() {
+            self.infer_expression(raises, TypeContext::default());
+            return;
+        }
+
+        self.infer_type_expression_with_state(
+            raises,
+            DeferredExpressionState::from(self.defer_annotations()),
+        );
     }
 
     fn infer_return_type_annotation(&mut self, function: &ast::StmtFunctionDef) {
@@ -1009,6 +1043,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let previous_typevar_binding_context =
             self.typevar_binding_context.replace(binding_context);
         self.infer_return_type_annotation(function);
+        self.infer_raises_clause(function);
         self.infer_type_parameters(type_params);
         self.infer_parameters(&function.parameters);
         self.typevar_binding_context = previous_typevar_binding_context;

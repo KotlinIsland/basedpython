@@ -94,6 +94,7 @@ Module(
                                     kwarg: None,
                                 },
                                 returns: None,
+                                raises: None,
                                 body: [
                                     Pass(
                                         StmtPass {

@@ -32,6 +32,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         FunctionDef(
                             StmtFunctionDef {
@@ -75,6 +76,7 @@ Module(
                                     kwarg: None,
                                 },
                                 returns: None,
+                                raises: None,
                                 body: [
                                     Expr(
                                         StmtExpr {

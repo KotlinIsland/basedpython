@@ -61,6 +61,7 @@ Module(
                         ),
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Expr(
                             StmtExpr {
@@ -140,6 +141,7 @@ Module(
                         ),
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Expr(
                             StmtExpr {

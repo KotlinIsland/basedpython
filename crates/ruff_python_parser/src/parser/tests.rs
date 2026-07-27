@@ -1883,3 +1883,72 @@ fn basedpython_type_param_separator_misuse_reports() {
         assert!(has_error, "expected a parse error for `{source}`");
     }
 }
+
+#[test]
+fn basedpython_raises_clause_parses() {
+    let parsed = parse_basedpython_module(
+        "def a() raises TypeError: ...\n\
+         def b() -> int raises TypeError | ValueError: ...\n\
+         def c() raises Never: ...\n\
+         def d() raises ...: ...\n\
+         def e() raises not TypeError: ...\n\
+         def f() -> int: ...\n\
+         async def g() raises TypeError: ...\n\
+         def h() raises TypeError\n",
+    );
+
+    let raises: Vec<bool> = parsed
+        .syntax()
+        .body
+        .iter()
+        .map(|stmt| {
+            let Stmt::FunctionDef(function) = stmt else {
+                panic!("expected function definitions");
+            };
+            function.raises.is_some()
+        })
+        .collect();
+
+    assert_eq!(
+        raises,
+        [true, true, true, true, true, false, true, true],
+        "every `raises` clause should be recorded, and only those"
+    );
+}
+
+#[test]
+fn basedpython_raises_clause_is_basedpython_only() {
+    let has_error = match parse(
+        "def f() raises TypeError: ...\n",
+        ParseOptions::from(Mode::Module),
+    ) {
+        Ok(parsed) => !parsed.errors().is_empty(),
+        Err(_) => true,
+    };
+    assert!(has_error, "a `raises` clause should be a .py syntax error");
+}
+
+#[test]
+fn basedpython_raises_clause_without_a_type_reports() {
+    let parsed = parse_basedpython_module_with_errors("def f() raises: ...\n");
+    assert!(
+        !parsed.errors().is_empty(),
+        "a bare `raises` should report a missing type expression"
+    );
+}
+
+#[test]
+fn basedpython_raises_is_still_an_identifier() {
+    // `raises` is a soft keyword: it only introduces the clause between a
+    // function header and its body, and stays an ordinary name everywhere else
+    for source in [
+        "raises = 1\n",
+        "raises: int = 1\n",
+        "def raises(): ...\n",
+        "def f(raises): ...\n",
+        "def f() -> raises: ...\n",
+        "x = raises\n",
+    ] {
+        parse_basedpython_module(source);
+    }
+}

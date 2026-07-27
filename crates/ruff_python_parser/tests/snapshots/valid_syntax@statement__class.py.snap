@@ -98,6 +98,7 @@ Module(
                                     kwarg: None,
                                 },
                                 returns: None,
+                                raises: None,
                                 body: [
                                     Pass(
                                         StmtPass {
@@ -235,6 +236,7 @@ Module(
                                     kwarg: None,
                                 },
                                 returns: None,
+                                raises: None,
                                 body: [
                                     Assign(
                                         StmtAssign {
@@ -368,6 +370,7 @@ Module(
                                     kwarg: None,
                                 },
                                 returns: None,
+                                raises: None,
                                 body: [
                                     Pass(
                                         StmtPass {
@@ -457,6 +460,7 @@ Module(
                                     kwarg: None,
                                 },
                                 returns: None,
+                                raises: None,
                                 body: [
                                     Pass(
                                         StmtPass {

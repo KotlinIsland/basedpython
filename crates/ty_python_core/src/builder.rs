@@ -3048,6 +3048,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     type_params,
                     name,
                     returns,
+                    raises,
                     body,
                     is_async: _,
                     is_trailing_lambda,
@@ -3091,6 +3092,11 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         builder.visit_parameters(parameters);
                         if let Some(returns) = returns {
                             builder.visit_annotation(returns);
+                        }
+                        // basedpython: the `raises` clause is a type expression, and
+                        // sits in the same scope as the return annotation
+                        if let Some(raises) = raises {
+                            builder.visit_annotation(raises);
                         }
 
                         builder.push_scope(NodeWithScopeRef::Function(function_def));

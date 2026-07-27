@@ -889,6 +889,24 @@ fn check_class_declaration<'db>(
                 continue;
             }
 
+            // basedpython: an override may not raise more than what it
+            // overrides. orthogonal to Liskov compatibility below, so it runs
+            // whether or not the signatures line up
+            // only against the nearest superclass defining the method: a more
+            // distant ancestor's bound is already enforced on that superclass,
+            // and reporting it again here blames the wrong class
+            if let Some(superclass_function) = superclass_function
+                && immediate_parent_method.is_some_and(|(parent, _)| parent == superclass)
+            {
+                crate::types::exceptions::check_override_raises(
+                    context,
+                    &member.name,
+                    subclass_function,
+                    superclass_function,
+                    superclass,
+                );
+            }
+
             let Some((subclass_override_type, superclass_override_type)) =
                 method_override_types(db, type_on_subclass_instance, superclass_type)
             else {

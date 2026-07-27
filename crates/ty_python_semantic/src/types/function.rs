@@ -716,7 +716,7 @@ impl<'db> OverloadLiteral<'db> {
     /// calling query is not in the same file as this function is defined in, then this will create
     /// a cross-module dependency directly on the full AST which will lead to cache
     /// over-invalidation.
-    fn definition(self, db: &'db dyn Db) -> Definition<'db> {
+    pub(super) fn definition(self, db: &'db dyn Db) -> Definition<'db> {
         let body_scope = self.body_scope(db);
         let index = semantic_index(db, body_scope.file(db));
         index.expect_single_definition(body_scope.node(db).expect_function())
@@ -1212,7 +1212,7 @@ impl<'db> FunctionLiteral<'db> {
             && self.last_definition.previous_overload(db).is_some()
     }
 
-    fn iter_overloads_and_implementation(
+    pub(super) fn iter_overloads_and_implementation(
         self,
         db: &'db dyn Db,
     ) -> impl DoubleEndedIterator<Item = OverloadLiteral<'db>> + 'db {

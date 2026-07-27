@@ -145,6 +145,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Import(
                             StmtImport {
@@ -192,6 +193,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         ImportFrom(
                             StmtImportFrom {
@@ -283,6 +285,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         ClassDef(
                             StmtClassDef {

@@ -1449,6 +1449,7 @@ pub struct StmtFunctionDef<'a> {
     parameters: ComparableParameters<'a>,
     returns: Option<ComparableExpr<'a>>,
     is_asserts_return: bool,
+    raises: Option<ComparableExpr<'a>>,
     body: Vec<ComparableStmt<'a>>,
 }
 
@@ -1717,6 +1718,7 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 body,
                 decorator_list,
                 returns,
+                raises,
                 type_params,
                 is_trailing_lambda: _,
                 is_asserts_return,
@@ -1730,6 +1732,7 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 decorator_list: decorator_list.iter().map(Into::into).collect(),
                 returns: returns.as_ref().map(Into::into),
                 is_asserts_return: *is_asserts_return,
+                raises: raises.as_ref().map(Into::into),
                 type_params: type_params.as_ref().map(Into::into),
             }),
             ast::Stmt::ClassDef(ast::StmtClassDef {

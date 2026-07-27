@@ -647,6 +647,7 @@ pub(crate) fn definition(
         type_params: _,
         parameters,
         returns,
+        raises: _,
         body,
         is_trailing_lambda: _,
         is_asserts_return: _,

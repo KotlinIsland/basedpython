@@ -162,6 +162,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Return(
                             StmtReturn {

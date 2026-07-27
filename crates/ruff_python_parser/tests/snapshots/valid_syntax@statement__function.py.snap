@@ -32,6 +32,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -115,6 +116,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -218,6 +220,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -322,6 +325,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -406,6 +410,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -534,6 +539,7 @@ Module(
                         ),
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -617,6 +623,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -720,6 +727,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -835,6 +843,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -950,6 +959,7 @@ Module(
                         ),
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -1077,6 +1087,7 @@ Module(
                         ),
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -1210,6 +1221,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -1363,6 +1375,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -1528,6 +1541,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -1693,6 +1707,7 @@ Module(
                         ),
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -1870,6 +1885,7 @@ Module(
                         ),
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -2002,6 +2018,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -2154,6 +2171,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -2318,6 +2336,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -2494,6 +2513,7 @@ Module(
                         ),
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -2591,6 +2611,7 @@ Module(
                             },
                         ),
                     ),
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -2697,6 +2718,7 @@ Module(
                             },
                         ),
                     ),
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -2826,6 +2848,7 @@ Module(
                             },
                         ),
                     ),
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -2960,6 +2983,7 @@ Module(
                             },
                         ),
                     ),
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -3087,6 +3111,7 @@ Module(
                         ),
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -3197,6 +3222,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -3231,6 +3257,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Expr(
                             StmtExpr {
@@ -3280,6 +3307,7 @@ Module(
                             },
                         ),
                     ),
+                    raises: None,
                     body: [
                         Expr(
                             StmtExpr {
@@ -3367,6 +3395,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -3413,6 +3442,7 @@ Module(
                         ),
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -3471,6 +3501,7 @@ Module(
                         ),
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -3522,6 +3553,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -3590,6 +3622,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -3651,6 +3684,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -3735,6 +3769,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -3813,6 +3848,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -3953,6 +3989,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {
@@ -4082,6 +4119,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Pass(
                             StmtPass {

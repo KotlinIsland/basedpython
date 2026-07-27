@@ -95,6 +95,8 @@ fn inlay_hint_kind(inlay_hint_kind: &InlayHintKind) -> lsp_types::InlayHintKind 
     match inlay_hint_kind {
         InlayHintKind::Type => lsp_types::InlayHintKind::Type,
         InlayHintKind::CallArgumentName => lsp_types::InlayHintKind::Parameter,
+        // basedpython: an inferred exception set is a type, like a return type
+        InlayHintKind::Raises => lsp_types::InlayHintKind::Type,
     }
 }
 

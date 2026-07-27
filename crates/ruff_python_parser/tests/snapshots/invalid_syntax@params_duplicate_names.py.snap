@@ -141,6 +141,7 @@ Module(
                         ),
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Expr(
                             StmtExpr {
