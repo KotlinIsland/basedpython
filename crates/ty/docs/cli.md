@@ -242,6 +242,7 @@ by run [OPTIONS] <MODULE> [ARGS]...
 <dl class="cli-reference"><dt id="by-run--help"><a href="#by-run--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help</p>
 </dd><dt id="by-run--min-version"><a href="#by-run--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the output must run on [default: the version of the interpreter that will run it]</p>
 </dd><dt id="by-run--no-checked-cast"><a href="#by-run--no-checked-cast"><code>--no-checked-cast</code></a></dt><dd><p>lower <code>&lt;value&gt; cast &lt;type&gt;</code> to an unchecked <code>typing.cast</code> instead of a runtime-checked cast that raises on a type mismatch (the <code>cast?</code> safe form is unaffected)</p>
+</dd><dt id="by-run--runtime-raises-checks"><a href="#by-run--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
 </dd><dt id="by-run--soundness"><a href="#by-run--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
 <p>[default: default]</p></dd></dl>
 
@@ -260,6 +261,7 @@ by build [OPTIONS]
 <dl class="cli-reference"><dt id="by-build--help"><a href="#by-build--help"><code>--help</code></a>, <code>-h</code></dt><dd><p>Print help</p>
 </dd><dt id="by-build--min-version"><a href="#by-build--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the output must run on</p>
 <p>[default: 3.10]</p></dd><dt id="by-build--no-checked-cast"><a href="#by-build--no-checked-cast"><code>--no-checked-cast</code></a></dt><dd><p>lower <code>&lt;value&gt; cast &lt;type&gt;</code> to an unchecked <code>typing.cast</code> instead of a runtime-checked cast that raises on a type mismatch (the <code>cast?</code> safe form is unaffected)</p>
+</dd><dt id="by-build--runtime-raises-checks"><a href="#by-build--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
 </dd><dt id="by-build--soundness"><a href="#by-build--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
 <p>[default: default]</p></dd></dl>
 
@@ -317,6 +319,7 @@ by transpile [OPTIONS] [FILE]
 </dd><dt id="by-transpile--min-version"><a href="#by-transpile--min-version"><code>--min-version</code></a> <i>version</i></dt><dd><p>minimum Python version the output must run on</p>
 <p>[default: 3.10]</p></dd><dt id="by-transpile--no-checked-cast"><a href="#by-transpile--no-checked-cast"><code>--no-checked-cast</code></a></dt><dd><p>lower <code>&lt;value&gt; cast &lt;type&gt;</code> to an unchecked <code>typing.cast</code> instead of a runtime-checked cast that raises on a type mismatch (the <code>cast?</code> safe form is unaffected)</p>
 </dd><dt id="by-transpile--reverse"><a href="#by-transpile--reverse"><code>--reverse</code></a></dt><dd><p>convert Python source into basedpython idioms (instead of the default by → py direction)</p>
+</dd><dt id="by-transpile--runtime-raises-checks"><a href="#by-transpile--runtime-raises-checks"><code>--runtime-raises-checks</code></a></dt><dd><p>wrap every function with a <code>raises</code> clause in a runtime guard that fails when it raises something the clause does not include</p>
 </dd><dt id="by-transpile--soundness"><a href="#by-transpile--soundness"><code>--soundness</code></a> <i>spec</i></dt><dd><p>which runtime type-soundness checks to insert: <code>default</code>, <code>all</code> (adds the opt-in <code>parameters</code> entry checks), <code>none</code>, or a comma-separated subset of <code>generic-calls</code>, <code>projections</code>, <code>iterations</code>, <code>assignments</code>, <code>returns</code>, <code>arguments</code>, <code>parameters</code></p>
 <p>[default: default]</p></dd></dl>
 

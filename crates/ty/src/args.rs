@@ -91,6 +91,10 @@ pub(crate) enum Command {
         /// `cast?` safe form is unaffected)
         #[arg(long)]
         no_checked_cast: bool,
+        /// wrap every function with a `raises` clause in a runtime guard that
+        /// fails when it raises something the clause does not include
+        #[arg(long)]
+        runtime_raises_checks: bool,
     },
 
     /// Transpile all .by files and write them to out/.
@@ -109,6 +113,10 @@ pub(crate) enum Command {
         /// `cast?` safe form is unaffected)
         #[arg(long)]
         no_checked_cast: bool,
+        /// wrap every function with a `raises` clause in a runtime guard that
+        /// fails when it raises something the clause does not include
+        #[arg(long)]
+        runtime_raises_checks: bool,
     },
 
     /// Generate an api lockfile (`api.lock`) summarising the public type-level
@@ -157,6 +165,10 @@ pub(crate) enum Command {
         /// `cast?` safe form is unaffected)
         #[arg(long)]
         no_checked_cast: bool,
+        /// wrap every function with a `raises` clause in a runtime guard that
+        /// fails when it raises something the clause does not include
+        #[arg(long)]
+        runtime_raises_checks: bool,
     },
 }
 

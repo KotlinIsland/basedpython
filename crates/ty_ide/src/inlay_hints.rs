@@ -8,11 +8,11 @@ use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
 use ruff_python_ast::visitor::source_order::{self, SourceOrderVisitor, TraversalSignal};
-use ruff_python_ast::{AnyNodeRef, ArgOrKeyword, Expr, ExprUnaryOp, Stmt, UnaryOp};
+use ruff_python_ast::{self as ast, AnyNodeRef, ArgOrKeyword, Expr, ExprUnaryOp, Stmt, UnaryOp};
 use ruff_python_codegen::Stylist;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_module_resolver::file_to_module;
-use ty_python_semantic::types::ide_support::inlay_hint_call_argument_details;
+use ty_python_semantic::types::ide_support::{inferred_raises, inlay_hint_call_argument_details};
 use ty_python_semantic::types::{Type, TypeDetail};
 use ty_python_semantic::{HasType, SemanticModel};
 
@@ -191,6 +191,19 @@ impl InlayHint {
         }
     }
 
+    /// basedpython: the exception set inferred for a function with no `raises`
+    /// clause, shown where the clause would be written.
+    fn inferred_raises(db: &dyn Db, position: TextSize, raised: Type) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::Raises,
+            label: InlayHintLabel {
+                parts: vec![format!(" raises {}", raised.display(db)).into()],
+            },
+            text_edits: vec![],
+        }
+    }
+
     pub fn display(&self) -> InlayHintDisplay<'_> {
         InlayHintDisplay { inlay_hint: self }
     }
@@ -200,6 +213,8 @@ impl InlayHint {
 pub enum InlayHintKind {
     Type,
     CallArgumentName,
+    /// basedpython: a function's inferred exception set
+    Raises,
 }
 
 #[derive(Debug, Clone)]
@@ -324,12 +339,22 @@ pub struct InlayHintSettings {
     /// foo("x="1)
     /// ```
     pub call_argument_names: bool,
+
+    /// basedpython: whether to show the exception set inferred for a function
+    /// that has no `raises` clause.
+    ///
+    /// For example, this would enable / disable hints like the one quoted below:
+    /// ```by
+    /// def f()" raises TypeError":
+    ///     raise TypeError
+    /// ```
+    pub inferred_raises: bool,
     // Add any new setting that enables additional inlays to `any_enabled`.
 }
 
 impl InlayHintSettings {
     pub fn any_enabled(&self) -> bool {
-        self.variable_types || self.call_argument_names
+        self.variable_types || self.call_argument_names || self.inferred_raises
     }
 }
 
@@ -338,6 +363,7 @@ impl Default for InlayHintSettings {
         Self {
             variable_types: true,
             call_argument_names: true,
+            inferred_raises: true,
         }
     }
 }
@@ -405,6 +431,31 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         }
     }
 
+    /// basedpython: hint the exception set of a function with no `raises` clause.
+    ///
+    /// The hint sits where the clause would be written — after the return
+    /// annotation, before the `:` — so accepting it reads as ordinary source.
+    fn add_inferred_raises(&mut self, function: &ast::StmtFunctionDef) {
+        if !self.settings.inferred_raises || function.raises.is_some() {
+            return;
+        }
+
+        let Some(raised) = function
+            .inferred_type(&self.model)
+            .and_then(|ty| inferred_raises(self.db, ty))
+        else {
+            return;
+        };
+
+        let position = function
+            .returns
+            .as_deref()
+            .map_or_else(|| function.parameters.end(), Ranged::end);
+
+        self.hints
+            .push(InlayHint::inferred_raises(self.db, position, raised));
+    }
+
     fn add_call_argument_name(
         &mut self,
         position: TextSize,
@@ -464,8 +515,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 self.visit_expr(&expr.value);
                 return;
             }
-            // TODO
-            Stmt::FunctionDef(_) => {}
+            Stmt::FunctionDef(function) => self.add_inferred_raises(function),
             Stmt::For(_) => {}
             _ => {}
         }
@@ -807,6 +857,16 @@ mod tests {
     use ty_project::ProjectMetadata;
 
     pub(super) fn inlay_hint_test(source: &str) -> InlayHintTest {
+        inlay_hint_test_in("main.py", source)
+    }
+
+    /// Like [`inlay_hint_test`], but for a `.by` source, so basedpython-only
+    /// hints are produced.
+    pub(super) fn basedpython_inlay_hint_test(source: &str) -> InlayHintTest {
+        inlay_hint_test_in("main.by", source)
+    }
+
+    fn inlay_hint_test_in(file_name: &str, source: &str) -> InlayHintTest {
         const START: &str = "<START>";
         const END: &str = "<END>";
 
@@ -831,10 +891,10 @@ mod tests {
         let source = source.replace(START, "");
         let source = source.replace(END, "");
 
-        db.write_file("main.py", source)
+        db.write_file(file_name, source)
             .expect("write to memory file system to be successful");
 
-        let file = system_path_to_file(&db, "main.py").expect("newly written file to existing");
+        let file = system_path_to_file(&db, file_name).expect("newly written file to existing");
 
         let mut insta_settings = insta::Settings::clone_current();
         insta_settings.add_filter(r#"\\(\w\w|\.|")"#, "/$1");
@@ -8509,6 +8569,37 @@ Source with applied edits:
 
             main
         }
+    }
+
+    #[test]
+    fn basedpython_inferred_raises() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def leaf():
+                raise TypeError
+
+            def caller():
+                leaf()
+
+            def caught():
+                try:
+                    leaf()
+                except TypeError:
+                    pass
+
+            def annotated() -> int:
+                raise ValueError
+
+            def declared() raises TypeError:
+                raise TypeError
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            variable_types: false,
+            call_argument_names: false,
+            inferred_raises: true,
+        }));
     }
 
     impl InlayHintTextEdit {

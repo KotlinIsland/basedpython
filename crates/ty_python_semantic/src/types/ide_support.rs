@@ -2221,6 +2221,39 @@ pub fn constructor_signature(model: &SemanticModel, call_expr: &ast::ExprCall) -
     }
 }
 
+/// basedpython: the exceptions a call to `function` can raise, when it has no
+/// `raises` clause of its own and can raise something.
+///
+/// The IDE surfaces this as an inlay hint, so a declared clause returns `None`:
+/// the source already says what it is.
+pub fn inferred_raises<'db>(db: &'db dyn Db, function: Type<'db>) -> Option<Type<'db>> {
+    let Type::FunctionLiteral(function) = function else {
+        return None;
+    };
+    let literal = function.literal(db);
+    let overloads = || literal.iter_overloads_and_implementation(db);
+
+    // the source already says what a declared function raises
+    if overloads()
+        .any(|overload| crate::types::exceptions::declared_exceptions(db, overload).is_some())
+    {
+        return None;
+    }
+
+    // resolving the set follows every call into its callee, so a body that
+    // cannot raise anything is answered from its own effects alone. that keeps
+    // the common case — a hint on a function that does not raise — off the call
+    // graph entirely
+    if overloads()
+        .all(|overload| crate::types::exceptions::body_exception_effects(db, overload).is_empty())
+    {
+        return None;
+    }
+
+    let raised = crate::types::exceptions::function_raised_exceptions(db, literal);
+    (!raised.is_never()).then_some(raised)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{CallArgumentForm, call_argument_forms};

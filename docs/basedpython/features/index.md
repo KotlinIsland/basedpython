@@ -95,6 +95,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [extensions](extensions.md)
 - [context parameters](context-parameters.md)
 - [local lifetimes (`local` / `once`)](local-lifetimes.md)
+- [exception tracking (`raises`)](exceptions.md)
 
 ## planned
 

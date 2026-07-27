@@ -91,6 +91,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         ClassDef(
                             StmtClassDef {
@@ -225,6 +226,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         ClassDef(
                             StmtClassDef {

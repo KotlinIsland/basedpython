@@ -40,10 +40,10 @@ use super::{
     generic_call, generics, grapheme_string, identity_swap, implementation, implicit_receiver,
     implicit_typing, inferred_annotation, init_method, just_float, kw_subscript, literal_types,
     local_once, main_function, modifiers, mutable_defaults, none_chain, optional_type, overload,
-    parametric_is, postfix_await, propagate, properties, protocol_type, reified_generic,
-    repeated_underscore, sentinel, some_ctor, soundness, string_tag, super_keyword,
-    symbolic_type_op, top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification,
-    typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
+    parametric_is, postfix_await, propagate, properties, protocol_type, raises_clause,
+    reified_generic, repeated_underscore, sentinel, some_ctor, soundness, string_tag,
+    super_keyword, symbolic_type_op, top_star, trailing_lambda, tuple_index, type_fn, type_is,
+    type_reification, typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -455,6 +455,9 @@ pub(crate) fn run_against_source<'a>(
     let init_method_pass = init_method::InitMethod::new(source_ref);
     let properties_pass = properties::PropertiesPass::new(source_ref);
     let local_once_pass = local_once::LocalOncePass::new(source_ref);
+    let raises_strip_pass = raises_clause::RaisesStripPass::new(source_ref);
+    let raises_guard_pass =
+        raises_clause::RaisesGuardPass::new(source_ref, config.runtime_raises_checks);
     let type_fn_pass = type_fn::TypeFnPass::new(source_ref);
     let modifiers_pass = modifiers::ModifiersPass::new(source_ref);
     let main_function_pass = main_function::MainFunction::new(source_ref, config.is_stub);
@@ -527,6 +530,9 @@ pub(crate) fn run_against_source<'a>(
         // like init_method's `let` handling — must read ranges before any
         // AST-mutation pass zeroes them)
         &local_once_pass,
+        // delete `raises` clauses (a source-span deletion, like `local` / `once`
+        // — must read ranges before any AST-mutation pass zeroes them)
+        &raises_strip_pass,
         // erase `type def` declarations; their applications were already folded to
         // the resolved type by the symbolic pass above
         &type_fn_pass,
@@ -563,6 +569,10 @@ pub(crate) fn run_against_source<'a>(
         // order-independent; first, so a hard incompatibility surfaces
         // before any edit-conflict noise
         &frameworks_pass,
+        // the `raises` runtime guard is a decorator inserted at the start of the
+        // `def` line, so it composes with every edit inside the signature and
+        // body (the clause deletion among them)
+        &raises_guard_pass,
         // `init(...)` shorthand: rewrite to `def __init__`, strip `let`, and
         // synthesize `self.<name>: <ann> = <name>`. type-aware because the
         // synthesized annotation is fresh output that must reproduce whatever

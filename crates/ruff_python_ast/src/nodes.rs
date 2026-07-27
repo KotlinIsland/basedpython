@@ -4176,13 +4176,12 @@ mod tests {
     #[test]
     #[cfg(target_pointer_width = "64")]
     fn size() {
-        // basedpython: `StmtClassDef` carries one extra pointer for the
-        // `implementation A for B as N:` header (boxed, so the interface
-        // expression and witness name cost 8 bytes rather than 40). That pushes
-        // `StmtClassDef` to the size of `StmtFunctionDef` and consumes the niche
-        // the `Stmt` discriminant used to pack into
+        // basedpython: `StmtFunctionDef` carries a `raises` clause and
+        // `StmtClassDef` one boxed pointer for the `implementation A for B as N:`
+        // header, so both are a pointer wider than upstream. `Stmt` still packs
+        // its discriminant into the niche, so it matches the widest of them
         assert_eq!(std::mem::size_of::<Stmt>(), 96);
-        assert_eq!(std::mem::size_of::<StmtFunctionDef>(), 88);
+        assert_eq!(std::mem::size_of::<StmtFunctionDef>(), 96);
         assert_eq!(std::mem::size_of::<StmtClassDef>(), 88);
         assert_eq!(std::mem::size_of::<StmtTry>(), 64);
         assert_eq!(std::mem::size_of::<Mod>(), 32);

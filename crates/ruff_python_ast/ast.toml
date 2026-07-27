@@ -92,6 +92,11 @@ fields = [
   { name = "type_params", type = "Box<crate::TypeParams>?" },
   { name = "parameters", type = "Box<crate::Parameters>" },
   { name = "returns", type = "Expr?", is_annotation = true },
+  { name = "raises", type = "Expr?", is_annotation = true, doc = """basedpython: the exception set this function is declared to raise
+(`def f() -> int raises TypeError`). An ordinary type expression, so `Never`
+declares that the function cannot raise, `...` opts out of tracking entirely,
+and `not TypeError` declares everything but that. `None` here means the clause
+was absent and the set is inferred from the body. Erased when lowering""" },
   { name = "body", type = "ThinVec<Stmt>" },
   { name = "is_trailing_lambda", type = "bool", doc = """basedpython: when true, this function is a trailing lambda block —
 a statement-level `<call>:` followed by an indented suite. The suite is the

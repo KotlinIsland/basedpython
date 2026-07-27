@@ -1680,3 +1680,155 @@ print(object() is Sequence[int])
         "True\nTrue\nFalse"
     );
 }
+
+#[test]
+fn raises_guard_rejects_an_undeclared_exception_at_runtime() {
+    // the guard exists for what the checker cannot see: `boom` raises whatever
+    // it is handed, so only the runtime knows the clause was broken
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+def boom(kind: dynamic):
+    raise kind(\"boom\")
+
+def bad() raises ValueError:
+    boom(TypeError)
+
+def good() raises ValueError:
+    raise ValueError(\"expected\")
+
+def main():
+    try:
+        good()
+    except ValueError as e:
+        print(\"good\", type(e).__name__)
+    try:
+        bad()
+    except BaseException as e:
+        print(\"bad\", type(e).__name__)
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main", "--runtime-raises-checks"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "good ValueError\nbad AssertionError"
+    );
+}
+
+#[test]
+fn raises_guard_covers_an_async_generator() {
+    // an async generator answers `False` to both `iscoroutinefunction` and
+    // `isgeneratorfunction`, so a wrapper that forgets it returns the generator
+    // object without ever entering the body and catches nothing
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "\
+async def boom(kind: dynamic):
+    raise kind(\"x\")
+
+async def gen() raises ValueError:
+    yield 1
+    await boom(TypeError)
+
+async def drive():
+    try:
+        async for v in gen():
+            print(\"got\", v)
+    except BaseException as e:
+        print(\"caught\", type(e).__name__)
+
+def main():
+    import asyncio
+    asyncio.run(drive())
+",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main", "--runtime-raises-checks"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout)
+            .replace("\r\n", "\n")
+            .trim(),
+        "got 1\ncaught AssertionError"
+    );
+}
+
+/// The `override-raise` strictness option is off unless asked for.
+///
+/// mdtest force-enables every rule, including default-ignored ones, so the
+/// default posture can only be pinned from outside it.
+#[test]
+fn override_raise_is_off_by_default() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = "\
+def a() -> A:
+    return B()
+
+class A:
+    def foo(self):
+        pass
+
+class B(A):
+    override def foo(self):
+        raise TypeError
+
+def main():
+    a().foo()
+";
+    fs::write(dir.path().join("main.by"), source).unwrap();
+
+    let check = || {
+        Command::new(env!("CARGO_BIN_EXE_by"))
+            .arg("check")
+            .current_dir(dir.path())
+            .output()
+            .expect("failed to spawn by")
+    };
+
+    let output = check();
+    assert!(
+        output.status.success(),
+        "expected no diagnostic by default:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[tool.ty.rules]\noverride-raise = \"error\"\n",
+    )
+    .unwrap();
+
+    let output = check();
+    let rendered = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        rendered.contains("override-raise")
+            && rendered.contains("which the method it overrides cannot"),
+        "expected the override to be reported once enabled:\n{rendered}"
+    );
+}

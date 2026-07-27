@@ -359,6 +359,10 @@ impl<'a> Generator<'a> {
                 decorator_list,
                 type_params,
                 is_asserts_return,
+                // basedpython: `raises` falls under the `..` deliberately. the
+                // clause is compile-time-only and has no python spelling, and the
+                // generator emits python — including for the statements a lowering
+                // pass re-renders — so it is always erased
                 ..
             }) => {
                 self.newlines(if self.indent_depth == 0 { 2 } else { 1 });

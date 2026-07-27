@@ -1,0 +1,22 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ variable_types: false, call_argument_names: false, inferred_raises: true, })"
+---
+
+def leaf()[ raises TypeError]:
+    raise TypeError
+
+def caller()[ raises TypeError]:
+    leaf()
+
+def caught():
+    try:
+        leaf()
+    except TypeError:
+        pass
+
+def annotated() -> int[ raises ValueError]:
+    raise ValueError
+
+def declared() raises TypeError:
+    raise TypeError

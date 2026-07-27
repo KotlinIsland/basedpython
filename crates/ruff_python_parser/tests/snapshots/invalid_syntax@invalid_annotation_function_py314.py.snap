@@ -56,6 +56,7 @@ Module(
                             },
                         ),
                     ),
+                    raises: None,
                     body: [
                         Expr(
                             StmtExpr {
@@ -137,6 +138,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Expr(
                             StmtExpr {
@@ -177,6 +179,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         FunctionDef(
                             StmtFunctionDef {
@@ -235,6 +238,7 @@ Module(
                                     kwarg: None,
                                 },
                                 returns: None,
+                                raises: None,
                                 body: [
                                     Expr(
                                         StmtExpr {
@@ -293,6 +297,7 @@ Module(
                                         },
                                     ),
                                 ),
+                                raises: None,
                                 body: [
                                     Expr(
                                         StmtExpr {
@@ -366,6 +371,7 @@ Module(
                                     kwarg: None,
                                 },
                                 returns: None,
+                                raises: None,
                                 body: [
                                     Expr(
                                         StmtExpr {
@@ -422,6 +428,7 @@ Module(
                                         },
                                     ),
                                 ),
+                                raises: None,
                                 body: [
                                     Expr(
                                         StmtExpr {
@@ -467,6 +474,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         FunctionDef(
                             StmtFunctionDef {
@@ -507,6 +515,7 @@ Module(
                                         },
                                     ),
                                 ),
+                                raises: None,
                                 body: [
                                     Expr(
                                         StmtExpr {
@@ -581,6 +590,7 @@ Module(
                                     kwarg: None,
                                 },
                                 returns: None,
+                                raises: None,
                                 body: [
                                     Expr(
                                         StmtExpr {

@@ -1061,6 +1061,16 @@
             }
           ]
         },
+        "invalid-raises-clause": {
+          "title": "detects a `raises` clause that is not a set of exceptions",
+          "description": "## What it does\nChecks for a basedpython `raises` clause that does not describe a set of\nexceptions.\n\n## Why is this bad?\nOnly a `BaseException` subclass can be raised, so a clause with no\nexception in it can never be satisfied by anything the function does.\n\n## Example\n\n```by\ndef f() raises int:  # error: `int` is not an exception\n    ...\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-regex": {
           "title": "detects an invalid regular expression or a reference to a group it has not got",
           "description": "## What it does\nChecks a literal regular expression passed to the `re` module: that it\ncompiles at all, and that every group a match is asked for exists in it.\n\n## Why is this bad?\nThe stubs type every `re` pattern as a plain `str`, so a pattern that\n`re.compile` rejects, or a `m.group(3)` on a pattern with two groups,\nonly fails once the line runs.\n\n## Example\n\n```py\nimport re\n\nre.compile(\"(\")  # error: missing ), unterminated subpattern at position 0\n\nif m := re.match(\"(a)(b)\", \"ab\"):\n    m.group(3)  # error: No such group: 3\n```",
@@ -1441,6 +1451,16 @@
             }
           ]
         },
+        "override-raise": {
+          "title": "detects an override that raises more than the method it overrides",
+          "description": "## What it does\nChecks for a method that can raise an exception the method it overrides\ncannot.\n\n## Why is this bad?\nA call is checked against the type it can see. When a base-class method\ncannot raise, its callers are told nothing escapes — but a subclass\nsubstituted for the base can still raise from that call, and no caller\non the base type has any reason to handle it.\n\nThis is off by default: it is a strictness option, and honouring it means\na base method's exception set bounds every override of it.\n\n## Example\n\n```by\nclass A:\n    def foo(self): ...\n\nclass B(A):\n    override def foo(self):\n        raise TypeError  # error: `A.foo` cannot raise\n\ndef get() -> A:\n    return B()\n\ndef main():\n    get().foo()  # nothing here says this can raise\n```",
+          "default": "ignore",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "parameter-already-assigned": {
           "title": "detects multiple arguments for the same parameter",
           "description": "## What it does\n\nChecks for calls which provide more than one argument for a single parameter.\n\n## Why is this bad?\n\nProviding multiple values for a single parameter will raise a `TypeError` at runtime.\n\n## Examples\n\n```python\ndef f(x: int) -> int:\n    return x\n\n\nf(1, x=2)  # error\n```",
@@ -1701,10 +1721,30 @@
             }
           ]
         },
+        "undeclared-raise": {
+          "title": "detects an exception a `raises` clause does not include",
+          "description": "## What it does\nChecks for a basedpython function that can raise an exception its\n`raises` clause does not include.\n\n## Why is this bad?\nA `raises` clause is the function's contract about what can escape a\ncall to it. Callers rely on that set to decide what they must handle, so\nan exception outside it escapes somewhere nobody expects it.\n\n## Example\n\n```by\ndef f() raises TypeError:\n    raise ValueError  # error: `ValueError` is not declared\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "undefined-reveal": {
           "title": "detects usages of `reveal_type` without importing it",
           "description": "## What it does\n\nChecks for calls to `reveal_type` without importing it.\n\n## Why is this bad?\n\nUsing `reveal_type` without importing it will raise a `NameError` at runtime.\n\n## Examples\n\n```python\n# NameError: name 'reveal_type' is not defined\n# error\nreveal_type(1)  # revealed: Literal[1]\n```",
           "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "unhandled-exception": {
+          "title": "detects an exception escaping the `main` entry point",
+          "description": "## What it does\nChecks for an exception that can escape a basedpython `main` function.\n\n## Why is this bad?\n`main` is the program's entry point, so it has no caller to handle what\nit raises. An exception escaping it terminates the program with a\ntraceback rather than an error the program chose to report.\n\n## Example\n\n```by\ndef read() raises OSError: ...\n\ndef main():\n    read()  # error: `OSError` can escape `main`\n```",
+          "default": "error",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"

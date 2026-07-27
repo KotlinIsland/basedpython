@@ -9604,6 +9604,12 @@ pub struct StmtFunctionDef {
     pub type_params: Option<Box<crate::TypeParams>>,
     pub parameters: Box<crate::Parameters>,
     pub returns: Option<Box<Expr>>,
+    /// basedpython: the exception set this function is declared to raise
+    /// (`def f() -> int raises TypeError`). An ordinary type expression, so `Never`
+    /// declares that the function cannot raise, `...` opts out of tracking entirely,
+    /// and `not TypeError` declares everything but that. `None` here means the clause
+    /// was absent and the set is inferred from the body. Erased when lowering
+    pub raises: Option<Box<Expr>>,
     pub body: thin_vec::ThinVec<Stmt>,
     /// basedpython: when true, this function is a trailing lambda block —
     /// a statement-level `<call>:` followed by an indented suite. The suite is the
@@ -10547,6 +10553,7 @@ impl StmtFunctionDef {
             type_params,
             parameters,
             returns,
+            raises,
             body,
             is_trailing_lambda: _,
             is_asserts_return: _,
@@ -10567,6 +10574,10 @@ impl StmtFunctionDef {
 
         if let Some(returns) = returns {
             visitor.visit_annotation(returns);
+        }
+
+        if let Some(raises) = raises {
+            visitor.visit_annotation(raises);
         }
 
         visitor.visit_body(body);

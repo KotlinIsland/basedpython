@@ -64,6 +64,8 @@ pub enum KnownClass {
     Classmethod,
     Super,
     NotImplementedError,
+    AssertionError,
+    RuntimeError,
     // enum
     Enum,
     EnumProperty,
@@ -236,6 +238,8 @@ impl KnownClass {
             | Self::Exception
             | Self::Warning
             | Self::NotImplementedError
+            | Self::AssertionError
+            | Self::RuntimeError
             | Self::ExceptionGroup
             | Self::Object
             | Self::OrderedDict
@@ -356,6 +360,8 @@ impl KnownClass {
             | KnownClass::Property
             | KnownClass::BaseException
             | KnownClass::NotImplementedError
+            | KnownClass::AssertionError
+            | KnownClass::RuntimeError
             | KnownClass::Exception
             | KnownClass::Warning
             | KnownClass::BaseExceptionGroup
@@ -484,6 +490,8 @@ impl KnownClass {
             | KnownClass::Exception
             | KnownClass::Warning
             | KnownClass::NotImplementedError
+            | KnownClass::AssertionError
+            | KnownClass::RuntimeError
             | KnownClass::BaseExceptionGroup
             | KnownClass::ExceptionGroup
             | KnownClass::Staticmethod
@@ -611,6 +619,8 @@ impl KnownClass {
             | KnownClass::Exception
             | KnownClass::Warning
             | KnownClass::NotImplementedError
+            | KnownClass::AssertionError
+            | KnownClass::RuntimeError
             | KnownClass::BaseExceptionGroup
             | KnownClass::ExceptionGroup
             | KnownClass::Staticmethod
@@ -762,6 +772,8 @@ impl KnownClass {
             | Self::Exception
             | Self::Warning
             | Self::NotImplementedError
+            | Self::AssertionError
+            | Self::RuntimeError
             | Self::ExceptionGroup
             | Self::Staticmethod
             | Self::Classmethod
@@ -878,6 +890,8 @@ impl KnownClass {
             | KnownClass::Exception
             | KnownClass::Warning
             | KnownClass::NotImplementedError
+            | KnownClass::AssertionError
+            | KnownClass::RuntimeError
             | KnownClass::BaseExceptionGroup
             | KnownClass::ExceptionGroup
             | KnownClass::Staticmethod
@@ -1004,6 +1018,8 @@ impl KnownClass {
             Self::Exception => "Exception",
             Self::Warning => "Warning",
             Self::NotImplementedError => "NotImplementedError",
+            Self::AssertionError => "AssertionError",
+            Self::RuntimeError => "RuntimeError",
             Self::ExceptionGroup => "ExceptionGroup",
             Self::Staticmethod => "staticmethod",
             Self::Classmethod => "classmethod",
@@ -1408,6 +1424,8 @@ impl KnownClass {
             | Self::Exception
             | Self::Warning
             | Self::NotImplementedError
+            | Self::AssertionError
+            | Self::RuntimeError
             | Self::ExceptionGroup
             | Self::Staticmethod
             | Self::Classmethod
@@ -1562,6 +1580,8 @@ impl KnownClass {
             | Self::Exception
             | Self::Warning
             | Self::NotImplementedError
+            | Self::AssertionError
+            | Self::RuntimeError
             | Self::ExceptionGroup
             | Self::Staticmethod
             | Self::Classmethod
@@ -1712,6 +1732,8 @@ impl KnownClass {
             | Self::Exception
             | Self::Warning
             | Self::NotImplementedError
+            | Self::AssertionError
+            | Self::RuntimeError
             | Self::ExceptionGroup
             | Self::Staticmethod
             | Self::Classmethod
@@ -1820,6 +1842,8 @@ impl KnownClass {
             "Exception" => &[Self::Exception],
             "Warning" => &[Self::Warning],
             "NotImplementedError" => &[Self::NotImplementedError],
+            "AssertionError" => &[Self::AssertionError],
+            "RuntimeError" => &[Self::RuntimeError],
             "ExceptionGroup" => &[Self::ExceptionGroup],
             "staticmethod" => &[Self::Staticmethod],
             "classmethod" => &[Self::Classmethod],
@@ -1961,6 +1985,8 @@ impl KnownClass {
             | Self::Exception
             | Self::Warning
             | Self::NotImplementedError
+            | Self::AssertionError
+            | Self::RuntimeError
             | Self::ExceptionGroup
             | Self::EllipsisType
             | Self::BaseExceptionGroup

@@ -1072,6 +1072,70 @@ fn asserted_guard(term: &Expr) -> Option<ReturnGuard<'_>> {
     })
 }
 
+/// basedpython: the source spans of a function's `raises` clause.
+///
+/// The AST holds only the declared type expression, whose range excludes both
+/// the keyword and any parentheses wrapping it. Recovering those from the source
+/// is what lets the lowering delete the whole clause and the IDE highlight
+/// exactly the keyword.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RaisesClauseSpans {
+    /// the `raises` keyword alone
+    pub keyword: TextRange,
+    /// the keyword through the end of the declared type, parentheses included
+    pub clause: TextRange,
+}
+
+/// basedpython: locate `function`'s `raises` clause in `source`.
+///
+/// Returns `None` when there is no clause, or when the source does not have the
+/// expected shape — a caller that cannot find the clause must leave the source
+/// alone rather than guess at a range.
+pub fn raises_clause_spans(
+    source: &str,
+    function: &ast::StmtFunctionDef,
+) -> Option<RaisesClauseSpans> {
+    let raises = function.raises.as_deref()?;
+
+    // the clause follows the return annotation, or the parameter list when there
+    // is none. tokenizing the gap finds the keyword without being fooled by the
+    // word appearing in a comment or in the annotation next to it
+    let signature_end = function
+        .returns
+        .as_deref()
+        .map_or_else(|| function.parameters.end(), Ranged::end);
+    let gap = TextRange::new(signature_end, raises.start());
+
+    let mut tokens = SimpleTokenizer::new(source, gap).skip_trivia();
+    let keyword = tokens.next()?;
+    if keyword.kind != SimpleTokenKind::Name || &source[keyword.range] != "raises" {
+        return None;
+    }
+
+    // parentheses around the declared type are not part of its range — except
+    // for a parenthesized tuple, which owns them. counting what the gap opens
+    // and closing exactly that many handles both without special-casing either
+    let depth = tokens
+        .filter(|token| token.kind == SimpleTokenKind::LParen)
+        .count();
+
+    let mut end = raises.end();
+    let mut closing =
+        SimpleTokenizer::new(source, TextRange::new(end, function.end())).skip_trivia();
+    for _ in 0..depth {
+        let token = closing.next()?;
+        if token.kind != SimpleTokenKind::RParen {
+            return None;
+        }
+        end = token.range.end();
+    }
+
+    Some(RaisesClauseSpans {
+        keyword: keyword.range,
+        clause: TextRange::new(keyword.range.start(), end),
+    })
+}
+
 /// basedpython: detect `local` / `once` modifiers on `param`, read from `source`
 /// (the file the parameter was parsed from).
 ///

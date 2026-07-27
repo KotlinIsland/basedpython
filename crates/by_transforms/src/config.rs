@@ -39,6 +39,13 @@ pub struct Config {
     /// Tests that compare exact transpile output should leave this
     /// [`SoundnessPositions::none`] unless they exercise the checks themselves
     pub soundness: SoundnessPositions,
+    /// when true, a function with a `raises` clause is wrapped in a runtime
+    /// guard that fails when it raises something the clause does not include.
+    /// off by default: static checking is unconditional, so this is only for
+    /// builds that want the contract enforced against callers the checker never
+    /// saw. a clause with no faithful runtime test — `raises ...`, or a set with
+    /// no runtime spelling such as a negation — is never guarded
+    pub runtime_raises_checks: bool,
     /// when true (the default), the `<value> cast? <type>` checked-cast
     /// operator is lowered to a runtime `isinstance` test that yields the
     /// value or `None`. when false, using `cast?` is a transpile error — the
@@ -139,6 +146,7 @@ impl Default for Config {
             inject_future_annotations: false,
             prune_unused_imports_after_reverse: true,
             soundness: SoundnessPositions::defaults(),
+            runtime_raises_checks: false,
             checked_cast: true,
         }
     }

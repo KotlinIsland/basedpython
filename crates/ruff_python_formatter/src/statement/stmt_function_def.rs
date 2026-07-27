@@ -158,6 +158,7 @@ fn format_function_header(f: &mut PyFormatter, item: &StmtFunctionDef) -> Format
         type_params,
         parameters,
         returns,
+        raises,
         body: _,
         is_trailing_lambda: _,
         is_asserts_return,
@@ -258,7 +259,15 @@ fn format_function_header(f: &mut PyFormatter, item: &StmtFunctionDef) -> Format
             }
         } else {
             Ok(())
+        }?;
+
+        // basedpython: `raises <type>` follows the return annotation
+        if let Some(raises) = raises.as_deref() {
+            write!(f, [space(), token("raises"), space()])?;
+            maybe_parenthesize_expression(raises, item, Parenthesize::IfBreaks).fmt(f)?;
         }
+
+        Ok(())
     });
 
     group(&format_inner).fmt(f)

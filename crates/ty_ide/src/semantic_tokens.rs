@@ -31,6 +31,7 @@ use bitflags::bitflags;
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
+use ruff_python_ast::helpers::raises_clause_spans;
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, TraversalSignal, walk_arguments, walk_expr,
     walk_interpolated_string_element, walk_stmt,
@@ -876,6 +877,19 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 // Handle return type annotation
                 if let Some(returns) = &func.returns {
                     self.visit_annotation(returns);
+                }
+
+                // basedpython `raises T` — the keyword text sits between the
+                // signature and the declared exception set, which is a type form
+                if let Some(raises) = func.raises.as_deref() {
+                    if let Some(spans) = raises_clause_spans(self.source, func) {
+                        self.add_token(
+                            spans.keyword,
+                            SemanticTokenType::Keyword,
+                            SemanticTokenModifier::empty(),
+                        );
+                    }
+                    self.visit_annotation(raises);
                 }
 
                 // Clear the in_class_scope flag so inner functions
@@ -5165,6 +5179,40 @@ a: dynamic
         assert_snapshot!(test.to_snapshot(&tokens), @r#"
         "sentinel" @ 0..8: Keyword
         "A" @ 9..10: Variable [definition]
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_raises_keyword() {
+        // `raises` is highlighted on its own — not the parentheses that may wrap
+        // the declared exception set, which is itself a type form
+        let test = SemanticTokenTest::new_by(
+            "
+def f() raises TypeError: ...
+
+def g() -> int raises TypeError | ValueError: ...
+
+def h() -> int raises (
+    TypeError
+): ...
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 5..6: Function [definition]
+        "raises" @ 9..15: Keyword
+        "TypeError" @ 16..25: Class
+        "g" @ 36..37: Function [definition]
+        "int" @ 43..46: Class
+        "raises" @ 47..53: Keyword
+        "TypeError" @ 54..63: Class
+        "ValueError" @ 66..76: Class
+        "h" @ 87..88: Function [definition]
+        "int" @ 94..97: Class
+        "raises" @ 98..104: Keyword
+        "TypeError" @ 111..120: Class
         "#);
     }
 

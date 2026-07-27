@@ -32,6 +32,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [],
                     is_trailing_lambda: false,
                     is_asserts_return: false,
@@ -59,6 +60,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [
                         Expr(
                             StmtExpr {
@@ -99,6 +101,7 @@ Module(
                         kwarg: None,
                     },
                     returns: None,
+                    raises: None,
                     body: [],
                     is_trailing_lambda: false,
                     is_asserts_return: false,

@@ -340,6 +340,7 @@ fn build_property_fn(
         returns: returns.map(Box::new),
         is_trailing_lambda: false,
         is_asserts_return: false,
+        raises: None,
         range,
         node_index: AtomicNodeIndex::NONE,
     })
@@ -1776,6 +1777,8 @@ impl<'src> Parser<'src> {
                 kwarg: None,
             }),
             returns,
+            // a `type def` declares a type-level function, which cannot raise
+            raises: None,
             body,
             is_trailing_lambda: false,
             is_asserts_return: false,
@@ -4102,6 +4105,30 @@ impl<'src> Parser<'src> {
             None
         };
 
+        // basedpython `def f() -> int raises TypeError`: the declared exception
+        // set. an ordinary type expression — `Never` cannot raise, `...` opts out
+        // of tracking, `A | B` is a union — so no tuple form is accepted here
+        let raises =
+            if self.at(TokenKind::Name) && self.src_text(self.current_token_range()) == "raises" {
+                self.error_if_not_basedpython(
+                    "`raises` clauses are not valid in .py files".to_string(),
+                );
+                self.bump(TokenKind::Name);
+
+                if self.at_expr() {
+                    Some(Box::new(self.parse_conditional_expression_or_higher().expr))
+                } else {
+                    self.add_error(
+                        ParseErrorType::ExpectedExpression,
+                        self.current_token_range(),
+                    );
+
+                    None
+                }
+            } else {
+                None
+            };
+
         // basedpython: `def f(a: int) -> int` (no colon, no body) is permitted as
         // a bodyless overload declaration. The `overload` transform adds `@overload`
         // to consecutive bodyless defs with the same name and a `: ...` stub body.
@@ -4136,6 +4163,7 @@ impl<'src> Parser<'src> {
             decorator_list,
             is_async: false,
             returns,
+            raises,
             is_trailing_lambda: false,
             is_asserts_return,
             range: self.node_range(start),
@@ -4226,6 +4254,7 @@ impl<'src> Parser<'src> {
             }))),
             is_trailing_lambda: false,
             is_asserts_return: false,
+            raises: None,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         }
@@ -5069,6 +5098,7 @@ impl<'src> Parser<'src> {
             decorator_list: vec![decorator].into(),
             is_async: false,
             returns: None,
+            raises: None,
             is_trailing_lambda: true,
             is_asserts_return: false,
             range: self.node_range(start),
@@ -6067,6 +6097,7 @@ impl<'src> Parser<'src> {
                     is_async: false,
                     is_trailing_lambda: false,
                     is_asserts_return: false,
+                    raises: None,
                     decorator_list: decorators,
                     name: ast::Identifier {
                         id: Name::empty(),

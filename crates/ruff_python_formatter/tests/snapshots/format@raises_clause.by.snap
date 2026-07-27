@@ -1,0 +1,115 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/raises_clause.by
+---
+## Input
+```bython
+def a() raises TypeError: ...
+
+
+def b() -> int raises TypeError | ValueError: ...
+
+
+def c() raises Never: ...
+
+
+def d() raises ...: ...
+
+
+def e() raises not TypeError: ...
+
+
+async def f() raises TypeError: ...
+
+
+def g() raises TypeError
+
+
+def h(
+    a: int,
+    b: str,
+) -> int raises TypeError:
+    raise TypeError
+
+
+class C:
+    def m(self) -> None raises ValueError:
+        raise ValueError
+
+
+def i() raises   TypeError :
+    raise TypeError
+
+
+def j() -> int raises TypeError:  # trailing comment
+    raise TypeError
+
+
+def k(
+    a: int,
+) -> int raises (
+    TypeError  # inside the clause
+):
+    raise TypeError
+
+
+# leading comment
+def l() raises TypeError:
+    raise TypeError
+```
+
+## Output
+```bython
+def a() raises TypeError: ...
+
+
+def b() -> int raises TypeError | ValueError: ...
+
+
+def c() raises Never: ...
+
+
+def d() raises ...: ...
+
+
+def e() raises not TypeError: ...
+
+
+async def f() raises TypeError: ...
+
+
+def g() raises TypeError
+
+
+def h(
+    a: int,
+    b: str,
+) -> int raises TypeError:
+    raise TypeError
+
+
+class C:
+    def m(self) -> None raises ValueError:
+        raise ValueError
+
+
+def i() raises TypeError:
+    raise TypeError
+
+
+def j() -> int raises TypeError:  # trailing comment
+    raise TypeError
+
+
+def k(
+    a: int,
+) -> int raises (
+    TypeError  # inside the clause
+):
+    raise TypeError
+
+
+# leading comment
+def l() raises TypeError:
+    raise TypeError
+```

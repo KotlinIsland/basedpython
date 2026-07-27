@@ -68,6 +68,15 @@ pub(crate) trait TypeInfo {
 
     fn is_function(&self, name: &ExprName) -> bool;
 
+    /// basedpython: the `isinstance` target for `function`'s declared `raises`
+    /// clause (`(TypeError, ValueError)`, `()` for `raises Never`), or `None`
+    /// when the clause has no faithful runtime test — a gradual `raises ...`, or
+    /// a set with no runtime spelling
+    fn declared_raises_runtime_target(
+        &self,
+        function: &ruff_python_ast::StmtFunctionDef,
+    ) -> Option<String>;
+
     /// whether `name` resolves to a basedpython *reified* generic function (a
     /// pep 695 type parameter referenced in a value position). these are
     /// wrapped in the `generic` polyfill, so their specialized call sites
@@ -417,6 +426,17 @@ impl TypeInfo for SemanticModel<'_> {
     fn is_function(&self, name: &ExprName) -> bool {
         name.inferred_type(self)
             .is_some_and(|ty| ty.as_function_literal().is_some())
+    }
+
+    fn declared_raises_runtime_target(
+        &self,
+        function: &ruff_python_ast::StmtFunctionDef,
+    ) -> Option<String> {
+        ty_python_semantic::types::exceptions::declared_raises_runtime_target(
+            self.db(),
+            self.file(),
+            function.inferred_type(self)?,
+        )
     }
 
     fn is_reified_function(&self, name: &ExprName) -> bool {

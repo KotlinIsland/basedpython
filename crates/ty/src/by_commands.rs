@@ -73,6 +73,7 @@ pub(crate) fn cmd_run(
     min_version: Option<&str>,
     soundness: &str,
     no_checked_cast: bool,
+    runtime_raises_checks: bool,
 ) -> anyhow::Result<ExitStatus> {
     let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
     // `run` executes on a specific interpreter, so by default target *its*
@@ -103,6 +104,7 @@ pub(crate) fn cmd_run(
     };
     config.soundness = parse_soundness(soundness)?;
     config.checked_cast = !no_checked_cast;
+    config.runtime_raises_checks = runtime_raises_checks;
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let tmp = tempfile::TempDir::new().context("failed to create temp directory")?;
 
@@ -177,10 +179,12 @@ pub(crate) fn cmd_build(
     min_version: &str,
     soundness: &str,
     no_checked_cast: bool,
+    runtime_raises_checks: bool,
 ) -> anyhow::Result<ExitStatus> {
     let mut config = parse_version(min_version)?;
     config.soundness = parse_soundness(soundness)?;
     config.checked_cast = !no_checked_cast;
+    config.runtime_raises_checks = runtime_raises_checks;
     let cwd = std::env::current_dir().context("failed to get current directory")?;
     let out = cwd.join("out");
     let files = bpy_files(&cwd);
@@ -222,10 +226,12 @@ pub(crate) fn cmd_transpile(
     min_version: &str,
     soundness: &str,
     no_checked_cast: bool,
+    runtime_raises_checks: bool,
 ) -> anyhow::Result<ExitStatus> {
     let mut config = parse_version(min_version)?;
     config.soundness = parse_soundness(soundness)?;
     config.checked_cast = !no_checked_cast;
+    config.runtime_raises_checks = runtime_raises_checks;
 
     // a directory argument transpiles the whole tree in place: forward turns
     // every `.by` into a `.py` (type-aware, one shared project db); reverse

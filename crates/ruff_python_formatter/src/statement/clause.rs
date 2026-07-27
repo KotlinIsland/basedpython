@@ -151,6 +151,7 @@ impl<'a> ClauseHeader<'a> {
                 decorator_list: _,
                 name: _,
                 returns,
+                raises,
                 body: _,
                 is_trailing_lambda: _,
                 is_asserts_return: _,
@@ -162,6 +163,10 @@ impl<'a> ClauseHeader<'a> {
 
                 if let Some(returns) = returns.as_deref() {
                     visit(returns, visitor);
+                }
+
+                if let Some(raises) = raises.as_deref() {
+                    visit(raises, visitor);
                 }
             }
             ClauseHeader::If(StmtIf {
