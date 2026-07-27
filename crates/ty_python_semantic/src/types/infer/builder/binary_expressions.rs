@@ -817,14 +817,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             (Type::NominalInstance(_), _, ast::Operator::Mult)
                 if right_ty.as_int_like_literal().is_some() =>
             {
-                self.fold_tuple_repeat(left_ty, right_ty).or_else(|| {
+                fold_tuple_repeat(db, left_ty, right_ty).or_else(|| {
                     Type::try_call_bin_op_return_type_with_tcx(db, left_ty, op, right_ty, tcx)
                 })
             }
             (_, Type::NominalInstance(_), ast::Operator::Mult)
                 if left_ty.as_int_like_literal().is_some() =>
             {
-                self.fold_tuple_repeat(right_ty, left_ty).or_else(|| {
+                fold_tuple_repeat(db, right_ty, left_ty).or_else(|| {
                     Type::try_call_bin_op_return_type_with_tcx(db, left_ty, op, right_ty, tcx)
                 })
             }
@@ -832,7 +832,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // fold `(a, b) + (c,)` into `(a, b, c)`. as with `*`, typeshed's `tuple.__add__`
             // otherwise widens the concatenation to `tuple[T, ...]`
             (Type::NominalInstance(_), Type::NominalInstance(_), ast::Operator::Add) => {
-                self.fold_tuple_concat(left_ty, right_ty).or_else(|| {
+                fold_tuple_concat(db, left_ty, right_ty).or_else(|| {
                     Type::try_call_bin_op_return_type_with_tcx(db, left_ty, op, right_ty, tcx)
                 })
             }
@@ -897,58 +897,6 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 op,
             ) => Type::try_call_bin_op_return_type_with_tcx(db, left_ty, op, right_ty, tcx),
         }
-    }
-
-    /// Fold `tuple * n` into a fixed-length tuple whose elements are those of `tuple_ty`
-    /// repeated `n` times, where `multiplier` is a literal integer (or `bool`).
-    ///
-    /// Returns `None` — leaving the caller to fall back on typeshed's `tuple.__mul__`, which
-    /// widens to `tuple[T, ...]` — when `tuple_ty` is not an exact fixed-length tuple, when
-    /// `multiplier` is not a literal integer, or when the repeated tuple would grow beyond
-    /// `MAX_LENGTH`. A non-positive multiplier folds to the empty tuple.
-    fn fold_tuple_repeat(&self, tuple_ty: Type<'db>, multiplier: Type<'db>) -> Option<Type<'db>> {
-        /// Repeating into a longer tuple discards the exact element types, so cap the work.
-        const MAX_LENGTH: usize = 512;
-
-        let db = self.db();
-        let factor = multiplier.as_int_like_literal()?;
-        let spec = tuple_ty.exact_tuple_instance_spec(db)?;
-        let Tuple::Fixed(fixed) = spec.as_ref() else {
-            return None;
-        };
-
-        let elements = fixed.all_elements();
-        let factor = usize::try_from(factor).unwrap_or(0);
-        let new_length = elements.len().checked_mul(factor)?;
-        if new_length > MAX_LENGTH {
-            return None;
-        }
-
-        let mut repeated = Vec::with_capacity(new_length);
-        for _ in 0..factor {
-            repeated.extend_from_slice(elements);
-        }
-        Some(Type::heterogeneous_tuple(db, repeated))
-    }
-
-    /// Fold `left + right` into a single fixed-length tuple concatenating their elements.
-    ///
-    /// Returns `None` — leaving the caller to fall back on typeshed's `tuple.__add__` — unless
-    /// both operands are exact fixed-length tuples.
-    fn fold_tuple_concat(&self, left_ty: Type<'db>, right_ty: Type<'db>) -> Option<Type<'db>> {
-        let db = self.db();
-        let left = left_ty.exact_tuple_instance_spec(db)?;
-        let right = right_ty.exact_tuple_instance_spec(db)?;
-        let (Tuple::Fixed(left), Tuple::Fixed(right)) = (left.as_ref(), right.as_ref()) else {
-            return None;
-        };
-        Some(Type::heterogeneous_tuple(
-            db,
-            left.all_elements()
-                .iter()
-                .chain(right.all_elements())
-                .copied(),
-        ))
     }
 
     /// Raise a diagnostic if the given type cannot be divided by zero.
@@ -1102,12 +1050,64 @@ fn complex_binary_op_result(
     LiteralArithOutcome::Literal(Type::complex_literal(db, re, im))
 }
 
-/// basedpython: evaluate a binary operation on two literal operands, reusing the
-/// exact literal/type logic the value-expression inferrer uses (so `1 + 1` folds to
-/// `Literal[2]`, `0.1 + 0.2` keeps IEEE-754 semantics, and so on). returns `None`
-/// when neither operand is a literal or the operator isn't supported between them.
-/// shared with the symbolic type-arithmetic path, where a specialized `Dim + 1`
-/// re-evaluates to `Literal[6]`
+/// Fold `tuple * n` into a fixed-length tuple whose elements are those of `tuple_ty`
+/// repeated `n` times, where `multiplier` is a literal integer (or `bool`).
+///
+/// Returns `None` — leaving the caller to fall back on typeshed's `tuple.__mul__`, which
+/// widens to `tuple[T, ...]` — when `tuple_ty` is not an exact fixed-length tuple, when
+/// `multiplier` is not a literal integer, or when the repeated tuple would grow beyond
+/// `MAX_LENGTH`. A non-positive multiplier folds to the empty tuple.
+pub(crate) fn fold_tuple_repeat<'db>(
+    db: &'db dyn Db,
+    tuple_ty: Type<'db>,
+    multiplier: Type<'db>,
+) -> Option<Type<'db>> {
+    /// Repeating into a longer tuple discards the exact element types, so cap the work.
+    const MAX_LENGTH: usize = 512;
+
+    let factor = multiplier.as_int_like_literal()?;
+    let spec = tuple_ty.exact_tuple_instance_spec(db)?;
+    let Tuple::Fixed(fixed) = spec.as_ref() else {
+        return None;
+    };
+
+    let elements = fixed.all_elements();
+    let factor = usize::try_from(factor).unwrap_or(0);
+    let new_length = elements.len().checked_mul(factor)?;
+    if new_length > MAX_LENGTH {
+        return None;
+    }
+
+    let mut repeated = Vec::with_capacity(new_length);
+    for _ in 0..factor {
+        repeated.extend_from_slice(elements);
+    }
+    Some(Type::heterogeneous_tuple(db, repeated))
+}
+
+/// Fold `left + right` into a single fixed-length tuple concatenating their elements.
+///
+/// Returns `None` — leaving the caller to fall back on typeshed's `tuple.__add__` — unless
+/// both operands are exact fixed-length tuples.
+pub(crate) fn fold_tuple_concat<'db>(
+    db: &'db dyn Db,
+    left_ty: Type<'db>,
+    right_ty: Type<'db>,
+) -> Option<Type<'db>> {
+    let left = left_ty.exact_tuple_instance_spec(db)?;
+    let right = right_ty.exact_tuple_instance_spec(db)?;
+    let (Tuple::Fixed(left), Tuple::Fixed(right)) = (left.as_ref(), right.as_ref()) else {
+        return None;
+    };
+    Some(Type::heterogeneous_tuple(
+        db,
+        left.all_elements()
+            .iter()
+            .chain(right.all_elements())
+            .copied(),
+    ))
+}
+
 /// basedpython: fold a unary operation on a literal operand (`-3` → `Literal[-3]`,
 /// `~0` → `Literal[-1]`). Returns `None` when the operand isn't a numeric literal or
 /// the operator isn't `+`/`-`/`~`, so callers fall back to dunder dispatch. Shared
@@ -1150,6 +1150,12 @@ pub(crate) fn literal_unary_op<'db>(
     }
 }
 
+/// basedpython: evaluate a binary operation on two literal operands, reusing the
+/// exact literal/type logic the value-expression inferrer uses (so `1 + 1` folds to
+/// `Literal[2]`, `0.1 + 0.2` keeps IEEE-754 semantics, and so on). returns `None`
+/// when neither operand is a literal or the operator isn't supported between them.
+/// shared with the symbolic type-arithmetic path, where a specialized `Dim + 1`
+/// re-evaluates to `Literal[6]`
 pub(crate) fn literal_binary_op<'db>(
     db: &'db dyn Db,
     left_ty: Type<'db>,

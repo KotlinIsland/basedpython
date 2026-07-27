@@ -608,6 +608,11 @@ impl<'db> TypeVarInstance<'db> {
                 let typevar_node = typevar.node(&module);
                 definition_expression_type(db, definition, typevar_node.bound.as_ref()?)
             }
+            // basedpython: `*Ts: int` bounds every element of the pack
+            DefinitionKind::TypeVarTuple(typevartuple) => {
+                let typevartuple_node = typevartuple.node(&module);
+                definition_expression_type(db, definition, typevartuple_node.bound.as_ref()?)
+            }
             // legacy typevar
             DefinitionKind::Assignment(assignment) => {
                 let call_expr = assignment.value(&module).as_call_expr()?;

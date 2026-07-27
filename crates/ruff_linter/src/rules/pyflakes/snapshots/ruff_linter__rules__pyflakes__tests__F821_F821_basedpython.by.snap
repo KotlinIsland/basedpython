@@ -58,6 +58,8 @@ F821 Undefined name `UndefinedMember`
 61 | good_protocol: protocol(a: Defined; def m(self, n: Defined) -> Defined)
 62 | bad_protocol: protocol(a: UndefinedMember; def m(self) -> UndefinedReturn)
    |                           ^^^^^^^^^^^^^^^
+63 |
+64 | # a match type's `case` captures are type variables, and its bodies are type
    |
 
 F821 Undefined name `UndefinedReturn`
@@ -67,4 +69,15 @@ F821 Undefined name `UndefinedReturn`
 61 | good_protocol: protocol(a: Defined; def m(self, n: Defined) -> Defined)
 62 | bad_protocol: protocol(a: UndefinedMember; def m(self) -> UndefinedReturn)
    |                                                           ^^^^^^^^^^^^^^^
+63 |
+64 | # a match type's `case` captures are type variables, and its bodies are type
+   |
+
+F821 Undefined name `UndefinedBound`
+  --> F821_basedpython.by:73:20
+   |
+71 |         (NDTuple[T, *Rest],) * Dim
+72 |
+73 | type BadBound[*Ts: UndefinedBound] = tuple[*Ts]
+   |                    ^^^^^^^^^^^^^^
    |

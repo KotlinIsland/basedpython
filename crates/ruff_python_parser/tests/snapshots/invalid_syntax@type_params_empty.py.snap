@@ -105,6 +105,7 @@ Module(
                             ),
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),

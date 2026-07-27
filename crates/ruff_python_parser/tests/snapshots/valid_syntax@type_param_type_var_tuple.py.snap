@@ -36,6 +36,7 @@ Module(
                                             range: 8..10,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),
@@ -56,6 +57,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),
@@ -85,6 +87,7 @@ Module(
                                             range: 26..28,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Name(
                                                 ExprName {
@@ -114,6 +117,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),
@@ -143,6 +147,7 @@ Module(
                                             range: 50..52,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Starred(
                                                 ExprStarred {
@@ -179,6 +184,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),
@@ -223,6 +229,7 @@ Module(
                                             range: 78..80,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),
@@ -243,6 +250,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),
@@ -287,6 +295,7 @@ Module(
                                             range: 99..101,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Name(
                                                 ExprName {
@@ -316,6 +325,7 @@ Module(
                             ctx: Load,
                         },
                     ),
+                    cases: [],
                     is_private: false,
                 },
             ),

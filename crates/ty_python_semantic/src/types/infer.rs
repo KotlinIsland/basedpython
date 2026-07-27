@@ -73,7 +73,9 @@ use ty_python_core::unpack::Unpack;
 use ty_python_core::{ExpressionNodeKey, SemanticIndex, Statement, semantic_index};
 
 mod builder;
-pub(crate) use builder::{literal_binary_op, literal_unary_op};
+pub(crate) use builder::{
+    fold_tuple_concat, fold_tuple_repeat, literal_binary_op, literal_unary_op,
+};
 mod comparisons;
 pub(crate) use comparisons::deferred_comparison;
 #[cfg(test)]

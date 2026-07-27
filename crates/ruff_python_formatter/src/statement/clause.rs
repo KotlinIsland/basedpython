@@ -2,7 +2,7 @@ use ruff_formatter::{Argument, Arguments, FormatError, write};
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::{
     ElifElseClause, ExceptHandlerExceptHandler, MatchCase, StmtClassDef, StmtFor, StmtFunctionDef,
-    StmtIf, StmtMatch, StmtTry, StmtWhile, StmtWith, Suite,
+    StmtIf, StmtMatch, StmtTry, StmtTypeAlias, StmtWhile, StmtWith, Suite,
 };
 use ruff_python_trivia::{SimpleToken, SimpleTokenKind, SimpleTokenizer};
 use ruff_source_file::LineRanges;
@@ -30,6 +30,8 @@ pub(crate) enum ClauseHeader<'a> {
     ExceptHandler(&'a ExceptHandlerExceptHandler),
     TryFinally(&'a StmtTry),
     Match(&'a StmtMatch),
+    /// basedpython: the `match S:` header of a match type alias.
+    TypeAliasMatch(&'a StmtTypeAlias),
     MatchCase(&'a MatchCase),
     For(&'a StmtFor),
     While(&'a StmtWhile),
@@ -66,7 +68,8 @@ impl<'a> ClauseHeader<'a> {
             | ClauseHeader::TryFinally(StmtTry {
                 finalbody: body, ..
             }) => body.last().map(AnyNodeRef::from),
-            ClauseHeader::Match(StmtMatch { cases, .. }) => cases
+            ClauseHeader::Match(StmtMatch { cases, .. })
+            | ClauseHeader::TypeAliasMatch(StmtTypeAlias { cases, .. }) => cases
                 .last()
                 .and_then(|case| case.body.last().map(AnyNodeRef::from)),
         }
@@ -88,6 +91,7 @@ impl<'a> ClauseHeader<'a> {
             | ClauseHeader::If(_)
             | ClauseHeader::TryFinally(_)
             | ClauseHeader::Match(_)
+            | ClauseHeader::TypeAliasMatch(_)
             | ClauseHeader::MatchCase(_)
             | ClauseHeader::For(_)
             | ClauseHeader::While(_)
@@ -216,6 +220,17 @@ impl<'a> ClauseHeader<'a> {
             }) => {
                 visit(subject.as_ref(), visitor);
             }
+            ClauseHeader::TypeAliasMatch(StmtTypeAlias {
+                value,
+                range: _,
+                node_index: _,
+                name: _,
+                type_params: _,
+                cases: _,
+                is_private: _,
+            }) => {
+                visit(value.as_ref(), visitor);
+            }
             ClauseHeader::MatchCase(MatchCase {
                 guard,
                 pattern,
@@ -342,6 +357,27 @@ impl<'a> ClauseHeader<'a> {
                 SimpleTokenKind::Match,
                 source,
             ),
+            // a match type's clause keyword does not start the statement: it follows the
+            // alias name, its type parameters and the `=`, so the scan starts from there
+            ClauseHeader::TypeAliasMatch(header) => {
+                let after_header = header
+                    .type_params
+                    .as_deref()
+                    .map_or_else(|| header.name.end(), Ranged::end);
+                let mut tokens = SimpleTokenizer::starts_at(after_header, source).skip_trivia();
+                match (tokens.next(), tokens.next()) {
+                    (
+                        Some(SimpleToken {
+                            kind: SimpleTokenKind::Equals,
+                            ..
+                        }),
+                        Some(token),
+                    ) if token.kind() == SimpleTokenKind::Match => Ok(token.range()),
+                    _ => Err(FormatError::syntax_error(
+                        "Expected `= match` after a match type alias's name.",
+                    )),
+                }
+            }
             ClauseHeader::MatchCase(header) => find_keyword(
                 StartPosition::clause_start(header),
                 SimpleTokenKind::Case,
@@ -408,6 +444,7 @@ impl<'a> From<ClauseHeader<'a>> for AnyNodeRef<'a> {
             }
             ClauseHeader::TryFinally(stmt_try) => stmt_try.into(),
             ClauseHeader::Match(stmt_match) => stmt_match.into(),
+            ClauseHeader::TypeAliasMatch(stmt_type_alias) => stmt_type_alias.into(),
             ClauseHeader::MatchCase(match_case) => match_case.into(),
             ClauseHeader::For(stmt_for) => stmt_for.into(),
             ClauseHeader::While(stmt_while) => stmt_while.into(),

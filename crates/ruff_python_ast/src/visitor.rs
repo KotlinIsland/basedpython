@@ -199,6 +199,7 @@ pub fn walk_stmt<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, stmt: &'a Stmt) {
             name,
             type_params,
             value,
+            cases,
             is_private: _,
         }) => {
             visitor.visit_expr(value);
@@ -206,6 +207,9 @@ pub fn walk_stmt<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, stmt: &'a Stmt) {
                 visitor.visit_type_params(type_params);
             }
             visitor.visit_expr(name);
+            for match_case in cases {
+                visitor.visit_match_case(match_case);
+            }
         }
         Stmt::Assign(ast::StmtAssign { targets, value, .. }) => {
             visitor.visit_expr(value);
@@ -807,11 +811,15 @@ pub fn walk_type_param<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, type_param:
             }
         }
         TypeParam::TypeVarTuple(TypeParamTypeVarTuple {
+            bound,
             default,
             name: _,
             range: _,
             node_index: _,
         }) => {
+            if let Some(expr) = bound {
+                visitor.visit_expr(expr);
+            }
             if let Some(expr) = default {
                 visitor.visit_expr(expr);
             }

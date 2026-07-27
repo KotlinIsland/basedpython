@@ -142,6 +142,9 @@ fields = [
   { name = "name", type = "Expr" },
   { name = "type_params", type = "Box<crate::TypeParams>?" },
   { name = "value", type = "Expr" },
+  { name = "cases", type = "MatchCase*", doc = """basedpython: the `case` blocks of a match type
+`type X[...] = match S: ...`. Empty for an ordinary alias; when non-empty, `value` is the
+match subject rather than the alias's value, and each case body is a single type expression""" },
   { name = "is_private", type = "bool", doc = """basedpython: when true, this alias was written `private type X = V`.
 A type alias has no decorator list, so unlike `def`/`class` the visibility
 modifier can't ride along as a synthetic decorator and is recorded here
@@ -764,6 +767,8 @@ fields = [
 doc = "See also [TypeVarTuple](https://docs.python.org/3/library/ast.html#ast.TypeVarTuple)"
 fields = [
   { name = "name", type = "Identifier" },
+  { name = "bound", type = "Box<Expr>?", doc = """basedpython: an upper bound applied to every
+element of the pack, written `*Ts: int`. CPython rejects a bound on a `TypeVarTuple`""" },
   { name = "default", type = "Box<Expr>?" },
 ]
 

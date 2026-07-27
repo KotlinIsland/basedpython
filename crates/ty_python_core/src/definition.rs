@@ -357,7 +357,23 @@ pub(crate) enum DefinitionNodeRef<'ast, 'db> {
     TypeVar(&'ast ast::TypeParamTypeVar),
     ParamSpec(&'ast ast::TypeParamParamSpec),
     TypeVarTuple(&'ast ast::TypeParamTypeVarTuple),
+    /// basedpython: a name captured by a match type's `case` pattern.
+    TypeMatchCapture(TypeMatchCaptureDefinitionNodeRef<'ast>),
     LoopHeader(LoopHeaderDefinitionNodeRef<'ast>),
+}
+
+/// basedpython: a name bound by the pattern of a match type's `case` block.
+///
+/// A capture stands for a type, not a value: `case (Dim, *Rest)` introduces one type
+/// variable per capture, which the case body is written in terms of and which the match
+/// evaluation substitutes once the alias is specialized.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct TypeMatchCaptureDefinitionNodeRef<'ast> {
+    /// The captured name.
+    pub(crate) identifier: &'ast ast::Identifier,
+    /// Whether the capture is a starred one (`*Rest`), which captures a whole pack of
+    /// types rather than a single type.
+    pub(crate) is_variadic: bool,
 }
 
 impl<'ast> From<&'ast ast::StmtFunctionDef> for DefinitionNodeRef<'ast, '_> {
@@ -405,6 +421,12 @@ impl<'ast> From<&'ast ast::TypeParamParamSpec> for DefinitionNodeRef<'ast, '_> {
 impl<'ast> From<&'ast ast::TypeParamTypeVarTuple> for DefinitionNodeRef<'ast, '_> {
     fn from(value: &'ast ast::TypeParamTypeVarTuple) -> Self {
         Self::TypeVarTuple(value)
+    }
+}
+
+impl<'ast> From<TypeMatchCaptureDefinitionNodeRef<'ast>> for DefinitionNodeRef<'ast, '_> {
+    fn from(value: TypeMatchCaptureDefinitionNodeRef<'ast>) -> Self {
+        Self::TypeMatchCapture(value)
     }
 }
 
@@ -788,6 +810,13 @@ impl<'db> DefinitionNodeRef<'_, 'db> {
             DefinitionNodeRef::TypeVarTuple(node) => {
                 DefinitionKind::TypeVarTuple(AstNodeRef::new(parsed, node))
             }
+            DefinitionNodeRef::TypeMatchCapture(TypeMatchCaptureDefinitionNodeRef {
+                identifier,
+                is_variadic,
+            }) => DefinitionKind::TypeMatchCapture(TypeMatchCaptureDefinitionKind {
+                identifier: AstNodeRef::new(parsed, identifier),
+                is_variadic,
+            }),
             DefinitionNodeRef::LoopHeader(LoopHeaderDefinitionNodeRef {
                 loop_stmt,
                 place,
@@ -868,6 +897,9 @@ impl<'db> DefinitionNodeRef<'_, 'db> {
             Self::TypeVar(node) => node.into(),
             Self::ParamSpec(node) => node.into(),
             Self::TypeVarTuple(node) => node.into(),
+            Self::TypeMatchCapture(TypeMatchCaptureDefinitionNodeRef { identifier, .. }) => {
+                identifier.into()
+            }
             Self::LoopHeader(LoopHeaderDefinitionNodeRef { loop_stmt, .. }) => match loop_stmt {
                 LoopStmtRef::While(stmt) => stmt.into(),
                 LoopStmtRef::For(stmt) => stmt.into(),
@@ -943,6 +975,7 @@ pub enum DefinitionKind<'db> {
     TypeVar(AstNodeRef<ast::TypeParamTypeVar>),
     ParamSpec(AstNodeRef<ast::TypeParamParamSpec>),
     TypeVarTuple(AstNodeRef<ast::TypeParamTypeVarTuple>),
+    TypeMatchCapture(TypeMatchCaptureDefinitionKind),
     LoopHeader(LoopHeaderDefinitionKind),
     // Boxing here helps avoid growing the memory footprint of this enum.
     NestedBindings(Box<NestedBindingsDefinitionKind>),
@@ -1072,6 +1105,7 @@ impl<'db> DefinitionKind<'db> {
             DefinitionKind::TypeVarTuple(type_var_tuple) => {
                 type_var_tuple.node(module).name.range()
             }
+            DefinitionKind::TypeMatchCapture(capture) => capture.identifier(module).range(),
             DefinitionKind::LoopHeader(loop_header) => loop_header.range(module),
             DefinitionKind::NestedBindings(nested_bindings) => {
                 // TODO: We only return the `TextRange` of one of the `nonlocal` or `global`
@@ -1128,6 +1162,7 @@ impl<'db> DefinitionKind<'db> {
             DefinitionKind::TypeVar(type_var) => type_var.node(module).range(),
             DefinitionKind::ParamSpec(param_spec) => param_spec.node(module).range(),
             DefinitionKind::TypeVarTuple(type_var_tuple) => type_var_tuple.node(module).range(),
+            DefinitionKind::TypeMatchCapture(capture) => capture.identifier(module).range(),
             DefinitionKind::LoopHeader(loop_header) => loop_header.range(module),
             DefinitionKind::NestedBindings(nested_bindings) => {
                 // TODO: We only return the `TextRange` of one of the `nonlocal` or `global`
@@ -1149,7 +1184,8 @@ impl<'db> DefinitionKind<'db> {
             | DefinitionKind::StarImport(_)
             | DefinitionKind::TypeVar(_)
             | DefinitionKind::ParamSpec(_)
-            | DefinitionKind::TypeVarTuple(_) => DefinitionCategory::DeclarationAndBinding,
+            | DefinitionKind::TypeVarTuple(_)
+            | DefinitionKind::TypeMatchCapture(_) => DefinitionCategory::DeclarationAndBinding,
             DefinitionKind::Parameter(parameter) => parameter.category(module),
             DefinitionKind::LambdaParameter(LambdaParameterDefinitionNodeKind {
                 parameter,
@@ -1245,6 +1281,23 @@ impl StarImportDefinitionKind {
 
     pub fn symbol_id(&self) -> ScopedSymbolId {
         self.symbol_id
+    }
+}
+
+/// basedpython: a name bound by the pattern of a match type's `case` block.
+#[derive(Clone, Debug, get_size2::GetSize, salsa::SalsaValue)]
+pub struct TypeMatchCaptureDefinitionKind {
+    identifier: AstNodeRef<ast::Identifier>,
+    is_variadic: bool,
+}
+
+impl TypeMatchCaptureDefinitionKind {
+    pub fn identifier<'ast>(&self, module: &'ast ParsedModuleRef) -> &'ast ast::Identifier {
+        self.identifier.node(module)
+    }
+
+    pub fn is_variadic(&self) -> bool {
+        self.is_variadic
     }
 }
 

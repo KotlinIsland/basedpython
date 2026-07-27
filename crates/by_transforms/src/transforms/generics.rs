@@ -729,6 +729,29 @@ impl<'src> GenericPolyfill<'src> {
             (String::new(), Vec::new())
         };
 
+        // basedpython: a match type has no value expression — `alias.value` is the subject
+        // its `case` blocks are matched against. the checker resolves every application, so
+        // the runtime alias stands for "whatever it worked out", the same `object` the
+        // dedicated pass writes on the native path
+        if !alias.cases.is_empty() {
+            self.needed_imports.typealias_type = true;
+            let (_line_start, indent) = self.line_start_of(alias.range().start());
+            let indent = indent.to_owned();
+            let mut replacement = String::new();
+            for d in &defs {
+                let _ = writeln!(replacement, "{indent}{d}");
+            }
+            let _ = write!(
+                replacement,
+                "{indent}{name_src} = TypeAliasType(\"{name_src}\", object{type_params_arg})"
+            );
+            self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                replacement,
+                alias.range(),
+            )));
+            return;
+        }
+
         // Everything that rewrites part of the value has to be spliced here: our
         // `alias.range()` edit subsumes the value, so an edit another pass emitted
         // on it alone is dropped. Symbolic folds (`T.a` → `int`, `Dim + 1` → `int`)

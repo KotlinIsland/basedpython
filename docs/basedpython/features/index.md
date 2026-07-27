@@ -35,6 +35,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [infinity and nan float literals](float-literals.md)
 - [literal type promotion](literal-types.md)
 - [symbolic operations in types](symbolic-type-ops.md)
+- [match types](match-types.md)
 - [typed dict literals](typed-dict-literal.md)
 - [anonymous named tuple types](anonymous-named-tuple.md)
 - [inline protocol types](inline-protocol.md)

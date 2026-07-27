@@ -1495,6 +1495,7 @@ pub struct StmtTypeAlias<'a> {
     pub name: Box<ComparableExpr<'a>>,
     pub type_params: Option<ComparableTypeParams<'a>>,
     pub value: Box<ComparableExpr<'a>>,
+    pub cases: Vec<ComparableMatchCase<'a>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1542,11 +1543,13 @@ impl<'a> From<&'a ast::TypeParam> for ComparableTypeParam<'a> {
             }),
             ast::TypeParam::TypeVarTuple(ast::TypeParamTypeVarTuple {
                 name,
+                bound,
                 default,
                 range: _,
                 node_index: _,
             }) => Self::TypeVarTuple(TypeParamTypeVarTuple {
                 name: name.as_str(),
+                bound: bound.as_ref().map(Into::into),
                 default: default.as_ref().map(Into::into),
             }),
             ast::TypeParam::ParamSpec(ast::TypeParamParamSpec {
@@ -1579,6 +1582,7 @@ pub struct TypeParamParamSpec<'a> {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TypeParamTypeVarTuple<'a> {
     pub name: &'a str,
+    pub bound: Option<Box<ComparableExpr<'a>>>,
     pub default: Option<Box<ComparableExpr<'a>>>,
 }
 
@@ -1800,11 +1804,13 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 name,
                 type_params,
                 value,
+                cases,
                 is_private: _,
             }) => Self::TypeAlias(StmtTypeAlias {
                 name: name.into(),
                 type_params: type_params.as_ref().map(Into::into),
                 value: value.into(),
+                cases: cases.iter().map(Into::into).collect(),
             }),
             ast::Stmt::Assign(ast::StmtAssign {
                 targets,

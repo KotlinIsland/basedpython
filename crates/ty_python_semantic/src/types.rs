@@ -93,6 +93,7 @@ use crate::types::infer::InferenceFlags;
 use crate::types::known_instance::{
     InternedConstraintSet, InternedType, SentinelInstance, UnionTypeInstance,
 };
+use crate::types::match_type::match_type_application;
 pub use crate::types::method::{BoundMethodType, KnownBoundMethodType, WrapperDescriptorKind};
 use crate::types::mro::{MroIterator, StaticMroError};
 pub(crate) use crate::types::narrow::{NarrowingConstraint, infer_narrowing_constraints};
@@ -181,6 +182,7 @@ mod lifetimes;
 pub mod list_members;
 mod literal;
 mod match_pattern;
+pub(crate) mod match_type;
 mod member;
 mod method;
 mod mro;
@@ -6551,7 +6553,13 @@ impl<'db> Type<'db> {
             }),
 
             Type::KnownInstance(known_instance) => match known_instance {
-                KnownInstanceType::TypeAliasType(alias) => Ok(Type::TypeAlias(*alias)),
+                // basedpython: a match type is a function from its arguments to a type, not
+                // a name for one, so an application is a deferred operation rather than a
+                // `Type::TypeAlias`. That is what lets it survive being resolved somewhere
+                // its arguments are still type parameters, and reduce once they are known
+                KnownInstanceType::TypeAliasType(alias) => {
+                    Ok(match_type_application(db, *alias).unwrap_or(Type::TypeAlias(*alias)))
+                }
                 KnownInstanceType::NewType(newtype) => Ok(Type::NewTypeInstance(*newtype)),
                 KnownInstanceType::TypeVar(typevar) => {
                     if !inference_flags.contains(InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR)

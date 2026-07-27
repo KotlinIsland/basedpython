@@ -7,6 +7,7 @@ use crate::{
         TypeMapping, TypeVarVariance, definition_expression_type,
         display::qualified_name_components_from_scope,
         generics::{ApplySpecialization, Specialization},
+        match_type::{MatchTypeOutcome, evaluate_match_type},
         variance::VarianceInferable,
         visitor,
     },
@@ -44,6 +45,24 @@ pub(super) fn walk_pep_695_type_alias<'db, V: visitor::TypeVisitor<'db> + ?Sized
     visitor.visit_type(db, type_alias.value_type(db));
 }
 
+/// basedpython: whether the alias declared by `scope` is a match type.
+///
+/// Keyed on the *scope* rather than on the alias, because the answer is a property of the
+/// declaration: keying it on `PEP695TypeAliasType` would memoize the same bool once per
+/// distinct application (`NDTuple[int, 2, 3]` and `NDTuple[int, 3]` are different aliases).
+/// It is tracked at all because [`PEP695TypeAliasType::value_type`] consults it for every
+/// use of every type alias, and answering from the AST would put a module load on that path.
+#[salsa::tracked(returns(copy), heap_size = ruff_memory_usage::heap_size)]
+fn scope_declares_match_type<'db>(db: &'db dyn Db, scope: ScopeId<'db>) -> bool {
+    let module = parsed_module(db, scope.file(db)).load(db);
+    !scope
+        .node(db)
+        .expect_type_alias()
+        .node(&module)
+        .cases
+        .is_empty()
+}
+
 #[salsa::tracked]
 impl<'db> PEP695TypeAliasType<'db> {
     pub(crate) fn definition(self, db: &'db dyn Db) -> Definition<'db> {
@@ -53,8 +72,36 @@ impl<'db> PEP695TypeAliasType<'db> {
     }
 
     /// The RHS type of a PEP-695 style type alias with specialization applied.
+    ///
+    /// basedpython: for a match type there is no single RHS — the value is the body of the
+    /// first `case` whose pattern matches the subject, evaluated against this alias's own
+    /// specialization. An application that cannot pick a case yet has no value, and is
+    /// reported as `Unknown` while it waits to be specialized.
     pub(crate) fn value_type(self, db: &'db dyn Db) -> Type<'db> {
-        self.apply_function_specialization(db, self.raw_value_type(db))
+        if !self.is_match_type(db) {
+            return self.apply_function_specialization(db, self.raw_value_type(db));
+        }
+        match evaluate_match_type(db, self) {
+            Some(MatchTypeOutcome::Matched(ty)) => *ty,
+            // an application that cannot pick a case — because its arguments are not known
+            // yet, because none match, or because the subject grew past the budget — has no
+            // value. `Unknown` keeps it gradual; the cases worth reporting are reported
+            // where the application is written
+            _ => Type::unknown(),
+        }
+    }
+
+    /// basedpython: whether this alias's value is decided by `case` blocks.
+    pub(crate) fn is_match_type(self, db: &'db dyn Db) -> bool {
+        scope_declares_match_type(db, self.rhs_scope(db))
+    }
+
+    /// basedpython: applies this alias's own specialization to a type inferred in its scope.
+    ///
+    /// Match-type evaluation needs this for the subject and for the winning case's body,
+    /// both of which are written in terms of the alias's type parameters.
+    pub(crate) fn apply_own_specialization(self, db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
+        self.apply_function_specialization(db, ty)
     }
 
     /// The RHS type of a PEP-695 style type alias with *no* specialization applied.

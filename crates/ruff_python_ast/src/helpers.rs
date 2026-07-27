@@ -2651,6 +2651,7 @@ mod tests {
             variance: None,
         });
         let type_alias = Stmt::TypeAlias(StmtTypeAlias {
+            cases: Vec::new(),
             name: Box::new(name.clone()),
             type_params: Some(Box::new(TypeParams {
                 type_params: vec![type_var_one, type_var_two],
@@ -2736,6 +2737,7 @@ mod tests {
     #[test]
     fn any_over_type_param_type_var_tuple() {
         let type_var_tuple = TypeParam::TypeVarTuple(TypeParamTypeVarTuple {
+            bound: None,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
             name: Identifier::new("x", TextRange::default()),
@@ -2753,6 +2755,7 @@ mod tests {
         });
 
         let type_var_tuple_with_default = TypeParam::TypeVarTuple(TypeParamTypeVarTuple {
+            bound: None,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
             default: Some(Box::new(constant.clone())),
@@ -2790,6 +2793,7 @@ mod tests {
         });
 
         let param_spec_with_default = TypeParam::TypeVarTuple(TypeParamTypeVarTuple {
+            bound: None,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
             default: Some(Box::new(constant.clone())),

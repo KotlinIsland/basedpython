@@ -37,6 +37,7 @@ pub(crate) mod lazy_import;
 pub(crate) mod literal_types;
 pub(crate) mod local_once;
 pub(crate) mod main_function;
+pub(crate) mod match_type;
 pub(crate) mod modifiers;
 pub(crate) mod mutable_defaults;
 pub(crate) mod none_chain;

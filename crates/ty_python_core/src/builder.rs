@@ -38,7 +38,7 @@ use crate::definition::{
     ImportFromDefinitionNodeRef, ImportFromSubmoduleDefinitionNodeRef,
     LambdaParameterDefinitionNodeRef, LoopHeaderDefinitionNodeRef, LoopStmtRef,
     MatchPatternDefinitionNodeRef, NestedBindingsDefinitionKind, ParameterDefinitionNodeRef,
-    StarImportDefinitionNodeRef, WithItemDefinitionNodeRef,
+    StarImportDefinitionNodeRef, TypeMatchCaptureDefinitionNodeRef, WithItemDefinitionNodeRef,
 };
 use crate::expression::{Expression, ExpressionKind};
 use crate::fluid::{FluidUse, FluidUseRole};
@@ -2872,6 +2872,86 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         statement
     }
 
+    /// basedpython: records the `case` blocks of a match type alias in the alias's own scope.
+    ///
+    /// Each case is a separate branch off the state before the cases, so a name captured by
+    /// one case's pattern is in scope for that case's body and nowhere else — referring to
+    /// another case's capture is an unresolved reference, as it should be.
+    fn visit_type_match_cases(&mut self, cases: &'ast [ast::MatchCase]) {
+        if cases.is_empty() {
+            return;
+        }
+
+        let before_cases = self.flow_snapshot();
+        let mut post_case_snapshots = Vec::with_capacity(cases.len());
+
+        for (index, case) in cases.iter().enumerate() {
+            // the state is restored *between* cases, not after the last one — that one
+            // becomes the state the others are merged into
+            if index > 0 {
+                self.flow_restore(before_cases.clone());
+            }
+            // whether a case matches is decided when the alias is applied, so from the index's
+            // point of view every case is a branch that may or may not be taken
+            self.record_ambiguous_reachability();
+            self.add_type_match_captures(&case.pattern);
+            for stmt in &case.body {
+                // the parser rejects anything else; a malformed body simply contributes no
+                // expressions rather than being recorded as a statement of the alias scope
+                if let ast::Stmt::Expr(expr_stmt) = stmt {
+                    self.visit_expr(&expr_stmt.value);
+                }
+            }
+            post_case_snapshots.push(self.flow_snapshot());
+        }
+
+        for snapshot in post_case_snapshots {
+            self.flow_merge(snapshot);
+        }
+    }
+
+    /// basedpython: binds every name a match type's `case` pattern captures.
+    fn add_type_match_captures(&mut self, pattern: &'ast ast::Pattern) {
+        let capture = |builder: &mut Self, identifier: &'ast ast::Identifier, is_variadic| {
+            let symbol = builder.add_symbol(identifier.id.clone());
+            builder.add_definition(
+                symbol.into(),
+                TypeMatchCaptureDefinitionNodeRef {
+                    identifier,
+                    is_variadic,
+                },
+            );
+        };
+
+        match pattern {
+            ast::Pattern::MatchAs(ast::PatternMatchAs {
+                pattern: inner,
+                name,
+                ..
+            }) => {
+                if let Some(inner) = inner.as_deref() {
+                    self.add_type_match_captures(inner);
+                }
+                if let Some(name) = name {
+                    capture(self, name, false);
+                }
+            }
+            ast::Pattern::MatchStar(ast::PatternMatchStar { name, .. }) => {
+                if let Some(name) = name {
+                    capture(self, name, true);
+                }
+            }
+            ast::Pattern::MatchSequence(ast::PatternMatchSequence { patterns, .. })
+            | ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => {
+                for pattern in patterns {
+                    self.add_type_match_captures(pattern);
+                }
+            }
+            ast::Pattern::MatchValue(_) | ast::Pattern::MatchSingleton(_) => {}
+            ast::Pattern::MatchMapping(_) | ast::Pattern::MatchClass(_) => {}
+        }
+    }
+
     fn with_type_params<T>(
         &mut self,
         with_scope: NodeWithScopeRef,
@@ -2895,11 +2975,13 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     ast::TypeParam::ParamSpec(ast::TypeParamParamSpec {
                         name, default, ..
                     }) => (name, &None, &None, default),
+                    // basedpython: `*Ts: int` bounds every element of the pack
                     ast::TypeParam::TypeVarTuple(ast::TypeParamTypeVarTuple {
                         name,
+                        bound,
                         default,
                         ..
-                    }) => (name, &None, &None, default),
+                    }) => (name, &None, bound, default),
                 };
                 self.scopes_by_expression
                     .record_expression(name, self.current_scope());
@@ -3510,6 +3592,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     |builder| {
                         builder.push_scope(NodeWithScopeRef::TypeAlias(type_alias));
                         builder.visit_expr(&type_alias.value);
+                        builder.visit_type_match_cases(&type_alias.cases);
                         builder.pop_scope()
                     },
                 );

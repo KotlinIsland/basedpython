@@ -186,6 +186,7 @@ pub fn walk_stmt<V: Transformer + ?Sized>(visitor: &V, stmt: &mut Stmt) {
             name,
             type_params,
             value,
+            cases,
             is_private: _,
         }) => {
             visitor.visit_expr(value);
@@ -193,6 +194,9 @@ pub fn walk_stmt<V: Transformer + ?Sized>(visitor: &V, stmt: &mut Stmt) {
                 visitor.visit_type_params(type_params);
             }
             visitor.visit_expr(name);
+            for match_case in cases {
+                visitor.visit_match_case(match_case);
+            }
         }
         Stmt::Assign(ast::StmtAssign { targets, value, .. }) => {
             visitor.visit_expr(value);
@@ -811,11 +815,15 @@ pub fn walk_type_param<V: Transformer + ?Sized>(visitor: &V, type_param: &mut Ty
             }
         }
         TypeParam::TypeVarTuple(TypeParamTypeVarTuple {
+            bound,
             default,
             name: _,
             range: _,
             node_index: _,
         }) => {
+            if let Some(expr) = bound {
+                visitor.visit_expr(expr);
+            }
             if let Some(expr) = default {
                 visitor.visit_expr(expr);
             }

@@ -105,6 +105,7 @@ Module(
                                             range: 82..84,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),

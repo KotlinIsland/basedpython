@@ -49,6 +49,7 @@ Module(
                                             range: 15..17,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),
