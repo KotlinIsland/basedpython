@@ -213,8 +213,7 @@ pub(crate) fn expression(expr: &Expr, checker: &Checker) {
             parenthesized: _,
             is_anon_named_tuple: _,
             is_anon_named_tuple_value: _,
-            parameter_slash: _,
-            parameter_star: _,
+            callable_shape: _,
             is_parameter_shape: _,
         })
         | Expr::List(ast::ExprList {

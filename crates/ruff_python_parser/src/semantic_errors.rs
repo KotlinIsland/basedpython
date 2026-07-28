@@ -2391,13 +2391,12 @@ where
                 elts,
                 is_anon_named_tuple,
                 is_anon_named_tuple_value,
-                parameter_slash,
-                parameter_star,
+                callable_shape,
                 ..
             }) if *is_anon_named_tuple
                 || *is_anon_named_tuple_value
-                || parameter_slash.is_some()
-                || parameter_star.is_some() || elts.iter().any(|e| {
+                || callable_shape.is_some()
+                || elts.iter().any(|e| {
                 matches!(e, Expr::Named(_))
                     || matches!(e, Expr::Starred(s) if !matches!(s.value.as_ref(), Expr::Name(_)))
             }) =>

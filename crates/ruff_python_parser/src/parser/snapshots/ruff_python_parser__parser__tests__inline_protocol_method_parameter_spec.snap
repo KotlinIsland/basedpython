@@ -155,10 +155,15 @@ ModModule {
                                                     ),
                                                 },
                                             ),
-                                            parameter_slash: Some(
-                                                2,
+                                            callable_shape: Some(
+                                                CallableParameterShape {
+                                                    slash: Some(
+                                                        2,
+                                                    ),
+                                                    star: None,
+                                                    borrows: [],
+                                                },
                                             ),
-                                            parameter_star: None,
                                         },
                                     ),
                                 },

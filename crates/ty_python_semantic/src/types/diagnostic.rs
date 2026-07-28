@@ -1188,7 +1188,13 @@ declare_lint! {
     /// ## What it does
     /// Checks for a basedpython `local` parameter whose value escapes the call it
     /// is bound in — returned to the caller, stored on a parameter-rooted object,
-    /// or assigned to a `global` / `nonlocal` binding.
+    /// assigned to a `global` / `nonlocal` binding, or passed on to a parameter
+    /// that is not itself a borrow.
+    ///
+    /// A callable type may declare its own parameters `local` too
+    /// (`(local int) -> None`), which puts the same constraint on the trailing
+    /// lambda block filling it: the block's implicit `it` is borrowed from the
+    /// call.
     ///
     /// ## Why is this bad?
     /// A `local` parameter is borrowed only for the duration of the call. Letting

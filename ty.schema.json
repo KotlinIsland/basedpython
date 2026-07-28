@@ -590,7 +590,7 @@
         },
         "escaping-local": {
           "title": "detects a `local` parameter whose value escapes its call",
-          "description": "## What it does\nChecks for a basedpython `local` parameter whose value escapes the call it\nis bound in — returned to the caller, stored on a parameter-rooted object,\nor assigned to a `global` / `nonlocal` binding.\n\n## Why is this bad?\nA `local` parameter is borrowed only for the duration of the call. Letting\nits value outlive the call defeats the borrow: the caller may release the\nunderlying resource, leaving a dangling reference behind.\n\n## Example\n\n```by\n_saved: object\n\ndef f(local fn: () -> None):\n    global _saved\n    _saved = fn  # error: `fn` is local and cannot escape the call\n```",
+          "description": "## What it does\nChecks for a basedpython `local` parameter whose value escapes the call it\nis bound in — returned to the caller, stored on a parameter-rooted object,\nassigned to a `global` / `nonlocal` binding, or passed on to a parameter\nthat is not itself a borrow.\n\nA callable type may declare its own parameters `local` too\n(`(local int) -> None`), which puts the same constraint on the trailing\nlambda block filling it: the block's implicit `it` is borrowed from the\ncall.\n\n## Why is this bad?\nA `local` parameter is borrowed only for the duration of the call. Letting\nits value outlive the call defeats the borrow: the caller may release the\nunderlying resource, leaving a dangling reference behind.\n\n## Example\n\n```by\n_saved: object\n\ndef f(local fn: () -> None):\n    global _saved\n    _saved = fn  # error: `fn` is local and cannot escape the call\n```",
           "default": "error",
           "oneOf": [
             {

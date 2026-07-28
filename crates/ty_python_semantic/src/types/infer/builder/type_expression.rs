@@ -4,7 +4,7 @@ use ruff_python_ast::helpers::{
     top_star_slice_elements, use_site_variance_marker,
 };
 use ruff_python_ast::name::Name;
-use ruff_python_ast::{self as ast, PythonVersion};
+use ruff_python_ast::{self as ast, ParameterBorrow, PythonVersion};
 use ruff_text_size::Ranged;
 
 use super::{DeferredExpressionState, TypeInferenceBuilder};
@@ -882,7 +882,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         return ty;
                     }
                     let has_markers =
-                        tuple.parameter_slash.is_some() || tuple.parameter_star.is_some();
+                        tuple.parameter_slash().is_some() || tuple.parameter_star().is_some();
                     if has_markers {
                         let elt_tys: Vec<Type<'db>> = tuple
                             .elts
@@ -1683,8 +1683,12 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             .chain(implicit_receiver)
             .chain(self.infer_parameter_spec_elements(
                 args,
-                shift(callable.parameter_slash),
-                shift(callable.parameter_star),
+                shift(callable.parameter_slash()),
+                shift(callable.parameter_star()),
+                // basedpython: the modifiers are recorded against the written
+                // parameters, so a method receiver taken out of `args` shifts
+                // them the same way the separators are shifted
+                |index| callable.parameter_borrow(index + receiver_offset),
             ))
             .collect();
         let parameters = Parameters::from_annotation(db, params);
@@ -1733,6 +1737,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         elements: &[ast::Expr],
         slash: Option<usize>,
         star: Option<usize>,
+        borrow_at: impl Fn(usize) -> ParameterBorrow,
     ) -> Vec<Parameter<'db>> {
         let db = self.db();
         let mut params: Vec<Parameter<'db>> = Vec::with_capacity(elements.len());
@@ -1846,7 +1851,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 }
             }
         }
+        // every element contributes exactly one parameter, so the modifiers the
+        // parser recorded against the elements apply by position
+        debug_assert_eq!(params.len(), elements.len());
         params
+            .into_iter()
+            .enumerate()
+            .map(|(index, parameter)| parameter.with_borrow(borrow_at(index)))
+            .collect()
     }
 
     /// Infers a type expression that is allowed to unpack a variadic type (`*Ts`, `Unpack[Ts]`,
@@ -4040,7 +4052,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             // catch-all (`**name: T`) all map onto Parameter slots
             ast::Expr::Tuple(tuple) if tuple.parenthesized => {
                 let mut params: Vec<Parameter<'db>> = Vec::with_capacity(tuple.elts.len());
-                let parameter_star = tuple.parameter_star.map(|i| i as usize);
+                let parameter_star = tuple.parameter_star().map(|i| i as usize);
                 for (i, elt) in tuple.elts.iter().enumerate() {
                     let after_star = parameter_star.is_some_and(|s| i >= s);
                     match elt {

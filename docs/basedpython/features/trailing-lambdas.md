@@ -156,6 +156,31 @@ does not get:
 > calls it — defeats the propagation. tightening `return` / `break` / `continue`
 > out of a `once` block into a guaranteed unwind is tracked as future work
 
+## borrowed `it`
+
+when the callee declares its callback's parameter [`local` or `once`](local-lifetimes.md#borrowed-callback-arguments)
+— `def f(fn: (local Resource) -> None)` — the block is the implementation of that
+callback, so the value bound to `it` is borrowed for the duration of the call and
+may not escape the block:
+
+```by
+def f(fn: (local Resource) -> None):
+    with acquire() as resource:
+        fn(resource)
+
+var kept: Resource | None = None
+f:
+    borrow(it)  # fine — re-lent to another borrow
+    kept = it   # error[escaping-local] — the write-back outlives the call
+```
+
+the escape routes are the ones [`escaping-local`](local-lifetimes.md) checks
+everywhere else, with the block's write-through counting as a store: a name an
+enclosing scope binds, and — from a `once` block, where such a name survives —
+one only the block binds. a `once` on the callback's parameter also puts the
+exactly-once obligation on the block. a callee whose callback shape cannot be
+inspected leaves the block unconstrained
+
 ## required parameters after defaulted ones
 
 so a trailing block can bind the last parameter while earlier parameters keep

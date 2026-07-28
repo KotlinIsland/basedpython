@@ -342,8 +342,7 @@ fn convert_to_dict_comprehension(
         parenthesized: false,
         is_anon_named_tuple: false,
         is_anon_named_tuple_value: false,
-        parameter_slash: None,
-        parameter_star: None,
+        callable_shape: None,
         is_parameter_shape: false,
         ..
     }) = &*for_stmt.iter
@@ -383,8 +382,7 @@ fn convert_to_dict_comprehension(
         parenthesized: false,
         is_anon_named_tuple: false,
         is_anon_named_tuple_value: false,
-        parameter_slash: None,
-        parameter_star: None,
+        callable_shape: None,
         is_parameter_shape: false,
         ..
     }) = value

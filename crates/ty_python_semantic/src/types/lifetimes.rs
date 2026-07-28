@@ -13,6 +13,11 @@
 //!   called and [`ONCE_CALLED_TWICE`] on two unconditional calls or a call inside
 //!   a loop.
 //!
+//! A parameter carries a borrow either from its own `local` / `once` prefix or,
+//! for a trailing lambda block's implicit `it`, from the callee's declaration of
+//! the callback's parameter ([`InheritedBorrow`]) — `(local int) -> None` makes
+//! the block the implementation of a borrowed callback.
+//!
 //! Both are deliberately conservative — they flag only what they can see
 //! directly, never guessing through opaque calls, aliasing, or closures. See
 //! `docs/basedpython/features/local-lifetimes.md`.
@@ -22,7 +27,7 @@ use ruff_db::source::source_text;
 use ruff_python_ast::helpers::parameter_modifiers;
 use ruff_python_ast::statement_visitor::{StatementVisitor, walk_stmt};
 use ruff_python_ast::visitor::{Visitor, walk_expr};
-use ruff_python_ast::{self as ast, Expr, ExprContext, ExprName, Stmt};
+use ruff_python_ast::{self as ast, Expr, ExprContext, ExprName, ParameterBorrow, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::{FxHashMap, FxHashSet};
 use ty_python_core::SemanticIndex;
@@ -36,6 +41,98 @@ use super::diagnostic::{
     ESCAPING_LOCAL, ESCAPING_LOOP_VARIABLE, INVALID_ASSIGNMENT, ONCE_CALLED_TWICE, ONCE_NOT_CALLED,
     TRAILING_LAMBDA_CONTROL_FLOW,
 };
+
+/// basedpython: where a parameter's borrow was declared, and how the diagnostic
+/// should describe that declaration.
+#[derive(Clone, Copy)]
+struct BorrowDeclaration {
+    /// what the "declared here" annotation points at
+    range: TextRange,
+    /// true when the borrow comes from the *callee's* callback signature rather
+    /// than from a modifier on this parameter — a trailing lambda's `it`, whose
+    /// own parameter is synthetic and has an empty range, so `range` points at
+    /// the callee instead
+    inherited: bool,
+}
+
+impl BorrowDeclaration {
+    /// declared by a modifier on the parameter itself
+    fn own(range: TextRange) -> Self {
+        Self {
+            range,
+            inherited: false,
+        }
+    }
+
+    /// the "declared here" annotation for a borrow of kind `kind` on `name`
+    fn describe(self, name: &str, kind: &str) -> String {
+        if self.inherited {
+            format!("`{name}` binds a `{kind}` parameter of this callback")
+        } else {
+            format!("`{name}` is declared `{kind}` here")
+        }
+    }
+}
+
+/// basedpython: a borrow a function's parameter carries from somewhere other
+/// than its own declaration — a trailing-lambda block's `it`, which is borrowed
+/// because the callee declared its callback's parameter `local` / `once`.
+#[derive(Clone, Copy)]
+pub(super) struct InheritedBorrow<'a, 'db, 'ast> {
+    /// the parameter the borrow lands on
+    pub(super) name: &'ast str,
+    /// which modifier the callee declared
+    pub(super) borrow: ParameterBorrow,
+    /// the callee expression, which the diagnostics point at
+    pub(super) declaration: TextRange,
+    /// the block's own scope, and the index to resolve names against — a store
+    /// in a block writes *through* to an enclosing binding, so what looks like a
+    /// block-local assignment can be an escape
+    pub(super) index: &'a SemanticIndex<'db>,
+    pub(super) block_scope: FileScopeId,
+}
+
+impl<'ast> InheritedBorrow<'_, '_, 'ast> {
+    /// Whether assigning `name` inside the block rebinds a name an enclosing
+    /// scope already binds. The lowering emits a `global` / `nonlocal` for
+    /// exactly those, so the assigned value outlives the call; a name only the
+    /// block binds stays block-local and dies with it.
+    fn writes_through(&self, name: &str) -> bool {
+        self.index
+            .ancestor_scopes(self.block_scope)
+            .skip(1)
+            .any(|(scope_id, _)| {
+                let table = self.index.place_table(scope_id);
+                table.symbol_id(name).is_some_and(|symbol_id| {
+                    let symbol = table.symbol(symbol_id);
+                    symbol.is_bound() || symbol.is_declared()
+                })
+            })
+    }
+
+    /// records this borrow in the two maps the checks are driven by
+    fn seed(
+        self,
+        locals: &mut FxHashMap<&'ast str, BorrowDeclaration>,
+        once: &mut FxHashMap<&'ast str, BorrowDeclaration>,
+    ) {
+        let declaration = BorrowDeclaration {
+            range: self.declaration,
+            inherited: true,
+        };
+        match self.borrow {
+            ParameterBorrow::None => {}
+            ParameterBorrow::Local => {
+                locals.insert(self.name, declaration);
+            }
+            // `once` is a borrow with an extra obligation, so it seeds both
+            ParameterBorrow::Once => {
+                locals.insert(self.name, declaration);
+                once.insert(self.name, declaration);
+            }
+        }
+    }
+}
 
 /// How a `local` value left the call — feeds the diagnostic message.
 #[derive(Clone, Copy)]
@@ -58,14 +155,15 @@ impl EscapeRoute {
 pub(super) fn check_local_lifetimes<'db, 'ast>(
     context: &InferContext<'db, 'ast>,
     function: &'ast ast::StmtFunctionDef,
+    inherited: Option<InheritedBorrow<'_, 'db, 'ast>>,
 ) {
     let source = source_text(context.db(), context.file());
 
     // `local` / `once` parameter names → the range of their declaration, plus
     // the set of every parameter name. a parameter's attributes / items outlive
     // the call, because the caller holds the value bound to the parameter
-    let mut locals: FxHashMap<&'ast str, TextRange> = FxHashMap::default();
-    let mut once: FxHashMap<&'ast str, TextRange> = FxHashMap::default();
+    let mut locals: FxHashMap<&'ast str, BorrowDeclaration> = FxHashMap::default();
+    let mut once: FxHashMap<&'ast str, BorrowDeclaration> = FxHashMap::default();
     let mut params: FxHashSet<&'ast str> = FxHashSet::default();
     for param in &function.parameters {
         let param = param.as_parameter();
@@ -74,11 +172,20 @@ pub(super) fn check_local_lifetimes<'db, 'ast>(
         // a `once` callback is a `local` borrow with an extra "called exactly
         // once" obligation, so it is escape-checked exactly like a `local`
         if modifiers.local || modifiers.once {
-            locals.insert(param.name.as_str(), param.name.range());
+            locals.insert(
+                param.name.as_str(),
+                BorrowDeclaration::own(param.name.range()),
+            );
         }
         if modifiers.once {
-            once.insert(param.name.as_str(), param.name.range());
+            once.insert(
+                param.name.as_str(),
+                BorrowDeclaration::own(param.name.range()),
+            );
         }
+    }
+    if let Some(inherited) = inherited {
+        inherited.seed(&mut locals, &mut once);
     }
 
     if !locals.is_empty() {
@@ -95,6 +202,7 @@ pub(super) fn check_local_lifetimes<'db, 'ast>(
             once: &once,
             params: &params,
             outer_names: &outer_names,
+            inherited,
         }
         .visit_body(&function.body);
     }
@@ -132,11 +240,14 @@ impl<'ast> StatementVisitor<'ast> for OuterNameCollector<'_, 'ast> {
 struct EscapeChecker<'a, 'db, 'ast> {
     context: &'a InferContext<'db, 'ast>,
     /// every borrowed parameter (`local` or `once`) → its declaration range
-    locals: &'a FxHashMap<&'ast str, TextRange>,
+    locals: &'a FxHashMap<&'ast str, BorrowDeclaration>,
     /// the subset that is `once`, so a diagnostic names the right modifier
-    once: &'a FxHashMap<&'ast str, TextRange>,
+    once: &'a FxHashMap<&'ast str, BorrowDeclaration>,
     params: &'a FxHashSet<&'ast str>,
     outer_names: &'a FxHashSet<&'ast str>,
+    /// set when the body is a trailing-lambda block, whose stores may write
+    /// through to an enclosing binding
+    inherited: Option<InheritedBorrow<'a, 'db, 'ast>>,
 }
 
 impl<'ast> StatementVisitor<'ast> for EscapeChecker<'_, '_, 'ast> {
@@ -188,13 +299,23 @@ impl<'ast> EscapeChecker<'_, '_, 'ast> {
             // a store into an attribute / item of a parameter, or of a
             // `global` / `nonlocal` name, reaches state that outlives the call
             Expr::Attribute(_) | Expr::Subscript(_) => root_name(target)
-                .is_some_and(|root| self.params.contains(root) || self.outer_names.contains(root)),
-            Expr::Name(name) => self.outer_names.contains(name.id.as_str()),
+                .is_some_and(|root| self.params.contains(root) || self.outlives_scope(root)),
+            Expr::Name(name) => self.outlives_scope(name.id.as_str()),
             _ => false,
         };
         if outlives && let Some(name) = self.surface_local(value) {
             self.report(name, EscapeRoute::Stored);
         }
+    }
+
+    /// Whether binding `name` here reaches state that outlives the call: it was
+    /// declared `global` / `nonlocal`, or — in a trailing-lambda block, whose
+    /// assignments write back — it resolves to an enclosing binding.
+    fn outlives_scope(&self, name: &str) -> bool {
+        self.outer_names.contains(name)
+            || self
+                .inherited
+                .is_some_and(|inherited| inherited.writes_through(name))
     }
 
     fn report(&self, name: &ExprName, route: EscapeRoute) {
@@ -214,8 +335,8 @@ impl<'ast> EscapeChecker<'_, '_, 'ast> {
         if let Some(&decl) = self.locals.get(id) {
             diagnostic.annotate(
                 self.context
-                    .secondary(decl)
-                    .message(format_args!("`{id}` is declared `{kind}` here")),
+                    .secondary(decl.range)
+                    .message(decl.describe(id, kind)),
             );
         }
     }
@@ -236,7 +357,7 @@ fn root_name(expr: &Expr) -> Option<&str> {
 /// on purpose: a value routed through a call is handled by the caller.
 fn surface_local<'ast>(
     value: &'ast Expr,
-    locals: &FxHashMap<&str, TextRange>,
+    locals: &FxHashMap<&str, BorrowDeclaration>,
 ) -> Option<&'ast ExprName> {
     match value {
         Expr::Name(name) if locals.contains_key(name.id.as_str()) => Some(name),
@@ -281,20 +402,30 @@ enum ArgTarget<'a> {
 pub(super) fn check_local_argument_passing<'db, 'ast>(
     context: &InferContext<'db, 'ast>,
     function: &'ast ast::StmtFunctionDef,
+    inherited: Option<InheritedBorrow<'_, 'db, 'ast>>,
     callee_type: impl Fn(&'ast Expr) -> Option<Type<'db>>,
 ) {
     let source = source_text(context.db(), context.file());
-    let mut locals: FxHashMap<&'ast str, TextRange> = FxHashMap::default();
-    let mut once: FxHashMap<&'ast str, TextRange> = FxHashMap::default();
+    let mut locals: FxHashMap<&'ast str, BorrowDeclaration> = FxHashMap::default();
+    let mut once: FxHashMap<&'ast str, BorrowDeclaration> = FxHashMap::default();
     for param in &function.parameters {
         let param = param.as_parameter();
         let modifiers = parameter_modifiers(&source, param);
         if modifiers.local || modifiers.once {
-            locals.insert(param.name.as_str(), param.name.range());
+            locals.insert(
+                param.name.as_str(),
+                BorrowDeclaration::own(param.name.range()),
+            );
         }
         if modifiers.once {
-            once.insert(param.name.as_str(), param.name.range());
+            once.insert(
+                param.name.as_str(),
+                BorrowDeclaration::own(param.name.range()),
+            );
         }
+    }
+    if let Some(inherited) = inherited {
+        inherited.seed(&mut locals, &mut once);
     }
     if locals.is_empty() {
         return;
@@ -312,9 +443,9 @@ pub(super) fn check_local_argument_passing<'db, 'ast>(
 struct LocalArgChecker<'a, 'db, 'ast, F> {
     context: &'a InferContext<'db, 'ast>,
     /// every borrowed parameter (`local` or `once`) → its declaration range
-    locals: &'a FxHashMap<&'ast str, TextRange>,
+    locals: &'a FxHashMap<&'ast str, BorrowDeclaration>,
     /// the subset that is `once`
-    once: &'a FxHashMap<&'ast str, TextRange>,
+    once: &'a FxHashMap<&'ast str, BorrowDeclaration>,
     callee_type: &'a F,
 }
 
@@ -370,8 +501,8 @@ impl<'db, 'ast, F> LocalArgChecker<'_, 'db, 'ast, F> {
         if let Some(&decl) = self.locals.get(id) {
             diagnostic.annotate(
                 self.context
-                    .secondary(decl)
-                    .message(format_args!("`{id}` is declared `{kind}` here")),
+                    .secondary(decl.range)
+                    .message(decl.describe(id, kind)),
             );
         }
     }
@@ -468,7 +599,7 @@ struct OnceCallInfo {
 fn check_once_callbacks<'db, 'ast>(
     context: &InferContext<'db, 'ast>,
     body: &'ast [Stmt],
-    once: &FxHashMap<&'ast str, TextRange>,
+    once: &FxHashMap<&'ast str, BorrowDeclaration>,
 ) {
     // a callback mentioned anywhere — including a nested scope — might still be
     // called, so it is not "never called"
@@ -488,13 +619,13 @@ fn check_once_callbacks<'db, 'ast>(
     counter.visit_body(body);
 
     // deterministic order (by declaration) so diagnostics are stable
-    let mut ordered: Vec<(&'ast str, TextRange)> =
+    let mut ordered: Vec<(&'ast str, BorrowDeclaration)> =
         once.iter().map(|(&name, &decl)| (name, decl)).collect();
-    ordered.sort_by_key(|(_, decl)| decl.start());
+    ordered.sort_by_key(|(_, decl)| decl.range.start());
 
     for (name, decl) in ordered {
         if !referenced.contains(name) {
-            if let Some(builder) = context.report_lint(&ONCE_NOT_CALLED, decl) {
+            if let Some(builder) = context.report_lint(&ONCE_NOT_CALLED, decl.range) {
                 builder.into_diagnostic(format_args!("once callback `{name}` is never called"));
             }
             continue;
@@ -511,8 +642,8 @@ fn check_once_callbacks<'db, 'ast>(
             ));
             diagnostic.annotate(
                 context
-                    .secondary(decl)
-                    .message(format_args!("`{name}` is declared `once` here")),
+                    .secondary(decl.range)
+                    .message(decl.describe(name, "once")),
             );
         }
     }
@@ -521,7 +652,7 @@ fn check_once_callbacks<'db, 'ast>(
 /// Marks which `once` callbacks are referenced anywhere in the body, descending
 /// into nested scopes (a capture may still call the callback later).
 struct RefCollector<'a, 'ast> {
-    once: &'a FxHashMap<&'ast str, TextRange>,
+    once: &'a FxHashMap<&'ast str, BorrowDeclaration>,
     referenced: &'a mut FxHashSet<&'ast str>,
 }
 
@@ -542,7 +673,7 @@ impl<'ast> Visitor<'ast> for RefCollector<'_, 'ast> {
 /// (`a and done()`, `done() if c else ...`) so a call is only counted where it
 /// definitely runs.
 struct OnceCounter<'a, 'ast> {
-    once: &'a FxHashMap<&'ast str, TextRange>,
+    once: &'a FxHashMap<&'ast str, BorrowDeclaration>,
     info: FxHashMap<&'ast str, OnceCallInfo>,
     loop_depth: u32,
     cond_depth: u32,

@@ -306,12 +306,32 @@ fn basedpython_asserts_return_rejected_in_py() {
 
 #[test]
 fn basedpython_local_once_in_callable_type() {
-    // `local` / `once` modifiers inside a callable-type parameter list parse
-    // cleanly (stripped, no AST field), on the first and subsequent elements
-    for (source, arg_count) in [
-        ("f: (local int) -> None", 1usize),
-        ("f: (local list[int], once str) -> bool", 2),
-        ("f: (int, local str, /, once bool) -> None", 3),
+    // `local` / `once` modifiers inside a callable-type parameter list are
+    // stripped from the element and recorded positionally against it, whichever
+    // of the parameter-list shapes the list took: a lone parenthesized type, a
+    // plain tuple, a parameter spec with separators, or named fields
+    use ruff_python_ast::ParameterBorrow::{Local, None as NoBorrow, Once};
+    for (source, expected) in [
+        ("f: (local int) -> None", &[Local][..]),
+        ("f: (once fn) -> None", &[Once]),
+        // no modifier anywhere stays an empty slice rather than a run of `None`
+        ("f: (int, str) -> None", &[]),
+        ("f: (local list[int], once str) -> bool", &[Local, Once]),
+        ("f: (int, local str) -> None", &[NoBorrow, Local]),
+        (
+            "f: (int, local str, /, once bool) -> None",
+            &[NoBorrow, Local, Once],
+        ),
+        ("f: (local int, /, str) -> None", &[Local]),
+        // named parameters carry the modifier before the name
+        ("f: (local resource: Resource) -> None", &[Local]),
+        ("f: (a: int, once cb: Callback) -> None", &[NoBorrow, Once]),
+        // `once` implies the borrow, so it wins over a `local` written with it
+        ("f: (once local fn) -> None", &[Once]),
+        ("f: (local once fn) -> None", &[Once]),
+        // an implicit receiver is not one of `args`, so the modifiers still
+        // line up with the written parameters
+        ("f: int.(local str) -> None", &[Local]),
     ] {
         let parsed = parse_basedpython_module(source);
         let [Stmt::AnnAssign(assign)] = parsed.syntax().body.as_slice() else {
@@ -320,8 +340,33 @@ fn basedpython_local_once_in_callable_type() {
         let Expr::CallableType(callable) = assign.annotation.as_ref() else {
             panic!("expected a callable type for `{source}`");
         };
-        assert_eq!(callable.args.len(), arg_count, "arg count for `{source}`");
+        let borrows = callable
+            .callable_shape
+            .as_ref()
+            .map(|shape| shape.borrows.as_ref())
+            .unwrap_or_default();
+        assert_eq!(borrows, expected, "recorded borrows for `{source}`");
+        assert!(
+            borrows.len() <= callable.args.len(),
+            "borrows are recorded positionally, so they cannot outnumber the \
+             parameters in `{source}`"
+        );
     }
+}
+
+#[test]
+fn basedpython_local_once_in_callable_type_rejected_in_py() {
+    // the modifiers are `.by`-only here too
+    let source = "f: (local int) -> None";
+    let parsed = crate::Parser::new(source, ParseOptions::from(Mode::Module))
+        .parse()
+        .try_into_module()
+        .expect("recovers to a module");
+    assert!(
+        parsed.errors().iter().any(ParseError::is_basedpython_only),
+        "expected a BasedPythonOnly error for `{source}`, got {:?}",
+        parsed.errors()
+    );
 }
 
 #[test]

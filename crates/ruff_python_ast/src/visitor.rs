@@ -644,8 +644,7 @@ pub fn walk_expr<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, expr: &'a Expr) {
             parenthesized: _,
             is_anon_named_tuple: _,
             is_anon_named_tuple_value: _,
-            parameter_slash: _,
-            parameter_star: _,
+            callable_shape: _,
             is_parameter_shape: _,
         }) => {
             for expr in elts {
@@ -677,8 +676,7 @@ pub fn walk_expr<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, expr: &'a Expr) {
             returns,
             range: _,
             node_index: _,
-            parameter_slash: _,
-            parameter_star: _,
+            callable_shape: _,
         }) => {
             if let Some(receiver) = receiver {
                 visitor.visit_expr(receiver);

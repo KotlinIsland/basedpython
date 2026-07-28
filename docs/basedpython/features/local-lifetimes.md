@@ -3,9 +3,10 @@
 > **status: partially implemented.** `local` and `once` parameters parse, lower
 > to clean python, and are enforced by ty today — `escaping-local` (with `once`
 > treated as a borrow), `once-not-called`, `once-called-twice`, and
-> `escaping-loop-variable`. still design sketches: the opt-in
-> `once` runtime guard, `local` inside a callable type (`(local ) -> None`), and
-> the `T_{x}` lifetime notation. those sections are marked below
+> `escaping-loop-variable` — as are `local` / `once` on a callable type's own
+> parameters, which constrain the trailing lambda block filling it. still design
+> sketches: the opt-in `once` runtime guard and the `T_{x}` lifetime notation.
+> those sections are marked below
 
 python is garbage collected: every value lives as long as something references
 it, and no reference is ever "too old". that safety net also erases a whole
@@ -243,11 +244,6 @@ static check does not flag it — proving "skipped on some path" is what the
 
 ### borrowed callback arguments
 
-> **partially implemented** — `local` inside a callable type now parses and
-> strips to a plain `Callable`, so signatures like `(local int) -> None` are
-> accepted. still design: propagating the borrow into the callback body, so the
-> `result = it` rejection below does not fire yet
-
 the two features compose through the callback's *own* signature. a callback type
 can mark its parameters `local`, which says: when the callee invokes the
 callback, the value it passes in is local to the callee, and the callback body
@@ -255,22 +251,48 @@ may not leak it. this is the flagship case, using a
 [trailing lambda block](trailing-lambdas.md) as the callback:
 
 ```by
-def f(once fn: (local ) -> None):  # fn: called once; its argument is local to f
+def f(once fn: (local Resource) -> None):  # fn: called once; its argument is local to f
     with acquire() as resource:
-        fn(resource)               # resource is local to this call
+        fn(resource)                       # resource is local to this call
 
-let result
+let result: Resource
 f:
     result = it   # error[escaping-local]: `it` is local to `f`, cannot escape the callback
 ```
 
-`(local ) -> None` is a callable type with a single `local` parameter. the
+`(local Resource) -> None` is a callable type with a single `local` parameter. the
 trailing block becomes `fn`, and its implicit parameter [`it`](trailing-lambdas.md)
 binds that `local` position — so inside the block, `it` carries `f`'s lifetime.
 `print(it)`, `it.read()`, or handing `it` to another `local` parameter are all
-fine; assigning it to the outer `result` is the escape. the parameter may be
-named and typed for clarity — `(local resource: Resource) -> None` — the `(local )`
-form is just the anonymous, unannotated spelling
+fine; assigning it to the outer `result` is the escape — a block's assignments
+[write through](trailing-lambdas.md) to an enclosing binding, so the value would
+outlive the call. the parameter may be named for clarity, and that spelling also
+covers a type a bare modifier cannot precede:
+
+```by
+def f(fn: (local resource: Resource) -> None): ...
+def g(fn: (once cb: (int) -> None) -> None): ...
+```
+
+the modifier is only read when a *name* follows it, so a bare modifier before a
+parenthesized type (`(local (int) -> None)`), a string forward reference, or a
+starred type is not one — `once (x)` and `local (y)` are an ordinary call and a
+parenthesized name everywhere else, and a parameter list is not always
+distinguishable from a value tuple when the modifier is read. naming the
+parameter removes the ambiguity. for the same reason there is no bare `(local )`
+spelling: it is the same token stream as `(local)`, the one-parameter list whose
+parameter has the type named `local`
+
+`once` in a callable type carries the whole obligation, not just the borrow: the
+block filling that callable must call the marked parameter exactly once, and is
+reported with `once-not-called` / `once-called-twice` if it does not.
+
+the borrow is a constraint on the callback's *implementation*, not on its
+callers, so it does not change assignability: a `(local int) -> None` and an
+`(int) -> None` remain mutually assignable, and passing an ordinary function
+where a borrowed callback is expected is not an error. what is checked is the
+body of a block written in that position. a callee whose callback shape cannot
+be inspected leaves the block unconstrained, as everywhere else here
 
 ### runtime guard
 
@@ -318,7 +340,10 @@ the visibility and binding modifiers:
 
 - `local` precedes a function/method parameter (`def f(local x: T)`) or a
     parameter inside a [callable type](callable.md) (`(local T) -> R`,
-    `(local ) -> R`)
+    `(local name: T) -> R`). in a callable type it is only read when a name
+    follows it, so `(local)` stays the one-parameter list whose parameter has the
+    type named `local`, and a type that does not start with a name has to be
+    reached through the named form
 - `once` precedes a callback parameter (`def f(once fn: () -> R)`). it is only
     meaningful on a callable-typed parameter; a planned `once-on-non-callable`
     check will flag `once` on a non-callable (today such a parameter simply reads
@@ -341,7 +366,7 @@ a single forward pass:
 | `def f(local x: T)`          | `def f(x: T)`                                 |
 | `-> Sequence[str]_{x}`       | `-> Sequence[str]`                            |
 | `def f(once fn: () -> None)` | `def f(fn: Callable[[], None])` (static-only) |
-| `(local ) -> None`           | `Callable[[object], None]`                    |
+| `(local T) -> None`          | `Callable[[T], None]`                         |
 
 the callable-arrow half of the last two rows lowers through the existing
 [callable](callable.md) transform; `local`/`once` are removed before it runs.

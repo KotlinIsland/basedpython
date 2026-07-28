@@ -123,3 +123,39 @@ def f(once done: () -> None):
     borrow(done)  # error: [escaping-local]
     keep(done)  # ok — the obligation is preserved
 ```
+
+## a callback's parameter may be declared `once`
+
+A callable type can mark one of its own parameters `once`, which obliges whatever implements that
+callable to call it exactly once. A trailing lambda block's implicit `it` binds that position, so
+the block carries the obligation.
+
+```by
+def with_retry(once fn: (once cb: (int) -> None) -> None):
+    fn(print)
+
+# error: [once-not-called] "once callback `it` is never called"
+with_retry:
+    pass
+```
+
+## a `once` callback parameter may not be called twice
+
+```by
+def with_retry(once fn: (once cb: (int) -> None) -> None):
+    fn(print)
+
+with_retry:
+    it(1)
+    it(2)  # error: [once-called-twice] "once callback `it` may be called more than once"
+```
+
+## calling the borrowed `once` callback exactly once is fine
+
+```by
+def with_retry(once fn: (once cb: (int) -> None) -> None):
+    fn(print)
+
+with_retry:
+    it(1)
+```
