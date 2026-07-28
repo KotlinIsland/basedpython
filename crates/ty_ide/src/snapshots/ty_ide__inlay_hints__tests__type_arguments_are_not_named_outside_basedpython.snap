@@ -6,7 +6,7 @@ expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{\n    variable_
 class Pair[Key, Value]:
     def __init__(self, key: Key, value: Value) -> None: ...
 
-a[: Pair[int, str]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
+a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
 
 ---------------------------------------------
 info[inlay-hint-location]: Inlay Hint Target
@@ -18,34 +18,21 @@ info[inlay-hint-location]: Inlay Hint Target
 info: Source
  --> main2.py:5:5
   |
-5 | a[: Pair[int, str]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
+5 | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
   |     ^^^^
   |
 
 info[inlay-hint-location]: Inlay Hint Target
-  --> stdlib/builtins.byi:LL:7
+  --> stdlib/typing.byi:LL:1
    |
-LL | class int:
-   |       ^^^
+LL | Literal: _SpecialForm
+   | ^^^^^^^
    |
 info: Source
   --> main2.py:LL:10
    |
-LL | a[: Pair[int, str]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
-   |          ^^^
-   |
-
-info[inlay-hint-location]: Inlay Hint Target
-  --> stdlib/builtins.byi:LL:7
-   |
-LL | class str(Sequence[str]):
-   |       ^^^
-   |
-info: Source
-  --> main2.py:LL:15
-   |
-LL | a[: Pair[int, str]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
-   |               ^^^
+LL | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
+   |          ^^^^^^^
    |
 
 info[inlay-hint-location]: Inlay Hint Target
@@ -55,10 +42,23 @@ LL | class int:
    |       ^^^
    |
 info: Source
-  --> main2.py:LL:29
+  --> main2.py:LL:18
    |
-LL | a[: Pair[int, str]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
-   |                             ^^^^^^^^^^
+LL | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
+   |                  ^
+   |
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/typing.byi:LL:1
+   |
+LL | Literal: _SpecialForm
+   | ^^^^^^^
+   |
+info: Source
+  --> main2.py:LL:22
+   |
+LL | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
+   |                      ^^^^^^^
    |
 
 info[inlay-hint-location]: Inlay Hint Target
@@ -68,17 +68,47 @@ LL | class str(Sequence[str]):
    |       ^^^
    |
 info: Source
-  --> main2.py:LL:41
+  --> main2.py:LL:30
    |
-LL | a[: Pair[int, str]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
-   |                                         ^^^^^^^^^^^^
+LL | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
+   |                              ^^^
+   |
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+   |
+info: Source
+  --> main2.py:LL:45
+   |
+LL | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
+   |                                             ^^^^^^^^^^
+   |
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class str(Sequence[str]):
+   |       ^^^
+   |
+info: Source
+  --> main2.py:LL:57
+   |
+LL | a[: Pair[Literal[1], Literal["x"]]] = Pair[[Literal[1], Literal["x"]]](1, 'x')
+   |                                                         ^^^^^^^^^^^^
    |
 
 ---------------------------------------------
 info[inlay-hint-edit]: Inlay hint edits
 --> main.py:1:1
   |
-4 |
+1 + from typing import Literal
+2 |
+3 | class Pair[Key, Value]:
+4 |     def __init__(self, key: Key, value: Value) -> None: ...
+5 |
   - a = Pair(1, 'x')
-5 + a: Pair[int, str] = Pair(1, 'x')
+6 + a: Pair[Literal[1], Literal["x"]] = Pair(1, 'x')
   |

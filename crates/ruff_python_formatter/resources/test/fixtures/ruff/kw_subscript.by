@@ -1,7 +1,17 @@
 class M[K, V]: ...
 class B[T]: ...
+class A[**Kwargs]: ...
+class Two[T, **Kwargs]: ...
 
 
 x: M[K=int, V=str]
 y: B[T=int]
 z: M[int, V=str]
+
+a: A[foo=int, bar=str]
+b = A[foo=int]()
+c: Two[bytes, foo=int]
+d = f[int, foo=str]()
+e: A[foo=Two[bytes, bar=int]]
+g = (walrus := 1)
+h: SomeVeryLongGenericClassName[foo=SomeExtremelyLongTypeNameHere, bar=AnotherPrettyLongName]

@@ -316,6 +316,63 @@ if True:
         Ok(())
     }
 
+    /// basedpython: a keyword subscript argument in value position round-trips —
+    /// the field shares the `Named` encoding with the walrus, whose `:=` form
+    /// would turn the field into an assignment.
+    #[test]
+    fn keyword_subscript_value_round_trip() -> Result<()> {
+        let input = "x = A[foo=int]()\n";
+        let options = PyFormatOptions::from_extension(Path::new("test.by"));
+        let actual = format_module_source(input, options)?.as_code().to_string();
+        assert_eq!(input, actual);
+        Ok(())
+    }
+
+    /// basedpython: keyword subscript arguments in a type expression round-trip.
+    /// The slice is an unparenthesized tuple of labelled fields, which is also
+    /// the parameter-list encoding — printing it as one would parenthesize the
+    /// slice and turn every `=` into `:`.
+    #[test]
+    fn keyword_subscript_type_expression_round_trip() -> Result<()> {
+        let input = "def use(a: A[foo=int, bar=str]) -> None: ...\n";
+        let options = PyFormatOptions::from_extension(Path::new("test.by"));
+        let actual = format_module_source(input, options)?.as_code().to_string();
+        assert_eq!(input, actual);
+        Ok(())
+    }
+
+    /// basedpython: keyword subscript arguments mixed with positional ones.
+    #[test]
+    fn keyword_subscript_mixed_with_positional_round_trip() -> Result<()> {
+        let input = "y: Two[bytes, foo=int]\n";
+        let options = PyFormatOptions::from_extension(Path::new("test.by"));
+        let actual = format_module_source(input, options)?.as_code().to_string();
+        assert_eq!(input, actual);
+        Ok(())
+    }
+
+    /// basedpython: a keyword subscript on a reified generic function call.
+    #[test]
+    fn keyword_subscript_reified_generic_call_round_trip() -> Result<()> {
+        let input = "z = f[int, foo=str]()\n";
+        let options = PyFormatOptions::from_extension(Path::new("test.by"));
+        let actual = format_module_source(input, options)?.as_code().to_string();
+        assert_eq!(input, actual);
+        Ok(())
+    }
+
+    /// basedpython: a comment between a keyword subscript field's `=` and its
+    /// value is a dangling comment on the field, the way it is for a walrus.
+    #[test]
+    fn keyword_subscript_dangling_comment() -> Result<()> {
+        let input = "a = A[foo=  # why\n    int]\n";
+        let expected = "a = A[\n    foo=  # why\n    int\n]\n";
+        let options = PyFormatOptions::from_extension(Path::new("test.by"));
+        let actual = format_module_source(input, options)?.as_code().to_string();
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
     /// basedpython: use-site variance `out X` round-trips with no brackets
     /// around the inner type.
     #[test]
