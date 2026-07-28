@@ -19,10 +19,10 @@ use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
     InlayHintCallArgumentDetails, hintable_parameter_type, inferred_override, inferred_raises,
     inferred_type_param_variance, inlay_hint_call_argument_details, is_reveal_type_function,
-    numeric_promotion, type_parameter_names,
+    numeric_promotion, trailing_lambda_implicit_parameter, type_parameter_names,
 };
 use ty_python_semantic::types::{Type, TypeDetail};
-use ty_python_semantic::{HasType, SemanticModel};
+use ty_python_semantic::{HasType, SemanticModel, with_display_for_file};
 
 #[derive(Debug, Clone)]
 pub struct InlayHint {
@@ -332,11 +332,21 @@ impl InlayHint {
     }
 
     /// A parameter the source never spells, shown where it would be written.
-    fn implicit_parameter(db: &dyn Db, position: TextSize, name: &str, ty: Option<Type>) -> Self {
+    fn implicit_parameter(
+        db: &dyn Db,
+        position: TextSize,
+        name: &str,
+        ty: Option<Type>,
+        parameter_follows: bool,
+    ) -> Self {
         let mut parts = vec![InlayHintLabelPart::new(name)];
 
         if let Some(ty) = ty {
             parts.push(format!(": {}", ty.display(db)).into());
+        }
+
+        if parameter_follows {
+            parts.push(", ".into());
         }
 
         Self {
@@ -472,6 +482,17 @@ pub struct InlayHintTextEdit {
 }
 
 pub fn inlay_hints(
+    db: &dyn Db,
+    file: File,
+    range: TextRange,
+    settings: &InlayHintSettings,
+) -> Vec<InlayHint> {
+    // a hint is read as source, so it must spell types the way the file is
+    // written — `1`, not `Literal[1]`, in a `.by` file
+    with_display_for_file(db, file, || inlay_hints_inner(db, file, range, settings))
+}
+
+fn inlay_hints_inner(
     db: &dyn Db,
     file: File,
     range: TextRange,
@@ -782,16 +803,20 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
 
     /// basedpython: hint the variance ty infers for each type parameter of
     /// `class` that does not declare one.
-    fn add_inferred_variances(&mut self, class: &ast::StmtClassDef) {
+    fn add_inferred_variances(
+        &mut self,
+        type_params: Option<&ast::TypeParams>,
+        owner: impl FnOnce(&SemanticModel<'db>) -> Option<Type<'db>>,
+    ) {
         if !self.settings.inferred_variance || !self.is_basedpython {
             return;
         }
 
-        let Some(type_params) = class.type_params.as_deref() else {
+        let Some(type_params) = type_params else {
             return;
         };
 
-        // only look the class up once, and only when something could be hinted
+        // only look the owner up once, and only when something could be hinted
         let undeclared = || {
             type_params
                 .iter()
@@ -803,13 +828,13 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
-        let Some(class_ty) = class.inferred_type(&self.model) else {
+        let Some(owner) = owner(&self.model) else {
             return;
         };
 
         for type_var in undeclared() {
             let Some(variance) =
-                inferred_type_param_variance(self.db, class_ty, type_var.name.as_str())
+                inferred_type_param_variance(self.db, owner, type_var.name.as_str())
             else {
                 continue;
             };
@@ -848,21 +873,8 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     }
 
     /// Hint the type arguments inferred for a generic call.
-    ///
-    /// Only a *function* call is hinted: a generic constructor's specialization
-    /// is already the type of the value it produces, and `C[int](…)` is python's
-    /// own syntax, so nothing about it is hidden.
-    fn add_call_type_arguments(
-        &mut self,
-        call: &ast::ExprCall,
-        callee: Option<Type<'db>>,
-        arguments: &[Type<'db>],
-    ) {
+    fn add_call_type_arguments(&mut self, call: &ast::ExprCall, arguments: &[Type<'db>]) {
         if !self.settings.call_type_arguments || arguments.is_empty() {
-            return;
-        }
-
-        if callee.is_none_or(|callee| callee.as_function_literal().is_none()) {
             return;
         }
 
@@ -1003,14 +1015,57 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
+        let position = parameter.range().start();
         let ty = hintable_parameter_type(&self.model, parameter);
 
         self.hints.push(InlayHint::implicit_parameter(
             self.db,
-            parameter.range().start(),
+            position,
             parameter.name.as_str(),
             ty,
+            self.parameter_follows(position),
         ));
+    }
+
+    /// basedpython: hint the parameter a trailing lambda block binds — `it`, or
+    /// the receiver spelled `self` when the callback declares one.
+    ///
+    /// The parser anchors the synthetic parameter *on* the block's `:`, but the
+    /// binding belongs to the suite that opens after it, so the hint sits past
+    /// the colon rather than between the callee and it.
+    fn add_trailing_lambda_parameter(&mut self, function: &ast::StmtFunctionDef) {
+        if !self.settings.implicit_parameters {
+            return;
+        }
+
+        let Some(parameter) = function.parameters.args.first() else {
+            return;
+        };
+
+        let colon = parameter.range().start();
+        if self.source.as_bytes().get(colon.to_usize()) != Some(&b':') {
+            return;
+        }
+
+        let Some((name, ty)) = trailing_lambda_implicit_parameter(&self.model, function) else {
+            return;
+        };
+
+        self.hints.push(InlayHint::implicit_parameter(
+            self.db,
+            colon + TextSize::from(1),
+            name,
+            ty,
+            false,
+        ));
+    }
+
+    /// Whether a parameter of the same list is written after `position`, so an
+    /// implicit one placed there needs a separator to read as source.
+    fn parameter_follows(&self, position: TextSize) -> bool {
+        self.source
+            .get(position.to_usize()..)
+            .is_some_and(|rest| !rest.trim_start().starts_with([')', ',']))
     }
 
     /// Hint the inferred type of an unannotated lambda parameter.
@@ -1100,6 +1155,22 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 self.visit_expr(&expr.value);
                 return;
             }
+            Stmt::FunctionDef(function) if function.is_trailing_lambda => {
+                self.add_trailing_lambda_parameter(function);
+
+                // the whole header is synthetic — the callee rides on a
+                // decorator and the `it` parameter has no source of its own —
+                // so walk the two parts that are real
+                for decorator in &function.decorator_list {
+                    self.visit_decorator(decorator);
+                }
+
+                let enclosing_class = self.enclosing_class.take();
+                self.visit_body(&function.body);
+                self.enclosing_class = enclosing_class;
+
+                return;
+            }
             Stmt::FunctionDef(function) => {
                 self.add_inferred_raises(function);
                 self.add_inferred_override(function);
@@ -1112,7 +1183,9 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 return;
             }
             Stmt::ClassDef(class) => {
-                self.add_inferred_variances(class);
+                self.add_inferred_variances(class.type_params.as_deref(), |model| {
+                    class.inferred_type(model)
+                });
 
                 let enclosing_class =
                     std::mem::replace(&mut self.enclosing_class, class.inferred_type(&self.model));
@@ -1122,6 +1195,10 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 return;
             }
             Stmt::TypeAlias(type_alias) => {
+                self.add_inferred_variances(type_alias.type_params.as_deref(), |model| {
+                    type_alias.inferred_type(model)
+                });
+
                 self.visit_expr(&type_alias.name);
 
                 if let Some(type_params) = &type_alias.type_params {
@@ -1188,8 +1265,10 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
             }
             Expr::Call(call) => {
                 let callee = call.func.inferred_type(&self.model);
+                let reveals_type =
+                    callee.is_some_and(|callee| is_reveal_type_function(self.db, callee));
 
-                if callee.is_some_and(|callee| is_reveal_type_function(self.db, callee)) {
+                if reveals_type {
                     self.add_revealed_type(call);
                 }
 
@@ -1202,7 +1281,11 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                     inlay_hint_call_argument_details(self.db, &self.model, call).unwrap_or_default()
                 };
 
-                self.add_call_type_arguments(call, callee, &details.type_arguments);
+                // `reveal_type`'s own type argument *is* the revealed type,
+                // which the hint above already spells out
+                if !reveals_type {
+                    self.add_call_type_arguments(call, &details.type_arguments);
+                }
                 self.add_implicit_context_arguments(call, callee);
 
                 self.visit_expr(&call.func);
@@ -3897,10 +3980,10 @@ Source with applied edits:
                 self.x[: list[T@MyClass]] = x
                 self.y[: tuple[U@MyClass, U@MyClass]] = y
 
-        x[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b"))
-        y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
-        a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b"))
-        c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        x[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b"))
+        y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a", "b")))
+        a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a", "b"))
+        c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a", "b")))
 
         ---------------------------------------------
         info[inlay-hint-location]: Inlay Hint Target
@@ -3938,7 +4021,7 @@ Source with applied edits:
         info: Source
          --> main2.py:7:5
           |
-        7 | x[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b"))
+        7 | x[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b"))
           |     ^^^^^^^
           |
 
@@ -3951,7 +4034,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:13
            |
-        LL | x[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b"))
+        LL | x[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b"))
            |             ^^^
            |
 
@@ -3964,8 +4047,34 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:18
            |
-        LL | x[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b"))
+        LL | x[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b"))
            |                  ^^^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:35
+           |
+        LL | x[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b"))
+           |                                   ^^^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:40
+           |
+        LL | x[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b"))
+           |                                        ^^^
            |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -3975,10 +4084,10 @@ Source with applied edits:
           |                        ^
           |
         info: Source
-         --> main2.py:7:35
+         --> main2.py:7:47
           |
-        7 | x[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b"))
-          |                                   ^
+        7 | x[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b"))
+          |                                               ^
           |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -3988,10 +4097,10 @@ Source with applied edits:
           |                                    ^
           |
         info: Source
-         --> main2.py:7:45
+         --> main2.py:7:57
           |
-        7 | x[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b"))
-          |                                             ^
+        7 | x[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b"))
+          |                                                         ^
           |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -4003,7 +4112,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:5
            |
-        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=](…
            |     ^^^^^
            |
 
@@ -4016,7 +4125,7 @@ Source with applied edits:
         info: Source
          --> main2.py:8:11
           |
-        8 | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        8 | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("…
           |           ^^^^^^^
           |
 
@@ -4029,7 +4138,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:19
            |
-        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=](…
            |                   ^^^
            |
 
@@ -4042,7 +4151,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:24
            |
-        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=](…
            |                        ^^^
            |
 
@@ -4055,7 +4164,7 @@ Source with applied edits:
         info: Source
          --> main2.py:8:30
           |
-        8 | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        8 | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("…
           |                              ^^^^^^^
           |
 
@@ -4068,7 +4177,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:38
            |
-        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=](…
            |                                      ^^^
            |
 
@@ -4081,8 +4190,34 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:43
            |
-        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=](…
            |                                           ^^^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:62
+           |
+        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=](…
+           |                                                              ^^^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:67
+           |
+        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=](…
+           |                                                                   ^^^
            |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -4092,10 +4227,10 @@ Source with applied edits:
           |                        ^
           |
         info: Source
-         --> main2.py:8:62
+         --> main2.py:8:74
           |
-        8 | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
-          |                                                              ^
+        8 | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("…
+          |                                                                          ^
           |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -4105,11 +4240,37 @@ Source with applied edits:
           |                                    ^
           |
         info: Source
-         --> main2.py:8:72
+         --> main2.py:8:84
           |
-        8 | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
-          |                                                                        ^
+        8 | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("…
+          |                                                                                    ^
           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:109
+           |
+        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=](…
+           |                                                                                                             ^^^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:114
+           |
+        LL | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=](…
+           |                                                                                                                  ^^^
+           |
 
         info[inlay-hint-location]: Inlay Hint Target
          --> main.py:3:24
@@ -4118,10 +4279,10 @@ Source with applied edits:
           |                        ^
           |
         info: Source
-         --> main2.py:8:97
+         --> main2.py:8:121
           |
-        8 | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
-          |                                                                                                 ^
+        8 | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("…
+          |                                                                                                                         ^
           |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -4131,10 +4292,10 @@ Source with applied edits:
           |                                    ^
           |
         info: Source
-         --> main2.py:8:107
+         --> main2.py:8:131
           |
-        8 | y[: tuple[MyClass[int, str], MyClass[int, str]]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
-          |                                                                                                           ^
+        8 | …, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a", "b")))
+          |                                                                    ^
           |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -4146,7 +4307,7 @@ Source with applied edits:
         info: Source
          --> main2.py:9:5
           |
-        9 | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b"))
+        9 | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
           |     ^^^^^^^
           |
 
@@ -4159,7 +4320,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:13
            |
-        LL | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b"))
+        LL | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
            |             ^^^
            |
 
@@ -4172,7 +4333,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:18
            |
-        LL | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b"))
+        LL | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
            |                  ^^^
            |
 
@@ -4185,7 +4346,7 @@ Source with applied edits:
         info: Source
          --> main2.py:9:29
           |
-        9 | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b"))
+        9 | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
           |                             ^^^^^^^
           |
 
@@ -4198,7 +4359,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:37
            |
-        LL | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b"))
+        LL | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
            |                                     ^^^
            |
 
@@ -4211,8 +4372,34 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:42
            |
-        LL | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b"))
+        LL | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
            |                                          ^^^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:59
+           |
+        LL | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
+           |                                                           ^^^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:64
+           |
+        LL | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
+           |                                                                ^^^
            |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -4222,10 +4409,10 @@ Source with applied edits:
           |                        ^
           |
         info: Source
-         --> main2.py:9:59
+         --> main2.py:9:71
           |
-        9 | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b"))
-          |                                                           ^
+        9 | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
+          |                                                                       ^
           |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -4235,11 +4422,37 @@ Source with applied edits:
           |                                    ^
           |
         info: Source
-         --> main2.py:9:69
+         --> main2.py:9:81
           |
-        9 | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b"))
-          |                                                                     ^
+        9 | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
+          |                                                                                 ^
           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:106
+           |
+        LL | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
+           |                                                                                                          ^^^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:111
+           |
+        LL | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
+           |                                                                                                               ^^^
+           |
 
         info[inlay-hint-location]: Inlay Hint Target
          --> main.py:3:24
@@ -4248,10 +4461,10 @@ Source with applied edits:
           |                        ^
           |
         info: Source
-         --> main2.py:9:94
+         --> main2.py:9:118
           |
-        9 | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b"))
-          |                                                                                              ^
+        9 | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
+          |                                                                                                                      ^
           |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -4261,10 +4474,10 @@ Source with applied edits:
           |                                    ^
           |
         info: Source
-         --> main2.py:9:104
+         --> main2.py:9:128
           |
-        9 | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b"))
-          |                                                                                                        ^
+        9 | a[: MyClass[int, str]], b[: MyClass[int, str]] = MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a"…
+          |                                                                                                                                ^
           |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -4276,7 +4489,7 @@ Source with applied edits:
         info: Source
           --> main2.py:10:5
            |
-        10 | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        10 | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
            |     ^^^^^^^
            |
 
@@ -4289,7 +4502,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:13
            |
-        LL | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        LL | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
            |             ^^^
            |
 
@@ -4302,7 +4515,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:18
            |
-        LL | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        LL | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
            |                  ^^^
            |
 
@@ -4315,7 +4528,7 @@ Source with applied edits:
         info: Source
           --> main2.py:10:29
            |
-        10 | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        10 | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
            |                             ^^^^^^^
            |
 
@@ -4328,7 +4541,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:37
            |
-        LL | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        LL | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
            |                                     ^^^
            |
 
@@ -4341,21 +4554,47 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:42
            |
-        LL | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
+        LL | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
            |                                          ^^^
            |
 
         info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:60
+           |
+        LL | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
+           |                                                            ^^^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:65
+           |
+        LL | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
+           |                                                                 ^^^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
          --> main.py:3:24
           |
         3 |     def __init__(self, x: list[T], y: tuple[U, U]):
           |                        ^
           |
         info: Source
-          --> main2.py:10:60
+          --> main2.py:10:72
            |
-        10 | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
-           |                                                            ^
+        10 | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
+           |                                                                        ^
            |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -4365,10 +4604,36 @@ Source with applied edits:
           |                                    ^
           |
         info: Source
-          --> main2.py:10:70
+          --> main2.py:10:82
            |
-        10 | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
-           |                                                                      ^
+        10 | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
+           |                                                                                  ^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:107
+           |
+        LL | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
+           |                                                                                                           ^^^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:112
+           |
+        LL | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
+           |                                                                                                                ^^^
            |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -4378,10 +4643,10 @@ Source with applied edits:
           |                        ^
           |
         info: Source
-          --> main2.py:10:95
+          --> main2.py:10:119
            |
-        10 | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
-           |                                                                                               ^
+        10 | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
+           |                                                                                                                       ^
            |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -4391,10 +4656,10 @@ Source with applied edits:
           |                                    ^
           |
         info: Source
-          --> main2.py:10:105
+          --> main2.py:10:129
            |
-        10 | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass([x=][42], [y=]("a", "b")), MyClass([x=][42], [y=]("a", "b")))
-           |                                                                                                         ^
+        10 | c[: MyClass[int, str]], d[: MyClass[int, str]] = (MyClass[[int, str]]([x=][42], [y=]("a", "b")), MyClass[[int, str]]([x=][42], [y=]("a…
+           |                                                                                                                                 ^
            |
 
         ---------------------------------------------
@@ -8331,7 +8596,7 @@ Source with applied edits:
 
         class Baz: ...
 
-        a[: D[Baz]] = D([x=]Baz)
+        a[: D[Baz]] = D[[Baz]]([x=]Baz)
 
         ---------------------------------------------
         info[inlay-hint-location]: Inlay Hint Target
@@ -8343,7 +8608,7 @@ Source with applied edits:
         info: Source
          --> main2.py:6:5
           |
-        6 | a[: D[Baz]] = D([x=]Baz)
+        6 | a[: D[Baz]] = D[[Baz]]([x=]Baz)
           |     ^
           |
 
@@ -8356,8 +8621,21 @@ Source with applied edits:
         info: Source
          --> main2.py:6:7
           |
-        6 | a[: D[Baz]] = D([x=]Baz)
+        6 | a[: D[Baz]] = D[[Baz]]([x=]Baz)
           |       ^^^
+          |
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> main.py:4:7
+          |
+        4 | class Baz: ...
+          |       ^^^
+          |
+        info: Source
+         --> main2.py:6:18
+          |
+        6 | a[: D[Baz]] = D[[Baz]]([x=]Baz)
+          |                  ^^^
           |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -8367,10 +8645,10 @@ Source with applied edits:
           |                                    ^
           |
         info: Source
-         --> main2.py:6:18
+         --> main2.py:6:25
           |
-        6 | a[: D[Baz]] = D([x=]Baz)
-          |                  ^
+        6 | a[: D[Baz]] = D[[Baz]]([x=]Baz)
+          |                         ^
           |
 
         ---------------------------------------------
@@ -8818,7 +9096,7 @@ Source with applied edits:
         class B[T]:
             x: T
 
-        b[: B[A]] = B([x=]foo.A())
+        b[: B[A]] = B[[A]]([x=]foo.A())
 
         ---------------------------------------------
         info[inlay-hint-location]: Inlay Hint Target
@@ -8830,7 +9108,7 @@ Source with applied edits:
         info: Source
           --> main2.py:11:5
            |
-        11 | b[: B[A]] = B([x=]foo.A())
+        11 | b[: B[A]] = B[[A]]([x=]foo.A())
            |     ^
            |
 
@@ -8843,8 +9121,21 @@ Source with applied edits:
         info: Source
           --> main2.py:11:7
            |
-        11 | b[: B[A]] = B([x=]foo.A())
+        11 | b[: B[A]] = B[[A]]([x=]foo.A())
            |       ^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> foo.py:2:19
+          |
+        2 |             class A: ...
+          |                   ^
+          |
+        info: Source
+          --> main2.py:11:16
+           |
+        11 | b[: B[A]] = B[[A]]([x=]foo.A())
+           |                ^
            |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -8854,10 +9145,10 @@ Source with applied edits:
           |     ^
           |
         info: Source
-          --> main2.py:11:16
+          --> main2.py:11:21
            |
-        11 | b[: B[A]] = B([x=]foo.A())
-           |                ^
+        11 | b[: B[A]] = B[[A]]([x=]foo.A())
+           |                     ^
            |
 
         ---------------------------------------------
@@ -9322,6 +9613,8 @@ Source with applied edits:
 
             class Plain:
                 pass
+
+            type Alias[T] = list[T]
             ",
         );
 
@@ -9361,16 +9654,48 @@ Source with applied edits:
             def apply(fn: (int) -> None) -> None:
                 fn(1)
 
+            def against(fn: str.() -> None) -> None:
+                'a'.fn()
+
             class C:
                 init(a: int)
 
+            class D:
+                init()
+
             apply:
+                print(it)
+
+            against:
                 print(it)
             ",
         );
 
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
             implicit_parameters: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// Types in a `.by` file are spelled the way that file is written, not in
+    /// typing-spec syntax — a hint is read as source.
+    #[test]
+    fn basedpython_type_display() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def identity[T](x: T) -> T:
+                return x
+
+            a = identity(1)
+            b = (1, 'two')
+            reveal_type(a)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            variable_types: true,
+            call_type_arguments: true,
+            revealed_types: true,
             ..InlayHintSettings::none()
         }));
     }
@@ -9428,9 +9753,14 @@ Source with applied edits:
             def plain(x: int) -> int:
                 return x
 
+            class Box[T]:
+                def __init__(self, value: T) -> None: ...
+
             identity(1)
             pair('a', 2)
             plain(1)
+            Box(1)
+            Box[str]('a')
             ",
         );
 

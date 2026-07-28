@@ -8,6 +8,7 @@ use crate::types::call::{CallArguments, CallError, MatchedArgument};
 use crate::types::class::{DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTupleAnchor};
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::function::FunctionDecorators;
+use crate::types::generics::GenericContext;
 use crate::types::overrides::is_constructor_like_method;
 use crate::types::signatures::{ParametersKind, Signature};
 use crate::types::{
@@ -2278,21 +2279,17 @@ pub fn inferred_raises<'db>(db: &'db dyn Db, function: Type<'db>) -> Option<Type
 }
 
 /// basedpython: the variance ty infers for the type parameter named `name` of
-/// the class literal `class`, in its surface spelling (`out` / `in` / `in out`).
+/// the generic `owner`, in its surface spelling (`out` / `in` / `in out`).
 ///
-/// Returns `None` when `class` is not a generic class literal, has no such type
-/// parameter, or the inferred variance is bivariant — basedpython has no
+/// Returns `None` when `owner` is not a generic class or type alias, has no such
+/// type parameter, or the inferred variance is bivariant — basedpython has no
 /// spelling for that, so there is nothing to hint.
 pub fn inferred_type_param_variance<'db>(
     db: &'db dyn Db,
-    class: Type<'db>,
+    owner: Type<'db>,
     name: &str,
 ) -> Option<ast::Variance> {
-    let Type::ClassLiteral(class) = class else {
-        return None;
-    };
-    let bound_typevar = class
-        .generic_context(db)?
+    let bound_typevar = generic_context_of(db, owner)?
         .variables(db)
         .find(|variable| variable.name(db) == name)?;
 
@@ -2344,6 +2341,32 @@ pub fn inferred_override<'db>(
         .map(Type::from)
 }
 
+/// basedpython: the parameter a trailing lambda block binds implicitly, as its
+/// name and the type the callee gives it.
+///
+/// A callback that declares an [implicit receiver] runs *against* a value, so
+/// the block binds that receiver, spelled `self`. An ordinary callback binds the
+/// argument it is passed, spelled `it`.
+///
+/// [implicit receiver]: crate::types::receivers
+pub fn trailing_lambda_implicit_parameter<'db>(
+    model: &SemanticModel<'db>,
+    function: &ast::StmtFunctionDef,
+) -> Option<(&'static str, Option<Type<'db>>)> {
+    let db = model.db();
+    let callee = function.trailing_lambda_callee()?.inferred_type(model)?;
+
+    if let Some(receiver) = crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee)
+    {
+        return Some(("self", Some(receiver)));
+    }
+
+    Some((
+        "it",
+        crate::types::trailing_lambda::trailing_lambda_it_type(db, callee),
+    ))
+}
+
 /// The type worth showing for a parameter the source leaves unannotated.
 ///
 /// A receiver's `Self` type says nothing the enclosing class does not already,
@@ -2373,19 +2396,25 @@ pub fn is_reveal_type_function<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
     )
 }
 
+/// The type parameters `ty` declares, when it is something whose parameters have
+/// spellable names — a generic class literal or a generic type alias.
+fn generic_context_of<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<GenericContext<'db>> {
+    match ty {
+        Type::ClassLiteral(class) => class.generic_context(db),
+        // an alias is `Type::TypeAlias` where it names a type and a
+        // `KnownInstance` where it names the alias object itself
+        Type::TypeAlias(alias) => alias.generic_context(db),
+        ty => ty.as_type_alias()?.generic_context(db),
+    }
+}
+
 /// The names of the type parameters `ty` declares, in declaration order.
 ///
 /// Only generic class literals and generic type aliases have spellable type
 /// parameter names; everything else returns `None`.
 pub fn type_parameter_names<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Vec<Name>> {
-    let generic_context = match ty {
-        Type::ClassLiteral(class) => class.generic_context(db),
-        Type::TypeAlias(alias) => alias.generic_context(db),
-        _ => None,
-    }?;
-
     Some(
-        generic_context
+        generic_context_of(db, ty)?
             .variables(db)
             .map(|variable| variable.name(db).clone())
             .collect(),

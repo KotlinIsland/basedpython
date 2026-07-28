@@ -12,9 +12,14 @@ def pair[T, U](a: T, b: U) -> tuple[T, U]:
 def plain(x: int) -> int:
     return x
 
+class Box[T]:
+    def __init__(self, value: T) -> None: ...
+
 identity[[Literal[1]]](1)
 pair[[Literal["a"], Literal[2]]]('a', 2)
 plain(1)
+Box[[Literal[1]]](1)
+Box[str]('a')
 
 ---------------------------------------------
 info[inlay-hint-location]: Inlay Hint Target
@@ -54,4 +59,17 @@ info: Source
    |
 LL | pair[[Literal["a"], Literal[2]]]('a', 2)
    |                     ^^^^^^^^^^
+   |
+
+info[inlay-hint-location]: Inlay Hint Target
+  --> stdlib/builtins.byi:LL:7
+   |
+LL | class int:
+   |       ^^^
+   |
+info: Source
+  --> main2.py:LL:6
+   |
+LL | Box[[Literal[1]]](1)
+   |      ^^^^^^^^^^
    |

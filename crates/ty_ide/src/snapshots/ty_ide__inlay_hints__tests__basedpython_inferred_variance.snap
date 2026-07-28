@@ -17,3 +17,5 @@ class Declared[out T]:
 
 class Plain:
     pass
+
+type Alias[[in out ]T] = list[T]

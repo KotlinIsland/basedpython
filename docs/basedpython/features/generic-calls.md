@@ -49,14 +49,18 @@ generic calls, prefer the inference path (`identity(x)`)
 
 ## inlay hints
 
-a generic function call with no explicit specialization gets the type arguments
-ty inferred as an inlay hint, written where the `[...]` would go:
+a generic call with no explicit specialization gets the type arguments ty
+inferred as an inlay hint, written where the `[...]` would go — for a constructor
+too, since python spells that natively:
 
 ```by
 def identity[T](x: T) -> T: ...
+class Box[T]:
+    init(value: T)
 
 identity⟨[int]⟩(x)
+Box⟨[int]⟩(1)
 ```
 
-constructor calls are not hinted — a generic constructor's specialization is
-already the type of the value it produces
+a `reveal_type` call is not hinted this way — its type argument *is* the revealed
+type, which its own hint already spells out

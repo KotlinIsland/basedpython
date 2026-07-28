@@ -110,5 +110,11 @@ class Sink[⟨in ⟩T]:
     def put(self, value: T) -> None: ...
 ```
 
+a generic type alias is hinted the same way:
+
+```by
+type Alias[⟨in out ⟩T] = list[T]
+```
+
 a parameter ty infers as bivariant is not hinted — basedpython has no spelling
 for it

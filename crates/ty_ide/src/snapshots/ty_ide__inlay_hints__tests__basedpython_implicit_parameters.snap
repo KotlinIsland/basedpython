@@ -6,8 +6,17 @@ expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ implicit_param
 def apply(fn: (int) -> None) -> None:
     fn(1)
 
-class C:
-    init([self]a: int)
+def against(fn: str.() -> None) -> None:
+    'a'.fn()
 
-apply[it: int]:
+class C:
+    init([self, ]a: int)
+
+class D:
+    init([self])
+
+apply:[it: int]
+    print(it)
+
+against:[self: str]
     print(it)
