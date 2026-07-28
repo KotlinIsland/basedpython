@@ -32,8 +32,8 @@ use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
 use ruff_python_ast::helpers::{
-    consumed_keywords, if_let_keyword_range, name_token_ranges, parameter_modifiers,
-    raises_clause_spans, return_guards,
+    consumed_keywords, if_let_keyword_range, parameter_modifiers, raises_clause_spans,
+    return_guards, word_token_ranges,
 };
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, TraversalSignal, walk_arguments, walk_elif_else_clause, walk_expr,
@@ -207,6 +207,24 @@ const LIFETIME_MODIFIERS: &[&str] = &["local", "once"];
 /// The keyword introducing a basedpython narrowing return annotation, written
 /// between the `->` and the places it asserts.
 const ASSERTS_RETURN: &[&str] = &["asserts"];
+
+/// basedpython's use-site and declaration-site variance keywords, written ahead
+/// of the type parameter or subscript argument they qualify.
+const VARIANCE: &[&str] = &["in", "out"];
+
+/// The keyword introducing an `implementation A for B` block, written ahead of the
+/// interface the block implements.
+const IMPLEMENTATION: &[&str] = &["implementation"];
+
+/// The visibility keyword a private type alias carries. `type` itself is python's
+/// own soft keyword, highlighted lexically like every other one.
+const PRIVATE_TYPE_ALIAS: &[&str] = &["private"];
+
+/// The keyword introducing an inline protocol type, written ahead of its members.
+const INLINE_PROTOCOL: &[&str] = &["protocol"];
+
+/// basedpython's postfix `await`, written after the awaited expression.
+const POSTFIX_AWAIT: &[&str] = &["await"];
 
 /// The keywords that introduce an accessor inside a basedpython property
 /// construct. They are consumed by the parser: the members it synthesizes are
@@ -1118,7 +1136,7 @@ impl<'db> SemanticTokenVisitor<'db> {
             return;
         }
         let source = self.source;
-        for name in name_token_ranges(source, TextRange::new(start, end)) {
+        for name in word_token_ranges(source, TextRange::new(start, end)) {
             let classification = if ACCESSOR_KEYWORDS.contains(&&source[name]) {
                 Some((SemanticTokenType::Keyword, SemanticTokenModifier::empty()))
             } else if binds_parameter {
@@ -1132,6 +1150,65 @@ impl<'db> SemanticTokenVisitor<'db> {
             if let Some((token_type, modifiers)) = classification {
                 self.add_token(name, token_type, modifiers);
             }
+        }
+    }
+
+    /// basedpython: visits a callable type — `(int) -> str`, or the signature of an
+    /// inline protocol's method member, whose first parameter is its receiver.
+    ///
+    /// A parameter's `local` / `once` modifier is consumed by the parser, leaving the
+    /// field ranged from the type onwards, so each keyword is recovered from the gap
+    /// ahead of the field it modifies.
+    fn visit_callable_type(&mut self, callable: &ast::ExprCallableType, receiver_first: bool) {
+        let mut gap_start = callable.start();
+        if let Some(receiver) = callable.receiver.as_deref() {
+            self.visit_expr(receiver);
+            gap_start = receiver.end();
+        }
+        for (index, arg) in callable.args.iter().enumerate() {
+            self.add_consumed_keywords(gap_start, arg.start(), LIFETIME_MODIFIERS);
+            let label_type = if receiver_first && index == 0 {
+                SemanticTokenType::SelfParameter
+            } else {
+                SemanticTokenType::Parameter
+            };
+            self.visit_parameter_field(arg, label_type);
+            gap_start = arg.end();
+        }
+        self.visit_expr(&callable.returns);
+    }
+
+    /// basedpython: visits one field of a callable type's parameter list or of an
+    /// inline protocol.
+    ///
+    /// A field may name itself (`(count: int) -> None`, `protocol(a: int)`). The name
+    /// labels a parameter or a member rather than binding anything, so the parser
+    /// gives it [`Invalid`](ast::ExprContext::Invalid) context and nothing resolves
+    /// it; everything else is an ordinary type.
+    fn visit_parameter_field(&mut self, field: &Expr, label_type: SemanticTokenType) {
+        let (label, ty) = match field {
+            Expr::Named(named) => (named.target.as_ref(), Some(named.value.as_ref())),
+            Expr::Name(name) if name.ctx.is_invalid() => (field, None),
+            _ => (field, None),
+        };
+        let labelled = match label {
+            Expr::Name(name) => name.ctx.is_invalid(),
+            // a variadic field labels itself under the star (`*args: int`)
+            Expr::Starred(starred) => starred
+                .value
+                .as_name_expr()
+                .is_some_and(|name| name.ctx.is_invalid()),
+            _ => false,
+        };
+
+        if !labelled {
+            self.visit_annotation(field);
+            return;
+        }
+
+        self.add_token(label.range(), label_type, SemanticTokenModifier::DEFINITION);
+        if let Some(ty) = ty {
+            self.visit_annotation(ty);
         }
     }
 
@@ -1285,12 +1362,34 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     self.visit_decorator(decorator);
                 }
 
+                // basedpython `implementation A for B as W:` parses as the class it
+                // implements for, with the interface and witness on the side. The
+                // keyword and the interface are written ahead of that class' name
+                let implementation = class.implementation.as_ref();
+                if let Some(header) = implementation {
+                    self.add_consumed_keywords(
+                        class.range().start(),
+                        header.interface.range().start(),
+                        IMPLEMENTATION,
+                    );
+                    self.visit_annotation(&header.interface);
+                }
+
                 // Class name
                 self.add_token(
                     class.name.range(),
                     SemanticTokenType::Class,
                     SemanticTokenModifier::DEFINITION,
                 );
+
+                // the witness names a class of its own, written after the `as`
+                if let Some(witness) = implementation.and_then(|header| header.witness.as_ref()) {
+                    self.add_token(
+                        witness.range(),
+                        SemanticTokenType::Class,
+                        SemanticTokenModifier::DEFINITION,
+                    );
+                }
 
                 // Type parameters (Python 3.12+ syntax)
                 if let Some(type_params) = &class.type_params {
@@ -1312,6 +1411,16 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 self.in_class_scope = prev_in_class;
             }
             ast::Stmt::TypeAlias(type_alias) => {
+                // basedpython `private type X = int` — the modifier is recorded by
+                // `is_private` alone, ahead of the name
+                if type_alias.is_private {
+                    self.add_consumed_keywords(
+                        type_alias.range().start(),
+                        type_alias.name.range().start(),
+                        PRIVATE_TYPE_ALIAS,
+                    );
+                }
+
                 // Type alias name
                 self.add_token(
                     type_alias.name.range(),
@@ -1545,18 +1654,82 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
             // modifier is consumed by the parser, leaving the element ranged from
             // the type onwards, so each keyword is recovered from the gap ahead of
             // the element it modifies
-            ast::Expr::CallableType(callable) => {
-                let mut gap_start = callable.start();
-                if let Some(receiver) = callable.receiver.as_deref() {
-                    self.visit_expr(receiver);
-                    gap_start = receiver.end();
+            ast::Expr::CallableType(callable) => self.visit_callable_type(callable, false),
+            // basedpython `protocol(a: int; def f(self) -> int)`: an inline protocol
+            // names its members with synthetic labels rather than bindings, so they
+            // are classified as the members they declare
+            ast::Expr::ProtocolType(protocol) => {
+                self.add_consumed_keywords(
+                    protocol.start(),
+                    protocol
+                        .members
+                        .first()
+                        .map_or(protocol.end(), Ranged::start),
+                    INLINE_PROTOCOL,
+                );
+                for member in &protocol.members {
+                    match member {
+                        Expr::ProtocolMethod(method) => {
+                            self.add_token(
+                                method.name.range(),
+                                SemanticTokenType::Method,
+                                SemanticTokenModifier::DEFINITION,
+                            );
+                            // a method member binds its first parameter to the
+                            // receiver, exactly as a method in a class body does
+                            match method.signature.as_ref() {
+                                Expr::CallableType(signature) => {
+                                    self.visit_callable_type(signature, true);
+                                }
+                                signature => self.visit_annotation(signature),
+                            }
+                        }
+                        // a data member declares a member of the protocol, not a
+                        // parameter
+                        member => {
+                            self.visit_parameter_field(member, SemanticTokenType::Variable);
+                        }
+                    }
                 }
-                for arg in &callable.args {
-                    self.add_consumed_keywords(gap_start, arg.start(), LIFETIME_MODIFIERS);
-                    self.visit_expr(arg);
-                    gap_start = arg.end();
-                }
-                self.visit_expr(&callable.returns);
+            }
+            // basedpython writes a use-site variance keyword as a marker standing in
+            // for the type it qualifies (`list[out int]`), the same shape a
+            // declaration keyword takes in annotation position
+            ast::Expr::Subscript(subscript)
+                if subscript
+                    .value
+                    .as_name_expr()
+                    .is_some_and(|marker| marker.ctx.is_invalid()) =>
+            {
+                self.add_token(
+                    self.keyword_range(subscript.value.range()),
+                    SemanticTokenType::Keyword,
+                    SemanticTokenModifier::empty(),
+                );
+                self.visit_annotation(&subscript.slice);
+            }
+            // basedpython `x.await` — the keyword trails the awaited expression
+            // rather than introducing it
+            ast::Expr::Await(await_expr) if await_expr.end() > await_expr.value.end() => {
+                self.visit_expr(&await_expr.value);
+                self.add_consumed_keywords(await_expr.value.end(), await_expr.end(), POSTFIX_AWAIT);
+            }
+            // basedpython `pair.0` — a tuple member. The index lexes as a float, so
+            // the attribute's identifier is ranged over the dot as well; only the
+            // digits are the member, and they are an index rather than a name
+            ast::Expr::Attribute(attr)
+                if !attr.attr.is_empty()
+                    && attr.attr.id.chars().all(|digit| digit.is_ascii_digit()) =>
+            {
+                self.visit_expr(&attr.value);
+                self.add_token(
+                    TextRange::at(
+                        attr.attr.end() - attr.attr.id.as_str().text_len(),
+                        attr.attr.id.as_str().text_len(),
+                    ),
+                    SemanticTokenType::Number,
+                    SemanticTokenModifier::empty(),
+                );
             }
             // basedpython: a `field` read inside a property accessor, which the
             // parser rewrote to the backing attribute. The receiver it synthesized
@@ -1773,6 +1946,14 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
     }
 
     fn visit_type_param(&mut self, type_param: &TypeParam) {
+        // basedpython declares variance ahead of the name (`class C[out T]`), and
+        // the keywords are consumed — the parameter's own range covers them
+        self.add_consumed_keywords(
+            type_param.range().start(),
+            type_param.name().range().start(),
+            VARIANCE,
+        );
+
         // Emit token for the type parameter name
         let name_range = type_param.name().range();
         self.add_token(
@@ -5743,6 +5924,7 @@ def i(fn: (local: int) -> None, g: (int, once bool) -> None): ...
         "None" @ 140..144: BuiltinConstant
         "i" @ 156..157: Function [definition]
         "fn" @ 158..160: Parameter [definition]
+        "local" @ 163..168: Parameter [definition]
         "int" @ 170..173: Class
         "None" @ 178..182: BuiltinConstant
         "g" @ 184..185: Parameter [definition]
@@ -5767,8 +5949,13 @@ def i(fn: (local: int) -> None, g: (int, once bool) -> None): ...
         assert_snapshot!(test.to_snapshot(&tokens), @r#"
         "f" @ 4..5: Function [definition]
         "x" @ 6..7: Parameter [definition]
+        "protocol" @ 9..17: Keyword
+        "m" @ 22..23: Method [definition]
+        "self" @ 24..28: SelfParameter [definition]
         "local" @ 30..35: Keyword
+        "a" @ 36..37: Parameter [definition]
         "int" @ 39..42: Class
+        "local" @ 44..49: Parameter [definition]
         "str" @ 51..54: Class
         "None" @ 59..63: BuiltinConstant
         "#);
@@ -5978,6 +6165,165 @@ class C(B):
         "int" @ 244..247: Class
         "get" @ 256..259: Keyword
         "1" @ 282..283: Number
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_implementation_block() {
+        // `implementation A for B as W` parses as the class it implements for, so
+        // the keyword, the interface and the witness are all off to the side of the
+        // name — and every one of them is written before or after it
+        let test = SemanticTokenTest::new_by(
+            "
+class A: ...
+
+class B: ...
+
+implementation A for B as BAsA:
+    def f(self) -> None: ...
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "A" @ 7..8: Class [definition]
+        "B" @ 21..22: Class [definition]
+        "implementation" @ 29..43: Keyword
+        "A" @ 44..45: Class
+        "B" @ 50..51: Class [definition]
+        "BAsA" @ 55..59: Class [definition]
+        "f" @ 69..70: Method [definition]
+        "self" @ 71..75: SelfParameter [definition]
+        "None" @ 80..84: BuiltinConstant
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_variance_keywords() {
+        // variance is written ahead of a type parameter and, at a use site, as a
+        // marker standing in for the argument it qualifies
+        let test = SemanticTokenTest::new_by(
+            "
+class Source[out T]: ...
+
+class Both[in out T]: ...
+
+def read(data: list[out int], sink: Both[in str]) -> None: ...
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "Source" @ 7..13: Class [definition]
+        "out" @ 14..17: Keyword
+        "T" @ 18..19: TypeParameter [definition]
+        "Both" @ 33..37: Class [definition]
+        "in" @ 38..40: Keyword
+        "out" @ 41..44: Keyword
+        "T" @ 45..46: TypeParameter [definition]
+        "read" @ 58..62: Function [definition]
+        "data" @ 63..67: Parameter [definition]
+        "list" @ 69..73: Class
+        "out" @ 74..77: Keyword
+        "int" @ 78..81: Class
+        "sink" @ 84..88: Parameter [definition]
+        "Both" @ 90..94: Class
+        "in" @ 95..97: Keyword
+        "str" @ 98..101: Class
+        "None" @ 107..111: BuiltinConstant
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_private_type_alias() {
+        // the modifier is recorded by `is_private` alone; `type` is python's own
+        // soft keyword and stays lexical
+        let test = SemanticTokenTest::new_by("private type Alias = int\n");
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "private" @ 0..7: Keyword
+        "Alias" @ 13..18: Class [definition]
+        "int" @ 21..24: Class
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_inline_protocol_members() {
+        // an inline protocol labels its members rather than binding them, so
+        // nothing resolves them; a method's parameters are labels too
+        let test = SemanticTokenTest::new_by(
+            "def f(x: protocol(a: int; def m(self, count: str) -> None)) -> None: ...\n",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 4..5: Function [definition]
+        "x" @ 6..7: Parameter [definition]
+        "protocol" @ 9..17: Keyword
+        "a" @ 18..19: Variable [definition]
+        "int" @ 21..24: Class
+        "m" @ 30..31: Method [definition]
+        "self" @ 32..36: SelfParameter [definition]
+        "count" @ 38..43: Parameter [definition]
+        "str" @ 45..48: Class
+        "None" @ 53..57: BuiltinConstant
+        "None" @ 63..67: BuiltinConstant
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_postfix_await() {
+        // `x.await` trails the keyword rather than introducing it
+        let test = SemanticTokenTest::new_by(
+            "
+async def f() -> int: ...
+
+async def g() -> int:
+    return f().await
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 11..12: Function [definition, async]
+        "int" @ 18..21: Class
+        "g" @ 38..39: Function [definition, async]
+        "int" @ 45..48: Class
+        "f" @ 61..62: Function
+        "await" @ 65..70: Keyword
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_tuple_member_index() {
+        // `pair.0` lexes its index as a float, so the attribute's identifier covers
+        // the dot; only the digits are the member, and they are an index
+        let test = SemanticTokenTest::new_by(
+            "
+pair = (1, 2)
+first = pair.0
+second = pair.10
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "pair" @ 1..5: Variable [definition]
+        "1" @ 9..10: Number
+        "2" @ 12..13: Number
+        "first" @ 15..20: Variable [definition]
+        "pair" @ 23..27: Variable
+        "0" @ 28..29: Number
+        "second" @ 30..36: Variable [definition]
+        "pair" @ 39..43: Variable
+        "10" @ 44..46: Number
         "#);
     }
 

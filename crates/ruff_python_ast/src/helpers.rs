@@ -1363,6 +1363,16 @@ fn leading_whitespace_len(s: &str) -> usize {
     s.len() - s.trim_start().len()
 }
 
+/// whether `text` reads as one word — an identifier or a keyword, as opposed to
+/// punctuation or a literal that merely starts with a letter (`f"…"`)
+fn is_word(text: &str) -> bool {
+    let mut characters = text.chars();
+    characters
+        .next()
+        .is_some_and(|first| first.is_alphabetic() || first == '_')
+        && characters.all(|character| character.is_alphanumeric() || character == '_')
+}
+
 /// basedpython: the ranges of `keywords` the parser consumed without leaving an
 /// AST node behind, recovered from the source `range` they were written in.
 ///
@@ -1378,20 +1388,22 @@ pub fn consumed_keywords<'src>(
     range: TextRange,
     keywords: &'src [&'src str],
 ) -> impl Iterator<Item = TextRange> + 'src {
-    name_token_ranges(source, range).filter(move |name| keywords.contains(&&source[*name]))
+    word_token_ranges(source, range).filter(move |word| keywords.contains(&&source[*word]))
 }
 
-/// The ranges of the name tokens written in `range` of `source`.
+/// The ranges of the word tokens written in `range` of `source` — identifiers and
+/// python's own keywords alike, since a basedpython keyword may be either
+/// (`await` is a keyword to the tokenizer, `once` an identifier).
 ///
 /// Yields nothing when `range` does not index into `source`, as for the sub-AST
 /// of a string annotation, whose ranges belong to the string's own contents.
-pub fn name_token_ranges(source: &str, range: TextRange) -> impl Iterator<Item = TextRange> + '_ {
+pub fn word_token_ranges(source: &str, range: TextRange) -> impl Iterator<Item = TextRange> + '_ {
     let tokenizer = (range.start() <= range.end() && usize::from(range.end()) <= source.len())
         .then(|| SimpleTokenizer::new(source, range).skip_trivia());
     tokenizer
         .into_iter()
         .flatten()
-        .filter(|token| token.kind == SimpleTokenKind::Name)
+        .filter(|token| token.kind == SimpleTokenKind::Name || is_word(&source[token.range]))
         .map(|token| token.range)
 }
 
