@@ -7,9 +7,10 @@ use thin_vec::ThinVec;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::token::TokenKind;
 use ruff_python_ast::{
-    self as ast, AnyStringFlags, AtomicNodeIndex, BoolOp, CmpOp, ConversionFlag, Expr, ExprContext,
-    FString, InterpolatedStringElement, InterpolatedStringElements, IpyEscapeKind, Number,
-    Operator, OperatorPrecedence, StringFlags, TString, UnaryOp,
+    self as ast, AnyStringFlags, AtomicNodeIndex, BoolOp, CallableParameterShape, CmpOp,
+    ConversionFlag, Expr, ExprContext, FString, InterpolatedStringElement,
+    InterpolatedStringElements, IpyEscapeKind, Number, Operator, OperatorPrecedence,
+    ParameterBorrow, StringFlags, TString, UnaryOp,
 };
 use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 
@@ -373,6 +374,7 @@ impl<'src> Parser<'src> {
                 left = ParsedExpr {
                     expr: self.parse_callable_type_arrow(None, left, start, context),
                     is_parenthesized: false,
+                    parameter_borrow: ParameterBorrow::None,
                 };
                 continue;
             }
@@ -427,6 +429,7 @@ impl<'src> Parser<'src> {
                         is_string_tag: false,
                     }),
                     is_parenthesized: false,
+                    parameter_borrow: ParameterBorrow::None,
                 };
                 continue;
             }
@@ -474,6 +477,7 @@ impl<'src> Parser<'src> {
                         is_string_tag: false,
                     }),
                     is_parenthesized: false,
+                    parameter_borrow: ParameterBorrow::None,
                 };
                 continue;
             }
@@ -674,6 +678,7 @@ impl<'src> Parser<'src> {
                 node_index: AtomicNodeIndex::NONE,
             }),
             is_parenthesized: false,
+            parameter_borrow: ParameterBorrow::None,
         }
     }
 
@@ -800,6 +805,7 @@ impl<'src> Parser<'src> {
         ParsedExpr {
             expr: self.parse_postfix_expression(lhs.expr, start, context),
             is_parenthesized: lhs.is_parenthesized,
+            parameter_borrow: lhs.parameter_borrow,
         }
     }
 
@@ -869,6 +875,7 @@ impl<'src> Parser<'src> {
                     node_index: AtomicNodeIndex::NONE,
                 }),
                 is_parenthesized: false,
+                parameter_borrow: ParameterBorrow::None,
             };
         }
         self.parse_conditional_expression_or_higher_impl(ExpressionContext::default())
@@ -1465,6 +1472,7 @@ impl<'src> Parser<'src> {
                         let arg = if let ParsedExpr {
                             expr: Expr::Name(ident_expr),
                             is_parenthesized,
+                            parameter_borrow: _,
                         } = parsed_expr
                         {
                             // test_ok parenthesized_kwarg_py37
@@ -1742,8 +1750,7 @@ impl<'src> Parser<'src> {
                 parenthesized: false,
                 is_anon_named_tuple: false,
                 is_anon_named_tuple_value: false,
-                parameter_slash: None,
-                parameter_star: None,
+                callable_shape: None,
                 is_parameter_shape: false,
                 node_index: AtomicNodeIndex::NONE,
             });
@@ -1760,8 +1767,7 @@ impl<'src> Parser<'src> {
                 parenthesized: false,
                 is_anon_named_tuple: false,
                 is_anon_named_tuple_value: false,
-                parameter_slash: None,
-                parameter_star: None,
+                callable_shape: None,
                 is_parameter_shape: false,
                 node_index: AtomicNodeIndex::NONE,
             });
@@ -3152,23 +3158,39 @@ impl<'src> Parser<'src> {
     }
 
     /// basedpython: consume a `local` / `once` modifier prefixing a callable-type
-    /// parameter, e.g. the `local` in `(local int) -> None`. The keyword is
-    /// consumed without an AST field — the parsed element starts at the type, so
-    /// ty and the callable transform both see a plain `Callable[[int], None]`.
+    /// parameter, e.g. the `local` in `(local int) -> None`, and report which one
+    /// was written. The parsed element starts at the type, so the keyword leaves
+    /// no trace in the element itself — the enclosing parameter list records the
+    /// returned [`ParameterBorrow`] positionally instead, and the callable
+    /// transform still sees a plain `Callable[[int], None]`.
     ///
     /// Only consumed when a bare name (a type) directly follows, so a
     /// parenthesized name (`(local)`), a call (`once(x)`), or a subscript
     /// (`local[i]`) is never mistaken for a modifier.
-    fn skip_callable_type_modifiers(&mut self) {
+    ///
+    /// A run may spell both (`once local fn`); `once` is the stronger of the two
+    /// (it implies the borrow) and wins.
+    fn skip_callable_type_modifiers(&mut self) -> ParameterBorrow {
+        let mut borrow = ParameterBorrow::None;
         while self.at(TokenKind::Name)
             && matches!(self.src_text(self.current_token_range()), "local" | "once")
             && self.peek() == TokenKind::Name
+            // `(local x=1)` is an anonymous named tuple *value*, which has no
+            // parameters to borrow — leave the name alone so it keeps its
+            // existing reading
+            && self.peek2().1 != TokenKind::Equal
         {
             self.error_if_not_basedpython(
                 "`local` / `once` in a callable type are not valid in .py files".to_string(),
             );
+            if self.src_text(self.current_token_range()) == "once" {
+                borrow = ParameterBorrow::Once;
+            } else if borrow.is_none() {
+                borrow = ParameterBorrow::Local;
+            }
             self.bump(TokenKind::Name);
         }
+        borrow
     }
 
     /// Returns whether the current `protocol` identifier introduces an inline protocol type
@@ -3201,13 +3223,26 @@ impl<'src> Parser<'src> {
     /// `(int)` parses to a parenthesized expression and is a one-parameter list; anything else
     /// parenthesized is a tuple, whose elements carry the parameter shape (and whose
     /// `is_anon_named_tuple` flag is irrelevant here — `name: T` has the same encoding in both).
-    fn callable_parameter_spec(parsed: ParsedExpr) -> (Vec<Expr>, Option<u32>, Option<u32>) {
+    /// The `local` / `once` modifiers ride along the same two shapes: on the single element
+    /// itself, or on the tuple.
+    fn callable_parameter_spec(parsed: ParsedExpr) -> (Vec<Expr>, CallableParameterShape) {
         if parsed.is_parenthesized {
-            return (vec![parsed.expr], None, None);
+            let mut borrows = Vec::new();
+            record_parameter_borrow(&mut borrows, 0, parsed.parameter_borrow);
+            return (
+                vec![parsed.expr],
+                CallableParameterShape {
+                    borrows: borrows.into_boxed_slice(),
+                    ..CallableParameterShape::default()
+                },
+            );
         }
         match parsed.expr {
-            Expr::Tuple(t) => (t.elts, t.parameter_slash, t.parameter_star),
-            _ => (vec![], None, None),
+            Expr::Tuple(t) => (
+                t.elts,
+                t.callable_shape.map(|shape| *shape).unwrap_or_default(),
+            ),
+            _ => (vec![], CallableParameterShape::default()),
         }
     }
 
@@ -3252,7 +3287,8 @@ impl<'src> Parser<'src> {
                 // straight to the spec parser rather than through the parenthesized-expression
                 // dispatch, where `(self, x: int)` would read as an anonymous named tuple
                 self.expect(TokenKind::Lpar);
-                let mut parameters = self.parse_parameters_spec(signature_start, None);
+                let mut parameters =
+                    self.parse_parameters_spec(signature_start, None, ParameterBorrow::None);
                 // the receiver is a parameter *name*, not a type — mark it a label so it neither
                 // binds a name nor resolves to one, the way an anonymous-named-tuple field name
                 // is. Every later bare name keeps its parameter-spec meaning of a
@@ -3260,11 +3296,7 @@ impl<'src> Parser<'src> {
                 if let Some(Expr::Name(receiver)) = parameters.elts.first_mut() {
                     receiver.ctx = ExprContext::Invalid;
                 }
-                let (args, parameter_slash, parameter_star) = (
-                    parameters.elts,
-                    parameters.parameter_slash,
-                    parameters.parameter_star,
-                );
+                let (args, callable_shape) = (parameters.elts, parameters.callable_shape);
 
                 // unlike the callable arrow `(...) -> T | None`, where `->` binds tighter than
                 // `|` so that the union wraps the whole callable, a method's return annotation
@@ -3284,8 +3316,7 @@ impl<'src> Parser<'src> {
                         returns: Box::new(returns),
                         range: self.node_range(signature_start),
                         node_index: AtomicNodeIndex::NONE,
-                        parameter_slash,
-                        parameter_star,
+                        callable_shape,
                     })),
                     range: self.node_range(member_start),
                     node_index: AtomicNodeIndex::NONE,
@@ -3371,15 +3402,14 @@ impl<'src> Parser<'src> {
         self.expect(TokenKind::Rarrow);
         // parse return type stopping before `|` so the union wraps the whole callable
         let returns = self.parse_binary_expression_or_higher(OperatorPrecedence::BitOr, context);
-        let (args, parameter_slash, parameter_star) = Self::callable_parameter_spec(params);
+        let (args, shape) = Self::callable_parameter_spec(params);
         Expr::CallableType(ast::ExprCallableType {
             receiver: receiver.map(Box::new),
             args,
             returns: Box::new(returns.expr),
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
-            parameter_slash,
-            parameter_star,
+            callable_shape: shape.into_stored(),
         })
     }
 
@@ -3411,12 +3441,17 @@ impl<'src> Parser<'src> {
                 parenthesized: true,
                 is_anon_named_tuple: false,
                 is_anon_named_tuple_value: false,
-                parameter_slash: None,
-                parameter_star: None,
+                callable_shape: None,
                 is_parameter_shape: false,
             })
             .into();
         }
+
+        // basedpython: a callable-type parameter may carry a `local` / `once`
+        // modifier (`(local int) -> None`). It binds to the element that follows,
+        // so it is consumed before the dispatches below read that element's own
+        // leading tokens, and handed to whichever shape claims it
+        let first_borrow = self.skip_callable_type_modifiers();
 
         // basedpython: `(name: T, ...)` — anonymous named tuple type literal.
         // Detected before parsing the first element: the very first token after
@@ -3426,10 +3461,11 @@ impl<'src> Parser<'src> {
             self.error_if_not_basedpython(
                 "anonymous named tuple type `(name: T, ...)` is not valid in .py files".to_string(),
             );
-            let tuple = self.parse_anon_named_tuple_type(start);
+            let tuple = self.parse_anon_named_tuple_type(start, first_borrow);
             return ParsedExpr {
                 expr: Expr::Tuple(tuple),
                 is_parenthesized: false,
+                parameter_borrow: ParameterBorrow::None,
             };
         }
 
@@ -3450,10 +3486,12 @@ impl<'src> Parser<'src> {
             self.error_if_not_basedpython(
                 "Parameters spec syntax is not valid in .py files".to_string(),
             );
-            let tuple = self.parse_parameters_spec(start, None);
+            let tuple =
+                self.parse_extended_tuple(start, Vec::new(), Vec::new(), None, first_borrow);
             return ParsedExpr {
                 expr: Expr::Tuple(tuple),
                 is_parenthesized: false,
+                parameter_borrow: ParameterBorrow::None,
             };
         }
 
@@ -3469,12 +3507,9 @@ impl<'src> Parser<'src> {
             return ParsedExpr {
                 expr: Expr::Tuple(tuple),
                 is_parenthesized: false,
+                parameter_borrow: ParameterBorrow::None,
             };
         }
-
-        // basedpython: a callable-type parameter may carry a `local` / `once`
-        // modifier (`(local int) -> None`); strip it before parsing the type
-        self.skip_callable_type_modifiers();
 
         // Use the more general rule of the three to parse the first element
         // and limit it later.
@@ -3497,11 +3532,16 @@ impl<'src> Parser<'src> {
                     "anonymous named tuple is not valid in .py files".to_string(),
                 );
                 let is_type_form = after_name == TokenKind::Colon;
-                let tuple =
-                    self.parse_anon_named_tuple_mixed(start, parsed_expr.expr, is_type_form);
+                let tuple = self.parse_anon_named_tuple_mixed(
+                    start,
+                    parsed_expr.expr,
+                    first_borrow,
+                    is_type_form,
+                );
                 return ParsedExpr {
                     expr: Expr::Tuple(tuple),
                     is_parenthesized: false,
+                    parameter_borrow: ParameterBorrow::None,
                 };
             }
             // basedpython: positional first element followed by `, /` or
@@ -3528,10 +3568,11 @@ impl<'src> Parser<'src> {
                 self.error_if_not_basedpython(
                     "Parameters spec syntax is not valid in .py files".to_string(),
                 );
-                let tuple = self.parse_parameters_spec(start, Some(parsed_expr.expr));
+                let tuple = self.parse_parameters_spec(start, Some(parsed_expr.expr), first_borrow);
                 return ParsedExpr {
                     expr: Expr::Tuple(tuple),
                     is_parenthesized: false,
+                    parameter_borrow: ParameterBorrow::None,
                 };
             }
         }
@@ -3545,11 +3586,13 @@ impl<'src> Parser<'src> {
                 // elements collected so far. this lets `(int, str, /, name:
                 // T)` reach the spec parser without requiring a single-token
                 // dispatch
-                let tuple = self.parse_tuple_or_parameters_spec(parsed_expr.expr, start);
+                let tuple =
+                    self.parse_tuple_or_parameters_spec(parsed_expr.expr, first_borrow, start);
 
                 ParsedExpr {
                     expr: tuple.into(),
                     is_parenthesized: false,
+                    parameter_borrow: ParameterBorrow::None,
                 }
             }
             TokenKind::Async | TokenKind::For => {
@@ -3572,6 +3615,7 @@ impl<'src> Parser<'src> {
                 ParsedExpr {
                     expr: generator,
                     is_parenthesized: false,
+                    parameter_borrow: ParameterBorrow::None,
                 }
             }
             _ => {
@@ -3588,6 +3632,7 @@ impl<'src> Parser<'src> {
                 self.expect(TokenKind::Rpar);
 
                 parsed_expr.is_parenthesized = true;
+                parsed_expr.parameter_borrow = first_borrow;
                 parsed_expr
             }
         }
@@ -3630,8 +3675,7 @@ impl<'src> Parser<'src> {
             parenthesized: parenthesized.is_yes(),
             is_anon_named_tuple: false,
             is_anon_named_tuple_value: false,
-            parameter_slash: None,
-            parameter_star: None,
+            callable_shape: None,
             is_parameter_shape: false,
         }
     }
@@ -3643,15 +3687,29 @@ impl<'src> Parser<'src> {
     /// The opening `(` has already been consumed; `start` points at it. The
     /// current token is the first field's `Name`, and `peek()` is `:` (the
     /// caller dispatched on this).
-    fn parse_anon_named_tuple_type(&mut self, start: TextSize) -> ast::ExprTuple {
-        self.parse_anon_named_tuple_fields(start, /* is_type_form = */ true, None)
+    fn parse_anon_named_tuple_type(
+        &mut self,
+        start: TextSize,
+        first_borrow: ParameterBorrow,
+    ) -> ast::ExprTuple {
+        self.parse_anon_named_tuple_fields(
+            start,
+            /* is_type_form = */ true,
+            None,
+            first_borrow,
+        )
     }
 
     /// Parses a basedpython anonymous named tuple value construction
     /// `(name1=expr1, ...)`, possibly with positional fields interleaved
     /// (e.g. `(1, name="a")`).
     fn parse_anon_named_tuple_value(&mut self, start: TextSize) -> ast::ExprTuple {
-        self.parse_anon_named_tuple_fields(start, /* is_type_form = */ false, None)
+        self.parse_anon_named_tuple_fields(
+            start,
+            /* is_type_form = */ false,
+            None,
+            ParameterBorrow::None,
+        )
     }
 
     /// Continues parsing an anonymous named tuple after the first element has
@@ -3661,9 +3719,15 @@ impl<'src> Parser<'src> {
         &mut self,
         start: TextSize,
         first_positional: Expr,
+        first_borrow: ParameterBorrow,
         is_type_form: bool,
     ) -> ast::ExprTuple {
-        self.parse_anon_named_tuple_fields(start, is_type_form, Some(first_positional))
+        self.parse_anon_named_tuple_fields(
+            start,
+            is_type_form,
+            Some((first_positional, first_borrow)),
+            ParameterBorrow::None,
+        )
     }
 
     /// Shared field-list parser for anonymous named tuples. Each field is
@@ -3681,7 +3745,8 @@ impl<'src> Parser<'src> {
         &mut self,
         start: TextSize,
         is_type_form: bool,
-        prefix_positional: Option<Expr>,
+        prefix_positional: Option<(Expr, ParameterBorrow)>,
+        mut pending_borrow: ParameterBorrow,
     ) -> ast::ExprTuple {
         let separator = if is_type_form {
             TokenKind::Colon
@@ -3689,8 +3754,13 @@ impl<'src> Parser<'src> {
             TokenKind::Equal
         };
         let mut elts: Vec<Expr> = Vec::new();
+        // basedpython: the type form doubles as a callable's parameter list, so
+        // its fields may carry `local` / `once`. The value form never does — the
+        // modifier scan does not fire on a `name = value` field
+        let mut borrows: Vec<ParameterBorrow> = Vec::new();
 
-        if let Some(first) = prefix_positional {
+        if let Some((first, first_borrow)) = prefix_positional {
+            record_parameter_borrow(&mut borrows, elts.len(), first_borrow);
             elts.push(first);
             // The caller has already verified there's a comma here.
             self.expect(TokenKind::Comma);
@@ -3705,6 +3775,15 @@ impl<'src> Parser<'src> {
         loop {
             // Trailing comma already absorbed up the loop with `eat`; reaching
             // `)` is a clean exit.
+            if self.at(TokenKind::Rpar) {
+                break;
+            }
+
+            let borrow = match std::mem::take(&mut pending_borrow) {
+                ParameterBorrow::None => self.skip_callable_type_modifiers(),
+                pending => pending,
+            };
+            let elts_before = elts.len();
             if self.at(TokenKind::Rpar) {
                 break;
             }
@@ -3770,6 +3849,10 @@ impl<'src> Parser<'src> {
                 elts.push(inner.expr);
             }
 
+            if elts.len() > elts_before {
+                record_parameter_borrow(&mut borrows, elts.len() - 1, borrow);
+            }
+
             if self.eat(TokenKind::Comma) {
                 continue;
             }
@@ -3786,21 +3869,30 @@ impl<'src> Parser<'src> {
             parenthesized: true,
             is_anon_named_tuple: is_type_form,
             is_anon_named_tuple_value: !is_type_form,
-            parameter_slash: None,
-            parameter_star: None,
+            callable_shape: CallableParameterShape {
+                borrows: borrows.into_boxed_slice(),
+                ..CallableParameterShape::default()
+            }
+            .into_stored(),
             is_parameter_shape: false,
         }
     }
 
     /// Parses a parenthesized tuple, switching to Parameters spec parsing if
     /// a `/` or standalone `*` marker is encountered mid-list. The first
-    /// element has already been parsed; the current token is `,`
+    /// element has already been parsed; the current token is `,`.
+    ///
+    /// `first_borrow` is the `local` / `once` modifier that element was written
+    /// with, which the caller consumed before parsing it
     fn parse_tuple_or_parameters_spec(
         &mut self,
         first_element: Expr,
+        first_borrow: ParameterBorrow,
         start: TextSize,
     ) -> ast::ExprTuple {
         let mut elts = vec![first_element];
+        let mut borrows = Vec::new();
+        record_parameter_borrow(&mut borrows, 0, first_borrow);
         if !self.at_sequence_end() {
             self.expect(TokenKind::Comma);
         }
@@ -3812,7 +3904,7 @@ impl<'src> Parser<'src> {
 
             // basedpython: strip a `local` / `once` modifier on this callable
             // parameter before dispatching on markers / named fields
-            self.skip_callable_type_modifiers();
+            let borrow = self.skip_callable_type_modifiers();
             if self.at(TokenKind::Rpar) {
                 break;
             }
@@ -3837,7 +3929,7 @@ impl<'src> Parser<'src> {
                 self.error_if_not_basedpython(
                     "Parameters spec syntax is not valid in .py files".to_string(),
                 );
-                return self.continue_parameters_spec(start, elts);
+                return self.continue_parameters_spec(start, elts, borrows, borrow);
             }
 
             // basedpython: a `Name : type` field also switches to spec form
@@ -3849,7 +3941,7 @@ impl<'src> Parser<'src> {
                 self.error_if_not_basedpython(
                     "Parameters spec syntax is not valid in .py files".to_string(),
                 );
-                return self.continue_parameters_spec(start, elts);
+                return self.continue_parameters_spec(start, elts, borrows, borrow);
             }
 
             // basedpython: anonymous-named-tuple value form `Name = expr`
@@ -3866,6 +3958,7 @@ impl<'src> Parser<'src> {
 
             let parsed =
                 self.parse_named_expression_or_higher(ExpressionContext::starred_bitwise_or());
+            record_parameter_borrow(&mut borrows, elts.len(), borrow);
             elts.push(parsed.expr);
 
             if self.eat(TokenKind::Comma) {
@@ -3884,8 +3977,11 @@ impl<'src> Parser<'src> {
             parenthesized: true,
             is_anon_named_tuple: false,
             is_anon_named_tuple_value: false,
-            parameter_slash: None,
-            parameter_star: None,
+            callable_shape: CallableParameterShape {
+                borrows: borrows.into_boxed_slice(),
+                ..CallableParameterShape::default()
+            }
+            .into_stored(),
             is_parameter_shape: false,
         }
     }
@@ -3940,14 +4036,19 @@ impl<'src> Parser<'src> {
             parenthesized: true,
             is_anon_named_tuple: false,
             is_anon_named_tuple_value: true,
-            parameter_slash: None,
-            parameter_star: None,
+            callable_shape: None,
             is_parameter_shape: false,
         }
     }
 
-    fn continue_parameters_spec(&mut self, start: TextSize, elts: Vec<Expr>) -> ast::ExprTuple {
-        self.parse_extended_tuple(start, elts, None, None)
+    fn continue_parameters_spec(
+        &mut self,
+        start: TextSize,
+        elts: Vec<Expr>,
+        borrows: Vec<ParameterBorrow>,
+        pending_borrow: ParameterBorrow,
+    ) -> ast::ExprTuple {
+        self.parse_extended_tuple(start, elts, borrows, None, pending_borrow)
     }
 
     /// Parses a basedpython extended-tuple / parameter spec like
@@ -3964,25 +4065,39 @@ impl<'src> Parser<'src> {
     /// - `/`          → tracked in `parameter_slash` (index in elts)
     /// - bare `*`     → tracked in `parameter_star` (index in elts)
     ///
-    /// The opening `(` has already been consumed; `start` points at it
+    /// The opening `(` has already been consumed; `start` points at it.
+    /// `prefix_borrow` is the `local` / `once` modifier `prefix_positional` was
+    /// written with, when the caller consumed one before parsing it
     fn parse_parameters_spec(
         &mut self,
         start: TextSize,
         prefix_positional: Option<Expr>,
+        prefix_borrow: ParameterBorrow,
     ) -> ast::ExprTuple {
-        self.parse_extended_tuple(start, Vec::new(), prefix_positional, None)
+        self.parse_extended_tuple(
+            start,
+            Vec::new(),
+            Vec::new(),
+            prefix_positional.map(|first| (first, prefix_borrow)),
+            ParameterBorrow::None,
+        )
     }
 
+    /// `borrows` is the modifier shape recorded for `elts` so far;
+    /// `pending_borrow` is one the caller already consumed for the *next*
+    /// element, which this parse is resuming in the middle of
     fn parse_extended_tuple(
         &mut self,
         start: TextSize,
         mut elts: Vec<Expr>,
-        prefix_positional: Option<Expr>,
-        _unused: Option<()>,
+        mut borrows: Vec<ParameterBorrow>,
+        prefix_positional: Option<(Expr, ParameterBorrow)>,
+        mut pending_borrow: ParameterBorrow,
     ) -> ast::ExprTuple {
         let mut slash: Option<u32> = None;
         let mut star: Option<u32> = None;
-        if let Some(first) = prefix_positional {
+        if let Some((first, first_borrow)) = prefix_positional {
+            record_parameter_borrow(&mut borrows, elts.len(), first_borrow);
             elts.push(first);
             self.expect(TokenKind::Comma);
         }
@@ -3993,8 +4108,13 @@ impl<'src> Parser<'src> {
             }
 
             // basedpython: strip a `local` / `once` modifier prefixing this
-            // callable parameter's type
-            self.skip_callable_type_modifiers();
+            // callable parameter's type. a modifier the caller already consumed
+            // belongs to the first element parsed here
+            let borrow = match std::mem::take(&mut pending_borrow) {
+                ParameterBorrow::None => self.skip_callable_type_modifiers(),
+                pending => pending,
+            };
+            let elts_before = elts.len();
             if self.at(TokenKind::Rpar) {
                 break;
             }
@@ -4155,6 +4275,13 @@ impl<'src> Parser<'src> {
                 }
             }
 
+            // every branch above pushes at most one element, and a bare `/` or
+            // `*` separator pushes none — so the modifier belongs to the element
+            // this iteration added, if it added one
+            if elts.len() > elts_before {
+                record_parameter_borrow(&mut borrows, elts.len() - 1, borrow);
+            }
+
             if self.eat(TokenKind::Comma) {
                 continue;
             }
@@ -4179,9 +4306,13 @@ impl<'src> Parser<'src> {
             parenthesized: true,
             is_anon_named_tuple,
             is_anon_named_tuple_value: false,
-            parameter_slash: slash,
-            parameter_star: star,
             is_parameter_shape: true,
+            callable_shape: CallableParameterShape {
+                slash,
+                star,
+                borrows: borrows.into_boxed_slice(),
+            }
+            .into_stored(),
         }
     }
 
@@ -4934,6 +5065,11 @@ pub(super) enum ArgumentsContext {
 pub(super) struct ParsedExpr {
     pub(super) expr: Expr,
     pub(super) is_parenthesized: bool,
+    /// basedpython: the `local` / `once` modifier written before this expression
+    /// when it is the sole element of a callable type's parameter list — the
+    /// `local` of `(local int) -> None`. A multi-element list records its
+    /// modifiers on the tuple instead
+    pub(super) parameter_borrow: ParameterBorrow,
 }
 
 impl ParsedExpr {
@@ -4954,8 +5090,33 @@ impl From<Expr> for ParsedExpr {
         ParsedExpr {
             expr,
             is_parenthesized: false,
+            parameter_borrow: ParameterBorrow::None,
         }
     }
+}
+
+/// basedpython: record `borrow` for the element at `index` of a callable
+/// parameter list under construction.
+///
+/// The list stays sparse: a list where nothing was written never allocates, and
+/// the leading unmodified elements are only padded once a modifier appears. The
+/// result is either empty or exactly as long as the elements, which is what
+/// [`ExprTuple::parameter_borrow`] and [`ExprCallableType::parameter_borrow`]
+/// expect.
+///
+/// [`ExprTuple::parameter_borrow`]: ast::ExprTuple::parameter_borrow
+/// [`ExprCallableType::parameter_borrow`]: ast::ExprCallableType::parameter_borrow
+fn record_parameter_borrow(
+    borrows: &mut Vec<ParameterBorrow>,
+    index: usize,
+    borrow: ParameterBorrow,
+) {
+    if !borrow.is_borrow() {
+        return;
+    }
+    debug_assert!(borrows.len() <= index, "elements are recorded in order");
+    borrows.resize(index, ParameterBorrow::None);
+    borrows.push(borrow);
 }
 
 impl Deref for ParsedExpr {

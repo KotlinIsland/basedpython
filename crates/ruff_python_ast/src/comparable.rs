@@ -1383,8 +1383,7 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
                 parenthesized: _,
                 is_anon_named_tuple: _,
                 is_anon_named_tuple_value: _,
-                parameter_slash: _,
-                parameter_star: _,
+                callable_shape: _,
                 is_parameter_shape: _,
             }) => Self::Tuple(ExprTuple {
                 elts: elts.iter().map(Into::into).collect(),
@@ -1412,8 +1411,7 @@ impl<'a> From<&'a ast::Expr> for ComparableExpr<'a> {
                 returns,
                 range: _,
                 node_index: _,
-                parameter_slash: _,
-                parameter_star: _,
+                callable_shape: _,
             }) => Self::CallableType(ExprCallableType {
                 receiver: receiver
                     .as_ref()

@@ -7,6 +7,7 @@
 //! are defaulted. the implicit `it` parameter takes its type from that
 //! parameter's declared callable type
 
+use ruff_python_ast::ParameterBorrow;
 use ruff_python_ast::name::Name;
 
 use crate::Db;
@@ -89,13 +90,10 @@ pub(crate) fn trailing_lambda_keyword<'db>(db: &'db dyn Db, callee: Type<'db>) -
     parameter.name().cloned()
 }
 
-/// the type of the implicit `it` parameter: the first positional parameter
-/// type of the callable the callee's last parameter is declared as. `None`
-/// when that shape doesn't hold — `it` is then left untyped
-pub(crate) fn trailing_lambda_it_type<'db>(
-    db: &'db dyn Db,
-    callee: Type<'db>,
-) -> Option<Type<'db>> {
+/// the parameter the implicit `it` binds: the first positional parameter of the
+/// callable the callee's last parameter is declared as. `None` when that shape
+/// doesn't hold
+fn it_parameter<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<Parameter<'db>> {
     let parameter = last_parameter(db, callee)?;
     let Type::Callable(callable) = parameter.annotated_type() else {
         return None;
@@ -103,7 +101,31 @@ pub(crate) fn trailing_lambda_it_type<'db>(
     let [signature] = callable.signatures(db).overloads.as_slice() else {
         return None;
     };
-    Some(signature.parameters().get_positional(0)?.annotated_type())
+    Some(signature.parameters().get_positional(0)?.clone())
+}
+
+/// the type of the implicit `it` parameter. `None` when the callee's callback
+/// shape is not inspectable — `it` is then left untyped
+pub(crate) fn trailing_lambda_it_type<'db>(
+    db: &'db dyn Db,
+    callee: Type<'db>,
+) -> Option<Type<'db>> {
+    Some(it_parameter(db, callee)?.annotated_type())
+}
+
+/// basedpython: the `local` / `once` modifier the callee declares on the
+/// parameter `it` binds — the `local` of `def f(fn: (local int) -> None)`.
+///
+/// The block body is the *implementation* of that callback, so the value bound
+/// to `it` is borrowed from the call and may not escape the block.
+/// [`ParameterBorrow::None`] when the callee's callback shape is not
+/// inspectable, which leaves the block unconstrained the way an opaque callee
+/// does everywhere else in the borrow analysis.
+pub(crate) fn trailing_lambda_it_borrow<'db>(
+    db: &'db dyn Db,
+    callee: Type<'db>,
+) -> ParameterBorrow {
+    it_parameter(db, callee).map_or(ParameterBorrow::None, |parameter| parameter.borrow())
 }
 
 /// the type the block's callback declares as its *receiver* — the block body then

@@ -189,8 +189,7 @@ pub(crate) fn multiple_starts_ends_with(checker: &Checker, expr: &Expr) {
                 parenthesized: true,
                 is_anon_named_tuple: false,
                 is_anon_named_tuple_value: false,
-                parameter_slash: None,
-                parameter_star: None,
+                callable_shape: None,
                 is_parameter_shape: false,
             });
             let node1 = Expr::Name(ast::ExprName {

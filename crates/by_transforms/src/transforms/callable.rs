@@ -262,7 +262,7 @@ impl<'src> CallableSyntax<'src> {
     /// anything else unpacks into an explicit parameter list instead, so it is left to the
     /// `Protocol.__call__` synthesis
     fn paramspec_tail<'ct>(&self, ct: &'ct ExprCallableType) -> Option<(&'ct [Expr], &'ct Expr)> {
-        if ct.parameter_slash.is_some() || ct.parameter_star.is_some() {
+        if ct.parameter_slash().is_some() || ct.parameter_star().is_some() {
             return None;
         }
         let (last, prefix) = ct.args.split_last()?;
@@ -293,7 +293,7 @@ impl<'src> CallableSyntax<'src> {
     /// parameter, marker, variadic, or kwargs catch-all
     #[expect(clippy::unused_self, reason = "kept as method for grouping")]
     fn is_non_denotable(&self, ct: &ExprCallableType) -> bool {
-        if ct.parameter_slash.is_some() || ct.parameter_star.is_some() {
+        if ct.parameter_slash().is_some() || ct.parameter_star().is_some() {
             return true;
         }
         ct.args
@@ -529,8 +529,8 @@ impl<'src> CallableSyntax<'src> {
                 });
                 let params = self.render_protocol_params(
                     &ct.args,
-                    ct.parameter_slash.map(|i| i as usize),
-                    ct.parameter_star.map(|i| i as usize),
+                    ct.parameter_slash().map(|i| i as usize),
+                    ct.parameter_star().map(|i| i as usize),
                     "self",
                     implicit_receiver,
                 );

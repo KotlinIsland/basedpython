@@ -2588,8 +2588,7 @@ impl<'src> Parser<'src> {
             parenthesized: false,
             is_anon_named_tuple: false,
             is_anon_named_tuple_value: false,
-            parameter_slash: None,
-            parameter_star: None,
+            callable_shape: None,
             ..
         }) = expr
         else {
@@ -2639,8 +2638,7 @@ impl<'src> Parser<'src> {
                     parenthesized: false,
                     is_anon_named_tuple: false,
                     is_anon_named_tuple_value: false,
-                    parameter_slash: None,
-                    parameter_star: None,
+                    callable_shape: None,
                     ..
                 }) = exc.as_tuple_expr()
                 {
@@ -2666,8 +2664,7 @@ impl<'src> Parser<'src> {
                 parenthesized: false,
                 is_anon_named_tuple: false,
                 is_anon_named_tuple_value: false,
-                parameter_slash: None,
-                parameter_star: None,
+                callable_shape: None,
                 ..
             }) = cause.as_tuple_expr()
             {
@@ -4016,8 +4013,7 @@ impl<'src> Parser<'src> {
                     parenthesized: false,
                     is_anon_named_tuple: false,
                     is_anon_named_tuple_value: false,
-                    parameter_slash: None,
-                    parameter_star: None,
+                    callable_shape: None,
                     ..
                 })
             ) {
@@ -4391,8 +4387,7 @@ impl<'src> Parser<'src> {
                         parenthesized: false,
                         is_anon_named_tuple: false,
                         is_anon_named_tuple_value: false,
-                        parameter_slash: None,
-                        parameter_star: None,
+                        callable_shape: None,
                         ..
                     })
                 ) {
@@ -6693,6 +6688,7 @@ impl<'src> Parser<'src> {
                                         node_index: AtomicNodeIndex::NONE,
                                     }),
                                     is_parenthesized: false,
+                                    parameter_borrow: ast::ParameterBorrow::None,
                                 }
                             } else {
                                 self.parse_conditional_expression_or_higher()

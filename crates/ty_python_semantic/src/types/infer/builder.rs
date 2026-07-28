@@ -7615,8 +7615,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             parenthesized: _,
             is_anon_named_tuple: _,
             is_anon_named_tuple_value: _,
-            parameter_slash: _,
-            parameter_star: _,
+            callable_shape: _,
             is_parameter_shape: _,
         } = tuple;
 

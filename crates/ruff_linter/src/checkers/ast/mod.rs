@@ -2235,8 +2235,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                                 parenthesized: _,
                                 is_anon_named_tuple: _,
                                 is_anon_named_tuple_value: _,
-                                parameter_slash: _,
-                                parameter_star: _,
+                                callable_shape: _,
                                 is_parameter_shape: _,
                             }) = slice.as_ref()
                             {

@@ -100,6 +100,19 @@ a type before the parameter list is an [implicit receiver](implicit-receivers.md
 — `int.() -> str` is a callable that runs against an `int`, which it takes as its
 leading positional parameter
 
+### borrowed parameter
+
+```by
+f: (local int) -> None
+g: (once cb: (int) -> None) -> None
+```
+
+a parameter may carry a [`local` / `once`](local-lifetimes.md) modifier, which
+constrains whatever *implements* the callable: the value passed in does not
+outlive the call, so the body filling it may not let it escape. the modifier is
+erased in lowering — both of the above are ordinary `Callable`s at runtime — and
+does not affect assignability
+
 ## scope
 
 arrow form recognized only in syntactic type positions: parameter
