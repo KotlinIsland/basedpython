@@ -1171,6 +1171,17 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
 
                 return;
             }
+            // basedpython: a property accessor's whole header is synthesized — the
+            // parameter list stands for no source and the name and declared type
+            // belong to the construct's head, which is written once and hinted
+            // there — so only the accessor body is real
+            Stmt::FunctionDef(function) if has_synthesized_header(function) => {
+                let enclosing_class = self.enclosing_class.take();
+                self.visit_body(&function.body);
+                self.enclosing_class = enclosing_class;
+
+                return;
+            }
             Stmt::FunctionDef(function) => {
                 self.add_inferred_raises(function);
                 self.add_inferred_override(function);
@@ -1415,6 +1426,16 @@ fn call_matches_name(expr: &Expr, name: &str) -> bool {
         Expr::Attribute(expr_attribute) => expr_attribute.attr.as_str() == name,
         _ => false,
     }
+}
+
+/// basedpython: whether the parser built `function` from a construct that spells
+/// the signature somewhere else — a property accessor, whose parameter list stands
+/// for no source at all.
+///
+/// Every real `def` and `lambda` writes its own parameter list, even an empty one,
+/// so a list with no range is always synthesized.
+fn has_synthesized_header(function: &ast::StmtFunctionDef) -> bool {
+    function.parameters.range().is_empty()
 }
 
 /// Given an expression that's the RHS of an assignment, would it be excessive to
@@ -1808,6 +1829,67 @@ Source with applied edits:
 
             buf
         }
+    }
+
+    #[test]
+    fn property_accessor_hints() {
+        // an accessor's header is synthesized, so it takes no implicit-parameter
+        // hint for the receiver it never spells nor for the name a `set` does; the
+        // bodies are ordinary source and still hint
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def compute() -> int:
+                return 1
+
+            class A:
+                var x: int
+                    field = 10
+                    get():
+                        y = compute()
+                        return y
+                    set(value):
+                        print(value)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints(), @"
+
+        def compute() -> int:
+            return 1
+
+        class A:
+            var x: int
+                field = 10
+                get():
+                    y[: int] = compute()
+                    return y
+                set(value):
+                    print(value)
+
+        ---------------------------------------------
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class int:
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:17
+           |
+        LL |             y[: int] = compute()
+           |                 ^^^
+           |
+
+        ---------------------------------------------
+        info[inlay-hint-edit]: Inlay hint edits
+        --> main.by:1:1
+           |
+        8  |         get():
+           -             y = compute()
+        9  +             y: int = compute()
+        10 |             return y
+           |
+        ");
     }
 
     #[test]
