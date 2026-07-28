@@ -1,0 +1,11 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ numeric_promotions: true, ..InlayHintSettings::none() })"
+---
+
+def f(x: float[ | int], y: complex[ | float | int], z: int) -> float[ | int]:
+    return x
+
+a: float[ | int] = 1.0
+b: list[float[ | int]] = []
+c = float(1)

@@ -96,3 +96,19 @@ and the projection is a no-op.
 the projection is part of the type, so it also decides a
 [parametric type test](parametric-type-tests.md) — `a is A[out int]` matches
 covariantly even when `A`'s `T` is invariant.
+
+## inlay hints
+
+a type parameter that declares no variance gets its inferred one as an inlay
+hint, written where the keyword would go:
+
+```by
+class Source[⟨out ⟩T]:
+    def get(self) -> T: ...
+
+class Sink[⟨in ⟩T]:
+    def put(self, value: T) -> None: ...
+```
+
+a parameter ty infers as bivariant is not hinted — basedpython has no spelling
+for it

@@ -1,0 +1,14 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ type_argument_names: true, ..InlayHintSettings::none() })"
+---
+
+class Cache[Key, Value]:
+    pass
+
+def f(
+    a: dict[[Key=]str, [Value=]int],
+    b: list[int],
+    c: Cache[[Key=]str, [Value=]int],
+    d: tuple[int, str],
+) -> None: ...

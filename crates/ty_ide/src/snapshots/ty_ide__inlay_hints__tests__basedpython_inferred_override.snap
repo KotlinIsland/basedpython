@@ -1,0 +1,29 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ inferred_override: true, ..InlayHintSettings::none() })"
+---
+
+class A:
+    def f(self) -> None: ...
+    def g(self) -> None: ...
+    def __init__(self) -> None: ...
+
+class B(A):
+    [override ]def f(self) -> None: ...
+    override def g(self) -> None: ...
+    def h(self) -> None: ...
+    def __init__(self) -> None: ...
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:2:7
+  |
+2 | class A:
+  |       ^
+  |
+info: Source
+ --> main2.py:8:6
+  |
+8 |     [override ]def f(self) -> None: ...
+  |      ^^^^^^^^^
+  |
