@@ -824,6 +824,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             Bound(&'ast ast::Expr),
             /// The `name=type` fields collected for a keyword-variadic pack, in source order.
             Pack(Vec<(&'ast ast::name::Name, &'ast ast::Expr)>),
+            /// The run of positional arguments a `*Ts` variadic absorbs, in source order.
+            Variadic(Vec<&'ast ast::Expr>),
             /// A keyword argument named a type variable that cannot be given by name (a `*Ts`
             /// variadic). The expression is still type-checked, and the slot is filled with the
             /// gradual form so no cascading missing-argument error is reported.
@@ -972,6 +974,24 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         }
                         slots.push(KeywordSlot::Bound(expr));
                     }
+                } else if tv.is_typevartuple(db) {
+                    // basedpython: a variadic absorbs every positional argument the parameters
+                    // after it don't need — those claim theirs from the back, and a slot given
+                    // by name or a keyword pack claims none at all. this is the same rule the
+                    // positional path applies, restated here because a keyword-variadic pack
+                    // (or any keyword argument) routes the whole subscript through these slots
+                    let claimed_after = typevars[index + 1..]
+                        .iter()
+                        .enumerate()
+                        .filter(|(offset, later)| {
+                            keyword_pack_index != Some(index + 1 + offset)
+                                && !by_name.contains_key(later.name(db).as_str())
+                        })
+                        .count();
+                    let run = positional_iter.len().saturating_sub(claimed_after);
+                    slots.push(KeywordSlot::Variadic(
+                        positional_iter.by_ref().take(run).collect(),
+                    ));
                 } else if let Some(expr) = positional_iter.next() {
                     if kind == ast::TypeParamKind::KeywordOnly
                         && let Some(builder) =
@@ -1041,6 +1061,34 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         }));
                         specialization_types
                             .push(Some(Type::paramspec_value_callable(db, parameters)));
+                    }
+                    KeywordSlot::Variadic(exprs) => {
+                        let mut tuple_builder = TupleSpecBuilder::with_capacity(exprs.len());
+                        for expr in exprs.iter().copied() {
+                            let previously_in_valid_unpack_context = self
+                                .context
+                                .inference_flags
+                                .replace(InferenceFlags::IN_VALID_UNPACK_CONTEXT, true);
+                            let provided_type = self.infer_type_expression(expr);
+                            self.context.inference_flags.set(
+                                InferenceFlags::IN_VALID_UNPACK_CONTEXT,
+                                previously_in_valid_unpack_context,
+                            );
+                            // `*tuple[int, str]` contributes its elements, not itself
+                            if self
+                                .type_expression_flags(expr)
+                                .contains(TypeExpressionFlags::UNPACK)
+                                && let Some(tuple) = provided_type.exact_tuple_instance_spec(db)
+                            {
+                                tuple_builder = tuple_builder.concat(db, &tuple);
+                            } else {
+                                tuple_builder.push(provided_type);
+                            }
+                        }
+                        specialization_types.push(Some(Type::tuple(TupleType::new(
+                            db,
+                            &tuple_builder.build(),
+                        ))));
                     }
                     KeywordSlot::Invalid(expr) => {
                         // still type-check the expression so its own diagnostics fire, then fill
