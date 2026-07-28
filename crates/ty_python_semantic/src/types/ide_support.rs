@@ -7,17 +7,21 @@ use crate::types::call::bind::CheckTypesMode;
 use crate::types::call::{CallArguments, CallError, MatchedArgument};
 use crate::types::class::{DynamicClassAnchor, DynamicEnumAnchor, DynamicNamedTupleAnchor};
 use crate::types::constraints::ConstraintSetBuilder;
+use crate::types::function::FunctionDecorators;
+use crate::types::generics::GenericContext;
+use crate::types::overrides::is_constructor_like_method;
 use crate::types::signatures::{ParametersKind, Signature};
 use crate::types::{
     CallDunderError, CallableTypes, ClassBase, ClassLiteral, ClassType, KnownClass, KnownFunction,
-    KnownUnion, SubclassOfInner, Type, TypeContext,
+    KnownUnion, SubclassOfInner, Type, TypeContext, TypeVarVariance, binding_type,
 };
 use crate::{Db, DisplaySettings, HasDefinition, HasType, SemanticModel};
 use itertools::Either;
-use ruff_db::files::FileRange;
+use ruff_db::files::{File, FileRange};
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
 use ruff_python_ast::{self as ast, AnyNodeRef, name::Name};
+use ruff_python_stdlib::identifiers::is_mangled_private;
 use ruff_text_size::{Ranged, TextRange};
 use rustc_hash::FxHashSet;
 use ty_module_resolver::Module;
@@ -583,6 +587,10 @@ pub struct CallSignatureDetails<'db> {
     /// Mapping from argument indices to displayed parameter indices. This accounts for
     /// displayed signatures that synthesize parameters, like bare `ParamSpec` signatures.
     pub argument_to_displayed_parameter_mapping: Vec<Option<usize>>,
+
+    /// The type arguments inferred for the callee's own generic context, in
+    /// declaration order. Empty when the callee is not generic.
+    pub type_arguments: Vec<Type<'db>>,
 }
 
 /// A single displayed parameter in a callable signature for IDE support.
@@ -627,6 +635,14 @@ impl<'db> CallSignatureDetails<'db> {
             })
             .collect();
 
+        // only the callee's *own* type parameters are spellable at the call
+        // site; a method's specialization also carries its class's typevars,
+        // which the receiver already fixed
+        let type_arguments = specialization
+            .filter(|_| signature.generic_context.is_some())
+            .map(|specialization| specialization.types(db).to_vec())
+            .unwrap_or_default();
+
         CallSignatureDetails {
             definition: signature.definition(),
             signature,
@@ -634,6 +650,7 @@ impl<'db> CallSignatureDetails<'db> {
             parameters,
             argument_to_parameter_mapping,
             argument_to_displayed_parameter_mapping,
+            type_arguments,
         }
     }
 }
@@ -1219,16 +1236,20 @@ pub fn resolved_call_signature<'db>(
 }
 
 #[derive(Default)]
-pub struct InlayHintCallArgumentDetails {
+pub struct InlayHintCallArgumentDetails<'db> {
     /// The position of the arguments mapped to their name and the range of the argument definition in the signature.
     pub argument_names: HashMap<usize, (String, Option<FileRange>)>,
+
+    /// The type arguments inferred for the callee's own generic context, in
+    /// declaration order. Empty when the callee is not generic.
+    pub type_arguments: Vec<Type<'db>>,
 }
 
 pub fn inlay_hint_call_argument_details<'db>(
     db: &'db dyn Db,
     model: &SemanticModel<'db>,
     call_expr: &ast::ExprCall,
-) -> Option<InlayHintCallArgumentDetails> {
+) -> Option<InlayHintCallArgumentDetails<'db>> {
     let resolved = resolved_call_signature(model, call_expr)?;
 
     let parameters = resolved.signature.parameters();
@@ -1273,7 +1294,10 @@ pub fn inlay_hint_call_argument_details<'db>(
         }
     }
 
-    Some(InlayHintCallArgumentDetails { argument_names })
+    Some(InlayHintCallArgumentDetails {
+        argument_names,
+        type_arguments: resolved.type_arguments,
+    })
 }
 
 mod resolve_definition {
@@ -2252,6 +2276,170 @@ pub fn inferred_raises<'db>(db: &'db dyn Db, function: Type<'db>) -> Option<Type
 
     let raised = crate::types::exceptions::function_raised_exceptions(db, literal);
     (!raised.is_never()).then_some(raised)
+}
+
+/// basedpython: the variance ty infers for the type parameter named `name` of
+/// the generic `owner`, in its surface spelling (`out` / `in` / `in out`).
+///
+/// Returns `None` when `owner` is not a generic class or type alias, has no such
+/// type parameter, or the inferred variance is bivariant — basedpython has no
+/// spelling for that, so there is nothing to hint.
+pub fn inferred_type_param_variance<'db>(
+    db: &'db dyn Db,
+    owner: Type<'db>,
+    name: &str,
+) -> Option<ast::Variance> {
+    let bound_typevar = generic_context_of(db, owner)?
+        .variables(db)
+        .find(|variable| variable.name(db) == name)?;
+
+    match bound_typevar.variance(db) {
+        TypeVarVariance::Covariant => Some(ast::Variance::Covariant),
+        TypeVarVariance::Contravariant => Some(ast::Variance::Contravariant),
+        TypeVarVariance::Invariant => Some(ast::Variance::Invariant),
+        TypeVarVariance::Bivariant => None,
+    }
+}
+
+/// basedpython: the superclass whose member `name` the class member `member`
+/// overrides, when `member` is a method that is not already marked `override`.
+///
+/// Mirrors the `missing-override-decorator` lint's notion of an override, so the
+/// hint appears exactly where writing `override` would silence that lint.
+pub fn inferred_override<'db>(
+    db: &'db dyn Db,
+    class: Type<'db>,
+    member: Type<'db>,
+    name: &str,
+) -> Option<Type<'db>> {
+    let Type::FunctionLiteral(function) = member else {
+        return None;
+    };
+    if function.has_known_decorator(db, FunctionDecorators::OVERRIDE)
+        || is_constructor_like_method(name)
+        || is_mangled_private(name)
+    {
+        return None;
+    }
+
+    let Type::ClassLiteral(class) = class else {
+        return None;
+    };
+
+    class
+        .default_specialization(db)
+        .iter_mro(db)
+        .skip(1)
+        .filter_map(ClassBase::into_class)
+        .find(|superclass| {
+            !superclass
+                .own_class_member(db, None, name)
+                .inner
+                .place
+                .is_undefined()
+        })
+        .map(Type::from)
+}
+
+/// basedpython: the parameter a trailing lambda block binds implicitly, as its
+/// name and the type the callee gives it.
+///
+/// A callback that declares an [implicit receiver] runs *against* a value, so
+/// the block binds that receiver, spelled `self`. An ordinary callback binds the
+/// argument it is passed, spelled `it`.
+///
+/// [implicit receiver]: crate::types::receivers
+pub fn trailing_lambda_implicit_parameter<'db>(
+    model: &SemanticModel<'db>,
+    function: &ast::StmtFunctionDef,
+) -> Option<(&'static str, Option<Type<'db>>)> {
+    let db = model.db();
+    let callee = function.trailing_lambda_callee()?.inferred_type(model)?;
+
+    if let Some(receiver) = crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee)
+    {
+        return Some(("self", Some(receiver)));
+    }
+
+    Some((
+        "it",
+        crate::types::trailing_lambda::trailing_lambda_it_type(db, callee),
+    ))
+}
+
+/// The type worth showing for a parameter the source leaves unannotated.
+///
+/// A receiver's `Self` type says nothing the enclosing class does not already,
+/// and an unsolved parameter says nothing at all, so both answer `None`. Unlike
+/// [`HasType::inferred_type`] this also never panics, which matters for the
+/// zero-width parameters basedpython's parser synthesizes.
+pub fn hintable_parameter_type<'db>(
+    model: &SemanticModel<'db>,
+    parameter: &ast::Parameter,
+) -> Option<Type<'db>> {
+    let db = model.db();
+    let definition = semantic_index(db, model.file()).try_definition(parameter)?;
+
+    match binding_type(db, definition) {
+        Type::TypeVar(bound_typevar) if bound_typevar.typevar(db).is_self(db) => None,
+        ty if ty.is_unknown() => None,
+        ty => Some(ty),
+    }
+}
+
+/// Whether `ty` is the `reveal_type` function.
+pub fn is_reveal_type_function<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    matches!(
+        ty.as_function_literal()
+            .and_then(|function| function.known(db)),
+        Some(KnownFunction::RevealType)
+    )
+}
+
+/// The type parameters `ty` declares, when it is something whose parameters have
+/// spellable names — a generic class literal or a generic type alias.
+fn generic_context_of<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<GenericContext<'db>> {
+    match ty {
+        Type::ClassLiteral(class) => class.generic_context(db),
+        // an alias is `Type::TypeAlias` where it names a type and a
+        // `KnownInstance` where it names the alias object itself
+        Type::TypeAlias(alias) => alias.generic_context(db),
+        ty => ty.as_type_alias()?.generic_context(db),
+    }
+}
+
+/// The names of the type parameters `ty` declares, in declaration order.
+///
+/// Only generic class literals and generic type aliases have spellable type
+/// parameter names; everything else returns `None`.
+pub fn type_parameter_names<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Vec<Name>> {
+    Some(
+        generic_context_of(db, ty)?
+            .variables(db)
+            .map(|variable| variable.name(db).clone())
+            .collect(),
+    )
+}
+
+/// The extra arms the typing spec's numeric promotion adds to a type expression
+/// that already evaluated to `ty`, rendered as they would be spelled.
+///
+/// `float` means `int | float` and `complex` means `int | float | complex` in a
+/// `.py` file. basedpython opts out, so a `.by` file promotes nothing.
+pub fn numeric_promotion<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<&'static str> {
+    if file.source_type(db).is_basedpython() {
+        return None;
+    }
+
+    // a type expression stores what it evaluated to, so the promotion is only
+    // visible as the union it produced
+    if ty == KnownUnion::Float.to_type(db) {
+        Some(" | int")
+    } else if ty == KnownUnion::Complex.to_type(db) {
+        Some(" | float | int")
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]

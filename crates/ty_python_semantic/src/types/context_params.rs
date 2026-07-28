@@ -15,7 +15,7 @@
 //! declaration's definition), so a later reassignment that changes the type
 //! is not accounted for
 
-use ruff_db::files::File;
+use ruff_db::files::{File, FileRange};
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
 use ruff_python_ast::name::Name;
@@ -32,7 +32,11 @@ use crate::types::{Type, binding_type};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ContextResolution<'db> {
     /// exactly one declaration in the winning scope matches
-    Resolved { name: Name, ty: Type<'db> },
+    Resolved {
+        name: Name,
+        ty: Type<'db>,
+        definition: Definition<'db>,
+    },
     /// no visible declaration is assignable to the parameter
     NotFound,
     /// several declarations in the winning scope match, in source order
@@ -85,24 +89,31 @@ pub(crate) fn resolve_context_argument<'db>(
         });
         candidates.reverse();
 
-        let matching: Vec<(Name, Type<'db>)> = candidates
+        let matching: Vec<(Name, Type<'db>, Definition<'db>)> = candidates
             .into_iter()
             .filter_map(|candidate| {
                 let ty = binding_type(db, candidate.definition);
-                ty.is_assignable_to(db, parameter_ty)
-                    .then_some((candidate.name, ty))
+                ty.is_assignable_to(db, parameter_ty).then_some((
+                    candidate.name,
+                    ty,
+                    candidate.definition,
+                ))
             })
             .collect();
 
         match matching.len() {
             0 => {}
             1 => {
-                let (name, ty) = matching.into_iter().next().expect("length checked");
-                return ContextResolution::Resolved { name, ty };
+                let (name, ty, definition) = matching.into_iter().next().expect("length checked");
+                return ContextResolution::Resolved {
+                    name,
+                    ty,
+                    definition,
+                };
             }
             _ => {
                 return ContextResolution::Ambiguous(
-                    matching.into_iter().map(|(name, _)| name).collect(),
+                    matching.into_iter().map(|(name, _, _)| name).collect(),
                 );
             }
         }
@@ -111,19 +122,29 @@ pub(crate) fn resolve_context_argument<'db>(
     ContextResolution::NotFound
 }
 
+/// one `context` parameter of a call site and the declaration filling it
+#[derive(Debug, Clone)]
+pub struct ImplicitContextArgument {
+    /// the `context` parameter left unmatched by the explicit arguments
+    pub parameter: Name,
+    /// the in-scope `context` declaration resolved for it
+    pub variable: Name,
+    /// where that declaration's name is written, for an IDE to navigate to
+    pub declaration: FileRange,
+}
+
 /// the implicit arguments the transpiler must append to `call`: for each
 /// `context` parameter of `callee` that no explicit argument matches, the
-/// in-scope declaration that fills it, as a `(parameter name, variable name)`
-/// pair in parameter order. parameters that fail to resolve are skipped —
-/// checking already reported them. calls that use `*` / `**` unpacking are
-/// skipped entirely: whether the unpacking covers a parameter is not knowable
-/// statically
+/// in-scope declaration that fills it, in parameter order. parameters that
+/// fail to resolve are skipped — checking already reported them. calls that
+/// use `*` / `**` unpacking are skipped entirely: whether the unpacking covers
+/// a parameter is not knowable statically
 pub fn implicit_context_arguments<'db>(
     db: &'db dyn Db,
     file: File,
     callee: Type<'db>,
     call: &ast::ExprCall,
-) -> Vec<(Name, Name)> {
+) -> Vec<ImplicitContextArgument> {
     let has_unpacking = call.arguments.args.iter().any(ast::Expr::is_starred_expr)
         || call.arguments.keywords.iter().any(|kw| kw.arg.is_none());
     if has_unpacking {
@@ -164,10 +185,17 @@ pub fn implicit_context_arguments<'db>(
         if matched_positionally || matched_by_keyword {
             continue;
         }
-        if let ContextResolution::Resolved { name: variable, .. } =
-            resolve_context_argument(db, scope, call.range().start(), parameter.annotated_type())
+        if let ContextResolution::Resolved {
+            name: variable,
+            definition,
+            ..
+        } = resolve_context_argument(db, scope, call.range().start(), parameter.annotated_type())
         {
-            implicit.push((name.clone(), variable));
+            implicit.push(ImplicitContextArgument {
+                parameter: name.clone(),
+                variable,
+                declaration: definition.focus_range(db, &parsed_module(db, file).load(db)),
+            });
         }
     }
     implicit

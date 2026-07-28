@@ -220,12 +220,18 @@ pub fn check_file_unwrap(db: &dyn Db, file: File) -> Vec<Diagnostic> {
 }
 
 pub fn check_file(db: &dyn Db, file: File) -> Result<Box<[Diagnostic]>, Diagnostic> {
-    // basedpython-style display (e.g. `(1, 2)` instead of
-    // `tuple[Literal[1], Literal[2]]`) is enabled while checking `.by` files
-    // so diagnostics for those files render types in the surface syntax
-    let is_basedpython = file.source_type(db).is_basedpython();
-    let body = || -> Result<Box<[Diagnostic]>, Diagnostic> { check_file_inner(db, file) };
-    if is_basedpython {
+    with_display_for_file(db, file, || check_file_inner(db, file))
+}
+
+/// Run `body` with the type display `file` is written in: basedpython surface
+/// syntax (`(1, 2)` rather than `tuple[Literal[1], Literal[2]]`) for a `.by`
+/// file, the standard typing-spec spelling otherwise.
+///
+/// Anything that renders a type *for* a file — a diagnostic, a hover, an inlay
+/// hint — should go through this, or it will spell types in a syntax the file
+/// cannot be written in.
+pub fn with_display_for_file<R>(db: &dyn Db, file: File, body: impl FnOnce() -> R) -> R {
+    if file.source_type(db).is_basedpython() {
         crate::types::display::with_basedpython_display(body)
     } else {
         body()

@@ -173,3 +173,40 @@ def f(x=1, a=_MISSING):
 
 the checker still treats the parameter as required. see
 [mutable defaults](mutable-defaults.md) for the sentinel machinery this shares
+
+## inlay hints
+
+the parameter the block binds is shown as an inlay hint with the type the callee
+gives it, written just past the `:` that opens the suite:
+
+```by
+def apply(fn: (int) -> None) -> None:
+    fn(1)
+
+apply:⟨it: int⟩
+    print(it)
+```
+
+a callback that declares an [implicit receiver](implicit-receivers.md) runs
+*against* a value rather than being passed one, so the hint spells it `self`:
+
+```by
+def against(fn: str.() -> None) -> None:
+    "a".fn()
+
+against:⟨self: str⟩
+    print(upper())
+```
+
+the same hint covers the other parameters basedpython synthesizes rather than
+spells — an [`init(...)`](init-method.md) method's receiver, and a
+[property accessor](properties.md)'s. it carries the separator it would need as
+source, so accepting it reads correctly:
+
+```by
+class C:
+    init(⟨self, ⟩a: int)
+
+class D:
+    init(⟨self⟩)
+```

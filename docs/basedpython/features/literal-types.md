@@ -39,3 +39,12 @@ metadata slice as a type context, so literal metadata is preserved
 
 `Literal` is imported from `typing` exactly once per module that uses
 promoted literal types
+
+## inlay hints
+
+an inlay hint is read as source, so types in a `.by` file are spelled the way
+that file is written — a promoted literal shows bare, not wrapped:
+
+```by
+a⟨: 1⟩ = 1
+```

@@ -835,7 +835,12 @@ impl TypeInfo for SemanticModel<'_> {
             call,
         )
         .into_iter()
-        .map(|(parameter, variable)| (parameter.to_string(), variable.to_string()))
+        .map(|argument| {
+            (
+                argument.parameter.to_string(),
+                argument.variable.to_string(),
+            )
+        })
         .collect()
     }
 

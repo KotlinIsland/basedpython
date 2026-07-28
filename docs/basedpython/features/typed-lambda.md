@@ -58,3 +58,12 @@ becomes:
 ```python
 lambda a, b: a + b
 ```
+
+## inlay hints
+
+a lambda parameter left unannotated gets its inferred type as an inlay hint,
+written where the annotation would go:
+
+```by
+apply(lambda x⟨: int⟩: str(x))
+```

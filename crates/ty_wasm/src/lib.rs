@@ -570,11 +570,7 @@ impl Workspace {
             file_id.file,
             range.to_text_range(&index, &source, self.position_encoding)?,
             // TODO: Provide a way to configure this
-            &InlayHintSettings {
-                variable_types: true,
-                call_argument_names: true,
-                inferred_raises: true,
-            },
+            &InlayHintSettings::default(),
         );
 
         Ok(result
@@ -1431,10 +1427,17 @@ pub enum InlayHintKind {
 impl From<ty_ide::InlayHintKind> for InlayHintKind {
     fn from(kind: ty_ide::InlayHintKind) -> Self {
         match kind {
-            ty_ide::InlayHintKind::Type => Self::Type,
-            ty_ide::InlayHintKind::CallArgumentName => Self::Parameter,
+            ty_ide::InlayHintKind::Type
             // basedpython: an inferred exception set is a type, like a return type
-            ty_ide::InlayHintKind::Raises => Self::Type,
+            | ty_ide::InlayHintKind::Raises
+            | ty_ide::InlayHintKind::Variance
+            | ty_ide::InlayHintKind::TypeArgument
+            | ty_ide::InlayHintKind::Override
+            | ty_ide::InlayHintKind::NumericPromotion
+            | ty_ide::InlayHintKind::RevealedType => Self::Type,
+            ty_ide::InlayHintKind::CallArgumentName
+            | ty_ide::InlayHintKind::ImplicitParameter
+            | ty_ide::InlayHintKind::ImplicitArgument => Self::Parameter,
         }
     }
 }

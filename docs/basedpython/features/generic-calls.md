@@ -46,3 +46,21 @@ Box[int](42)   # unchanged — runtime parametrized constructor
 
 only locally-defined function targets are recognized. for cross-module
 generic calls, prefer the inference path (`identity(x)`)
+
+## inlay hints
+
+a generic call with no explicit specialization gets the type arguments ty
+inferred as an inlay hint, written where the `[...]` would go — for a constructor
+too, since python spells that natively:
+
+```by
+def identity[T](x: T) -> T: ...
+class Box[T]:
+    init(value: T)
+
+identity⟨[int]⟩(x)
+Box⟨[int]⟩(1)
+```
+
+a `reveal_type` call is not hinted this way — its type argument *is* the revealed
+type, which its own hint already spells out

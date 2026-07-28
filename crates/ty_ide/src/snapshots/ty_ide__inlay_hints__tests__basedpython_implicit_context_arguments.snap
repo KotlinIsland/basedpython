@@ -1,0 +1,54 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ implicit_arguments: true, ..InlayHintSettings::none() })"
+---
+
+def f(context a: int) -> None: ...
+def g(x: str, context a: int, context c: str) -> None: ...
+
+context b = 1
+context d = 'x'
+
+f([a=b])
+f(a=2)
+g('y'[, a=b, c=d])
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:5:9
+  |
+5 | context b = 1
+  |         ^
+  |
+info: Source
+ --> main2.py:8:6
+  |
+8 | f([a=b])
+  |      ^
+  |
+
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:5:9
+  |
+5 | context b = 1
+  |         ^
+  |
+info: Source
+  --> main2.py:10:11
+   |
+10 | g('y'[, a=b, c=d])
+   |           ^
+   |
+
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:6:9
+  |
+6 | context d = 'x'
+  |         ^
+  |
+info: Source
+  --> main2.py:10:16
+   |
+10 | g('y'[, a=b, c=d])
+   |                ^
+   |

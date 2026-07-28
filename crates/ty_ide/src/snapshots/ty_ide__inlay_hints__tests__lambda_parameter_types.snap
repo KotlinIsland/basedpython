@@ -1,0 +1,11 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ lambda_parameter_types: true, ..InlayHintSettings::none() })"
+---
+
+def apply(fn: Callable[[int], str]) -> None: ...
+
+from typing import Callable
+
+apply(lambda x[: int]: str(x))
+f = lambda y: y
