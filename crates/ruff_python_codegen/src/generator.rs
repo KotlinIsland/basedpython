@@ -1573,15 +1573,15 @@ impl<'a> Generator<'a> {
                     self.p("(");
                     self.unparse_parameter_spec(
                         &tuple.elts,
-                        tuple.parameter_slash,
-                        tuple.parameter_star,
+                        tuple.parameter_slash(),
+                        tuple.parameter_star(),
                     );
                     // unlike a callable's parameter list, a tuple has no `->` to mark its
                     // parentheses as a parameter list. a lone field that doesn't start with
                     // a marker leaves `(x)` looking like a parenthesized expression, so it
                     // still needs the one-element tuple's trailing comma
-                    let lone_unmarked_field = tuple.parameter_slash.is_none()
-                        && tuple.parameter_star.is_none()
+                    let lone_unmarked_field = tuple.parameter_slash().is_none()
+                        && tuple.parameter_star().is_none()
                         && matches!(tuple.elts.as_slice(), [elt] if !reparses_as_parameter_field(elt));
                     self.p_if(lone_unmarked_field, ",");
                     self.p(")");
@@ -1638,8 +1638,8 @@ impl<'a> Generator<'a> {
                 self.p("(");
                 self.unparse_parameter_spec(
                     &callable.args,
-                    callable.parameter_slash,
-                    callable.parameter_star,
+                    callable.parameter_slash(),
+                    callable.parameter_star(),
                 );
                 self.p(") -> ");
                 self.unparse_expr(&callable.returns, precedence::EXPR);

@@ -172,8 +172,8 @@ impl<'src> ProtocolTypeLowering<'src> {
 
         let params = self.callable.render_protocol_params(
             &signature.args[offset..],
-            shift(signature.parameter_slash),
-            shift(signature.parameter_star),
+            shift(signature.parameter_slash()),
+            shift(signature.parameter_star()),
             receiver.unwrap_or("self"),
             // a protocol method's receiver is its `self` parameter, never an implicit one
             None,

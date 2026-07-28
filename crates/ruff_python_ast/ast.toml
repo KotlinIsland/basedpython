@@ -593,11 +593,10 @@ expression like `(name=\"asdf\", age=20)`. Its `elts` are `Expr::Named`
 nodes where `target` is the field name (an `Expr::Name`) and `value`
 is the value expression for that field. Mutually exclusive with
 `is_anon_named_tuple` (which is the type-expression form).""" },
-  { name = "parameter_slash", type = "Option<u32>", doc = """basedpython: index in `elts` of the `/` positional-only marker, if
-present. tuples in basedpython carry full callable-parameter shape;
-fields before this index are positional-only""" },
-  { name = "parameter_star", type = "Option<u32>", doc = """basedpython: index in `elts` of the bare `*` keyword-only marker,
-if present. fields after this index are keyword-only""" },
+  { name = "callable_shape", type = "Box<crate::CallableParameterShape>?", skip_visit = true, doc = """basedpython: the callable-parameter shape this tuple carries when read
+as a parameter list — where the `/` and bare `*` separators fell, and which
+fields were declared a `local` / `once` borrow. `None` for an ordinary tuple,
+which carries none of it""" },
   { name = "is_parameter_shape", type = "bool", doc = """basedpython: tuple uses extended callable-parameter syntax —
 markers (`/`, `*`), variadic (`*: T` / `*name: T`), kwargs catch-all
 (`**: T` / `**name: T`), or named-only fields (`name: T`). set by
@@ -640,8 +639,10 @@ first argument is bound as the receiver, callable as `x.fn()` and supplying
 the implicit member scope of a trailing lambda block""" },
   { name = "args", type = "Expr*" },
   { name = "returns", type = "Expr" },
-  { name = "parameter_slash", type = "Option<u32>", doc = "basedpython: index in `args` of the `/` positional-only marker" },
-  { name = "parameter_star", type = "Option<u32>", doc = "basedpython: index in `args` of the bare `*` keyword-only marker" },
+  { name = "callable_shape", type = "Box<crate::CallableParameterShape>?", skip_visit = true, doc = """basedpython: where the `/` and bare `*` separators fell, and which
+parameters were declared a `local` / `once` borrow. `None` for an ordinary
+`(int, str) -> bool`, which carries none of it — boxed so that this
+surface costs one pointer rather than widening every `Expr`""" },
 ]
 
 [Expr.nodes.ExprProtocolType]

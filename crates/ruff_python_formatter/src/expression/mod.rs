@@ -673,8 +673,7 @@ impl<'input> CanOmitOptionalParenthesesVisitor<'input> {
                 parenthesized: true,
                 is_anon_named_tuple: false,
                 is_anon_named_tuple_value: false,
-                parameter_slash: None,
-                parameter_star: None,
+                callable_shape: None,
                 ..
             }) => {
                 self.any_parenthesized_expressions = true;
@@ -1239,8 +1238,7 @@ pub(crate) fn has_own_parentheses(
                 parenthesized: true,
                 is_anon_named_tuple: false,
                 is_anon_named_tuple_value: false,
-                parameter_slash: None,
-                parameter_star: None,
+                callable_shape: None,
                 ..
             },
         ) => {

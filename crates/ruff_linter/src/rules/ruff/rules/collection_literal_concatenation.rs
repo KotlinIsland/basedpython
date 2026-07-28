@@ -178,8 +178,7 @@ fn concatenate_expressions(expr: &Expr) -> Option<(Expr, Type)> {
             parenthesized: true,
             is_anon_named_tuple: false,
             is_anon_named_tuple_value: false,
-            parameter_slash: None,
-            parameter_star: None,
+            callable_shape: None,
             is_parameter_shape: false,
         }
         .into(),

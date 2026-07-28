@@ -1,7 +1,7 @@
 use itertools::{Either, EitherOrBoth, Itertools};
 use ruff_db::diagnostic::{Annotation, Diagnostic, Span};
 use ruff_db::parsed::parsed_module;
-use ruff_python_ast::{self as ast, ArgOrKeyword, ExprContext};
+use ruff_python_ast::{self as ast, ArgOrKeyword, ExprContext, ParameterBorrow};
 use ruff_text_size::Ranged;
 use ty_module_resolver::file_to_module;
 
@@ -862,8 +862,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // `A[bytes, foo=int]` on a keyword-pack context binds the pack's fields
             ast::Expr::Tuple(tuple)
                 if (tuple.is_parameter_shape
-                    || tuple.parameter_slash.is_some()
-                    || tuple.parameter_star.is_some())
+                    || tuple.parameter_slash().is_some()
+                    || tuple.parameter_star().is_some())
                     && keyword_pack_index.is_none() =>
             {
                 (std::slice::from_ref(slice_node), false)
@@ -1790,12 +1790,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // callable arrow `(int, /, name: T)` builds
                 let (slash, star) = match expr {
                     ast::Expr::Tuple(tuple) => (
-                        tuple.parameter_slash.map(|i| i as usize),
-                        tuple.parameter_star.map(|i| i as usize),
+                        tuple.parameter_slash().map(|i| i as usize),
+                        tuple.parameter_star().map(|i| i as usize),
                     ),
                     _ => (None, None),
                 };
-                let params = self.infer_parameter_spec_elements(elts, slash, star);
+                let params = self
+                    .infer_parameter_spec_elements(elts, slash, star, |_| ParameterBorrow::None);
                 self.context.inference_flags.set(
                     InferenceFlags::ALLOW_PARAMSPEC_TYPE_EXPR,
                     previously_allowed_paramspec,

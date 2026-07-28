@@ -88,8 +88,7 @@ pub(crate) fn unnecessary_default_type_args(checker: &Checker, expr: &Expr) {
         parenthesized: _,
         is_anon_named_tuple: _,
         is_anon_named_tuple_value: _,
-        parameter_slash: _,
-        parameter_star: _,
+        callable_shape: _,
         is_parameter_shape: _,
     }) = slice.as_ref()
     else {
@@ -137,8 +136,7 @@ pub(crate) fn unnecessary_default_type_args(checker: &Checker, expr: &Expr) {
                             parenthesized: true,
                             is_anon_named_tuple: false,
                             is_anon_named_tuple_value: false,
-                            parameter_slash: None,
-                            parameter_star: None,
+                            callable_shape: None,
                             is_parameter_shape: false,
                         })
                     }),

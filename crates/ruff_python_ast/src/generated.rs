@@ -10409,13 +10409,11 @@ pub struct ExprTuple {
     /// is the value expression for that field. Mutually exclusive with
     /// `is_anon_named_tuple` (which is the type-expression form).
     pub is_anon_named_tuple_value: bool,
-    /// basedpython: index in `elts` of the `/` positional-only marker, if
-    /// present. tuples in basedpython carry full callable-parameter shape;
-    /// fields before this index are positional-only
-    pub parameter_slash: Option<u32>,
-    /// basedpython: index in `elts` of the bare `*` keyword-only marker,
-    /// if present. fields after this index are keyword-only
-    pub parameter_star: Option<u32>,
+    /// basedpython: the callable-parameter shape this tuple carries when read
+    /// as a parameter list — where the `/` and bare `*` separators fell, and which
+    /// fields were declared a `local` / `once` borrow. `None` for an ordinary tuple,
+    /// which carries none of it
+    pub callable_shape: Option<Box<crate::CallableParameterShape>>,
     /// basedpython: tuple uses extended callable-parameter syntax —
     /// markers (`/`, `*`), variadic (`*: T` / `*name: T`), kwargs catch-all
     /// (`**: T` / `**name: T`), or named-only fields (`name: T`). set by
@@ -10468,10 +10466,11 @@ pub struct ExprCallableType {
     pub receiver: Option<Box<Expr>>,
     pub args: Vec<Expr>,
     pub returns: Box<Expr>,
-    /// basedpython: index in `args` of the `/` positional-only marker
-    pub parameter_slash: Option<u32>,
-    /// basedpython: index in `args` of the bare `*` keyword-only marker
-    pub parameter_star: Option<u32>,
+    /// basedpython: where the `/` and bare `*` separators fell, and which
+    /// parameters were declared a `local` / `once` borrow. `None` for an ordinary
+    /// `(int, str) -> bool`, which carries none of it — boxed so that this
+    /// surface costs one pointer rather than widening every `Expr`
+    pub callable_shape: Option<Box<crate::CallableParameterShape>>,
 }
 
 /// basedpython inline protocol type expression:
@@ -11592,8 +11591,7 @@ impl ExprTuple {
             parenthesized: _,
             is_anon_named_tuple: _,
             is_anon_named_tuple_value: _,
-            parameter_slash: _,
-            parameter_star: _,
+            callable_shape: _,
             is_parameter_shape: _,
             range: _,
             node_index: _,
@@ -11655,8 +11653,7 @@ impl ExprCallableType {
             receiver,
             args,
             returns,
-            parameter_slash: _,
-            parameter_star: _,
+            callable_shape: _,
             range: _,
             node_index: _,
         } = self;

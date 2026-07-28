@@ -33,8 +33,9 @@ use crate::{
             original_class_type,
         },
         infer_definition_types, infer_expression_types, infer_scope_types,
+        lifetimes::InheritedBorrow,
         signatures::ReturnCallableTypeVarScope,
-        trailing_lambda::trailing_lambda_it_type,
+        trailing_lambda::{trailing_lambda_it_borrow, trailing_lambda_it_type},
         tuple::{TupleSpecBuilder, TupleType},
         typed_dict::extract_unpacked_typed_dict_keys_from_kwargs_annotation,
     },
@@ -154,8 +155,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         self.check_pytest_function(function);
 
-        // basedpython: enforce `local` (no escape) and `once` (exactly one call)
-        crate::types::lifetimes::check_local_lifetimes(&self.context, function);
+        // basedpython: enforce `local` (no escape) and `once` (exactly one call),
+        // both on the function's own parameters and on a trailing-lambda block's
+        // `it`, which is borrowed when the callee's callback declares it so
+        let inherited_borrow = self.trailing_lambda_inherited_borrow(function);
+        crate::types::lifetimes::check_local_lifetimes(&self.context, function, inherited_borrow);
 
         // basedpython: a trailing-lambda block always returns `None`, so its
         // callback must be declared to return `None`
@@ -181,9 +185,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         // basedpython: a `local` borrow may only be passed on to another `local`
         // parameter — checked after the body so callee types are available
-        crate::types::lifetimes::check_local_argument_passing(&self.context, function, |expr| {
-            self.try_expression_type(expr)
-        });
+        crate::types::lifetimes::check_local_argument_passing(
+            &self.context,
+            function,
+            inherited_borrow,
+            |expr| self.try_expression_type(expr),
+        );
 
         // basedpython: check the body against the `raises` clause. runs after the
         // body so callee types are available, and reads this in-progress
@@ -1525,6 +1532,42 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let callee_ty = infer_expression_types(db, expression, TypeContext::default())
             .try_expression_type(callee)?;
         trailing_lambda_it_type(db, callee_ty)
+    }
+
+    /// basedpython: the borrow a trailing-lambda block's implicit `it` inherits
+    /// from the callee's callback signature — the `local` of
+    /// `def f(fn: (local int) -> None)`. The block body implements that callback,
+    /// so the value bound to `it` may not escape it.
+    ///
+    /// `None` for an ordinary function, for a block whose callee declares no
+    /// modifier, and for one whose callee is not inspectable — an opaque callee
+    /// leaves the block unconstrained, as everywhere else in the borrow analysis.
+    fn trailing_lambda_inherited_borrow(
+        &self,
+        function: &'ast ast::StmtFunctionDef,
+    ) -> Option<InheritedBorrow<'db, 'db, 'ast>> {
+        if !function.is_trailing_lambda {
+            return None;
+        }
+        let db = self.db();
+        let callee = function.trailing_lambda_callee()?;
+        let expression = self.index.try_expression(callee)?;
+        let callee_ty = infer_expression_types(db, expression, TypeContext::default())
+            .try_expression_type(callee)?;
+        let borrow = trailing_lambda_it_borrow(db, callee_ty);
+        if !borrow.is_borrow() {
+            return None;
+        }
+        // the block's `it` parameter is synthetic and zero-width, so the
+        // diagnostics point at the callee, which is where the modifier is
+        // visible from
+        Some(InheritedBorrow {
+            name: function.parameters.args.first()?.parameter.name.as_str(),
+            borrow,
+            declaration: callee.range(),
+            index: self.index,
+            block_scope: self.scope().file_scope_id(db),
+        })
     }
 
     /// basedpython: whether this trailing-lambda block's callee marks its callback

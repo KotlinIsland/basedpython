@@ -28,6 +28,8 @@ types_requiring_crate_prefix = {
     "Arguments",
     "CmpOp",
     "Comprehension",
+    "ParameterBorrow",
+    "CallableParameterShape",
     "DictItem",
     "UnaryOp",
     "BoolOp",

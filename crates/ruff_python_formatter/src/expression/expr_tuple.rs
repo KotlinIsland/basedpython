@@ -121,8 +121,7 @@ impl FormatNodeRule<ExprTuple> for FormatExprTuple {
             parenthesized: is_parenthesized,
             is_anon_named_tuple: _,
             is_anon_named_tuple_value: _,
-            parameter_slash: _,
-            parameter_star: _,
+            callable_shape: _,
             is_parameter_shape: _,
         } = item;
 
@@ -321,8 +320,8 @@ impl<'a> ParameterShapeFields<'a> {
 
 impl Format<PyFormatContext<'_>> for ParameterShapeFields<'_> {
     fn fmt(&self, f: &mut PyFormatter) -> FormatResult<()> {
-        let slash = self.tuple.parameter_slash.map(|i| i as usize);
-        let star = self.tuple.parameter_star.map(|i| i as usize);
+        let slash = self.tuple.parameter_slash().map(|i| i as usize);
+        let star = self.tuple.parameter_star().map(|i| i as usize);
         let mut joiner = f.join_comma_separated(self.tuple.end());
         for (i, elt) in self.tuple.elts.iter().enumerate() {
             if Some(i) == slash {

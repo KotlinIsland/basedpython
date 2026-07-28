@@ -2689,8 +2689,8 @@ impl ExprTuple {
         // expressions have `Store`/`Load` ctx and must not be misread as
         // tuple fields
         self.is_parameter_shape
-            || self.parameter_slash.is_some()
-            || self.parameter_star.is_some()
+            || self.parameter_slash().is_some()
+            || self.parameter_star().is_some()
             || self.elts.iter().any(|e| {
                 if let Expr::Named(n) = e {
                     if let Expr::Name(name) = n.target.as_ref() {
@@ -3012,6 +3012,115 @@ impl Parameter {
 
     pub fn annotation(&self) -> Option<&Expr> {
         self.annotation.as_deref()
+    }
+}
+
+/// basedpython: the extra shape a callable type's parameter list can carry
+/// beyond the parameter types themselves — where the `/` and bare `*` separators
+/// fell, and which parameters were declared a borrow.
+///
+/// Boxed behind an `Option` on [`ExprCallableType`](crate::ExprCallableType): an
+/// ordinary `(int, str) -> bool` has none of it, and paying three words for it on
+/// every callable type would widen `Expr` itself.
+#[derive(Clone, Debug, Default, PartialEq)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub struct CallableParameterShape {
+    /// index in `args` of the `/` positional-only marker
+    pub slash: Option<u32>,
+    /// index in `args` of the bare `*` keyword-only marker
+    pub star: Option<u32>,
+    /// the `local` / `once` modifier each parameter was written with. Only as
+    /// long as the last modified parameter, so it is empty when none carries one
+    /// and never longer than `args`
+    pub borrows: Box<[ParameterBorrow]>,
+}
+
+impl CallableParameterShape {
+    /// whether nothing was written at all, in which case the shape is not stored
+    pub fn is_empty(&self) -> bool {
+        self.slash.is_none() && self.star.is_none() && self.borrows.is_empty()
+    }
+
+    /// the shape to store on a node, or `None` when the list carries none of it
+    pub fn into_stored(self) -> Option<Box<Self>> {
+        (!self.is_empty()).then(|| Box::new(self))
+    }
+}
+
+/// basedpython: the callable-parameter shape accessors shared by the two nodes
+/// that carry a [`CallableParameterShape`] — `ExprCallableType` over its `args`,
+/// and `ExprTuple` over its `elts` when read as a parameter list.
+macro_rules! callable_shape_accessors {
+    ($node:ty) => {
+        impl $node {
+            /// basedpython: index of the `/` positional-only marker
+            pub fn parameter_slash(&self) -> Option<u32> {
+                self.callable_shape.as_ref().and_then(|shape| shape.slash)
+            }
+
+            /// basedpython: index of the bare `*` keyword-only marker
+            pub fn parameter_star(&self) -> Option<u32> {
+                self.callable_shape.as_ref().and_then(|shape| shape.star)
+            }
+
+            /// basedpython: the `local` / `once` modifier the parameter at
+            /// `index` was written with. `index` counts from the start of the
+            /// parameter list, so an implicit receiver's offset must already be
+            /// applied by the caller
+            pub fn parameter_borrow(&self, index: usize) -> ParameterBorrow {
+                self.callable_shape
+                    .as_ref()
+                    .and_then(|shape| shape.borrows.get(index).copied())
+                    .unwrap_or_default()
+            }
+        }
+    };
+}
+
+callable_shape_accessors!(crate::ExprCallableType);
+callable_shape_accessors!(crate::ExprTuple);
+
+/// basedpython: the `local` / `once` modifier a *callable type*'s parameter was
+/// written with — the `local` of `(local int) -> None`.
+///
+/// On a `def`, the same two keywords are recovered from the source span the
+/// parameter's range covers ([`parameter_modifiers`]); a callable type has no
+/// such anchor for a bare type, so the parser records the modifier here instead.
+/// A borrow declared this way constrains the *callback*: the value the caller
+/// passes in does not outlive the call, so the callback body may not let it
+/// escape.
+///
+/// `Once` implies `Local` — a callback you can only guarantee to run exactly
+/// once is one you have not let escape your control — so the two are ordered
+/// rather than independent, and [`ParameterBorrow::is_borrow`] covers both.
+///
+/// [`parameter_modifiers`]: crate::helpers::parameter_modifiers
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, is_macro::Is)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub enum ParameterBorrow {
+    /// no modifier — an ordinary parameter the callback may keep
+    #[default]
+    None,
+    /// `local T` — the value must not escape the callback
+    Local,
+    /// `once T` — a callback parameter that must be called exactly once, and
+    /// (being a borrow) must not escape either
+    Once,
+}
+
+impl ParameterBorrow {
+    /// whether a modifier was written at all, of either kind
+    pub const fn is_borrow(self) -> bool {
+        matches!(self, Self::Local | Self::Once)
+    }
+
+    /// how the modifier is spelled, for diagnostics
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::None => "",
+            Self::Local => "local",
+            Self::Once => "once",
+        }
     }
 }
 
@@ -4221,7 +4330,10 @@ mod tests {
         assert_eq!(std::mem::size_of::<ExprStarred>(), 24);
         assert_eq!(std::mem::size_of::<ExprStringLiteral>(), 64);
         assert_eq!(std::mem::size_of::<ExprSubscript>(), 32);
-        assert_eq!(std::mem::size_of::<ExprTuple>(), 64);
+        // basedpython: the callable-parameter shape a tuple can carry (`/` and
+        // `*` marker positions, `local` / `once` modifiers) is boxed behind an
+        // `Option`, so an ordinary tuple is a word narrower than upstream's
+        assert_eq!(std::mem::size_of::<ExprTuple>(), 56);
         assert_eq!(std::mem::size_of::<ExprUnaryOp>(), 24);
         assert_eq!(std::mem::size_of::<ExprYield>(), 24);
         assert_eq!(std::mem::size_of::<ExprYieldFrom>(), 24);

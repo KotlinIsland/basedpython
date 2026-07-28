@@ -175,3 +175,148 @@ Only `local` parameters are constrained.
 def f(fn: () -> None) -> object:
     return fn
 ```
+
+## a callback's parameter may be declared `local`
+
+A callable type can mark its own parameters `local`. That constrains the *implementation* of the
+callback rather than its callers: the value handed in is local to the call, so the body filling that
+callable may not let it escape. The flagship case is a trailing lambda block, whose implicit `it`
+binds the marked position.
+
+```by
+class Resource: ...
+
+def sink(r: Resource): ...
+
+def f(fn: (local Resource) -> None):
+    fn(Resource())
+
+f:
+    # error: [escaping-local] "local `it` cannot escape the call: it is passed as a non-`local` argument"
+    sink(it)
+```
+
+## a borrowed `it` may be used freely within the block
+
+```by
+class Resource:
+    def read(self) -> str:
+        return ""
+
+def borrow(local r: Resource): ...
+
+def f(fn: (local Resource) -> None):
+    fn(Resource())
+
+f:
+    it.read()  # a member call keeps it inside the block
+    borrow(it)  # re-lent to another borrow
+```
+
+## a borrowed `it` may not be written back to an enclosing binding
+
+A trailing lambda block's assignments write *through* to an enclosing binding (the lowering inserts
+the matching `global` / `nonlocal`), so binding a borrow to one lets it outlive the call.
+
+```by
+class Resource: ...
+
+def f(fn: (local Resource) -> None):
+    fn(Resource())
+
+var kept: Resource | None = None
+
+f:
+    # error: [escaping-local] "local `it` cannot escape the call: it is stored where it outlives the call"
+    kept = it
+```
+
+## a block-local binding is fine
+
+A name the block alone binds dies with the block, so it does not carry the borrow out.
+
+```by
+class Resource: ...
+
+def f(fn: (local Resource) -> None):
+    fn(Resource())
+
+f:
+    tmp = it
+    print(tmp is None)
+```
+
+## a `once` block's fresh binding still escapes
+
+A `once` block runs exactly once, so even a name only it binds survives the block — the lowering
+makes it an enclosing local. A borrow bound to one therefore does escape.
+
+```by
+class Resource: ...
+
+def f(once fn: (local Resource) -> None):
+    fn(Resource())
+
+f:
+    # error: [escaping-local] "local `it` cannot escape the call: it is stored where it outlives the call"
+    kept = it
+```
+
+## returning a borrowed `it` escapes
+
+```by
+class Resource: ...
+
+def f(once fn: (local Resource) -> None) -> Resource:
+    fn(Resource())
+    return Resource()
+
+f:
+    # error: [escaping-local] "local `it` cannot escape the call: it is returned from the call"
+    return it
+```
+
+## the borrowed parameter may be named
+
+Naming the callback's parameter documents it, and is also the spelling that reaches a type a bare
+modifier cannot precede — the modifier is only read when a name follows it.
+
+```by
+class Resource: ...
+
+def sink(r: Resource): ...
+
+def f(fn: (local resource: Resource) -> None):
+    fn(Resource())
+
+f:
+    sink(it)  # error: [escaping-local]
+```
+
+## an unmarked callback parameter leaves the block unconstrained
+
+```by
+class Resource: ...
+
+def sink(r: Resource): ...
+
+def f(fn: (Resource) -> None):
+    fn(Resource())
+
+f:
+    sink(it)
+```
+
+## an opaque callee leaves the block unconstrained
+
+When the callee's callback shape cannot be inspected, there is no declaration to read, so the block
+is left alone — as everywhere else in the borrow analysis.
+
+```by
+def sink(r: object): ...
+
+def f(fn): ...
+
+f:
+    sink(it)
+```

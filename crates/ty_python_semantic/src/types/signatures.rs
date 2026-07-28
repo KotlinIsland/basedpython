@@ -47,7 +47,7 @@ use crate::types::{
 };
 use crate::{Db, FxOrderSet};
 use ruff_python_ast::helpers::ReturnGuardForm;
-use ruff_python_ast::{self as ast, name::Name};
+use ruff_python_ast::{self as ast, ParameterBorrow, name::Name};
 use ty_python_core::definition::Definition;
 
 /// Selects which binding context to use for type variables that only appear in a return-position
@@ -4877,6 +4877,16 @@ pub(crate) struct Parameter<'db> {
     /// implicit member scope of a trailing lambda block
     is_receiver: bool,
 
+    /// basedpython: the `local` / `once` modifier the parameter was declared
+    /// with in a callable type — the `local` of `(local int) -> None`.
+    ///
+    /// This constrains the *implementation* of a callable of this type, not its
+    /// callers: the value bound here does not outlive the call, so the callback
+    /// body may not let it escape. Two callables that differ only here have the
+    /// same call interface and stay mutually assignable — nothing in the
+    /// relation machinery reads this.
+    borrow: ParameterBorrow,
+
     kind: ParameterKind<'db>,
 }
 
@@ -4910,6 +4920,7 @@ impl<'db> Parameter<'db> {
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
             is_receiver: false,
+            borrow: ParameterBorrow::None,
             kind: ParameterKind::PositionalOnly {
                 name,
                 default_type: None,
@@ -4925,6 +4936,7 @@ impl<'db> Parameter<'db> {
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
             is_receiver: false,
+            borrow: ParameterBorrow::None,
             kind: ParameterKind::PositionalOrKeyword {
                 name,
                 default_type: None,
@@ -4940,6 +4952,7 @@ impl<'db> Parameter<'db> {
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
             is_receiver: false,
+            borrow: ParameterBorrow::None,
             kind: ParameterKind::Variadic { name },
         }
     }
@@ -4952,6 +4965,7 @@ impl<'db> Parameter<'db> {
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
             is_receiver: false,
+            borrow: ParameterBorrow::None,
             kind: ParameterKind::KeywordOnly {
                 name,
                 default_type: None,
@@ -4967,6 +4981,7 @@ impl<'db> Parameter<'db> {
             annotation_kind: ParameterAnnotationKind::Normal,
             is_context: false,
             is_receiver: false,
+            borrow: ParameterBorrow::None,
             kind: ParameterKind::KeywordVariadic { name },
         }
     }
@@ -5064,6 +5079,7 @@ impl<'db> Parameter<'db> {
             annotation_kind: self.annotation_kind,
             is_context: self.is_context,
             is_receiver: self.is_receiver,
+            borrow: self.borrow,
         }
     }
 
@@ -5081,6 +5097,7 @@ impl<'db> Parameter<'db> {
             annotation_kind: self.annotation_kind,
             is_context: self.is_context,
             is_receiver: self.is_receiver,
+            borrow: self.borrow,
             kind,
         }
     }
@@ -5098,6 +5115,7 @@ impl<'db> Parameter<'db> {
             inferred_annotation,
             is_context,
             is_receiver,
+            borrow,
             kind,
         } = self;
 
@@ -5160,6 +5178,7 @@ impl<'db> Parameter<'db> {
             annotation_kind: *annotation_kind,
             is_context: *is_context,
             is_receiver: *is_receiver,
+            borrow: *borrow,
             kind,
         })
     }
@@ -5225,6 +5244,10 @@ impl<'db> Parameter<'db> {
             annotation_kind,
             is_context: parameter.is_context,
             is_receiver: false,
+            // a `def`'s own `local` / `once` prefix is recovered from the source
+            // span, not carried on the signature — only a callable type records
+            // the modifier here
+            borrow: ParameterBorrow::None,
             kind,
         }
     }
@@ -5308,6 +5331,18 @@ impl<'db> Parameter<'db> {
 
     /// basedpython: mark this parameter as the implicit receiver of a
     /// `T.() -> R` callable
+    /// basedpython: the `local` / `once` modifier this parameter was declared
+    /// with in a callable type
+    pub(crate) fn borrow(&self) -> ParameterBorrow {
+        self.borrow
+    }
+
+    /// basedpython: declare this parameter a `local` / `once` borrow
+    pub(crate) fn with_borrow(mut self, borrow: ParameterBorrow) -> Self {
+        self.borrow = borrow;
+        self
+    }
+
     pub(crate) fn with_receiver(mut self) -> Self {
         self.is_receiver = true;
         self
@@ -5563,6 +5598,7 @@ mod tests {
                 inferred_annotation,
                 is_context,
                 is_receiver,
+                borrow: _,
                 kind,
             } = parameter;
 
