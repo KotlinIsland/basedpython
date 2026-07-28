@@ -1378,14 +1378,20 @@ pub fn consumed_keywords<'src>(
     range: TextRange,
     keywords: &'src [&'src str],
 ) -> impl Iterator<Item = TextRange> + 'src {
+    name_token_ranges(source, range).filter(move |name| keywords.contains(&&source[*name]))
+}
+
+/// The ranges of the name tokens written in `range` of `source`.
+///
+/// Yields nothing when `range` does not index into `source`, as for the sub-AST
+/// of a string annotation, whose ranges belong to the string's own contents.
+pub fn name_token_ranges(source: &str, range: TextRange) -> impl Iterator<Item = TextRange> + '_ {
     let tokenizer = (range.start() <= range.end() && usize::from(range.end()) <= source.len())
         .then(|| SimpleTokenizer::new(source, range).skip_trivia());
     tokenizer
         .into_iter()
         .flatten()
-        .filter(move |token| {
-            token.kind == SimpleTokenKind::Name && keywords.contains(&&source[token.range])
-        })
+        .filter(|token| token.kind == SimpleTokenKind::Name)
         .map(|token| token.range)
 }
 
