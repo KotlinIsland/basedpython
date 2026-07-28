@@ -196,6 +196,25 @@ f:
     sink(it)
 ```
 
+## a receiver callback's `local` argument is still `it`
+
+A block binds its callback's [receiver](basedpython_implicit_receiver.md) implicitly, as `self`, so
+the parameter *after* the receiver is the one `it` binds — and the one whose `local` constrains the
+block.
+
+```by
+class Resource: ...
+
+def sink(r: Resource): ...
+
+def f(fn: str.(local Resource) -> None):
+    fn("a", Resource())
+
+f:
+    # error: [escaping-local] "local `it` cannot escape the call: it is passed as a non-`local` argument"
+    sink(it)
+```
+
 ## a borrowed `it` may be used freely within the block
 
 ```by

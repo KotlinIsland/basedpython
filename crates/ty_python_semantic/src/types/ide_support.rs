@@ -2343,28 +2343,34 @@ pub fn inferred_override<'db>(
         .map(Type::from)
 }
 
-/// basedpython: the parameter a trailing lambda block binds implicitly, as its
-/// name and the type the callee gives it.
+/// basedpython: the parameters a trailing lambda block binds implicitly, each as
+/// its name and the type the callee gives it.
 ///
 /// A callback that declares an implicit receiver (`int.() -> str`) runs
-/// *against* a value, so the block binds that receiver, spelled `self`. An
-/// ordinary callback binds the argument it is passed, spelled `it`.
-pub fn trailing_lambda_implicit_parameter<'db>(
+/// *against* a value, so the block binds that receiver, spelled `self`. The
+/// argument the callback is passed is bound as `it` — the only binding of an
+/// ordinary callback, and the one after the receiver of a receiver callback,
+/// which is left out when there is none.
+pub fn trailing_lambda_implicit_parameters<'db>(
     model: &SemanticModel<'db>,
     function: &ast::StmtFunctionDef,
-) -> Option<(&'static str, Option<Type<'db>>)> {
+) -> Vec<(&'static str, Option<Type<'db>>)> {
     let db = model.db();
-    let callee = function.trailing_lambda_callee()?.inferred_type(model)?;
+    let Some(callee) = function
+        .trailing_lambda_callee()
+        .and_then(|callee| callee.inferred_type(model))
+    else {
+        return Vec::new();
+    };
+    let it = crate::types::trailing_lambda::trailing_lambda_it_type(db, callee);
 
-    if let Some(receiver) = crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee)
-    {
-        return Some(("self", Some(receiver)));
-    }
-
-    Some((
-        "it",
-        crate::types::trailing_lambda::trailing_lambda_it_type(db, callee),
-    ))
+    let Some(receiver) = crate::types::trailing_lambda::trailing_lambda_receiver_type(db, callee)
+    else {
+        return vec![("it", it)];
+    };
+    let mut parameters = vec![("self", Some(receiver))];
+    parameters.extend(it.map(|it| ("it", Some(it))));
+    parameters
 }
 
 /// The type worth showing for a parameter the source leaves unannotated.

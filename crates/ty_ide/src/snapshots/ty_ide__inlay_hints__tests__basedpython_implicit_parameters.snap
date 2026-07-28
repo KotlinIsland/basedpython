@@ -9,6 +9,9 @@ def apply(fn: (int) -> None) -> None:
 def against(fn: str.() -> None) -> None:
     'a'.fn()
 
+def against_with(fn: str.(int) -> None) -> None:
+    'a'.fn(1)
+
 class C:
     init([self, ]a: int)
 
@@ -19,4 +22,7 @@ apply:[it: int]
     print(it)
 
 against:[self: str]
-    print(it)
+    print(upper())
+
+against_with:[self: str, it: int]
+    print(upper(), it)

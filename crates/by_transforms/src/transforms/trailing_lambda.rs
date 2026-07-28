@@ -37,6 +37,13 @@ use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::source_util::line_indent;
 use crate::type_info::{CaptureKind, TypeInfo};
 
+/// The parameter a block binds its callback's implicit receiver to. The body
+/// spells it `self`, which [`implicit_receiver`] rewrites to this name — a name
+/// the source cannot produce, so a method's own `self` is never shadowed
+///
+/// [`implicit_receiver`]: super::implicit_receiver
+pub(crate) const RECEIVER_PARAMETER: &str = "_by_self";
+
 struct TrailingLambdaLower<'a, 'src> {
     source: &'src str,
     types: &'a dyn TypeInfo,
@@ -247,9 +254,18 @@ impl TrailingLambdaLower<'_, '_> {
         // surviving bindings to pre-init before it
         let (declarations, preinits) = self.capture_declarations(function);
 
-        // `it` defaults to `None` so a callback whose type takes no argument
-        // (`() -> None`, invoked as `fn()`) can still call the block, which
-        // always declares the single implicit `it` parameter
+        // a receiver callback is called with its receiver first, so the block
+        // declares a parameter for it ahead of `it`. both default to `None` so a
+        // callback whose type takes fewer arguments (`() -> None`, invoked as
+        // `fn()`) can still call the block, which always declares them
+        let parameters = if self
+            .types
+            .trailing_lambda_callback_has_receiver(signature_callee)
+        {
+            format!("{RECEIVER_PARAMETER}=None, it=None")
+        } else {
+            "it=None".to_owned()
+        };
         let mut fragments = Vec::new();
         if !returns.is_empty() {
             fragments.push(Fragment::Lit(format!("{ret_cell} = []\n{indent}")));
@@ -259,7 +275,7 @@ impl TrailingLambdaLower<'_, '_> {
         for preinit in &preinits {
             fragments.push(Fragment::Lit(format!("{preinit} = None\n{indent}")));
         }
-        fragments.push(Fragment::Lit(format!("def {name}(it=None):")));
+        fragments.push(Fragment::Lit(format!("def {name}({parameters}):")));
         // write-through declarations so block assignments update enclosing
         // bindings; spliced ahead of the suite so they precede every use
         if let Some(declarations) = declarations {

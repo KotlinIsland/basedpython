@@ -54,30 +54,32 @@ spliced into
 ## trailing lambda blocks
 
 when a [trailing lambda](trailing-lambdas.md) block fills a receiver callback,
-the block's body sees the receiver's members unqualified. the block's implicit
-`it` parameter *is* the receiver, so the two spellings are the same value:
+the block binds that receiver itself. the body sees the receiver's members
+unqualified, and spells the receiver `self`; the block's implicit `it` parameter
+is the callback's *own* argument, the one after the receiver:
 
 ```by
-def apply(fn: int.() -> None):
-    fn(1)
+def apply(fn: int.(str) -> None):
+    fn(1, "a")
 
 apply:
-    print(it)    # 1
-    print(imag)  # 0 — `it.imag`
+    print(self)  # 1
+    print(imag)  # 0 — a member of `self`
+    print(it)    # "a"
 ```
 
 →
 
 ```python
-def _trailing_lambda_0(it=None):
+def _trailing_lambda_0(_by_self=None, it=None):
+    print(_by_self)
+    print(_by_self.imag)
     print(it)
-    print(it.imag)
 apply(fn=_trailing_lambda_0)
 ```
 
-a block that assigns `it` cannot use its receiver's members unqualified — the
-lowering reads them from `it`, so a rebinding would silently redirect them. that
-combination is rejected
+the receiver lands in a parameter the source cannot spell, so nothing the block
+binds can redirect the members read off it
 
 as with `x.fn`, this is the last fallback. a name bound anywhere in the lexical
 chain — a block local, an enclosing function's local, a module global, a builtin —
@@ -88,15 +90,20 @@ the scope around it:
 imag: str = "shadow"
 
 apply:
-    print(imag)  # the module-level `imag`, not `it.imag`
+    print(imag)  # the module-level `imag`, not the receiver's
 ```
+
+`self` is no exception: inside a method, `self` is that method's own receiver,
+and the block's receiver is reachable only through its members
 
 a name that resolves nowhere and is not a member of the receiver stays an
 `unresolved-reference` error
 
 a block still returns `None`, so the callback must be declared to return a type
 that accepts it — `int.() -> None`, not `int.() -> str` (see
-[trailing lambdas](trailing-lambdas.md#binding))
+[trailing lambdas](trailing-lambdas.md#binding)) — and it binds one argument
+beyond the receiver, so `int.(str, str) -> None` is rejected with
+`trailing-lambda-parameters`
 
 ## syntax
 

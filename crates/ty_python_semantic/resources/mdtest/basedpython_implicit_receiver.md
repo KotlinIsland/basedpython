@@ -4,7 +4,7 @@ a callable type may declare a *receiver* — `int.() -> str` is a callable whose
 receiver it runs against. the receiver is an ordinary leading positional parameter, so any function
 of the same shape satisfies it, and it additionally unlocks two forms: calling the callable as a
 method of the receiver (`x.fn()`), and a trailing lambda block whose body sees the receiver's
-members unqualified
+members unqualified and spells the receiver itself `self`
 
 ```toml
 [environment]
@@ -103,8 +103,9 @@ def apply(fn: (int) -> str) -> None:
 
 ## trailing lambda blocks
 
-a trailing lambda block bound to a receiver callable sees the receiver's members unqualified — the
-block's implicit `it` parameter *is* the receiver
+a trailing lambda block bound to a receiver callable sees the receiver's members unqualified, and
+spells the receiver itself `self`. the block's implicit `it` parameter is the callback's *own*
+argument — the one after the receiver
 
 ### the receiver's members are in scope
 
@@ -113,9 +114,37 @@ def apply(fn: int.() -> None) -> None:
     fn(1)
 
 apply:
-    reveal_type(it)  # revealed: int
+    reveal_type(self)  # revealed: int
     reveal_type(imag)  # revealed: 0
     reveal_type(bit_length())  # revealed: int
+```
+
+### a receiver callback's argument is `it`
+
+```by
+def apply(fn: int.(str) -> None) -> None:
+    fn(1, "a")
+
+apply:
+    reveal_type(self)  # revealed: int
+    reveal_type(it)  # revealed: str
+    reveal_type(bit_length())  # revealed: int
+```
+
+### an enclosing `self` keeps its meaning
+
+the receiver is the last fallback, so a method's own `self` still wins — its members are the ones in
+scope unqualified either way
+
+```by
+def apply(fn: int.() -> None) -> None:
+    fn(1)
+
+class C:
+    def m(self) -> None:
+        apply:
+            reveal_type(self)  # revealed: Self@m
+            reveal_type(imag)  # revealed: 0
 ```
 
 ## an enclosing binding wins

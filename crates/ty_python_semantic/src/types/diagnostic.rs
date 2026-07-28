@@ -153,6 +153,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&ONCE_NOT_CALLED);
     registry.register_lint(&ONCE_CALLED_TWICE);
     registry.register_lint(&TRAILING_LAMBDA_CONTROL_FLOW);
+    registry.register_lint(&TRAILING_LAMBDA_PARAMETERS);
     registry.register_lint(&TRAILING_LAMBDA_RETURN_TYPE);
     registry.register_lint(&UNRESOLVED_NARROWING_GUARD);
     registry.register_lint(&NARROWING_GUARD_AS_VALUE);
@@ -1640,6 +1641,34 @@ declare_lint! {
     /// ```
     pub(crate) static TRAILING_LAMBDA_RETURN_TYPE = {
         summary: "detects a trailing-lambda callback whose return type does not accept `None`",
+        status: LintStatus::stable("0.0.1-alpha.1"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a trailing-lambda block whose callback takes arguments the
+    /// block has no parameter for.
+    ///
+    /// ## Why is this bad?
+    /// A block binds one argument, as `it` — plus its callback's implicit
+    /// receiver, which the body spells `self` and reads members off
+    /// unqualified. A callback that takes more than that, or takes a variadic
+    /// parameter, passes arguments the block cannot name, and would be called
+    /// with more arguments than it declares.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def f(a: (int, str) -> None):
+    ///     a(1, "two")
+    ///
+    /// f:  # error: the block binds only `it`, so `"two"` has nowhere to go
+    ///     print(it)
+    /// ```
+    pub(crate) static TRAILING_LAMBDA_PARAMETERS = {
+        summary: "detects a trailing-lambda callback taking arguments the block cannot bind",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
     }

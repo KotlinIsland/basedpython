@@ -640,9 +640,9 @@ pub(crate) fn run_against_source<'a>(
         &implementation_block_pass,
         &conversion_pass,
         // implicit receivers: `x.fn()` → `fn(x)` for a receiver callable in
-        // scope, and a trailing lambda block's unqualified receiver members →
-        // `it.<name>`. same shape as the extension rewrite above, which wins
-        // when both could apply
+        // scope, and a trailing lambda block's `self` / unqualified receiver
+        // members → its receiver parameter. same shape as the extension rewrite
+        // above, which wins when both could apply
         &implicit_receiver_pass,
         &dynamic_keyword_pass,
         // import-only companion to the ty-side implicit `Character` resolution;
