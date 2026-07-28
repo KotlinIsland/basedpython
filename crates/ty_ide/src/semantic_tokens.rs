@@ -31,7 +31,9 @@ use bitflags::bitflags;
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
-use ruff_python_ast::helpers::{if_let_keyword_range, raises_clause_spans};
+use ruff_python_ast::helpers::{
+    consumed_keywords, if_let_keyword_range, parameter_modifiers, raises_clause_spans,
+};
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, TraversalSignal, walk_arguments, walk_elif_else_clause, walk_expr,
     walk_interpolated_string_element, walk_stmt,
@@ -197,6 +199,14 @@ pub fn semantic_tokens(db: &dyn Db, file: File, range: Option<TextRange>) -> Sem
     SemanticTokens::new(visitor.tokens)
 }
 
+/// basedpython lifetime modifiers, written ahead of the callable-type parameter
+/// they borrow.
+const LIFETIME_MODIFIERS: &[&str] = &["local", "once"];
+
+/// The keyword introducing a basedpython narrowing return annotation, written
+/// between the `->` and the places it asserts.
+const ASSERTS_RETURN: &[&str] = &["asserts"];
+
 /// True when `func` came from basedpython's `init(...)` shorthand, which the
 /// parser expands to a `__init__` function named over the `init` keyword itself.
 fn is_init_method(func: &ast::StmtFunctionDef) -> bool {
@@ -304,6 +314,22 @@ impl<'db> SemanticTokenVisitor<'db> {
             // a type expression; elsewhere `dynamic` is an ordinary identifier
             "dynamic" => self.in_type_form && self.is_unbound(name),
             _ => false,
+        }
+    }
+
+    /// basedpython: highlight every keyword the parser consumed without leaving
+    /// an AST node, written between `start` and `end`.
+    fn add_consumed_keywords(&mut self, start: TextSize, end: TextSize, keywords: &[&str]) {
+        if start > end {
+            return;
+        }
+        let source = self.source;
+        for keyword in consumed_keywords(source, TextRange::new(start, end), keywords) {
+            self.add_token(
+                keyword,
+                SemanticTokenType::Keyword,
+                SemanticTokenModifier::empty(),
+            );
         }
     }
 
@@ -765,14 +791,30 @@ impl<'db> SemanticTokenVisitor<'db> {
                 ast::AnyParameterRef::Variadic(_) => SemanticTokenType::Parameter,
             };
 
-            // basedpython `context` parameter modifier — the keyword text sits
+            // basedpython lifetime modifiers — `local` / `once` are consumed
+            // without an AST field, so they are recovered from the keyword run
             // between the parameter start and its name
+            let lifetime_modifiers = parameter_modifiers(self.source, parameter);
+
+            // basedpython `context` parameter modifier — the keyword text sits
+            // between the parameter start and the modifiers that follow it
             if parameter.is_context && parameter.range().start() < parameter.name.range().start() {
+                let context_end = lifetime_modifiers
+                    .strip_ranges
+                    .first()
+                    .map_or(parameter.name.range().start(), Ranged::start);
                 self.add_token(
-                    self.keyword_range(TextRange::new(
-                        parameter.range().start(),
-                        parameter.name.range().start(),
-                    )),
+                    self.keyword_range(TextRange::new(parameter.range().start(), context_end)),
+                    SemanticTokenType::Keyword,
+                    SemanticTokenModifier::empty(),
+                );
+            }
+
+            // a strip range covers the keyword plus the whitespace up to the token
+            // it modifies, which must not be highlighted
+            for modifier in &lifetime_modifiers.strip_ranges {
+                self.add_token(
+                    self.keyword_range(*modifier),
                     SemanticTokenType::Keyword,
                     SemanticTokenModifier::empty(),
                 );
@@ -899,6 +941,16 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
 
                 // Handle return type annotation
                 if let Some(returns) = &func.returns {
+                    // basedpython `-> asserts x`: the keyword is recorded by
+                    // `is_asserts_return` alone, so its text is recovered from the
+                    // gap between the signature and the asserted places
+                    if func.is_asserts_return {
+                        self.add_consumed_keywords(
+                            func.parameters.end(),
+                            returns.start(),
+                            ASSERTS_RETURN,
+                        );
+                    }
                     self.visit_annotation(returns);
                 }
 
@@ -1182,6 +1234,23 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     SemanticTokenModifier::empty(),
                 );
                 self.visit_value_expression(&subscript.slice);
+            }
+            // basedpython `(local int) -> None`: a parameter's `local` / `once`
+            // modifier is consumed by the parser, leaving the element ranged from
+            // the type onwards, so each keyword is recovered from the gap ahead of
+            // the element it modifies
+            ast::Expr::CallableType(callable) => {
+                let mut gap_start = callable.start();
+                if let Some(receiver) = callable.receiver.as_deref() {
+                    self.visit_expr(receiver);
+                    gap_start = receiver.end();
+                }
+                for arg in &callable.args {
+                    self.add_consumed_keywords(gap_start, arg.start(), LIFETIME_MODIFIERS);
+                    self.visit_expr(arg);
+                    gap_start = arg.end();
+                }
+                self.visit_expr(&callable.returns);
             }
             ast::Expr::Attribute(attr) => {
                 // Visit the base expression first (e.g., 'os' in 'os.path')
@@ -5300,6 +5369,137 @@ def f(a: int, context b: str): ...
         "context" @ 32..39: Keyword
         "b" @ 40..41: Parameter [definition]
         "str" @ 43..46: Class
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_lifetime_modifier_keywords() {
+        // `local` / `once` carry no AST field, on a parameter or on a
+        // callable-type parameter; both are recovered from the source ahead of
+        // what they modify. a parameter or callable field *named* `local` is not
+        // a modifier and keeps its own classification
+        let test = SemanticTokenTest::new_by(
+            "
+def f(once fn: (local int) -> None):
+    fn(1)
+
+def g(local a: int, once local b: str, local): ...
+
+def h(fn: int.(local str, once int) -> None): ...
+
+def i(fn: (local: int) -> None, g: (int, once bool) -> None): ...
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 5..6: Function [definition]
+        "once" @ 7..11: Keyword
+        "fn" @ 12..14: Parameter [definition]
+        "local" @ 17..22: Keyword
+        "int" @ 23..26: Class
+        "None" @ 31..35: BuiltinConstant
+        "fn" @ 42..44: Parameter
+        "1" @ 45..46: Number
+        "g" @ 53..54: Function [definition]
+        "local" @ 55..60: Keyword
+        "a" @ 61..62: Parameter [definition]
+        "int" @ 64..67: Class
+        "once" @ 69..73: Keyword
+        "local" @ 74..79: Keyword
+        "b" @ 80..81: Parameter [definition]
+        "str" @ 83..86: Class
+        "local" @ 88..93: Parameter [definition]
+        "h" @ 105..106: Function [definition]
+        "fn" @ 107..109: Parameter [definition]
+        "int" @ 111..114: Class
+        "local" @ 116..121: Keyword
+        "str" @ 122..125: Class
+        "once" @ 127..131: Keyword
+        "int" @ 132..135: Class
+        "None" @ 140..144: BuiltinConstant
+        "i" @ 156..157: Function [definition]
+        "fn" @ 158..160: Parameter [definition]
+        "int" @ 170..173: Class
+        "None" @ 178..182: BuiltinConstant
+        "g" @ 184..185: Parameter [definition]
+        "int" @ 188..191: Class
+        "once" @ 193..197: Keyword
+        "bool" @ 198..202: Class
+        "None" @ 207..211: BuiltinConstant
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_lifetime_modifiers_in_protocol_method() {
+        // an inline protocol's method signature is an `ExprCallableType` too, so
+        // its parameters' modifiers highlight through the same rule — and a
+        // parameter *named* `local` still does not
+        let test = SemanticTokenTest::new_by(
+            "def f(x: protocol(def m(self, local a: int, local: str) -> None)): ...\n",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 4..5: Function [definition]
+        "x" @ 6..7: Parameter [definition]
+        "local" @ 30..35: Keyword
+        "int" @ 39..42: Class
+        "str" @ 51..54: Class
+        "None" @ 59..63: BuiltinConstant
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_context_and_lifetime_modifiers() {
+        // `context` and the lifetime modifiers stack on one parameter, each
+        // highlighted as its own keyword
+        let test = SemanticTokenTest::new_by("def f(context once fn: () -> None): ...\n");
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 4..5: Function [definition]
+        "context" @ 6..13: Keyword
+        "once" @ 14..18: Keyword
+        "fn" @ 19..21: Parameter [definition]
+        "None" @ 29..33: BuiltinConstant
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_asserts_return_keyword() {
+        // an `asserts` return annotation records only the flag, so the keyword is
+        // recovered from between the signature and the asserted places; the `is`
+        // predicate form has no keyword of its own
+        let test = SemanticTokenTest::new_by(
+            "
+def f(a: object) -> asserts a: ...
+
+def g(a: object) -> asserts not a is int: ...
+
+def h(a: object) -> a is int: ...
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "f" @ 5..6: Function [definition]
+        "a" @ 7..8: Parameter [definition]
+        "object" @ 10..16: Class
+        "asserts" @ 21..28: Keyword
+        "g" @ 41..42: Function [definition]
+        "a" @ 43..44: Parameter [definition]
+        "object" @ 46..52: Class
+        "asserts" @ 57..64: Keyword
+        "int" @ 74..77: Class
+        "h" @ 88..89: Function [definition]
+        "a" @ 90..91: Parameter [definition]
+        "object" @ 93..99: Class
+        "int" @ 109..112: Class
         "#);
     }
 
