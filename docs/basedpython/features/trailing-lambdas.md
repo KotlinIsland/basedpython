@@ -15,9 +15,21 @@ f(2):
     print(it)  # prints 2
 ```
 
-customising the lambda's parameters is not supported yet — the block always
-takes exactly one parameter named `it`, defaulted to `None` so a callback whose
-type takes no argument (`() -> None`, invoked as `fn()`) can still call it
+customising the lambda's parameters is not supported yet — the block takes
+exactly one parameter named `it` (plus the callback's
+[receiver](#implicit-receivers), where it declares one), defaulted to `None` so
+a callback whose type takes no argument (`() -> None`, invoked as `fn()`) can
+still call it. a callback that takes *more* than that one argument is rejected
+with `trailing-lambda-parameters`: the extra arguments have no parameter to land
+in, and no spelling in the body
+
+```by
+def f(a: (int, str) -> None):
+    a(1, "two")
+
+f:  # error: the block binds only `it`, so `"two"` has nowhere to go
+    print(it)
+```
 
 ## binding
 
@@ -66,9 +78,19 @@ preserved in place
 ## implicit receivers
 
 when the callback declares an [implicit receiver](implicit-receivers.md)
-(`int.() -> None`), the block body sees that type's members unqualified — `imag`
-means `it.imag`. a name bound anywhere in the lexical chain keeps its ordinary
-meaning, so only names that would otherwise be unresolved resolve this way
+(`str.(int) -> None`), the block binds that receiver itself, ahead of `it`: the
+body sees the receiver's members unqualified, spells the receiver `self`, and
+`it` is the callback's own argument — the one *after* the receiver. a name bound
+anywhere in the lexical chain keeps its ordinary meaning, so only names that
+would otherwise be unresolved resolve this way
+
+```by
+def against(fn: str.(int) -> None):
+    fn("asdf", 1)
+
+against:
+    print(upper(), it, self)  # ASDF 1 asdf
+```
 
 ## enclosing scope
 
@@ -201,8 +223,8 @@ the checker still treats the parameter as required. see
 
 ## inlay hints
 
-the parameter the block binds is shown as an inlay hint with the type the callee
-gives it, written just past the `:` that opens the suite:
+the parameters the block binds are shown as an inlay hint with the types the
+callee gives them, written just past the `:` that opens the suite:
 
 ```by
 def apply(fn: (int) -> None) -> None:
@@ -213,14 +235,22 @@ apply:⟨it: int⟩
 ```
 
 a callback that declares an [implicit receiver](implicit-receivers.md) runs
-*against* a value rather than being passed one, so the hint spells it `self`:
+*against* a value as well as being passed one, so the receiver is hinted first,
+spelled `self` — with `it` after it whenever the callback takes an argument of
+its own:
 
 ```by
 def against(fn: str.() -> None) -> None:
     "a".fn()
 
+def against_with(fn: str.(int) -> None) -> None:
+    "a".fn(1)
+
 against:⟨self: str⟩
     print(upper())
+
+against_with:⟨self: str, it: int⟩
+    print(upper(), it)
 ```
 
 the same hint covers the other parameters basedpython synthesizes rather than

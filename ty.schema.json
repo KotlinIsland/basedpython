@@ -1698,6 +1698,16 @@
             }
           ]
         },
+        "trailing-lambda-parameters": {
+          "title": "detects a trailing-lambda callback taking arguments the block cannot bind",
+          "description": "## What it does\nChecks for a trailing-lambda block whose callback takes arguments the\nblock has no parameter for.\n\n## Why is this bad?\nA block binds one argument, as `it` — plus its callback's implicit\nreceiver, which the body spells `self` and reads members off\nunqualified. A callback that takes more than that, or takes a variadic\nparameter, passes arguments the block cannot name, and would be called\nwith more arguments than it declares.\n\n## Example\n\n```by\ndef f(a: (int, str) -> None):\n    a(1, \"two\")\n\nf:  # error: the block binds only `it`, so `\"two\"` has nowhere to go\n    print(it)\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "trailing-lambda-return-type": {
           "title": "detects a trailing-lambda callback whose return type does not accept `None`",
           "description": "## What it does\nChecks for a trailing-lambda block whose callback's declared return type\ndoes not accept `None`.\n\n## Why is this bad?\nA trailing-lambda block lowers to a function that returns `None` (in a\n`once` block a `return` targets the *enclosing* function, not the block).\nA callback whose return type does not accept `None` — `int`, `str`, … —\ncan never be satisfied by the block. A return type that merely accepts\n`None` (`None` itself, `int | None`, `object`) is fine; other non-`None`\nreturn types are not yet supported.\n\n## Example\n\n```by\ndef f(a: (int) -> str):  # callback returns `str`\n    print(a(1))\n\nf:  # error: the block returns `None`, not `str`\n    print(it)\n```",

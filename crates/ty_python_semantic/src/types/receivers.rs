@@ -10,6 +10,7 @@
 //!   accepts `x`. only reached when `x` has no member `fn` of its own
 //! - the body of a [trailing lambda] block bound to a receiver callback, where the
 //!   receiver's members are in scope unqualified (`imag` for an `int` receiver)
+//!   and the receiver itself is spelled `self`
 //!
 //! both are *last* fallbacks: a declared member, and any name bound anywhere in
 //! the lexical chain, keeps its ordinary meaning. that is what makes the forms
@@ -117,21 +118,46 @@ pub(crate) fn resolve_receiver_attribute<'db>(
     None
 }
 
-/// basedpython: the receiver member a bare `name` in a trailing lambda block
-/// resolves to, when the block's callback declares a receiver. `None` for a name
-/// that resolves anywhere else — the receiver's members are the last fallback, so
-/// no existing binding is ever captured
-pub(crate) fn implicit_receiver_member<'db>(
+/// basedpython: what a bare name in a trailing lambda block resolves to through
+/// the block's receiver
+pub(crate) enum ImplicitReceiverName<'db> {
+    /// `self` — the receiver itself
+    Receiver(Type<'db>),
+    /// a member of the receiver, read off it in the lowering
+    Member(Type<'db>),
+}
+
+impl<'db> ImplicitReceiverName<'db> {
+    pub(crate) fn ty(&self) -> Type<'db> {
+        match self {
+            Self::Receiver(ty) | Self::Member(ty) => *ty,
+        }
+    }
+}
+
+/// basedpython: what a bare `name` in a trailing lambda block resolves to when
+/// the block's callback declares a receiver: `self` is the receiver, and any
+/// other name is looked up as a member of it. `None` for a name that resolves
+/// anywhere else — both are the last fallback, so no existing binding is ever
+/// captured (a method's own `self` keeps its meaning)
+pub(crate) fn implicit_receiver_name<'db>(
     db: &'db dyn Db,
     file: File,
     scope: ScopeId<'db>,
     name: &str,
-) -> Option<Type<'db>> {
+) -> Option<ImplicitReceiverName<'db>> {
     let receiver = trailing_lambda_scope_receiver(db, file, scope)?;
     if resolves_elsewhere(db, file, scope, name) {
         return None;
     }
-    receiver.member(db, name).place.ignore_possibly_undefined()
+    if name == "self" {
+        return Some(ImplicitReceiverName::Receiver(receiver));
+    }
+    receiver
+        .member(db, name)
+        .place
+        .ignore_possibly_undefined()
+        .map(ImplicitReceiverName::Member)
 }
 
 /// the receiver of the trailing lambda block `scope` is the body of. Walks out

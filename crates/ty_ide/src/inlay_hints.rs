@@ -19,7 +19,7 @@ use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
     InlayHintCallArgumentDetails, hintable_parameter_type, inferred_override, inferred_raises,
     inferred_type_param_variance, inlay_hint_call_argument_details, is_reveal_type_function,
-    numeric_promotion, trailing_lambda_implicit_parameter, type_parameter_names,
+    numeric_promotion, trailing_lambda_implicit_parameters, type_parameter_names,
 };
 use ty_python_semantic::types::{DisplaySettings, Type, TypeDetail};
 use ty_python_semantic::{HasType, SemanticModel, with_display_for_file};
@@ -350,18 +350,23 @@ impl InlayHint {
         }
     }
 
-    /// A parameter the source never spells, shown where it would be written.
-    fn implicit_parameter(
+    /// The parameters a source never spells, shown where they would be written.
+    fn implicit_parameters(
         db: &dyn Db,
         position: TextSize,
-        name: &str,
-        ty: Option<Type>,
+        parameters: &[(&str, Option<Type>)],
         parameter_follows: bool,
     ) -> Self {
-        let mut parts = vec![InlayHintLabelPart::new(name)];
+        let mut parts = Vec::new();
 
-        if let Some(ty) = ty {
-            parts.push(format!(": {}", ty.display(db)).into());
+        for (index, (name, ty)) in parameters.iter().enumerate() {
+            if index > 0 {
+                parts.push(", ".into());
+            }
+            parts.push(InlayHintLabelPart::new(*name));
+            if let Some(ty) = ty {
+                parts.push(format!(": {}", ty.display(db)).into());
+            }
         }
 
         if parameter_follows {
@@ -1053,17 +1058,16 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         let position = parameter.range().start();
         let ty = hintable_parameter_type(&self.model, parameter);
 
-        self.hints.push(InlayHint::implicit_parameter(
+        self.hints.push(InlayHint::implicit_parameters(
             self.db,
             position,
-            parameter.name.as_str(),
-            ty,
+            &[(parameter.name.as_str(), ty)],
             self.parameter_follows(position),
         ));
     }
 
-    /// basedpython: hint the parameter a trailing lambda block binds — `it`, or
-    /// the receiver spelled `self` when the callback declares one.
+    /// basedpython: hint the parameters a trailing lambda block binds — `it`,
+    /// preceded by the receiver spelled `self` when the callback declares one.
     ///
     /// The parser anchors the synthetic parameter *on* the block's `:`, but the
     /// binding belongs to the suite that opens after it, so the hint sits past
@@ -1082,15 +1086,15 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
-        let Some((name, ty)) = trailing_lambda_implicit_parameter(&self.model, function) else {
+        let parameters = trailing_lambda_implicit_parameters(&self.model, function);
+        if parameters.is_empty() {
             return;
-        };
+        }
 
-        self.hints.push(InlayHint::implicit_parameter(
+        self.hints.push(InlayHint::implicit_parameters(
             self.db,
             colon + TextSize::from(1),
-            name,
-            ty,
+            &parameters,
             false,
         ));
     }
@@ -9774,6 +9778,9 @@ Source with applied edits:
             def against(fn: str.() -> None) -> None:
                 'a'.fn()
 
+            def against_with(fn: str.(int) -> None) -> None:
+                'a'.fn(1)
+
             class C:
                 init(a: int)
 
@@ -9784,7 +9791,10 @@ Source with applied edits:
                 print(it)
 
             against:
-                print(it)
+                print(upper())
+
+            against_with:
+                print(upper(), it)
             ",
         );
 

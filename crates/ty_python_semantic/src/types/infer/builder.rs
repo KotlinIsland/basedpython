@@ -11447,19 +11447,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
             })
             // basedpython only: inside a trailing lambda block whose callback
-            // declares a receiver (`int.() -> None`), the receiver's members are
-            // in scope unqualified. reached last, so a name bound anywhere in the
-            // lexical chain — or a builtin — keeps its ordinary meaning
+            // declares a receiver (`int.() -> None`), the receiver is spelled
+            // `self` and its members are in scope unqualified. reached last, so a
+            // name bound anywhere in the lexical chain — or a builtin — keeps its
+            // ordinary meaning
             .or_fall_back_to(db, || {
                 if self.is_basedpython_file()
-                    && let Some(member) = receivers::implicit_receiver_member(
+                    && let Some(resolved) = receivers::implicit_receiver_name(
                         db,
                         self.file(),
                         self.scope(),
                         symbol_name,
                     )
                 {
-                    Place::bound(member).into()
+                    Place::bound(resolved.ty()).into()
                 } else {
                     Place::Undefined.into()
                 }

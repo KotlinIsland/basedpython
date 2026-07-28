@@ -411,21 +411,29 @@ impl<'db> SemanticModel<'db> {
         .is_some()
     }
 
-    /// basedpython: whether a bare name resolves to a member of the enclosing
-    /// trailing lambda block's receiver, which the transpiler rewrites to
-    /// `it.<name>`. `false` for every name that resolves any other way — the
-    /// receiver's members are the last fallback
-    pub fn implicit_receiver_name(&self, name: &ast::ExprName) -> bool {
-        let Some(scope) = self.scope(ast::AnyNodeRef::from(name)) else {
-            return false;
-        };
-        crate::types::receivers::implicit_receiver_member(
+    /// basedpython: how a bare name resolves through the enclosing trailing
+    /// lambda block's receiver, which the transpiler rewrites to the block's
+    /// receiver parameter. `None` for every name that resolves any other way —
+    /// the receiver and its members are the last fallback
+    pub fn implicit_receiver_name(
+        &self,
+        name: &ast::ExprName,
+    ) -> Option<ImplicitReceiverReference> {
+        let scope = self.scope(ast::AnyNodeRef::from(name))?;
+        let resolved = crate::types::receivers::implicit_receiver_name(
             self.db,
             self.file,
             scope.to_scope_id(self.db, self.file),
             name.id.as_str(),
-        )
-        .is_some()
+        )?;
+        Some(match resolved {
+            crate::types::receivers::ImplicitReceiverName::Receiver(_) => {
+                ImplicitReceiverReference::Receiver
+            }
+            crate::types::receivers::ImplicitReceiverName::Member(_) => {
+                ImplicitReceiverReference::Member
+            }
+        })
     }
 
     /// basedpython: the enum a *context-sensitively* resolved name must be
@@ -469,6 +477,15 @@ impl<'db> SemanticModel<'db> {
         let callee_ty = callee.inferred_type(self)?;
         crate::types::trailing_lambda::trailing_lambda_keyword(self.db, callee_ty)
             .map(|name| name.to_string())
+    }
+
+    /// basedpython: whether the trailing-lambda callee's callback declares an
+    /// implicit receiver — the block then binds it as a leading parameter, which
+    /// its body reads members off unqualified and spells `self`
+    pub fn trailing_lambda_callback_has_receiver(&self, callee: &ast::Expr) -> bool {
+        callee.inferred_type(self).is_some_and(|ty| {
+            crate::types::trailing_lambda::trailing_lambda_receiver_type(self.db, ty).is_some()
+        })
     }
 
     /// basedpython: whether the trailing-lambda callee's callback parameter is
@@ -1101,6 +1118,16 @@ fn strip_none<'db>(db: &'db dyn Db, ty: Type<'db>) -> Type<'db> {
 pub struct MemberDefinition<'db> {
     pub ty: Type<'db>,
     pub first_reachable_definition: Definition<'db>,
+}
+
+/// basedpython: what a bare name inside a trailing lambda block resolves to
+/// through the block's callback receiver
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ImplicitReceiverReference {
+    /// `self` — the receiver itself
+    Receiver,
+    /// a member read off the receiver
+    Member,
 }
 
 /// A classification of symbol names.

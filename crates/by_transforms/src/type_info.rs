@@ -8,7 +8,7 @@ use ty_python_core::{global_scope, place_table, semantic_index};
 use ty_python_semantic::types::{
     DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
 };
-use ty_python_semantic::{HasType, SemanticModel};
+use ty_python_semantic::{HasType, ImplicitReceiverReference, SemanticModel};
 
 /// How the postfix `^` / `!` operators test the "absent" arm of an operand's
 /// wrapped type. `T?` lowers to `T | None`, so its absent arm is `None`; a
@@ -170,9 +170,10 @@ pub(crate) trait TypeInfo {
     /// rather than a member of `x`. lowered to `fn(x)`
     fn is_implicit_receiver_attribute(&self, attribute: &ruff_python_ast::ExprAttribute) -> bool;
 
-    /// whether `name` is a member of the enclosing trailing lambda block's
-    /// receiver, used unqualified. lowered to `it.<name>`
-    fn is_implicit_receiver_name(&self, name: &ExprName) -> bool;
+    /// how `name` resolves through the enclosing trailing lambda block's
+    /// receiver: `self` is the receiver itself, any other name is a member of
+    /// it used unqualified. both lower to the block's receiver parameter
+    fn implicit_receiver_name(&self, name: &ExprName) -> Option<ImplicitReceiverReference>;
 
     /// the enum a *context-sensitively* resolved name must be qualified with —
     /// `Red` in a `Color` context lowers to `Color.Red`. `None` for every name
@@ -330,6 +331,11 @@ pub(crate) trait TypeInfo {
     /// as a positional argument instead (unknown callee signature, or a
     /// variadic / positional-only last parameter)
     fn trailing_lambda_keyword(&self, callee: &Expr) -> Option<String>;
+
+    /// whether the trailing-lambda callee's callback declares an implicit
+    /// receiver, which the block binds as a leading parameter — the body reads
+    /// the receiver's members off it unqualified, and spells it `self`
+    fn trailing_lambda_callback_has_receiver(&self, callee: &Expr) -> bool;
 
     /// whether the trailing-lambda callee's callback parameter is `once` — the
     /// block runs exactly once, so its `return` propagates to the enclosing
@@ -546,7 +552,7 @@ impl TypeInfo for SemanticModel<'_> {
         SemanticModel::implicit_receiver_attribute(self, attribute)
     }
 
-    fn is_implicit_receiver_name(&self, name: &ExprName) -> bool {
+    fn implicit_receiver_name(&self, name: &ExprName) -> Option<ImplicitReceiverReference> {
         SemanticModel::implicit_receiver_name(self, name)
     }
 
@@ -828,6 +834,10 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn trailing_lambda_keyword(&self, callee: &Expr) -> Option<String> {
         SemanticModel::trailing_lambda_keyword(self, callee)
+    }
+
+    fn trailing_lambda_callback_has_receiver(&self, callee: &Expr) -> bool {
+        SemanticModel::trailing_lambda_callback_has_receiver(self, callee)
     }
 
     fn trailing_lambda_callee_is_once(&self, callee: &Expr) -> bool {

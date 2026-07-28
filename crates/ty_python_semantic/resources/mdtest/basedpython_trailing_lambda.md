@@ -42,6 +42,61 @@ g:
     print(it)
 ```
 
+## the callback may not take more than the block binds
+
+A block binds one argument, as `it`. A callback that takes more would be called with arguments the
+block has no parameter for, and that the body cannot name.
+
+```by
+def f(a: (int, str) -> None):
+    a(1, "two")
+
+f:  # error: [trailing-lambda-parameters] "a trailing-lambda block binds one argument, but this callback takes 2"
+    print(it)
+```
+
+A keyword-only parameter counts too — the block declares no name for it either.
+
+```by
+def g(a: (int, *, flag: bool) -> None):
+    a(1, flag=True)
+
+g:  # error: [trailing-lambda-parameters] "a trailing-lambda block binds one argument, but this callback takes 2"
+    print(it)
+```
+
+A variadic parameter stands for any number of arguments, so a block can never fill it.
+
+```by
+def h(a: (*: int) -> None):
+    a(1)
+
+h:  # error: [trailing-lambda-parameters] "a trailing-lambda block binds one argument, so it cannot fill a callback with a variadic parameter"
+    print(it)
+```
+
+The gradual form is the deliberately unchecked one, and is left alone.
+
+```by
+def gradual(a: (...) -> None):
+    a(1)
+
+gradual:
+    print(it)
+```
+
+The receiver of an [implicit receiver](basedpython_implicit_receiver.md) callback is bound by the
+block itself, so it does not count against the one argument `it` binds.
+
+```by
+def against(a: str.(int) -> None):
+    a("a", 1)
+
+against:
+    reveal_type(self)  # revealed: str
+    reveal_type(it)  # revealed: int
+```
+
 ## earlier defaulted parameters keep their defaults
 
 A required parameter may follow a defaulted one in a `def` — the trailing block binds the last

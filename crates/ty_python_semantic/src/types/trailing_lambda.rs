@@ -12,7 +12,7 @@ use ruff_python_ast::name::Name;
 
 use crate::Db;
 use crate::types::Type;
-use crate::types::signatures::Parameter;
+use crate::types::signatures::{Parameter, Signature};
 use crate::types::soundness::single_signature;
 
 /// basedpython: whether the callee's callback — its last declared parameter, the
@@ -90,10 +90,10 @@ pub(crate) fn trailing_lambda_keyword<'db>(db: &'db dyn Db, callee: Type<'db>) -
     parameter.name().cloned()
 }
 
-/// the parameter the implicit `it` binds: the first positional parameter of the
-/// callable the callee's last parameter is declared as. `None` when that shape
-/// doesn't hold
-fn it_parameter<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<Parameter<'db>> {
+/// the single signature of the callback a trailing lambda block fills: the
+/// callable the callee's last declared parameter is annotated as. `None` for
+/// anything else — an unannotated, non-callable or overloaded parameter
+fn callback_signature<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<&'db Signature<'db>> {
     let parameter = last_parameter(db, callee)?;
     let Type::Callable(callable) = parameter.annotated_type() else {
         return None;
@@ -101,7 +101,27 @@ fn it_parameter<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<Parameter<'db
     let [signature] = callable.signatures(db).overloads.as_slice() else {
         return None;
     };
-    Some(signature.parameters().get_positional(0)?.clone())
+    Some(signature)
+}
+
+/// whether the callback's leading parameter is a receiver, which the block binds
+/// implicitly rather than as `it`
+fn declares_receiver(signature: &Signature<'_>) -> bool {
+    signature
+        .parameters()
+        .iter()
+        .next()
+        .is_some_and(Parameter::is_receiver)
+}
+
+/// the parameter the implicit `it` binds: the first parameter of the callback
+/// the block fills that the block does not bind implicitly — the leading one, or
+/// the one after the receiver when the callback declares one. `None` when that
+/// shape doesn't hold
+fn it_parameter<'db>(db: &'db dyn Db, callee: Type<'db>) -> Option<Parameter<'db>> {
+    let signature = callback_signature(db, callee)?;
+    let index = usize::from(declares_receiver(signature));
+    Some(signature.parameters().get_positional(index)?.clone())
 }
 
 /// the type of the implicit `it` parameter. `None` when the callee's callback
@@ -129,14 +149,52 @@ pub(crate) fn trailing_lambda_it_borrow<'db>(
 }
 
 /// the type the block's callback declares as its *receiver* — the block body then
-/// sees that type's members unqualified. `None` when the callback is an ordinary
-/// callable, which has no implicit member scope
+/// sees that type's members unqualified, and spells the receiver itself `self`.
+/// `None` when the callback is an ordinary callable, which has no implicit
+/// member scope
 pub(crate) fn trailing_lambda_receiver_type<'db>(
     db: &'db dyn Db,
     callee: Type<'db>,
 ) -> Option<Type<'db>> {
     let parameter = last_parameter(db, callee)?;
     crate::types::receivers::receiver_type(db, parameter.annotated_type())
+}
+
+/// a callback parameter a trailing lambda block has no way to bind
+pub(crate) enum UnbindableParameters {
+    /// more parameters than the single `it` a block binds
+    TooMany(usize),
+    /// a variadic parameter, which stands for any number of arguments
+    Variadic,
+}
+
+/// the parameters of the callee's callback that a trailing lambda block cannot
+/// bind. A block binds its callback's receiver implicitly and one further
+/// argument as `it`, so anything beyond that is unreachable from the body — and
+/// passed to a block that has no parameter for it at runtime.
+///
+/// `None` when the block covers the callback, when the callback is not an
+/// inspectable single-signature callable, or when its parameter list is gradual
+/// (`(...) -> None`, the deliberately unchecked form)
+pub(crate) fn trailing_lambda_unbindable_parameters<'db>(
+    db: &'db dyn Db,
+    callee: Type<'db>,
+) -> Option<UnbindableParameters> {
+    let signature = callback_signature(db, callee)?;
+    let parameters = signature.parameters();
+    if parameters.is_gradual() {
+        return None;
+    }
+    let bound_implicitly = usize::from(declares_receiver(signature));
+    let declared = parameters.iter().skip(bound_implicitly);
+    if declared
+        .clone()
+        .any(|parameter| parameter.is_variadic() || parameter.is_keyword_variadic())
+    {
+        return Some(UnbindableParameters::Variadic);
+    }
+    let count = declared.count();
+    (count > 1).then_some(UnbindableParameters::TooMany(count))
 }
 
 /// the declared return type of the callback the callee's last parameter is — the
@@ -147,12 +205,5 @@ pub(crate) fn trailing_lambda_callback_return_type<'db>(
     db: &'db dyn Db,
     callee: Type<'db>,
 ) -> Option<Type<'db>> {
-    let parameter = last_parameter(db, callee)?;
-    let Type::Callable(callable) = parameter.annotated_type() else {
-        return None;
-    };
-    let [signature] = callable.signatures(db).overloads.as_slice() else {
-        return None;
-    };
-    Some(signature.return_ty)
+    Some(callback_signature(db, callee)?.return_ty)
 }
