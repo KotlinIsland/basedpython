@@ -10,7 +10,7 @@ use ruff_text_size::{Ranged, TextRange};
 use std::cell::RefCell;
 
 use crate::{
-    Db, FxIndexMap, FxIndexSet, Program, TypeQualifiers,
+    Db, FxIndexMap, FxIndexSet, NameKind, Program, TypeQualifiers,
     place::{
         DefinedPlace, Definedness, Place, PlaceAndQualifiers, Provenance, PublicTypePolicy,
         TypeOrigin, place_from_bindings, place_from_declarations,
@@ -3824,6 +3824,8 @@ impl<'db> VarianceInferable<'db> for StaticClassLiteral<'db> {
             })
             .dedup();
 
+        let bivariant_private_attributes = db.analysis_settings(file).bivariant_private_attributes;
+
         let attribute_variances = attribute_names
             .map(|name| {
                 let place_and_quals = self.own_instance_member(db, &name).inner;
@@ -3833,7 +3835,14 @@ impl<'db> VarianceInferable<'db> for StaticClassLiteral<'db> {
             .dedup()
             .filter_map(|(name, place_and_qual)| {
                 place_and_qual.ignore_possibly_undefined().map(|ty| {
-                    let variance = if place_and_qual
+                    // A private member is invisible to external observers, so it can't be used to
+                    // tell two specializations of its class apart, and therefore can't constrain
+                    // the class's variance at all. Dunders are excluded: they are part of the
+                    // public protocol surface.
+                    let is_private = matches!(NameKind::classify(&name), NameKind::Sunder);
+                    let variance = if is_private && bivariant_private_attributes {
+                        TypeVarVariance::Bivariant
+                    } else if place_and_qual
                         .qualifiers
                         // `CLASS_VAR || FINAL` is really `all()`, but
                         // we want to be robust against new qualifiers

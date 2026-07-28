@@ -137,6 +137,14 @@ pub struct AnalysisSettings {
     /// `ClassVar` declares its inferred type instead of `Unknown | <inferred>`, and a type
     /// variable left unsolved by a call is solved to `Never` rather than `Unknown`.
     pub sound_types: bool,
+
+    /// Whether a private attribute leaves an inferred type parameter bivariant.
+    ///
+    /// A private (single-underscore or name-mangled) member is invisible to external observers,
+    /// so it cannot be used to distinguish two specializations of its class and therefore
+    /// constrains variance not at all. When this is disabled, private attributes are instead
+    /// treated as immutable-but-readable, which constrains the type parameter to covariance.
+    pub bivariant_private_attributes: bool,
 }
 
 impl Default for AnalysisSettings {
@@ -148,6 +156,7 @@ impl Default for AnalysisSettings {
             replace_imports_with_any: ModuleGlobSet::empty(),
             disable_fluid_specializations: false,
             sound_types: false,
+            bivariant_private_attributes: true,
         }
     }
 }

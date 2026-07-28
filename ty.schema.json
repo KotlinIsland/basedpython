@@ -82,6 +82,13 @@
             "$ref": "#/definitions/string"
           }
         },
+        "bivariant-private-attributes": {
+          "description": "Whether a private attribute leaves an inferred type parameter bivariant. This is a\nbasedpython feature.\n\nA private (single-underscore or name-mangled) member is invisible to external observers, so\nit cannot be used to distinguish two specializations of its class, and therefore cannot\nconstrain the class's variance:\n\n```python\nclass A[T]:\n    _t: T\n```\n\nWith this option enabled, `T` is inferred bivariant: nothing on `A`'s public surface\nmentions `T`, so `A[int]` and `A[object]` are mutually assignable. As soon as a public\nmember mentions `T`, that member drives the inference as usual.\n\nWhen set to `false`, a private attribute is instead treated as immutable-but-readable,\nwhich constrains the type parameter to covariance.\n\nDefaults to `true`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "disable-fluid-specializations": {
           "description": "Whether to disable \"fluid specializations\", a basedpython feature that widens the\ninferred generic specialization of an unannotated binding flow-sensitively based on\nits later uses in the same scope.\n\nWhen set to `true`, each unannotated binding keeps the specialization it was inferred\nwith at its creation site; later uses no longer widen or lock it.\n\nDefaults to `false`.",
           "type": [

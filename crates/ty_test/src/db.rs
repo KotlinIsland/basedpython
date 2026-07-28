@@ -258,6 +258,7 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
         replace_imports_with_any: replace_imports_with_any_default,
         disable_fluid_specializations: disable_fluid_specializations_default,
         sound_types: sound_types_default,
+        bivariant_private_attributes: bivariant_private_attributes_default,
     } = AnalysisSettings::default();
 
     let allowed_unresolved_imports =
@@ -299,6 +300,9 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
             .disable_fluid_specializations
             .unwrap_or(disable_fluid_specializations_default),
         sound_types: options.sound_types.unwrap_or(sound_types_default),
+        bivariant_private_attributes: options
+            .bivariant_private_attributes
+            .unwrap_or(bivariant_private_attributes_default),
     }
 }
 
