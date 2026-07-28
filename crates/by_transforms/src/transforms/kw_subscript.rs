@@ -96,7 +96,67 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
         true
     }
 
+    /// whether the subscript carries a keyword field (`x[a=1]`) — the parser
+    /// spells one as a named expression whose target is [`ExprContext::Invalid`]
+    fn is_keyword_field(element: &Expr) -> bool {
+        matches!(element, Expr::Named(n)
+            if matches!(n.target.as_ref(), Expr::Name(t)
+                if matches!(t.ctx, ruff_python_ast::ExprContext::Invalid)))
+    }
+
+    fn subscript_elements(sub: &ruff_python_ast::ExprSubscript) -> Vec<&Expr> {
+        match sub.slice.as_ref() {
+            Expr::Tuple(t) if !t.parenthesized => t.elts.iter().collect(),
+            single => vec![single],
+        }
+    }
+
+    /// the subscript's arguments, keyword fields rendered as `name=value`
+    fn subscript_parts(&self, sub: &ruff_python_ast::ExprSubscript) -> Vec<String> {
+        Self::subscript_elements(sub)
+            .into_iter()
+            .map(|element| {
+                if let Expr::Named(n) = element
+                    && let Expr::Name(target) = n.target.as_ref()
+                    && matches!(target.ctx, ruff_python_ast::ExprContext::Invalid)
+                {
+                    return format!(
+                        "{}={}",
+                        target.id.as_str(),
+                        self.value_src(n.value.as_ref())
+                    );
+                }
+                self.value_src(element)
+            })
+            .collect()
+    }
+
     fn rewrite_subscript(&mut self, sub: &ruff_python_ast::ExprSubscript) {
+        // subscripting a function is a *type* specialization, not a runtime
+        // keyword subscript: an erased generic has its whole `[…]` stripped by
+        // `generic_call`, and a reified one routes the fields through the
+        // `generic` wrapper's `__getitem__`, which takes them as keywords
+        if let Some(types) = self.types
+            && let Expr::Name(name) = sub.value.as_ref()
+            && types.is_function(name)
+        {
+            if types.is_reified_function(name)
+                && Self::subscript_elements(sub)
+                    .iter()
+                    .any(|element| Self::is_keyword_field(element))
+            {
+                let value_src = self.src(sub.value.range()).to_owned();
+                let replacement = format!(
+                    "{value_src}.__getitem__({})",
+                    self.subscript_parts(sub).join(", ")
+                );
+                self.edits.push(Fix::safe_edit(Edit::range_replacement(
+                    replacement,
+                    sub.range(),
+                )));
+            }
+            return;
+        }
         if let Some(types) = self.types
             && let Some(pack_index) = types.class_keyword_pack_index(&sub.value)
             && self.rewrite_keyword_pack_subscript(sub, pack_index)
@@ -156,15 +216,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
         if t.parenthesized {
             return;
         }
-        let has_kw = t.elts.iter().any(|e| {
-            if let Expr::Named(n) = e {
-                if let Expr::Name(name) = n.target.as_ref() {
-                    return matches!(name.ctx, ruff_python_ast::ExprContext::Invalid);
-                }
-            }
-            false
-        });
-        if !has_kw {
+        if !t.elts.iter().any(Self::is_keyword_field) {
             return;
         }
         // when the value is a known generic class, reorder by typevar declaration and emit a
@@ -221,24 +273,10 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
         // Build `value.__getitem__(<args>)` where each Named field renders
         // as `name=value` and bare exprs render verbatim
         let value_src = self.src(sub.value.range()).to_owned();
-        let parts: Vec<String> = t
-            .elts
-            .iter()
-            .map(|e| {
-                if let Expr::Named(n) = e
-                    && let Expr::Name(target) = n.target.as_ref()
-                    && matches!(target.ctx, ruff_python_ast::ExprContext::Invalid)
-                {
-                    return format!(
-                        "{}={}",
-                        target.id.as_str(),
-                        self.value_src(n.value.as_ref())
-                    );
-                }
-                self.value_src(e)
-            })
-            .collect();
-        let replacement = format!("{value_src}.__getitem__({})", parts.join(", "));
+        let replacement = format!(
+            "{value_src}.__getitem__({})",
+            self.subscript_parts(sub).join(", ")
+        );
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
             replacement,
             sub.range(),
