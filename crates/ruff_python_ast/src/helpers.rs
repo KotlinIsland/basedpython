@@ -1318,7 +1318,11 @@ pub fn parameter_modifiers(source: &str, param: &ast::Parameter) -> ParameterMod
         return mods;
     }
     let base = usize::from(prefix_start);
-    let prefix = &source[base..usize::from(name_start)];
+    // a parameter parsed from a string annotation's sub-AST is ranged against the
+    // string's contents rather than `source`
+    let Some(prefix) = source.get(base..usize::from(name_start)) else {
+        return mods;
+    };
 
     // walk the whitespace-separated keyword run left to right
     let mut rel = 0usize;
@@ -1357,6 +1361,32 @@ pub fn parameter_modifiers(source: &str, param: &ast::Parameter) -> ParameterMod
 /// byte length of the leading run of whitespace in `s`
 fn leading_whitespace_len(s: &str) -> usize {
     s.len() - s.trim_start().len()
+}
+
+/// basedpython: the ranges of `keywords` the parser consumed without leaving an
+/// AST node behind, recovered from the source `range` they were written in.
+///
+/// The `local` / `once` of a callable-type parameter and the `asserts` of a
+/// narrowing return annotation are all dropped once parsed, so the only record
+/// left is the gap ahead of the node they modify. Every name token in such a gap
+/// is one of them, since nothing else there can be an identifier.
+///
+/// Yields nothing when `range` does not index into `source`, as for the sub-AST
+/// of a string annotation, whose ranges belong to the string's own contents.
+pub fn consumed_keywords<'src>(
+    source: &'src str,
+    range: TextRange,
+    keywords: &'src [&'src str],
+) -> impl Iterator<Item = TextRange> + 'src {
+    let tokenizer = (range.start() <= range.end() && usize::from(range.end()) <= source.len())
+        .then(|| SimpleTokenizer::new(source, range).skip_trivia());
+    tokenizer
+        .into_iter()
+        .flatten()
+        .filter(move |token| {
+            token.kind == SimpleTokenKind::Name && keywords.contains(&&source[token.range])
+        })
+        .map(|token| token.range)
 }
 
 /// basedpython: the parameter a trailing-lambda block binds to — the last
