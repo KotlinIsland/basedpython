@@ -33,6 +33,7 @@ use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
 use ruff_python_ast::helpers::{
     consumed_keywords, if_let_keyword_range, parameter_modifiers, raises_clause_spans,
+    return_guards,
 };
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, TraversalSignal, walk_arguments, walk_elif_else_clause, walk_expr,
@@ -207,6 +208,15 @@ const LIFETIME_MODIFIERS: &[&str] = &["local", "once"];
 /// between the `->` and the places it asserts.
 const ASSERTS_RETURN: &[&str] = &["asserts"];
 
+/// The name a place is rooted at — `self` in `self.data`.
+fn place_root(place: &Expr) -> Option<&ast::ExprName> {
+    match place {
+        Expr::Name(name) => Some(name),
+        Expr::Attribute(attribute) => place_root(&attribute.value),
+        _ => None,
+    }
+}
+
 /// True when `func` came from basedpython's `init(...)` shorthand, which the
 /// parser expands to a `__init__` function named over the `init` keyword itself.
 fn is_init_method(func: &ast::StmtFunctionDef) -> bool {
@@ -258,6 +268,10 @@ struct SemanticTokenVisitor<'db> {
     in_docstring: bool,
     expecting_docstring: bool,
     range_filter: Option<TextRange>,
+    /// basedpython: the places a narrowing return annotation names, each with the
+    /// classification of the parameter it refers to. Only set while the annotation
+    /// is being visited.
+    guard_places: Vec<(TextRange, SemanticTokenType)>,
 }
 
 impl<'db> SemanticTokenVisitor<'db> {
@@ -277,6 +291,7 @@ impl<'db> SemanticTokenVisitor<'db> {
             in_docstring: false,
             range_filter,
             expecting_docstring: false,
+            guard_places: Vec::new(),
         }
     }
 
@@ -730,6 +745,49 @@ impl<'db> SemanticTokenVisitor<'db> {
         }
     }
 
+    /// basedpython: the places `func`'s narrowing return annotation names that are
+    /// its own parameters, with the classification each parameter takes.
+    ///
+    /// `def f(a: object) -> asserts a` and `def f(a) -> a is int` both name a place
+    /// in a position where it is *not* in scope — the annotation is evaluated where
+    /// the function is defined, so the name resolves to nothing and has no inferred
+    /// type. It refers to the parameter, exactly as the narrowing itself reads it
+    /// (a place that is not a parameter is an ordinary reference to the enclosing
+    /// scope, which resolves on its own).
+    fn guard_place_classifications(
+        &self,
+        func: &ast::StmtFunctionDef,
+    ) -> Vec<(TextRange, SemanticTokenType)> {
+        let Some(guards) = return_guards(func) else {
+            return Vec::new();
+        };
+
+        guards
+            .iter()
+            .filter_map(|guard| {
+                let root = place_root(guard.place)?;
+                let (index, parameter) = func
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .find(|(_, parameter)| parameter.name().id == root.id)?;
+                Some((
+                    root.range(),
+                    self.classify_parameter(parameter.as_parameter(), index == 0, func),
+                ))
+            })
+            .collect()
+    }
+
+    /// The classification of `name` as a place named by the enclosing narrowing
+    /// return annotation, if it is one.
+    fn guard_place_classification(&self, name: &ast::ExprName) -> Option<SemanticTokenType> {
+        self.guard_places
+            .iter()
+            .find(|(range, _)| *range == name.range())
+            .map(|(_, token_type)| *token_type)
+    }
+
     fn classify_function_definition(&self, func: &ast::StmtFunctionDef) -> SemanticTokenType {
         if !self.in_class_scope {
             return SemanticTokenType::Function;
@@ -951,7 +1009,11 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                             ASSERTS_RETURN,
                         );
                     }
+                    // a place the annotation narrows is a parameter of this
+                    // function, which the annotation's own scope cannot resolve
+                    self.guard_places = self.guard_place_classifications(func);
                     self.visit_annotation(returns);
+                    self.guard_places.clear();
                 }
 
                 // basedpython `raises T` — the keyword text sits between the
@@ -1216,7 +1278,11 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 );
             }
             ast::Expr::Name(name) => {
-                if let Some((token_type, mut modifiers)) = self.classify_name(name) {
+                // a place named by a narrowing return annotation classifies as the
+                // parameter it refers to, which no binding in this scope resolves
+                if let Some(token_type) = self.guard_place_classification(name) {
+                    self.add_token(name, token_type, SemanticTokenModifier::empty());
+                } else if let Some((token_type, mut modifiers)) = self.classify_name(name) {
                     if self.in_target_creating_definition && name.ctx.is_store() {
                         modifiers |= SemanticTokenModifier::DEFINITION;
                     }
@@ -5473,14 +5539,19 @@ def i(fn: (local: int) -> None, g: (int, once bool) -> None): ...
     fn semantic_tokens_asserts_return_keyword() {
         // an `asserts` return annotation records only the flag, so the keyword is
         // recovered from between the signature and the asserted places; the `is`
-        // predicate form has no keyword of its own
+        // predicate form has no keyword of its own. each place classifies as the
+        // parameter it names, which the annotation's own scope cannot resolve
         let test = SemanticTokenTest::new_by(
             "
 def f(a: object) -> asserts a: ...
 
-def g(a: object) -> asserts not a is int: ...
+def g(a: object) -> asserts not a: ...
 
 def h(a: object) -> a is int: ...
+
+def i(a: object, b: object) -> asserts a is int and b: ...
+
+def j(a: object) -> asserts a is not int: ...
 ",
         );
 
@@ -5491,15 +5562,68 @@ def h(a: object) -> a is int: ...
         "a" @ 7..8: Parameter [definition]
         "object" @ 10..16: Class
         "asserts" @ 21..28: Keyword
+        "a" @ 29..30: Parameter
         "g" @ 41..42: Function [definition]
         "a" @ 43..44: Parameter [definition]
         "object" @ 46..52: Class
         "asserts" @ 57..64: Keyword
-        "int" @ 74..77: Class
-        "h" @ 88..89: Function [definition]
-        "a" @ 90..91: Parameter [definition]
-        "object" @ 93..99: Class
-        "int" @ 109..112: Class
+        "a" @ 69..70: Parameter
+        "h" @ 81..82: Function [definition]
+        "a" @ 83..84: Parameter [definition]
+        "object" @ 86..92: Class
+        "a" @ 97..98: Parameter
+        "int" @ 102..105: Class
+        "i" @ 116..117: Function [definition]
+        "a" @ 118..119: Parameter [definition]
+        "object" @ 121..127: Class
+        "b" @ 129..130: Parameter [definition]
+        "object" @ 132..138: Class
+        "asserts" @ 143..150: Keyword
+        "a" @ 151..152: Parameter
+        "int" @ 156..159: Class
+        "b" @ 164..165: Parameter
+        "j" @ 176..177: Function [definition]
+        "a" @ 178..179: Parameter [definition]
+        "object" @ 181..187: Class
+        "asserts" @ 192..199: Keyword
+        "a" @ 200..201: Parameter
+        "int" @ 209..212: Class
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_asserts_return_attribute_place() {
+        // a place may be an attribute chain rooted at a parameter — the root
+        // classifies as the receiver it is; the segments below it are ordinary
+        // attribute classification, which has no type to work from here
+        let test = SemanticTokenTest::new_by(
+            "
+class A:
+    data: object
+
+    def f(self) -> asserts self.data is int: ...
+
+def g(a: A) -> asserts a.data is int: ...
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "A" @ 7..8: Class [definition]
+        "data" @ 14..18: Variable [definition]
+        "object" @ 20..26: Class
+        "f" @ 36..37: Method [definition]
+        "self" @ 38..42: SelfParameter [definition]
+        "asserts" @ 47..54: Keyword
+        "self" @ 55..59: SelfParameter
+        "int" @ 68..71: Class
+        "g" @ 82..83: Function [definition]
+        "a" @ 84..85: Parameter [definition]
+        "A" @ 87..88: Class
+        "asserts" @ 93..100: Keyword
+        "a" @ 101..102: Parameter
+        "int" @ 111..114: Class
         "#);
     }
 
