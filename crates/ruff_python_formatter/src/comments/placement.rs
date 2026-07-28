@@ -1784,13 +1784,20 @@ fn handle_named_expr_comment<'a>(
         return CommentPlacement::Default(comment);
     };
 
-    let colon_equal = find_only_token_in_range(
+    // basedpython: a keyword subscript field (`A[foo=int]`) shares the `Named`
+    // encoding with the walrus but spells its separator `=`
+    let separator_kind = match comment.enclosing_node() {
+        AnyNodeRef::ExprNamed(named) if named.label().is_some() => SimpleTokenKind::Equals,
+        _ => SimpleTokenKind::ColonEqual,
+    };
+
+    let separator = find_only_token_in_range(
         TextRange::new(target.end(), value.start()),
-        SimpleTokenKind::ColonEqual,
+        separator_kind,
         source,
     );
 
-    if comment.end() < colon_equal.start() {
+    if comment.end() < separator.start() {
         // If the comment is before the `:=` token, then it must be a trailing comment of the
         // target.
         CommentPlacement::trailing(target, comment)
