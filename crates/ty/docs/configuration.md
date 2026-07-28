@@ -83,6 +83,53 @@ any module where the first component contains the substring `test`, use `*test*.
 
 ---
 
+### `bivariant-private-attributes`
+
+Whether a private attribute leaves an inferred type parameter bivariant. This is a
+basedpython feature.
+
+A private (single-underscore or name-mangled) member is invisible to external observers, so
+it cannot be used to distinguish two specializations of its class, and therefore cannot
+constrain the class's variance:
+
+```python
+class A[T]:
+    _t: T
+```
+
+With this option enabled, `T` is inferred bivariant: nothing on `A`'s public surface
+mentions `T`, so `A[int]` and `A[object]` are mutually assignable. As soon as a public
+member mentions `T`, that member drives the inference as usual.
+
+When set to `false`, a private attribute is instead treated as immutable-but-readable,
+which constrains the type parameter to covariance.
+
+Defaults to `true`.
+
+**Default value**: `true`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Let private attributes constrain inferred variance to covariance
+    bivariant-private-attributes = false
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Let private attributes constrain inferred variance to covariance
+    bivariant-private-attributes = false
+    ```
+
+---
+
 ### `disable-fluid-specializations`
 
 Whether to disable "fluid specializations", a basedpython feature that widens the
@@ -763,6 +810,53 @@ any module where the first component contains the substring `test`, use `*test*.
     [overrides.analysis]
     # Suppress errors for all `test` modules except `test.foo`
     allowed-unresolved-imports = ["test.**", "!test.foo"]
+    ```
+
+---
+
+#### `bivariant-private-attributes`
+
+Whether a private attribute leaves an inferred type parameter bivariant. This is a
+basedpython feature.
+
+A private (single-underscore or name-mangled) member is invisible to external observers, so
+it cannot be used to distinguish two specializations of its class, and therefore cannot
+constrain the class's variance:
+
+```python
+class A[T]:
+    _t: T
+```
+
+With this option enabled, `T` is inferred bivariant: nothing on `A`'s public surface
+mentions `T`, so `A[int]` and `A[object]` are mutually assignable. As soon as a public
+member mentions `T`, that member drives the inference as usual.
+
+When set to `false`, a private attribute is instead treated as immutable-but-readable,
+which constrains the type parameter to covariance.
+
+Defaults to `true`.
+
+**Default value**: `true`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # Let private attributes constrain inferred variance to covariance
+    bivariant-private-attributes = false
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # Let private attributes constrain inferred variance to covariance
+    bivariant-private-attributes = false
     ```
 
 ---

@@ -533,7 +533,8 @@ static_assert(not is_subtype_of(C[A], C[B]))
 #### Underscore-prefixed attributes
 
 Underscore-prefixed instance attributes are considered private, and thus are assumed not externally
-mutated.
+mutated. Here it is the public property that constrains `T` to covariance; the private attribute
+itself contributes no constraint at all (see [private attributes](#private-attributes)).
 
 ```py
 from ty_extensions import static_assert
@@ -721,6 +722,201 @@ class C[T](E[T]):
     w: T
 
 static_assert(not is_subtype_of(C[B], C[A]))
+static_assert(not is_subtype_of(C[A], C[B]))
+```
+
+### Private attributes
+
+A private member is invisible to external observers, so it cannot be used to distinguish two
+specializations of its class, and therefore constrains variance not at all. When nothing on the
+public surface mentions the typevar, the inference is left at its bottom, bivariance. This is a
+basedpython enhancement, controlled by the `analysis.bivariant-private-attributes` option (enabled
+by default), and it applies to plain Python files too.
+
+#### A single-underscore attribute is private
+
+```py
+from ty_extensions import static_assert
+from ty_extensions._internal import is_equivalent_to, is_subtype_of
+
+class A: ...
+class B(A): ...
+
+class C[T]:
+    _x: T
+
+static_assert(is_subtype_of(C[B], C[A]))
+static_assert(is_subtype_of(C[A], C[B]))
+static_assert(is_equivalent_to(C[A], C[B]))
+```
+
+A mutable private attribute is bivariant even though the same attribute would force invariance if it
+were public:
+
+```py
+class Public[T]:
+    x: T
+
+static_assert(not is_subtype_of(Public[B], Public[A]))
+static_assert(not is_subtype_of(Public[A], Public[B]))
+```
+
+#### A name-mangled attribute is private
+
+```py
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+class A: ...
+class B(A): ...
+
+class C[T]:
+    __x: T
+
+static_assert(is_subtype_of(C[B], C[A]))
+static_assert(is_subtype_of(C[A], C[B]))
+```
+
+#### A dunder attribute is not private
+
+Dunders are part of the public protocol surface, so they keep constraining variance:
+
+```py
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+class A: ...
+class B(A): ...
+
+class C[T]:
+    __x__: T
+
+static_assert(is_subtype_of(C[B], C[A]))
+static_assert(not is_subtype_of(C[A], C[B]))
+```
+
+#### Private implicit attributes
+
+An attribute only assigned in a method body is private under the same rule:
+
+```py
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+class A: ...
+class B(A): ...
+
+class C[T]:
+    def __init__(self, x: T):
+        self._x = x
+
+static_assert(is_subtype_of(C[B], C[A]))
+static_assert(is_subtype_of(C[A], C[B]))
+```
+
+#### Private methods
+
+A private method is invisible for the same reason, so its parameter and return types don't constrain
+the typevar either:
+
+```py
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+class A: ...
+class B(A): ...
+
+class Consumer[T]:
+    def _consume(self, value: T) -> None: ...
+
+static_assert(is_subtype_of(Consumer[B], Consumer[A]))
+static_assert(is_subtype_of(Consumer[A], Consumer[B]))
+```
+
+#### Any public mention of the typevar wins
+
+Bivariance only survives while the typevar is absent from the public surface. As soon as a public
+member mentions it, that member's position drives the inference as usual:
+
+```py
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+class A: ...
+class B(A): ...
+
+# the read-only property makes `T` covariant
+class Covariant[T]:
+    _x: T
+
+    @property
+    def x(self) -> T:
+        return self._x
+
+static_assert(is_subtype_of(Covariant[B], Covariant[A]))
+static_assert(not is_subtype_of(Covariant[A], Covariant[B]))
+
+# the mutable public attribute makes `T` invariant
+class Invariant[T]:
+    _x: T
+    x: T
+
+static_assert(not is_subtype_of(Invariant[B], Invariant[A]))
+static_assert(not is_subtype_of(Invariant[A], Invariant[B]))
+
+# the parameter makes `T` contravariant
+class Contravariant[T]:
+    _x: T
+
+    def consume(self, value: T) -> None: ...
+
+static_assert(not is_subtype_of(Contravariant[B], Contravariant[A]))
+static_assert(is_subtype_of(Contravariant[A], Contravariant[B]))
+```
+
+#### Explicit variance still wins
+
+```py
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+from typing import TypeVar, Generic
+
+class A: ...
+class B(A): ...
+
+T_co = TypeVar("T_co", covariant=True)
+
+class C(Generic[T_co]):
+    _x: T_co
+
+static_assert(is_subtype_of(C[B], C[A]))
+static_assert(not is_subtype_of(C[A], C[B]))
+```
+
+#### Disabling the option
+
+With `bivariant-private-attributes = false`, a private attribute is treated as
+immutable-but-readable instead, which constrains the typevar to covariance.
+
+```toml
+[environment]
+python-version = "3.12"
+
+[analysis]
+bivariant-private-attributes = false
+```
+
+```py
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+class A: ...
+class B(A): ...
+
+class C[T]:
+    _x: T
+
+static_assert(is_subtype_of(C[B], C[A]))
 static_assert(not is_subtype_of(C[A], C[B]))
 ```
 

@@ -280,3 +280,88 @@ fn sound_types_is_per_module() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// `bivariant-private-attributes` is resolved per module: the module that *declares* a class
+/// governs how its variance is inferred, and consumers see the result regardless of their own
+/// setting.
+#[test]
+fn bivariant_private_attributes_is_per_module() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.ty.environment]
+            python-version = "3.13"
+
+            [tool.ty.analysis]
+            bivariant-private-attributes = false
+
+            [[tool.ty.overrides]]
+            include = ["bivariant/**"]
+
+            [tool.ty.overrides.analysis]
+            bivariant-private-attributes = true
+            "#,
+        ),
+        (
+            "bivariant/lib.py",
+            r#"
+            class Bivariant[T]:
+                _x: T
+            "#,
+        ),
+        (
+            "covariant/lib.py",
+            r#"
+            class Covariant[T]:
+                _x: T
+            "#,
+        ),
+        (
+            "covariant/main.py",
+            r#"
+            from bivariant.lib import Bivariant
+
+            class A: ...
+            class B(A): ...
+
+            # `Bivariant` is declared in a bivariant module, so it is bivariant even here
+            widened: Bivariant[A] = Bivariant[B]()
+            narrowed: Bivariant[B] = Bivariant[A]()
+            "#,
+        ),
+        (
+            "bivariant/main.py",
+            r#"
+            from covariant.lib import Covariant
+
+            class A: ...
+            class B(A): ...
+
+            # `Covariant` is declared in a covariant module, so it stays covariant even here
+            widened: Covariant[A] = Covariant[B]()
+            narrowed: Covariant[B] = Covariant[A]()
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    error[invalid-assignment]: Object of type `Covariant[A]` is not assignable to `Covariant[B]`
+     --> bivariant/main.py:9:11
+      |
+    9 | narrowed: Covariant[B] = Covariant[A]()
+      |           ------------   ^^^^^^^^^^^^^^ Incompatible value of type `Covariant[A]`
+      |           |
+      |           Declared type
+      |
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}

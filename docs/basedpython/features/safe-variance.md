@@ -128,6 +128,27 @@ field is invisible from outside, so neither direction of assignment can be
 caught misbehaving. the moment any public member mentions `T`, that member's
 position drives the inference in the usual way and the bivariance disappears
 
+privacy is read off the member's name: a leading underscore is private, and so
+is a name-mangled `__t`. a dunder is *not* private — it is part of the public
+protocol surface — so `__t__: T` keeps constraining variance. a private
+*method* counts too: `def _consume(self, t: T)` leaves `T` bivariant
+
+> a class-body `private` member keyword is currently stripped without renaming,
+> so it does not by itself mark the member private to the type checker. write the
+> underscore name until that lands
+
+the behaviour is controlled by `analysis.bivariant-private-attributes`, which is
+enabled by default. set it to `false` to fall back to treating a private
+attribute as immutable-but-readable, which constrains `T` to covariance
+
+```toml
+[analysis]
+bivariant-private-attributes = false
+```
+
+the option is resolved per module, so the module that *declares* a class governs
+how that class's variance is inferred, no matter which module reads it
+
 ## why privacy is the common thread
 
 all three behaviours are one principle applied three ways. a private member is

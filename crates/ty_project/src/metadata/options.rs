@@ -1635,6 +1635,37 @@ pub struct AnalysisOptions {
     )]
     pub sound_types: Option<bool>,
 
+    /// Whether a private attribute leaves an inferred type parameter bivariant. This is a
+    /// basedpython feature.
+    ///
+    /// A private (single-underscore or name-mangled) member is invisible to external observers, so
+    /// it cannot be used to distinguish two specializations of its class, and therefore cannot
+    /// constrain the class's variance:
+    ///
+    /// ```python
+    /// class A[T]:
+    ///     _t: T
+    /// ```
+    ///
+    /// With this option enabled, `T` is inferred bivariant: nothing on `A`'s public surface
+    /// mentions `T`, so `A[int]` and `A[object]` are mutually assignable. As soon as a public
+    /// member mentions `T`, that member drives the inference as usual.
+    ///
+    /// When set to `false`, a private attribute is instead treated as immutable-but-readable,
+    /// which constrains the type parameter to covariance.
+    ///
+    /// Defaults to `true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"true"#,
+        value_type = "bool",
+        example = r#"
+        # Let private attributes constrain inferred variance to covariance
+        bivariant-private-attributes = false
+        "#
+    )]
+    pub bivariant_private_attributes: Option<bool>,
+
     /// A list of module glob patterns for which `unresolved-import` diagnostics should be suppressed.
     ///
     /// Details on supported glob patterns:
@@ -1698,6 +1729,7 @@ impl AnalysisOptions {
             replace_imports_with_any,
             disable_fluid_specializations,
             sound_types,
+            bivariant_private_attributes,
         } = self;
 
         let AnalysisSettings {
@@ -1707,6 +1739,7 @@ impl AnalysisOptions {
             replace_imports_with_any: replace_imports_with_any_default,
             disable_fluid_specializations: disable_fluid_specializations_default,
             sound_types: sound_types_default,
+            bivariant_private_attributes: bivariant_private_attributes_default,
         } = AnalysisSettings::default();
 
         let allowed_unresolved_imports =
@@ -1741,6 +1774,8 @@ impl AnalysisOptions {
             disable_fluid_specializations: disable_fluid_specializations
                 .unwrap_or(disable_fluid_specializations_default),
             sound_types: sound_types.unwrap_or(sound_types_default),
+            bivariant_private_attributes: bivariant_private_attributes
+                .unwrap_or(bivariant_private_attributes_default),
         }
     }
 }

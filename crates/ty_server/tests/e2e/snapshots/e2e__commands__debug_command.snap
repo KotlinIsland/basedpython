@@ -176,6 +176,7 @@ Settings: Settings {
         },
         disable_fluid_specializations: false,
         sound_types: false,
+        bivariant_private_attributes: true,
     },
     overrides: [],
 }

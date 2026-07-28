@@ -162,6 +162,8 @@ pub(crate) struct Analysis {
     pub(crate) disable_fluid_specializations: Option<bool>,
 
     pub(crate) sound_types: Option<bool>,
+
+    pub(crate) bivariant_private_attributes: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
