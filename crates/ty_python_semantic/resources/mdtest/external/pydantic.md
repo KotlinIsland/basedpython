@@ -1194,6 +1194,96 @@ derived = Derived(value=1)
 derived.value = 2  # error: [invalid-assignment]
 ```
 
+Unlike a frozen dataclass, a frozen model can be unfrozen again by a subclass, because `frozen` is
+just another configuration value that a subclass may override:
+
+```py
+class FrozenBase(BaseModel, frozen=True):
+    a: int
+
+class Unfrozen(FrozenBase, frozen=False):
+    b: int
+
+unfrozen = Unfrozen(a=1, b=2)
+unfrozen.a = 3
+unfrozen.b = 3
+```
+
+The model config is another way to unfreeze:
+
+```py
+class UnfrozenByConfig(FrozenBase):
+    model_config = ConfigDict(frozen=False)
+
+    b: int
+
+unfrozen_by_config = UnfrozenByConfig(a=1, b=2)
+unfrozen_by_config.a = 3
+unfrozen_by_config.b = 3
+```
+
+Unfreezing the model does not unfreeze an individual field that was frozen through `Field(...)`:
+
+```py
+class FrozenFieldBase(BaseModel, frozen=True):
+    immutable: int = Field(frozen=True)
+    mutable: int
+
+class UnfrozenField(FrozenFieldBase, frozen=False):
+    pass
+
+unfrozen_field = UnfrozenField(immutable=1, mutable=2)
+unfrozen_field.immutable = 3  # error: [invalid-assignment]
+unfrozen_field.mutable = 3
+```
+
+An unfrozen model is invariant in the type of its fields again, even when its base was frozen:
+
+```py
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+class Super: ...
+class Sub(Super): ...
+
+class FrozenGenericBase[T](BaseModel, frozen=True):
+    value: T
+
+class UnfrozenGeneric[T](FrozenGenericBase[T], frozen=False):
+    pass
+
+static_assert(is_subtype_of(FrozenGenericBase[Sub], FrozenGenericBase[Super]))
+static_assert(not is_subtype_of(UnfrozenGeneric[Sub], UnfrozenGeneric[Super]))
+static_assert(not is_subtype_of(UnfrozenGeneric[Super], UnfrozenGeneric[Sub]))
+```
+
+`frozen` merges across multiple bases like any other configuration value, so a later base that
+explicitly sets `frozen=False` supersedes an earlier frozen base:
+
+```py
+class FrozenLeftBase(BaseModel, frozen=True):
+    a: int
+
+class MutableRightBase(BaseModel, frozen=False):
+    b: int
+
+class MergedConfig(FrozenLeftBase, MutableRightBase): ...
+
+merged = MergedConfig(a=1, b=2)
+merged.a = 2
+merged.b = 3
+```
+
+Reversing the bases makes the model frozen again:
+
+```py
+class MergedConfigReversed(MutableRightBase, FrozenLeftBase): ...
+
+reversed_merged = MergedConfigReversed(a=1, b=2)
+reversed_merged.a = 2  # error: [invalid-assignment]
+reversed_merged.b = 3  # error: [invalid-assignment]
+```
+
 Because nothing can write to a frozen field, a generic model is covariant in the type of every field
 that is frozen — whether the model is frozen as a whole:
 

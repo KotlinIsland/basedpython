@@ -2166,6 +2166,11 @@ impl<'db> StaticClassLiteral<'db> {
                 // otherwise-mutable model. Reject writes to just those fields with an
                 // overloaded `__setattr__`: a `Literal["field"] -> Never` overload per
                 // frozen field, and a `str -> None` catch-all for the rest.
+                //
+                // The same catch-all also has to be synthesized without any frozen field when
+                // this model would otherwise inherit a frozen base's `Never` `__setattr__`:
+                // Pydantic resolves `frozen` per class, so a model whose own configuration is
+                // not frozen stays writable no matter what its bases configured.
                 if let CodeGeneratorKind::Pydantic(_) = field_policy {
                     let setattr_signature = |name_ty, return_ty| {
                         Signature::new(
@@ -2187,7 +2192,9 @@ impl<'db> StaticClassLiteral<'db> {
                             setattr_signature(Type::string_literal(db, name), Type::Never)
                         })
                         .collect();
-                    if !frozen_overloads.is_empty() {
+                    if !frozen_overloads.is_empty()
+                        || self.inherits_frozen_model_setattr(db, specialization)
+                    {
                         let overloads = frozen_overloads.into_iter().chain([setattr_signature(
                             KnownClass::Str.to_instance(db),
                             Type::none(db),
@@ -2222,6 +2229,33 @@ impl<'db> StaticClassLiteral<'db> {
             ),
             _ => None,
         }
+    }
+
+    /// Whether this class would inherit the `Never`-returning `__setattr__` that is synthesized
+    /// for a frozen Pydantic model further up its MRO.
+    ///
+    /// An explicit `__setattr__` earlier in the MRO already shadows that synthesized one, so the
+    /// frozen model behind it is never reached.
+    fn inherits_frozen_model_setattr(
+        self,
+        db: &'db dyn Db,
+        specialization: Option<Specialization<'db>>,
+    ) -> bool {
+        self.iter_mro(db, specialization)
+            .skip(1)
+            .filter_map(ClassBase::into_class)
+            .filter_map(|class| class.static_class_literal(db))
+            .find_map(|(class, _)| {
+                if class_member(db, class.body_scope(db), "__setattr__")
+                    .ignore_possibly_undefined()
+                    .is_some()
+                {
+                    return Some(false);
+                }
+                let field_policy = CodeGeneratorKind::from_static_class(db, class)?;
+                Self::is_frozen_pydantic_model(db, field_policy).then_some(true)
+            })
+            .unwrap_or(false)
     }
 
     /// Synthesize a `__setattr__` view for an ordinary subclass of a frozen dataclass.
@@ -3764,15 +3798,16 @@ impl<'db> VarianceInferable<'db> for StaticClassLiteral<'db> {
 
         let field_policy = CodeGeneratorKind::from_static_class(db, self);
 
+        // a frozen class rejects every attribute write after construction, so all of its
+        // fields are read-only and may vary covariantly. the synthesized methods that do
+        // mention field types in parameter position — `__init__`, `__new__` and (on 3.13+)
+        // `__replace__` — all *construct* a new instance rather than writing through `self`,
+        // so like any constructor they don't constrain the variance of the instance type
+        let is_frozen = self.is_frozen_dataclass(db) == Some(true)
+            || field_policy.is_some_and(|policy| Self::is_frozen_pydantic_model(db, policy));
+
         let default_attribute_variance = {
             let is_namedtuple = CodeGeneratorKind::NamedTuple.matches(db, self.into());
-            // a frozen class rejects every attribute write after construction, so all of its
-            // fields are read-only and may vary covariantly. the synthesized methods that do
-            // mention field types in parameter position — `__init__`, `__new__` and (on 3.13+)
-            // `__replace__` — all *construct* a new instance rather than writing through `self`,
-            // so like any constructor they don't constrain the variance of the instance type
-            let is_frozen = self.is_frozen_dataclass(db) == Some(true)
-                || field_policy.is_some_and(|policy| Self::is_frozen_pydantic_model(db, policy));
 
             if is_namedtuple || is_frozen {
                 TypeVarVariance::Covariant
@@ -3793,6 +3828,24 @@ impl<'db> VarianceInferable<'db> for StaticClassLiteral<'db> {
                     .collect()
             })
             .unwrap_or_default();
+
+        // a model that unfreezes a frozen base would otherwise inherit that base's `Never`
+        // `__setattr__`; because it doesn't, the base's fields become writable through this
+        // class's instances, and the covariance the frozen base derived for itself no longer
+        // describes how this class uses them
+        let unfrozen_inherited_field_variances = field_policy
+            .filter(|policy| {
+                policy.is_pydantic() && !is_frozen && self.inherits_frozen_model_setattr(db, None)
+            })
+            .into_iter()
+            .flat_map(|policy| self.fields(db, None, policy))
+            .filter(|(name, field)| !name.starts_with('_') && !field.is_frozen())
+            .map(|(_, field)| {
+                field
+                    .declared_ty
+                    .with_polarity(default_attribute_variance)
+                    .variance_of(db, typevar)
+            });
 
         let init_name: &Name = &"__init__".into();
         let new_name: &Name = &"__new__".into();
@@ -3887,6 +3940,7 @@ impl<'db> VarianceInferable<'db> for StaticClassLiteral<'db> {
             });
 
         attribute_variances
+            .chain(unfrozen_inherited_field_variances)
             .chain(explicit_bases_variances)
             .chain(extra_items_variance)
             .collect()

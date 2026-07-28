@@ -12,6 +12,7 @@ basedpython has full support for pydantic v2 models. type checking is precise, a
 - generic models: `class Box[T](BaseModel): value: T` with reified constructor calls `Box[int](value=1)`
 - computed fields via `@computed_field` properties
 - model validators via `@field_validator` and `@model_validator`
+- model config (`model_config` or class keywords) merges across bases left to right, and a subclass can override any inherited setting — including unfreezing a frozen base with `frozen=False`
 
 ### transpilation compatibility
 
