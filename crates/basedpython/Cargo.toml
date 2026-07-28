@@ -13,7 +13,7 @@
 # keep them in sync if those entrypoints change
 [package]
 name = "basedpython"
-version = "0.0.1-a6"
+version = "0.0.1-a7"
 edition = "2024"
 rust-version = "1.95"
 publish = false
