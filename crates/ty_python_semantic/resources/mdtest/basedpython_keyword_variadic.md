@@ -213,6 +213,41 @@ def f(t: Two[bytes, foo=int]):
     t.get()(b"", foo="wrong")  # error: [invalid-argument-type]
 ```
 
+## alongside a variadic
+
+a pack occupies no positional slot at all, so a `*Ts` beside one still absorbs every positional
+argument the fixed type variables don't claim — those before it from the front, those after it from
+the back:
+
+```by
+class A[T, *Ts, **Kwargs]: ...
+
+def f(a: A[int, str, bool, foo=bytes]):
+    reveal_type(a)  # revealed: A[int, str, bool, foo=bytes]
+
+def g(a: A[int, foo=bytes]):  # the variadic absorbs nothing
+    reveal_type(a)  # revealed: A[int, foo=bytes]
+
+class B[T, *Ts, U, **Kwargs]: ...
+
+def h(b: B[int, str, bool, bytes, foo=complex]):
+    reveal_type(b)  # revealed: B[int, str, bool, bytes, foo=complex]
+
+def i(b: B[int, bytes, foo=complex]):
+    reveal_type(b)  # revealed: B[int, bytes, foo=complex]
+```
+
+## an unpacked run alongside a pack
+
+a run spelled as an unpacked tuple is absorbed the same way:
+
+```by
+class A[T, *Ts, **Kwargs]: ...
+
+def f(a: A[int, *tuple[str, bool], foo=bytes]):
+    reveal_type(a)  # revealed: A[int, str, bool, foo=bytes]
+```
+
 ## a prefix in the arrow
 
 ```by
