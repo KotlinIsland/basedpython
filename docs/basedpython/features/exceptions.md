@@ -127,14 +127,14 @@ error on its own — that is what makes the feature usable on existing code
 without annotating anything. an escape is reported at exactly two boundaries:
 
 - a function with a `raises` clause that can raise outside it —
-    [`undeclared-raise`](../../rules.md#undeclared-raise)
+    `undeclared-raise`
 - `main`, the [entry point](main-function.md), which has no caller to propagate
-    to — [`unhandled-exception`](../../rules.md#unhandled-exception)
+    to — `unhandled-exception`
 
 both point at the `raise` or the call that produces the exception, not at the
 signature, so the fix is where the diagnostic is. a clause that contains no
 exception at all is
-[`invalid-raises-clause`](../../rules.md#invalid-raises-clause)
+`invalid-raises-clause`
 
 `main` may declare a clause of its own, which opts it into the ordinary rule:
 
@@ -165,7 +165,7 @@ def main():
     a().foo()  # statically raises nothing; at runtime raises TypeError
 ```
 
-[`override-raise`](../../rules.md#override-raise) closes that hole by bounding
+`override-raise` closes that hole by bounding
 every override with the exception set of the method it overrides. it is a
 **strictness option and off by default**, because honouring it makes a base
 method's set part of its contract — adding a `raise` to a base method is then a
