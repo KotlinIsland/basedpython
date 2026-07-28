@@ -32,7 +32,7 @@ use crate::types::generics::{Specialization, combine_use_site_projections};
 use crate::types::literal::LiteralValueTypeKind;
 use crate::types::protocol_class::ReifiedMember;
 use crate::types::tuple::Tuple;
-use crate::types::typevar::TypeVarBoundOrConstraints;
+use crate::types::typevar::{TypeVarBoundOrConstraints, TypeVarKind};
 use crate::types::variance::TypeVarVariance;
 use crate::types::{KnownClass, Type};
 
@@ -58,7 +58,7 @@ pub(crate) fn inferred_call_type_arguments<'db>(
     callee: Type<'db>,
     function: FunctionType<'db>,
     arguments: &CallArguments<'_, 'db>,
-) -> Result<Vec<String>, ReifiedInferenceError<'db>> {
+) -> Result<Vec<TypeArgument>, ReifiedInferenceError<'db>> {
     let bindings = callee
         .try_call(db, arguments)
         .map_err(|_| ReifiedInferenceError::NoBinding)?;
@@ -72,17 +72,20 @@ pub(crate) fn inferred_call_type_arguments<'db>(
 }
 
 /// [`inferred_call_type_arguments`] for callers outside the `types` module:
-/// arguments arrive as plain types (positional, then keyword) and any failure
-/// collapses to `None` — the checker reports those, the caller just skips
-/// injection
-pub(crate) fn injectable_call_type_arguments<'db>(
+/// arguments arrive as plain types (positional, then keyword), and the result
+/// is the *source text* of the specialization step to splice in after the
+/// callee — `[int, str]`, or the `.__getitem__(…)` call form when a
+/// keyword-variadic pack contributes fields, since a subscript takes no
+/// keywords. any failure collapses to `None` — the checker reports those, the
+/// caller just skips injection
+pub(crate) fn injectable_call_specialization<'db>(
     db: &'db dyn Db,
     file: File,
     callee: Type<'db>,
     function: FunctionType<'db>,
     positional: Vec<Type<'db>>,
     keywords: Vec<(&str, Type<'db>)>,
-) -> Option<Vec<String>> {
+) -> Option<String> {
     let arguments: CallArguments<'_, 'db> = positional
         .into_iter()
         .map(|ty| (Argument::Positional, Some(ty)))
@@ -92,11 +95,26 @@ pub(crate) fn injectable_call_type_arguments<'db>(
                 .map(|(name, ty)| (Argument::Keyword(name), Some(ty))),
         )
         .collect();
-    inferred_call_type_arguments(db, file, callee, function, &arguments)
-        .ok()
-        // an empty prefix means everything defaults — the bare call is
-        // already correct and nothing is injected
-        .filter(|rendered| !rendered.is_empty())
+    let rendered = inferred_call_type_arguments(db, file, callee, function, &arguments).ok()?;
+    // an empty prefix means everything defaults — the bare call is already
+    // correct and nothing is injected
+    if rendered.is_empty() {
+        return None;
+    }
+    // keyword fields are spelled after the positional arguments whatever their
+    // declaration order: the wrapper binds them by name, not by slot
+    let (fields, positional): (Vec<&TypeArgument>, Vec<&TypeArgument>) =
+        rendered.iter().partition(|argument| argument.keyword);
+    let parts: Vec<&str> = positional
+        .into_iter()
+        .chain(fields.iter().copied())
+        .map(|argument| argument.text.as_str())
+        .collect();
+    Some(if fields.is_empty() {
+        format!("[{}]", parts.join(", "))
+    } else {
+        format!(".__getitem__({})", parts.join(", "))
+    })
 }
 
 /// The rendered runtime spellings to inject, in declaration order, from the
@@ -112,7 +130,7 @@ fn rendered_type_arguments<'db>(
     file: File,
     function: FunctionType<'db>,
     specialization: Option<Specialization<'db>>,
-) -> Result<Vec<String>, ReifiedInferenceError<'db>> {
+) -> Result<Vec<TypeArgument>, ReifiedInferenceError<'db>> {
     let signature = function.signature(db);
     let generic_context = signature
         .overloads
@@ -128,29 +146,35 @@ fn rendered_type_arguments<'db>(
     };
 
     let mut last_solved = None;
-    let mut resolved: Vec<(&Name, Option<Type<'db>>)> = Vec::with_capacity(generic_context.len(db));
+    let mut resolved: Vec<ResolvedParameter<'db, '_>> = Vec::with_capacity(generic_context.len(db));
     for (index, bound_typevar) in generic_context.variables(db).enumerate() {
-        let solution = solved.get(index).copied().filter(|ty| is_solution(db, *ty));
+        let typevar = bound_typevar.typevar(db);
+        let kind = ParameterKind::of(typevar.kind(db));
+        let solution = solved
+            .get(index)
+            .copied()
+            .filter(|ty| kind.is_solution(db, *ty));
         if solution.is_some() {
             last_solved = Some(index);
         }
-        let typevar = bound_typevar.typevar(db);
-        resolved.push((
-            typevar.name(db),
-            solution.or_else(|| typevar.default_type(db)),
-        ));
+        resolved.push(ResolvedParameter {
+            name: typevar.name(db),
+            value: solution.or_else(|| typevar.default_type(db)),
+            kind,
+        });
     }
 
     // a parameter may stay valueless only when nothing depends on it: an
     // erased parameter outside the injected prefix. a reified parameter
     // without a default always needs a value, and a hole inside the prefix
     // cannot be spelled positionally
-    let must_have_value = function.reified_type_params_without_default(db);
-    for (index, (name, value)) in resolved.iter().enumerate() {
-        if value.is_none()
-            && (last_solved.is_some_and(|last| index < last) || must_have_value.contains(name))
+    let must_have_value = function.reified_type_params_requiring_argument(db);
+    for (index, parameter) in resolved.iter().enumerate() {
+        if parameter.value.is_none()
+            && (last_solved.is_some_and(|last| index < last)
+                || must_have_value.contains(parameter.name))
         {
-            return Err(ReifiedInferenceError::Unsolved((*name).clone()));
+            return Err(ReifiedInferenceError::Unsolved(parameter.name.clone()));
         }
     }
     let Some(last_solved) = last_solved else {
@@ -159,13 +183,113 @@ fn rendered_type_arguments<'db>(
 
     resolved[..=last_solved]
         .iter()
-        .map(|(name, value)| {
-            let ty = value.ok_or_else(|| ReifiedInferenceError::Unsolved((*name).clone()))?;
+        .map(|parameter| {
+            let ty = parameter
+                .value
+                .ok_or_else(|| ReifiedInferenceError::Unsolved(parameter.name.clone()))?;
             let promoted = ty.promote(db);
-            runtime_spelling(db, file, promoted)
-                .ok_or_else(|| ReifiedInferenceError::Unspellable((*name).clone(), promoted))
+            parameter
+                .kind
+                .spelling(db, file, promoted)
+                .map(|text| TypeArgument {
+                    text,
+                    keyword: parameter.kind == ParameterKind::KeywordPack,
+                })
+                .ok_or_else(|| ReifiedInferenceError::Unspellable(parameter.name.clone(), promoted))
         })
+        // a variadic or pack that absorbed nothing spells as nothing — it
+        // occupies no slot in the injected list, exactly as the wrapper binds it
+        .filter(|argument| !matches!(argument, Ok(argument) if argument.text.is_empty()))
         .collect()
+}
+
+/// one rendered argument of an injected specialization
+pub(crate) struct TypeArgument {
+    /// the source text of this argument — `int`, the comma-joined run of a
+    /// `*Ts`, or the `foo=int, bar=str` fields of a `**Kwargs` pack
+    text: String,
+    /// whether the text is keyword-spelled, and so cannot go in a subscript
+    keyword: bool,
+}
+
+/// a type parameter paired with the value the call solved it to
+struct ResolvedParameter<'db, 'name> {
+    name: &'name Name,
+    value: Option<Type<'db>>,
+    kind: ParameterKind,
+}
+
+/// how many arguments a type parameter stands for, and how they are spelled
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ParameterKind {
+    /// a plain `T` — exactly one positional argument
+    Single,
+    /// a `*Ts` — the run of positional arguments it absorbs
+    Variadic,
+    /// a `**Kwargs` — the keyword fields it binds
+    KeywordPack,
+}
+
+impl ParameterKind {
+    fn of(kind: TypeVarKind) -> Self {
+        if kind.is_typevartuple() {
+            Self::Variadic
+        } else if kind.is_keyword_variadic() {
+            Self::KeywordPack
+        } else {
+            Self::Single
+        }
+    }
+
+    /// whether the solver's answer for a parameter of this kind is one the
+    /// call site can be specialized with. a run or a pack whose shape is not
+    /// statically known is what the solver leaves behind when it could not
+    /// determine it at all, which is "unsolved", not "solved to anything"
+    fn is_solution<'db>(self, db: &'db dyn Db, ty: Type<'db>) -> bool {
+        match self {
+            Self::Single => is_solution(db, ty),
+            Self::Variadic => variadic_elements(db, ty).is_some(),
+            Self::KeywordPack => ty.keyword_pack_fields(db).is_some(),
+        }
+    }
+
+    /// the source text this parameter's value spells as, or the empty string
+    /// when it stands for no arguments at all
+    fn spelling<'db>(self, db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<String> {
+        let fields = match self {
+            Self::Single => return runtime_spelling(db, file, ty),
+            Self::Variadic => {
+                let spellings = variadic_elements(db, ty)?
+                    .into_iter()
+                    .map(|element| runtime_spelling(db, file, element.promote(db)))
+                    .collect::<Option<Vec<_>>>()?;
+                return Some(spellings.join(", "));
+            }
+            Self::KeywordPack => ty.keyword_pack_fields(db)?,
+        };
+        let spellings = fields
+            .into_iter()
+            .map(|(name, field)| {
+                Some(format!(
+                    "{name}={}",
+                    runtime_spelling(db, file, field.promote(db))?
+                ))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some(spellings.join(", "))
+    }
+}
+
+/// the run of type arguments a `*Ts` parameter stands for — the elements of
+/// the tuple that is its value
+fn variadic_elements<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Vec<Type<'db>>> {
+    let Type::NominalInstance(instance) = ty else {
+        return None;
+    };
+    match instance.tuple_spec(db)?.into_owned() {
+        Tuple::Fixed(elements) => Some(elements.elements_slice().to_vec()),
+        Tuple::Variable(_) => None,
+    }
 }
 
 /// whether the solver produced an actual answer for a type parameter —
@@ -922,7 +1046,7 @@ fn is_reified_function_typevar<'db>(
     };
     let node = function.node(&module);
     let source = ruff_db::source::source_text(db, def_file);
-    crate::reified::reified_type_param_names(source.as_str(), node)
+    crate::reified::reified_type_param_names(source.as_str(), def_file.source_type(db), node)
         .iter()
         .any(|name| name == bound_typevar.name(db))
 }
@@ -973,7 +1097,7 @@ pub(crate) fn reified_override_error<'db>(
         (false, false) => None,
         (true, false) => Some(ReifiedOverrideError::ErasesReified),
         (false, true) => {
-            let missing = sub.reified_type_params_without_default(db);
+            let missing = sub.reified_type_params_requiring_argument(db);
             (!missing.is_empty())
                 .then(|| ReifiedOverrideError::ReifiesErased(missing.iter().cloned().collect()))
         }

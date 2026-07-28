@@ -67,12 +67,12 @@ impl<'db> SemanticModel<'db> {
         self.file.path(self.db)
     }
 
-    /// basedpython: the runtime type-argument spellings the transpiler injects
-    /// at a bare call of a reified generic (`f(1)` → `["int"]`), in
-    /// declaration order. `None` when the call is not a bare reified-generic
-    /// call or no injectable spelling exists — the checker reports the latter
-    /// as `unspecialized-reified-generic`
-    pub fn reified_call_type_arguments(&self, call: &ast::ExprCall) -> Option<Vec<String>> {
+    /// basedpython: the source text of the specialization step the transpiler
+    /// splices in after the callee of a bare reified-generic call (`f(1)` →
+    /// `"[int]"`). `None` when the call is not a bare reified-generic call or
+    /// no injectable spelling exists — the checker reports the latter as
+    /// `unspecialized-reified-generic`
+    pub fn reified_call_specialization(&self, call: &ast::ExprCall) -> Option<String> {
         let db = self.db;
         let callee_ty = call.func.inferred_type(self)?;
         let function = match callee_ty {
@@ -95,7 +95,7 @@ impl<'db> SemanticModel<'db> {
             let name = keyword.arg.as_ref()?;
             keywords.push((name.as_str(), keyword.value.inferred_type(self)?));
         }
-        crate::types::reified_infer::injectable_call_type_arguments(
+        crate::types::reified_infer::injectable_call_specialization(
             db, self.file, callee_ty, function, positional, keywords,
         )
     }

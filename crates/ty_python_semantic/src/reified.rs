@@ -11,14 +11,22 @@
 
 use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{self as ast, CmpOp, Expr, Stmt};
+use ruff_python_ast::{self as ast, CmpOp, Expr, PySourceType, Stmt};
 use ruff_text_size::Ranged;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-/// names of the function's plain type parameters that its body references in
-/// a value position, in declaration order. `*Ts` / `**P` parameters never
-/// participate (their reification is not supported yet)
-pub fn reified_type_param_names(source: &str, function: &ast::StmtFunctionDef) -> Vec<Name> {
+/// names of the function's type parameters that its body references in a
+/// value position, in declaration order. every kind of parameter can carry a
+/// runtime value: a plain `T` the type argument, a `*Ts` the tuple of the run
+/// it absorbs, and a `**Kwargs` the mapping of its fields. `**Kwargs` is a
+/// keyword-variadic pack only in a basedpython *source* file — elsewhere the
+/// same spelling declares a `ParamSpec`, a parameter list with no runtime
+/// object to bind — so `source_type` decides whether it is a candidate
+pub fn reified_type_param_names(
+    source: &str,
+    source_type: PySourceType,
+    function: &ast::StmtFunctionDef,
+) -> Vec<Name> {
     let Some(type_params) = function.type_params.as_deref() else {
         return Vec::new();
     };
@@ -33,7 +41,10 @@ pub fn reified_type_param_names(source: &str, function: &ast::StmtFunctionDef) -
         .iter()
         .filter_map(|param| match param {
             ast::TypeParam::TypeVar(tv) => Some(&tv.name.id),
-            ast::TypeParam::TypeVarTuple(_) | ast::TypeParam::ParamSpec(_) => None,
+            ast::TypeParam::TypeVarTuple(tvt) => Some(&tvt.name.id),
+            ast::TypeParam::ParamSpec(ps) => {
+                matches!(source_type, PySourceType::BasedPython).then_some(&ps.name.id)
+            }
         })
         .collect();
     if candidates.is_empty() {

@@ -508,19 +508,24 @@ impl<'db> OverloadLiteral<'db> {
     #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
     pub(crate) fn reified_type_params(self, db: &'db dyn Db) -> Box<[ast::name::Name]> {
         let file = self.file(db);
-        if !file.source_type(db).is_basedpython() {
+        let source_type = file.source_type(db);
+        if !source_type.is_basedpython() {
             return Box::default();
         }
         let module = parsed_module(db, file).load(db);
         let node = self.body_scope(db).node(db).expect_function().node(&module);
         let source = source_text(db, file);
-        crate::reified::reified_type_param_names(source.as_str(), node).into_boxed_slice()
+        crate::reified::reified_type_param_names(source.as_str(), source_type, node)
+            .into_boxed_slice()
     }
 
-    /// basedpython: reified type parameters with no pep 696 default — these
-    /// make explicit specialization mandatory at call sites
+    /// basedpython: reified type parameters that a call must supply a value
+    /// for — these make explicit specialization mandatory at call sites. a
+    /// parameter with a pep 696 default is excluded, and so are `*Ts` and
+    /// `**Kwargs`: an unfilled variadic or pack binds empty, which is a
+    /// complete answer rather than a missing one
     #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
-    pub(crate) fn reified_type_params_without_default(
+    pub(crate) fn reified_type_params_requiring_argument(
         self,
         db: &'db dyn Db,
     ) -> Box<[ast::name::Name]> {
@@ -537,7 +542,11 @@ impl<'db> OverloadLiteral<'db> {
         type_params
             .type_params
             .iter()
-            .filter(|param| param.default().is_none() && reified.contains(&param.name().id))
+            .filter(|param| {
+                param.default().is_none()
+                    && param.is_type_var()
+                    && reified.contains(&param.name().id)
+            })
             .map(|param| param.name().id.clone())
             .collect()
     }
@@ -1625,13 +1634,13 @@ impl<'db> FunctionType<'db> {
     }
 
     /// basedpython: reified type parameters with no pep 696 default
-    pub(crate) fn reified_type_params_without_default(
+    pub(crate) fn reified_type_params_requiring_argument(
         self,
         db: &'db dyn Db,
     ) -> &'db [ast::name::Name] {
         self.literal(db)
             .last_definition
-            .reified_type_params_without_default(db)
+            .reified_type_params_requiring_argument(db)
     }
 
     /// basedpython: a *pristine* reified generic — reified and not yet put
