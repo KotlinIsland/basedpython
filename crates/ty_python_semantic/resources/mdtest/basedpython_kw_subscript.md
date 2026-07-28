@@ -26,3 +26,18 @@ class B[T]: ...
 def f(x: B[T=int]) -> None:
     reveal_type(x)  # revealed: B[int]
 ```
+
+## a keyword argument is not a parameter field
+
+a keyword argument shares its encoding with the labelled field of a parameter list and of an
+anonymous named tuple. those two are always parenthesized, so an unparenthesized subscript slice
+stays a keyword subscript.
+
+```by
+class M[K, V]: ...
+
+def f(x: M[K=int, V=str], y: (int, /, name: str) -> bool, z: (a: int, b: str)) -> None:
+    reveal_type(x)  # revealed: M[int, str]
+    reveal_type(y)  # revealed: (int, /, name: str) -> bool
+    reveal_type(z)  # revealed: (a: int, b: str)
+```

@@ -65,8 +65,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
         let mut positional: Vec<String> = Vec::new();
         for element in elements {
             if let Expr::Named(n) = element
-                && let Expr::Name(target) = n.target.as_ref()
-                && matches!(target.ctx, ruff_python_ast::ExprContext::Invalid)
+                && n.label().is_some()
             {
                 fields.push(self.value_src(n.value.as_ref()));
             } else {
@@ -99,9 +98,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
     /// whether the subscript carries a keyword field (`x[a=1]`) — the parser
     /// spells one as a named expression whose target is [`ExprContext::Invalid`]
     fn is_keyword_field(element: &Expr) -> bool {
-        matches!(element, Expr::Named(n)
-            if matches!(n.target.as_ref(), Expr::Name(t)
-                if matches!(t.ctx, ruff_python_ast::ExprContext::Invalid)))
+        matches!(element, Expr::Named(n) if n.label().is_some())
     }
 
     fn subscript_elements(sub: &ruff_python_ast::ExprSubscript) -> Vec<&Expr> {
@@ -117,8 +114,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
             .into_iter()
             .map(|element| {
                 if let Expr::Named(n) = element
-                    && let Expr::Name(target) = n.target.as_ref()
-                    && matches!(target.ctx, ruff_python_ast::ExprContext::Invalid)
+                    && let Some(target) = n.label()
                 {
                     return format!(
                         "{}={}",
@@ -169,8 +165,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
         // (`A[R=int]` with `class A[T=int, R=str]` → `A[int, int]`).
         // single-typevar class falls back to dropping the kw name
         if let Expr::Named(n) = sub.slice.as_ref()
-            && let Expr::Name(target) = n.target.as_ref()
-            && matches!(target.ctx, ruff_python_ast::ExprContext::Invalid)
+            && let Some(target) = n.label()
         {
             if let Some(types) = self.types
                 && let Some(typevars) = types.class_typevars(&sub.value)
@@ -232,8 +227,7 @@ impl<'src, T: TypeInfo + ?Sized> KwSubscript<'src, T> {
             let mut positional: Vec<&Expr> = Vec::new();
             for elt in &t.elts {
                 if let Expr::Named(n) = elt
-                    && let Expr::Name(target) = n.target.as_ref()
-                    && matches!(target.ctx, ruff_python_ast::ExprContext::Invalid)
+                    && let Some(target) = n.label()
                 {
                     by_name.insert(target.id.as_str(), n.value.as_ref());
                 } else {

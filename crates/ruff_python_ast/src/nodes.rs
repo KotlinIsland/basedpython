@@ -2,8 +2,8 @@
 
 use crate::AtomicNodeIndex;
 use crate::generated::{
-    ExprBytesLiteral, ExprDict, ExprFString, ExprList, ExprName, ExprSet, ExprStringLiteral,
-    ExprTString, ExprTuple, PatternMatchAs, PatternMatchOr, StmtClassDef,
+    ExprBytesLiteral, ExprDict, ExprFString, ExprList, ExprName, ExprNamed, ExprSet,
+    ExprStringLiteral, ExprTString, ExprTuple, PatternMatchAs, PatternMatchOr, StmtClassDef,
 };
 use std::borrow::Cow;
 use std::fmt;
@@ -2640,6 +2640,27 @@ impl ExprName {
     }
 }
 
+impl ExprNamed {
+    /// basedpython: the *label* this node names, if it spells a labelled field
+    /// rather than a walrus assignment
+    ///
+    /// a keyword subscript argument (`A[foo=int]`), an anonymous named tuple
+    /// field (`(foo: int)`, `(foo=1)`) and a parameter-shape field
+    /// (`(int, /, foo: T)`) all carry the field name in `target`, marked with
+    /// [`ExprContext::Invalid`]: a label neither binds a name nor refers to
+    /// one, whereas a walrus target always binds and so carries
+    /// [`ExprContext::Store`]
+    ///
+    /// which separator stands between the label and its value (`=` or `:`)
+    /// belongs to the surrounding surface form, not to this node
+    pub fn label(&self) -> Option<&ExprName> {
+        match self.target.as_ref() {
+            Expr::Name(name) if name.is_invalid() => Some(name),
+            _ => None,
+        }
+    }
+}
+
 impl ExprList {
     pub fn iter(&self) -> std::slice::Iter<'_, Expr> {
         self.elts.iter()
@@ -2684,26 +2705,30 @@ impl ExprTuple {
     /// `is_parameter_shape` field, marker positions, and named-field
     /// presence, so callers don't have to set the flag manually
     pub fn has_parameter_shape(&self) -> bool {
-        // a Named expression in `elts` only counts as a parameter-spec
-        // field label when its target name has `Invalid` ctx — real walrus
+        // a Named expression in `elts` only counts as a parameter-spec field
+        // label when its target name has `Invalid` ctx — real walrus
         // expressions have `Store`/`Load` ctx and must not be misread as
-        // tuple fields
+        // tuple fields. the labelled encoding is also shared with the keyword
+        // subscript form (`A[foo=int]`), whose tuple is the *unparenthesized*
+        // slice of a subscript; a parameter list is always parenthesized, so
+        // the label heuristic only applies to a parenthesized tuple
         self.is_parameter_shape
             || self.parameter_slash().is_some()
             || self.parameter_star().is_some()
-            || self.elts.iter().any(|e| {
-                if let Expr::Named(n) = e {
-                    if let Expr::Name(name) = n.target.as_ref() {
-                        return matches!(name.ctx, ExprContext::Invalid);
-                    }
-                    if let Expr::Starred(s) = n.target.as_ref() {
-                        if let Expr::Name(name) = s.value.as_ref() {
-                            return matches!(name.ctx, ExprContext::Invalid);
+            || (self.parenthesized
+                && self.elts.iter().any(|e| {
+                    if let Expr::Named(n) = e {
+                        if n.label().is_some() {
+                            return true;
+                        }
+                        if let Expr::Starred(s) = n.target.as_ref() {
+                            if let Expr::Name(name) = s.value.as_ref() {
+                                return name.is_invalid();
+                            }
                         }
                     }
-                }
-                false
-            })
+                    false
+                }))
     }
 }
 

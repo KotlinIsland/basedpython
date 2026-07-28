@@ -24,6 +24,20 @@ impl FormatNodeRule<ExprNamed> for FormatExprNamed {
         let comments = f.context().comments().clone();
         let dangling = comments.dangling(item);
 
+        // basedpython: a keyword subscript argument — `A[foo=int]`. the field
+        // shares the `Named` encoding with the walrus, so printing the `:=`
+        // form here would turn a keyword field into an assignment. a label
+        // never breaks from its `=`, matching a call's keyword arguments
+        if let Some(label) = item.label() {
+            write!(f, [label.format(), token("=")])?;
+
+            if !dangling.is_empty() {
+                write!(f, [dangling_comments(dangling), hard_line_break()])?;
+            }
+
+            return write!(f, [value.format()]);
+        }
+
         write!(
             f,
             [
@@ -51,6 +65,13 @@ impl NeedsParentheses for ExprNamed {
         parent: AnyNodeRef,
         _context: &PyFormatContext,
     ) -> OptionalParentheses {
+        // basedpython: a keyword subscript argument can never be parenthesized —
+        // `A[(foo=int)]` parses as an anonymous named tuple value, not a field
+        // of the subscript
+        if self.label().is_some() {
+            return OptionalParentheses::Never;
+        }
+
         // Unlike tuples, named expression parentheses are not part of the range even when
         // mandatory. See [PEP 572](https://peps.python.org/pep-0572/) for details.
         if parent.is_stmt_ann_assign()

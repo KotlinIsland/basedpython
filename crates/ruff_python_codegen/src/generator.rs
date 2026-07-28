@@ -1149,17 +1149,28 @@ impl<'a> Generator<'a> {
                     }
                 });
             }
-            Expr::Named(ast::ExprNamed {
-                target,
-                value,
-                range: _,
-                node_index: _,
-            }) => {
-                group_if!(precedence::NAMED_EXPR, {
-                    self.unparse_expr(target, precedence::NAMED_EXPR);
-                    self.p(" := ");
-                    self.unparse_expr(value, precedence::NAMED_EXPR + 1);
-                });
+            Expr::Named(
+                named @ ast::ExprNamed {
+                    target,
+                    value,
+                    range: _,
+                    node_index: _,
+                },
+            ) => {
+                // basedpython: a keyword subscript argument (`A[foo=int]`) shares the
+                // `Named` encoding with the walrus, so it has to be told apart by its
+                // label or it unparses as an assignment
+                if let Some(label) = named.label() {
+                    self.p(label.id.as_str());
+                    self.p("=");
+                    self.unparse_expr(value, precedence::COMMA);
+                } else {
+                    group_if!(precedence::NAMED_EXPR, {
+                        self.unparse_expr(target, precedence::NAMED_EXPR);
+                        self.p(" := ");
+                        self.unparse_expr(value, precedence::NAMED_EXPR + 1);
+                    });
+                }
             }
             Expr::BinOp(ast::ExprBinOp {
                 left,
@@ -1565,11 +1576,23 @@ impl<'a> Generator<'a> {
                 self.p("]");
             }
             Expr::Tuple(tuple) => {
-                // basedpython: a parameter-shape tuple (`(int, /, name: str)`) shares its
-                // encoding with a callable's parameter list, so render it the same way. the
-                // anonymous named tuple *value* form `(name=expr)` reuses the labelled-field
-                // encoding for a different surface syntax, so it keeps the generic rendering
-                if tuple.has_parameter_shape() && !tuple.is_anon_named_tuple_value {
+                // basedpython: the anonymous named tuple *value* form `(name=expr)` reuses
+                // the labelled-field encoding of a parameter list for a different surface
+                // syntax. its parentheses are part of that syntax rather than tuple
+                // grouping, so they are always emitted — and never a trailing comma, which
+                // would reparse the lone field as a plain one-element tuple
+                if tuple.is_anon_named_tuple_value {
+                    self.p("(");
+                    let mut first = true;
+                    for elt in tuple {
+                        self.p_delim(&mut first, ", ");
+                        self.unparse_expr(elt, precedence::COMMA);
+                    }
+                    self.p(")");
+                }
+                // a parameter-shape tuple (`(int, /, name: str)`) shares its encoding with a
+                // callable's parameter list, so render it the same way
+                else if tuple.has_parameter_shape() {
                     self.p("(");
                     self.unparse_parameter_spec(
                         &tuple.elts,
@@ -2106,7 +2129,25 @@ mod tests {
     /// parameter-field rendering
     #[test]
     fn basedpython_anon_named_tuple_value_is_not_a_parameter_field() {
-        assert!(!based_round_trip("m = (name=1)").contains("name: 1"));
+        assert_eq!(based_round_trip("m = (name=1)"), "m = (name=1)");
+        assert_eq!(
+            based_round_trip("n = (name=1, other=\"a\")"),
+            "n = (name=1, other=\"a\")"
+        );
+    }
+
+    /// A keyword subscript argument shares the labelled-field encoding with a parameter
+    /// field, and its `Named` node with the walrus, so it round-trips only when told
+    /// apart from both
+    #[test_case::test_case("a: A[foo=int]" ; "single field")]
+    #[test_case::test_case("b: A[foo=int, bar=str]" ; "several fields")]
+    #[test_case::test_case("c: Two[bytes, foo=int]" ; "positional then field")]
+    #[test_case::test_case("d = f[int, foo=str]()" ; "reified generic call")]
+    #[test_case::test_case("e = A[foo=int]()" ; "value position")]
+    #[test_case::test_case("g: A[foo=Two[bytes, bar=int]]" ; "nested")]
+    #[test_case::test_case("h: A[foo=(int, str)]" ; "tuple value keeps its parentheses")]
+    fn basedpython_keyword_subscript_round_trip(contents: &str) {
+        assert_eq!(based_round_trip(contents), contents);
     }
 
     /// An `implementation A for B:` header has no python spelling, so it
