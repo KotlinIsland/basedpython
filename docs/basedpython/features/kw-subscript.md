@@ -54,3 +54,18 @@ all-positional subscripts are untouched
 - [type parameter separators](type-param-separators.md) — `/` and `*` restrict which type
     parameters may be given by name
 - [tuple member access (`expr.N`)](tuple-index.md) — dot-indexing companion form
+
+## inlay hints
+
+a positional type argument of a generic with more than one type parameter gets
+that parameter's name as an inlay hint, in the keyword form the subscript would
+take:
+
+```by
+class Cache[Key, Value]: ...
+
+def f(c: Cache[⟨Key=⟩str, ⟨Value=⟩int]) -> None: ...
+```
+
+a subscript that already binds by keyword is left alone, as is a single-typevar
+generic (whose keyword is dropped anyway) and a variadic one

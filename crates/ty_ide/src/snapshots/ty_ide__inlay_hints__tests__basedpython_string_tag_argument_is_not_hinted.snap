@@ -1,0 +1,33 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ call_argument_names: true, ..InlayHintSettings::none() })"
+---
+
+def sql(query: str) -> int:
+    return 0
+
+a = sql"select"
+b = sql([query=]"select")
+
+---------------------------------------------
+info[inlay-hint-location]: Inlay Hint Target
+ --> main.by:2:9
+  |
+2 | def sql(query: str) -> int:
+  |         ^^^^^
+  |
+info: Source
+ --> main2.py:6:10
+  |
+6 | b = sql([query=]"select")
+  |          ^^^^^
+  |
+
+---------------------------------------------
+info[inlay-hint-edit]: Inlay hint edits
+--> main.by:1:1
+  |
+5 | a = sql"select"
+  - b = sql("select")
+6 + b = sql(query="select")
+  |

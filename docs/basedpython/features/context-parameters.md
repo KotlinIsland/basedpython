@@ -108,3 +108,23 @@ pass the argument themselves
     not tracked
 - a declaration inside a conditional branch counts lexically; whether the
     branch executed is not tracked
+
+## inlay hints
+
+a call site shows the arguments it fills implicitly, written where the lowering
+writes them — after the explicit arguments, by keyword. each variable navigates
+to the declaration that resolved it:
+
+```by
+def f(context a: int) -> None: ...
+def g(x: str, context a: int) -> None: ...
+
+context b = 1
+
+f(⟨a=b⟩)
+g("y"⟨, a=b⟩)
+```
+
+a parameter given explicitly is not hinted, and neither is one that failed to
+resolve — `missing-context-argument` and `ambiguous-context-argument` already
+say so

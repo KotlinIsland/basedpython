@@ -173,3 +173,25 @@ def f(x=1, a=_MISSING):
 
 the checker still treats the parameter as required. see
 [mutable defaults](mutable-defaults.md) for the sentinel machinery this shares
+
+## inlay hints
+
+the block's implicit `it` parameter is shown as an inlay hint with the type the
+callee gives it, written where a parameter list would go:
+
+```by
+def apply(fn: (int) -> None) -> None:
+    fn(1)
+
+apply⟨it: int⟩:
+    print(it)
+```
+
+the same hint covers the other parameters basedpython synthesizes rather than
+spells — an [`init(...)`](init-method.md) method's receiver, and a
+[property accessor](properties.md)'s:
+
+```by
+class C:
+    init(⟨self⟩a: int)
+```

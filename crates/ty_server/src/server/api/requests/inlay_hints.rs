@@ -93,10 +93,17 @@ impl RetriableRequestHandler for InlayHintRequestHandler {}
 
 fn inlay_hint_kind(inlay_hint_kind: &InlayHintKind) -> lsp_types::InlayHintKind {
     match inlay_hint_kind {
-        InlayHintKind::Type => lsp_types::InlayHintKind::Type,
-        InlayHintKind::CallArgumentName => lsp_types::InlayHintKind::Parameter,
+        InlayHintKind::Type
         // basedpython: an inferred exception set is a type, like a return type
-        InlayHintKind::Raises => lsp_types::InlayHintKind::Type,
+        | InlayHintKind::Raises
+        | InlayHintKind::Variance
+        | InlayHintKind::TypeArgument
+        | InlayHintKind::Override
+        | InlayHintKind::NumericPromotion
+        | InlayHintKind::RevealedType => lsp_types::InlayHintKind::Type,
+        InlayHintKind::CallArgumentName
+        | InlayHintKind::ImplicitParameter
+        | InlayHintKind::ImplicitArgument => lsp_types::InlayHintKind::Parameter,
     }
 }
 

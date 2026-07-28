@@ -46,3 +46,17 @@ Box[int](42)   # unchanged — runtime parametrized constructor
 
 only locally-defined function targets are recognized. for cross-module
 generic calls, prefer the inference path (`identity(x)`)
+
+## inlay hints
+
+a generic function call with no explicit specialization gets the type arguments
+ty inferred as an inlay hint, written where the `[...]` would go:
+
+```by
+def identity[T](x: T) -> T: ...
+
+identity⟨[int]⟩(x)
+```
+
+constructor calls are not hinted — a generic constructor's specialization is
+already the type of the value it produces

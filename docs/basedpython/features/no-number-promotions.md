@@ -46,4 +46,15 @@ a `.py` file imported into a `.by` file keeps python's typing-spec meaning of
 `float` / `complex`. the strict basedpython meaning only applies inside `.by`
 files; consumers reading the transpiled `.py` output see the strict types too
 
+## inlay hints
+
+in a `.py` file, where the promotion does apply, the extra arms are shown as an
+inlay hint so the widening is visible at the annotation:
+
+```python
+def f(x: float⟨ | int⟩, y: complex⟨ | float | int⟩): ...
+```
+
+a `.by` file promotes nothing, so nothing is hinted there
+
 [spec]: https://typing.readthedocs.io/en/latest/spec/special-types.html#special-cases-for-float-and-complex

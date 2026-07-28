@@ -1,5 +1,6 @@
 use std::{fmt, vec};
 
+use itertools::{Either, Itertools};
 use rustc_hash::FxHashMap;
 
 use crate::importer::{ImportAction, ImportRequest, Importer, MembersInScope};
@@ -7,12 +8,19 @@ use crate::{Db, HasNavigationTargets, NavigationTarget};
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
+use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::source_order::{self, SourceOrderVisitor, TraversalSignal};
 use ruff_python_ast::{self as ast, AnyNodeRef, ArgOrKeyword, Expr, ExprUnaryOp, Stmt, UnaryOp};
 use ruff_python_codegen::Stylist;
+use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_module_resolver::file_to_module;
-use ty_python_semantic::types::ide_support::{inferred_raises, inlay_hint_call_argument_details};
+use ty_python_semantic::types::context_params::implicit_context_arguments;
+use ty_python_semantic::types::ide_support::{
+    InlayHintCallArgumentDetails, hintable_parameter_type, inferred_override, inferred_raises,
+    inferred_type_param_variance, inlay_hint_call_argument_details, is_reveal_type_function,
+    numeric_promotion, type_parameter_names,
+};
 use ty_python_semantic::types::{Type, TypeDetail};
 use ty_python_semantic::{HasType, SemanticModel};
 
@@ -204,6 +212,153 @@ impl InlayHint {
         }
     }
 
+    /// basedpython: the variance inferred for a type parameter that declares
+    /// none, shown where the keyword would be written.
+    fn inferred_variance(position: TextSize, variance: ast::Variance) -> Self {
+        let keyword = match variance {
+            ast::Variance::Covariant => "out ",
+            ast::Variance::Contravariant => "in ",
+            ast::Variance::Invariant => "in out ",
+        };
+
+        Self {
+            position,
+            kind: InlayHintKind::Variance,
+            label: InlayHintLabel {
+                parts: vec![keyword.into()],
+            },
+            text_edits: vec![],
+        }
+    }
+
+    /// basedpython: a method that overrides a superclass member without saying
+    /// so, shown where the `override` modifier would be written.
+    fn inferred_override(position: TextSize, superclass: Option<NavigationTarget>) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::Override,
+            label: InlayHintLabel {
+                parts: vec![InlayHintLabelPart::new("override ").with_target(superclass)],
+            },
+            text_edits: vec![],
+        }
+    }
+
+    /// The type arguments inferred for a generic call, shown between the callee
+    /// and its argument list — where an explicit specialization would be written.
+    fn call_type_arguments(db: &dyn Db, position: TextSize, arguments: &[Type]) -> Self {
+        let mut parts = vec!["[".into()];
+
+        for (index, argument) in arguments.iter().enumerate() {
+            if index > 0 {
+                parts.push(", ".into());
+            }
+            parts.push(
+                InlayHintLabelPart::new(argument.display(db).to_string())
+                    .with_target(argument.navigation_targets(db).into_iter().next()),
+            );
+        }
+
+        parts.push("]".into());
+
+        Self {
+            position,
+            kind: InlayHintKind::TypeArgument,
+            label: InlayHintLabel { parts },
+            text_edits: vec![],
+        }
+    }
+
+    /// basedpython: the arguments a call site fills implicitly from the
+    /// `context` declarations in scope, shown where the lowering writes them.
+    fn implicit_context_arguments(
+        position: TextSize,
+        leading_comma: bool,
+        arguments: &[(&Name, &Name, Option<NavigationTarget>)],
+    ) -> Self {
+        let mut parts = Vec::new();
+
+        for (index, (parameter, variable, declaration)) in arguments.iter().enumerate() {
+            if leading_comma || index > 0 {
+                parts.push(", ".into());
+            }
+            parts.push(format!("{parameter}=").into());
+            parts.push(InlayHintLabelPart::new(variable.as_str()).with_target(declaration.clone()));
+        }
+
+        Self {
+            position,
+            kind: InlayHintKind::ImplicitArgument,
+            label: InlayHintLabel { parts },
+            text_edits: vec![],
+        }
+    }
+
+    /// The name of the type parameter a positional type argument fills.
+    fn type_argument_name(position: TextSize, name: &str) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::TypeArgument,
+            label: InlayHintLabel {
+                parts: vec![InlayHintLabelPart::new(name), "=".into()],
+            },
+            text_edits: vec![],
+        }
+    }
+
+    /// The arms the typing spec's numeric promotion adds to a `float` /
+    /// `complex` type expression.
+    fn numeric_promotion(position: TextSize, arms: &'static str) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::NumericPromotion,
+            label: InlayHintLabel {
+                parts: vec![arms.into()],
+            },
+            text_edits: vec![],
+        }
+    }
+
+    /// The type a `reveal_type` call reveals, shown at the end of its line.
+    fn revealed_type(db: &dyn Db, position: TextSize, revealed: Type) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::RevealedType,
+            label: InlayHintLabel {
+                parts: vec![format!("  revealed: {}", revealed.display(db)).into()],
+            },
+            text_edits: vec![],
+        }
+    }
+
+    /// A parameter the source never spells, shown where it would be written.
+    fn implicit_parameter(db: &dyn Db, position: TextSize, name: &str, ty: Option<Type>) -> Self {
+        let mut parts = vec![InlayHintLabelPart::new(name)];
+
+        if let Some(ty) = ty {
+            parts.push(format!(": {}", ty.display(db)).into());
+        }
+
+        Self {
+            position,
+            kind: InlayHintKind::ImplicitParameter,
+            label: InlayHintLabel { parts },
+            text_edits: vec![],
+        }
+    }
+
+    /// The inferred type of an unannotated lambda parameter.
+    fn lambda_parameter_type(db: &dyn Db, position: TextSize, ty: Type) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::Type,
+            label: InlayHintLabel {
+                parts: vec![format!(": {}", ty.display(db)).into()],
+            },
+            text_edits: vec![],
+        }
+    }
+
     pub fn display(&self) -> InlayHintDisplay<'_> {
         InlayHintDisplay { inlay_hint: self }
     }
@@ -215,6 +370,21 @@ pub enum InlayHintKind {
     CallArgumentName,
     /// basedpython: a function's inferred exception set
     Raises,
+    /// basedpython: the variance inferred for a class type parameter
+    Variance,
+    /// The type arguments inferred for a generic call, or the name of the type
+    /// parameter a positional type argument fills
+    TypeArgument,
+    /// basedpython: a method that overrides a superclass member without saying so
+    Override,
+    /// The arms the typing spec's numeric promotion adds to `float` / `complex`
+    NumericPromotion,
+    /// The type a `reveal_type` call reveals
+    RevealedType,
+    /// basedpython: a parameter the source never spells (`it`, `self`)
+    ImplicitParameter,
+    /// basedpython: an argument a call site fills from a `context` declaration
+    ImplicitArgument,
 }
 
 #[derive(Debug, Clone)]
@@ -313,15 +483,21 @@ pub fn inlay_hints(
     let stylist = Stylist::from_tokens(ast.tokens(), source.as_str());
     let importer = Importer::new(db, &stylist, file, source.as_str(), &ast);
 
-    let mut visitor = InlayHintVisitor::new(db, file, importer, range, settings);
+    let mut visitor = InlayHintVisitor::new(db, file, importer, source.as_str(), range, settings);
 
     visitor.visit_body(ast.suite());
+
+    // hints are collected in visit order, which is not quite source order: a
+    // `raises` or `override` hint is added before the definition it sits on is
+    // walked into, and a revealed type lands at the end of its own line
+    visitor.hints.sort_by_key(|hint| hint.position);
 
     visitor.hints
 }
 
 /// Settings to control the behavior of inlay hints.
 #[derive(Clone, Debug)]
+#[expect(clippy::struct_excessive_bools, reason = "one toggle per hint kind")]
 pub struct InlayHintSettings {
     /// Whether to show variable type hints.
     ///
@@ -349,12 +525,134 @@ pub struct InlayHintSettings {
     ///     raise TypeError
     /// ```
     pub inferred_raises: bool,
+
+    /// basedpython: whether to show the variance ty infers for a class type
+    /// parameter that does not declare one.
+    ///
+    /// ```by
+    /// class A["out "T]:
+    ///     def get(self) -> T: ...
+    /// ```
+    pub inferred_variance: bool,
+
+    /// Whether to show the type arguments inferred for a generic call.
+    ///
+    /// ```by
+    /// def identity[T](x: T) -> T: ...
+    /// identity"[int]"(1)
+    /// ```
+    pub call_type_arguments: bool,
+
+    /// Whether to show the name of the type parameter a positional type
+    /// argument fills.
+    ///
+    /// ```python
+    /// x: dict["_KT="str, "_VT="int]
+    /// ```
+    pub type_argument_names: bool,
+
+    /// basedpython: whether to show `override` on a method that overrides a
+    /// superclass member without saying so.
+    ///
+    /// ```by
+    /// class B(A):
+    ///     "override "def f(self): ...
+    /// ```
+    pub inferred_override: bool,
+
+    /// Whether to show the extra arms the typing spec's numeric promotion adds
+    /// to `float` and `complex` in a type expression.
+    ///
+    /// ```python
+    /// def f(x: float" | int"): ...
+    /// ```
+    pub numeric_promotions: bool,
+
+    /// Whether to show the type a `reveal_type` call reveals, at the end of its
+    /// line.
+    ///
+    /// ```python
+    /// reveal_type(1)"  revealed: Literal[1]"
+    /// ```
+    pub revealed_types: bool,
+
+    /// basedpython: whether to show the parameters a construct binds but the
+    /// source never spells — a trailing lambda's `it`, an `init(...)` or
+    /// property accessor's `self`.
+    ///
+    /// ```by
+    /// f(2)"it: int":
+    ///     print(it)
+    /// ```
+    pub implicit_parameters: bool,
+
+    /// Whether to show the inferred type of an unannotated lambda parameter.
+    ///
+    /// ```python
+    /// map(lambda x": int": x + 1, [1])
+    /// ```
+    pub lambda_parameter_types: bool,
+
+    /// basedpython: whether to show the arguments a call site fills implicitly
+    /// from the `context` declarations in scope.
+    ///
+    /// ```by
+    /// def f(context a: int): ...
+    ///
+    /// context b = 1
+    /// f("a=b")
+    /// ```
+    pub implicit_arguments: bool,
     // Add any new setting that enables additional inlays to `any_enabled`.
 }
 
 impl InlayHintSettings {
+    /// Every hint disabled — a base for enabling one kind at a time.
+    pub fn none() -> Self {
+        Self {
+            variable_types: false,
+            call_argument_names: false,
+            inferred_raises: false,
+            inferred_variance: false,
+            call_type_arguments: false,
+            type_argument_names: false,
+            inferred_override: false,
+            numeric_promotions: false,
+            revealed_types: false,
+            implicit_parameters: false,
+            lambda_parameter_types: false,
+            implicit_arguments: false,
+        }
+    }
+
     pub fn any_enabled(&self) -> bool {
-        self.variable_types || self.call_argument_names || self.inferred_raises
+        let Self {
+            variable_types,
+            call_argument_names,
+            inferred_raises,
+            inferred_variance,
+            call_type_arguments,
+            type_argument_names,
+            inferred_override,
+            numeric_promotions,
+            revealed_types,
+            implicit_parameters,
+            lambda_parameter_types,
+            implicit_arguments,
+        } = *self;
+
+        variable_types
+            || call_argument_names
+            || inferred_raises
+            || inferred_variance
+            || call_type_arguments
+            || type_argument_names
+            || inferred_override
+            || numeric_promotions
+            || revealed_types
+            || implicit_parameters
+            || lambda_parameter_types
+            || implicit_arguments
     }
 }
 
@@ -364,6 +662,15 @@ impl Default for InlayHintSettings {
             variable_types: true,
             call_argument_names: true,
             inferred_raises: true,
+            inferred_variance: true,
+            call_type_arguments: true,
+            type_argument_names: true,
+            inferred_override: true,
+            numeric_promotions: true,
+            revealed_types: true,
+            implicit_parameters: true,
+            lambda_parameter_types: true,
+            implicit_arguments: true,
         }
     }
 }
@@ -375,6 +682,7 @@ struct InlayHintImportContext<'a, 'db> {
     dynamic_imports: &'a mut FxHashMap<DynamicallyImportedMember, ImportAction>,
 }
 
+#[expect(clippy::struct_excessive_bools, reason = "independent traversal state")]
 struct InlayHintVisitor<'a, 'db> {
     db: &'db dyn Db,
     model: SemanticModel<'db>,
@@ -382,11 +690,21 @@ struct InlayHintVisitor<'a, 'db> {
     /// We store these imports so that we don't create multiple imports for the same symbol.
     dynamic_imports: FxHashMap<DynamicallyImportedMember, ImportAction>,
     importer: Importer<'db>,
+    source: &'a str,
     hints: Vec<InlayHint>,
     assignment_rhs: Option<&'a Expr>,
     range: TextRange,
     settings: &'a InlayHintSettings,
     in_no_edits_allowed: bool,
+    /// Whether the file uses basedpython syntax, which several hints spell.
+    is_basedpython: bool,
+    /// Whether we are inside a type expression, where `float` promotes and a
+    /// subscript's arguments fill type parameters.
+    in_type_expression: bool,
+    /// Whether we are inside a `lambda`'s parameter list.
+    in_lambda: bool,
+    /// The class whose body we are directly inside, if any.
+    enclosing_class: Option<Type<'db>>,
 }
 
 impl<'a, 'db> InlayHintVisitor<'a, 'db> {
@@ -394,6 +712,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         db: &'db dyn Db,
         file: File,
         importer: Importer<'db>,
+        source: &'a str,
         range: TextRange,
         settings: &'a InlayHintSettings,
     ) -> Self {
@@ -402,11 +721,16 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             model: SemanticModel::new(db, file),
             dynamic_imports: FxHashMap::default(),
             importer,
+            source,
             hints: Vec::new(),
             assignment_rhs: None,
             range,
             settings,
             in_no_edits_allowed: false,
+            is_basedpython: file.source_type(db).is_basedpython(),
+            in_type_expression: false,
+            in_lambda: false,
+            enclosing_class: None,
         }
     }
 
@@ -454,6 +778,267 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
 
         self.hints
             .push(InlayHint::inferred_raises(self.db, position, raised));
+    }
+
+    /// basedpython: hint the variance ty infers for each type parameter of
+    /// `class` that does not declare one.
+    fn add_inferred_variances(&mut self, class: &ast::StmtClassDef) {
+        if !self.settings.inferred_variance || !self.is_basedpython {
+            return;
+        }
+
+        let Some(type_params) = class.type_params.as_deref() else {
+            return;
+        };
+
+        // only look the class up once, and only when something could be hinted
+        let undeclared = || {
+            type_params
+                .iter()
+                .filter_map(ast::TypeParam::as_type_var)
+                .filter(|type_var| type_var.variance.is_none())
+        };
+
+        if undeclared().next().is_none() {
+            return;
+        }
+
+        let Some(class_ty) = class.inferred_type(&self.model) else {
+            return;
+        };
+
+        for type_var in undeclared() {
+            let Some(variance) =
+                inferred_type_param_variance(self.db, class_ty, type_var.name.as_str())
+            else {
+                continue;
+            };
+
+            self.hints.push(InlayHint::inferred_variance(
+                type_var.range().start(),
+                variance,
+            ));
+        }
+    }
+
+    /// basedpython: hint `override` on a method that overrides a superclass
+    /// member without saying so.
+    fn add_inferred_override(&mut self, function: &ast::StmtFunctionDef) {
+        if !self.settings.inferred_override || !self.is_basedpython {
+            return;
+        }
+
+        let Some(class_ty) = self.enclosing_class else {
+            return;
+        };
+
+        let Some(superclass) = function
+            .inferred_type(&self.model)
+            .and_then(|ty| inferred_override(self.db, class_ty, ty, &function.name))
+        else {
+            return;
+        };
+
+        // the range of a `def` excludes its decorators, so this is the modifier
+        // position even on a decorated method
+        self.hints.push(InlayHint::inferred_override(
+            function.range().start(),
+            superclass.navigation_targets(self.db).into_iter().next(),
+        ));
+    }
+
+    /// Hint the type arguments inferred for a generic call.
+    ///
+    /// Only a *function* call is hinted: a generic constructor's specialization
+    /// is already the type of the value it produces, and `C[int](…)` is python's
+    /// own syntax, so nothing about it is hidden.
+    fn add_call_type_arguments(
+        &mut self,
+        call: &ast::ExprCall,
+        callee: Option<Type<'db>>,
+        arguments: &[Type<'db>],
+    ) {
+        if !self.settings.call_type_arguments || arguments.is_empty() {
+            return;
+        }
+
+        if callee.is_none_or(|callee| callee.as_function_literal().is_none()) {
+            return;
+        }
+
+        // an explicit specialization is already written out, and a call whose
+        // type arguments all went unsolved says nothing worth reading
+        if call.func.is_subscript_expr() || arguments.iter().all(Type::is_unknown) {
+            return;
+        }
+
+        self.hints.push(InlayHint::call_type_arguments(
+            self.db,
+            call.func.range().end(),
+            arguments,
+        ));
+    }
+
+    /// basedpython: hint the arguments a call site fills implicitly from the
+    /// `context` declarations in scope, written where the lowering writes them
+    /// — after the explicit arguments, by keyword.
+    fn add_implicit_context_arguments(&mut self, call: &ast::ExprCall, callee: Option<Type<'db>>) {
+        if !self.settings.implicit_arguments || !self.is_basedpython {
+            return;
+        }
+
+        let Some(callee) = callee else {
+            return;
+        };
+
+        let arguments = implicit_context_arguments(self.db, self.model.file(), callee, call);
+        if arguments.is_empty() {
+            return;
+        }
+
+        let labelled: Vec<_> = arguments
+            .iter()
+            .map(|argument| {
+                (
+                    &argument.parameter,
+                    &argument.variable,
+                    Some(NavigationTarget::from(argument.declaration)),
+                )
+            })
+            .collect();
+
+        // the lowering appends to the explicit arguments, so an empty call
+        // takes the position just inside its `(`
+        let last_explicit = call.arguments.iter_source_order().last();
+        let position = last_explicit.map_or_else(
+            || call.arguments.range().start() + TextSize::from(1),
+            |argument| argument.range().end(),
+        );
+
+        self.hints.push(InlayHint::implicit_context_arguments(
+            position,
+            last_explicit.is_some(),
+            &labelled,
+        ));
+    }
+
+    /// Hint the name of the type parameter each positional argument of a
+    /// subscripted generic fills.
+    fn add_type_argument_names(&mut self, subscript: &ast::ExprSubscript) {
+        if !self.settings.type_argument_names {
+            return;
+        }
+
+        let Some(names) = subscript
+            .value
+            .inferred_type(&self.model)
+            .and_then(|ty| type_parameter_names(self.db, ty))
+        else {
+            return;
+        };
+
+        // a single type parameter has nothing to disambiguate, and a count
+        // mismatch means a variadic generic with no fixed parameter per argument
+        if names.len() < 2 || names.len() != subscript_arguments(&subscript.slice).count() {
+            return;
+        }
+
+        for (name, argument) in names.iter().zip(subscript_arguments(&subscript.slice)) {
+            self.hints.push(InlayHint::type_argument_name(
+                argument.range().start(),
+                name,
+            ));
+        }
+    }
+
+    /// Hint the extra arms the typing spec's numeric promotion adds to a
+    /// `float` / `complex` type expression.
+    fn add_numeric_promotion(&mut self, expr: &Expr) {
+        if !self.settings.numeric_promotions || !self.in_type_expression {
+            return;
+        }
+
+        let Some(arms) = expr
+            .inferred_type(&self.model)
+            .and_then(|ty| numeric_promotion(self.db, self.model.file(), ty))
+        else {
+            return;
+        };
+
+        self.hints
+            .push(InlayHint::numeric_promotion(expr.range().end(), arms));
+    }
+
+    /// Hint the type a `reveal_type` call reveals, at the end of its line.
+    fn add_revealed_type(&mut self, call: &ast::ExprCall) {
+        if !self.settings.revealed_types {
+            return;
+        }
+
+        let Some(revealed) = call
+            .arguments
+            .args
+            .iter()
+            .exactly_one()
+            .ok()
+            .and_then(|argument| argument.inferred_type(&self.model))
+        else {
+            return;
+        };
+
+        self.hints.push(InlayHint::revealed_type(
+            self.db,
+            self.source.line_end(call.range().end()),
+            revealed,
+        ));
+    }
+
+    /// basedpython: hint a parameter the source never spells. The parser gives
+    /// those an empty range at the position they would occupy.
+    fn add_implicit_parameter(&mut self, parameter: &ast::Parameter) {
+        if !self.settings.implicit_parameters
+            || !self.is_basedpython
+            || !parameter.range().is_empty()
+        {
+            return;
+        }
+
+        let ty = hintable_parameter_type(&self.model, parameter);
+
+        self.hints.push(InlayHint::implicit_parameter(
+            self.db,
+            parameter.range().start(),
+            parameter.name.as_str(),
+            ty,
+        ));
+    }
+
+    /// Hint the inferred type of an unannotated lambda parameter.
+    fn add_lambda_parameter_type(&mut self, parameter: &ast::Parameter) {
+        if !self.settings.lambda_parameter_types
+            || !self.in_lambda
+            || parameter.annotation.is_some()
+            || parameter.range().is_empty()
+        {
+            return;
+        }
+
+        let Some(ty) = hintable_parameter_type(&self.model, parameter) else {
+            return;
+        };
+
+        self.hints.push(InlayHint::lambda_parameter_type(
+            self.db,
+            parameter.name.range().end(),
+            ty,
+        ));
+    }
+
+    /// Visit an expression that denotes a type rather than a value.
+    fn visit_type_expr(&mut self, expr: &'a Expr) {
+        let in_type_expression = std::mem::replace(&mut self.in_type_expression, true);
+        self.visit_expr(expr);
+        self.in_type_expression = in_type_expression;
     }
 
     fn add_call_argument_name(
@@ -515,12 +1100,56 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                 self.visit_expr(&expr.value);
                 return;
             }
-            Stmt::FunctionDef(function) => self.add_inferred_raises(function),
+            Stmt::FunctionDef(function) => {
+                self.add_inferred_raises(function);
+                self.add_inferred_override(function);
+
+                // a function nested in a method is not itself a class member
+                let enclosing_class = self.enclosing_class.take();
+                source_order::walk_stmt(self, stmt);
+                self.enclosing_class = enclosing_class;
+
+                return;
+            }
+            Stmt::ClassDef(class) => {
+                self.add_inferred_variances(class);
+
+                let enclosing_class =
+                    std::mem::replace(&mut self.enclosing_class, class.inferred_type(&self.model));
+                source_order::walk_stmt(self, stmt);
+                self.enclosing_class = enclosing_class;
+
+                return;
+            }
+            Stmt::TypeAlias(type_alias) => {
+                self.visit_expr(&type_alias.name);
+
+                if let Some(type_params) = &type_alias.type_params {
+                    self.visit_type_params(type_params);
+                }
+
+                self.visit_type_expr(&type_alias.value);
+
+                return;
+            }
             Stmt::For(_) => {}
             _ => {}
         }
 
         source_order::walk_stmt(self, stmt);
+    }
+
+    fn visit_annotation(&mut self, expr: &'a Expr) {
+        self.visit_type_expr(expr);
+    }
+
+    fn visit_parameter(&mut self, parameter: &'a ast::Parameter) {
+        if self.enter_node(parameter.into()).is_traverse() {
+            self.add_implicit_parameter(parameter);
+            self.add_lambda_parameter_type(parameter);
+        }
+
+        source_order::walk_parameter(self, parameter);
     }
 
     fn visit_expr(&mut self, expr: &'a Expr) {
@@ -533,6 +1162,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                         }
                     }
                 }
+                self.add_numeric_promotion(expr);
                 source_order::walk_expr(self, expr);
             }
             Expr::Attribute(attribute) => {
@@ -543,11 +1173,37 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
                         }
                     }
                 }
+                self.add_numeric_promotion(expr);
+                source_order::walk_expr(self, expr);
+            }
+            Expr::Lambda(_) => {
+                // every parameter below a lambda belongs to a lambda
+                let in_lambda = std::mem::replace(&mut self.in_lambda, true);
+                source_order::walk_expr(self, expr);
+                self.in_lambda = in_lambda;
+            }
+            Expr::Subscript(subscript) if self.in_type_expression => {
+                self.add_type_argument_names(subscript);
                 source_order::walk_expr(self, expr);
             }
             Expr::Call(call) => {
-                let details = inlay_hint_call_argument_details(self.db, &self.model, call)
-                    .unwrap_or_default();
+                let callee = call.func.inferred_type(&self.model);
+
+                if callee.is_some_and(|callee| is_reveal_type_function(self.db, callee)) {
+                    self.add_revealed_type(call);
+                }
+
+                // a string tag's argument is the abutting literal, not something
+                // the reader passed by position, and a `cast` operator's are its
+                // own surface syntax
+                let details = if call.is_string_tag || call.is_cast || call.is_checked_cast {
+                    InlayHintCallArgumentDetails::default()
+                } else {
+                    inlay_hint_call_argument_details(self.db, &self.model, call).unwrap_or_default()
+                };
+
+                self.add_call_type_arguments(call, callee, &details.type_arguments);
+                self.add_implicit_context_arguments(call, callee);
 
                 self.visit_expr(&call.func);
 
@@ -594,6 +1250,27 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
             }
         }
     }
+}
+
+/// The arguments a subscript passes, one per element of its slice.
+///
+/// A basedpython keyword subscript (`M[V=int]`) already names the parameter it
+/// fills, so a slice carrying one has nothing to hint and yields no arguments.
+fn subscript_arguments(slice: &Expr) -> impl Iterator<Item = &Expr> {
+    let elements = match slice {
+        Expr::Tuple(tuple) if !tuple.parenthesized => Either::Left(tuple.elts.iter()),
+        _ => Either::Right(std::iter::once(slice)),
+    };
+
+    // a keyword element's target is parser-synthesized, which `Invalid` marks
+    let has_keyword = elements.clone().any(|element| {
+        element
+            .as_named_expr()
+            .and_then(|named| named.target.as_name_expr())
+            .is_some_and(|target| target.ctx.is_invalid())
+    });
+
+    elements.filter(move |_| !has_keyword)
 }
 
 /// Given a positional argument, check if the expression is the "same name"
@@ -5872,7 +6549,7 @@ Source with applied edits:
 
         assert_snapshot!(test.inlay_hints(), @"
 
-        def foo(a: int, b: str, /, c: float, d: bool = True, *, e: int, f: str = 'default'): pass
+        def foo(a: int, b: str, /, c: float[ | int], d: bool = True, *, e: int, f: str = 'default'): pass
         foo(1, 'pos', [c=]3.14, [d=]False, e=42)
         foo(1, 'pos', [c=]3.14, e=42, f='custom')
         ---------------------------------------------
@@ -7723,7 +8400,7 @@ Source with applied edits:
         from typing import Any
 
         def foo(x: Any):
-            a[: Any | Literal["some"]] = getattr(x, 'foo', "some")
+            a[: Any | Literal["some"]] = getattr[[Literal["some"]]](x, 'foo', "some")
 
         ---------------------------------------------
         info[inlay-hint-location]: Inlay Hint Target
@@ -7735,7 +8412,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:9
            |
-        LL |     a[: Any | Literal["some"]] = getattr(x, 'foo', "some")
+        LL |     a[: Any | Literal["some"]] = getattr[[Literal["some"]]](x, 'foo', "some")
            |         ^^^
            |
 
@@ -7748,7 +8425,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:15
            |
-        LL |     a[: Any | Literal["some"]] = getattr(x, 'foo', "some")
+        LL |     a[: Any | Literal["some"]] = getattr[[Literal["some"]]](x, 'foo', "some")
            |               ^^^^^^^
            |
 
@@ -7761,8 +8438,21 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:23
            |
-        LL |     a[: Any | Literal["some"]] = getattr(x, 'foo', "some")
+        LL |     a[: Any | Literal["some"]] = getattr[[Literal["some"]]](x, 'foo', "some")
            |                       ^^^^^^
+           |
+
+        info[inlay-hint-location]: Inlay Hint Target
+          --> stdlib/builtins.byi:LL:7
+           |
+        LL | class str(Sequence[str]):
+           |       ^^^
+           |
+        info: Source
+          --> main2.py:LL:43
+           |
+        LL |     a[: Any | Literal["some"]] = getattr[[Literal["some"]]](x, 'foo', "some")
+           |                                           ^^^^^^^^^^^^^^^
            |
 
         ---------------------------------------------
@@ -8283,7 +8973,7 @@ Source with applied edits:
         def wrap[T](x: T) -> list[T]:
             return [x]
 
-        y[: list[Inner]] = wrap([x=]Outer.Inner())
+        y[: list[Inner]] = wrap[[Inner]]([x=]Outer.Inner())
 
         ---------------------------------------------
         info[inlay-hint-location]: Inlay Hint Target
@@ -8295,7 +8985,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:5
            |
-        LL | y[: list[Inner]] = wrap([x=]Outer.Inner())
+        LL | y[: list[Inner]] = wrap[[Inner]]([x=]Outer.Inner())
            |     ^^^^
            |
 
@@ -8308,8 +8998,21 @@ Source with applied edits:
         info: Source
          --> main2.py:8:10
           |
-        8 | y[: list[Inner]] = wrap([x=]Outer.Inner())
+        8 | y[: list[Inner]] = wrap[[Inner]]([x=]Outer.Inner())
           |          ^^^^^
+          |
+
+        info[inlay-hint-location]: Inlay Hint Target
+         --> module.py:3:23
+          |
+        3 |                 class Inner: ...
+          |                       ^^^^^
+          |
+        info: Source
+         --> main2.py:8:26
+          |
+        8 | y[: list[Inner]] = wrap[[Inner]]([x=]Outer.Inner())
+          |                          ^^^^^
           |
 
         info[inlay-hint-location]: Inlay Hint Target
@@ -8319,10 +9022,10 @@ Source with applied edits:
           |             ^
           |
         info: Source
-         --> main2.py:8:26
+         --> main2.py:8:35
           |
-        8 | y[: list[Inner]] = wrap([x=]Outer.Inner())
-          |                          ^
+        8 | y[: list[Inner]] = wrap[[Inner]]([x=]Outer.Inner())
+          |                                   ^
           |
 
         ---------------------------------------------
@@ -8596,9 +9299,259 @@ Source with applied edits:
         );
 
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
-            variable_types: false,
-            call_argument_names: false,
             inferred_raises: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn basedpython_inferred_variance() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class Source[T]:
+                def get(self) -> T: ...
+
+            class Sink[T]:
+                def put(self, value: T) -> None: ...
+
+            class Both[T]:
+                value: T
+
+            class Declared[out T]:
+                def get(self) -> T: ...
+
+            class Plain:
+                pass
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_variance: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn basedpython_inferred_override() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A:
+                def f(self) -> None: ...
+                def g(self) -> None: ...
+                def __init__(self) -> None: ...
+
+            class B(A):
+                def f(self) -> None: ...
+                override def g(self) -> None: ...
+                def h(self) -> None: ...
+                def __init__(self) -> None: ...
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_override: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn basedpython_implicit_parameters() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def apply(fn: (int) -> None) -> None:
+                fn(1)
+
+            class C:
+                init(a: int)
+
+            apply:
+                print(it)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            implicit_parameters: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn basedpython_implicit_context_arguments() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def f(context a: int) -> None: ...
+            def g(x: str, context a: int, context c: str) -> None: ...
+
+            context b = 1
+            context d = 'x'
+
+            f()
+            f(a=2)
+            g('y')
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            implicit_arguments: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn basedpython_string_tag_argument_is_not_hinted() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def sql(query: str) -> int:
+                return 0
+
+            a = sql\"select\"
+            b = sql(\"select\")
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            call_argument_names: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn call_type_arguments() {
+        let mut test = inlay_hint_test(
+            "
+            def identity[T](x: T) -> T:
+                return x
+
+            def pair[T, U](a: T, b: U) -> tuple[T, U]:
+                return (a, b)
+
+            def plain(x: int) -> int:
+                return x
+
+            identity(1)
+            pair('a', 2)
+            plain(1)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            call_type_arguments: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn type_argument_names() {
+        let mut test = inlay_hint_test(
+            "
+            class Cache[Key, Value]:
+                pass
+
+            def f(
+                a: dict[str, int],
+                b: list[int],
+                c: Cache[str, int],
+                d: tuple[int, str],
+            ) -> None: ...
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            type_argument_names: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn basedpython_type_argument_names() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class Cache[Key, Value]: ...
+
+            type Alias = Cache[str, int]
+
+            def f(
+                a: Cache[Key=str, Value=int],
+                b: Cache[str, Value=int],
+            ) -> None: ...
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            type_argument_names: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn numeric_promotions() {
+        let mut test = inlay_hint_test(
+            "
+            def f(x: float, y: complex, z: int) -> float:
+                return x
+
+            a: float = 1.0
+            b: list[float] = []
+            c = float(1)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            numeric_promotions: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn basedpython_numeric_promotions_are_not_hinted() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def f(x: float, y: complex) -> None: ...
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            numeric_promotions: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn revealed_types() {
+        let mut test = inlay_hint_test(
+            "
+            reveal_type(1)
+
+            x = 'a'
+            reveal_type(x)  # a trailing comment
+
+            def f(y: int) -> None:
+                reveal_type(y)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            revealed_types: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn lambda_parameter_types() {
+        let mut test = inlay_hint_test(
+            "
+            def apply(fn: Callable[[int], str]) -> None: ...
+
+            from typing import Callable
+
+            apply(lambda x: str(x))
+            f = lambda y: y
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            lambda_parameter_types: true,
+            ..InlayHintSettings::none()
         }));
     }
 

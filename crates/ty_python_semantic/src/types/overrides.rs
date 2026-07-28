@@ -1414,7 +1414,7 @@ pub(super) enum MethodKind<'db> {
     NotSynthesized,
 }
 
-fn is_constructor_like_method(name: &str) -> bool {
+pub(crate) fn is_constructor_like_method(name: &str) -> bool {
     matches!(
         name,
         "__init__" | "__new__" | "__post_init__" | "__init_subclass__"

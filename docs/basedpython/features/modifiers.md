@@ -159,3 +159,18 @@ def _helper(): ...
     `__all__` even when no `export`/`public` declarations exist
 - visibility keywords are module-level only. inside a class they are stripped
     without renaming
+
+## inlay hints
+
+a method that overrides a superclass member without saying so gets an
+`override` inlay hint, written where the modifier would go. the hint navigates
+to the superclass it overrides:
+
+```by
+class B(A):
+    ⟨override ⟩def f(self): ...
+```
+
+constructor-like methods (`__init__`, `__new__`, `__post_init__`,
+`__init_subclass__`) and name-mangled private methods are exempt, matching
+`missing-override-decorator`

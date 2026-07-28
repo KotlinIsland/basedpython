@@ -363,6 +363,15 @@ pub struct InlayHintOptions {
     variable_types: Option<bool>,
     call_argument_names: Option<bool>,
     inferred_raises: Option<bool>,
+    inferred_variance: Option<bool>,
+    call_type_arguments: Option<bool>,
+    type_argument_names: Option<bool>,
+    inferred_override: Option<bool>,
+    numeric_promotions: Option<bool>,
+    revealed_types: Option<bool>,
+    implicit_parameters: Option<bool>,
+    lambda_parameter_types: Option<bool>,
+    implicit_arguments: Option<bool>,
 }
 
 impl InlayHintOptions {
@@ -371,6 +380,15 @@ impl InlayHintOptions {
             variable_types: self.variable_types.unwrap_or(true),
             call_argument_names: self.call_argument_names.unwrap_or(true),
             inferred_raises: self.inferred_raises.unwrap_or(true),
+            inferred_variance: self.inferred_variance.unwrap_or(true),
+            call_type_arguments: self.call_type_arguments.unwrap_or(true),
+            type_argument_names: self.type_argument_names.unwrap_or(true),
+            inferred_override: self.inferred_override.unwrap_or(true),
+            numeric_promotions: self.numeric_promotions.unwrap_or(true),
+            revealed_types: self.revealed_types.unwrap_or(true),
+            implicit_parameters: self.implicit_parameters.unwrap_or(true),
+            lambda_parameter_types: self.lambda_parameter_types.unwrap_or(true),
+            implicit_arguments: self.implicit_arguments.unwrap_or(true),
         }
     }
 }

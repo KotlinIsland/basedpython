@@ -1,0 +1,19 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ inferred_variance: true, ..InlayHintSettings::none() })"
+---
+
+class Source[[out ]T]:
+    def get(self) -> T: ...
+
+class Sink[[in ]T]:
+    def put(self, value: T) -> None: ...
+
+class Both[[in out ]T]:
+    value: T
+
+class Declared[out T]:
+    def get(self) -> T: ...
+
+class Plain:
+    pass
