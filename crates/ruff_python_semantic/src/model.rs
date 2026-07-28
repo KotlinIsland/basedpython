@@ -783,7 +783,7 @@ impl<'a> SemanticModel<'a> {
             );
             ReadResult::WildcardImport
         } else if self.is_basedpython_class_base_self_ref(name)
-            || self.is_basedpython_pseudo_keyword(name)
+            || self.is_basedpython_transpile_resolved_name(name)
             || self.is_basedpython_type_is_lhs(name)
         {
             // basedpython resolves these forms at transpile time, so the name is
@@ -800,20 +800,33 @@ impl<'a> SemanticModel<'a> {
         }
     }
 
-    /// True if `name` is a basedpython pseudo-keyword that has no Python
-    /// binding but is recognized by the transpiler:
+    /// True if `name` is one of the fixed set of names that basedpython resolves
+    /// at transpile time, so it has no Python binding in the source but is never
+    /// undefined at runtime:
     /// - `constraints`, used in typevar bound syntax (`T: constraints(int, str)`)
     /// - `dynamic`, the surface spelling of `typing.Any`, in any type position.
     ///   in value position `dynamic` is an ordinary identifier, so it stays
     ///   subject to the usual undefined-name check
-    fn is_basedpython_pseudo_keyword(&self, name: &ast::ExprName) -> bool {
+    /// - `Some`, the present-case optional constructor, lowered to the injected
+    ///   `Optional(...)` wrapper
+    /// - `Character` and `Overlapping`, `ty_extensions` special forms implicitly
+    ///   available in a type position
+    /// - the `typing` members basedpython auto-imports (`Optional`, `Sequence`, …)
+    ///
+    /// the position gates mirror the fallbacks in ty's `infer_name_load`, so the
+    /// linter and the type checker agree on which names resolve. this deliberately
+    /// covers only names that are fixed strings: an enum member reached through
+    /// context-sensitive resolution (`a: Color = Red`) is an arbitrary identifier
+    /// whose resolution needs the expected type, which ruff has no access to, so
+    /// it is still reported
+    fn is_basedpython_transpile_resolved_name(&self, name: &ast::ExprName) -> bool {
         if !self.in_basedpython_file() {
             return false;
         }
         match name.id.as_str() {
-            "constraints" => true,
-            "dynamic" => self.in_type_definition(),
-            _ => false,
+            "constraints" | "Some" => true,
+            "dynamic" | "Character" | "Overlapping" => self.in_type_definition(),
+            other => ruff_python_stdlib::basedpython::is_implicit_typing_name(other),
         }
     }
 
