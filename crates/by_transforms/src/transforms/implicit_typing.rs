@@ -8,7 +8,8 @@
 //! `Literal`, `TypeIs`, `Protocol`, `Generic`, `NewType`, `TypeVar`,
 //! `ParamSpec`, `TypeVarTuple`, `Unpack`, `NamedTuple`, `TypedDict`, …)
 //! and runtime-only helpers (`cast`, `get_type_hints`, `overload`, ...)
-//! are intentionally not on this list — see `IMPLICIT_TYPING_NAMES`.
+//! are intentionally not on this list — see
+//! [`ruff_python_stdlib::basedpython::IMPLICIT_TYPING_NAMES`].
 //!
 //! a name is imported only when it isn't already bound at module scope, so
 //! existing `from typing import X` and user-defined `X = ...` win.
@@ -17,82 +18,10 @@ use std::collections::BTreeSet;
 
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, ExprName, Stmt};
+use ruff_python_stdlib::basedpython::IMPLICIT_TYPING_NAMES;
 
 use crate::transforms::ast_driver::{PassContext, TypeAwarePass};
 use crate::type_info::TypeInfo;
-
-/// `typing` members that are implicitly available when referenced in `.by`
-/// source. limited to names whose role is to construct a type or describe
-/// a structural protocol — names with dedicated basedpython syntax
-/// (`Callable`, `Final`, `Literal`, `Protocol`, etc.) and runtime helpers
-/// (`cast`, `get_type_hints`, `overload`, etc.) are excluded
-pub(crate) const IMPLICIT_TYPING_NAMES: &[&str] = &[
-    "AbstractSet",
-    "Annotated",
-    "Any",
-    "AnyStr",
-    "AsyncContextManager",
-    "AsyncGenerator",
-    "AsyncIterable",
-    "AsyncIterator",
-    "Awaitable",
-    "BinaryIO",
-    "ByteString",
-    "Callable",
-    "ChainMap",
-    "Collection",
-    "Concatenate",
-    "Container",
-    "ContextManager",
-    "Coroutine",
-    "Counter",
-    "DefaultDict",
-    "Deque",
-    "Dict",
-    "FrozenSet",
-    "Generator",
-    "Hashable",
-    "IO",
-    "ItemsView",
-    "Iterable",
-    "Iterator",
-    "KeysView",
-    "List",
-    "LiteralString",
-    "Mapping",
-    "MappingView",
-    "Match",
-    "MutableMapping",
-    "MutableSequence",
-    "MutableSet",
-    "Never",
-    "NoReturn",
-    "NotRequired",
-    "Optional",
-    "OrderedDict",
-    "Pattern",
-    "ReadOnly",
-    "Required",
-    "Reversible",
-    "Self",
-    "Sequence",
-    "Set",
-    "Sized",
-    "SupportsAbs",
-    "SupportsBytes",
-    "SupportsComplex",
-    "SupportsFloat",
-    "SupportsIndex",
-    "SupportsInt",
-    "SupportsRound",
-    "Text",
-    "TextIO",
-    "Tuple",
-    "Type",
-    "TypeGuard",
-    "Union",
-    "ValuesView",
-];
 
 fn canonical_implicit_name(s: &str) -> Option<&'static str> {
     IMPLICIT_TYPING_NAMES.iter().copied().find(|n| *n == s)
@@ -162,29 +91,6 @@ mod tests {
     use crate::python_passthrough::unchanged;
     use crate::{Config, transpile};
     use indoc::indoc;
-
-    // the implicit-typing name set is duplicated across three crates (this list,
-    // ty's `BASEDPYTHON_IMPLICIT_TYPING_NAMES`, and by_typeshed_patch's copy). if
-    // they drift, the typeshed transform strips imports ty won't provide (or keeps
-    // ones it would). this locks the two lists this crate can see together
-    #[test]
-    fn implicit_typing_names_match_ty() {
-        assert_eq!(
-            super::IMPLICIT_TYPING_NAMES,
-            ty_python_semantic::BASEDPYTHON_IMPLICIT_TYPING_NAMES,
-        );
-    }
-
-    #[test]
-    fn implicit_typing_names_sorted() {
-        // ty resolves the names with a binary search, so the list must stay sorted
-        let mut sorted = ty_python_semantic::BASEDPYTHON_IMPLICIT_TYPING_NAMES.to_vec();
-        sorted.sort_unstable();
-        assert_eq!(
-            ty_python_semantic::BASEDPYTHON_IMPLICIT_TYPING_NAMES,
-            sorted.as_slice(),
-        );
-    }
 
     fn check(input: &str, expected: &str) {
         assert_eq!(

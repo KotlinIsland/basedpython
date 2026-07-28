@@ -377,6 +377,7 @@ dependencies = [
  "anyhow",
  "ruff_python_ast",
  "ruff_python_parser",
+ "ruff_python_stdlib",
  "ruff_text_size",
  "tempfile",
  "walkdir",

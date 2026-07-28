@@ -13,9 +13,7 @@ pub use diagnostic::{
     add_inferred_python_version_hint_to_diagnostic, inferred_python_version_source_annotation,
 };
 pub use fixes::{fix_all_diagnostics, suppress_all_diagnostics};
-pub use place::{
-    BASEDPYTHON_IMPLICIT_TYPING_NAMES, basedpython_typing_added_in, basedpython_warnings_added_in,
-};
+pub use place::{basedpython_typing_added_in, basedpython_warnings_added_in};
 use ruff_db::diagnostic::{Annotation, Diagnostic, DiagnosticId, Severity, Span};
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;

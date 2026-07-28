@@ -71,3 +71,31 @@ type NDTuple[T, *Shape: int] = match *Shape:
         (NDTuple[T, *Rest],) * Dim
 
 type BadBound[*Ts: UndefinedBound] = tuple[*Ts]
+
+# the `typing` members basedpython auto-imports are implicitly available in any
+# position — the transpiler emits the matching `from typing import ...`
+implicit_annotation: Optional[Sequence[int]]
+def implicit_params(a: Mapping[str, Any], b: Iterator[int]) -> Tuple[List[int], ...]: ...
+implicit_value = Optional
+# a `typing` member basedpython does *not* auto-import is still flagged
+not_implicit: Protocol
+
+# `Some` is the present-case optional constructor, lowered to the injected
+# `Optional(...)` wrapper — it has no runtime definition to import
+some_value = Some(1)
+
+# `Character` and `Overlapping` are `ty_extensions` special forms implicitly
+# available in a type position
+a_character: Character
+overlapping_arg: Overlapping[int]
+# in value position they are ordinary names — still flagged when unbound
+print(Character, Overlapping)
+
+# known gap: an enum member reached by context-sensitive resolution is an
+# arbitrary identifier whose resolution needs the expected type, which ruff has
+# no access to. `by check` accepts it; F821 reports it, and `# noqa: F821` is
+# the escape hatch
+enum class Color:
+    case Red, Green
+
+context_sensitive: Color = Red
