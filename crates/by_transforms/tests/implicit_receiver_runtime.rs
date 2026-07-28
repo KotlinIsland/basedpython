@@ -6,8 +6,9 @@
 //! plain function, `x.fn()` called through the receiver, an unapplied `x.fn`
 //! bound as a `functools.partial`, and a trailing lambda block using the
 //! receiver's members unqualified — and runs them on a real interpreter. A
-//! misplaced receiver argument or a member bound to the wrong object would fail
-//! here even though the type-level tests pass.
+//! misplaced receiver argument, a member bound to the wrong object, or a block
+//! whose parameters don't line up with the call would fail here even though the
+//! type-level tests pass.
 //!
 //! No third-party packages are needed, so any `python3` will do; if none is
 //! found the test skips rather than fails.
@@ -50,15 +51,16 @@ def suffixed(value: int, mark: str) -> str:
 
 assert unapplied(suffixed) == "5!", "an unapplied reference binds the receiver"
 
-# a trailing lambda block sees the receiver's members unqualified
-def apply(fn: str.() -> None) -> None:
-    fn("abc")
+# a trailing lambda block sees the receiver's members unqualified, spells the
+# receiver itself `self`, and binds the callback's own argument as `it`
+def apply(fn: str.(int) -> None) -> None:
+    fn("abc", 3)
 
 seen: str = ""
 apply:
-    seen = upper() + str(len(it))
+    seen = upper() + str(it) + self
 
-assert seen == "ABC3", "block members resolve against the receiver"
+assert seen == "ABC3abc", "a block's receiver, its members and `it` all bind"
 
 print("ok")
 "##;

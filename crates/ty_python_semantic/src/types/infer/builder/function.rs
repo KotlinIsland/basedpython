@@ -10,10 +10,11 @@ use crate::{
         diagnostic::{
             FINAL_ON_NON_METHOD, INVALID_FIXTURE_TYPE, INVALID_PARAMETER_DEFAULT,
             INVALID_PARAMETRIZE, INVALID_PARAMSPEC, INVALID_TYPE_FORM, REIFIED_CLASSMETHOD,
-            TRAILING_LAMBDA_RETURN_TYPE, UNKNOWN_FIXTURE, USELESS_OVERLOAD_BODY,
-            add_type_expression_reference_link, is_invalid_typed_dict_literal,
-            report_implicit_return_type, report_invalid_generator_function_return_type,
-            report_invalid_return_type, report_shadowed_type_variable,
+            TRAILING_LAMBDA_PARAMETERS, TRAILING_LAMBDA_RETURN_TYPE, UNKNOWN_FIXTURE,
+            USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
+            is_invalid_typed_dict_literal, report_implicit_return_type,
+            report_invalid_generator_function_return_type, report_invalid_return_type,
+            report_shadowed_type_variable,
         },
         extensions,
         function::{
@@ -35,7 +36,9 @@ use crate::{
         infer_definition_types, infer_expression_types, infer_scope_types,
         lifetimes::InheritedBorrow,
         signatures::ReturnCallableTypeVarScope,
-        trailing_lambda::{trailing_lambda_it_borrow, trailing_lambda_it_type},
+        trailing_lambda::{
+            UnbindableParameters, trailing_lambda_it_borrow, trailing_lambda_it_type,
+        },
         tuple::{TupleSpecBuilder, TupleType},
         typed_dict::extract_unpacked_typed_dict_keys_from_kwargs_annotation,
     },
@@ -162,9 +165,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         crate::types::lifetimes::check_local_lifetimes(&self.context, function, inherited_borrow);
 
         // basedpython: a trailing-lambda block always returns `None`, so its
-        // callback must be declared to return `None`
+        // callback must be declared to return `None`, and it binds one argument,
+        // so its callback may not take more
         if function.is_trailing_lambda {
             self.check_trailing_lambda_callback_returns_none(function);
+            self.check_trailing_lambda_bindable_parameters(function);
         }
 
         // basedpython: a non-`once` trailing-lambda block is an ordinary closure
@@ -1517,21 +1522,25 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         function.is_trailing_lambda.then_some(function)
     }
 
-    /// basedpython: the type of a trailing lambda's implicit `it` parameter,
-    /// read from the callee's standalone-expression inference (registered by
+    /// basedpython: the type of the expression a trailing lambda block is
+    /// attached to, read from its standalone-expression inference (registered by
     /// the semantic index builder — independent of the enclosing definition's
-    /// inference, so no cycle). `None` when the callee's signature or its
-    /// last parameter's callable shape is not inspectable
+    /// inference, so no cycle)
+    fn trailing_lambda_callee_type(&self, function: &ast::StmtFunctionDef) -> Option<Type<'db>> {
+        let callee = function.trailing_lambda_callee()?;
+        let expression = self.index.try_expression(callee)?;
+        infer_expression_types(self.db(), expression, TypeContext::default())
+            .try_expression_type(callee)
+    }
+
+    /// basedpython: the type of a trailing lambda's implicit `it` parameter.
+    /// `None` when the callee's signature or its last parameter's callable shape
+    /// is not inspectable
     fn trailing_lambda_it_parameter_type(
         &self,
         function: &ast::StmtFunctionDef,
     ) -> Option<Type<'db>> {
-        let db = self.db();
-        let callee = function.trailing_lambda_callee()?;
-        let expression = self.index.try_expression(callee)?;
-        let callee_ty = infer_expression_types(db, expression, TypeContext::default())
-            .try_expression_type(callee)?;
-        trailing_lambda_it_type(db, callee_ty)
+        trailing_lambda_it_type(self.db(), self.trailing_lambda_callee_type(function)?)
     }
 
     /// basedpython: the borrow a trailing-lambda block's implicit `it` inherits
@@ -1574,19 +1583,45 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// parameter `once` — the block then runs exactly once (`with`-like). Anything
     /// unresolvable is treated as not-`once` (the restricted default).
     fn trailing_lambda_callee_is_once(&self, function: &ast::StmtFunctionDef) -> bool {
+        self.trailing_lambda_callee_type(function)
+            .is_some_and(|callee_ty| {
+                crate::types::trailing_lambda::callee_callback_is_once(self.db(), callee_ty)
+            })
+    }
+
+    /// basedpython: a trailing-lambda block binds one argument, as `it`, plus the
+    /// receiver its callback declares. Report a callback that takes more than
+    /// that: the extra arguments have no parameter to land in, and no spelling
+    /// in the body.
+    fn check_trailing_lambda_bindable_parameters(&self, function: &ast::StmtFunctionDef) {
         let db = self.db();
         let Some(callee) = function.trailing_lambda_callee() else {
-            return false;
+            return;
         };
-        let Some(expression) = self.index.try_expression(callee) else {
-            return false;
+        let Some(callee_ty) = self.trailing_lambda_callee_type(function) else {
+            return;
         };
-        let Some(callee_ty) = infer_expression_types(db, expression, TypeContext::default())
-            .try_expression_type(callee)
+        let Some(unbindable) =
+            crate::types::trailing_lambda::trailing_lambda_unbindable_parameters(db, callee_ty)
         else {
-            return false;
+            return;
         };
-        crate::types::trailing_lambda::callee_callback_is_once(db, callee_ty)
+        let Some(builder) = self
+            .context
+            .report_lint(&TRAILING_LAMBDA_PARAMETERS, callee)
+        else {
+            return;
+        };
+        let message = match unbindable {
+            UnbindableParameters::TooMany(count) => format!(
+                "a trailing-lambda block binds one argument, but this callback takes {count}"
+            ),
+            UnbindableParameters::Variadic => "a trailing-lambda block binds one argument, so it \
+                 cannot fill a callback with a variadic parameter"
+                .to_owned(),
+        };
+        let mut diagnostic = builder.into_diagnostic(message);
+        diagnostic.info("the block's suite takes the implicit parameter `it`");
     }
 
     /// basedpython: a trailing-lambda block lowers to a function returning `None`
@@ -1598,12 +1633,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let Some(callee) = function.trailing_lambda_callee() else {
             return;
         };
-        let Some(expression) = self.index.try_expression(callee) else {
-            return;
-        };
-        let Some(callee_ty) = infer_expression_types(db, expression, TypeContext::default())
-            .try_expression_type(callee)
-        else {
+        let Some(callee_ty) = self.trailing_lambda_callee_type(function) else {
             return;
         };
         let Some(return_ty) =

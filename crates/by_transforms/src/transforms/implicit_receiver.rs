@@ -9,21 +9,23 @@
 //!   in scope rather than to a member of `x`. An unapplied `x.fn` becomes a
 //!   `functools.partial`, matching how a bound method would have carried the
 //!   receiver
-//! - a bare name in a trailing lambda block that resolves to a member of the
-//!   block's receiver → `it.<name>`, where `it` is the block's implicit
-//!   parameter (the receiver itself)
+//! - a bare name in a trailing lambda block that resolves through the block's
+//!   receiver → the block's receiver parameter, either on its own (`self`) or
+//!   as the object a member is read off (`<receiver>.<name>`)
 //!
 //! Both are narrow edits nested inside the trailing-lambda template's `Src`
 //! spans, so they compose with the block lowering.
 //!
 //! [`callable`]: super::callable
 
-use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{Expr, ExprAttribute, ExprContext, Stmt};
+use ruff_python_ast::visitor::{Visitor, walk_expr};
+use ruff_python_ast::{Expr, ExprAttribute, Stmt};
 use ruff_text_size::{Ranged, TextRange};
+use ty_python_semantic::ImplicitReceiverReference;
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::extension::{arguments_span, spine_has_optional};
+use super::trailing_lambda::RECEIVER_PARAMETER;
 use crate::type_info::TypeInfo;
 
 struct ImplicitReceiverLower<'a> {
@@ -33,62 +35,10 @@ struct ImplicitReceiverLower<'a> {
     /// attribute ranges already rewritten as part of an enclosing call, so the
     /// bare-access arm doesn't rewrite them a second time
     handled: Vec<TextRange>,
-    /// the enclosing trailing lambda blocks, innermost last, and whether each
-    /// rebinds `it` — the name the receiver members are read from
-    blocks: Vec<Block>,
     needs_functools: bool,
 }
 
-/// An enclosing trailing lambda block, for the `it`-rebinding check
-struct Block {
-    rebinds_it: bool,
-    reported: bool,
-}
-
-/// Whether a block assigns `it` anywhere in its body. The lowering reads the
-/// receiver's members off that parameter, so a rebinding would silently redirect
-/// them to the new value. Nested scopes count too: this only decides whether to
-/// reject, and over-rejecting is the safe direction.
-fn rebinds_it(body: &[Stmt]) -> bool {
-    struct RebindsIt {
-        found: bool,
-    }
-
-    impl<'ast> Visitor<'ast> for RebindsIt {
-        fn visit_expr(&mut self, expr: &'ast Expr) {
-            if let Expr::Name(name) = expr
-                && name.id.as_str() == "it"
-                && matches!(name.ctx, ExprContext::Store | ExprContext::Del)
-            {
-                self.found = true;
-            }
-            walk_expr(self, expr);
-        }
-    }
-
-    let mut visitor = RebindsIt { found: false };
-    for stmt in body {
-        visitor.visit_stmt(stmt);
-    }
-    visitor.found
-}
-
 impl<'ast> Visitor<'ast> for ImplicitReceiverLower<'_> {
-    fn visit_stmt(&mut self, stmt: &'ast Stmt) {
-        if let Stmt::FunctionDef(function) = stmt
-            && function.is_trailing_lambda
-        {
-            self.blocks.push(Block {
-                rebinds_it: rebinds_it(&function.body),
-                reported: false,
-            });
-            walk_stmt(self, stmt);
-            self.blocks.pop();
-            return;
-        }
-        walk_stmt(self, stmt);
-    }
-
     fn visit_expr(&mut self, expr: &'ast Expr) {
         match expr {
             // `x.fn(a)` → `fn(x, a)`
@@ -127,15 +77,20 @@ impl<'ast> Visitor<'ast> for ImplicitReceiverLower<'_> {
                     }
                 }
             }
-            // a receiver member used unqualified inside a trailing lambda block
+            // the receiver of a trailing lambda block, or one of its members,
+            // used unqualified inside the block
             Expr::Name(name) => {
-                if name.ctx.is_load() && self.types.is_implicit_receiver_name(name) {
-                    if self.block_rebinds_it() {
-                        self.report_rebound_it();
-                    } else {
-                        self.edits
-                            .push((name.range(), vec![Fragment::Lit(format!("it.{}", name.id))]));
-                    }
+                if name.ctx.is_load()
+                    && let Some(reference) = self.types.implicit_receiver_name(name)
+                {
+                    let lowered = match reference {
+                        ImplicitReceiverReference::Receiver => RECEIVER_PARAMETER.to_owned(),
+                        ImplicitReceiverReference::Member => {
+                            format!("{RECEIVER_PARAMETER}.{}", name.id)
+                        }
+                    };
+                    self.edits
+                        .push((name.range(), vec![Fragment::Lit(lowered)]));
                 }
             }
             _ => {}
@@ -159,28 +114,6 @@ impl ImplicitReceiverLower<'_> {
         fragments.push(Fragment::Lit(")".to_owned()));
         self.edits.push((call.range(), fragments));
     }
-
-    /// whether the innermost enclosing block rebinds `it`, which the member
-    /// rewrite reads the receiver from
-    fn block_rebinds_it(&self) -> bool {
-        self.blocks.last().is_some_and(|block| block.rebinds_it)
-    }
-
-    /// report the rebinding once per block, however many members it uses
-    fn report_rebound_it(&mut self) {
-        let Some(block) = self.blocks.last_mut() else {
-            return;
-        };
-        if block.reported {
-            return;
-        }
-        block.reported = true;
-        self.errors.push(
-            "a trailing lambda block that rebinds `it` cannot use its receiver's members \
-             unqualified yet — the lowering reads them from `it`"
-                .to_owned(),
-        );
-    }
 }
 
 /// whether the access is a link of a `?.` chain, which the receiver rewrite
@@ -202,7 +135,6 @@ impl TypeAwarePass for ImplicitReceiverPass {
             edits: Vec::new(),
             handled: Vec::new(),
             errors: Vec::new(),
-            blocks: Vec::new(),
             needs_functools: false,
         };
         for stmt in stmts {
@@ -270,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn trailing_block_members_bind_to_it() {
+    fn trailing_block_members_bind_to_the_receiver_parameter() {
         let out = check(indoc! {"
             def f(fn: int.() -> None) -> None:
                 fn(1)
@@ -278,7 +210,43 @@ mod tests {
             f:
                 print(imag)
         "});
-        assert!(out.contains("print(it.imag)"), "got:\n{out}");
+        assert!(out.contains("print(_by_self.imag)"), "got:\n{out}");
+        assert!(
+            out.contains("def _trailing_lambda_0(_by_self=None, it=None):"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_trailing_block_spells_its_receiver_self() {
+        let out = check(indoc! {"
+            def f(fn: str.(int) -> None) -> None:
+                fn(\"a\", 1)
+
+            f:
+                print(upper(), it, self)
+        "});
+        assert!(
+            out.contains("print(_by_self.upper(), it, _by_self)"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn an_enclosing_self_keeps_its_meaning() {
+        // the receiver is the *last* fallback, so a method's own `self` still
+        // wins — and the block's receiver parameter is a name the source cannot
+        // spell, so it cannot be shadowed either
+        let out = check(indoc! {"
+            def f(fn: str.() -> None) -> None:
+                fn(\"a\")
+
+            class C:
+                def m(self) -> None:
+                    f:
+                        print(self, upper())
+        "});
+        assert!(out.contains("print(self, _by_self.upper())"), "got:\n{out}");
     }
 
     #[test]
@@ -295,20 +263,18 @@ mod tests {
     }
 
     #[test]
-    fn rebinding_it_is_rejected() {
-        let error = transpile(
-            indoc! {"
-                def f(fn: str.() -> None) -> None:
-                    fn(\"abc\")
+    fn a_block_local_shadows_the_receiver_spelling() {
+        // a block that binds `self` itself keeps that binding — the receiver's
+        // members are read off the block's own parameter, so they are unaffected
+        let out = check(indoc! {"
+            def f(fn: str.() -> None) -> None:
+                fn(\"abc\")
 
-                f:
-                    it = 5
-                    print(upper())
-            "},
-            &Config::test_default(),
-        )
-        .expect_err("a block that rebinds `it` should be rejected");
-        assert!(error.contains("rebinds `it`"), "got:\n{error}");
+            f:
+                self = 5
+                print(self, upper())
+        "});
+        assert!(out.contains("print(self, _by_self.upper())"), "got:\n{out}");
     }
 
     #[test]
