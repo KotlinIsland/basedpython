@@ -220,7 +220,7 @@ def f(shape: Shape):
     if let Shape.Circle(r) := shape:
         reveal_type(r)  # revealed: int
     else:
-        reveal_type(shape)  # revealed: Square & not Circle
+        reveal_type(shape)  # revealed: Square
 ```
 
 ## Consecutive `elif let` clauses
