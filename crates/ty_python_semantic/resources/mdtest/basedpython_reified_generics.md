@@ -430,6 +430,19 @@ def f[T, **Kwargs]() -> None:
 f[int, foo=str]()
 ```
 
+## a variadic and a pack in one list
+
+The pack occupies no positional slot, so a variadic beside one still absorbs every positional type
+argument the fixed parameters don't claim:
+
+```by
+def f[*Args, **Kwargs]() -> None:
+    assert Args == (int, str)
+    assert Kwargs == {"a": int, "b": str}
+
+f[int, str, a=int, b=str]()
+```
+
 ## an unfilled pack is empty
 
 Like a variadic, a pack never forces the specialization step — supplying it no fields is a complete
