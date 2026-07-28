@@ -32,8 +32,8 @@ use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
 use ruff_python_ast::helpers::{
-    consumed_keywords, if_let_keyword_range, parameter_modifiers, raises_clause_spans,
-    return_guards,
+    consumed_keywords, if_let_keyword_range, name_token_ranges, parameter_modifiers,
+    raises_clause_spans, return_guards,
 };
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, TraversalSignal, walk_arguments, walk_elif_else_clause, walk_expr,
@@ -207,6 +207,92 @@ const LIFETIME_MODIFIERS: &[&str] = &["local", "once"];
 /// The keyword introducing a basedpython narrowing return annotation, written
 /// between the `->` and the places it asserts.
 const ASSERTS_RETURN: &[&str] = &["asserts"];
+
+/// The keywords that introduce an accessor inside a basedpython property
+/// construct. They are consumed by the parser: the members it synthesizes are
+/// ranged onto the accessor bodies, not onto the headers.
+const ACCESSOR_KEYWORDS: &[&str] = &["get", "set", "field", "late"];
+
+/// basedpython: the range of the property construct `func` was synthesized from,
+/// if it is a property getter.
+///
+/// The parser lowers `var x: int` plus its accessor blocks into a getter, an
+/// optional backing declaration and an optional setter, and marks the getter with
+/// a synthetic decorator spanning the whole construct — the same span the
+/// transpiler and the formatter claim for it.
+fn property_construct(func: &ast::StmtFunctionDef) -> Option<TextRange> {
+    func.decorator_list.iter().find_map(|decorator| {
+        let Expr::Name(marker) = &decorator.expression else {
+            return None;
+        };
+        matches!(marker.id.as_str(), "__property__" | "__static_property__").then(|| marker.range())
+    })
+}
+
+/// One member of a property construct, and which part of the source it stands
+/// for. Only a setter can declare a name in its header.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AccessorPiece {
+    Getter,
+    Setter,
+    Backing,
+}
+
+/// A part of a property member that stands for source text of its own.
+enum AccessorContent<'a> {
+    Statement(&'a Stmt),
+    Annotation(&'a Expr),
+    Value(&'a Expr),
+}
+
+impl Ranged for AccessorContent<'_> {
+    fn range(&self) -> TextRange {
+        match self {
+            AccessorContent::Statement(statement) => statement.range(),
+            AccessorContent::Annotation(expr) | AccessorContent::Value(expr) => expr.range(),
+        }
+    }
+}
+
+/// The value a property's backing declaration stores, which for a property
+/// written `var x: int = 0` is the initialiser from the construct's head.
+fn property_backing_value(statement: &Stmt) -> Option<&Expr> {
+    match statement {
+        Stmt::AnnAssign(assignment) => assignment.value.as_deref(),
+        Stmt::Assign(assignment) => Some(&assignment.value),
+        _ => None,
+    }
+}
+
+/// The parts of a property member that stand for the accessor it was built from,
+/// in source order.
+///
+/// Anything ranged outside the member is the construct's head reaching it a second
+/// time — the declared type on a backing declaration or on a setter's parameter —
+/// and anything with an empty range is synthesized outright, as in the pass-through
+/// accessors a `var` gets for free.
+fn accessor_content(statement: &Stmt) -> Vec<AccessorContent<'_>> {
+    let accessor = statement.range();
+    let mut content: Vec<AccessorContent<'_>> = match statement {
+        Stmt::FunctionDef(function) => function
+            .body
+            .iter()
+            .map(AccessorContent::Statement)
+            .collect(),
+        Stmt::AnnAssign(assignment) => [
+            Some(AccessorContent::Annotation(&assignment.annotation)),
+            assignment.value.as_deref().map(AccessorContent::Value),
+        ]
+        .into_iter()
+        .flatten()
+        .collect(),
+        Stmt::Assign(assignment) => vec![AccessorContent::Value(&assignment.value)],
+        _ => Vec::new(),
+    };
+    content.retain(|node| !node.range().is_empty() && accessor.contains_range(node.range()));
+    content.sort_by_key(Ranged::start);
+    content
+}
 
 /// The name a place is rooted at — `self` in `self.data`.
 fn place_root(place: &Expr) -> Option<&ast::ExprName> {
@@ -895,6 +981,160 @@ impl<'db> SemanticTokenVisitor<'db> {
         }
     }
 
+    /// Walks a class body, taking each basedpython property construct as a unit.
+    ///
+    /// A property is parsed into several members that are all ranged back onto the
+    /// one construct, so they are neither in source order nor each other's
+    /// disjoint spans — walking them as ordinary statements would emit tokens
+    /// backwards.
+    fn visit_class_body(&mut self, body: &[Stmt]) {
+        let mut members = body.iter().peekable();
+        while let Some(statement) = members.next() {
+            let Some(construct) = statement
+                .as_function_def_stmt()
+                .and_then(property_construct)
+                .filter(|construct| construct.contains_range(statement.range()))
+            else {
+                self.visit_stmt(statement);
+                continue;
+            };
+
+            // the getter leads the group; the backing declaration and the setter
+            // follow it, inside the same construct
+            let mut group = vec![(statement, AccessorPiece::Getter)];
+            while let Some(member) = members
+                .next_if(|member| construct.contains_range(member.range()))
+                .map(|member| {
+                    let piece = if member.is_function_def_stmt() {
+                        AccessorPiece::Setter
+                    } else {
+                        AccessorPiece::Backing
+                    };
+                    (member, piece)
+                })
+            {
+                group.push(member);
+            }
+
+            self.visit_property_construct(&group, construct);
+        }
+    }
+
+    /// basedpython: emits the tokens of one property construct in source order.
+    ///
+    /// The construct's head (`var x: int`) is written once but reaches the AST
+    /// several times — as the getter's name and return annotation, as the setter's
+    /// name and parameter annotation, and as the backing declaration's type — so it
+    /// is emitted from the getter alone. What remains of each member is the
+    /// accessor it was built from, whose header keywords the parser consumed and
+    /// whose body is ordinary source.
+    fn visit_property_construct(&mut self, group: &[(&Stmt, AccessorPiece)], construct: TextRange) {
+        let Some(getter) = group
+            .first()
+            .and_then(|(statement, _)| statement.as_function_def_stmt())
+        else {
+            return;
+        };
+
+        // accessors are written below the head, so the first one bounds it
+        let head = TextRange::new(
+            construct.start(),
+            group
+                .iter()
+                .filter(|(statement, _)| !statement.range().is_empty())
+                .map(|(statement, _)| statement.range().start())
+                .min()
+                .unwrap_or(construct.end()),
+        );
+
+        // `var` / `let` and any modifier keywords ahead of the name, as one token
+        // like every other basedpython declaration prefix
+        self.add_token(
+            self.keyword_range(TextRange::new(construct.start(), getter.name.start())),
+            SemanticTokenType::Keyword,
+            SemanticTokenModifier::empty(),
+        );
+        self.add_token(
+            getter.name.range(),
+            SemanticTokenType::Property,
+            SemanticTokenModifier::DEFINITION,
+        );
+        let mut cursor = getter.name.end();
+
+        if let Some(returns) = getter
+            .returns
+            .as_deref()
+            .filter(|returns| !returns.range().is_empty() && head.contains_range(returns.range()))
+        {
+            self.visit_annotation(returns);
+            cursor = returns.end();
+        }
+
+        // the property's own initialiser is written in the head but carried by the
+        // backing declaration, which stores it
+        for initialiser in group.iter().filter_map(|(statement, _)| {
+            property_backing_value(statement).filter(|value| head.contains_range(value.range()))
+        }) {
+            self.visit_value_expression(initialiser);
+            cursor = initialiser.end();
+        }
+
+        let mut pieces: Vec<(&Stmt, AccessorPiece)> = group
+            .iter()
+            .copied()
+            .filter(|(statement, _)| !statement.range().is_empty())
+            .collect();
+        pieces.sort_by_key(|(statement, _)| statement.range().start());
+
+        for (statement, piece) in pieces {
+            let content = accessor_content(statement);
+            // `get` / `set` / `field` / `late`, plus the name a setter binds
+            self.add_accessor_header(
+                cursor,
+                content.first().map_or(statement.end(), Ranged::start),
+                piece == AccessorPiece::Setter,
+            );
+            // an accessor body is a function body: what it names is not a member of
+            // the class the construct is written in
+            let prev_in_class = self.in_class_scope;
+            self.in_class_scope = self.in_class_scope && piece == AccessorPiece::Backing;
+            for node in content {
+                match node {
+                    AccessorContent::Statement(statement) => self.visit_stmt(statement),
+                    AccessorContent::Annotation(annotation) => self.visit_annotation(annotation),
+                    AccessorContent::Value(value) => self.visit_value_expression(value),
+                }
+            }
+            self.in_class_scope = prev_in_class;
+            cursor = statement.end();
+        }
+    }
+
+    /// basedpython: highlights an accessor's header, which the synthesized members
+    /// keep no node for. Every name there is one of the [`ACCESSOR_KEYWORDS`],
+    /// except the parameter a setter binds.
+    fn add_accessor_header(&mut self, start: TextSize, end: TextSize, binds_parameter: bool) {
+        if start > end {
+            return;
+        }
+        let source = self.source;
+        for name in name_token_ranges(source, TextRange::new(start, end)) {
+            let classification = if ACCESSOR_KEYWORDS.contains(&&source[name]) {
+                Some((SemanticTokenType::Keyword, SemanticTokenModifier::empty()))
+            } else if binds_parameter {
+                Some((
+                    SemanticTokenType::Parameter,
+                    SemanticTokenModifier::DEFINITION,
+                ))
+            } else {
+                None
+            };
+            if let Some((token_type, modifiers)) = classification {
+                self.add_token(name, token_type, modifiers);
+            }
+        }
+    }
+
     fn visit_expr_with_type_form(&mut self, expr: &Expr, in_type_form: bool) {
         let prev_in_type_form = self.in_type_form;
         self.in_type_form = in_type_form;
@@ -1067,7 +1307,7 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 let prev_in_class = self.in_class_scope;
                 self.in_class_scope = true;
                 self.expecting_docstring = true;
-                self.visit_body(&class.body);
+                self.visit_class_body(&class.body);
                 self.expecting_docstring = false;
                 self.in_class_scope = prev_in_class;
             }
@@ -1317,6 +1557,22 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     gap_start = arg.end();
                 }
                 self.visit_expr(&callable.returns);
+            }
+            // basedpython: a `field` read inside a property accessor, which the
+            // parser rewrote to the backing attribute. The receiver it synthesized
+            // has no source of its own, so the keyword is all there is to highlight
+            ast::Expr::Attribute(attr)
+                if attr.value.range().is_empty()
+                    && self
+                        .source
+                        .get(attr.attr.start().into()..attr.attr.end().into())
+                        == Some("field") =>
+            {
+                self.add_token(
+                    attr.attr.range(),
+                    SemanticTokenType::Keyword,
+                    SemanticTokenModifier::empty(),
+                );
             }
             ast::Expr::Attribute(attr) => {
                 // Visit the base expression first (e.g., 'os' in 'os.path')
@@ -5624,6 +5880,104 @@ def g(a: A) -> asserts a.data is int: ...
         "asserts" @ 93..100: Keyword
         "a" @ 101..102: Parameter
         "int" @ 111..114: Class
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_property_accessors() {
+        // a property construct is parsed into a getter, a backing declaration and
+        // a setter, all ranged back onto the one construct, so the members are not
+        // in source order and several of their nodes are synthetic
+        let test = SemanticTokenTest::new_by(
+            "
+class A:
+    var x: int
+        field = 10
+        get():
+            print(field)
+            return 10
+        set(value):
+            print(value)
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "A" @ 7..8: Class [definition]
+        "var" @ 14..17: Keyword
+        "x" @ 18..19: Property [definition]
+        "int" @ 21..24: Class
+        "field" @ 33..38: Keyword
+        "10" @ 41..43: Number
+        "get" @ 52..55: Keyword
+        "print" @ 71..76: Function
+        "field" @ 77..82: Keyword
+        "10" @ 103..105: Number
+        "set" @ 114..117: Keyword
+        "value" @ 118..123: Parameter [definition]
+        "print" @ 138..143: Function
+        "value" @ 144..149: Parameter
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_property_accessor_variants() {
+        // the head's initialiser is stored by the backing declaration, an
+        // expression accessor has no block, `late field` carries its own type, and
+        // the modifier prefix is one keyword token like every other declaration
+        let test = SemanticTokenTest::new_by(
+            "
+class B:
+    var count: int = 0
+        field
+        get() = field * 2
+        set(v):
+            field = v
+
+class C(B):
+    final override var name: str
+        late field: str
+        get():
+            return field
+
+    static let total: int
+        get():
+            return 1
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "B" @ 7..8: Class [definition]
+        "var" @ 14..17: Keyword
+        "count" @ 18..23: Property [definition]
+        "int" @ 25..28: Class
+        "0" @ 31..32: Number
+        "field" @ 41..46: Keyword
+        "get" @ 55..58: Keyword
+        "field" @ 63..68: Keyword
+        "2" @ 71..72: Number
+        "set" @ 81..84: Keyword
+        "v" @ 85..86: Parameter [definition]
+        "field" @ 101..106: Keyword
+        "v" @ 109..110: Parameter
+        "C" @ 118..119: Class [definition]
+        "B" @ 120..121: Class
+        "final override var" @ 128..146: Keyword
+        "name" @ 147..151: Property [definition]
+        "str" @ 153..156: Class
+        "late" @ 165..169: Keyword
+        "field" @ 170..175: Keyword
+        "str" @ 177..180: Class
+        "get" @ 189..192: Keyword
+        "field" @ 215..220: Keyword
+        "static let" @ 226..236: Keyword
+        "total" @ 237..242: Property [definition]
+        "int" @ 244..247: Class
+        "get" @ 256..259: Keyword
+        "1" @ 282..283: Number
         "#);
     }
 
