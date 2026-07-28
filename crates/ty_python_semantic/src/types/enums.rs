@@ -326,7 +326,10 @@ fn enum_class_literal<'db>(
     aliases.sort_unstable();
     let members_are_exhaustive = !metadata.value_construction.metaclass_may_transform_values
         && !Type::ClassLiteral(class).is_subtype_of(db, KnownClass::Flag.to_subclass_of(db))
-        && !enum_has_custom_missing(db, class);
+        && !enum_has_custom_missing(db, class)
+        && !class.as_static().is_some_and(|static_class| {
+            crate::types::class::based_enum_has_payload_variants(db, static_class)
+        });
 
     Some(EnumClassLiteral::new(
         db,

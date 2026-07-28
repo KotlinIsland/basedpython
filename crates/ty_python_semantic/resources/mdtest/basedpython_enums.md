@@ -28,7 +28,7 @@ c = Shape.Circle(2.0)
 reveal_type(c)  # revealed: Circle
 reveal_type(c.radius)  # revealed: float
 # a payload-less variant is a value, not a class — reached without parens
-reveal_type(Shape.Empty)  # revealed: Shape
+reveal_type(Shape.Empty)  # revealed: Shape.Empty
 ```
 
 ## construction is checked against the variant fields
@@ -56,6 +56,8 @@ enum class Shape:
     case Empty
 
 def describe(s: Shape) -> str:
+    # the enum name in annotation position *is* the variant union
+    reveal_type(s)  # revealed: Circle | Square | Shape.Empty
     return "shape"
 
 # every variant is assignable to the enum type
@@ -64,7 +66,7 @@ s = Shape.Square(2.0)
 s = Shape.Empty
 describe(Shape.Circle(1.0))
 
-reveal_type(s)  # revealed: Shape
+reveal_type(s)  # revealed: Shape.Empty
 ```
 
 ## `match` narrows and checks exhaustiveness
@@ -98,6 +100,157 @@ def area2(s: Shape) -> float:
             return 1.0
         case Shape.Square():
             return 2.0
+```
+
+## positional subpatterns destructure a variant's payload
+
+a payload variant's declared fields *are* its `__match_args__`, in declaration order, so
+`case Shape.Circle(r):` binds `r` to the variant's first field. keyword subpatterns address a field
+by name, defaulted fields included:
+
+```by
+enum class Shape:
+    case Circle(radius: int)
+    case Rect(width: int, height: int)
+    case Point
+    case Poly(sides: int, closed: bool = True)
+
+reveal_type(Shape.Circle.__match_args__)  # revealed: ("radius",)
+reveal_type(Shape.Rect.__match_args__)  # revealed: ("width", "height")
+
+def area(s: Shape) -> int:
+    match s:
+        case Shape.Circle(r):
+            reveal_type(r)  # revealed: int
+            return 3 * r * r
+        case Shape.Rect(w, h):
+            reveal_type(w)  # revealed: int
+            reveal_type(h)  # revealed: int
+            return w * h
+        case Shape.Point:
+            return 0
+        case Shape.Poly(n, closed=c):
+            reveal_type(n)  # revealed: int
+            reveal_type(c)  # revealed: bool
+            return n
+```
+
+## destructuring does not depend on the project's python version
+
+`dataclasses` only started deriving `__match_args__` in 3.10, but a variant's match args are part of
+the language rather than a runtime dataclass detail, and the lowering targets basedpython's 3.10
+floor regardless of what the project advertises. so a project that infers an older version — an
+ambient 3.9 interpreter, say — still destructures:
+
+```toml
+[environment]
+python-version = "3.9"
+```
+
+```by
+enum class Shape:
+    case Circle(radius: int)
+    case Point
+
+reveal_type(Shape.Circle.__match_args__)  # revealed: ("radius",)
+
+def area(s: Shape) -> int:
+    match s:
+        case Shape.Circle(r):
+            reveal_type(r)  # revealed: int
+            return r
+        case Shape.Point:
+            return 0
+```
+
+## anonymous positional fields destructure by position
+
+anonymous fields (`case Both(int, str)`) take the synthetic names `_0`, `_1`, … and destructure by
+position just the same:
+
+```by
+enum class Pair:
+    case Both(int, str)
+    case Neither
+
+def show(p: Pair) -> str:
+    match p:
+        case Pair.Both(n, s):
+            reveal_type(n)  # revealed: int
+            reveal_type(s)  # revealed: str
+            return s
+        case Pair.Neither:
+            return ""
+```
+
+## more positional subpatterns than the variant has fields
+
+```by
+enum class Shape:
+    case Circle(radius: int)
+    case Point
+
+def bad(s: Shape) -> None:
+    match s:
+        # error: [invalid-match-pattern]
+        case Shape.Circle(r, extra):
+            pass
+        case _:
+            pass
+```
+
+## positional subpatterns in a generic enum
+
+a variant's fields are specialised by the enum's type arguments before they are bound, so
+destructuring `Tree[int]` yields `int` rather than the bare typevar bound:
+
+```by
+enum class Tree[T]:
+    case Leaf(value: T)
+    case Node(left: Tree[T], right: Tree[T])
+
+def depth(t: Tree[int]) -> int:
+    match t:
+        case Tree.Leaf(v):
+            reveal_type(v)  # revealed: int
+            return 1
+        case Tree.Node(l, r):
+            reveal_type(l)  # revealed: Leaf[int] | Node[int]
+            return 1 + max(depth(l), depth(r))
+```
+
+## destructuring holds at runtime
+
+the lowered variants are frozen dataclasses, so the `__match_args__` the checker models is the one
+python derives — the transpiled `match` really does destructure:
+
+```by
+enum class Shape:
+    case Circle(radius: int)
+    case Rect(width: int, height: int)
+    case Point
+
+def area(s: Shape) -> int:
+    match s:
+        case Shape.Circle(r):
+            return 3 * r * r
+        case Shape.Rect(w, h):
+            return w * h
+        case Shape.Point:
+            return 0
+
+assert area(Shape.Circle(2)) == 12
+assert area(Shape.Rect(3, 4)) == 12
+assert area(Shape.Point) == 0
+
+def swap(s: Shape) -> Shape:
+    match s:
+        case Shape.Rect(w, h):
+            return Shape.Rect(h, w)
+        case _:
+            return s
+
+assert swap(Shape.Rect(3, 4)) == Shape.Rect(4, 3)
 ```
 
 ## defaulted fields

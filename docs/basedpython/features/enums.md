@@ -159,6 +159,10 @@ def double_radius(c: Shape.Circle) -> Shape.Circle:
 assignability follows the obvious rule: `Shape.Circle` is a subtype of
 `Shape`, but `Shape` is not a subtype of `Shape.Circle`
 
+the variant set is closed, so a variant is `final` — subclassing one is an
+error. that is what makes two sibling variants disjoint, so narrowing to one
+variant discards the rest
+
 ## derived behaviour
 
 payload variants lower to frozen dataclasses, so they come with `__eq__`,
