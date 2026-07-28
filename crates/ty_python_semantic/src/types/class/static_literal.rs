@@ -898,6 +898,12 @@ impl<'db> StaticClassLiteral<'db> {
         self.known_function_decorators(db)
             .contains(&KnownFunction::Final)
             || enum_metadata(db, ClassLiteral::Static(self)).is_some()
+            // a based-enum variant is a leaf of a closed hierarchy: the enum
+            // declares the whole variant set and the lowering emits `@final` on
+            // each one. modelling that here is what makes two sibling variants
+            // disjoint, so narrowing a variant union to one variant discards the
+            // others instead of leaving `Other & This` intersections behind
+            || self.is_enum_variant(db)
     }
 
     /// Attempt to resolve the [method resolution order] ("MRO") for this class.
@@ -2070,8 +2076,14 @@ impl<'db> StaticClassLiteral<'db> {
                     None
                 }
             }
+            // the version gate models `dataclasses`, which only started deriving
+            // `__match_args__` in 3.10. a based-enum variant is not a hand-written
+            // dataclass: its positional pattern order is part of the language, and
+            // the lowering emits a dataclass at basedpython's 3.10 floor whatever
+            // python version the project happens to advertise
             (field_policy @ CodeGeneratorKind::DataclassLike(_), "__match_args__")
-                if Program::get(db).python_version(db) >= PythonVersion::PY310 =>
+                if Program::get(db).python_version(db) >= PythonVersion::PY310
+                    || self.is_enum_variant(db) =>
             {
                 if !self.has_dataclass_param(db, field_policy, DataclassFlags::MATCH_ARGS) {
                     return None;
@@ -3994,6 +4006,28 @@ pub(crate) fn based_enum_unit_member_names<'db>(
         })
         .collect();
     (!names.is_empty()).then_some(names)
+}
+
+/// True when `class` is a based enum that declares at least one payload-bearing
+/// variant alongside its unit variants.
+///
+/// The unit variants of such an enum are still modelled as enum members (that is
+/// what makes `case Shape.Point:` narrow and count towards exhaustiveness), but
+/// the payload variants are *subclasses* of the enum, so their instances are
+/// runtime values of the enum class that no member literal denotes. The member
+/// set is therefore not closed, and treating it as closed would make the enum
+/// instance type equivalent to the union of its members — swallowing every
+/// payload variant, since each one is a subtype of the enum.
+pub(crate) fn based_enum_has_payload_variants<'db>(
+    db: &'db dyn Db,
+    class: StaticClassLiteral<'db>,
+) -> bool {
+    let module = parsed_module(db, class.file(db)).load(db);
+    let class_stmt = class.node(db, &module);
+    class_stmt.is_based_enum()
+        && class_stmt.body.iter().any(|stmt| {
+            matches!(stmt, ast::Stmt::ClassDef(variant) if variant.has_synthetic_marker("variant_tuple"))
+        })
 }
 
 fn explicit_bases_cycle_initial<'db>(

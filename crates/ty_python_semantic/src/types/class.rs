@@ -10,8 +10,8 @@ pub(super) use self::named_tuple::{
     DynamicNamedTupleAnchor, DynamicNamedTupleLiteral, NamedTupleField, NamedTupleSpec,
 };
 pub(crate) use self::static_literal::{
-    ClassLiteralFlags, ExpandedClassBaseEntry, StaticClassLiteral, based_enum_unit_member_names,
-    based_enum_variant_union, expanded_class_base_entries,
+    ClassLiteralFlags, ExpandedClassBaseEntry, StaticClassLiteral, based_enum_has_payload_variants,
+    based_enum_unit_member_names, based_enum_variant_union, expanded_class_base_entries,
 };
 pub(super) use self::typed_dict::{DynamicTypedDictAnchor, DynamicTypedDictLiteral};
 use super::dedicated::{django, pydantic, sqlalchemy};
