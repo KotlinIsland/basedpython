@@ -335,6 +335,134 @@ def f[T]() -> None:
 f[int, str]()  # error: [invalid-type-arguments]
 ```
 
+## a variadic type parameter reifies to the tuple of its arguments
+
+A `*Ts` parameter takes a whole *run* of type arguments rather than one, so its runtime value is the
+tuple of them — and the arity of a parameter list containing one is unbounded:
+
+```by
+def f[T, *Args]() -> None:
+    reveal_type(T)  # revealed: type[T@f]
+    reveal_type(Args)  # revealed: (*: type)
+    assert T === int
+    assert Args == (str, bool)
+
+f[int, str, bool]()
+```
+
+## a variadic absorbs only what the fixed parameters leave
+
+The parameters before and after the variadic claim their arguments from the front and the back; the
+variadic takes the rest, down to nothing:
+
+```by
+def f[A, *Rest, Z]() -> None:
+    assert (A, Rest, Z) == (int, (str, bytes), bool) or (A, Rest, Z) == (int, (), bool)
+
+f[int, str, bytes, bool]()
+f[int, bool]()
+```
+
+## a variadic on its own reifies
+
+A variadic is a reifying reference like any other type parameter — it does not need a plain
+parameter alongside it:
+
+```by
+def f[*Ts]() -> None:
+    assert Ts == (int, str) or Ts == ()
+
+f[int, str]()
+f()
+```
+
+## a variadic PEP 696 default fills the slot
+
+The default is a run of arguments too, so it spells as that many arguments at the injected call
+site:
+
+```by
+def f[*Ts = *tuple[int, str]]() -> None:
+    assert Ts == (int, str) or Ts == (bool,)
+
+f()
+f[bool]()
+```
+
+## an unfilled variadic is the empty run
+
+A variadic never forces the specialization step the way a plain reified parameter does: supplying it
+nothing is a complete answer, not a missing one, so a bare call stays legal and binds the empty run.
+Inference does not solve a variadic from the arguments, so a non-empty run has to be written out:
+
+```by
+def f[*Ts](*args: *Ts) -> None:
+    assert Ts == () or Ts == (int, str)
+
+f(1, "a")  # Ts is (), not (int, str)
+f[int, str](1, "a")
+```
+
+## a keyword-variadic pack reifies to its fields
+
+A `**Kwargs` pack is an ordered mapping of field name to type, so its runtime value is that mapping.
+Python's subscript grammar takes no keywords, so a keyword specialization lowers to the wrapper's
+`__getitem__` call:
+
+```by
+def f[**Kwargs]() -> None:
+    reveal_type(Kwargs)  # revealed: dict[str, type]
+    assert Kwargs == {"foo": int, "bar": str}
+
+f[foo=int, bar=str]()
+```
+
+## a pack sits outside the positional slots
+
+The other type parameters are given positionally and the pack takes the keyword fields, whatever
+order they are written in:
+
+```by
+def f[T, **Kwargs]() -> None:
+    assert T === int
+    assert Kwargs == {"foo": str}
+
+f[int, foo=str]()
+```
+
+## an unfilled pack is empty
+
+Like a variadic, a pack never forces the specialization step — supplying it no fields is a complete
+answer:
+
+```by
+def f[**Kwargs]() -> None:
+    assert Kwargs == {}
+
+f()
+```
+
+## a pack is inferred from keyword arguments
+
+`**kwargs: **Kwargs` unpacks the pack into the parameter list, so a bare call's keyword arguments
+solve it and the transpiler injects the solved fields:
+
+```by
+def f[**Kwargs](**kwargs: **Kwargs) -> None:
+    assert Kwargs == {"a": int, "b": str}
+
+f(a=1, b="x")  # runs as f[a=int, b=str](a=1, b="x")
+```
+
+## a variadic used only in annotations is not reified
+
+```by
+def f[*Ts](*args: *Ts) -> tuple[*Ts]:
+    return args
+
+reveal_type(f[int, str](1, "a"))  # revealed: (int, str)
+```
+
 ## async and generator functions reify
 
 The closure rebuild preserves the code object, so coroutine and generator functions specialize like

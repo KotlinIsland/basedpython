@@ -85,9 +85,11 @@ pub(crate) trait TypeInfo {
     /// `generic.__getitem__`
     fn is_reified_function(&self, name: &ExprName) -> bool;
 
-    /// the comma-joined type arguments to inject at a bare call of a reified
-    /// generic (`f(1)` → `"int"`), or `None` when the call needs no injection
-    /// or none is possible (ty reports the latter)
+    /// the specialization step to splice in after the callee of a bare call of
+    /// a reified generic (`f(1)` → `"[int]"`, or a `".__getitem__(foo=int)"`
+    /// call form when a keyword-variadic pack contributes fields), or `None`
+    /// when the call needs no injection or none is possible (ty reports the
+    /// latter)
     fn reified_call_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String>;
 
     /// the comma-joined type arguments to inject at a bare constructor call
@@ -475,8 +477,7 @@ impl TypeInfo for SemanticModel<'_> {
     }
 
     fn reified_call_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String> {
-        let arguments = self.reified_call_type_arguments(call)?;
-        Some(arguments.join(", "))
+        SemanticModel::reified_call_specialization(self, call)
     }
 
     fn constructor_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String> {

@@ -341,16 +341,79 @@ method (the base's `f[...]` would subscript a plain function), and to
 reifying an erased one without [PEP 696] defaults (a bare call through the
 base could not supply the values)
 
-## variadics and paramspecs
+## variadics and keyword packs
 
-> not yet implemented — only plain type parameters reify today; a `*Ts` or
-> `**P` is never reified and stays erased
+a `*Ts` reifies like any other type parameter, to the *run* of type arguments
+it absorbs: the parameters before it claim theirs from the front, those after
+it from the back, and the wrapper packs the rest into one tuple cell, so a
+list containing a variadic has no upper arity bound
 
-`*Ts` reifies to a tuple of the supplied type arguments and `**P` to the
-typed-dictionary view described in [generics](generics.md). both follow the
-arity rules above — a trailing `*Ts` absorbs zero or more positional type
-arguments, and the `generic` wrapper packs them into a single cell so the body
-observes one tuple value
+```by
+def f[T, *Args]() -> None:
+    print(T, Args)
+
+f[int, str, bool]()  # T is int, Args is (str, bool)
+f[int]()             # T is int, Args is ()
+```
+
+a variadic never makes the specialization step mandatory the way a plain
+reified parameter does — supplying it nothing is a complete answer, not a
+missing one — so a bare call stays legal and binds the empty run. the run is
+not inferred from the call's arguments, so a non-empty one has to be written
+out:
+
+```by
+def f[*Ts](*args: *Ts) -> None:
+    print(Ts)
+
+f(1, "a")            # Ts is ()
+f[int, str](1, "a")  # Ts is (int, str)
+```
+
+a [PEP 696] default is a run too, and fills the slot as one:
+
+```by
+def f[*Ts = *tuple[int, str]]() -> None:
+    print(Ts)
+
+f()  # Ts is (int, str)
+```
+
+a [keyword-variadic pack](generics.md) reifies to the mapping of its fields.
+the pack sits outside the positional slots entirely — the other parameters are
+given positionally and the pack takes the keyword fields — and, like a
+variadic, an unfilled one is empty rather than missing:
+
+```by
+def f[T, **Kwargs]() -> None:
+    print(T, Kwargs)
+
+f[int, foo=str]()  # T is int, Kwargs is {"foo": str}
+
+def g[**Kwargs]() -> None:
+    print(Kwargs)
+
+g()  # Kwargs is {}
+```
+
+unlike a variadic, a pack *is* inferred from a call's keyword arguments when
+`**kwargs: **Kwargs` unpacks it into the parameter list:
+
+```by
+def f[**Kwargs](**kwargs: **Kwargs) -> None:
+    print(Kwargs)
+
+f(a=1, b="x")  # Kwargs is {"a": int, "b": str}
+```
+
+python's subscript grammar takes no keywords, so a keyword specialization
+lowers to the wrapper's `__getitem__` call — `f[int, foo=str]()` becomes
+`f.__getitem__(int, foo=str)()`. an *erased* pack is stripped like any other
+erased specialization, so nothing calls a `__getitem__` a plain function does
+not have
+
+> `**P` in a `.py` or `.byi` file is a [PEP 612] `ParamSpec`, not a pack, and
+> is never reified: a parameter list has no runtime object to bind to a cell
 
 ## round-tripping
 
@@ -360,4 +423,5 @@ bare `def f[T]` with reified body usage, restoring the unstripped `f[int](...)`
 call sites. a hand-written `@generic` decoration without that provenance is
 left untouched
 
+[pep 612]: https://peps.python.org/pep-0612/
 [pep 696]: https://peps.python.org/pep-0696/

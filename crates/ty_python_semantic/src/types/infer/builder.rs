@@ -11503,13 +11503,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // basedpython: a pep 695 function type parameter referenced in a value
         // position is reified — the runtime value is the supplied type
         // argument, so the reference types as `type[T]` rather than as the
-        // `TypeVar` object
+        // `TypeVar` object. a `*Ts` parameter absorbs a whole run of type
+        // arguments, so its value is a tuple of them; a `**Kwargs` pack binds
+        // its fields, so its value is a mapping of field name to type
         if self.is_basedpython_file()
             && !self
                 .inference_flags()
                 .contains(InferenceFlags::IN_TYPE_EXPRESSION)
             && let Type::KnownInstance(KnownInstanceType::TypeVar(typevar)) = ty
-            && matches!(typevar.kind(db), TypeVarKind::Pep695TypeVar)
+            && matches!(
+                typevar.kind(db),
+                TypeVarKind::Pep695TypeVar
+                    | TypeVarKind::Pep695TypeVarTuple
+                    | TypeVarKind::Pep695KeywordVariadic
+            )
             && typevar.definition(db).is_some_and(|definition| {
                 matches!(
                     definition.scope(db).node(db),
@@ -11524,6 +11531,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 typevar,
             )
         {
+            let kind = typevar.kind(db);
+            if kind.is_typevartuple() {
+                return Type::homogeneous_tuple(db, KnownClass::Type.to_instance(db));
+            }
+            if kind.is_keyword_variadic() {
+                return KnownClass::Dict.to_specialized_instance(
+                    db,
+                    &[
+                        KnownClass::Str.to_instance(db),
+                        KnownClass::Type.to_instance(db),
+                    ],
+                );
+            }
             return Type::TypeVar(bound_typevar).to_meta_type(db);
         }
 
