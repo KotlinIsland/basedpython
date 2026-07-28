@@ -194,6 +194,52 @@ class D[T, U]:
     Ok(())
 }
 
+/// a frozen dataclass is read-only in its fields, so it locks as covariant while an
+/// otherwise identical mutable dataclass locks as invariant
+#[test]
+fn renders_frozen_dataclass_variance() -> anyhow::Result<()> {
+    let case = CliTest::with_file(
+        "fr.py",
+        r"
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class Frozen[T]:
+    x: T
+
+@dataclass
+class Mutable[T]:
+    x: T
+",
+    )?;
+
+    assert_cmd_snapshot!(
+        {
+            let mut cmd = api_lockfile_command(&case);
+            cmd.arg("--stdout");
+            cmd
+        },
+        @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    #api-lock:v=1
+    #tool:by=0.0.5
+    #python:default
+    #modules:1
+    fr.Frozen.x:v=T
+    fr.Frozen:c<+T>[]{dataclass}
+    fr.Mutable.x:v=T
+    fr.Mutable:c<T>[]{dataclass}
+    fr.dataclass:r=dataclasses.dataclass
+
+    ----- stderr -----
+    "
+    );
+
+    Ok(())
+}
+
 #[test]
 fn renders_explicit_typevar_variance() -> anyhow::Result<()> {
     let case = CliTest::with_file(

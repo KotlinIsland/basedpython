@@ -53,6 +53,22 @@ subclassed. neither emits a runtime artefact
 `sealed` declares a closed subclass hierarchy — see
 [sealed classes](sealed-classes.md)
 
+`frozen data class` rejects every attribute write after construction, so its
+fields are read-only and the class is inferred [covariant](variance.md) in
+their types:
+
+```by
+frozen data class D[T]:
+    t: T
+
+d: D[object] = D[int](t=1)   # ok — `D` is covariant in `T`
+```
+
+a plain `data class` is mutable, so it stays invariant. the same rule applies
+to any frozen dataclass-like class: `@dataclass(frozen=True)`, a
+`@dataclass_transform(frozen_default=True)` base, a frozen pydantic model, and
+individual pydantic fields marked `Field(frozen=True)`
+
 `enum class` is not a modifier but its own declaration form — see
 [based enums](enums.md)
 

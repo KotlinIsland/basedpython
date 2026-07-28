@@ -2485,3 +2485,25 @@ frozen data class Point:
 p = Point(1, 2)
 p.x = 3  # error: [invalid-assignment]
 ```
+
+### `frozen data class` is covariant in its field types
+
+nothing can write to a frozen field after construction, so a `frozen data class` varies covariantly
+in its type parameters
+
+```by
+frozen data class D[T]:
+    t: T
+
+d: D[object] = D[int](t=1)
+```
+
+a plain `data class` is mutable, so it stays invariant
+
+```by
+data class M[T]:
+    t: T
+
+# error: [invalid-assignment]
+m: M[object] = M[int](t=1)
+```

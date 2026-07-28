@@ -7,6 +7,7 @@ use ruff_db::{
 use ruff_python_ast as ast;
 use ruff_python_ast::{PythonVersion, name::Name};
 use ruff_text_size::{Ranged, TextRange};
+use rustc_hash::FxHashSet;
 use std::cell::RefCell;
 
 use crate::{
@@ -3761,25 +3762,37 @@ impl<'db> VarianceInferable<'db> for StaticClassLiteral<'db> {
             .iter()
             .map(|class| class.variance_of(db, typevar));
 
+        let field_policy = CodeGeneratorKind::from_static_class(db, self);
+
         let default_attribute_variance = {
             let is_namedtuple = CodeGeneratorKind::NamedTuple.matches(db, self.into());
-            // Python 3.13 introduced a synthesized `__replace__` method on dataclasses which uses
-            // their field types in contravariant position, thus meaning a frozen dataclass must
-            // still be invariant in its field types. Other synthesized methods on dataclasses are
-            // not considered here, since they don't use field types in their signatures. TODO:
-            // ideally we'd have a single source of truth for information about synthesized
-            // methods, so we just look them up normally and don't hardcode this knowledge here.
-            let is_frozen_dataclass_prior_to_313 = Program::get(db).python_version(db)
-                <= PythonVersion::PY312
-                && CodeGeneratorKind::from_static_class(db, self)
-                    .is_some_and(|kind| self.has_dataclass_param(db, kind, DataclassFlags::FROZEN));
+            // a frozen class rejects every attribute write after construction, so all of its
+            // fields are read-only and may vary covariantly. the synthesized methods that do
+            // mention field types in parameter position — `__init__`, `__new__` and (on 3.13+)
+            // `__replace__` — all *construct* a new instance rather than writing through `self`,
+            // so like any constructor they don't constrain the variance of the instance type
+            let is_frozen = self.is_frozen_dataclass(db) == Some(true)
+                || field_policy.is_some_and(|policy| Self::is_frozen_pydantic_model(db, policy));
 
-            if is_namedtuple || is_frozen_dataclass_prior_to_313 {
+            if is_namedtuple || is_frozen {
                 TypeVarVariance::Covariant
             } else {
                 TypeVarVariance::Invariant
             }
         };
+
+        // a per-field immutability marker (`pydantic.Field(frozen=True)`) freezes that one
+        // position, so the class can still vary covariantly in its type even when the class as a
+        // whole is mutable
+        let frozen_field_names: FxHashSet<&str> = field_policy
+            .map(|policy| {
+                self.fields(db, None, policy)
+                    .iter()
+                    .filter(|(_, field)| field.is_frozen())
+                    .map(|(name, _)| name.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
 
         let init_name: &Name = &"__init__".into();
         let new_name: &Name = &"__new__".into();
@@ -3843,6 +3856,8 @@ impl<'db> VarianceInferable<'db> for StaticClassLiteral<'db> {
                         || ty.is_property_instance()
                         // Underscore-prefixed attributes are assumed not to be externally mutated
                         || name.starts_with('_')
+                        // A field frozen on its own can't be written to either
+                        || frozen_field_names.contains(name.as_str())
                     {
                         // CLASS_VAR: class vars generally shouldn't contain the
                         // type variable, but they could if it's a
