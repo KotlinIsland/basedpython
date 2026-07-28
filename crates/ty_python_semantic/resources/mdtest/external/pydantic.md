@@ -1194,6 +1194,53 @@ derived = Derived(value=1)
 derived.value = 2  # error: [invalid-assignment]
 ```
 
+Because nothing can write to a frozen field, a generic model is covariant in the type of every field
+that is frozen — whether the model is frozen as a whole:
+
+```py
+from ty_extensions import static_assert
+from ty_extensions._internal import is_subtype_of
+
+class A: ...
+class B(A): ...
+
+class FrozenByClassParam[T](BaseModel, frozen=True):
+    value: T
+
+static_assert(is_subtype_of(FrozenByClassParam[B], FrozenByClassParam[A]))
+static_assert(not is_subtype_of(FrozenByClassParam[A], FrozenByClassParam[B]))
+
+class FrozenByConfig[T](BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    value: T
+
+static_assert(is_subtype_of(FrozenByConfig[B], FrozenByConfig[A]))
+static_assert(not is_subtype_of(FrozenByConfig[A], FrozenByConfig[B]))
+
+class NotFrozen[T](BaseModel):
+    value: T
+
+static_assert(not is_subtype_of(NotFrozen[B], NotFrozen[A]))
+static_assert(not is_subtype_of(NotFrozen[A], NotFrozen[B]))
+```
+
+or only that one field:
+
+```py
+class PartiallyFrozen[T, U](BaseModel):
+    frozen_value: T = Field(frozen=True)
+    mutable_value: U
+
+# covariant in `T`, which only ever appears in the frozen field
+static_assert(is_subtype_of(PartiallyFrozen[B, A], PartiallyFrozen[A, A]))
+static_assert(not is_subtype_of(PartiallyFrozen[A, A], PartiallyFrozen[B, A]))
+
+# but still invariant in `U`
+static_assert(not is_subtype_of(PartiallyFrozen[A, B], PartiallyFrozen[A, A]))
+static_assert(not is_subtype_of(PartiallyFrozen[A, A], PartiallyFrozen[A, B]))
+```
+
 ## Validation of default values
 
 At runtime, default values are *not* validated against the field type annotation, unless

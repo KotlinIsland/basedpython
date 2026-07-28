@@ -564,7 +564,10 @@ static_assert(is_subtype_of(D[B], D[A]))
 static_assert(not is_subtype_of(D[A], D[B]))
 ```
 
-#### Frozen dataclasses in Python 3.12 and earlier
+#### Frozen dataclasses
+
+A frozen dataclass rejects every attribute write after construction, so its fields are read-only and
+it is covariant in their types.
 
 ```py
 from dataclasses import dataclass, field
@@ -619,9 +622,10 @@ static_assert(not is_subtype_of(FrozenModel[A], FrozenModel[B]))
 python-version = "3.13"
 ```
 
-Python 3.13 introduced a new synthesized `__replace__` method on dataclasses, which uses every field
-type in a contravariant position (as a parameter to `__replace__`). This means that frozen
-dataclasses on Python 3.13+ can't be covariant in their field types.
+Python 3.13 introduced a synthesized `__replace__` method on dataclasses, which mentions every field
+type as one of its parameters. Like `__init__` and `__new__`, it _constructs_ a new instance rather
+than writing through `self`, so it doesn't constrain the variance of the instance type: a frozen
+dataclass stays covariant.
 
 ```py
 from dataclasses import dataclass
@@ -635,11 +639,11 @@ class B(A): ...
 class D[U]:
     y: U
 
-static_assert(not is_subtype_of(D[B], D[A]))
+static_assert(is_subtype_of(D[B], D[A]))
 static_assert(not is_subtype_of(D[A], D[B]))
 ```
 
-The same holds for dataclass-transformers:
+The same holds for dataclass-transformers, including a transformer that freezes by default:
 
 ```py
 from typing import dataclass_transform
@@ -652,14 +656,34 @@ class ModelBase:
 class DefaultFrozenModel[T](ModelBase):
     value: T
 
-static_assert(not is_subtype_of(DefaultFrozenModel[B], DefaultFrozenModel[A]))
+static_assert(is_subtype_of(DefaultFrozenModel[B], DefaultFrozenModel[A]))
 static_assert(not is_subtype_of(DefaultFrozenModel[A], DefaultFrozenModel[B]))
 
 class ExplicitFrozenModel[T](ModelBase, frozen=True):
     value: T
 
-static_assert(not is_subtype_of(ExplicitFrozenModel[B], ExplicitFrozenModel[A]))
+static_assert(is_subtype_of(ExplicitFrozenModel[B], ExplicitFrozenModel[A]))
 static_assert(not is_subtype_of(ExplicitFrozenModel[A], ExplicitFrozenModel[B]))
+
+class UnfrozenModel[T](ModelBase, frozen=False):
+    value: T
+
+static_assert(not is_subtype_of(UnfrozenModel[B], UnfrozenModel[A]))
+static_assert(not is_subtype_of(UnfrozenModel[A], UnfrozenModel[B]))
+```
+
+Freezing only makes the attribute slot itself read-only; a field whose declared type is a mutable
+container is still invariant:
+
+```py
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class WithMutableField[U]:
+    items: list[U]
+
+static_assert(not is_subtype_of(WithMutableField[B], WithMutableField[A]))
+static_assert(not is_subtype_of(WithMutableField[A], WithMutableField[B]))
 ```
 
 #### NamedTuple
