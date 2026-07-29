@@ -1,0 +1,10 @@
+from typing import Union
+
+# the fix re-renders the annotation, so any basedpython-only node inside it has
+# to come back out as surface syntax rather than the synthetic shape the parser
+# built for it — a use-site variance keyword or a `literal` / `final` type
+# modifier would otherwise be written back as `__variance_out__[int]`
+a: Union[literal str, int]
+b: Union[final int, str]
+c: Union[list[out int], None]
+d: Union[list[literal str], int]

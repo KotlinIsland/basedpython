@@ -46,7 +46,7 @@ use ruff_python_ast::{
     ModModule, Parameter, Parameters, Pattern, PythonVersion, Stmt, Suite, UnaryOp,
 };
 use ruff_python_ast::{PySourceType, helpers, str, visitor};
-use ruff_python_codegen::{Generator, Stylist};
+use ruff_python_codegen::{Generator, Mode as UnparseMode, Stylist};
 use ruff_python_index::Indexer;
 use ruff_python_parser::semantic_errors::{
     LazyImportContext, SemanticSyntaxChecker, SemanticSyntaxContext, SemanticSyntaxError,
@@ -336,8 +336,18 @@ impl<'a> Checker<'a> {
     }
 
     /// Create a [`Generator`] to generate source code based on the current AST state.
+    ///
+    /// A `.by` file is generated in basedpython mode, so a fix that re-renders an
+    /// expression carrying a basedpython-only node — a use-site variance marker, a
+    /// `literal`/`final` type modifier, an optional attribute access — writes back
+    /// the surface syntax rather than the synthetic shape the parser built for it.
     pub(crate) fn generator(&self) -> Generator<'_> {
-        Generator::new(self.stylist.indentation(), self.stylist.line_ending())
+        let generator = Generator::new(self.stylist.indentation(), self.stylist.line_ending());
+        if self.source_type.is_basedpython() {
+            generator.with_mode(UnparseMode::BasedPython)
+        } else {
+            generator
+        }
     }
 
     pub(crate) fn lazy_import_context(&self) -> Option<LazyImportContext> {
