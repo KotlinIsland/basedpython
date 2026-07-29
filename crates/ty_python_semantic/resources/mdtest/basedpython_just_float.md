@@ -115,3 +115,57 @@ A local rebinding shadows the builtin — the annotation keeps that local meanin
 float = int
 x: float = 1  # accepted: `float` here is the local alias for `int`
 ```
+
+## arithmetic on a `float` stays a `float`
+
+The promotion says an `int` is acceptable *where a `float` is asked for* — it is a rule about what a
+position accepts. A return annotation accepts nothing, and `float.__mul__` returns a `float` and
+never an `int`, so a promoted return would only invent a union. In a `.by` file, where the writer's
+own `float` is strict, that union was then not assignable back to it, and basic numeric code did not
+type-check at all.
+
+```by
+import math
+
+def scaled(x: float) -> float:
+    return x * 2.0
+
+def magnitude(x: float, y: float) -> float:
+    return math.sqrt(x * x + y * y)
+
+def size(x: float) -> float:
+    return abs(x)
+
+def flip(x: float) -> float:
+    return x if x > 0 else -x
+
+def f(x: float, y: float) -> None:
+    reveal_type(x * y)  # revealed: float
+    reveal_type(x + y)  # revealed: float
+    reveal_type(x / y)  # revealed: float
+    reveal_type(-x)  # revealed: float
+    reveal_type(math.sqrt(x))  # revealed: float
+    reveal_type(round(x, 2))  # revealed: float
+```
+
+A stub *parameter* still promotes, so mixing an `int` into the arithmetic is accepted exactly as
+python accepts it.
+
+```by
+def f(x: float) -> float:
+    return x * 9 / 5 + 32
+```
+
+## a `.py` file still promotes on both sides
+
+Tightening only a hand-written `.py` file's returns would break the pairing its parameters rely on:
+`x` below reads as `int | float`, and a strict return could not accept it.
+
+```py
+def flip(x: float) -> float:
+    return -x
+
+def f(x: float) -> None:
+    reveal_type(x)  # revealed: int | float
+    reveal_type(-x)  # revealed: int | float
+```
