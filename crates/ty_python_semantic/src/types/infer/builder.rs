@@ -12200,6 +12200,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .ancestor_scopes(self.scope().file_scope_id(db))
             .take_while(|(_, ancestor)| ancestor.node().as_class().is_none())
             .any(|(_, ancestor)| ancestor.node().as_function().is_some());
+        // both unavailable cases answer `Unknown` rather than declining: falling
+        // through would let the ordinary attribute load report a second, less
+        // useful `Class `super` has no attribute …` on top of this one
         if !reaches_a_function {
             if let Some(builder) = self
                 .context
@@ -12209,10 +12212,23 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     "Cannot determine implicit arguments for `super` outside a method",
                 );
             }
-            return None;
+            return Some(Type::unknown());
         }
 
-        let enclosing = nearest_enclosing_class(db, self.index, self.scope())?;
+        let Some(enclosing) = nearest_enclosing_class(db, self.index, self.scope()) else {
+            // in a function, but no class encloses it — `super` has a `__class__`
+            // cell to read only inside a method, so this is the same failure
+            if let Some(builder) = self
+                .context
+                .report_lint(&UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, value)
+            {
+                builder.into_diagnostic(
+                    "Cannot determine implicit arguments for `super`: \
+                     no class encloses this function",
+                );
+            }
+            return Some(Type::unknown());
+        };
         let enclosing_class = ClassLiteral::Static(enclosing).default_specialization(db);
         let owner_type = Type::instance(db, enclosing_class);
 

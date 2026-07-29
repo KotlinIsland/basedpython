@@ -1197,6 +1197,20 @@ impl<'src> Parser<'src> {
                 {
                     break lhs;
                 }
+                // the same `..` anywhere else is not a range. left alone it parses
+                // as two attribute accesses with an empty name between them, which
+                // earns a pair of diagnostics about an attribute nobody wrote —
+                // say what the reader actually did instead
+                TokenKind::Dot if self.options.is_basedpython && self.second_dot_is_adjacent() => {
+                    self.add_error(
+                        ParseErrorType::OtherError(
+                            "a `..` bound range is only valid in a type parameter's bound"
+                                .to_string(),
+                        ),
+                        self.current_token_range(),
+                    );
+                    break lhs;
+                }
                 // basedpython: `int.() -> str` — a callable with an implicit
                 // receiver. `.` followed by `(` is never valid python, so the
                 // form is unambiguous; the `->` is consumed here rather than by
