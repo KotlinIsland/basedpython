@@ -248,3 +248,83 @@ def f(xs: list[int], out: tuple[int, int]):
 def g(out: list[int]):
     reveal_type(out[0])  # revealed: int
 ```
+
+## a declared `in out` does not widen a parameter the body never writes
+
+`in out T` and a bare `T` are different declarations: the first pins invariance, the second leaves
+variance to be inferred from the body. But *widening a literal solution* is not the subtyping
+question — it asks whether a write can reach the parameter, so that a later write of a different
+type would conflict with the literal the first one happened to have. A class that only takes `T` in
+`__init__` has no such write under either spelling, so both keep the literal.
+
+```by
+class Bare[T]:
+    init(t: T)
+
+class Marked[in out T]:
+    init(t: T)
+
+reveal_type(Bare(1))  # revealed: Bare[1]
+reveal_type(Marked(1))  # revealed: Marked[1]
+
+def bare() -> Bare[1]:
+    result = Bare(1)
+    return result
+
+def marked() -> Marked[1]:
+    result = Marked(1)
+    return result
+```
+
+A member that really does read *and* write the parameter still widens, under either spelling — the
+literal could not survive a second write of a different type.
+
+```by
+class BareRW[T]:
+    x: T
+
+    init(t: T)
+
+class MarkedRW[in out T]:
+    x: T
+
+    init(t: T)
+
+reveal_type(BareRW(1))  # revealed: BareRW[int]
+reveal_type(MarkedRW(1))  # revealed: MarkedRW[int]
+```
+
+Only the literal is unaffected — see below for what the declaration does do.
+
+## a bare `T` infers its variance; `in out T` pins it
+
+These are different declarations, not two spellings of one. A bare `T` follows what the body does
+with it, so the same members come out covariant in one class and contravariant in another; `in out`
+overrides that and seals the subtyping relation.
+
+```by
+class Reads[T]:
+    def get(self) -> T:
+        raise NotImplementedError
+
+class Sealed[in out T]:
+    def get(self) -> T:
+        raise NotImplementedError
+
+def f(r: Reads[int], s: Sealed[int]):
+    # `Reads`'s variance is inferred from the body, which only produces `T`
+    inferred_covariant: Reads[object] = r
+    # error: [invalid-assignment]
+    declared_invariant: Sealed[object] = s
+
+class Writes[T]:
+    def put(self, t: T) -> None: ...
+
+class SealedSink[in out T]:
+    def put(self, t: T) -> None: ...
+
+def g(w: Writes[object], s: SealedSink[object]):
+    inferred_contravariant: Writes[int] = w
+    # error: [invalid-assignment]
+    declared_invariant: SealedSink[int] = s
+```

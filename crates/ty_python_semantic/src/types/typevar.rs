@@ -1332,6 +1332,41 @@ impl<'db> BoundTypeVarInstance<'db> {
         self.variance_with_polarity(db, TypeVarVariance::Covariant)
     }
 
+    /// basedpython: whether this parameter is declared `in out` on a class whose
+    /// body never writes through it.
+    ///
+    /// Declared variance and literal widening answer different questions.
+    /// `in out T` pins the *subtyping* relation between specializations, and
+    /// pins it deliberately — it is not the bare `T` beside it, whose variance
+    /// is inferred from the body. Widening asks something else: whether a write
+    /// can reach the parameter, so that a later write of a different type would
+    /// conflict with the literal the first one happened to have. A class that
+    /// only takes `T` in `__init__` has no such write under either spelling, so
+    /// the literal stands under both — that the declaration also seals the
+    /// subtyping relation is beside the point.
+    ///
+    /// The inferred variance is what answers the write question, which is why
+    /// it is consulted here rather than the declared one.
+    ///
+    /// Confined to `.by`, since `in out` is its syntax. A legacy `TypeVar("T")`
+    /// is invariant under python's own rules, and refining that would change
+    /// what a `.py` file means.
+    pub(crate) fn is_declared_invariant_but_never_written(self, db: &'db dyn Db) -> bool {
+        if self.typevar(db).explicit_variance(db) != Some(TypeVarVariance::Invariant) {
+            return false;
+        }
+        let BindingContext::Definition(definition) = self.binding_context(db) else {
+            return false;
+        };
+        if !definition.file(db).source_type(db).is_basedpython() {
+            return false;
+        }
+        binding_type(db, definition)
+            .with_polarity(TypeVarVariance::Covariant)
+            .variance_of(db, self.identity(db))
+            .is_covariant()
+    }
+
     /// Whether a literal type solved for this type parameter has to widen before it can be part
     /// of an inferred declaration.
     ///
