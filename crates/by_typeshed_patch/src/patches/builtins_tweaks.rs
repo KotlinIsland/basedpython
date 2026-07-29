@@ -5,12 +5,14 @@
 //!   covariant (`out dynamic`)
 //! - [`HashableKeyBound`] bounds the key/element typevar of `dict`, `set`,
 //!   `frozendict` and `frozenset` by `Hashable`
+//! - [`BorrowingBuiltins`] marks the parameters of the builtins that cannot
+//!   retain their argument as `local`
 //!
 //! each patch is scoped to a single named symbol and is idempotent
 
 use std::path::Path;
 
-use ruff_python_ast::{Expr, ModModule, Stmt, StmtClassDef, TypeParam};
+use ruff_python_ast::{Expr, ModModule, Parameter, Stmt, StmtClassDef, TypeParam};
 use ruff_python_parser::Parsed;
 use ruff_text_size::{Ranged, TextRange};
 
@@ -275,6 +277,111 @@ impl Patch for HashableKeyBound {
     }
 }
 
+/// Mark the parameters of the builtins that provably cannot retain their
+/// argument as [`local`](https://docs.basedpython.org/features/local-lifetimes).
+///
+/// The escape rule is that a `local` handed to a non-`local` parameter escapes,
+/// since that callee might keep it. Without this, an ordinary `len(xs)` on a
+/// borrow was reported — which made `local` unusable for the read-only borrow
+/// it exists to express.
+///
+/// Every entry here returns a fresh scalar and hands no part of the argument
+/// back. `min`, `max` and `sorted` are deliberately absent: they return an
+/// *element*, whose lifetime is a separate question from the container's.
+pub struct BorrowingBuiltins;
+
+/// `(function, index of the parameter that is only read)`
+const BORROWED: &[(&str, usize)] = &[
+    ("all", 0),
+    ("any", 0),
+    ("ascii", 0),
+    ("hash", 0),
+    ("isinstance", 0),
+    ("issubclass", 0),
+    ("len", 0),
+    ("repr", 0),
+    ("sum", 0),
+];
+
+/// visit every function in the module, descending through version guards and
+/// overload groups
+fn walk_functions<'a>(body: &'a [Stmt], f: &mut impl FnMut(&'a ruff_python_ast::StmtFunctionDef)) {
+    for stmt in body {
+        match stmt {
+            Stmt::FunctionDef(function) => f(function),
+            Stmt::If(node) => {
+                walk_functions(&node.body, f);
+                for clause in &node.elif_else_clauses {
+                    walk_functions(&clause.body, f);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Patch for BorrowingBuiltins {
+    fn name(&self) -> &'static str {
+        "borrowing-builtins"
+    }
+    fn target_symbols(&self) -> &'static [&'static str] {
+        &[
+            "builtins.all",
+            "builtins.any",
+            "builtins.ascii",
+            "builtins.hash",
+            "builtins.isinstance",
+            "builtins.issubclass",
+            "builtins.len",
+            "builtins.repr",
+            "builtins.sum",
+        ]
+    }
+    fn rewrite(&self, module_path: &Path, parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
+        if !in_builtins(module_path) {
+            return Vec::new();
+        }
+        let mut edits = Vec::new();
+        walk_functions(&parsed.syntax().body, &mut |function| {
+            let Some((_, index)) = BORROWED
+                .iter()
+                .find(|(name, _)| *name == function.name.as_str())
+            else {
+                return;
+            };
+            // the borrowed parameter is positional-only in every entry, and each
+            // overload of an overloaded builtin gets its own edit
+            let Some(parameter) = function
+                .parameters
+                .posonlyargs
+                .get(*index)
+                .map(|with_default| &with_default.parameter)
+            else {
+                return;
+            };
+            if already_local(source, parameter) {
+                return;
+            }
+            let at = parameter.name.range().start().to_usize();
+            edits.push(Edit {
+                start: at,
+                end: at,
+                replacement: "local ".to_string(),
+            });
+        });
+        edits
+    }
+}
+
+/// whether the parameter's name is already preceded by the `local` keyword —
+/// the modifier is not recorded on the AST node, so it is read back off the
+/// source, and this is what makes the patch idempotent
+fn already_local(source: &str, parameter: &Parameter) -> bool {
+    source[..parameter.name.range().start().to_usize()]
+        .trim_end()
+        .ends_with("local")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +394,42 @@ mod tests {
         let parsed = parse_unchecked_source(src, PySourceType::BasedPythonStub);
         let edits = patch.rewrite(Path::new("builtins.byi"), &parsed, src);
         apply_edits(src, edits)
+    }
+
+    #[test]
+    fn borrowed_builtins_take_local() {
+        let src = "def len(obj: Sized, /) -> int: ...\n";
+        let expected = "def len(local obj: Sized, /) -> int: ...\n";
+        assert_eq!(run(&BorrowingBuiltins, src), expected);
+        // idempotent: the modifier is read back off the source, not the AST
+        assert_eq!(run(&BorrowingBuiltins, expected), expected);
+    }
+
+    #[test]
+    fn every_overload_of_a_borrowed_builtin_is_marked() {
+        let src = "\
+@overload
+def sum(iterable: Iterable[int], /, start: int = 0) -> int: ...
+@overload
+def sum[T](iterable: Iterable[T], /) -> T: ...
+";
+        let out = run(&BorrowingBuiltins, src);
+        assert_eq!(out.matches("local iterable").count(), 2, "{out}");
+    }
+
+    #[test]
+    fn an_unlisted_builtin_is_untouched() {
+        // `sorted` returns an *element*, whose lifetime is a separate question
+        let src = "def sorted(iterable: Iterable[T], /) -> list[T]: ...\n";
+        assert_eq!(run(&BorrowingBuiltins, src), src);
+    }
+
+    #[test]
+    fn a_non_builtins_module_is_untouched() {
+        let src = "def len(obj: Sized, /) -> int: ...\n";
+        let parsed = parse_unchecked_source(src, PySourceType::BasedPythonStub);
+        let edits = BorrowingBuiltins.rewrite(Path::new("typing.byi"), &parsed, src);
+        assert!(edits.is_empty());
     }
 
     #[test]

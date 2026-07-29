@@ -89,6 +89,7 @@ pub fn all_post_patches(root: &Path) -> Vec<Box<dyn Patch>> {
         Box::new(patches::builtins_tweaks::FrozendictCovariant),
         Box::new(patches::builtins_tweaks::TypeDictProxyCovariant),
         Box::new(patches::builtins_tweaks::HashableKeyBound),
+        Box::new(patches::builtins_tweaks::BorrowingBuiltins),
         Box::new(patches::functools_cache::FunctoolsCache),
         Box::new(patches::protocol_keyword::ProtocolKeyword),
         Box::new(patches::property_to_let::PropertyToLet),

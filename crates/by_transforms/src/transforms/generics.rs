@@ -165,13 +165,19 @@ impl<'src> GenericPolyfill<'src> {
         }
     }
 
-    /// every rewrite that already exists inside `range`, ready to splice into a
-    /// replacement that subsumes them: the symbolic folds (`Dim + 1` → `int`)
-    /// and the text edits earlier passes queued (`kw_subscript`'s positional
-    /// rebuild, `unpack`'s `Unpack[…]`). without the second group a keyword
-    /// subscript or a variadic inside a polyfilled `type` alias value or a
-    /// type-parameter bound reaches the output in its `.by` spelling
-    fn substitutions_within(&mut self, range: TextRange) -> Vec<(TextRange, String)> {
+    /// take over every rewrite that already exists inside `range`, so that a
+    /// replacement covering `range` can carry them: the symbolic folds
+    /// (`Dim + 1` → `int`) and the text edits earlier passes queued
+    /// (`kw_subscript`'s positional rebuild, `unpack`'s `Unpack[…]`). without
+    /// the second group a keyword subscript or a variadic inside a polyfilled
+    /// `type` alias value or a type-parameter bound reaches the output in its
+    /// `.by` spelling.
+    ///
+    /// **this commits**: every pending edit it returns is marked superseded, so
+    /// the driver drops the original. the caller must therefore go on to emit a
+    /// replacement spanning `range` — calling this to *inspect* what is inside a
+    /// span would delete those edits without reinstating them
+    fn subsume_within(&mut self, range: TextRange) -> Vec<(TextRange, String)> {
         let mut within: Vec<(TextRange, String)> = self
             .symbolic_substitutions
             .iter()
@@ -202,44 +208,46 @@ impl<'src> GenericPolyfill<'src> {
     /// lowering's `(T) -> R` → `Callable[[T], R]` is the common case, and the
     /// emitted module then raises `NameError` because the polyfill bound `_T`.
     /// the fix is to apply the rename to that pass's *replacement text* and drop
-    /// the now-redundant narrow edit
-    /// `from` is the index this construct's renames start at. only they are
-    /// considered: an edit an *earlier* construct already reconciled must not be
+    /// the now-redundant narrow edit.
+    ///
+    /// `from` is the index this construct's renames start at. splitting there is
+    /// what keeps an edit an *earlier* construct already reconciled from being
     /// rewritten again under this construct's map, which would undo the renames
     /// only the earlier map knew about
     fn reconcile_pending(&mut self, renames: &HashMap<String, String>, from: usize) {
         if renames.is_empty() || from >= self.edits.len() {
             return;
         }
-        let pending = &self.pending_edits;
-        let superseded = &self.superseded;
         let mut rewritten: Vec<(TextRange, String)> = Vec::new();
-        let mut index = 0usize;
-        self.edits.retain(|fix| {
-            let at = index;
-            index += 1;
-            if at < from {
-                return true;
+        let mut kept: Vec<Fix> = Vec::new();
+        for fix in self.edits.split_off(from) {
+            let covered: Vec<&(TextRange, String)> = fix
+                .edits()
+                .iter()
+                .filter_map(|edit| {
+                    // the *widest* covering edit is the one that wins the overlap
+                    // race, so it is the one that has to carry the rename —
+                    // patching a narrower edit nested inside it is dropped in turn
+                    self.pending_edits
+                        .iter()
+                        .filter(|(pending, _)| {
+                            pending.contains_range(edit.range())
+                                && !self.superseded.contains(pending)
+                        })
+                        .max_by_key(|(pending, _)| pending.len())
+                })
+                .collect();
+            if covered.is_empty() {
+                kept.push(fix);
+                continue;
             }
-            let mut keep = true;
-            for edit in fix.edits() {
-                // the *widest* covering edit is the one that wins the overlap
-                // race, so it is the one that has to carry the rename — patching
-                // a narrower edit nested inside it would be dropped in turn
-                let Some((range, text)) = pending
-                    .iter()
-                    .filter(|(p, _)| p.contains_range(edit.range()) && !superseded.contains(p))
-                    .max_by_key(|(p, _)| p.len())
-                else {
-                    continue;
-                };
-                keep = false;
+            for (range, text) in covered {
                 if !rewritten.iter().any(|(seen, _)| seen == range) {
                     rewritten.push((*range, apply_renames_to_rendered(text, renames)));
                 }
             }
-            keep
-        });
+        }
+        self.edits.extend(kept);
         for (range, text) in rewritten {
             self.superseded.push(range);
             self.edits
@@ -444,7 +452,7 @@ impl<'src> GenericPolyfill<'src> {
                                     self.source,
                                     self.types,
                                     bound,
-                                    &self.substitutions_within(bound.range()),
+                                    &self.subsume_within(bound.range()),
                                 )
                                 .unwrap_or_else(|| self.src(bound.range()).to_owned())
                             };
@@ -457,7 +465,7 @@ impl<'src> GenericPolyfill<'src> {
                             self.source,
                             self.types,
                             default,
-                            &self.substitutions_within(default.range()),
+                            &self.subsume_within(default.range()),
                         )
                         .unwrap_or_else(|| self.src(default.range()).to_owned());
                         if self.config.min_version < PythonVersion::PY313 {
@@ -877,7 +885,7 @@ impl<'src> GenericPolyfill<'src> {
         // and typevar / private-alias renames are collected into one substitution
         // set so the lowering below honours both, rather than picking one and
         // silently losing the other.
-        let folded = self.substitutions_within(alias.value.range());
+        let folded = self.subsume_within(alias.value.range());
         let mut value_renames: Vec<Fix> = Vec::new();
         rename_in_expr(&alias.value, &rename_map, &mut value_renames);
         let renames = value_renames
@@ -1045,32 +1053,57 @@ fn is_parameters_bound(bound: &Expr) -> bool {
 /// apply a type-parameter rename to text an earlier pass already rendered.
 ///
 /// the input is always a type expression another pass built from the very
-/// source expression being renamed (`(T) -> R` → `Callable[[T], R]`), so every
-/// identifier in it is a type name — except an attribute, which names a member
-/// of the preceding one and is skipped. renaming a forward-reference string's
-/// contents is wanted, so quotes are not treated specially
+/// source expression being renamed (`(T) -> R` → `Callable[[T], R]`), so a bare
+/// identifier in it is a type name. two things are not:
+///
+/// - an attribute (`x.T`), which names a member of the preceding expression
+/// - anything inside a string. in basedpython a quoted annotation is a string
+///   *literal type*, not a forward reference, so `Literal["T"]` means the text
+///   `T` — rewriting it to `Literal["_T"]` would change which value the type
+///   admits, and only on the polyfilled target
 fn apply_renames_to_rendered(rendered: &str, renames: &HashMap<String, String>) -> String {
     if renames.is_empty() {
         return rendered.to_owned();
     }
     let mut out = String::with_capacity(rendered.len());
-    let mut rest = rendered;
-    while let Some(start) = rest.find(|c: char| c.is_alphabetic() || c == '_') {
-        let (before, tail) = rest.split_at(start);
-        out.push_str(before);
-        let end = tail
+    let mut chars = rendered.char_indices().peekable();
+    let mut quote: Option<char> = None;
+    while let Some((offset, ch)) = chars.next() {
+        if let Some(open) = quote {
+            out.push(ch);
+            if ch == '\\' {
+                // an escape consumes the next char, so a `\"` cannot close
+                if let Some((_, escaped)) = chars.next() {
+                    out.push(escaped);
+                }
+            } else if ch == open {
+                quote = None;
+            }
+            continue;
+        }
+        if ch == '"' || ch == '\'' {
+            quote = Some(ch);
+            out.push(ch);
+            continue;
+        }
+        if !(ch.is_alphabetic() || ch == '_') {
+            out.push(ch);
+            continue;
+        }
+        let end = rendered[offset..]
             .find(|c: char| !(c.is_alphanumeric() || c == '_'))
-            .unwrap_or(tail.len());
-        let (ident, tail) = tail.split_at(end);
+            .map_or(rendered.len(), |len| offset + len);
+        let ident = &rendered[offset..end];
+        while chars.peek().is_some_and(|(next, _)| *next < end) {
+            chars.next();
+        }
         // `x.T` names a member of `x`, not the type parameter `T`
-        let is_attribute = before.trim_end_matches(char::is_whitespace).ends_with('.');
+        let is_attribute = out.trim_end_matches(char::is_whitespace).ends_with('.');
         match renames.get(ident) {
             Some(new) if !is_attribute => out.push_str(new),
             _ => out.push_str(ident),
         }
-        rest = tail;
     }
-    out.push_str(rest);
     out
 }
 
@@ -1531,6 +1564,32 @@ mod tests {
                     def method(self, x: _T) -> _T:
                         return x
             "},
+        );
+    }
+
+    #[test]
+    fn rendered_rename_skips_string_and_attribute() {
+        let mut renames = std::collections::HashMap::new();
+        renames.insert("T".to_owned(), "_T".to_owned());
+        // a quoted annotation is a string *literal type* in basedpython, not a
+        // forward reference, so its contents are data and must not be renamed
+        assert_eq!(
+            super::apply_renames_to_rendered("Callable[[T], Literal[\"T\", 'T']]", &renames),
+            "Callable[[_T], Literal[\"T\", 'T']]"
+        );
+        assert_eq!(
+            super::apply_renames_to_rendered("Callable[[T], x.T]", &renames),
+            "Callable[[_T], x.T]"
+        );
+        // an escaped quote does not close the string
+        assert_eq!(
+            super::apply_renames_to_rendered("Literal[\"a\\\"T\"] | T", &renames),
+            "Literal[\"a\\\"T\"] | _T"
+        );
+        // a name that merely contains a parameter's name is untouched
+        assert_eq!(
+            super::apply_renames_to_rendered("List[TT] | T", &renames),
+            "List[TT] | _T"
         );
     }
 

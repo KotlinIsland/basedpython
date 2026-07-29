@@ -149,11 +149,10 @@ F821 Undefined name `Overlapping`
 101 | # known gap: an enum member reached by context-sensitive resolution is an
     |
 
-F821 Undefined name `Red`
-   --> F821_basedpython.by:108:28
+F821 Undefined name `Bleu`
+   --> F821_basedpython.by:125:19
     |
-106 |     case Red, Green
-107 |
-108 | context_sensitive: Color = Red
-    |                            ^^^
+124 | chosen: Colour = Green
+125 | missing: Colour = Bleu  # F821
+    |                   ^^^^
     |
