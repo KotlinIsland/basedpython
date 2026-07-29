@@ -1552,11 +1552,13 @@ impl<'a> From<&'a ast::TypeParam> for ComparableTypeParam<'a> {
             }),
             ast::TypeParam::ParamSpec(ast::TypeParamParamSpec {
                 name,
+                bound,
                 default,
                 range: _,
                 node_index: _,
             }) => Self::ParamSpec(TypeParamParamSpec {
                 name: name.as_str(),
+                bound: bound.as_ref().map(Into::into),
                 default: default.as_ref().map(Into::into),
             }),
         }
@@ -1574,6 +1576,7 @@ pub struct TypeParamTypeVar<'a> {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct TypeParamParamSpec<'a> {
     pub name: &'a str,
+    pub bound: Option<Box<ComparableExpr<'a>>>,
     pub default: Option<Box<ComparableExpr<'a>>>,
 }
 

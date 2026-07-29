@@ -29,6 +29,7 @@ use crate::types::special_form::AliasSpec;
 use crate::types::subscript::{LegacyGenericOrigin, SubscriptError, SubscriptErrorKind};
 use crate::types::tuple::{Tuple, TupleSpecBuilder, TupleType, VariableSegment};
 use crate::types::typed_dict::{TypedDictAssignmentKind, TypedDictKeyAssignment};
+use crate::types::typevar::pack_bound_violation;
 use crate::types::{
     BoundTypeVarInstance, CallArguments, CallDunderError, CallableBinding, CycleDetector,
     DynamicType, InternedType, KnownClass, KnownInstanceType, LintDiagnosticGuard,
@@ -65,7 +66,51 @@ fn string_literal_values<'db>(
     }
 }
 
+/// Points a diagnostic at where `typevar` was declared.
+fn add_typevar_definition<'db>(
+    db: &'db dyn Db,
+    diagnostic: &mut Diagnostic,
+    typevar: BoundTypeVarInstance<'db>,
+) {
+    let Some(definition) = typevar.typevar(db).definition(db) else {
+        return;
+    };
+    let file = definition.file(db);
+    let module = parsed_module(db, file).load(db);
+    let range = definition.focus_range(db, &module).range();
+    diagnostic.annotate(
+        Annotation::secondary(Span::from(file).with_range(range))
+            .message("Type variable defined here"),
+    );
+}
+
 impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
+    /// basedpython: checks a variadic pack's specialization against its declared upper bound,
+    /// reporting on `node`. Returns whether the bound was violated.
+    fn check_pack_bound(
+        &mut self,
+        typevar: BoundTypeVarInstance<'db>,
+        provided: Type<'db>,
+        node: impl Ranged,
+    ) -> bool {
+        let db = self.db();
+        let Some(violation) = pack_bound_violation(
+            db,
+            typevar,
+            provided,
+            &ConstraintSetBuilder::new(),
+            InferableTypeVars::None,
+        ) else {
+            return false;
+        };
+        if let Some(builder) = self.context.report_lint(&INVALID_TYPE_ARGUMENTS, node) {
+            let mut diagnostic = builder.into_diagnostic(violation.message(db, typevar));
+            add_typevar_definition(db, &mut diagnostic, typevar);
+            violation.attach_context(db, typevar, &mut diagnostic);
+        }
+        true
+    }
+
     pub(super) fn typed_dict_key_expected_type(&self, ty: Type<'db>) -> Option<Type<'db>> {
         struct TypedDictKeyExpectedType;
         type TypedDictKeyExpectedTypeVisitor<'db> =
@@ -790,23 +835,6 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             NonGeneric,
         }
 
-        fn add_typevar_definition<'db>(
-            db: &'db dyn Db,
-            diagnostic: &mut Diagnostic,
-            typevar: BoundTypeVarInstance<'db>,
-        ) {
-            let Some(definition) = typevar.typevar(db).definition(db) else {
-                return;
-            };
-            let file = definition.file(db);
-            let module = parsed_module(db, file).load(db);
-            let range = definition.focus_range(db, &module).range();
-            diagnostic.annotate(
-                Annotation::secondary(Span::from(file).with_range(range))
-                    .message("Type variable defined here"),
-            );
-        }
-
         /// A type argument after expanding any allowed `Unpack[tuple[...]]` syntax.
         #[derive(Clone, Copy)]
         struct TypeArgument<'ast, 'db> {
@@ -1059,8 +1087,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             let field_type = self.infer_type_expression(expr);
                             Parameter::keyword_only((*name).clone()).with_annotated_type(field_type)
                         }));
-                        specialization_types
-                            .push(Some(Type::paramspec_value_callable(db, parameters)));
+                        let provided_type = Type::paramspec_value_callable(db, parameters);
+                        self.check_pack_bound(*typevar, provided_type, subscript);
+                        specialization_types.push(Some(provided_type));
                     }
                     KeywordSlot::Variadic(exprs) => {
                         let mut tuple_builder = TupleSpecBuilder::with_capacity(exprs.len());
@@ -1085,10 +1114,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                 tuple_builder.push(provided_type);
                             }
                         }
-                        specialization_types.push(Some(Type::tuple(TupleType::new(
-                            db,
-                            &tuple_builder.build(),
-                        ))));
+                        let provided_type = Type::tuple(TupleType::new(db, &tuple_builder.build()));
+                        self.check_pack_bound(*typevar, provided_type, subscript);
+                        specialization_types.push(Some(provided_type));
                     }
                     KeywordSlot::Invalid(expr) => {
                         // still type-check the expression so its own diagnostics fire, then fill
@@ -1504,52 +1532,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         continue;
                     }
 
-                    // basedpython: `*Ts: int` bounds every *element* of the pack, so the
-                    // packed tuple is checked element by element. Checking the pack itself
-                    // against the bound below would compare a tuple against `int` and always
-                    // fail
-                    if typevar.is_typevartuple(db)
-                        && let Some(TypeVarBoundOrConstraints::UpperBound(bound)) =
-                            typevar.typevar(db).bound_or_constraints(db)
-                    {
-                        let unbounded_element = provided_type
-                            .exact_tuple_instance_spec(db)
-                            .and_then(|spec| {
-                                spec.fixed_elements()
-                                    .find(|element| {
-                                        element
-                                            .when_assignable_to(
-                                                db,
-                                                bound,
-                                                &constraints,
-                                                InferableTypeVars::None,
-                                            )
-                                            .is_never_satisfied(db)
-                                    })
-                                    .copied()
-                            });
-                        if let Some(element) = unbounded_element {
-                            if let Some(builder) = self
-                                .context
-                                .report_lint(&INVALID_TYPE_ARGUMENTS, type_argument.node)
-                            {
-                                let mut diagnostic = builder.into_diagnostic(format_args!(
-                                    "Type `{}` is not assignable to upper bound `{}` \
-                                        of type variable tuple `{}`",
-                                    element.display(db),
-                                    bound.display(db),
-                                    typevar.identity(db).display(db),
-                                ));
-                                add_typevar_definition(db, &mut diagnostic, typevar);
-                                element
-                                    .assignability_error_context(db, bound)
-                                    .attach_to(db, &mut diagnostic);
-                            }
+                    // basedpython: a pack's bound reads element-wise or whole-pack depending on
+                    // its star count, and neither is the ordinary check below — that one would
+                    // compare the packed tuple against an element bound and always fail
+                    if typevar.is_typevartuple(db) && typevar.typevar(db).has_pack_bound(db) {
+                        if self.check_pack_bound(typevar, provided_type, type_argument.node) {
                             error = Some(ExplicitSpecializationError::UnsatisfiedBound);
                         }
-                        // the pack is kept even when an element violates the bound: replacing
-                        // it with `Unknown` would stop it reading as a tuple at all, and a
-                        // match type over it would then report a second, misleading error
+                        // the pack is kept even when it violates the bound: replacing it with
+                        // `Unknown` would stop it reading as a tuple at all, and a match type
+                        // over it would then report a second, misleading error
                         specialization_types.push(Some(provided_type));
                         continue;
                     }

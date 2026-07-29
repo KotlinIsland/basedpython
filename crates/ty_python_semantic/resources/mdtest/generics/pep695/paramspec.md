@@ -17,27 +17,16 @@ def foo1[**P]() -> None:
 
 ## Bounds and constraints
 
-`ParamSpec`, when defined using the new syntax, does not allow defining bounds or constraints.
-
-TODO: This results in a lot of syntax errors mainly because the AST doesn't accept them in this
-position. The parser could do a better job in recovering from these errors.
-
-<!-- fmt:off -->
+`ParamSpec`, when defined using the new syntax, does not allow defining bounds or constraints. The
+bound is still parsed — it is a basedpython
+[keyword-variadic pack](../../basedpython_keyword_variadic.md) bound there — so the recovery is a
+single error rather than a cascade.
 
 ```py
-# error: [invalid-syntax]
-# error: [invalid-syntax]
-# error: [invalid-syntax]
-# error: [invalid-syntax]
-# error: [invalid-syntax]
-# error: [invalid-syntax]
+# error: [invalid-syntax] "a bound on a keyword-variadic pack is a basedpython feature and is not valid in .py files"
 def foo[**P: int]() -> None:
-    # error: [invalid-syntax]
-    # error: [invalid-syntax]
     pass
 ```
-
-<!-- fmt:on -->
 
 ## Default
 

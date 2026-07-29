@@ -10630,7 +10630,8 @@ pub struct TypeParamTypeVarTuple {
     pub range: ruff_text_size::TextRange,
     pub name: crate::Identifier,
     /// basedpython: an upper bound applied to every
-    /// element of the pack, written `*Ts: int`. CPython rejects a bound on a `TypeVarTuple`
+    /// element of the pack, written `*Ts: int`, or — when starred, as `*Ts: *(int, str)` — to the pack
+    /// as a whole. CPython rejects a bound on a `TypeVarTuple`
     pub bound: Option<Box<Expr>>,
     pub default: Option<Box<Expr>>,
 }
@@ -10642,6 +10643,10 @@ pub struct TypeParamParamSpec {
     pub node_index: crate::AtomicNodeIndex,
     pub range: ruff_text_size::TextRange,
     pub name: crate::Identifier,
+    /// basedpython: an upper bound on a
+    /// keyword-variadic pack, written `**Kwargs: int` to bound every field, or `**Kwargs: **{"a": int}`
+    /// to bound the pack as a whole. CPython rejects a bound on a `ParamSpec`
+    pub bound: Option<Box<Expr>>,
     pub default: Option<Box<Expr>>,
 }
 
@@ -11880,11 +11885,16 @@ impl TypeParamParamSpec {
     {
         let TypeParamParamSpec {
             name,
+            bound,
             default,
             range: _,
             node_index: _,
         } = self;
         visitor.visit_identifier(name);
+
+        if let Some(bound) = bound {
+            visitor.visit_expr(bound);
+        }
 
         if let Some(default) = default {
             visitor.visit_expr(default);

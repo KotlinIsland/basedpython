@@ -823,11 +823,15 @@ pub fn walk_type_param<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, type_param:
             }
         }
         TypeParam::ParamSpec(TypeParamParamSpec {
+            bound,
             default,
             name: _,
             range: _,
             node_index: _,
         }) => {
+            if let Some(expr) = bound {
+                visitor.visit_expr(expr);
+            }
             if let Some(expr) = default {
                 visitor.visit_expr(expr);
             }

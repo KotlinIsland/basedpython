@@ -2167,6 +2167,13 @@ bitflags::bitflags! {
         /// name's inference instead, and a dotted name contains no arbitrary values to
         /// leak into.
         const RESOLVING_DOTTED_TYPE_EXPRESSION = 1 << 17;
+
+        /// basedpython: set while inferring the upper bound of a variadic pack — `*Ts: …` on a
+        /// `TypeVarTuple`, `**Kwargs: …` on a keyword-variadic pack.
+        ///
+        /// This is the one position besides a `**kwargs` annotation where a `**` type expression
+        /// means something: it bounds the pack as a whole rather than field by field.
+        const IN_PACK_BOUND = 1 << 18;
     }
 }
 

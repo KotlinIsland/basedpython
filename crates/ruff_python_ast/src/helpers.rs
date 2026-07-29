@@ -2825,6 +2825,7 @@ mod tests {
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
             name: Identifier::new("x", TextRange::default()),
+            bound: None,
             default: None,
         });
         assert!(

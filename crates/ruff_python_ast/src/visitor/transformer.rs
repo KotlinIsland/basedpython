@@ -827,11 +827,15 @@ pub fn walk_type_param<V: Transformer + ?Sized>(visitor: &V, type_param: &mut Ty
             }
         }
         TypeParam::ParamSpec(TypeParamParamSpec {
+            bound,
             default,
             name: _,
             range: _,
             node_index: _,
         }) => {
+            if let Some(expr) = bound {
+                visitor.visit_expr(expr);
+            }
             if let Some(expr) = default {
                 visitor.visit_expr(expr);
             }
