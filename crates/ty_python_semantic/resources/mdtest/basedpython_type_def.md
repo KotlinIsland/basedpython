@@ -122,6 +122,48 @@ def f():
     t = F[int]
 ```
 
+## every annotation position is a type expression
+
+an application is a type expression wherever an annotation is written, not only in a signature. a
+variable annotation resolves the subscripted name in a type position too, so the value-position
+rejection above must not fire on one.
+
+```by
+type def F[X]:
+    if X <= int:
+        return int
+    return str
+
+x: F[bool]
+
+class Plain:
+    y: F[str]
+
+def f(p: Plain):
+    reveal_type(x)  # revealed: int
+    reveal_type(p.y)  # revealed: str
+```
+
+## a class type parameter defers the same way a function's does
+
+```by
+type def F[X] -> int | str:
+    if X <= int:
+        return int
+    return str
+
+class Holder[T]:
+    x: F[T]
+
+def unreduced[T](h: Holder[T]):
+    # only the declared return is known until `T` is substituted
+    reveal_type(h.x)  # revealed: int | str
+
+def specialized(h: Holder[bool], i: Holder[str]):
+    reveal_type(h.x)  # revealed: int
+    reveal_type(i.x)  # revealed: str
+```
+
 ## an application that still mentions a type parameter is deferred
 
 `F[T]` cannot run — `T` is unknown until the call is specialized. it stays symbolic and behaves as

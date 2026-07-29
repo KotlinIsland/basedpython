@@ -494,6 +494,32 @@ class Meters:
     }
 
     #[test]
+    fn naming_the_target_in_an_annotation_is_not_shadowing() {
+        // a scope's place table holds every name the scope mentions, so the
+        // annotation of the very assignment being converted used to read as a
+        // shadowing binding — which rejected every function-scope conversion
+        // whose target appeared in an annotation
+        let out = check(&format!(
+            "{TEMPERATURES}def use(c: Celsius) -> None:\n    f: Fahrenheit = c\n"
+        ));
+        assert!(
+            out.contains("f: Fahrenheit = Fahrenheit.__from__(c)"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn a_collection_element_conversion_inside_a_function_lowers() {
+        let out = check(&format!(
+            "{TEMPERATURES}def use(c: Celsius) -> None:\n    fs: list[Fahrenheit] = [c]\n"
+        ));
+        assert!(
+            out.contains("fs: list[Fahrenheit] = [Fahrenheit.__from__(c)]"),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
     fn an_ambiguous_conversion_is_rejected_rather_than_skipped() {
         // the checker accepts the site, so emitting nothing would leave python
         // that type-checks and never converts

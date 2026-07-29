@@ -260,7 +260,21 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 }
 
                 let slice = &**slice;
+                // resolve the subscripted name with `IN_TYPE_EXPRESSION` set,
+                // exactly as the bare-name arm above does: this *is* a type
+                // position, and the basedpython names that only exist in one —
+                // `dynamic`, a `type def` — must not be reported here as though
+                // they had been used as a value. only the lookup is wrapped, so
+                // the nested-type-expression tracking is unaffected
+                let previously_in_type_expression = self
+                    .context
+                    .inference_flags
+                    .replace(InferenceFlags::IN_TYPE_EXPRESSION, true);
                 let value_ty = self.infer_expression(value, TypeContext::default());
+                self.context.inference_flags.set(
+                    InferenceFlags::IN_TYPE_EXPRESSION,
+                    previously_in_type_expression,
+                );
 
                 let annotation_ty = match value_ty {
                     Type::SpecialForm(special_form) => match special_form {
