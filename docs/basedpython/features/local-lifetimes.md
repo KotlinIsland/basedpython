@@ -69,6 +69,27 @@ retained:
     local)
 - passing it on to another `local` parameter — the borrow is re-lent, not
     extended (see [re-borrowing](#re-borrowing))
+- constructing something from it (`str(xs)`, `list(xs)`) — a constructor is
+    read as consuming what it is given rather than retaining it
+
+the last row of the table is the one that bites in practice. no stdlib signature
+is annotated `local`, so an ordinary function call escapes even when the callee
+plainly does not retain anything:
+
+```by
+def f(local xs: list[int]) -> None:
+    print(len(xs))    # error: escaping-local
+    print(sum(xs))    # error: escaping-local
+    print(str(xs))    # fine — a constructor
+    print(xs[0])      # fine — indexing
+    for x in xs: ...  # fine — iterating
+```
+
+`len` and `str` differ only in that one is a function and the other a class,
+which is not a distinction the reader has any reason to expect. this is the
+largest rough edge in the current implementation: deciding it properly needs
+`local` annotations through the stdlib, and guessing which callees retain their
+arguments is exactly the kind of heuristic this feature exists to replace.
 
 ### re-borrowing
 
