@@ -826,8 +826,28 @@ impl<'a> SemanticModel<'a> {
         match name.id.as_str() {
             "constraints" | "Some" => true,
             "dynamic" | "Character" | "Overlapping" => self.in_type_definition(),
+            // a trailing-lambda block filling a *receiver* callback binds the
+            // receiver as `self`, in a parameter the source cannot spell — so
+            // there is no binding here to find. whether the callback really has
+            // a receiver takes the callback's type, which the linter does not
+            // have; ty reports a `self` that resolves to nothing, so deferring
+            // to it is the same split the rest of this list already makes
+            "self" => self.in_trailing_lambda_block(),
             other => ruff_python_stdlib::basedpython::is_implicit_typing_name(other),
         }
+    }
+
+    /// True when the innermost function scope is a
+    /// [trailing-lambda](https://docs.basedpython.org/features/trailing-lambdas)
+    /// block, whose receiver the parser binds outside the source's reach
+    fn in_trailing_lambda_block(&self) -> bool {
+        self.current_scopes()
+            .find_map(|scope| match scope.kind {
+                ScopeKind::Function(function) => Some(function.is_trailing_lambda),
+                ScopeKind::Lambda(_) => Some(false),
+                _ => None,
+            })
+            .unwrap_or(false)
     }
 
     /// True if `name` is the LHS of a `name is T` `TypeIs`-style annotation

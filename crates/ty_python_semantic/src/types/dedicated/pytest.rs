@@ -154,8 +154,10 @@ pub(in crate::types) fn conftest_chain(db: &dyn Db, file: File) -> Vec<File> {
         return chain;
     };
     for ancestor in directory.ancestors() {
-        if let Ok(conftest) = system_path_to_file(db, ancestor.join("conftest.py")) {
-            if conftest != file {
+        for extension in COLLECTED_EXTENSIONS {
+            if let Ok(conftest) = system_path_to_file(db, ancestor.join(format!("conftest.{extension}")))
+                && conftest != file
+            {
                 chain.push(conftest);
             }
         }
@@ -396,8 +398,13 @@ fn parametrize_names(argnames: &ast::Expr) -> Option<Vec<Name>> {
     }
 }
 
+/// the source extensions pytest's naming conventions apply to. a `.by` module
+/// transpiles to a `.py` of the same stem, so it is collected under exactly the
+/// same rules and has to be recognised here under its own name
+const COLLECTED_EXTENSIONS: [&str; 2] = ["py", "by"];
+
 /// `true` if `file` is collected by pytest under the default conventions:
-/// its name is `conftest.py`, `test_*.py`, or `*_test.py`.
+/// its name is `conftest`, `test_*`, or `*_test`.
 pub(in crate::types) fn is_test_file(db: &dyn Db, file: File) -> bool {
     let FilePath::System(path) = file.path(db) else {
         return false;
@@ -405,14 +412,17 @@ pub(in crate::types) fn is_test_file(db: &dyn Db, file: File) -> bool {
     let Some(name) = path.file_name() else {
         return false;
     };
-    if name == "conftest.py" {
-        return true;
-    }
-    if path.extension() != Some("py") {
+    let Some(extension) = path.extension() else {
+        return false;
+    };
+    if !COLLECTED_EXTENSIONS.contains(&extension) {
         return false;
     }
-    let stem = name.strip_suffix(".py").unwrap_or(name);
-    stem.starts_with("test_") || stem.ends_with("_test")
+    let stem = name
+        .strip_suffix(extension)
+        .and_then(|stem| stem.strip_suffix('.'))
+        .unwrap_or(name);
+    stem == "conftest" || stem.starts_with("test_") || stem.ends_with("_test")
 }
 
 /// `true` if `function` is a pytest test: a module-level `test*`-named
