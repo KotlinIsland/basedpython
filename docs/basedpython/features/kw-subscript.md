@@ -69,3 +69,16 @@ def f(c: Cache[⟨Key=⟩str, ⟨Value=⟩int]) -> None: ...
 
 a subscript that already binds by keyword is left alone, as is a single-typevar
 generic (whose keyword is dropped anyway) and a variadic one
+
+a specialization a hint *renders* rather than annotates is named the same way,
+so both sides of an assignment read alike:
+
+```by
+class Pair[Key, Value]:
+    init(key: Key, value: Value)
+
+a⟨: Pair[Key=int, Value=str]⟩ = Pair⟨[Key=1, Value="x"]⟩(⟨key=⟩1, ⟨value=⟩"x")
+```
+
+this is `.by` only — python's subscript grammar has no keyword form, so a hint
+there would spell something the file cannot be written as
