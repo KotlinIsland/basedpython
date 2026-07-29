@@ -1398,6 +1398,34 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         Box::new([left_ty, right_ty]),
                     );
                 }
+                // in a `.by` file a comparison *is* allowed here — the arm above
+                // folds one — so saying they are not allowed at all contradicts
+                // the line beside it. name the shape that does fold instead.
+                //
+                // the operands are inferred as the type expressions they are,
+                // rather than through `infer_compare_expression`, which resolves
+                // the operator and would pile an `unsupported-operator` about
+                // comparing two *types* on top — noise the reader cannot act on
+                if self.is_basedpython_file() {
+                    self.infer_type_expression(&compare.left);
+                    for comparator in &compare.comparators {
+                        self.infer_type_expression(comparator);
+                    }
+                    let what = if compare.ops.len() > 1 {
+                        "A chained comparison"
+                    } else {
+                        "An identity or membership comparison"
+                    };
+                    self.report_invalid_type_expression(
+                        expression,
+                        format_args!(
+                            "{what} has no symbolic fold, so it is not allowed in {}s; \
+                             only a single `==`, `!=`, `<`, `<=`, `>` or `>=` folds",
+                            self.type_expression_context()
+                        ),
+                    );
+                    return Type::unknown();
+                }
                 if !self.in_string_annotation() {
                     self.infer_compare_expression(compare);
                 }

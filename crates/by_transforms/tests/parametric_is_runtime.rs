@@ -262,6 +262,34 @@ def cast_cell[T](data: list[T]) -> list[int] | None:
 assert cast_cell([1, 2]) is not None, "reified cell says int"
 assert cast_cell(["a"]) is None, "reified cell says str"
 
+# a member declared inside `__init__` has no annotation any runtime can read,
+# and the checker accepts the class as satisfying the protocol regardless — so
+# answering `False` would be a silent contradiction. the check refuses instead
+class Annotated1[T](Protocol):
+    slot: T
+
+class ClassLevelSlot:
+    slot: int = 1
+
+class InitLevelSlot:
+    def __init__(self) -> None:
+        self.slot: int = 1
+
+class NoSlot:
+    pass
+
+def slot_probe(x: object) -> bool:
+    return x is Annotated1[int]
+
+assert slot_probe(ClassLevelSlot()), "a class-level annotation is readable"
+assert not slot_probe(NoSlot()), "a genuinely absent member is still `False`"
+try:
+    slot_probe(InitLevelSlot())
+except TypeError as exc:
+    assert "declared inside a method" in str(exc), str(exc)
+else:
+    raise AssertionError("an unreadable member must refuse, not answer `False`")
+
 print("ok")
 "#;
 

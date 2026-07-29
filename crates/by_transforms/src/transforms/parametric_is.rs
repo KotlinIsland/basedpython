@@ -356,7 +356,21 @@ def _by_protocol_is(value, members):
         if kind == \"attr\":
             _, name, expected, variance = member
             actual = _by_member_annotation(klass, name)
-            if actual is _by_proto_missing or not _by_variance_ok(actual, expected, variance):
+            if actual is _by_proto_missing:
+                # the member is *there*, it just carries no annotation any
+                # runtime can read — python records nothing for a `self.a: int`
+                # written inside `__init__`. answering `False` would contradict
+                # the checker, which accepts that class as satisfying the
+                # protocol, so refuse to answer rather than answer wrongly
+                if hasattr(value, name):
+                    raise TypeError(
+                        \"cannot check `\" + klass.__qualname__ + \".\" + name
+                        + \"` against a parameterized protocol: its type is declared \"
+                        + \"inside a method, and only a class-level annotation \"
+                        + \"survives to runtime. declare it in the class body\"
+                    )
+                return False
+            if not _by_variance_ok(actual, expected, variance):
                 return False
         else:
             _, name, params, ret = member
