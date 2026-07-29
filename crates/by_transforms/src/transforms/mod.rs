@@ -35,6 +35,7 @@ pub(crate) mod intersection;
 pub(crate) mod just_float;
 pub(crate) mod kw_subscript;
 pub(crate) mod lazy_import;
+pub(crate) mod literal_string;
 pub(crate) mod literal_types;
 pub(crate) mod local_once;
 pub(crate) mod main_function;

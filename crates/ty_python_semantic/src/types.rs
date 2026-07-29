@@ -2332,6 +2332,14 @@ impl<'db> Type<'db> {
         matches!(self, Type::Deferred(deferred) if deferred.is_attribute(db))
     }
 
+    /// basedpython: whether this is `LiteralString` — the one literal type the stdlib
+    /// can spell, and therefore the one use-site `literal T` the transpiler can lower
+    /// to real Python rather than erase. `literal str` reduces to it on construction,
+    /// so this answers for both spellings.
+    pub fn is_literal_string(self) -> bool {
+        self == Type::literal_string()
+    }
+
     pub(crate) fn literal_fallback_instance(self, db: &'db dyn Db) -> Option<Type<'db>> {
         // There are other literal types that could conceivable be included here: class literals
         // falling back to `type[X]`, for instance. For now, there is not much rigorous thought put

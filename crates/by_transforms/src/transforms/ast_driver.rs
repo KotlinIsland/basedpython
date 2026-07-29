@@ -39,12 +39,12 @@ use super::{
     dedent_string, dynamic_keyword, empty_declarations, extension, float_const, force_unwrap,
     frameworks, generic_call, generics, grapheme_string, identity_swap, if_let, implementation,
     implicit_receiver, implicit_typing, inferred_annotation, init_method, just_float, kw_subscript,
-    literal_types, local_once, main_function, match_type, modifiers, mutable_defaults, none_chain,
-    optional_type, overload, parametric_is, postfix_await, propagate, properties, protocol_type,
-    raises_clause, reified_generic, repeated_underscore, sentinel, some_ctor, soundness,
-    statement_expression, string_tag, super_keyword, symbolic_type_op, top_star, trailing_lambda,
-    tuple_index, type_fn, type_is, type_reification, typed_dict_literal, typed_lambda,
-    typeof_keyword, unpack, use_site_variance,
+    literal_string, literal_types, local_once, main_function, match_type, modifiers,
+    mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await, propagate,
+    properties, protocol_type, raises_clause, reified_generic, repeated_underscore, sentinel,
+    some_ctor, soundness, statement_expression, string_tag, super_keyword, symbolic_type_op,
+    top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification, typed_dict_literal,
+    typed_lambda, typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -390,6 +390,12 @@ pub(crate) fn run_against_source<'a>(
     // up front, from the original parse where `typeof` operands are still
     // intact for ty to read. the pass replaces each operation node and must run
     // before `typeof` lowering so a `typeof` operand is consumed here
+    // `literal str` is the one use-site modifier python can spell, so it lowers
+    // to `LiteralString` rather than being erased with the other markers. it has
+    // to be collected from the db's own (marker-bearing) parse, since the
+    // blanked copy the passes walk no longer has a `literal` keyword in it
+    let literal_string_rewrites = literal_string::collect(parsed_handle.suite(), &semantic_model);
+
     let symbolic_folds =
         symbolic_type_op::collect_symbolic_folds(parsed_handle.suite(), &semantic_model);
     let symbolic_needs_literal_import = symbolic_folds.needs_literal_import;
@@ -749,8 +755,21 @@ pub(crate) fn run_against_source<'a>(
     // spans) both come out clean; only a wider *plain* text edit keeps the
     // padding, which is valid Python either way
     for range in &blanked.ranges {
+        // a marker rewritten to `LiteralString` has its whole range replaced
+        // below; emitting the keyword collapse too would leave two plain text
+        // edits racing for the same start offset
+        if literal_string_rewrites.covers(*range) {
+            continue;
+        }
         ctx.text_edits
             .push((*range, use_site_variance::collapsed_to(source_ref, *range)));
+    }
+    for (range, replacement) in literal_string_rewrites.edits() {
+        ctx.text_edits.push((range, replacement));
+    }
+    if literal_string_rewrites.needs_import {
+        ctx.required_imports
+            .push("from typing import LiteralString".to_owned());
     }
 
     ctx.required_imports.sort();

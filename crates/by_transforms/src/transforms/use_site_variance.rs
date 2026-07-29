@@ -352,14 +352,17 @@ mod tests {
 
     #[test]
     fn type_modifiers_are_erased() {
-        check("a: literal str = \"x\"\n", "a: str = \"x\"\n");
+        // `literal str` is the exception — it has a stdlib spelling, so it
+        // lowers rather than erasing (see `transforms::literal_string`)
+        check("a: literal int = 1\n", "a: int = 1\n");
         check("b: final int = 1\n", "b: int = 1\n");
+        check("c: final str = \"x\"\n", "c: str = \"x\"\n");
     }
 
     #[test]
     fn type_modifiers_erased_in_nested_positions() {
-        check("a: list[literal str] = []\n", "a: list[str] = []\n");
-        check("b: literal str | None = None\n", "b: str | None = None\n");
+        check("a: list[literal int] = []\n", "a: list[int] = []\n");
+        check("b: final int | None = None\n", "b: int | None = None\n");
         check(
             "def f(x: literal int, y: final str) -> final bool: ...\n",
             "def f(x: int, y: str) -> bool: ...\n",

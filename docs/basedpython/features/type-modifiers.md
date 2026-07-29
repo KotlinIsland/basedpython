@@ -13,8 +13,9 @@ b = True                  # error: `bool` is a *sub*class of `int`
 they are the use-site counterpart to the declaration-site
 [modifiers](modifiers.md): `@final` on a class says "nobody may subclass me",
 `final T` at a use site says "only exactly a `T` fits *here*". like `abstract`
-and [`local`](local-lifetimes.md), both are compile-time-only — the keyword is
-erased in the lowered python and nothing about it survives to runtime
+and [`local`](local-lifetimes.md), they are compile-time-only markers — with one
+exception: `literal str` is exactly `LiteralString`, so it lowers to that stdlib
+name rather than being erased (see [lowering](#lowering))
 
 `final T` is **not** `typing.Final`. `Final` says a *name* may not be rebound;
 `final T` says a *value* must be exactly a `T`. basedpython spells the former
@@ -153,20 +154,38 @@ may be put in
 
 ## lowering
 
-both keywords are erased:
+`literal str` is the one modifier python can spell, so it lowers to
+`LiteralString` — keeping the literal-ness readable by whatever checks the
+produced python. every other modifier is erased:
 
-| basedpython            | python         |
-| ---------------------- | -------------- |
-| `a: literal str`       | `a: str`       |
-| `b: final int`         | `b: int`       |
-| `c: list[literal str]` | `c: list[str]` |
+| basedpython            | python                   |
+| ---------------------- | ------------------------ |
+| `a: literal str`       | `a: LiteralString`       |
+| `b: list[literal str]` | `b: list[LiteralString]` |
+| `c: literal int`       | `c: int`                 |
+| `d: final int`         | `d: int`                 |
+| `e: final str`         | `e: str`                 |
 
-nothing in the lowered python distinguishes a restricted annotation from a plain
-one, so the markers do not survive a round-trip — the
-[reverse transform](../development/reverse-transforms.md) has no lowered shape to
-detect, the same as any other erase-only marker. in particular `literal str` does
-**not** lower to `LiteralString`: the modifier is a basedpython-level check, and
-the lowered python states the plain type
+the `LiteralString` import is added once per module and [polyfilled](polyfills.md)
+to `typing_extensions` below 3.11
+
+because that lowering is faithful, it round-trips: the
+[reverse transform](../development/reverse-transforms.md) rewrites `LiteralString`
+back to `literal str`, which is also how existing python is converted to the
+keyword form:
+
+```sh
+by transpile --reverse app.py
+```
+
+the reverse rewrite fires only on a name that is spelled `LiteralString` *and*
+resolves to it, so an alias (`MyStr = LiteralString`) keeps its own spelling and a
+shadowed binding is left alone. once the last reference is rewritten the
+`from typing import LiteralString` line is dead and gets pruned
+
+the erased modifiers do **not** round-trip — nothing in the lowered python
+distinguishes `literal int` from a plain `int`, so the reverse transform has no
+shape to detect, the same as any other erase-only marker
 
 ## limits
 

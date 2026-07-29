@@ -619,6 +619,8 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let mut not_rev = reverse_transforms::not_type::NotTypeReverse::new(src, &model);
     let mut dynamic_keyword_rev =
         reverse_transforms::dynamic_keyword::DynamicKeywordReverse::new(&model);
+    let mut literal_string_rev =
+        reverse_transforms::literal_string::LiteralStringReverse::new(&model);
     let mut type_is_rev = reverse_transforms::type_is::TypeIsReverse::new(src, &model);
     let mut identity_rev = reverse_transforms::identity_swap::IdentitySwapReverse::new(src);
     let mut tuple_type = reverse_transforms::tuple_type::TupleTypeReverse::new(src, &model);
@@ -649,6 +651,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         intersection.visit_stmt(stmt);
         not_rev.visit_stmt(stmt);
         dynamic_keyword_rev.visit_stmt(stmt);
+        literal_string_rev.visit_stmt(stmt);
         type_is_rev.visit_stmt(stmt);
         identity_rev.visit_stmt(stmt);
         tuple_type.visit_stmt(stmt);
@@ -700,6 +703,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(intersection.edits);
     fixes.extend(not_rev.edits);
     fixes.extend(dynamic_keyword_rev.edits);
+    fixes.extend(literal_string_rev.edits);
     fixes.extend(type_is_rev.edits);
     fixes.extend(identity_rev.edits);
     fixes.extend(unpack.edits);
