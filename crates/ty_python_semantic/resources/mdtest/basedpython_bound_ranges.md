@@ -200,3 +200,15 @@ class C[T: str..object = str]: ...
 def f(c: C):
     reveal_type(c)  # revealed: C[str]
 ```
+
+## `..` outside a bound says so
+
+Anywhere but a type parameter's bound, `Lower..Upper` is not a range. Left alone it parses as two
+attribute accesses with an empty name between them, which earns a pair of diagnostics about an
+attribute nobody wrote.
+
+```by
+# error: [invalid-syntax] "a `..` bound range is only valid in a type parameter's bound"
+# error: [invalid-syntax] "Expected a statement"
+x: str..object
+```

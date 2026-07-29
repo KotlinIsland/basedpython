@@ -118,8 +118,17 @@ class A:
 
 class B(A):
     # error: [unavailable-implicit-super-arguments]
-    # error: [unresolved-attribute]
     override let a = super.a + 1
+```
+
+The unavailable cases answer `Unknown` rather than declining, so nothing adds a second, less useful
+"has no attribute" error on top. A function with no class around it is the same failure and says so,
+rather than falling through to that generic message:
+
+```by
+def outside() -> int:
+    # error: [unavailable-implicit-super-arguments] "no class encloses this function"
+    return super.a
 ```
 
 ## `super` in a property accessor
