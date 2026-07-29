@@ -155,7 +155,8 @@ pub(in crate::types) fn conftest_chain(db: &dyn Db, file: File) -> Vec<File> {
     };
     for ancestor in directory.ancestors() {
         for extension in COLLECTED_EXTENSIONS {
-            if let Ok(conftest) = system_path_to_file(db, ancestor.join(format!("conftest.{extension}")))
+            if let Ok(conftest) =
+                system_path_to_file(db, ancestor.join(format!("conftest.{extension}")))
                 && conftest != file
             {
                 chain.push(conftest);

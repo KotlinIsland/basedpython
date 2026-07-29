@@ -228,9 +228,7 @@ impl<'src> GenericPolyfill<'src> {
                 // a narrower edit nested inside it would be dropped in turn
                 let Some((range, text)) = pending
                     .iter()
-                    .filter(|(p, _)| {
-                        p.contains_range(edit.range()) && !superseded.contains(p)
-                    })
+                    .filter(|(p, _)| p.contains_range(edit.range()) && !superseded.contains(p))
                     .max_by_key(|(p, _)| p.len())
                 else {
                     continue;

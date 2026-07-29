@@ -194,7 +194,8 @@ mod tests {
         // `type_params=` takes the parameter objects themselves — an
         // `Unpack[_Shape]` there is rejected by `TypeAliasType` at import
         assert!(
-            output.contains("NDTuple = TypeAliasType(\"NDTuple\", object, type_params=(_T, _Shape))"),
+            output
+                .contains("NDTuple = TypeAliasType(\"NDTuple\", object, type_params=(_T, _Shape))"),
             "{output}"
         );
         assert!(!output.contains("case ("), "{output}");
