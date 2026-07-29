@@ -394,6 +394,7 @@ def random() -> bool:
 
 x = 1
 while random():
+    # error: [redundant-condition]
     if x:
         x = 1
     else:
@@ -463,6 +464,7 @@ def random() -> bool:
 x = 1
 y = 2
 while random():
+    # error: [redundant-condition]
     if x:
         x, y = y, x
     reveal_type(x)  # revealed: Literal[2, 1]

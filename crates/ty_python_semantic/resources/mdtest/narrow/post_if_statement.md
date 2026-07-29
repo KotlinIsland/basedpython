@@ -395,6 +395,7 @@ async def main(val: int | None):
 data: dict[str, str] = {}
 api_key = data.get("api_key")
 
+# error: [overlapping-condition]
 if not api_key:
     exit(1)
 

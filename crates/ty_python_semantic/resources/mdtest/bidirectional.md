@@ -1561,6 +1561,7 @@ class SortParams[F]:
 def build_sort_spec[T](
     sort_params: SortParams[T] | None,
 ) -> dict[T, Literal[1, -1]] | None:
+    # error: [overlapping-condition]
     if not sort_params:
         return None
     return {sort_params.field: 1}

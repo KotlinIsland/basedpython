@@ -96,6 +96,23 @@
             "null"
           ]
         },
+        "overlapping-condition-assume-truthy-instances": {
+          "description": "Whether an instance with no `__bool__` and no `__len__` counts as always truthy when\nlooking for an [`overlapping-condition`](rules.md#overlapping-condition).\n\nSuch an instance is only *ambiguously* truthy — a subclass may define `__bool__` — so by\ndefault it is a falsy member of `if not x` just as `None` is. Enabling this assumes the\nclass means what it looks like it means, which drops the reports for the very common\n`if not x` over an optional instance.\n\nDefaults to `false`.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "overlapping-condition-exempt-types": {
+          "description": "A list of classes whose values do not count as a distinct member of an\n[`overlapping-condition`](rules.md#overlapping-condition).\n\n`if not x` over an `int | None` selects both a falsy `int` and `None`, and is reported\nbecause the branch cannot tell them apart. Listing `int` here says that conflating a falsy\n`int` with anything else is fine, so only `None` is left and the condition is accepted.\n\nEntries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be\nspelled bare (`int`), and `None` stands for the type of `None`.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/string"
+          }
+        },
         "replace-imports-with-any": {
           "description": "A list of module glob patterns whose imports should be replaced with `typing.Any`.\n\nUnlike `allowed-unresolved-imports`, this setting replaces the module's type information\nwith `typing.Any` even if the module can be resolved. Import diagnostics are\nunconditionally suppressed for matching modules.\n\n- Prefix a pattern with `!` to exclude matching modules\n\nWhen multiple patterns match, later entries take precedence.\n\nGlob patterns can be used in combinations with each other. For example, to suppress errors for\nany module where the first component contains the substring `test`, use `*test*.**`.\n\nWhen multiple patterns match, later entries take precedence.",
           "type": [
@@ -1468,6 +1485,16 @@
             }
           ]
         },
+        "overlapping-condition": {
+          "title": "detects a condition that several members of the tested type answer the same way",
+          "description": "## What it does\nChecks for a truthiness test whose selected branch holds a value that is\nalways there alongside one that is only sometimes there.\n\n## Why is this bad?\nA condition collapses a value to a single bit, so two members that answer\nthe test the same way become indistinguishable inside the branch. The case\nthat bites is a sentinel meeting the falsy corner of a value that normally\nbelongs to the other branch — `None` meeting `\"\"` in `if not name:`.\n\nOnly the branch the condition *selects* is analyzed: `if a` looks at the\ntruthy members, `if not a` at the falsy ones. A boolean operator is one\ncondition per operand rather than one over its value, since each operand's\ntruthiness is tested on its own.\n\nTwo members that are *each* only partly in the branch are not reported:\n`if x:` over a `str | bytes` conflates nothing the union did not already\nconflate. Neither are members of one class, or of two classes where one\nderives the other, which a condition was never going to tell apart:\n`Literal[1] | Literal[2]` and `list[A] | list[B]` are each one kind of\nvalue.\n\n## Examples\n```python\ndef f(a: bool | None):\n    if a:      # ok — only `True` is truthy\n        ...\n    if not a:  # warning: `False` and `None` are both falsy\n        ...\n\ndef g(name: str | None):\n    if not name:  # warning: `\"\"` and `None` are both falsy\n        ...\n    if name is None:  # ok — the members are told apart\n        ...\n```\n\n## Options\n- `analysis.overlapping-condition-exempt-types`\n- `analysis.overlapping-condition-assume-truthy-instances`",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "override-of-final-method": {
           "title": "detects overrides of final methods",
           "description": "## What it does\n\nChecks for methods on subclasses that override superclass methods decorated with `@final`.\n\n## Why is this bad?\n\nDecorating a method with `@final` declares to the type checker that it should not be\noverridden on any subclass.\n\n## Example\n\n```python\nfrom typing import final\n\n\nclass A:\n    @final\n    def foo(self): ...\n\n\nclass B(A):\n    def foo(self): ...  # error\n```",
@@ -1598,9 +1625,29 @@
             }
           ]
         },
+        "redundant-boolean-comparison": {
+          "title": "detects a comparison of a `bool` against `True` or `False`",
+          "description": "## What it does\nChecks for a comparison of a `bool` against `True` or `False`.\n\n## Why is this bad?\nThe operand is already the value the comparison produces, so the\ncomparison only adds noise. Testing the operand — or its negation —\nsays the same thing.\n\nAn operand that is *not* a `bool` is left alone: `x == True` where\n`x: bool | None` really does tell `True` apart from `False` and `None`,\nand `x == True` where `x: int` is a value comparison. A chained comparison\n(`a == True == b`) is left alone too: it is two comparisons over one\nliteral, and neither the operand nor its negation replaces the chain.\n\n## Examples\n```python\ndef f(a: bool):\n    if a == True:   # warning: redundant comparison\n        ...\n    if a is False:  # warning: redundant comparison\n        ...\n    if a:           # ok\n        ...\n\ndef g(a: bool | None):\n    if a == True:  # ok — tells `True` apart from `False` and `None`\n        ...\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "redundant-cast": {
           "title": "detects redundant `cast` calls",
           "description": "## What it does\n\nDetects redundant `cast` calls where the value already has the target type.\n\n## Why is this bad?\n\nThese casts have no effect and can be removed.\n\n## Example\n\n```python\nfrom typing import cast\n\n\ndef f() -> int:\n    return 10\n\n\n# Redundant\ncast(int, f())  # error\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "redundant-condition": {
+          "title": "detects a condition whose outcome is fixed by the tested type",
+          "description": "## What it does\nChecks for a condition whose outcome is fixed by the tested type, so the\nbranch is not conditional at all.\n\n## Why is this bad?\nOne of the two branches is dead. Either the annotation is wider than the\nauthor believed, or the test is left over from an earlier version of the\ncode.\n\nOnly a value *read* is reported — a name, an attribute, a subscript. A\ncomparison or a call computes a fresh value, and ty folding that one is the\nstatically-known-branch machinery doing its job: `elif isinstance(x, B):`\nclosing an exhaustive chain is deliberate, and so is `while True:`, which\nis a literal rather than a read.\n\nA read whose constant outcome comes from the checker's model of the build\nenvironment (`TYPE_CHECKING`, `sys.version_info`, `sys.platform`, `os.name`)\nrather than from the program's own types is not reported either — those are\n*artificially* constant, and selecting a branch at check time is exactly\nwhat they are for.\n\n## Examples\n```python\nimport sys\nfrom typing import TYPE_CHECKING, Literal\n\ndef f(a: Literal[True], x: int):\n    if a:  # warning: always true\n        ...\n    if x is not None:  # ok — a comparison, not a value read\n        ...\n\nwhile True:  # ok — a literal, not a value read\n    ...\n\nif TYPE_CHECKING:  # ok — artificially constant\n    ...\nif sys.version_info >= (3, 12):  # ok — artificially constant\n    ...\n```",
           "default": "warn",
           "oneOf": [
             {

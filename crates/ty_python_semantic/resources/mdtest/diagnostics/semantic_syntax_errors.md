@@ -214,6 +214,7 @@ reveal_type(i)  # revealed: Unknown
 [(item := 0) for (item, other) in [(0, 1)]]
 
 # error: [invalid-syntax] "assignment expression cannot rebind comprehension variable"
+# error: [redundant-condition]
 [x for x in [1] if (y := x) for y in [1]]
 
 [x for x in [0] if [(y := z) for z in [1]] for y in [2]]

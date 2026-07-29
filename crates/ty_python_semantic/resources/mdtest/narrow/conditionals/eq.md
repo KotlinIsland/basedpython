@@ -42,12 +42,14 @@ def _(x: None | Literal[1]):
 
 ```py
 def _(x: bool):
+    # error: [redundant-boolean-comparison]
     if x != False:
         reveal_type(x)  # revealed: Literal[True]
     else:
         reveal_type(x)  # revealed: Literal[False]
 
 def _(x: bool):
+    # error: [redundant-boolean-comparison]
     if x == False:
         reveal_type(x)  # revealed: Literal[False]
     else:

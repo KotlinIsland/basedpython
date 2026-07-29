@@ -1041,6 +1041,7 @@ def add_replacement(self: Foo, x: int, y: int, /) -> int:
 original_add = Foo.add
 
 def requires_true(value: Literal[True]) -> None:
+    # error: [redundant-condition]
     assert value
 
 Foo.add = add_replacement

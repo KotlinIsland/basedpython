@@ -112,7 +112,7 @@ with Session(engine) as session:
     session.add(Flag())
     session.commit()
     row = session.query(Flag).one()
-    assert row.enabled is True
+    assert row.enabled
 ```
 
 ## soundness guards inside a model method
