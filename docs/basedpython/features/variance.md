@@ -10,9 +10,21 @@ class Both[in out T]: ...
 ```
 
 `out T` declares `T` covariant, `in T` contravariant, and `in out T`
-invariant — read-write, which is what a bare `T` already means, so `in out`
-is only ever worth writing to say so explicitly. variance affects subtyping
-in the obvious way:
+invariant. a *bare* `T` declares nothing: its variance is **inferred** from
+what the class body does with it, so it can come out covariant, contravariant,
+invariant or bivariant. writing a keyword is how you pin one down and stop the
+inference from following the body:
+
+```by
+class Bare[T]:
+    def get(self) -> T: ...        # inferred covariant
+
+class Pinned[in out T]:
+    def get(self) -> T: ...        # invariant, because it says so
+```
+
+`Bare[int]` is assignable to `Bare[object]`; `Pinned[int]` is not. variance
+affects subtyping in the obvious way:
 
 - `Source[Dog]` is assignable to `Source[Animal]` (covariant — `T` is
     produced)

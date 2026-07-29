@@ -5566,6 +5566,17 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
                 return None;
             }
 
+            // basedpython: the variance above is the *declared* one, which for
+            // `class A[in out T]` is a deliberate invariance — it pins the
+            // subtyping relation, and is not the same thing as the bare
+            // `class A[T]` beside it, whose variance is inferred. but widening
+            // asks a different question: whether a write can reach the
+            // parameter. a class that only takes `T` in `__init__` has no such
+            // write under either spelling, so the literal stands under both
+            if typevar.is_declared_invariant_but_never_written(self.db) {
+                return None;
+            }
+
             let lower = bounds.lower?;
             let promoted = lower.promote(self.db);
 
