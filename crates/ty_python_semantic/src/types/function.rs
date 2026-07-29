@@ -189,6 +189,10 @@ bitflags! {
         /// parameter is `type[Self]` like a classmethod's — but the decorated
         /// member is the descriptor, not a bound method, so this is its own flag
         const BY_STATIC_PROPERTY = 1 << 9;
+        /// basedpython: the method carries the `private` modifier keyword. A private
+        /// member is invisible outside its class, so it neither constrains the class's
+        /// variance nor may be reached through a widened view of it
+        const PRIVATE = 1 << 10;
     }
 }
 

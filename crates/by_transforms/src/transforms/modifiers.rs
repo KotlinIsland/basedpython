@@ -357,7 +357,7 @@ impl<'src> Modifiers<'src> {
         // the modifier prefix; the rest of the statement stays exactly as written,
         // with or without an initializer
         if let Expr::Subscript(s) = node.annotation.as_ref()
-            && matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__abstract_annot__" | "__visibility_annot__" | "__modifier_annot__"))
+            && matches!(s.value.as_ref(), Expr::Name(n) if matches!(n.id.as_str(), "__abstract_annot__" | "__visibility_annot__" | "__private_annot__" | "__modifier_annot__"))
         {
             let erase_range = TextRange::new(node.range().start(), node.target.range().start());
             self.edits
@@ -1448,6 +1448,27 @@ mod tests {
             indoc! {"
                 class Foo:
                     a: int
+            "},
+        );
+    }
+
+    #[test]
+    fn private_annot_in_class() {
+        // `private` on a class member carries a meaning ty reads (the member is
+        // invisible to a widened view of the class), so it parses to its own marker.
+        // the lowering is still a bare prefix erasure — no rename, no runtime artefact
+        check(
+            indoc! {"
+                class Foo:
+                    private t: int
+                    private var u: int = 1
+                    override private v: str = \"v\"
+            "},
+            indoc! {"
+                class Foo:
+                    t: int
+                    u: int = 1
+                    v: str = \"v\"
             "},
         );
     }

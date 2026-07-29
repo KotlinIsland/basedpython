@@ -178,10 +178,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         }
 
         // basedpython annotation markers — `let x = v`, `final x: T`, `class a = v`,
-        // `[modifiers] a = v`, `newtype X = T`, `abstract a: T`, `sentinel A`
-        // parse to AnnAssign with a synthetic Name/Subscript annotation whose
-        // id is one of `__let__`, `__final__`, `__classvar__`, `__context__`, `__modifier_assign__`,
-        // `__modifier_annot__`, `__newtype__`, `__abstract_annot__`, `__sentinel__`.
+        // `[modifiers] a = v`, `newtype X = T`, `abstract a: T`, `private a: T`,
+        // `sentinel A` parse to AnnAssign with a synthetic Name/Subscript annotation
+        // whose id is one of `__let__`, `__final__`, `__classvar__`, `__context__`,
+        // `__modifier_assign__`, `__modifier_annot__`, `__newtype__`,
+        // `__abstract_annot__`, `__private_annot__`, `__sentinel__`.
         // resolve them so ty applies the right qualifier without a transpile step
         // basedpython use-site type modifiers (`literal T`, `final T`) are type
         // expressions, not qualifiers: they restrict the declared type rather
@@ -500,6 +501,17 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     | "__context__" => {
                         return Some(TypeAndQualifiers::declared(
                             self.infer_type_expression(slice),
+                        ));
+                    }
+                    // `private x: T` — the declaration is `x: T`, but the privacy
+                    // rides along as a qualifier: a private member is invisible to
+                    // a widened view of its class, which is what makes it sound
+                    // under a covariant type parameter
+                    "__private_annot__" => {
+                        return Some(TypeAndQualifiers::new(
+                            self.infer_type_expression(slice),
+                            TypeOrigin::Declared,
+                            TypeQualifiers::PRIVATE,
                         ));
                     }
                     _ => return None,

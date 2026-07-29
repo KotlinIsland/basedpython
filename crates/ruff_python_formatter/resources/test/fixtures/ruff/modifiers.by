@@ -60,6 +60,16 @@ class H:
     override label: str = "x"
 
 
+# a class-body `private` member, which ty reads as private rather than ignoring —
+# on its own, in a chain, and on the `var` spelling
+class I[T]:
+    private t: T
+    private var u: int = 1
+    override private v: str = "v"
+    private def helper(self) -> int:
+        return self.u
+
+
 # `private type` aliases — the modifier has no decorator slot to ride on, so it
 # lives on the node itself and must survive the round trip
 private type Alias = int | str
