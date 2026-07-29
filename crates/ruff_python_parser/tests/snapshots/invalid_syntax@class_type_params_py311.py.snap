@@ -117,6 +117,7 @@ Module(
                                             range: 88..89,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),

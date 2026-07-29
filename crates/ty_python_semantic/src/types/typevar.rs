@@ -2,8 +2,8 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use ruff_db::parsed::parsed_module;
-use ruff_python_ast::PySourceType;
 use ruff_python_ast::name::Name;
+use ruff_python_ast::{self as ast, PySourceType};
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
@@ -15,9 +15,12 @@ use crate::{
     },
     types::{
         ApplySpecialization, ApplyTypeMappingVisitor, CycleDetector, DynamicType, GenericContext,
-        InstanceProjection, KnownClass, KnownInstanceType, MaterializationKind, Parameter,
-        Parameters, Type, TypeAliasType, TypeContext, TypeMapping, TypeVarVariance, UnionBuilder,
-        UnionType, any_over_type, binding_type, definition_expression_type,
+        InstanceProjection, KnownClass, KnownInstanceType, LintDiagnosticGuard,
+        MaterializationKind, Parameter, Parameters, Type, TypeAliasType, TypeContext, TypeMapping,
+        TypeVarVariance, UnionBuilder, UnionType, any_over_type, binding_type,
+        constraints::ConstraintSetBuilder,
+        definition_expression_type,
+        generics::InferableTypeVars,
         tuple::Tuple,
         variance::VarianceInferable,
         visitor::{
@@ -291,6 +294,43 @@ impl<'db> TypeVarInstance<'db> {
         self.kind(db).is_typevartuple()
     }
 
+    /// basedpython: whether this type variable carries a *pack* bound, which the generic solver
+    /// must leave alone.
+    ///
+    /// A variadic pack's value is a tuple (`*Ts`) or a parameter list (`**Kwargs`), and its bound
+    /// never describes that value: an unstarred bound describes each member and a starred one the
+    /// pack's shape. Applying either as an ordinary upper bound would compare a tuple against an
+    /// element type — and, in a contravariant position, intersect the two into the solution. The
+    /// bound is checked where the pack is specialized instead.
+    ///
+    /// [`bound_or_constraints`](Self::bound_or_constraints) therefore hides it, and this is the
+    /// only way to reach it.
+    pub(crate) fn pack_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
+        if !self.is_pack(db) {
+            return None;
+        }
+        match self._bound_or_constraints(db)? {
+            TypeVarBoundOrConstraintsEvaluation::Eager(TypeVarBoundOrConstraints::UpperBound(
+                bound,
+            )) => Some(bound),
+            TypeVarBoundOrConstraintsEvaluation::LazyUpperBound => self.lazy_bound(db),
+            TypeVarBoundOrConstraintsEvaluation::Eager(TypeVarBoundOrConstraints::Constraints(
+                _,
+            ))
+            | TypeVarBoundOrConstraintsEvaluation::LazyConstraints => None,
+        }
+    }
+
+    pub(crate) fn has_pack_bound(self, db: &'db dyn Db) -> bool {
+        self.pack_bound(db).is_some()
+    }
+
+    /// Whether this type variable stands for a run of types (`*Ts`) or a field mapping
+    /// (`**Kwargs`) rather than for a single type.
+    fn is_pack(self, db: &'db dyn Db) -> bool {
+        self.is_typevartuple(db) || self.is_keyword_variadic(db)
+    }
+
     pub(crate) fn upper_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
         if let Some(TypeVarBoundOrConstraints::UpperBound(ty)) = self.bound_or_constraints(db) {
             Some(ty)
@@ -311,6 +351,12 @@ impl<'db> TypeVarInstance<'db> {
         self,
         db: &'db dyn Db,
     ) -> Option<TypeVarBoundOrConstraints<'db>> {
+        // basedpython: a variadic pack's bound is never an upper bound on the pack's own value,
+        // so it is kept out of the type lattice entirely — reach it through
+        // [`pack_bound`](Self::pack_bound) instead
+        if self.is_pack(db) {
+            return None;
+        }
         self._bound_or_constraints(db).and_then(|w| match w {
             TypeVarBoundOrConstraintsEvaluation::Eager(bound_or_constraints) => {
                 Some(bound_or_constraints)
@@ -613,6 +659,11 @@ impl<'db> TypeVarInstance<'db> {
                 let typevartuple_node = typevartuple.node(&module);
                 definition_expression_type(db, definition, typevartuple_node.bound.as_ref()?)
             }
+            // basedpython: `**Kwargs: int` bounds every field of a keyword-variadic pack
+            DefinitionKind::ParamSpec(paramspec) => {
+                let paramspec_node = paramspec.node(&module);
+                definition_expression_type(db, definition, paramspec_node.bound.as_ref()?)
+            }
             // legacy typevar
             DefinitionKind::Assignment(assignment) => {
                 let call_expr = assignment.value(&module).as_call_expr()?;
@@ -623,6 +674,29 @@ impl<'db> TypeVarInstance<'db> {
         };
 
         Some(ty)
+    }
+
+    /// basedpython: whether this pack's bound was written starred — `*Ts: *(int, str)` or
+    /// `**Kwargs: **{"a": int}` — which bounds the pack *as a whole* rather than element by
+    /// element.
+    ///
+    /// The star count follows the pack's declaration, so the shape of the bound expression is
+    /// what distinguishes the two readings: an unstarred `*Ts: int` bounds each element, and the
+    /// starred `*Ts: *tuple[int, ...]` bounds the pack itself.
+    #[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
+    pub(crate) fn has_whole_pack_bound(self, db: &'db dyn Db) -> bool {
+        let Some(definition) = self.definition(db) else {
+            return false;
+        };
+        let module = parsed_module(db, definition.file(db)).load(db);
+        let bound = match definition.kind(db) {
+            DefinitionKind::TypeVarTuple(typevartuple) => &typevartuple.node(&module).bound,
+            DefinitionKind::ParamSpec(paramspec) => &paramspec.node(&module).bound,
+            _ => return false,
+        };
+        bound
+            .as_deref()
+            .is_some_and(|bound| matches!(bound, ast::Expr::Starred(_)))
     }
 
     fn lazy_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
@@ -2124,6 +2198,120 @@ impl<'db> TypeVarBoundOrConstraints<'db> {
             TypeVarBoundOrConstraints::UpperBound(bound) => bound,
             TypeVarBoundOrConstraints::Constraints(constraints) => constraints.as_type(db),
         }
+    }
+}
+
+/// basedpython: how a variadic pack's specialization fails the pack's declared upper bound.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PackBoundViolation<'db> {
+    /// A member — an element of a `*Ts`, or a field's type in a `**Kwargs` — is outside the
+    /// bound. For a whole-pack `*Ts: *(int, str)` the member is the packed tuple itself.
+    Member(Type<'db>),
+    /// A whole-pack `**Kwargs: **{"a": int}` names a field the specialization does not have.
+    MissingField(Name),
+}
+
+impl<'db> PackBoundViolation<'db> {
+    /// The bound this violation was measured against. Only ever `None` for a pack with no bound,
+    /// which cannot produce a violation in the first place.
+    fn bound(db: &'db dyn Db, typevar: BoundTypeVarInstance<'db>) -> Option<Type<'db>> {
+        typevar.typevar(db).pack_bound(db)
+    }
+
+    pub(crate) fn message(&self, db: &'db dyn Db, typevar: BoundTypeVarInstance<'db>) -> String {
+        let bound = Self::bound(db, typevar)
+            .map(|bound| bound.display(db).to_string())
+            .unwrap_or_default();
+        let kind = if typevar.is_typevartuple(db) {
+            "type variable tuple"
+        } else {
+            "keyword-variadic pack"
+        };
+        let name = typevar.identity(db).display(db);
+        match self {
+            Self::Member(member) => format!(
+                "Type `{}` is not assignable to upper bound `{bound}` of {kind} `{name}`",
+                member.display(db),
+            ),
+            Self::MissingField(field) => {
+                format!("Upper bound `{bound}` of {kind} `{name}` requires a field `{field}`")
+            }
+        }
+    }
+
+    /// Attaches the sub-diagnostic explaining *why* the member is not assignable, when there is
+    /// a member to explain.
+    pub(in crate::types) fn attach_context(
+        &self,
+        db: &'db dyn Db,
+        typevar: BoundTypeVarInstance<'db>,
+        diagnostic: &mut LintDiagnosticGuard<'_, '_>,
+    ) {
+        let (Self::Member(member), Some(bound)) = (self, Self::bound(db, typevar)) else {
+            return;
+        };
+        member
+            .assignability_error_context(db, bound)
+            .attach_to(db, diagnostic);
+    }
+}
+
+/// basedpython: checks a variadic pack's specialization against its declared upper bound.
+///
+/// The star count in the declaration decides which of two readings applies. An unstarred bound
+/// bounds every *member* of the pack — every element of a `*Ts: int`, every field of a
+/// `**Kwargs: int`. A starred one bounds the pack *as a whole*: `*Ts: *(int, str)` is an ordinary
+/// assignability check against the packed tuple, and `**Kwargs: **{"a": int}` requires every
+/// field the bound names to be present with an assignable type — extra fields are what an upper
+/// bound permits.
+///
+/// `provided` is the value bound to the pack: a tuple for a `TypeVarTuple`, a parameter-list
+/// callable for a keyword-variadic pack.
+pub(crate) fn pack_bound_violation<'db>(
+    db: &'db dyn Db,
+    typevar: BoundTypeVarInstance<'db>,
+    provided: Type<'db>,
+    constraints: &ConstraintSetBuilder<'db>,
+    inferable: InferableTypeVars<'db>,
+) -> Option<PackBoundViolation<'db>> {
+    let bound = typevar.typevar(db).pack_bound(db)?;
+    let outside = |member: Type<'db>, bound: Type<'db>| {
+        member
+            .when_assignable_to(db, bound, constraints, inferable)
+            .is_never_satisfied(db)
+    };
+
+    let whole_pack = typevar.typevar(db).has_whole_pack_bound(db);
+    match (whole_pack, typevar.is_typevartuple(db)) {
+        (true, true) => outside(provided, bound).then_some(PackBoundViolation::Member(provided)),
+        (false, true) => provided
+            .exact_tuple_instance_spec(db)
+            .and_then(|spec| {
+                spec.fixed_elements()
+                    .find(|element| outside(**element, bound))
+                    .copied()
+            })
+            .map(PackBoundViolation::Member),
+        // an unspecialized, gradual or unknown pack has no fields to check
+        (whole_pack, false) => provided.keyword_pack_fields(db).and_then(|fields| {
+            if whole_pack {
+                // a non-`TypedDict` whole-pack bound is reported where the pack is declared;
+                // there is nothing to measure a specialization against here
+                let required = bound.as_typed_dict()?.items(db);
+                required.iter().find_map(|(name, field)| {
+                    match fields.iter().find(|(field_name, _)| *field_name == name) {
+                        Some((_, provided_field)) => outside(*provided_field, field.declared_ty)
+                            .then(|| PackBoundViolation::Member(*provided_field)),
+                        None => Some(PackBoundViolation::MissingField(name.clone())),
+                    }
+                })
+            } else {
+                fields
+                    .iter()
+                    .find(|(_, field)| outside(*field, bound))
+                    .map(|(_, field)| PackBoundViolation::Member(*field))
+            }
+        }),
     }
 }
 

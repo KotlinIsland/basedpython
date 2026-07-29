@@ -2536,11 +2536,17 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 }
             }
             ast::TypeParam::ParamSpec(ast::TypeParamParamSpec {
+                bound,
                 default,
                 name: _,
                 range: _,
                 node_index: _,
             }) => {
+                if let Some(expr) = bound {
+                    self.visit
+                        .type_param_definitions
+                        .push((expr, self.semantic.snapshot()));
+                }
                 if let Some(expr) = default {
                     self.visit
                         .type_param_definitions

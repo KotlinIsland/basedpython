@@ -140,6 +140,7 @@ emitted python.
 ## see also
 
 - [generics](generics.md) — the type parameter forms
+- [bounds on a variadic pack](pack-bounds.md) — what a bound means on a `*Ts` or `**Kwargs`
 - [explicit typevar constraints](constraints.md) — `T: constraints (int, str)`, an unordered
     alternative to a range
 - [typevar variance keywords](variance.md) — which direction subtyping moves a specialization

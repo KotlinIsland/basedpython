@@ -1,0 +1,35 @@
+class ElementWise[*Ts: int]: ...
+
+
+class WholePack[*Ts: *(int, str)]: ...
+
+
+class UnboundedWholePack[*Ts: *tuple[int, ...]]: ...
+
+
+class EveryField[**Kwargs: int]: ...
+
+
+class WholeKeywordPack[**Kwargs: **{"a": int}]: ...
+
+
+class BoundAndDefault[*Ts: *(int, str) = *tuple[int]]: ...
+
+
+class Both[*Ts: *(int, str), **Kwargs: **{"a": int}]: ...
+
+
+class AlongsideATypeVar[T: bytes, *Ts: int, **Kwargs: **{"a": int}]: ...
+
+
+type Alias[*Ts: *(int, str)] = int
+
+
+def f[**Kwargs: **{"a": int}](x: int) -> int:
+    return x
+
+
+class Broken[
+    *Ts: *(int, str, bytes, complex, float),
+    **Kwargs: **{"a": int, "b": str, "c": bytes, "d": complex},
+]: ...

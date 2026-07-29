@@ -477,12 +477,17 @@ fn any_over_type_param(type_param: &TypeParam, func: &mut dyn FnMut(&Expr) -> bo
                     .as_ref()
                     .is_some_and(|value| any_over_expr(value, &mut *func))
         }
-        TypeParam::TypeVarTuple(ast::TypeParamTypeVarTuple { default, .. }) => default
-            .as_ref()
-            .is_some_and(|value| any_over_expr(value, &mut *func)),
-        TypeParam::ParamSpec(ast::TypeParamParamSpec { default, .. }) => default
-            .as_ref()
-            .is_some_and(|value| any_over_expr(value, &mut *func)),
+        // basedpython: a variadic pack's bound (`*Ts: int`, `**Kwargs: **{"a": int}`) is an
+        // expression like any other, so it has to be walked alongside the default
+        TypeParam::TypeVarTuple(ast::TypeParamTypeVarTuple { bound, default, .. })
+        | TypeParam::ParamSpec(ast::TypeParamParamSpec { bound, default, .. }) => {
+            bound
+                .as_ref()
+                .is_some_and(|value| any_over_expr(value, &mut *func))
+                || default
+                    .as_ref()
+                    .is_some_and(|value| any_over_expr(value, &mut *func))
+        }
     }
 }
 
@@ -2819,12 +2824,54 @@ mod tests {
         );
     }
 
+    /// basedpython: a variadic pack may carry a bound — `*Ts: int`, `**Kwargs: int`, and the
+    /// starred whole-pack forms — which is an expression the walk has to reach.
+    #[test]
+    fn any_over_type_param_pack_bound() {
+        let constant = Expr::NumberLiteral(ExprNumberLiteral {
+            value: Number::Int(Int::ONE),
+            range: TextRange::default(),
+            node_index: AtomicNodeIndex::NONE,
+        });
+
+        let packs = [
+            TypeParam::TypeVarTuple(TypeParamTypeVarTuple {
+                bound: Some(Box::new(constant.clone())),
+                range: TextRange::default(),
+                node_index: AtomicNodeIndex::NONE,
+                name: Identifier::new("x", TextRange::default()),
+                default: None,
+            }),
+            TypeParam::ParamSpec(TypeParamParamSpec {
+                bound: Some(Box::new(constant.clone())),
+                range: TextRange::default(),
+                node_index: AtomicNodeIndex::NONE,
+                name: Identifier::new("x", TextRange::default()),
+                default: None,
+            }),
+        ];
+
+        for pack in &packs {
+            assert!(
+                any_over_type_param(pack, &mut |expr| {
+                    assert_eq!(
+                        *expr, constant,
+                        "the received expression should be the unwrapped bound"
+                    );
+                    true
+                }),
+                "a pack's bound should be visited"
+            );
+        }
+    }
+
     #[test]
     fn any_over_type_param_param_spec() {
         let type_param_spec = TypeParam::ParamSpec(TypeParamParamSpec {
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
             name: Identifier::new("x", TextRange::default()),
+            bound: None,
             default: None,
         });
         assert!(

@@ -8448,6 +8448,13 @@ impl<'db> BindingError<'db> {
                                 .display(context.db())
                         ));
                     }
+                    SpecializationError::UnsatisfiedPackBound {
+                        bound_typevar,
+                        violation,
+                        ..
+                    } => {
+                        diag.set_primary_message(violation.message(context.db(), *bound_typevar));
+                    }
                     SpecializationError::MismatchedConstraint { bound_typevar, .. } => {
                         let typevar = bound_typevar.typevar(context.db());
                         let typevar_name = typevar.name(context.db());

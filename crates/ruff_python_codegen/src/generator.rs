@@ -1099,9 +1099,18 @@ impl<'a> Generator<'a> {
                     self.unparse_expr(expr, precedence::MAX);
                 }
             }
-            TypeParam::ParamSpec(TypeParamParamSpec { name, default, .. }) => {
+            TypeParam::ParamSpec(TypeParamParamSpec {
+                name,
+                bound,
+                default,
+                ..
+            }) => {
                 self.p("**");
                 self.p_id(name);
+                if let Some(expr) = bound {
+                    self.p(": ");
+                    self.unparse_expr(expr, precedence::MAX);
+                }
                 if let Some(expr) = default {
                     self.p(" = ");
                     self.unparse_expr(expr, precedence::MAX);
@@ -2741,6 +2750,23 @@ if True:
         T",
         );
         basedpython_wrapped_round_trip("type Plain[T, *Ts: int] = tuple[T, *Ts]");
+    }
+
+    /// basedpython: the starred whole-pack bounds, and a keyword-variadic pack's bound, have to
+    /// survive a re-render for the same reason the element-wise one does — the generator is what
+    /// a pass rewriting an enclosing statement emits, so a bound it drops is dropped silently.
+    #[test]
+    fn pack_bounds_round_trip() {
+        basedpython_wrapped_round_trip("type WholeTuple[*Ts: *(int, str)] = int");
+        basedpython_wrapped_round_trip("type Unbounded[*Ts: *tuple[int, ...]] = int");
+        basedpython_wrapped_round_trip("type EveryField[**Kwargs: int] = int");
+        basedpython_wrapped_round_trip("type WholeShape[**Kwargs: **{'a': int}] = int");
+        basedpython_wrapped_round_trip("type Both[*Ts: *(int, str), **Kwargs: **{'a': int}] = int");
+        basedpython_wrapped_round_trip("type WithDefault[*Ts: *(int, str) = *tuple[int]] = int");
+        // a class carries the same bounds, and the generator keeps the source quote style
+        basedpython_wrapped_round_trip(
+            "class A[*Ts: *(int, str), **Kwargs: **{\"a\": int}]:\n    ...",
+        );
     }
 
     /// basedpython: `-> asserts x` names a place, not a type, so the generator — which

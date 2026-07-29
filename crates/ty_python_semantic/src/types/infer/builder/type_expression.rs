@@ -1966,12 +1966,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         // parameters, the way `*args: *Ts` unpacks a `TypeVarTuple` into the positional ones —
         // the star count follows the pack's declaration. the double star parses to
         // `Starred(Starred(_))`; the pack is named bare inside, so it needs the same allowance a
-        // bare `ParamSpec` gets
+        // bare `ParamSpec` gets.
+        //
+        // a pack's own bound takes the same double star to bound the whole pack rather than
+        // each field — `**Kwargs: **{"a": int}` — and the inner type expression there is the
+        // shape the pack must have, not a pack reference
         if self.is_basedpython_file()
             && self
                 .context
                 .inference_flags
-                .contains(InferenceFlags::IN_KWARG_ANNOTATION)
+                .intersects(InferenceFlags::IN_KWARG_ANNOTATION | InferenceFlags::IN_PACK_BOUND)
             && let ast::Expr::Starred(inner) = value.as_ref()
         {
             let previously_allowed_paramspec = self
