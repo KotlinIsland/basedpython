@@ -616,9 +616,17 @@ fn name_is_shadowed_at<'db>(
         return false;
     };
     let index = semantic_index(db, file);
-    index
-        .ancestor_scopes(scope)
-        .any(|(id, _)| !id.is_global() && index.place_table(id).symbol_id(name).is_some())
+    index.ancestor_scopes(scope).any(|(id, _)| {
+        // a scope's place table holds every name the scope *mentions*, so
+        // merely naming the class — which the annotation of the very assignment
+        // being converted does — is not shadowing. only a binding or a
+        // declaration takes the name over
+        !id.is_global()
+            && index
+                .place_table(id)
+                .symbol_by_name(name)
+                .is_some_and(|symbol| symbol.is_bound() || symbol.is_declared())
+    })
 }
 
 /// declaration-site validation, run from the post-inference static-class checks.
