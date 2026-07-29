@@ -1,0 +1,7 @@
+# a stub file aligns its assignments too
+alias = int
+longer_alias = str
+
+class C:
+    field: int = 0
+    other_field: str = ""

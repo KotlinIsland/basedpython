@@ -1676,6 +1676,7 @@ fn docstring_format_source(
     let comments = crate::Comments::from_ast(parsed.syntax(), source_code, &trivia);
 
     let ctx = PyFormatContext::new(options, source, comments, &trivia, parsed.tokens())
+        .with_assignment_alignment(parsed.syntax().into())
         .in_docstring(docstring_quote_style);
     let formatted = crate::format!(ctx, [parsed.syntax().format()])?;
     formatted

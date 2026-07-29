@@ -49,7 +49,7 @@ def sql(template: Template) -> Query: ...
 def html(template: Template) -> str: ...
 
 
-q = sql"select * from t"
+q    = sql"select * from t"
 page = html"<p>{name}</p>"
 
 # as a call argument

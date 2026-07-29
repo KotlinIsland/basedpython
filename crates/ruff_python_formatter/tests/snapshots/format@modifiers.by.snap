@@ -131,8 +131,8 @@ class G:
 # and without an initializer, alone and in a chain
 override x: int = 1
 abstract y: str
-private z: int = 2
-export e: str = "e"
+private z: int                  = 2
+export e: str                   = "e"
 private override chained: bytes = b""
 
 
@@ -148,6 +148,6 @@ private type Pair[T] = tuple[T, T]
 type Public = list[int]
 
 # `type` and `private` remain ordinary identifiers when not in an alias shape
-type = 5
+type    = 5
 private = type
 ```

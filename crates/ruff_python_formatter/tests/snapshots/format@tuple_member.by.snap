@@ -43,7 +43,7 @@ def f(pair: tuple[int, str, float]) -> None:
 
 
 nested = ((1, 2), 3)
-inner = nested.0.1
+inner  = nested.0.1
 
 # an ordinary float attribute is unaffected
 part = (1.5).real

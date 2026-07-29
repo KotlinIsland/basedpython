@@ -79,13 +79,19 @@ pub fn format_range(
     let trivia = TriviaRanges::from(parsed.tokens());
     let comments = Comments::from_ast(parsed.syntax(), source_code, &trivia);
 
+    // The alignment of an assignment depends on the other assignments in its run,
+    // which may well fall outside `range`. It's computed for the whole document, and
+    // before the indent level is narrowed to the enclosing node, so that formatting a
+    // range lines the assignments in it up exactly like formatting the whole document
+    // does.
     let mut context = PyFormatContext::new(
         options.with_source_map_generation(SourceMapGeneration::Enabled),
         source,
         comments,
         &trivia,
         parsed.tokens(),
-    );
+    )
+    .with_assignment_alignment(parsed.syntax().into());
 
     let (enclosing_node, base_indent) =
         match find_enclosing_node(range, AnyNodeRef::from(parsed.syntax()), &context) {

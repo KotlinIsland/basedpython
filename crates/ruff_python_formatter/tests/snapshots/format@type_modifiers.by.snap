@@ -28,12 +28,12 @@ m: final[int]
 
 ## Output
 ```bython
-a: literal str = "asdf"
-b: final int = 1
-c: literal str | None = None
-d: list[literal str] = []
+a: literal str          = "asdf"
+b: final int            = 1
+c: literal str | None   = None
+d: list[literal str]    = []
 e: final dict[str, int] = {}
-f: literal list[*] = []
+f: literal list[*]      = []
 
 type G = literal str
 

@@ -5,6 +5,7 @@ use ruff_text_size::Ranged;
 use crate::expression::is_splittable_expression;
 use crate::expression::parentheses::{NeedsParentheses, OptionalParentheses, Parentheses};
 use crate::prelude::*;
+use crate::statement::assignment_alignment::AssignmentPadding;
 use crate::statement::stmt_assign::{
     AnyAssignmentOperator, AnyBeforeOperator, FormatStatementsLastExpression,
 };
@@ -12,6 +13,31 @@ use crate::statement::trailing_semicolon;
 
 #[derive(Default)]
 pub struct FormatStmtAnnAssign;
+
+/// ` = <value>`, the tail the basedpython surface forms share, padded so that the
+/// `=` lines up with the surrounding assignments
+struct AssignedValue<'a> {
+    value: &'a Expr,
+    padding: AssignmentPadding,
+}
+
+fn assigned_value(value: &Expr, padding: AssignmentPadding) -> AssignedValue<'_> {
+    AssignedValue { value, padding }
+}
+
+impl Format<PyFormatContext<'_>> for AssignedValue<'_> {
+    fn fmt(&self, f: &mut PyFormatter) -> FormatResult<()> {
+        write!(
+            f,
+            [
+                space(),
+                AnyAssignmentOperator::assign(self.padding),
+                space(),
+                self.value.format()
+            ]
+        )
+    }
+}
 
 /// detect a synthetic basedpython `let` annotation: returns `None` for bare `__let__`,
 /// or `Some(type_expr)` for the typed form `__let__[T]`
@@ -127,6 +153,8 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
             simple: _,
         } = item;
 
+        let padding = AssignmentPadding::of(item.start(), f.context());
+
         // basedpython synthetic annotations — format back to the surface syntax
         if let Some(type_ann) = synthetic_let(annotation) {
             write!(f, [token("let"), space(), target.format()])?;
@@ -134,7 +162,7 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
                 write!(f, [token(":"), space(), t.format()])?;
             }
             if let Some(v) = value {
-                write!(f, [space(), token("="), space(), v.format()])?;
+                assigned_value(v, padding).fmt(f)?;
             }
             return Ok(());
         }
@@ -144,7 +172,7 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
                 write!(f, [token(":"), space(), t.format()])?;
             }
             if let Some(v) = value {
-                write!(f, [space(), token("="), space(), v.format()])?;
+                assigned_value(v, padding).fmt(f)?;
             }
             return Ok(());
         }
@@ -167,7 +195,7 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
                 ]
             )?;
             if let Some(v) = value {
-                write!(f, [space(), token("="), space(), v.format()])?;
+                assigned_value(v, padding).fmt(f)?;
             }
             return Ok(());
         }
@@ -178,14 +206,14 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
             // rendered verbatim from source; the statement carries no annotation
             write!(f, [text(prefix), space(), target.format()])?;
             if let Some(v) = value {
-                write!(f, [space(), token("="), space(), v.format()])?;
+                assigned_value(v, padding).fmt(f)?;
             }
             return Ok(());
         }
         if let Some(keyword) = synthetic_marker(annotation) {
             write!(f, [text(keyword), space(), target.format()])?;
             if let Some(v) = value {
-                write!(f, [space(), token("="), space(), v.format()])?;
+                assigned_value(v, padding).fmt(f)?;
             }
             return Ok(());
         }
@@ -208,7 +236,7 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
                 ]
             )?;
             if let Some(v) = value {
-                write!(f, [space(), token("="), space(), v.format()])?;
+                assigned_value(v, padding).fmt(f)?;
             }
             return Ok(());
         }
@@ -226,7 +254,7 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
             {
                 FormatStatementsLastExpression::RightToLeft {
                     before_operator: AnyBeforeOperator::Expression(annotation),
-                    operator: AnyAssignmentOperator::Assign,
+                    operator: AnyAssignmentOperator::assign(padding),
                     value,
                     statement: item.into(),
                 }
@@ -249,7 +277,7 @@ impl FormatNodeRule<StmtAnnAssign> for FormatStmtAnnAssign {
                     f,
                     [
                         space(),
-                        token("="),
+                        AnyAssignmentOperator::assign(padding),
                         space(),
                         FormatStatementsLastExpression::left_to_right(value, item)
                     ]

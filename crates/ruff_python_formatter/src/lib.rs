@@ -19,8 +19,8 @@ use crate::comments::{
 pub use crate::context::PyFormatContext;
 pub use crate::db::Db;
 pub use crate::options::{
-    DocstringCode, DocstringCodeLineWidth, MagicTrailingComma, NestedStringQuoteStyle, PreviewMode,
-    PyFormatOptions, QuoteStyle,
+    AssignmentAlignment, DocstringCode, DocstringCodeLineWidth, MagicTrailingComma,
+    NestedStringQuoteStyle, PreviewMode, PyFormatOptions, QuoteStyle,
 };
 use crate::range::is_logical_line;
 pub use crate::shared_traits::{AsFormat, FormattedIter, FormattedIterExt, IntoFormat};
@@ -166,10 +166,10 @@ where
     let source_code = SourceCode::new(source);
     let comments = Comments::from_ast(parsed.syntax(), source_code, trivia);
 
-    let formatted = format!(
-        PyFormatContext::new(options, source, comments, trivia, parsed.tokens()),
-        [parsed.syntax().format()]
-    )?;
+    let context = PyFormatContext::new(options, source, comments, trivia, parsed.tokens())
+        .with_assignment_alignment(parsed.syntax().into());
+
+    let formatted = format!(context, [parsed.syntax().format()])?;
     formatted
         .context()
         .comments()

@@ -11,8 +11,8 @@ use ruff_linter::settings::types::{
 use ruff_macros::CacheKey;
 use ruff_python_ast::{PySourceType, PythonVersion};
 use ruff_python_formatter::{
-    DocstringCode, DocstringCodeLineWidth, MagicTrailingComma, NestedStringQuoteStyle, PreviewMode,
-    PyFormatOptions, QuoteStyle,
+    AssignmentAlignment, DocstringCode, DocstringCodeLineWidth, MagicTrailingComma,
+    NestedStringQuoteStyle, PreviewMode, PyFormatOptions, QuoteStyle,
 };
 use ruff_source_file::find_newline;
 use std::fmt;
@@ -202,6 +202,9 @@ pub struct FormatterSettings {
 
     pub magic_trailing_comma: MagicTrailingComma,
 
+    /// `None` means the default, which is to align.
+    pub assignment_alignment: Option<AssignmentAlignment>,
+
     pub line_ending: LineEnding,
 
     pub docstring_code_format: DocstringCode,
@@ -253,6 +256,7 @@ impl FormatterSettings {
             .with_quote_style(self.quote_style)
             .with_nested_string_quote_style(self.nested_string_quote_style)
             .with_magic_trailing_comma(self.magic_trailing_comma)
+            .with_assignment_alignment(self.assignment_alignment)
             .with_preview(self.preview)
             .with_line_ending(line_ending)
             .with_line_width(self.line_width)
@@ -289,6 +293,7 @@ impl Default for FormatterSettings {
             quote_style: default_options.quote_style(),
             nested_string_quote_style: default_options.nested_string_quote_style(),
             magic_trailing_comma: default_options.magic_trailing_comma(),
+            assignment_alignment: None,
             docstring_code_format: default_options.docstring_code(),
             docstring_code_line_width: default_options.docstring_code_line_width(),
         }
@@ -313,6 +318,7 @@ impl fmt::Display for FormatterSettings {
                 self.quote_style,
                 self.nested_string_quote_style,
                 self.magic_trailing_comma,
+                self.assignment_alignment | optional,
                 self.docstring_code_format,
                 self.docstring_code_line_width,
             ]

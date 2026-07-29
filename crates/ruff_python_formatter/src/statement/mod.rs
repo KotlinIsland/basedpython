@@ -5,6 +5,7 @@ use ruff_text_size::{Ranged, TextRange};
 
 use crate::prelude::*;
 
+pub(crate) mod assignment_alignment;
 pub(super) mod clause;
 pub(crate) mod stmt_ann_assign;
 pub(crate) mod stmt_assert;

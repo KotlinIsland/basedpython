@@ -1,0 +1,100 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/assignment_alignment_option.py
+---
+## Input
+```python
+# the default aligns these; the second output shows the opt-out
+short = 1
+much_longer = 2
+counter += 3
+annotated: int = 4
+first, second = 5, 6
+chained = also = 7
+
+
+def f():
+    """Code examples in docstrings follow the same setting.
+
+    ```python
+    x = 1
+    yyy = 2
+    ```
+    """
+```
+
+## Outputs
+### Output 1
+```
+indent-style               = space
+line-width                 = 88
+indent-width               = 4
+quote-style                = Double
+line-ending                = LineFeed
+magic-trailing-comma       = Respect
+assignment-alignment       = enabled
+docstring-code             = Enabled
+docstring-code-line-width  = "dynamic"
+preview                    = Disabled
+target_version             = 3.10
+source_type                = Python
+nested-string-quote-style  = alternating
+```
+
+```python
+# the default aligns these; the second output shows the opt-out
+short          = 1
+much_longer    = 2
+counter       += 3
+annotated: int = 4
+first, second  = 5, 6
+chained = also = 7
+
+
+def f():
+    """Code examples in docstrings follow the same setting.
+
+    ```python
+    x   = 1
+    yyy = 2
+    ```
+    """
+```
+
+
+### Output 2
+```
+indent-style               = space
+line-width                 = 88
+indent-width               = 4
+quote-style                = Double
+line-ending                = LineFeed
+magic-trailing-comma       = Respect
+assignment-alignment       = disabled
+docstring-code             = Enabled
+docstring-code-line-width  = "dynamic"
+preview                    = Disabled
+target_version             = 3.10
+source_type                = Python
+nested-string-quote-style  = alternating
+```
+
+```python
+# the default aligns these; the second output shows the opt-out
+short = 1
+much_longer = 2
+counter += 3
+annotated: int = 4
+first, second = 5, 6
+chained = also = 7
+
+
+def f():
+    """Code examples in docstrings follow the same setting.
+
+    ```python
+    x = 1
+    yyy = 2
+    ```
+    """
+```

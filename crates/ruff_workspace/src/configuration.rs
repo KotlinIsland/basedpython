@@ -43,7 +43,7 @@ use ruff_linter::{
 };
 use ruff_python_ast as ast;
 use ruff_python_formatter::{
-    DocstringCode, DocstringCodeLineWidth, MagicTrailingComma, QuoteStyle,
+    AssignmentAlignment, DocstringCode, DocstringCodeLineWidth, MagicTrailingComma, QuoteStyle,
 };
 
 use crate::options::{
@@ -258,6 +258,7 @@ impl Configuration {
             magic_trailing_comma: format
                 .magic_trailing_comma
                 .unwrap_or(format_defaults.magic_trailing_comma),
+            assignment_alignment: format.assignment_alignment,
             docstring_code_format: format
                 .docstring_code_format
                 .unwrap_or(format_defaults.docstring_code_format),
@@ -1325,6 +1326,7 @@ pub struct FormatConfiguration {
     pub quote_style: Option<QuoteStyle>,
     pub nested_string_quote_style: Option<ruff_python_formatter::NestedStringQuoteStyle>,
     pub magic_trailing_comma: Option<MagicTrailingComma>,
+    pub assignment_alignment: Option<AssignmentAlignment>,
     pub line_ending: Option<LineEnding>,
     pub docstring_code_format: Option<DocstringCode>,
     pub docstring_code_line_width: Option<DocstringCodeLineWidth>,
@@ -1356,6 +1358,7 @@ impl FormatConfiguration {
                     MagicTrailingComma::Respect
                 }
             }),
+            assignment_alignment: options.assignment_alignment,
             line_ending: options.line_ending,
             docstring_code_format: options.docstring_code_format.map(|yes| {
                 if yes {
@@ -1380,6 +1383,7 @@ impl FormatConfiguration {
                 .nested_string_quote_style
                 .or(config.nested_string_quote_style),
             magic_trailing_comma: self.magic_trailing_comma.or(config.magic_trailing_comma),
+            assignment_alignment: self.assignment_alignment.or(config.assignment_alignment),
             line_ending: self.line_ending.or(config.line_ending),
             docstring_code_format: self.docstring_code_format.or(config.docstring_code_format),
             docstring_code_line_width: self
