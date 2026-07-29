@@ -44,6 +44,13 @@ the value's static type decides the strategy:
     soundly (`x: A[int] | A[str]` against `A[int]`); answers `False` for values
     that carry no `__orig_class__`
 
+- **undecidable, protocol target → structural check**. a protocol's instances
+    record no specialization, but basedpython reifies class attribute
+    annotations, so the value's class is inspected member by member — each
+    reified annotation against the member's specialized type, by that member's
+    variance. a method member is checked the same way through its parameter and
+    return annotations. see [below](#a-protocol-target-is-checked-structurally)
+
 - **undecidable, builtin target → error**. a runtime `list` / `dict` / `set`
     / `tuple` carries no record of its type arguments, so it cannot be checked
     at runtime. this is an [`erased-type-check`](#the-erased-type-check-error)
@@ -157,3 +164,46 @@ xs === list[int]   # plain identity — the list is not the class object
 a user-generic probe works on any target version. the reified-cell token
 equality path is only reached inside a [reified generic](reified-generics.md),
 which already requires python 3.12+
+
+## a protocol target is checked structurally
+
+a protocol has no identity to record, so there is nothing on the value saying
+which specialization it satisfies. what there *is* is the value's class, whose
+annotations basedpython reifies — so the check is done member by member against
+those, each by its own variance:
+
+```by
+from typing import Protocol
+
+class HasA[T](Protocol):
+    a: T
+
+class IntAttr:
+    a: int
+
+def f(x: object):
+    x is HasA[int]      # True for an `IntAttr`
+```
+
+an invariant member is exact and a covariant one follows subtyping, the same way
+the target's own variance decides every other parametric test. a method member is
+checked through its annotations too — parameters contravariantly, the return
+covariantly.
+
+### only a class-level annotation survives
+
+python records nothing for a `self.a: int` written inside `__init__`, so a member
+declared there cannot be read back at runtime. the checker still accepts such a
+class as satisfying the protocol, so answering `False` would put the two halves
+in contradiction — the test raises instead:
+
+```by
+class InitLevel:
+    def __init__(self) -> None:
+        self.a: int = 1
+
+InitLevel() is HasA[int]    # TypeError: its type is declared inside a method
+```
+
+declare the member in the class body and the check answers. this is the same
+line the erased builtin target takes: refuse, never guess.

@@ -36,6 +36,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [literal type promotion](literal-types.md)
 - [symbolic operations in types](symbolic-type-ops.md)
 - [match types](match-types.md)
+- [`type def` type functions](type-def.md)
 - [typed dict literals](typed-dict-literal.md)
 - [anonymous named tuple types](anonymous-named-tuple.md)
 - [inline protocol types](inline-protocol.md)
