@@ -403,9 +403,11 @@ x7: tuple[int] = f("a")
 def f2[T: int](x: T) -> T:
     return x
 
+# error: [bool-as-int] "`Literal[True]` is implicitly used as `int`"
 x8: int = f2(True)
 reveal_type(x8)  # revealed: Literal[True]
 
+# error: [bool-as-int] "`Literal[True]` is implicitly used as `int | str`"
 x9: int | str = f2(True)
 reveal_type(x9)  # revealed: Literal[True]
 ```

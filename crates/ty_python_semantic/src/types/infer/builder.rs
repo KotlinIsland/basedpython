@@ -75,7 +75,8 @@ use crate::types::diagnostic::{
     UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
     UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
     hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
-    report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_call_to_abstract_method,
+    report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_bool_as_int,
+    report_bool_as_int_assignment, report_call_to_abstract_method,
     report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
     report_invalid_class_match_pattern, report_invalid_exception_caught,
     report_invalid_exception_cause, report_invalid_exception_raised,
@@ -1939,6 +1940,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
                 let declared_type = declared_ty.inner_type();
                 if inferred_ty.is_assignable_to(self.db(), declared_type) {
+                    report_bool_as_int_assignment(
+                        &self.context,
+                        node,
+                        definition,
+                        declared_type,
+                        inferred_ty,
+                    );
                     if !should_preserve_inferred_binding_type(self.db(), inferred_ty)
                         // TODO We currently can't distinguish here between "no declared type" and
                         // "declared types is `Unknown` (e.g. due to a bad annotation, missing
@@ -9677,6 +9685,31 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// Warn when a `bool` argument is bound to a numeric parameter it only fits by
+    /// subclassing `int`. Only the arguments written at the call site are walked,
+    /// so a bound method's synthetic `self` — and every `bool` operand a binary
+    /// operator forwards to `int.__add__` and friends — is out of scope, which is
+    /// what we want: those are uses of a boolean *as* a boolean.
+    fn report_bool_as_int_arguments(&mut self, call: &ast::ExprCall, bindings: &Bindings<'db>) {
+        let arguments: Vec<ast::ArgOrKeyword> = call.arguments.iter_source_order().collect();
+        let Some(parameter_types) = bindings.single_overload_parameter_types(arguments.len())
+        else {
+            return;
+        };
+        for (argument, parameter_type) in arguments.iter().zip(parameter_types) {
+            let Some(parameter_type) = parameter_type else {
+                continue;
+            };
+            let value = argument.value();
+            report_bool_as_int(
+                &self.context,
+                value,
+                self.expression_type(value),
+                parameter_type,
+            );
+        }
+    }
+
     fn infer_call_expression(
         &mut self,
         call_expression: &ast::ExprCall,
@@ -10820,6 +10853,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
 
         self.report_optional_object_arguments(call_expression, &bindings);
+        self.report_bool_as_int_arguments(call_expression, &bindings);
 
         if let Some(class) = class {
             pydantic::report_discarded_extra_arguments(&self.context, class, arguments, &bindings);
@@ -14766,7 +14800,15 @@ impl<'db, 'ast> AddBinding<'db, 'ast> {
             }
         }
 
-        if !bound_ty.is_assignable_to(db, declared_ty) {
+        if bound_ty.is_assignable_to(db, declared_ty) {
+            report_bool_as_int_assignment(
+                &builder.context,
+                self.node,
+                self.binding,
+                declared_ty,
+                bound_ty,
+            );
+        } else {
             builder.discard_dict_key_assignments_for(self.binding);
             report_invalid_assignment(
                 &builder.context,

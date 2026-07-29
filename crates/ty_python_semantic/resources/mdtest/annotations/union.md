@@ -43,6 +43,8 @@ a = 1
 a = ""
 a1: Union[int, bool]
 a1 = 1
+# `Union[int, bool]` simplifies to `int`, so the `bool` arm is gone before any check sees it
+# error: [bool-as-int] "`Literal[True]` is implicitly used as `int`"
 a1 = True
 # error: [invalid-assignment] "Object of type `Literal[b""]` is not assignable to `int | str`"
 a = b""

@@ -11,7 +11,7 @@ use crate::types::attribute_write::{
 use crate::types::call::{Bindings, CallArguments, CallError};
 use crate::types::diagnostic::{
     INVALID_ASSIGNMENT, INVALID_ATTRIBUTE_ACCESS, UNRESOLVED_ATTRIBUTE, report_bad_dunder_set_call,
-    report_invalid_attribute_assignment, report_possibly_missing_attribute,
+    report_bool_as_int, report_invalid_attribute_assignment, report_possibly_missing_attribute,
 };
 use crate::types::{CallDunderError, MemberLookupPolicy, Type, TypeContext, TypeQualifiers};
 
@@ -312,6 +312,9 @@ impl<'db> AssignmentAttributeWriteEvaluator<'_, 'db, '_, '_> {
     ) -> bool {
         let db = self.builder.db();
         if value_ty.is_assignable_to(db, target_ty) {
+            if emit_diagnostics {
+                report_bool_as_int(&self.builder.context, self.value, value_ty, target_ty);
+            }
             return true;
         }
         // basedpython: an attribute assignment is a conversion site — an in-scope
