@@ -118,6 +118,16 @@ pub(crate) fn mutable_class_default(checker: &Checker, class_def: &ast::StmtClas
                     }
                 }
 
+                // basedpython: a property accessor block's `field` declaration is
+                // parsed into a backing attribute whose target the source never
+                // wrote — it carries an empty range to say so. the lowering moves
+                // its initialiser into `__init__`, so it is per-instance, which is
+                // what this rule asks for. (a plain `var x: list[int] = []` with no
+                // accessors really is one shared list, and is still reported.)
+                if target.range().is_empty() {
+                    continue;
+                }
+
                 if !is_special_attribute(target)
                     && is_mutable_expr(value, checker.semantic())
                     && !is_class_var_annotation(annotation, checker.semantic())

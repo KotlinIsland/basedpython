@@ -813,6 +813,7 @@ mod tests {
     #[test_case(Rule::UselessFinally, Path::new("RUF072.py"))]
     #[test_case(Rule::FStringPercentFormat, Path::new("RUF073.py"))]
     // basedpython: a pattern clause is neither deleted nor reduced to its subject
+    #[test_case(Rule::MutableClassDefault, Path::new("RUF012_basedpython.by"))]
     #[test_case(Rule::UnnecessaryIf, Path::new("RUF050_basedpython.by"))]
     fn preview_rules(rule_code: Rule, path: &Path) -> Result<()> {
         let snapshot = format!(

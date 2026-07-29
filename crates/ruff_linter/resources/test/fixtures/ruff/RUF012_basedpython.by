@@ -1,0 +1,19 @@
+# a property accessor block's `field` declaration lowers to a per-instance
+# backing attribute, which is what this rule asks for. a plain `var` with no
+# accessors really is one shared list, and is still reported
+
+
+class Accessors:
+    let items: list[int]
+        field: list[int] = []
+        get() = field
+
+    var tags: list[str] = []
+        get() = field
+        set(value):
+            field = value
+
+
+class Plain:
+    var items: list[int] = []  # RUF012
+    let names: list[str] = []  # RUF012
