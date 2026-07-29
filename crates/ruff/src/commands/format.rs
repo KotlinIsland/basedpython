@@ -33,7 +33,9 @@ use ruff_linter::rules::flake8_quotes::settings::Quote;
 use ruff_linter::source_kind::{SourceError, SourceKind};
 use ruff_linter::warn_user_once;
 use ruff_python_ast::{PySourceType, SourceType};
-use ruff_python_formatter::{FormatModuleError, QuoteStyle, format_module_source, format_range};
+use ruff_python_formatter::{
+    AssignmentAlignment, FormatModuleError, QuoteStyle, format_module_source, format_range,
+};
 use ruff_source_file::{LineIndex, LineRanges, OneIndexed, SourceFileBuilder};
 use ruff_text_size::{TextLen, TextRange, TextSize};
 use ruff_workspace::FormatterSettings;
@@ -1152,6 +1154,21 @@ pub(super) fn warn_incompatible_formatter_settings(resolver: &Resolver) {
         {
             warn_user_once!(
                 "The `format.indent-style=\"tab\"` option is incompatible with `W191`, which lints against all uses of tabs. We recommend disabling these rules when using the formatter, which enforces a consistent indentation style. Alternatively, set the `format.indent-style` option to `\"space\"`."
+            );
+        }
+
+        // Aligning the `=` of consecutive assignments puts more than one space in
+        // front of the operator, which is exactly what `E221` lints against. The
+        // formatter aligns unless it's been told not to, so anything but an explicit
+        // opt-out conflicts.
+        if setting
+            .linter
+            .rules
+            .enabled(Rule::MultipleSpacesBeforeOperator)
+            && setting.formatter.assignment_alignment != Some(AssignmentAlignment::Disabled)
+        {
+            warn_user_once!(
+                "The formatter aligns the `=` of consecutive assignments, which is incompatible with `E221`, a rule against multiple spaces before an operator. We recommend disabling that rule. Alternatively, set the `format.assignment-alignment` option to `\"disabled\"`."
             );
         }
 

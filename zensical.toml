@@ -107,6 +107,7 @@ features = [
   { "context parameters" = "features/context-parameters.md" },
   { "local lifetimes (`local` / `once`)" = "features/local-lifetimes.md" },
   { "exception tracking (`raises`)" = "features/exceptions.md" },
+  { "assignment alignment" = "features/assignment-alignment.md" },
   { "destructuring with `if let`" = "features/if-let.md" },
   { "implementations" = "features/implementations.md" },
 ]

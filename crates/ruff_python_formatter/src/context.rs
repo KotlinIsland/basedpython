@@ -2,15 +2,16 @@ use std::fmt::{Debug, Formatter};
 use std::ops::{Deref, DerefMut};
 
 use ruff_formatter::{Buffer, FormatContext, GroupId, IndentWidth, SourceCode};
-use ruff_python_ast::ExprRef;
 use ruff_python_ast::str::Quote;
 use ruff_python_ast::token::Tokens;
+use ruff_python_ast::{AnyNodeRef, ExprRef};
 use ruff_python_trivia::TriviaRanges;
 use ruff_text_size::Ranged;
 
 use crate::PyFormatOptions;
 use crate::comments::Comments;
 use crate::other::interpolated_string::InterpolatedStringContext;
+use crate::statement::assignment_alignment::AssignmentAlignmentState;
 
 pub struct PyFormatContext<'a> {
     options: PyFormatOptions,
@@ -31,6 +32,8 @@ pub struct PyFormatContext<'a> {
     docstring: Option<Quote>,
     /// The state of the formatter with respect to f-strings and t-strings.
     interpolated_string_state: InterpolatedStringState,
+    /// Where the `=` of each assignment statement should be printed.
+    assignment_alignment: AssignmentAlignmentState,
 }
 
 impl<'a> PyFormatContext<'a> {
@@ -51,7 +54,23 @@ impl<'a> PyFormatContext<'a> {
             indent_level: IndentLevel::new(0),
             docstring: None,
             interpolated_string_state: InterpolatedStringState::Outside,
+            assignment_alignment: AssignmentAlignmentState::Disabled,
         }
+    }
+
+    /// Returns a context that aligns the `=` of the assignments in `root` and its
+    /// descendants, as computed by [`AssignmentAlignmentState::compute`].
+    pub(crate) fn with_assignment_alignment(mut self, root: AnyNodeRef) -> Self {
+        self.assignment_alignment = AssignmentAlignmentState::compute(root, &self);
+        self
+    }
+
+    pub(crate) fn assignment_alignment(&self) -> &AssignmentAlignmentState {
+        &self.assignment_alignment
+    }
+
+    pub(crate) fn set_assignment_alignment(&mut self, alignment: AssignmentAlignmentState) {
+        self.assignment_alignment = alignment;
     }
 
     pub(crate) fn source(&self) -> &'a str {

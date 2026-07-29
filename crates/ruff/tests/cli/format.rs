@@ -1134,6 +1134,128 @@ def say_hy(name: str):
 }
 
 #[test]
+fn assignments_are_aligned_by_default() -> Result<()> {
+    let test = CliTest::new()?;
+    assert_cmd_snapshot!(test.format_command()
+        .args(["--isolated", "--stdin-filename", "test.py"])
+        .arg("-")
+        .pass_stdin(r#"
+alpha = 1
+beta_beta += 2
+gamma: int = 3
+
+separate = 4
+"#), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    alpha      = 1
+    beta_beta += 2
+    gamma: int = 3
+
+    separate = 4
+
+    ----- stderr -----
+    ");
+    Ok(())
+}
+
+#[test]
+fn assignment_alignment_can_be_disabled() -> Result<()> {
+    let test = CliTest::with_file(
+        "ruff.toml",
+        r#"
+[format]
+assignment-alignment = "disabled"
+"#,
+    )?;
+
+    assert_cmd_snapshot!(test.format_command()
+        .args(["--config", "ruff.toml", "--stdin-filename", "test.py"])
+        .arg("-")
+        .pass_stdin(r#"
+alpha = 1
+beta_beta += 2
+gamma: int = 3
+"#), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    alpha = 1
+    beta_beta += 2
+    gamma: int = 3
+
+    ----- stderr -----
+    ");
+    Ok(())
+}
+
+/// `E221` conflicts with the alignment the formatter applies by default, so enabling
+/// the rule is enough to be warned; the option doesn't have to be set.
+#[test]
+fn conflicting_assignment_alignment() -> Result<()> {
+    let test = CliTest::with_files([
+        (
+            "ruff.toml",
+            r#"
+preview = true
+
+[lint]
+select = ["E221"]
+"#,
+        ),
+        ("test.py", "alpha = 1\nbeta_beta = 2\n"),
+    ])?;
+
+    assert_cmd_snapshot!(test.format_command()
+        .arg("--config")
+        .arg("ruff.toml")
+        .arg("test.py"), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    1 file reformatted
+
+    ----- stderr -----
+    warning: The formatter aligns the `=` of consecutive assignments, which is incompatible with `E221`, a rule against multiple spaces before an operator. We recommend disabling that rule. Alternatively, set the `format.assignment-alignment` option to `"disabled"`.
+    "#);
+    Ok(())
+}
+
+/// Opting out of alignment resolves the conflict with `E221`.
+#[test]
+fn assignment_alignment_disabled_does_not_conflict() -> Result<()> {
+    let test = CliTest::with_files([
+        (
+            "ruff.toml",
+            r#"
+preview = true
+
+[lint]
+select = ["E221"]
+
+[format]
+assignment-alignment = "disabled"
+"#,
+        ),
+        ("test.py", "alpha = 1\nbeta_beta = 2\n"),
+    ])?;
+
+    assert_cmd_snapshot!(test.format_command()
+        .arg("--config")
+        .arg("ruff.toml")
+        .arg("test.py"), @"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    1 file left unchanged
+
+    ----- stderr -----
+    ");
+    Ok(())
+}
+
+#[test]
 fn conflicting_options_stdin() -> Result<()> {
     let test = CliTest::with_file(
         "ruff.toml",

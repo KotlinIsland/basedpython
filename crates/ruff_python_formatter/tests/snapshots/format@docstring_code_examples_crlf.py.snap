@@ -24,6 +24,7 @@ indent-width               = 4
 quote-style                = Double
 line-ending                = CarriageReturnLineFeed
 magic-trailing-comma       = Respect
+assignment-alignment       = disabled
 docstring-code             = Enabled
 docstring-code-line-width  = "dynamic"
 preview                    = Disabled

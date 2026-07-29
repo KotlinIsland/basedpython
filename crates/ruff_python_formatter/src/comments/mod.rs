@@ -256,6 +256,17 @@ impl<'a> Comments<'a> {
         collect_comments(root.into(), source_code, trivia)
     }
 
+    /// Marks every comment as unformatted again.
+    ///
+    /// The assignment alignment measuring pass formats statements whose output is
+    /// thrown away. Resetting undoes the `formatted` flags it set, so that the real
+    /// formatting pass still writes those comments.
+    pub(crate) fn mark_all_unformatted(&self) {
+        for comment in self.data.comments.all_parts() {
+            comment.mark_unformatted();
+        }
+    }
+
     /// Returns `true` if the given `node` has any comments.
     #[inline]
     pub(crate) fn has<T>(&self, node: T) -> bool

@@ -105,6 +105,10 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [local lifetimes (`local` / `once`)](local-lifetimes.md)
 - [exception tracking (`raises`)](exceptions.md)
 
+## formatting
+
+- [assignment alignment](assignment-alignment.md) — line up the `=` of consecutive assignments
+
 ## planned
 
 - [destructuring with `if let`](if-let.md)

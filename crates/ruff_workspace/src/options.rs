@@ -40,7 +40,7 @@ use ruff_linter::{UnresolvedRuleSelector, warn_user_once};
 use ruff_macros::{CombineOptions, OptionsMetadata};
 use ruff_options_metadata::{OptionsMetadata, Visit};
 use ruff_python_ast::name::Name;
-use ruff_python_formatter::{DocstringCodeLineWidth, QuoteStyle};
+use ruff_python_formatter::{AssignmentAlignment, DocstringCodeLineWidth, QuoteStyle};
 use ruff_python_semantic::NameImports;
 use ruff_python_stdlib::identifiers::is_identifier;
 use ruff_ranged_value::ValueSourceGuard;
@@ -3952,6 +3952,32 @@ pub struct FormatOptions {
         example = "skip-magic-trailing-comma = true"
     )]
     pub skip_magic_trailing_comma: Option<bool>,
+
+    /// Whether to line up the `=` of consecutive assignments.
+    ///
+    /// A run of assignments that isn't interrupted by a blank line or by another kind
+    /// of statement is padded so that every `=` in it is printed at the same column:
+    ///
+    /// ```python
+    /// alpha      = 1
+    /// beta      += 2
+    /// gamma: int = 3
+    /// ```
+    ///
+    /// This is enabled by default, for python and basedpython alike, and is a
+    /// deliberate deviation from black.
+    ///
+    /// It conflicts with `E221` (`multiple-spaces-before-operator`), which lints
+    /// against the very spaces the alignment inserts. Disable one or the other.
+    #[option(
+        default = r#""enabled""#,
+        value_type = r#""enabled" | "disabled""#,
+        example = r#"
+            # Leave a single space in front of every `=`
+            assignment-alignment = "disabled"
+        "#
+    )]
+    pub assignment_alignment: Option<AssignmentAlignment>,
 
     /// The character Ruff uses at the end of a line.
     ///

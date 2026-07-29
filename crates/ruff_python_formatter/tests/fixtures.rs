@@ -10,7 +10,9 @@ use ruff_formatter::FormatOptions;
 use ruff_python_ast::Mod;
 use ruff_python_ast::comparable::ComparableMod;
 use ruff_python_ast::visitor::source_order::SourceOrderVisitor;
-use ruff_python_formatter::{PreviewMode, PyFormatOptions, format_module_source, format_range};
+use ruff_python_formatter::{
+    AssignmentAlignment, PreviewMode, PyFormatOptions, format_module_source, format_range,
+};
 use ruff_python_parser::{ParseOptions, Parsed, UnsupportedSyntaxError, parse};
 use ruff_source_file::{LineIndex, OneIndexed, SourceFileBuilder};
 use ruff_text_size::{Ranged, TextRange, TextSize};
@@ -35,6 +37,23 @@ fn snapshot_input_file_for_test(root: &str, test_name: &str) -> String {
     )
 }
 
+/// Turns assignment alignment back off for the python fixtures inherited from ruff
+/// and black.
+///
+/// Those fixtures were written to pin the style ruff had before this fork, and the
+/// black comparison only means something for the style the two tools actually share.
+/// Keeping them unaligned keeps their snapshots readable as a record of that style.
+/// Alignment is covered by the `.by` fixtures, which use the shipped default, and by
+/// the python fixtures that ask for it in their `options.json`.
+fn inherited_style(options: PyFormatOptions) -> PyFormatOptions {
+    if options.source_type().is_basedpython() || options.configured_assignment_alignment().is_some()
+    {
+        options
+    } else {
+        options.with_assignment_alignment(Some(AssignmentAlignment::Disabled))
+    }
+}
+
 #[expect(clippy::needless_pass_by_value)]
 fn black_compatibility(input_path: &Utf8Path, content: String) -> datatest_stable::Result<()> {
     let root = "./resources/test/fixtures/black";
@@ -51,6 +70,7 @@ fn black_compatibility(input_path: &Utf8Path, content: String) -> datatest_stabl
     } else {
         PyFormatOptions::from_extension(input_path.as_std_path())
     };
+    let options = inherited_style(options);
 
     let first_line = content.lines().next().unwrap_or_default();
     let formatted_code =
@@ -204,6 +224,7 @@ fn format(input_path: &Utf8Path, content: String) -> datatest_stable::Result<()>
         writeln!(snapshot, "## Outputs").unwrap();
 
         for (i, options) in options.into_iter().enumerate() {
+            let options = inherited_style(options);
             let (formatted_code, unsupported_syntax_errors) =
                 format_file(&content, &options, input_path);
 
@@ -255,7 +276,7 @@ fn format(input_path: &Utf8Path, content: String) -> datatest_stable::Result<()>
         }
     } else {
         // We want to capture the differences in the preview style in our fixtures
-        let options = PyFormatOptions::from_extension(input_path.as_std_path());
+        let options = inherited_style(PyFormatOptions::from_extension(input_path.as_std_path()));
         let (formatted_code, unsupported_syntax_errors) =
             format_file(&content, &options, input_path);
 
@@ -587,6 +608,7 @@ indent-width               = {indent_width}
 quote-style                = {quote_style:?}
 line-ending                = {line_ending:?}
 magic-trailing-comma       = {magic_trailing_comma:?}
+assignment-alignment       = {assignment_alignment}
 docstring-code             = {docstring_code:?}
 docstring-code-line-width  = {docstring_code_line_width:?}
 preview                    = {preview:?}
@@ -599,6 +621,7 @@ nested-string-quote-style  = {nested_string_quote_style}"#,
             quote_style = self.0.quote_style(),
             line_ending = self.0.line_ending(),
             magic_trailing_comma = self.0.magic_trailing_comma(),
+            assignment_alignment = self.0.assignment_alignment(),
             docstring_code = self.0.docstring_code(),
             docstring_code_line_width = self.0.docstring_code_line_width(),
             preview = self.0.preview(),

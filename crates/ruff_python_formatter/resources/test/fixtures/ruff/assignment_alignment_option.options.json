@@ -1,0 +1,10 @@
+[
+  {
+    "assignment_alignment": "enabled",
+    "docstring_code": "enabled"
+  },
+  {
+    "assignment_alignment": "disabled",
+    "docstring_code": "enabled"
+  }
+]

@@ -3,6 +3,7 @@ use ruff_python_ast::{
     AnyNodeRef, Expr, ExprAttribute, ExprCall, FString, Operator, StmtAssign, StringLike, TString,
     TypeParams,
 };
+use ruff_text_size::Ranged;
 
 use crate::builders::parenthesize_if_expands;
 use crate::comments::{
@@ -19,6 +20,7 @@ use crate::expression::{
 };
 use crate::other::interpolated_string::InterpolatedStringLayout;
 use crate::prelude::*;
+use crate::statement::assignment_alignment::AssignmentPadding;
 use crate::statement::trailing_semicolon;
 use crate::string::StringLikeExtensions;
 use crate::string::implicit::{
@@ -42,10 +44,20 @@ impl FormatNodeRule<StmtAssign> for FormatStmtAssign {
             "Expected at least on assignment target",
         ))?;
 
+        // The aligned `=` is the one that introduces the value, which puts the value
+        // in the same column as the values around it. In a chained `a = b = 1` that's
+        // the last `=`; the ones before it keep their single space.
+        let padding = AssignmentPadding::of(item.start(), f.context());
+
         // The first target is special because it never gets parenthesized nor does the formatter remove parentheses if unnecessary.
         let format_first = FormatTargetWithEqualOperator {
             target: first,
             preserve_parentheses: true,
+            padding: if rest.is_empty() {
+                padding
+            } else {
+                AssignmentPadding::None
+            },
         };
 
         // Avoid parenthesizing the value if the last target before the assigned value expands.
@@ -56,13 +68,14 @@ impl FormatNodeRule<StmtAssign> for FormatStmtAssign {
                 FormatTargetWithEqualOperator {
                     target,
                     preserve_parentheses: false,
+                    padding: AssignmentPadding::None,
                 }
                 .fmt(f)?;
             }
 
             FormatStatementsLastExpression::RightToLeft {
                 before_operator: AnyBeforeOperator::Expression(last),
-                operator: AnyAssignmentOperator::Assign,
+                operator: AnyAssignmentOperator::assign(padding),
                 value,
                 statement: item.into(),
             }
@@ -75,7 +88,7 @@ impl FormatNodeRule<StmtAssign> for FormatStmtAssign {
         {
             FormatStatementsLastExpression::RightToLeft {
                 before_operator: AnyBeforeOperator::Expression(first),
-                operator: AnyAssignmentOperator::Assign,
+                operator: AnyAssignmentOperator::assign(padding),
                 value,
                 statement: item.into(),
             }
@@ -107,6 +120,9 @@ struct FormatTargetWithEqualOperator<'a> {
     /// Whether parentheses should be preserved as in the source or if the target
     /// should only be parenthesized if necessary (because of comments or because it doesn't fit).
     preserve_parentheses: bool,
+
+    /// The padding that lines the `=` up with the surrounding assignments.
+    padding: AssignmentPadding,
 }
 
 impl Format<PyFormatContext<'_>> for FormatTargetWithEqualOperator<'_> {
@@ -127,7 +143,14 @@ impl Format<PyFormatContext<'_>> for FormatTargetWithEqualOperator<'_> {
                 .fmt(f)?;
         }
 
-        write!(f, [space(), token("="), space()])
+        write!(
+            f,
+            [
+                space(),
+                AnyAssignmentOperator::assign(self.padding),
+                space()
+            ]
+        )
     }
 }
 
@@ -1225,20 +1248,51 @@ impl Format<PyFormatContext<'_>> for OptionalParenthesesInlinedComments<'_> {
     }
 }
 
+/// The operator of an assignment statement, padded so that its `=` lines up with the
+/// `=` of the surrounding assignments.
+///
+/// The padding is written in front of the operator rather than in front of the space
+/// that precedes it, which puts the `=` in the same column either way but never
+/// leaves trailing whitespace at the end of a line.
 #[derive(Copy, Clone, Debug)]
-pub(super) enum AnyAssignmentOperator {
+pub(super) struct AnyAssignmentOperator {
+    kind: AssignmentOperatorKind,
+    padding: AssignmentPadding,
+}
+
+#[derive(Copy, Clone, Debug)]
+enum AssignmentOperatorKind {
     Assign,
     AugAssign(Operator),
 }
 
+impl AnyAssignmentOperator {
+    /// The `=` of an assignment, an annotated assignment, or a type alias.
+    pub(super) fn assign(padding: AssignmentPadding) -> Self {
+        Self {
+            kind: AssignmentOperatorKind::Assign,
+            padding,
+        }
+    }
+
+    /// The `+=`, `//=`, … of an augmented assignment.
+    pub(super) fn aug_assign(operator: Operator, padding: AssignmentPadding) -> Self {
+        Self {
+            kind: AssignmentOperatorKind::AugAssign(operator),
+            padding,
+        }
+    }
+}
+
 impl Format<PyFormatContext<'_>> for AnyAssignmentOperator {
     fn fmt(&self, f: &mut Formatter<PyFormatContext<'_>>) -> FormatResult<()> {
-        match self {
-            AnyAssignmentOperator::Assign => token("=").fmt(f),
-            AnyAssignmentOperator::AugAssign(operator) => {
-                write!(f, [operator.format(), token("=")])
-            }
+        self.padding.fmt(f)?;
+
+        if let AssignmentOperatorKind::AugAssign(operator) = self.kind {
+            operator.format().fmt(f)?;
         }
+
+        write!(f, [self.padding.marker(), token("=")])
     }
 }
 

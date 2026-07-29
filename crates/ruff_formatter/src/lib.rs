@@ -146,6 +146,10 @@ impl From<NonZeroU8> for IndentWidth {
 pub struct LineWidth(NonZeroU16);
 
 impl LineWidth {
+    /// The widest line the printer supports. Printing a document with this width
+    /// keeps every group that has no hard line break on a single line.
+    pub const MAX: Self = Self(NonZeroU16::MAX);
+
     /// Return the numeric value for this [`LineWidth`]
     pub const fn value(&self) -> u16 {
         self.0.get()
