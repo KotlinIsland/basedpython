@@ -212,6 +212,9 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_FROZEN_DATACLASS_SUBCLASS);
     registry.register_lint(&INVALID_TOTAL_ORDERING);
     registry.register_lint(&INVALID_LEGACY_POSITIONAL_PARAMETER);
+    registry.register_lint(&OVERLAPPING_CONDITION);
+    registry.register_lint(&REDUNDANT_CONDITION);
+    registry.register_lint(&REDUNDANT_BOOLEAN_COMPARISON);
 
     // String annotations
     registry.register_lint(&ESCAPE_CHARACTER_IN_FORWARD_ANNOTATION);
@@ -2435,6 +2438,138 @@ declare_lint! {
     pub(crate) static INVALID_LEGACY_POSITIONAL_PARAMETER = {
         summary: "detects incorrect usage of the legacy convention for specifying positional-only parameters",
         status: LintStatus::stable("0.0.15"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a truthiness test whose selected branch holds a value that is
+    /// always there alongside one that is only sometimes there.
+    ///
+    /// ## Why is this bad?
+    /// A condition collapses a value to a single bit, so two members that answer
+    /// the test the same way become indistinguishable inside the branch. The case
+    /// that bites is a sentinel meeting the falsy corner of a value that normally
+    /// belongs to the other branch — `None` meeting `""` in `if not name:`.
+    ///
+    /// Only the branch the condition *selects* is analyzed: `if a` looks at the
+    /// truthy members, `if not a` at the falsy ones. A boolean operator is one
+    /// condition per operand rather than one over its value, since each operand's
+    /// truthiness is tested on its own.
+    ///
+    /// Two members that are *each* only partly in the branch are not reported:
+    /// `if x:` over a `str | bytes` conflates nothing the union did not already
+    /// conflate. Neither are members of one class, or of two classes where one
+    /// derives the other, which a condition was never going to tell apart:
+    /// `Literal[1] | Literal[2]` and `list[A] | list[B]` are each one kind of
+    /// value.
+    ///
+    /// ## Examples
+    /// ```python
+    /// def f(a: bool | None):
+    ///     if a:      # ok — only `True` is truthy
+    ///         ...
+    ///     if not a:  # warning: `False` and `None` are both falsy
+    ///         ...
+    ///
+    /// def g(name: str | None):
+    ///     if not name:  # warning: `""` and `None` are both falsy
+    ///         ...
+    ///     if name is None:  # ok — the members are told apart
+    ///         ...
+    /// ```
+    ///
+    /// ## Options
+    /// - `analysis.overlapping-condition-exempt-types`
+    /// - `analysis.overlapping-condition-assume-truthy-instances`
+    pub(crate) static OVERLAPPING_CONDITION = {
+        summary: "detects a condition that several members of the tested type answer the same way",
+        status: LintStatus::stable("0.0.62"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a condition whose outcome is fixed by the tested type, so the
+    /// branch is not conditional at all.
+    ///
+    /// ## Why is this bad?
+    /// One of the two branches is dead. Either the annotation is wider than the
+    /// author believed, or the test is left over from an earlier version of the
+    /// code.
+    ///
+    /// Only a value *read* is reported — a name, an attribute, a subscript. A
+    /// comparison or a call computes a fresh value, and ty folding that one is the
+    /// statically-known-branch machinery doing its job: `elif isinstance(x, B):`
+    /// closing an exhaustive chain is deliberate, and so is `while True:`, which
+    /// is a literal rather than a read.
+    ///
+    /// A read whose constant outcome comes from the checker's model of the build
+    /// environment (`TYPE_CHECKING`, `sys.version_info`, `sys.platform`, `os.name`)
+    /// rather than from the program's own types is not reported either — those are
+    /// *artificially* constant, and selecting a branch at check time is exactly
+    /// what they are for.
+    ///
+    /// ## Examples
+    /// ```python
+    /// import sys
+    /// from typing import TYPE_CHECKING, Literal
+    ///
+    /// def f(a: Literal[True], x: int):
+    ///     if a:  # warning: always true
+    ///         ...
+    ///     if x is not None:  # ok — a comparison, not a value read
+    ///         ...
+    ///
+    /// while True:  # ok — a literal, not a value read
+    ///     ...
+    ///
+    /// if TYPE_CHECKING:  # ok — artificially constant
+    ///     ...
+    /// if sys.version_info >= (3, 12):  # ok — artificially constant
+    ///     ...
+    /// ```
+    pub(crate) static REDUNDANT_CONDITION = {
+        summary: "detects a condition whose outcome is fixed by the tested type",
+        status: LintStatus::stable("0.0.62"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a comparison of a `bool` against `True` or `False`.
+    ///
+    /// ## Why is this bad?
+    /// The operand is already the value the comparison produces, so the
+    /// comparison only adds noise. Testing the operand — or its negation —
+    /// says the same thing.
+    ///
+    /// An operand that is *not* a `bool` is left alone: `x == True` where
+    /// `x: bool | None` really does tell `True` apart from `False` and `None`,
+    /// and `x == True` where `x: int` is a value comparison. A chained comparison
+    /// (`a == True == b`) is left alone too: it is two comparisons over one
+    /// literal, and neither the operand nor its negation replaces the chain.
+    ///
+    /// ## Examples
+    /// ```python
+    /// def f(a: bool):
+    ///     if a == True:   # warning: redundant comparison
+    ///         ...
+    ///     if a is False:  # warning: redundant comparison
+    ///         ...
+    ///     if a:           # ok
+    ///         ...
+    ///
+    /// def g(a: bool | None):
+    ///     if a == True:  # ok — tells `True` apart from `False` and `None`
+    ///         ...
+    /// ```
+    pub(crate) static REDUNDANT_BOOLEAN_COMPARISON = {
+        summary: "detects a comparison of a `bool` against `True` or `False`",
+        status: LintStatus::stable("0.0.62"),
         default_level: Level::Warn,
     }
 }

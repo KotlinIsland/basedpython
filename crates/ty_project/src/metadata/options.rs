@@ -1666,6 +1666,46 @@ pub struct AnalysisOptions {
     )]
     pub bivariant_private_attributes: Option<bool>,
 
+    /// A list of classes whose values do not count as a distinct member of an
+    /// [`overlapping-condition`](rules.md#overlapping-condition).
+    ///
+    /// `if not x` over an `int | None` selects both a falsy `int` and `None`, and is reported
+    /// because the branch cannot tell them apart. Listing `int` here says that conflating a falsy
+    /// `int` with anything else is fine, so only `None` is left and the condition is accepted.
+    ///
+    /// Entries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be
+    /// spelled bare (`int`), and `None` stands for the type of `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"[]"#,
+        value_type = "list[str]",
+        example = r#"
+            # Accept a falsy `int` or `str` sharing a branch with another member
+            overlapping-condition-exempt-types = ["int", "str"]
+        "#
+    )]
+    pub overlapping_condition_exempt_types: Option<Vec<RangedValue<String>>>,
+
+    /// Whether an instance with no `__bool__` and no `__len__` counts as always truthy when
+    /// looking for an [`overlapping-condition`](rules.md#overlapping-condition).
+    ///
+    /// Such an instance is only *ambiguously* truthy — a subclass may define `__bool__` — so by
+    /// default it is a falsy member of `if not x` just as `None` is. Enabling this assumes the
+    /// class means what it looks like it means, which drops the reports for the very common
+    /// `if not x` over an optional instance.
+    ///
+    /// Defaults to `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"false"#,
+        value_type = "bool",
+        example = r#"
+            # `if not x` over a `Foo | None` only selects `None`
+            overlapping-condition-assume-truthy-instances = true
+        "#
+    )]
+    pub overlapping_condition_assume_truthy_instances: Option<bool>,
+
     /// A list of module glob patterns for which `unresolved-import` diagnostics should be suppressed.
     ///
     /// Details on supported glob patterns:
@@ -1730,6 +1770,8 @@ impl AnalysisOptions {
             disable_fluid_specializations,
             sound_types,
             bivariant_private_attributes,
+            overlapping_condition_exempt_types,
+            overlapping_condition_assume_truthy_instances,
         } = self;
 
         let AnalysisSettings {
@@ -1740,6 +1782,9 @@ impl AnalysisOptions {
             disable_fluid_specializations: disable_fluid_specializations_default,
             sound_types: sound_types_default,
             bivariant_private_attributes: bivariant_private_attributes_default,
+            overlapping_condition_exempt_types: overlapping_condition_exempt_types_default,
+            overlapping_condition_assume_truthy_instances:
+                overlapping_condition_assume_truthy_instances_default,
         } = AnalysisSettings::default();
 
         let allowed_unresolved_imports =
@@ -1776,8 +1821,62 @@ impl AnalysisOptions {
             sound_types: sound_types.unwrap_or(sound_types_default),
             bivariant_private_attributes: bivariant_private_attributes
                 .unwrap_or(bivariant_private_attributes_default),
+            overlapping_condition_exempt_types: overlapping_condition_exempt_types
+                .as_ref()
+                .map(|types| build_class_name_list(db, types, diagnostics))
+                .unwrap_or(overlapping_condition_exempt_types_default),
+            overlapping_condition_assume_truthy_instances:
+                overlapping_condition_assume_truthy_instances
+                    .unwrap_or(overlapping_condition_assume_truthy_instances_default),
         }
     }
+}
+
+/// Collect a list of configured class names, rejecting entries that are not spelled like one.
+///
+/// Only the spelling is checked. Whether a well-formed name resolves to a class that exists is
+/// not — an entry that resolves to nothing simply never matches, the same way a well-formed glob
+/// that matches no module is not an error.
+fn build_class_name_list(
+    db: &dyn Db,
+    names: &[RangedValue<String>],
+    diagnostics: &mut Vec<OptionDiagnostic>,
+) -> Box<[Box<str>]> {
+    const OPTION_NAME: &str = "overlapping-condition-exempt-types";
+
+    let is_identifier = |segment: &str| {
+        let mut chars = segment.chars();
+        chars
+            .next()
+            .is_some_and(|first| first.is_alphabetic() || first == '_')
+            && chars.all(|char| char.is_alphanumeric() || char == '_')
+    };
+
+    let mut collected = Vec::with_capacity(names.len());
+    for name in names {
+        if name.split('.').all(is_identifier) {
+            collected.push(Box::from(&***name));
+        } else {
+            // Fatal, like every other diagnostic in this vec — `Options::to_settings` turns the
+            // first analysis diagnostic into a `ToSettingsError` regardless of its severity, and
+            // that is the same treatment a malformed `allowed-unresolved-imports` glob gets.
+            diagnostics.push(
+                OptionDiagnostic::new(
+                    DiagnosticId::InvalidClassName,
+                    format!("`{}` is not a class name", &***name),
+                    Severity::Error,
+                )
+                .with_source_sub(
+                    db,
+                    name,
+                    "class name",
+                    OPTION_NAME,
+                    "Expected a bare or qualified class name, such as `int` or `decimal.Decimal`",
+                ),
+            );
+        }
+    }
+    collected.into_boxed_slice()
 }
 
 fn build_module_glob_set(

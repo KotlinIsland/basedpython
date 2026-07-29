@@ -239,6 +239,7 @@ def _(t3: tuple[int, str] | tuple[None, None] | tuple[bool, bytes]):
 def _(t4: tuple[bool, int] | tuple[bool, str]):
     # Both tuples have bool at index 0, which is not disjoint from True,
     # so neither gets filtered out when checking `is True`
+    # error: [redundant-boolean-comparison]
     if t4[0] is True:
         reveal_type(t4)  # revealed: tuple[bool, int] | tuple[bool, str]
 

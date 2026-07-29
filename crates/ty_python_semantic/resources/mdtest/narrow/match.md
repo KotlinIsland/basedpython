@@ -3436,6 +3436,7 @@ def _(x: Literal["foo", b"bar"] | int):
             pass
         case b"bar" if reveal_type(x):  # revealed: Literal[b"bar"]
             pass
+        # error: [overlapping-condition]
         case _ if reveal_type(x):  # revealed: Literal["foo", b"bar"] | int
             pass
 ```
@@ -3449,6 +3450,7 @@ def _(x: object):
             reveal_type(x)  #  revealed: str
         case "foo" | 42 | None if isinstance(x, int):
             reveal_type(x)  #  revealed: int
+        # error: [redundant-condition]
         case False if x:
             reveal_type(x)  #  revealed: Never
         case "foo" if x := "bar":
@@ -3470,6 +3472,7 @@ match x:
         pass
     case "foo" | 42 | None if isinstance(x, int) and reveal_type(x):  #  revealed: int
         pass
+    # error: [redundant-condition]
     case False if x and reveal_type(x):  #  revealed: Never
         pass
     case "foo" if (x := "bar") and reveal_type(x):  #  revealed: Literal["bar"]

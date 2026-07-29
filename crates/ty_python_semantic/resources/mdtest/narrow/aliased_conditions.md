@@ -145,6 +145,7 @@ def _(x: int | None):
         reveal_type(x)  # revealed: None
     if is_none if True else False:
         reveal_type(x)  # revealed: None
+    # error: [redundant-boolean-comparison]
     if is_none == True:
         # TODO: it would be nice to support this case, but even direct narrowing doesn't work here
         reveal_type(x)  # revealed: int | None
@@ -259,6 +260,7 @@ If the alias variable itself is reassigned, it no longer represents the original
 def _(x: int | None):
     is_none = x is None
     is_none = True
+    # error: [redundant-condition]
     if is_none:
         reveal_type(x)  # revealed: int | None
 
@@ -412,6 +414,7 @@ def _(x: int | None):
 
     class Inner:
         is_none = True
+        # error: [redundant-condition]
         if is_none:
             reveal_type(x)  # revealed: int | None
 
@@ -436,6 +439,7 @@ def _(x: int | None):
     def inner():
         nonlocal is_none
         is_none = True
+        # error: [redundant-condition]
         if is_none:
             reveal_type(x)  # revealed: int | None
 
@@ -514,6 +518,7 @@ def _(x: int | None):
 
     class Inner:
         is_none_alias = True
+        # error: [redundant-condition]
         if is_none_alias:
             reveal_type(x)  # revealed: int | None
         if is_none:
@@ -533,6 +538,7 @@ def _(x: int | None):
         if is_none_alias:
             # TODO: should be `None`
             reveal_type(x)  # revealed: int | None
+        # error: [redundant-condition]
         if is_none:
             reveal_type(x)  # revealed: int | None
 
@@ -546,6 +552,7 @@ def _(x: int | None):
 
     def inner():
         is_none_alias = True
+        # error: [redundant-condition]
         if is_none_alias:
             reveal_type(x)  # revealed: int | None
         if is_none:
@@ -553,6 +560,7 @@ def _(x: int | None):
             reveal_type(x)  # revealed: int | None
 
         def inner2():
+            # error: [redundant-condition]
             if is_none_alias:
                 reveal_type(x)  # revealed: int | None
             if is_none:
@@ -564,6 +572,7 @@ def _(x: int | None):
         if is_none_alias:
             # TODO: should be `None`
             reveal_type(x)  # revealed: int | None
+        # error: [redundant-condition]
         if is_none:
             reveal_type(x)  # revealed: int | None
 
@@ -571,6 +580,7 @@ def _(x: int | None):
             if is_none_alias:
                 # TODO: should be `None`
                 reveal_type(x)  # revealed: int | None
+            # error: [redundant-condition]
             if is_none:
                 reveal_type(x)  # revealed: int | None
 ```
@@ -603,6 +613,7 @@ def _(x: int | None):
         is_none_alias = is_none
         is_none = False
         reveal_type(is_none_alias)  # revealed: Literal[True]
+        # error: [redundant-condition]
         if is_none_alias:
             reveal_type(x)  # revealed: int | None
 

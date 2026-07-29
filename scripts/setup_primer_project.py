@@ -94,7 +94,9 @@ def main() -> None:
     args = parser.parse_args()
 
     project = find_project(args.project)
-    revision = args.revision or project.revision
+    # Normalized to a plain `str`: mypy_primer treats an empty revision as absent too, and a
+    # single type keeps the truthiness tests below asking one question instead of two.
+    revision = args.revision or project.revision or ""
 
     target_dir = Path(args.directory or project.name).resolve()
 

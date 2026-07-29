@@ -33,8 +33,9 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/function/return_type.md
 18 |         cond = False
 19 |     else:
 20 |         return 1
-21 |     if cond:
-22 |         return 2
+21 |     # error: [redundant-condition]
+22 |     if cond:
+23 |         return 2
 ```
 
 # Diagnostics
@@ -67,5 +68,16 @@ error[invalid-return-type]: Function can implicitly return `None`, which is not 
 16 | def f(cond: bool) -> int:
    |                      ^^^
    |
+
+```
+
+```
+warning[redundant-condition]: This condition is always false
+  --> src/mdtest_snippet.py:22:8
+   |
+22 |     if cond:
+   |        ^^^^
+   |
+info: `Literal[False]` is always falsy
 
 ```

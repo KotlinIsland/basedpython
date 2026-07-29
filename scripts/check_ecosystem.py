@@ -213,7 +213,7 @@ async def check(
     lines = [
         line
         for line in result.decode("utf8").splitlines()
-        if not SUMMARY_LINE_RE.match(line)
+        if SUMMARY_LINE_RE.match(line) is None
     ]
 
     return sorted(lines)

@@ -433,6 +433,7 @@ reveal_type(h.data)  # revealed: str
 
 ```by
 def check(a: int | None, b: str | None) -> asserts a is int and b:
+    # error: [overlapping-condition]
     if a is None or not b:
         raise ValueError
 

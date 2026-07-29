@@ -1809,6 +1809,7 @@ real crash that came up during development checking these lines of `sympy`:
 x = 1
 y = 2
 for _ in range(1_000_000):
+    # error: [redundant-condition]
     if x:
         x, y = y, x
     reveal_type(x)  # revealed: Literal[2, 1]

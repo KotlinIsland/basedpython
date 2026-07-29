@@ -73,6 +73,9 @@ class Public:
     c: Any
     d: int
 
+    # `flag` is a function, so this is always truthy — the test means `flag()`, but fixing it
+    # changes what the section asserts about possibly-missing attributes
+    # error: [redundant-condition]
     if flag:
         a = 1
         b = 2  # error: [invalid-assignment]
@@ -219,6 +222,8 @@ def flag() -> bool:
     return True
 
 class Public:
+    # as above: `if flag:` is always truthy, and `if flag()` would satisfy the TODO below
+    # error: [redundant-condition]
     if flag:
         a = 1
         b: SomeUnknownName = 1  # error: [unresolved-reference]

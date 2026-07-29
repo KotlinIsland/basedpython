@@ -365,3 +365,86 @@ fn bivariant_private_attributes_is_per_module() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// A class name that could not name a class is a configuration error, not a silent no-op.
+#[test]
+fn overlapping_condition_exempt_types_rejects_a_malformed_name() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "ty.toml",
+            r#"
+            [analysis]
+            overlapping-condition-exempt-types = ["int", "list[int]"]
+            "#,
+        ),
+        (
+            "test.py",
+            r#"
+            def f(a: str | None):
+                if not a:
+                    ...
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @r#"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    by failed
+      Cause: error[invalid-class-name]: Invalid class name
+     --> ty.toml:3:46
+      |
+    2 | [analysis]
+    3 | overlapping-condition-exempt-types = ["int", "list[int]"]
+      |                                              ^^^^^^^^^^^ Expected a bare or qualified class name, such as `int` or `decimal.Decimal`
+      |
+    "#);
+
+    Ok(())
+}
+
+/// A well-formed name that resolves to nothing is not an error; it just never matches — which the
+/// surviving `overlapping-condition` warning is the proof of.
+#[test]
+fn overlapping_condition_exempt_types_accepts_an_unresolvable_name() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "ty.toml",
+            r#"
+            [analysis]
+            overlapping-condition-exempt-types = ["nowhere.Nothing"]
+            "#,
+        ),
+        (
+            "test.py",
+            r#"
+            def f(a: str | None):
+                if not a:
+                    ...
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[overlapping-condition]: This condition does not distinguish between `str & ~AlwaysTruthy` and `None`
+     --> test.py:3:8
+      |
+    3 |     if not a:
+      |        ^^^^^
+      |
+    info: `str | None` is tested for falsiness
+    help: Compare against the specific value instead of testing truthiness
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}

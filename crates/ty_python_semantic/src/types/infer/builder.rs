@@ -171,6 +171,7 @@ pub(crate) use binary_expressions::{
     fold_tuple_concat, fold_tuple_repeat, literal_binary_op, literal_unary_op,
 };
 mod class;
+mod conditions;
 mod dict;
 mod dynamic_class;
 mod enum_call;
@@ -2536,6 +2537,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.infer_match_pattern(pattern);
         } else if let Err(err) = test_ty.try_bool(self.db()) {
             err.report_diagnostic(&self.context, test);
+        } else {
+            self.check_condition(test);
         }
     }
 
@@ -3009,6 +3012,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
                 if let Err(err) = guard_ty.try_bool(self.db()) {
                     err.report_diagnostic(&self.context, guard);
+                } else {
+                    self.check_condition(guard);
                 }
             }
 
@@ -5333,6 +5338,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         if let Err(err) = test_ty.try_bool(self.db()) {
             err.report_diagnostic(&self.context, &**test);
+        } else {
+            self.check_condition(test);
         }
 
         self.infer_body(body);
@@ -5351,6 +5358,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         if let Err(err) = test_ty.try_bool(self.db()) {
             err.report_diagnostic(&self.context, &**test);
+        } else {
+            self.check_condition(test);
         }
 
         self.infer_optional_expression(msg.as_deref(), TypeContext::default());
@@ -8913,7 +8922,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         });
 
         for expr in ifs {
-            self.infer_maybe_standalone_expression(expr, TypeContext::default());
+            let guard_ty = self.infer_maybe_standalone_expression(expr, TypeContext::default());
+            // Same shape as every other condition site: a guard whose type has no usable
+            // `__bool__` is skipped. Unlike the others this does not *report* that — ty has never
+            // reported `unsupported-bool-conversion` for a comprehension guard.
+            if guard_ty.try_bool(self.db()).is_ok() {
+                self.check_condition(expr);
+            }
         }
     }
 
@@ -9145,10 +9160,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 (body_ty, orelse_ty)
             };
 
-        match test_ty.try_bool(self.db()).unwrap_or_else(|err| {
-            err.report_diagnostic(&self.context, &**test);
-            err.fallback_truthiness()
-        }) {
+        let truthiness = match test_ty.try_bool(self.db()) {
+            Ok(truthiness) => {
+                self.check_condition(test);
+                truthiness
+            }
+            Err(err) => {
+                err.report_diagnostic(&self.context, &**test);
+                err.fallback_truthiness()
+            }
+        };
+
+        match truthiness {
             Truthiness::AlwaysTrue => body_ty,
             Truthiness::AlwaysFalse => orelse_ty,
             Truthiness::Ambiguous => UnionType::from_two_elements(self.db(), body_ty, orelse_ty),
@@ -13260,6 +13283,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         //
         // As some operators (==, !=, <, <=, >, >=) *can* return an arbitrary type, the logic below
         // is shared with the one in `infer_binary_type_comparison`.
+        //
+        // A chain like `a == True == b` is two comparisons over one literal: reporting each pair
+        // would double up on that `True`, and "test the operand" is not the fix for the chain.
+        let single_comparison = ops.len() == 1;
         self.infer_chained_boolean_types(
             ast::BoolOp::And,
             false,
@@ -13273,6 +13300,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let right_ty = builder.infer_expression(right, TypeContext::default());
 
                 let range = TextRange::new(left.start(), right.end());
+
+                if single_comparison {
+                    builder.check_redundant_boolean_comparison(
+                        left, right, left_ty, right_ty, *op, range,
+                    );
+                }
 
                 // a basedpython keyword-form `is`/`is not` whose rhs is a
                 // class (or a parametric test like `x is list[int]`) is an
