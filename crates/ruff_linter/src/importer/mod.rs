@@ -466,11 +466,15 @@ impl<'a> Importer<'a> {
                 names,
                 level,
                 is_lazy: _,
+                is_export,
                 range: _,
                 node_index: _,
             }) = stmt
             {
+                // appending to a basedpython `from x export y` would make the
+                // added member a re-export too — give it its own statement
                 if *level == 0
+                    && !is_export
                     && name.as_ref().is_some_and(|name| name == module)
                     && names.iter().all(|alias| alias.name.as_str() != "*")
                 {

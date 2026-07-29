@@ -1,0 +1,13 @@
+# `from x export y` is basedpython's explicit re-export spelling, so an
+# exported name is deliberately public and never "imported but unused" —
+# the same exemption `from x import y as y` gets
+from a export exported_name
+from b import y as y
+
+# a plain import of an unreferenced name is still reported
+from c import unused_name
+
+# and an exported name may of course also be used locally
+from d export used_name
+
+print(used_name)

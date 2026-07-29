@@ -99,6 +99,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [strings and characters](character.md) — grapheme-aware `str` api
 - [repeated `_` parameters](repeated-underscore.md)
 - [lazy imports](lazy-imports.md)
+- [export imports](export-imports.md) — `from x export y`
 - [extensions](extensions.md)
 - [conversions (`__from__` / `__into__` / `__of__`)](conversions.md)
 - [context parameters](context-parameters.md)

@@ -2728,6 +2728,26 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// Returns whether the parser sits on basedpython's `export` keyword — the
+    /// re-exporting spelling of `import` in `from x export y`.
+    fn at_export_keyword(&mut self) -> bool {
+        self.at(TokenKind::Name) && self.src_text(self.current_token_range()) == "export"
+    }
+
+    /// Returns whether the parser sits on the `export` keyword of a relative
+    /// import that omits its module, as in `from . export y`.
+    ///
+    /// A relative import may drop the module, so at this position `export` could
+    /// equally start a module name. Only a following `import` (`from . export
+    /// import y`) or `.` (`from .export.sub import y`) makes it one; anything
+    /// else — a name, `(`, `*` — starts the imported-name list, so the `export`
+    /// is the keyword.
+    fn at_module_less_export(&mut self, leading_dots: u32) -> bool {
+        leading_dots > 0
+            && self.at_export_keyword()
+            && !matches!(self.peek(), TokenKind::Import | TokenKind::Dot)
+    }
+
     /// Parses a `from` import statement.
     ///
     /// # Panics
@@ -2757,7 +2777,8 @@ impl<'src> Parser<'src> {
             }
         }
 
-        let module = if self.at_name_or_soft_keyword() {
+        let module = if self.at_name_or_soft_keyword() && !self.at_module_less_export(leading_dots)
+        {
             // test_ok from_import_soft_keyword_module_name
             // from match import pattern
             // from type import bar
@@ -2781,7 +2802,18 @@ impl<'src> Parser<'src> {
         // test_ok from_import_no_space
         // from.import x
         // from...import x
-        self.expect(TokenKind::Import);
+
+        // basedpython: `from x export y` binds `y` as an explicit re-export —
+        // the Python spelling is `from x import y as y`
+        let is_export = self.at_export_keyword();
+        if is_export {
+            self.error_if_not_basedpython(
+                "`from ... export ...` is not valid in `.py` files".to_string(),
+            );
+            self.bump(TokenKind::Name);
+        } else {
+            self.expect(TokenKind::Import);
+        }
 
         let names_start = self.node_start();
         let names_snapshot = self.alias_scratch.snapshot();
@@ -2836,6 +2868,32 @@ impl<'src> Parser<'src> {
             );
         }
 
+        if is_export {
+            // `export` means "bind under this exact name", so neither a star
+            // (which binds no single name) nor a rename can be expressed
+            if seen_star_import {
+                self.add_error(
+                    ParseErrorType::OtherError(
+                        "`export` cannot be used with a star import".to_string(),
+                    ),
+                    self.node_range(names_start),
+                );
+            }
+
+            for alias in &names {
+                if let Some(asname) = &alias.asname {
+                    self.add_error(
+                        ParseErrorType::OtherError(
+                            "`export` cannot be combined with an `as` clause; \
+                             use `from ... import ... as ...` instead"
+                                .to_string(),
+                        ),
+                        asname.range,
+                    );
+                }
+            }
+        }
+
         if parenthesized.is_yes() {
             // test_err from_import_missing_rpar
             // from x import (a, b
@@ -2850,6 +2908,7 @@ impl<'src> Parser<'src> {
             names,
             level: leading_dots,
             is_lazy,
+            is_export,
             range: self.node_range(start),
             node_index: AtomicNodeIndex::NONE,
         }

@@ -823,9 +823,13 @@ impl<'a> Generator<'a> {
                 names,
                 level,
                 is_lazy,
+                is_export,
                 range: _,
                 node_index: _,
             }) => {
+                // `from x export y` only has a spelling in basedpython; the
+                // python rendering is its meaning, `from x import y as y`
+                let export = *is_export && self.mode == Mode::BasedPython;
                 statement!({
                     if *is_lazy {
                         self.p("lazy ");
@@ -839,11 +843,15 @@ impl<'a> Generator<'a> {
                     if let Some(module) = module {
                         self.p_id(module);
                     }
-                    self.p(" import ");
+                    self.p(if export { " export " } else { " import " });
                     let mut first = true;
                     for alias in names {
                         self.p_delim(&mut first, ", ");
                         self.unparse_alias(alias);
+                        if *is_export && !export && alias.asname.is_none() {
+                            self.p(" as ");
+                            self.p_id(&alias.name);
+                        }
                     }
                 });
             }

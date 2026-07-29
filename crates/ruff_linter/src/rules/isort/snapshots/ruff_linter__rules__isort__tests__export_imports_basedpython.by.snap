@@ -1,0 +1,43 @@
+---
+source: crates/ruff_linter/src/rules/isort/mod.rs
+---
+I001 [*] Import block is un-sorted or un-formatted
+  --> export_imports_basedpython.by:1:1
+   |
+ 1 | / from b export z
+ 2 | | from a import y
+ 3 | | import os
+ 4 | |
+ 5 | | # an `export` statement never merges with a plain `import` one for the same
+ 6 | | # module — they mean different things
+ 7 | | from math export pi
+ 8 | | from math import e
+ 9 | |
+10 | | from math export (
+11 | |     floor,
+12 | |     ceil,
+13 | | )
+   | |_^
+   |
+help: Organize imports
+   |
+   - from b export z
+   - from a import y
+1  | import os
+2  |
+3  | # an `export` statement never merges with a plain `import` one for the same
+4  | # module — they mean different things
+   - from math export pi
+   - from math import e
+   -
+5  | from math export (
+6  +     ceil,
+7  |     floor,
+   -     ceil,
+8  +     pi,
+9  | )
+10 + from math import e
+11 +
+12 + from a import y
+13 + from b export z
+   |

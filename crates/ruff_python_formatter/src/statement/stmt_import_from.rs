@@ -17,6 +17,7 @@ impl FormatNodeRule<StmtImportFrom> for FormatStmtImportFrom {
             names,
             level,
             is_lazy,
+            is_export,
             range: _,
             node_index: _,
         } = item;
@@ -38,7 +39,7 @@ impl FormatNodeRule<StmtImportFrom> for FormatStmtImportFrom {
                 }),
                 module.as_ref().map(DotDelimitedIdentifier::new),
                 space(),
-                token("import"),
+                token(if *is_export { "export" } else { "import" }),
                 space(),
             ]
         )?;

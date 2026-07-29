@@ -32,6 +32,7 @@ mod tests {
     use crate::test::{test_contents, test_path, test_snippet};
     use crate::{Locator, assert_diagnostics, assert_diagnostics_diff, directives};
 
+    #[test_case(Rule::UnusedImport, Path::new("F401_basedpython.by"))]
     #[test_case(Rule::UnusedImport, Path::new("F401_0.py"))]
     #[test_case(Rule::UnusedImport, Path::new("F401_1.py"))]
     #[test_case(Rule::UnusedImport, Path::new("F401_2.py"))]

@@ -717,6 +717,7 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
                 module,
                 level,
                 is_lazy: _,
+                is_export: _,
                 range: _,
                 node_index: _,
             },

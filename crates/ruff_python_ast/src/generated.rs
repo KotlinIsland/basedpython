@@ -9934,6 +9934,9 @@ pub struct StmtImportFrom {
     pub names: Vec<crate::Alias>,
     pub level: u32,
     pub is_lazy: bool,
+    /// basedpython: the statement was spelled `from X export Y`, which binds
+    /// `Y` as an explicit re-export (the Python spelling is `from X import Y as Y`).
+    pub is_export: bool,
 }
 
 /// See also [Global](https://docs.python.org/3/library/ast.html#ast.Global)
@@ -11077,6 +11080,7 @@ impl StmtImportFrom {
             names,
             level: _,
             is_lazy: _,
+            is_export: _,
             range: _,
             node_index: _,
         } = self;

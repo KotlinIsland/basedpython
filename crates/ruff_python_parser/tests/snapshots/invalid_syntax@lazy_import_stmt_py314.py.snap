@@ -54,6 +54,7 @@ Module(
                     ],
                     level: 0,
                     is_lazy: true,
+                    is_export: false,
                 },
             ),
         ],

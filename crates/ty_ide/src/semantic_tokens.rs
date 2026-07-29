@@ -226,6 +226,10 @@ const INLINE_PROTOCOL: &[&str] = &["protocol"];
 /// basedpython's postfix `await`, written after the awaited expression.
 const POSTFIX_AWAIT: &[&str] = &["await"];
 
+/// The re-exporting spelling of `import`, written between a `from` import's
+/// module and its names.
+const EXPORT_IMPORT: &[&str] = &["export"];
+
 /// The keywords that introduce an accessor inside a basedpython property
 /// construct. They are consumed by the parser: the members it synthesizes are
 /// ranged onto the accessor bodies, not onto the headers.
@@ -1455,6 +1459,19 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 if let Some(module) = &import.module {
                     // Create separate tokens for each part of a dotted module name
                     self.add_dotted_name_tokens(module, SemanticTokenType::Namespace);
+                }
+                if import.is_export {
+                    // the keyword sits between the module and the names, and the
+                    // scan starts past the module so one *named* `export` isn't
+                    // highlighted as the keyword
+                    self.add_consumed_keywords(
+                        import
+                            .module
+                            .as_ref()
+                            .map_or_else(|| import.start(), Ranged::end),
+                        import.names.first().map_or(import.end(), Ranged::start),
+                        EXPORT_IMPORT,
+                    );
                 }
                 for alias in &import.names {
                     let classification = self
@@ -5778,6 +5795,39 @@ a: dynamic
         assert_snapshot!(test.to_snapshot(&tokens), @r#"
         "sentinel" @ 0..8: Keyword
         "A" @ 9..10: Variable [definition]
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_export_import_keyword() {
+        let test = SemanticTokenTest::new_by(
+            "
+from a export b
+from . export c
+from x import y
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "a" @ 6..7: Namespace
+        "export" @ 8..14: Keyword
+        "export" @ 24..30: Keyword
+        "x" @ 38..39: Namespace
+        "#);
+    }
+
+    /// a module literally named `export` is a namespace, not the keyword
+    #[test]
+    fn semantic_tokens_module_named_export() {
+        let test = SemanticTokenTest::new_by("from export export b\n");
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "export" @ 5..11: Namespace
+        "export" @ 12..18: Keyword
         "#);
     }
 

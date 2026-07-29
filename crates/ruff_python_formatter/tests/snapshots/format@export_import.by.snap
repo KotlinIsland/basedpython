@@ -1,0 +1,73 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/export_import.by
+---
+## Input
+```bython
+from x export y
+
+from a.b.c export d, e
+
+from .mod export y
+
+from . export y
+
+from ... export y
+
+from export export y
+
+from x export (
+    a,
+    b,
+)
+
+from x export y  # noqa
+
+lazy from x export y
+
+
+def f():
+    from x export y
+
+
+from x import y
+
+from x import y as y
+
+from . export import y
+```
+
+## Output
+```bython
+from x export y
+
+from a.b.c export d, e
+
+from .mod export y
+
+from . export y
+
+from ... export y
+
+from export export y
+
+from x export (
+    a,
+    b,
+)
+
+from x export y  # noqa
+
+lazy from x export y
+
+
+def f():
+    from x export y
+
+
+from x import y
+
+from x import y as y
+
+from .export import y
+```

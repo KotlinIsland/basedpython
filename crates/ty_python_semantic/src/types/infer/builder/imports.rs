@@ -234,6 +234,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             names,
             level: _,
             is_lazy: _,
+            is_export: _,
             range: _,
             node_index: _,
         } = import;

@@ -99,7 +99,13 @@ fn fix_banned_relative_import(
         return None;
     }
 
-    let Stmt::ImportFrom(ast::StmtImportFrom { names, is_lazy, .. }) = stmt else {
+    let Stmt::ImportFrom(ast::StmtImportFrom {
+        names,
+        is_lazy,
+        is_export,
+        ..
+    }) = stmt
+    else {
         panic!("Expected Stmt::ImportFrom");
     };
     let node = ast::StmtImportFrom {
@@ -110,6 +116,7 @@ fn fix_banned_relative_import(
         names: names.clone(),
         level: 0,
         is_lazy: *is_lazy,
+        is_export: *is_export,
         range: TextRange::default(),
         node_index: ruff_python_ast::AtomicNodeIndex::NONE,
     };
