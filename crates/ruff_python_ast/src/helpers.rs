@@ -1530,6 +1530,17 @@ impl UseSiteVariance {
         }
     }
 
+    /// the surface keywords this variance is written with. Consumers that have
+    /// the original source should reprint the marker's range instead, which
+    /// preserves the exact spelling
+    pub fn keywords(self) -> &'static str {
+        match self {
+            Self::Out => "out",
+            Self::In => "in",
+            Self::InOut => "in out",
+        }
+    }
+
     /// parse from a marker name id; returns None if not a variance marker
     pub fn from_marker_id(id: &str) -> Option<Self> {
         match id {

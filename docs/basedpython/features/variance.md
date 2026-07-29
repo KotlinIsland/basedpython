@@ -85,6 +85,10 @@ and an unmarked argument is simply untagged:
 def f(m: dict[str, out int]):
     m["a"]         # int
     m["a"] = 1     # error — write rejected through the `out` view
+
+def g(m: dict[out str, in int]):
+    m["a"] = 1     # ok — int accepted through the `in` view
+    m["a"]         # object — the value reads through the `in` view
 ```
 
 a projection only ever *adds* to what the declaration allows. against a

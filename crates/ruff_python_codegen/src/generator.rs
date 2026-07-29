@@ -3,6 +3,7 @@
 use std::fmt::Write;
 use std::ops::Deref;
 
+use ruff_python_ast::helpers::use_site_variance_marker;
 use ruff_python_ast::str::Quote;
 use ruff_python_ast::{
     self as ast, Alias, AnyStringFlags, ArgOrKeyword, BoolOp, BytesLiteralFlags, CmpOp,
@@ -74,7 +75,8 @@ pub enum Mode {
     /// Emit basedpython surface syntax: `?.` for optional attribute access,
     /// `(args) -> returns` for `ExprCallableType`, `(field: type, ...)`
     /// anon NT literal for `ExprTuple` with `is_anon_named_tuple`,
-    /// `typeof X` for `ExprSubscript` with `is_typeof`, `<value> cast
+    /// `typeof X` for `ExprSubscript` with `is_typeof`, `out X` / `in X` /
+    /// `in out X` for a use-site variance marker subscript, `<value> cast
     /// <type>` for `ExprCall` with `is_cast`, `private type X = V` for
     /// `StmtTypeAlias` with `is_private`. Modifier-keyword
     /// decorators (whose source range does not start with `@`) are
@@ -1565,10 +1567,21 @@ impl<'a> Generator<'a> {
                 self.p_id(attr);
             }
             Expr::Subscript(ast::ExprSubscript { value, slice, .. }) => {
-                self.unparse_expr(value, precedence::MAX);
-                self.p("[");
-                self.unparse_expr(slice, precedence::SUBSCRIPT);
-                self.p("]");
+                // basedpython: a use-site variance keyword is encoded as a
+                // subscript over a synthetic marker name, and carries no
+                // brackets in the source — emit `out X` rather than the marker
+                if self.mode == Mode::BasedPython
+                    && let Some((variance, inner)) = use_site_variance_marker(ast)
+                {
+                    self.p(variance.keywords());
+                    self.p(" ");
+                    self.unparse_expr(inner, precedence::SUBSCRIPT);
+                } else {
+                    self.unparse_expr(value, precedence::MAX);
+                    self.p("[");
+                    self.unparse_expr(slice, precedence::SUBSCRIPT);
+                    self.p("]");
+                }
             }
             Expr::Starred(ast::ExprStarred { value, .. }) => {
                 self.p("*");
@@ -2156,6 +2169,21 @@ mod tests {
     #[test_case::test_case("g: A[foo=Two[bytes, bar=int]]" ; "nested")]
     #[test_case::test_case("h: A[foo=(int, str)]" ; "tuple value keeps its parentheses")]
     fn basedpython_keyword_subscript_round_trip(contents: &str) {
+        assert_eq!(based_round_trip(contents), contents);
+    }
+
+    /// A use-site variance keyword is encoded as a subscript over a synthetic
+    /// marker name, so without the basedpython rendering it round-trips as
+    /// `dict[__variance_out__[int]]`
+    #[test_case::test_case("a: list[out int]" ; "single covariant")]
+    #[test_case::test_case("b: list[in int]" ; "single contravariant")]
+    #[test_case::test_case("c: list[in out int]" ; "single invariant")]
+    #[test_case::test_case("d: dict[out int, out str]" ; "covariant in both elements")]
+    #[test_case::test_case("e: dict[out int, in str]" ; "contravariant in a later element")]
+    #[test_case::test_case("f: dict[int, in str]" ; "bare first element")]
+    #[test_case::test_case("g: X[in int, in out str, out bytes, int]" ; "every form mixed")]
+    #[test_case::test_case("h: list[out list[in int]]" ; "nested")]
+    fn basedpython_use_site_variance_round_trip(contents: &str) {
         assert_eq!(based_round_trip(contents), contents);
     }
 
