@@ -72,24 +72,25 @@ retained:
 - constructing something from it (`str(xs)`, `list(xs)`) — a constructor is
     read as consuming what it is given rather than retaining it
 
-the last row of the table is the one that bites in practice. no stdlib signature
-is annotated `local`, so an ordinary function call escapes even when the callee
-plainly does not retain anything:
+the builtins that provably cannot retain what they are given — they return a
+fresh scalar and hand no part of the argument back — carry `local` in their own
+signatures, so the ordinary reads of a borrow are not reported:
 
 ```by
 def f(local xs: list[int]) -> None:
-    print(len(xs))    # error: escaping-local
-    print(sum(xs))    # error: escaping-local
-    print(str(xs))    # fine — a constructor
-    print(xs[0])      # fine — indexing
-    for x in xs: ...  # fine — iterating
+    print(len(xs))    # fine
+    print(sum(xs))    # fine
+    print(any(xs))    # fine
+    print(repr(xs))   # fine
 ```
 
-`len` and `str` differ only in that one is a function and the other a class,
-which is not a distinction the reader has any reason to expect. this is the
-largest rough edge in the current implementation: deciding it properly needs
-`local` annotations through the stdlib, and guessing which callees retain their
-arguments is exactly the kind of heuristic this feature exists to replace.
+that set is `len`, `sum`, `any`, `all`, `repr`, `ascii`, `hash`, `isinstance`
+and `issubclass`. the rest of the stdlib is not annotated yet, so a call into it
+still escapes even where the callee plainly keeps nothing — `min` and `sorted`
+among them, which are excluded deliberately because they hand an *element* back
+and that element's lifetime is a separate question. the remedy is to annotate
+more of the stdlib, never to guess which callees retain their arguments: that
+guesswork is exactly what this feature replaces.
 
 ### re-borrowing
 
