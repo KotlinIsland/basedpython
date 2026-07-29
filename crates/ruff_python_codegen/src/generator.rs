@@ -2208,6 +2208,16 @@ mod tests {
         assert_eq!(based_round_trip(contents), contents);
     }
 
+    /// A use-site variance keyword shares the marker-subscript encoding with the
+    /// type modifiers, so it round-trips through the same arm
+    #[test_case::test_case("a: list[out int]" ; "covariant")]
+    #[test_case::test_case("b: list[in int]" ; "contravariant")]
+    #[test_case::test_case("c: list[in out int]" ; "invariant")]
+    #[test_case::test_case("d: dict[out int, out str]" ; "several elements")]
+    fn basedpython_use_site_variance_round_trip(contents: &str) {
+        assert_eq!(based_round_trip(contents), contents);
+    }
+
     /// An `implementation A for B:` header has no python spelling, so it
     /// round-trips through its own surface form. Only the header is asserted:
     /// the generator's class-body layout (a blank line after the header, `@`-form
