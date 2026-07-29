@@ -100,6 +100,7 @@ features = [
   { "trailing lambda blocks" = "features/trailing-lambdas.md" },
   { "unpack syntax" = "features/unpack-syntax.md" },
   { "mutable default arguments" = "features/mutable-defaults.md" },
+  { "unique loop bindings" = "features/unique-loop-bindings.md" },
   { "dedented triple-quoted strings" = "features/dedent-strings.md" },
   { "custom string tags" = "features/string-tags.md" },
   { "strings and characters" = "features/character.md" },

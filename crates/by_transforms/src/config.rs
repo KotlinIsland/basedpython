@@ -51,6 +51,12 @@ pub struct Config {
     /// value or `None`. when false, using `cast?` is a transpile error — the
     /// feature is simply unavailable
     pub checked_cast: bool,
+    /// when true (the default), a closure created inside a loop captures the
+    /// loop's bindings *by value*, so each iteration's closure sees that
+    /// iteration's element instead of every closure sharing the one cell
+    /// python leaves behind. Tests that compare exact transpile output should
+    /// set this to `false` unless they exercise the capture itself
+    pub unique_loop_bindings: bool,
 }
 
 /// Per-position toggles for the runtime type-soundness checks. Each field
@@ -148,6 +154,7 @@ impl Default for Config {
             soundness: SoundnessPositions::defaults(),
             runtime_raises_checks: false,
             checked_cast: true,
+            unique_loop_bindings: true,
         }
     }
 }

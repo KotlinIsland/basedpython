@@ -640,6 +640,8 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     let mut reified_generic_rev =
         reverse_transforms::reified_generic::ReifiedGenericReverse::new(src);
     let mut string_tag_rev = reverse_transforms::string_tag::StringTagReverse::new(src);
+    let mut unique_loop_bindings_rev =
+        reverse_transforms::unique_loop_bindings::UniqueLoopBindingsReverse::new(src);
     let mut typing_redirect_rev = reverse_transforms::typing_redirect::TypingRedirectReverse::new();
     let mut export_import_rev = reverse_transforms::export_import::ExportImportReverse::new(src);
 
@@ -668,6 +670,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         reified_generic_rev.visit_stmt(stmt);
         string_tag_rev.visit_stmt(stmt);
         export_import_rev.visit_stmt(stmt);
+        unique_loop_bindings_rev.visit_stmt(stmt);
         // `callable` rewrites callable annotations to the arrow form. it runs
         // for stubs too, but in a restricted "stub" mode (set above) that only
         // touches the gradual `Callable[..., R]` form — the `Callable[[A, B],
@@ -722,6 +725,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(none_chain_rev.edits);
     fixes.extend(reified_generic_rev.edits);
     fixes.extend(string_tag_rev.edits);
+    fixes.extend(unique_loop_bindings_rev.edits);
     fixes.extend(typing_redirect_rev.edits);
     fixes.extend(export_import_rev.edits);
 

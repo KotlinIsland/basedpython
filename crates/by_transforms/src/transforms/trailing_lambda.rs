@@ -546,9 +546,27 @@ mod tests {
 
     #[test]
     fn ast_pass_inside_body_falls_back_to_rendered_lowering() {
-        // a typed lambda in the body makes the driver re-render the whole
+        // `typeof` is rewritten in the AST, so the driver re-renders the whole
         // statement through the generator, which has no type info — the
         // rendered lowering appends the function positionally
+        let out = check(indoc! {"
+            def f(a: (int) -> None):
+                a(1)
+
+            f:
+                x: typeof(1) = 1
+                print(x, it)
+        "});
+        assert!(out.contains("def __trailing_lambda__(it):"), "got:\n{out}");
+        assert!(out.contains("f(__trailing_lambda__)"), "got:\n{out}");
+    }
+
+    /// a typed lambda used to force that fallback too. it lowers by deleting
+    /// its basedpython surface now (see [`typed_lambda`](super::typed_lambda)),
+    /// leaving the statement un-re-rendered, so the block keeps the template
+    /// lowering and its keyword binding
+    #[test]
+    fn typed_lambda_inside_body_keeps_the_template_lowering() {
         let out = check(indoc! {"
             def f(a: (int) -> None):
                 a(1)
@@ -557,8 +575,12 @@ mod tests {
                 g = lambda (x: int): x
                 print(g(it))
         "});
-        assert!(out.contains("def __trailing_lambda__(it):"), "got:\n{out}");
-        assert!(out.contains("f(__trailing_lambda__)"), "got:\n{out}");
+        assert!(
+            out.contains("def _trailing_lambda_0(it=None):"),
+            "got:\n{out}"
+        );
+        assert!(out.contains("f(a=_trailing_lambda_0)"), "got:\n{out}");
+        assert!(out.contains("g = lambda x: x"), "got:\n{out}");
     }
 
     #[test]

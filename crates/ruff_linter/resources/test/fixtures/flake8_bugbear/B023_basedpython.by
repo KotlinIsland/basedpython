@@ -11,8 +11,60 @@ for x in [1, 2, 3]:
         print(x)
 
 
-# Not OK: a genuine closure captured into a list is the real late-binding bug
-# B023 exists to catch, and it is still flagged.
+# OK: basedpython gives each iteration its own binding for the loop target, so
+# the wrapper this lambda is applied through reads this iteration's value.
 fns = []
 for x in [1, 2, 3]:
     fns.append(lambda: x)
+
+
+# OK: a comprehension target is bound per element the same way.
+comprehended = [lambda: x for x in [1, 2, 3]]
+
+
+# Not OK: a `def` reads a *module-level* loop target as a global, which the
+# closure rebind has no cell for — so this one keeps python's late binding.
+defs = []
+for x in [1, 2, 3]:
+
+    def handler():
+        print(x)
+
+    defs.append(handler)
+
+
+def collect() -> list:
+    # OK: inside a function the target is a closure cell, which the rebind does
+    # reach, so the same `def` reads this iteration's value.
+    handlers = []
+    for x in [1, 2, 3]:
+
+        def handler():
+            print(x)
+
+        handlers.append(handler)
+    return handlers
+
+
+def accumulate() -> list:
+    # Not OK: a name merely *assigned* in the body is not a loop binding —
+    # basedpython resolves those late, exactly as python does.
+    fns = []
+    for x in [1, 2, 3]:
+        doubled = x * 2
+        fns.append(lambda: doubled)
+    return fns
+
+
+def properties() -> list:
+    # A property accessor is a `def` the parser synthesized, and the transpiler
+    # does not rebind it — so the late binding is real and must still be flagged.
+    holders = []
+    for x in [1, 2, 3]:
+
+        class Holder:
+            var scale: int = 0
+                get() = field * x
+
+        holders.append(Holder())
+    return holders
