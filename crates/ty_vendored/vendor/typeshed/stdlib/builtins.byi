@@ -3241,19 +3241,19 @@ class property:
 def abs[Element](x: SupportsAbs[Element], /) -> Element:
     """Return the absolute value of the argument."""
 
-def all(iterable: Iterable[object], /) -> bool:
+def all(local iterable: Iterable[object], /) -> bool:
     """Return True if bool(x) is True for all values x in the iterable.
 
     If the iterable is empty, return True.
     """
 
-def any(iterable: Iterable[object], /) -> bool:
+def any(local iterable: Iterable[object], /) -> bool:
     """Return True if bool(x) is True for any x in the iterable.
 
     If the iterable is empty, return False.
     """
 
-def ascii(obj: object, /) -> str:
+def ascii(local obj: object, /) -> str:
     """Return an ASCII-only representation of an object.
 
     As repr(), return a string containing a printable representation of an
@@ -3637,7 +3637,7 @@ def hasattr(obj: object, name: str, /) -> bool:
     This is done by calling getattr(obj, name) and catching AttributeError.
     """
 
-def hash(obj: object, /) -> int:
+def hash(local obj: object, /) -> int:
     """Return the integer hash value for the given object.
 
     Two objects that compare equal must also have the same hash value, but
@@ -3701,7 +3701,7 @@ def iter[Element](object: () -> Element, sentinel: object, /) -> Iterator[Elemen
 
 type _ClassInfo = type | types.UnionType | (*: _ClassInfo)
 
-def isinstance(obj: object, class_or_tuple: _ClassInfo, /) -> bool:
+def isinstance(local obj: object, class_or_tuple: _ClassInfo, /) -> bool:
     """Return whether an object is an instance of a class or of a subclass thereof.
 
     A tuple, as in ``isinstance(x, (A, B, ...))``, may be given as the
@@ -3709,7 +3709,7 @@ def isinstance(obj: object, class_or_tuple: _ClassInfo, /) -> bool:
     isinstance(x, B) or ...`` etc.
     """
 
-def issubclass(cls: type, class_or_tuple: _ClassInfo, /) -> bool:
+def issubclass(local cls: type, class_or_tuple: _ClassInfo, /) -> bool:
     """Return whether 'cls' is derived from another class or is the same class.
 
     A tuple, as in ``issubclass(x, (A, B, ...))``, may be given as the
@@ -3717,7 +3717,7 @@ def issubclass(cls: type, class_or_tuple: _ClassInfo, /) -> bool:
     issubclass(x, B) or ...``.
     """
 
-def len(obj: Sized, /) -> int:
+def len(local obj: Sized, /) -> int:
     """Return the number of items in a container."""
 
 license: _sitebuiltins._Printer
@@ -4191,7 +4191,7 @@ class reversed[in out Element]:
     def __length_hint__(self) -> int:
         """Private method returning an estimate of len(list(it))."""
 
-def repr(obj: object, /) -> str:
+def repr(local obj: object, /) -> str:
     """Return the canonical string representation of the object.
 
     For many object types, including most builtins, eval(repr(obj)) == obj.
@@ -4262,15 +4262,15 @@ private protocol SupportsSumWithNoDefaultGiven(SupportsAdd[dynamic, dynamic], Su
 # However, we can't express that in the stub for `sum()`
 # without creating many false-positive errors (see #7578).
 # Instead, we special-case the most common examples of this: bool and literal integers.
-def sum(iterable: Iterable[bool | LiteralInteger], /, start: int = 0) -> int:
+def sum(local iterable: Iterable[bool | LiteralInteger], /, start: int = 0) -> int:
     """Return the sum of a 'start' value (default: 0) plus an iterable of numbers
 
     When the iterable is empty, return the start value.
     This function is intended specifically for use with numeric values and
     may reject non-numeric types.
     """
-def sum[SupportsSumNoDefaultT: SupportsSumWithNoDefaultGiven](iterable: Iterable[SupportsSumNoDefaultT], /) -> SupportsSumNoDefaultT | 0
-def sum[AddableT1: SupportsAdd[dynamic, dynamic], AddableT2: SupportsAdd[dynamic, dynamic]](iterable: Iterable[AddableT1], /, start: AddableT2) -> AddableT1 | AddableT2
+def sum[SupportsSumNoDefaultT: SupportsSumWithNoDefaultGiven](local iterable: Iterable[SupportsSumNoDefaultT], /) -> SupportsSumNoDefaultT | 0
+def sum[AddableT1: SupportsAdd[dynamic, dynamic], AddableT2: SupportsAdd[dynamic, dynamic]](local iterable: Iterable[AddableT1], /, start: AddableT2) -> AddableT1 | AddableT2
 
 # The argument to `vars()` has to have a `__dict__` attribute, so the second overload can't be annotated with `object`
 # (A "SupportsDunderDict" protocol doesn't work)

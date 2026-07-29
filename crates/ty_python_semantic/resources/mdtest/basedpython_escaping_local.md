@@ -339,3 +339,35 @@ def f(fn): ...
 f:
     sink(it)
 ```
+
+## a builtin that cannot retain its argument takes a borrow
+
+The escape rule is that a `local` handed to a non-`local` parameter escapes, since that callee might
+keep it. The builtins that provably cannot — they return a fresh scalar and hand no part of the
+argument back — say so in their own signatures, so ordinary reads of a borrow are not reported.
+
+```by
+def f(local xs: list[int]) -> None:
+    print(len(xs))
+    print(sum(xs))
+    print(any(xs))
+    print(all(xs))
+    print(repr(xs))
+    print(hash(len(xs)))
+    print(isinstance(xs, list))
+```
+
+Anything that could keep it still escapes, including a callee of the user's own.
+
+```by
+_registry: list[object] = []
+
+def keeps(x: object) -> None:
+    _registry.append(x)
+
+def g(local xs: list[int]) -> None:
+    # error: [escaping-local]
+    keeps(xs)
+    # error: [escaping-local]
+    _registry.append(xs)
+```
