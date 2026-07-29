@@ -97,6 +97,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [trailing lambda blocks](trailing-lambdas.md)
 - [unpack syntax](unpack-syntax.md)
 - [mutable default arguments](mutable-defaults.md)
+- [unique loop bindings](unique-loop-bindings.md) — a closure captures its own iteration
 - [dedented triple-quoted strings](dedent-strings.md)
 - [custom string tags](string-tags.md)
 - [strings and characters](character.md) — grapheme-aware `str` api

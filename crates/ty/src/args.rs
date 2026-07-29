@@ -80,21 +80,8 @@ pub(crate) enum Command {
         /// [default: the version of the interpreter that will run it]
         #[arg(long, value_name = "VERSION")]
         min_version: Option<String>,
-        /// which runtime type-soundness checks to insert: `default`, `all`
-        /// (adds the opt-in `parameters` entry checks), `none`, or a
-        /// comma-separated subset of `generic-calls`, `projections`,
-        /// `iterations`, `assignments`, `returns`, `arguments`, `parameters`
-        #[arg(long, value_name = "SPEC", default_value = "default")]
-        soundness: String,
-        /// lower `<value> cast <type>` to an unchecked `typing.cast` instead
-        /// of a runtime-checked cast that raises on a type mismatch (the
-        /// `cast?` safe form is unaffected)
-        #[arg(long)]
-        no_checked_cast: bool,
-        /// wrap every function with a `raises` clause in a runtime guard that
-        /// fails when it raises something the clause does not include
-        #[arg(long)]
-        runtime_raises_checks: bool,
+        #[command(flatten)]
+        lowering: LoweringArgs,
     },
 
     /// Transpile all .by files and write them to out/.
@@ -102,21 +89,8 @@ pub(crate) enum Command {
         /// minimum Python version the output must run on
         #[arg(long, value_name = "VERSION", default_value = "3.10")]
         min_version: String,
-        /// which runtime type-soundness checks to insert: `default`, `all`
-        /// (adds the opt-in `parameters` entry checks), `none`, or a
-        /// comma-separated subset of `generic-calls`, `projections`,
-        /// `iterations`, `assignments`, `returns`, `arguments`, `parameters`
-        #[arg(long, value_name = "SPEC", default_value = "default")]
-        soundness: String,
-        /// lower `<value> cast <type>` to an unchecked `typing.cast` instead
-        /// of a runtime-checked cast that raises on a type mismatch (the
-        /// `cast?` safe form is unaffected)
-        #[arg(long)]
-        no_checked_cast: bool,
-        /// wrap every function with a `raises` clause in a runtime guard that
-        /// fails when it raises something the clause does not include
-        #[arg(long)]
-        runtime_raises_checks: bool,
+        #[command(flatten)]
+        lowering: LoweringArgs,
     },
 
     /// Generate an api lockfile (`api.lock`) summarising the public type-level
@@ -154,22 +128,36 @@ pub(crate) enum Command {
         /// minimum Python version the output must run on
         #[arg(long, value_name = "VERSION", default_value = "3.10")]
         min_version: String,
-        /// which runtime type-soundness checks to insert: `default`, `all`
-        /// (adds the opt-in `parameters` entry checks), `none`, or a
-        /// comma-separated subset of `generic-calls`, `projections`,
-        /// `iterations`, `assignments`, `returns`, `arguments`, `parameters`
-        #[arg(long, value_name = "SPEC", default_value = "default")]
-        soundness: String,
-        /// lower `<value> cast <type>` to an unchecked `typing.cast` instead
-        /// of a runtime-checked cast that raises on a type mismatch (the
-        /// `cast?` safe form is unaffected)
-        #[arg(long)]
-        no_checked_cast: bool,
-        /// wrap every function with a `raises` clause in a runtime guard that
-        /// fails when it raises something the clause does not include
-        #[arg(long)]
-        runtime_raises_checks: bool,
+        #[command(flatten)]
+        lowering: LoweringArgs,
     },
+}
+
+/// How the transpiler lowers a program, shared by `run`, `build` and
+/// `transpile`. Every option here changes the emitted python, never the
+/// checker's verdict.
+#[derive(Debug, Parser)]
+pub(crate) struct LoweringArgs {
+    /// which runtime type-soundness checks to insert: `default`, `all`
+    /// (adds the opt-in `parameters` entry checks), `none`, or a
+    /// comma-separated subset of `generic-calls`, `projections`,
+    /// `iterations`, `assignments`, `returns`, `arguments`, `parameters`
+    #[arg(long, value_name = "SPEC", default_value = "default")]
+    pub(crate) soundness: String,
+    /// lower `<value> cast <type>` to an unchecked `typing.cast` instead
+    /// of a runtime-checked cast that raises on a type mismatch (the
+    /// `cast?` safe form is unaffected)
+    #[arg(long)]
+    pub(crate) no_checked_cast: bool,
+    /// wrap every function with a `raises` clause in a runtime guard that
+    /// fails when it raises something the clause does not include
+    #[arg(long)]
+    pub(crate) runtime_raises_checks: bool,
+    /// leave a closure made inside a loop sharing the loop's one binding,
+    /// as python does, instead of binding the values of the iteration it
+    /// was made in
+    #[arg(long)]
+    pub(crate) no_unique_loop_bindings: bool,
 }
 
 #[derive(Debug, Parser)]

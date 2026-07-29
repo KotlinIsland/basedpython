@@ -1,4 +1,5 @@
 use ruff_macros::{ViolationMetadata, derive_message_formats};
+use ruff_python_ast::helpers::has_written_def_header;
 use ruff_python_ast::types::Node;
 use ruff_python_ast::visitor;
 use ruff_python_ast::visitor::Visitor;
@@ -75,10 +76,40 @@ impl<'a> Visitor<'a> for LoadedNamesVisitor<'a> {
     }
 }
 
-#[derive(Default)]
+/// The kind of closure a suspicious name was read inside. basedpython binds
+/// each of them differently, so what it leaves unbound — the report this rule
+/// keeps making — depends on which one read the name
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ReadBy {
+    /// applied to the loop's values through a wrapper, wherever it sits
+    Lambda,
+    /// rebuilt with fresh closure cells, which only reaches a binding python
+    /// compiled *as* a cell — never a module-level target
+    WrittenFunctionDef,
+    /// a `def` the parser synthesized for another construct, which the
+    /// lowering leaves to the pass that owns it — never bound
+    SynthesizedFunctionDef,
+}
+
+struct SuspiciousName<'a> {
+    name: &'a ast::ExprName,
+    read_by: ReadBy,
+}
+
 struct SuspiciousVariablesVisitor<'a> {
-    names: Vec<&'a ast::ExprName>,
+    source: &'a str,
+    names: Vec<SuspiciousName<'a>>,
     safe_functions: Vec<&'a Expr>,
+}
+
+impl<'a> SuspiciousVariablesVisitor<'a> {
+    fn new(source: &'a str) -> Self {
+        Self {
+            source,
+            names: Vec::new(),
+            safe_functions: Vec::new(),
+        }
+    }
 }
 
 /// `Visitor` to collect all suspicious variables (those referenced in
@@ -86,12 +117,14 @@ struct SuspiciousVariablesVisitor<'a> {
 impl<'a> Visitor<'a> for SuspiciousVariablesVisitor<'a> {
     fn visit_stmt(&mut self, stmt: &'a Stmt) {
         match stmt {
-            Stmt::FunctionDef(ast::StmtFunctionDef {
-                parameters,
-                body,
-                is_trailing_lambda,
-                ..
-            }) => {
+            Stmt::FunctionDef(
+                function @ ast::StmtFunctionDef {
+                    parameters,
+                    body,
+                    is_trailing_lambda,
+                    ..
+                },
+            ) => {
                 // basedpython: a trailing-lambda block (`f:` + suite) lowers to a
                 // closure, but whether it can outlive the loop depends on the
                 // callee's `local` / `once` marker — type information this
@@ -108,19 +141,30 @@ impl<'a> Visitor<'a> for SuspiciousVariablesVisitor<'a> {
                 let mut visitor = LoadedNamesVisitor::default();
                 visitor.visit_body(body);
 
+                let read_by = if has_written_def_header(self.source, function) {
+                    ReadBy::WrittenFunctionDef
+                } else {
+                    ReadBy::SynthesizedFunctionDef
+                };
+
                 // Treat any non-arguments as "suspicious".
-                self.names
-                    .extend(visitor.loaded.into_iter().filter(|loaded| {
-                        if visitor.stored.iter().any(|stored| stored.id == loaded.id) {
-                            return false;
-                        }
+                self.names.extend(
+                    visitor
+                        .loaded
+                        .into_iter()
+                        .filter(|loaded| {
+                            if visitor.stored.iter().any(|stored| stored.id == loaded.id) {
+                                return false;
+                            }
 
-                        if parameters.includes(&loaded.id) {
-                            return false;
-                        }
+                            if parameters.includes(&loaded.id) {
+                                return false;
+                            }
 
-                        true
-                    }));
+                            true
+                        })
+                        .map(|name| SuspiciousName { name, read_by }),
+                );
 
                 return;
             }
@@ -199,21 +243,29 @@ impl<'a> Visitor<'a> for SuspiciousVariablesVisitor<'a> {
                 visitor.visit_expr(body);
 
                 // Treat any non-arguments as "suspicious".
-                self.names
-                    .extend(visitor.loaded.into_iter().filter(|loaded| {
-                        if visitor.stored.iter().any(|stored| stored.id == loaded.id) {
-                            return false;
-                        }
+                self.names.extend(
+                    visitor
+                        .loaded
+                        .into_iter()
+                        .filter(|loaded| {
+                            if visitor.stored.iter().any(|stored| stored.id == loaded.id) {
+                                return false;
+                            }
 
-                        if parameters
-                            .as_ref()
-                            .is_some_and(|parameters| parameters.includes(&loaded.id))
-                        {
-                            return false;
-                        }
+                            if parameters
+                                .as_ref()
+                                .is_some_and(|parameters| parameters.includes(&loaded.id))
+                            {
+                                return false;
+                            }
 
-                        true
-                    }));
+                            true
+                        })
+                        .map(|name| SuspiciousName {
+                            name,
+                            read_by: ReadBy::Lambda,
+                        }),
+                );
 
                 return;
             }
@@ -245,6 +297,49 @@ impl<'a> Visitor<'a> for NamesFromAssignmentsVisitor<'a> {
             }
             _ => {}
         }
+    }
+}
+
+/// `Visitor` to collect the names a loop or comprehension *target* binds —
+/// the subset of the assigned names basedpython gives each iteration its own
+/// binding for. Mirrors [`AssignedNamesVisitor`]'s traversal, so the two agree
+/// on which loops belong to this one.
+#[derive(Default)]
+struct IterationTargetsVisitor<'a> {
+    names: Vec<&'a str>,
+}
+
+impl<'a> Visitor<'a> for IterationTargetsVisitor<'a> {
+    fn visit_stmt(&mut self, stmt: &'a Stmt) {
+        if stmt.is_function_def_stmt() {
+            // Don't recurse.
+            return;
+        }
+
+        if let Stmt::For(ast::StmtFor { target, .. }) = stmt {
+            let mut visitor = NamesFromAssignmentsVisitor::default();
+            visitor.visit_expr(target);
+            self.names.extend(visitor.names);
+        }
+
+        visitor::walk_stmt(self, stmt);
+    }
+
+    fn visit_expr(&mut self, expr: &'a Expr) {
+        if expr.is_lambda_expr() {
+            // Don't recurse.
+            return;
+        }
+
+        visitor::walk_expr(self, expr);
+    }
+
+    fn visit_comprehension(&mut self, comprehension: &'a Comprehension) {
+        let mut visitor = NamesFromAssignmentsVisitor::default();
+        visitor.visit_expr(&comprehension.target);
+        self.names.extend(visitor.names);
+
+        visitor::walk_comprehension(self, comprehension);
     }
 }
 
@@ -305,7 +400,7 @@ pub(crate) fn function_uses_loop_variable(checker: &Checker, node: &Node) {
     // Identify any "suspicious" variables. These are defined as variables that are
     // referenced in a function or lambda body, but aren't bound as arguments.
     let suspicious_variables = {
-        let mut visitor = SuspiciousVariablesVisitor::default();
+        let mut visitor = SuspiciousVariablesVisitor::new(checker.source());
         match node {
             Node::Stmt(stmt) => visitor.visit_stmt(stmt),
             Node::Expr(expr) => visitor.visit_expr(expr),
@@ -324,18 +419,49 @@ pub(crate) fn function_uses_loop_variable(checker: &Checker, node: &Node) {
             visitor.names
         };
 
+        // basedpython gives every iteration its own binding for a loop or
+        // comprehension *target*, so a closure made in the body reads that
+        // iteration's value and the late-binding trap is gone for those names.
+        // A name merely assigned in the body keeps python's late binding, and
+        // so keeps its report.
+        let bound_per_iteration = if checker.source_type.is_basedpython() {
+            let mut visitor = IterationTargetsVisitor::default();
+            match node {
+                Node::Stmt(stmt) => visitor.visit_stmt(stmt),
+                Node::Expr(expr) => visitor.visit_expr(expr),
+            }
+            visitor.names
+        } else {
+            Vec::new()
+        };
+        // the bindings the rebind cannot reach: a `def` reads a module-level
+        // target as a global, which the rebuilt closure has no cell for, and a
+        // `def` the parser synthesized is never rebound at all
+        let rebind_reaches_a_def = !checker.semantic().current_scope().kind.is_module();
+
         // If a variable was used in a function or lambda body, and assigned in the
         // loop, flag it.
-        for name in suspicious_variables {
-            if reassigned_in_loop.contains(&name.id.as_str()) {
-                if checker.insert_flake8_bugbear_range(name.range()) {
-                    checker.report_diagnostic(
-                        FunctionUsesLoopVariable {
-                            name: name.id.to_string(),
-                        },
-                        name.range(),
-                    );
-                }
+        for suspicious in suspicious_variables {
+            let name = suspicious.name;
+            if !reassigned_in_loop.contains(&name.id.as_str()) {
+                continue;
+            }
+            let bound = bound_per_iteration.contains(&name.id.as_str())
+                && match suspicious.read_by {
+                    ReadBy::Lambda => true,
+                    ReadBy::WrittenFunctionDef => rebind_reaches_a_def,
+                    ReadBy::SynthesizedFunctionDef => false,
+                };
+            if bound {
+                continue;
+            }
+            if checker.insert_flake8_bugbear_range(name.range()) {
+                checker.report_diagnostic(
+                    FunctionUsesLoopVariable {
+                        name: name.id.to_string(),
+                    },
+                    name.range(),
+                );
             }
         }
     }

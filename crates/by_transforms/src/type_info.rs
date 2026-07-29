@@ -1,7 +1,7 @@
 //! Abstraction over type/binding information consumed by transforms.
 
 use ruff_python_ast::helpers::is_dotted_name;
-use ruff_python_ast::{Expr, ExprCall, ExprName, Stmt, StmtClassDef};
+use ruff_python_ast::{Expr, ExprCall, ExprName, ExprRef, Stmt, StmtClassDef};
 use ruff_text_size::TextRange;
 use ty_python_core::scope::ScopeKind;
 use ty_python_core::{global_scope, place_table, semantic_index};
@@ -216,6 +216,15 @@ pub(crate) trait TypeInfo {
     /// takes to survive the boundary: `Global` at module scope, `Nonlocal` inside
     /// a function — the nearest such enclosing scope of the block at `anchor`
     fn trailing_block_fresh_capture(&self, anchor: &Expr) -> Option<CaptureKind>;
+
+    /// how `reference` reaches the binding established at `target`, when it
+    /// reaches it at all: the name has to resolve outward, past every scope the
+    /// reference sits in, to the scope that binds `target`. `Nonlocal` means
+    /// that scope is a function or lambda, so the read goes through a closure
+    /// cell; `Global` means it is the module, where python compiles the read as
+    /// a global instead. `None` when the two share a scope (no closure is
+    /// involved) or when a scope in between binds the name itself
+    fn reads_binding_of(&self, reference: &ExprName, target: &ExprName) -> Option<CaptureKind>;
 
     /// rendered inferred (literal-promoted) type of `expr`, or `None` when ty
     /// cannot resolve a type (unresolved import, parse error, etc.).
@@ -649,6 +658,43 @@ impl TypeInfo for SemanticModel<'_> {
                 ScopeKind::Function | ScopeKind::Lambda => return Some(CaptureKind::Nonlocal),
                 _ => {}
             }
+        }
+        None
+    }
+
+    fn reads_binding_of(&self, reference: &ExprName, target: &ExprName) -> Option<CaptureKind> {
+        let db = self.db();
+        let file = self.file();
+        let index = semantic_index(db, file);
+        let reference_scope = index.try_expression_scope_id(&ExprRef::from(reference))?;
+        let target_scope = index.try_expression_scope_id(&ExprRef::from(target))?;
+        // a reference in the binding's own scope reads the live binding, not a
+        // captured copy of it
+        if reference_scope == target_scope {
+            return None;
+        }
+        for (ancestor_id, scope) in index.ancestor_scopes(reference_scope) {
+            // a class body is skipped by name resolution from a scope nested in
+            // it, so a binding there does not answer this reference
+            if scope.kind() == ScopeKind::Class && ancestor_id != reference_scope {
+                continue;
+            }
+            if !place_table(db, ancestor_id.to_scope_id(db, file))
+                .symbol_by_name(&reference.id)
+                .is_some_and(ty_python_core::symbol::Symbol::is_bound)
+            {
+                continue;
+            }
+            if ancestor_id != target_scope {
+                return None;
+            }
+            return match scope.kind() {
+                ScopeKind::Module => Some(CaptureKind::Global),
+                ScopeKind::Function | ScopeKind::Lambda | ScopeKind::Comprehension => {
+                    Some(CaptureKind::Nonlocal)
+                }
+                _ => None,
+            };
         }
         None
     }
