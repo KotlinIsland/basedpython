@@ -473,9 +473,10 @@ impl<'db> KnownInstanceType<'db> {
                 ))
             }
             KnownInstanceType::Range { .. } => match type_mapping {
-                TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular) => {
-                    self.instance_fallback(db)
-                }
+                TypeMapping::Promote(
+                    PromotionMode::On,
+                    PromotionKind::Regular | PromotionKind::RegularKeepingLiterals,
+                ) => self.instance_fallback(db),
                 _ => Type::KnownInstance(self),
             },
             KnownInstanceType::FunctoolsPartialCall(partial) => {

@@ -2387,6 +2387,14 @@ impl<'db> Type<'db> {
         }
     }
 
+    /// Like [`Type::promote_impl`], but leaves a literal value as it is.
+    fn promote_impl_keeping_literals(self, db: &'db dyn Db) -> Type<'db> {
+        match self {
+            Type::LiteralValue(_) => self,
+            _ => self.promote_impl(db),
+        }
+    }
+
     /// Like [`Type::promote_singletons_recursively`], but does not recurse into nested types.
     fn promote_singletons_impl(self, db: &'db dyn Db) -> Type<'db> {
         match self {
@@ -7112,7 +7120,10 @@ impl<'db> Type<'db> {
                 match type_mapping {
                     // Promote the types within the signature before promoting the signature to its
                     // callable form.
-                    TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular) => {
+                    TypeMapping::Promote(
+                        PromotionMode::On,
+                        PromotionKind::Regular | PromotionKind::RegularKeepingLiterals,
+                    ) => {
                         Type::FunctionLiteral(function.apply_type_mapping_impl(
                             db,
                             type_mapping,
@@ -7136,7 +7147,7 @@ impl<'db> Type<'db> {
                 method.self_instance(db).apply_type_mapping_impl(db, type_mapping, tcx, visitor),
             )),
 
-            Type::NominalInstance(instance) if matches!(type_mapping, TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular)) => {
+            Type::NominalInstance(instance) if matches!(type_mapping, TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular | PromotionKind::RegularKeepingLiterals)) => {
                 match instance.known_class(db) {
                     Some(KnownClass::Complex) => KnownUnion::Complex.to_type(db),
                     Some(KnownClass::Float) => KnownUnion::Float.to_type(db),
@@ -7257,7 +7268,10 @@ impl<'db> Type<'db> {
                 // so we don't preserve them here when regular promotion is enabled.
                 if !matches!(
                     type_mapping,
-                    TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular)
+                    TypeMapping::Promote(
+                        PromotionMode::On,
+                        PromotionKind::Regular | PromotionKind::RegularKeepingLiterals
+                    )
                 ) {
                     for negative in intersection.negative(db) {
                         builder = builder.add_negative(
@@ -7384,6 +7398,9 @@ impl<'db> Type<'db> {
                     PromotionKind::ClassLiteralsOnly | PromotionKind::SingletonsOnly,
                 ) => self,
                 TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular) => self.promote_impl(db),
+                TypeMapping::Promote(PromotionMode::On, PromotionKind::RegularKeepingLiterals) => {
+                    self.promote_impl_keeping_literals(db)
+                }
             }
 
             Type::Dynamic(_) => match type_mapping {
@@ -8367,6 +8384,11 @@ impl PromotionMode {
 pub enum PromotionKind {
     /// Default promotion behaviour: recurse into nested types
     Regular,
+    /// Like [`PromotionKind::Regular`], but literal values are left as they are.
+    ///
+    /// This is what a covariant type argument gets: widening it is sound, but nothing reads a
+    /// different type back out of that position, so the literal it was inferred from stands.
+    RegularKeepingLiterals,
     /// Promote class literals recursively without promoting other literal types.
     ClassLiteralsOnly,
     /// Singleton-only promotion recursively descends through nominal instances

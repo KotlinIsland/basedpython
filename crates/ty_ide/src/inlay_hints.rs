@@ -9853,6 +9853,26 @@ Source with applied edits:
     }
 
     #[test]
+    fn basedpython_declared_variance_beside_an_inferred_parameter() {
+        // `B` is used only by the constructor, so it is bivariant and
+        // constrains nothing — its argument still reaches the specialization
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class A[out A, B]:
+                init(a: A, b: B)
+
+            a = A(1, 2)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            variable_types: true,
+            call_type_arguments: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
     fn type_argument_names() {
         let mut test = inlay_hint_test(
             "

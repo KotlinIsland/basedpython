@@ -347,7 +347,7 @@ fn spell_specialization_arguments<'db>(
                 let elements = fixed
                     .elements_slice()
                     .iter()
-                    .map(|element| runtime_spelling(db, file, *element))
+                    .map(|element| runtime_spelling(db, file, element.promote(db)))
                     .collect::<Option<Vec<_>>>()?;
                 if elements.is_empty() {
                     Some("()".to_owned())
@@ -358,10 +358,12 @@ fn spell_specialization_arguments<'db>(
             Tuple::Variable(_) => None,
         };
     }
+    // an argument is promoted one by one: a covariant parameter keeps the literal type it was
+    // inferred from, and only a class object can be written at runtime
     let arguments = specialization
         .types(db)
         .iter()
-        .map(|argument| runtime_spelling(db, file, *argument))
+        .map(|argument| runtime_spelling(db, file, argument.promote(db)))
         .collect::<Option<Vec<_>>>()?;
     Some(arguments.join(", "))
 }
