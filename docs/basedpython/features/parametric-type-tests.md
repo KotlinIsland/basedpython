@@ -207,3 +207,16 @@ InitLevel() is HasA[int]    # TypeError: its type is declared inside a method
 
 declare the member in the class body and the check answers. this is the same
 line the erased builtin target takes: refuse, never guess.
+
+### the cast forms usually never get here
+
+a [checked cast](checked-cast.md) shares this engine, but only for a value the
+checker could not already decide. `InitLevel() cast? HasA[int]` is decided
+*statically* — ty accepts that class as satisfying the protocol — so the cast
+folds to a pass-through and no runtime check is emitted at all. the `is` above
+raises only because its value is an `object`, where nothing is known statically
+and the residue has to run.
+
+so the two can differ on the same class: the cast succeeds, the test refuses.
+both are right for what they were asked, but it is worth knowing the cast is not
+re-verifying what the checker already concluded.
