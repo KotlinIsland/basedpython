@@ -1,14 +1,17 @@
-//! Pre-source text-edit that blanks use-site variance markers (`out T`,
-//! `in T`, `in out T`) out of the source string before the main lowering
-//! pipeline begins.
+//! Pre-source text-edit that blanks basedpython's keyword-prefix type markers
+//! out of the source string before the main lowering pipeline begins: the
+//! use-site variance markers (`out T`, `in T`, `in out T`) and the use-site
+//! type modifiers (`literal T`, `final T`). Both are written as a bare keyword
+//! in front of a type expression, both are compile-time-only, and both are
+//! erased by exactly the same mechanism, so one pass handles them.
 //!
 //! Unlike the other passes in `ast_pass`, this one does NOT mutate the AST
-//! and re-render through [`Generator`]; it scans the AST for variance
-//! markers, gathers their source ranges, and overwrites them in the source
+//! and re-render through [`Generator`]; it scans the AST for markers,
+//! gathers their source ranges, and overwrites them in the source
 //! string directly. The result is a basedpython source file with no
-//! variance keywords — downstream transforms (callable arrow lowering,
+//! marker keywords — downstream transforms (callable arrow lowering,
 //! intersection lowering) can then copy operand source verbatim without
-//! capturing variance keywords that would later leak, and AST passes can
+//! capturing keywords that would later leak, and AST passes can
 //! re-render a statement without the [`Generator`] meeting a marker node it
 //! has no spelling for
 //!
@@ -27,7 +30,7 @@
 //! a wider *plain* text edit the padding survives, harmlessly.
 
 use ruff_python_ast::PySourceType;
-use ruff_python_ast::helpers::use_site_variance_marker;
+use ruff_python_ast::helpers::{type_modifier_marker, use_site_variance_marker};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt};
 use ruff_python_parser::parse_unchecked_source;
@@ -73,9 +76,10 @@ impl Blanked<'_> {
     }
 }
 
-/// Blank every use-site variance marker (`out T`, `in T`, `in out T`) out of
-/// `source`, replacing the keyword bytes with spaces so byte positions are
-/// preserved. Newlines are kept as-is, so line structure survives a marker
+/// Blank every keyword-prefix type marker — the use-site variance keywords
+/// (`out T`, `in T`, `in out T`) and the use-site type modifiers (`literal T`,
+/// `final T`) — out of `source`, replacing the keyword bytes with spaces so
+/// byte positions are preserved. Newlines are kept as-is, so line structure survives a marker
 /// that spans a line break. If parsing fails or no markers are present,
 /// returns `source` unchanged with no ranges.
 pub(crate) fn blank(source: &str) -> Blanked<'_> {
@@ -131,9 +135,13 @@ impl<'ast> Visitor<'ast> for MarkerCollector {
     }
 
     fn visit_expr(&mut self, expr: &'ast Expr) {
-        if let Some((_, inner)) = use_site_variance_marker(expr) {
-            // blank the variance keyword bytes between the outer marker
-            // range and the inner expression's start
+        // both marker shapes span from the keyword to the end of the type they
+        // precede, so the keyword bytes are exactly what lies before the inner
+        // expression's start
+        if let Some(inner) = use_site_variance_marker(expr)
+            .map(|(_, inner)| inner)
+            .or_else(|| type_modifier_marker(expr).map(|(_, inner)| inner))
+        {
             let start = expr.range().start();
             let inner_start = inner.range().start();
             if start < inner_start {
@@ -336,5 +344,43 @@ mod tests {
         assert!(matches!(out.source, std::borrow::Cow::Borrowed(_)));
         assert!(out.ranges.is_empty());
         assert_eq!(out.source, src);
+    }
+
+    // the `literal T` / `final T` use-site type modifiers ride the same
+    // blanking pass: both are compile-time-only and erase to the type they
+    // precede
+
+    #[test]
+    fn type_modifiers_are_erased() {
+        // `literal str` is the exception — it has a stdlib spelling, so it
+        // lowers rather than erasing (see `transforms::literal_string`)
+        check("a: literal int = 1\n", "a: int = 1\n");
+        check("b: final int = 1\n", "b: int = 1\n");
+        check("c: final str = \"x\"\n", "c: str = \"x\"\n");
+    }
+
+    #[test]
+    fn type_modifiers_erased_in_nested_positions() {
+        check("a: list[literal int] = []\n", "a: list[int] = []\n");
+        check("b: final int | None = None\n", "b: int | None = None\n");
+        check(
+            "def f(x: literal int, y: final str) -> final bool: ...\n",
+            "def f(x: int, y: str) -> bool: ...\n",
+        );
+    }
+
+    #[test]
+    fn type_modifier_keywords_stay_identifiers() {
+        // only a modifier when a name follows it — everything else is an
+        // ordinary reference and must survive untouched
+        unchanged("a: literal\n");
+        unchanged("b: final[int]\n");
+        unchanged("literal = 1\n");
+    }
+
+    #[test]
+    fn stripped_collapses_type_modifier_padding() {
+        let src = "a: literal str\n";
+        assert_eq!(blank(src).stripped(src), "a: str\n");
     }
 }

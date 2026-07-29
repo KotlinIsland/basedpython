@@ -186,6 +186,12 @@ pub(crate) trait TypeInfo {
     /// both of which are also dynamic types
     fn is_any(&self, expr: &Expr) -> bool;
 
+    /// whether `expr` resolves to `LiteralString`. `literal str` reduces to that
+    /// very type on construction, so this answers for both spellings — which is
+    /// what lets the forward lowering emit the stdlib name and the reverse
+    /// transform read it back
+    fn is_literal_string(&self, expr: &Expr) -> bool;
+
     /// whether `expr` resolves to a `TypeVarTuple`. a callable's parameter list spells an
     /// unpacked variadic and an anonymous variadic identically — `(*Ts)` and `(*: T)` both
     /// parse to `Starred(_)` — so the lowering resolves them the way ty does: a
@@ -563,6 +569,11 @@ impl TypeInfo for SemanticModel<'_> {
     fn is_any(&self, expr: &Expr) -> bool {
         expr.inferred_type(self)
             .is_some_and(|ty| matches!(ty, Type::Dynamic(DynamicType::Any)))
+    }
+
+    fn is_literal_string(&self, expr: &Expr) -> bool {
+        expr.inferred_type(self)
+            .is_some_and(ty_python_semantic::types::Type::is_literal_string)
     }
 
     fn is_typevartuple(&self, expr: &Expr) -> bool {

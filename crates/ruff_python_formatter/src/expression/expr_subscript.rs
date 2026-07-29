@@ -1,6 +1,6 @@
 use ruff_formatter::{FormatRuleWithOptions, write};
 use ruff_python_ast::AnyNodeRef;
-use ruff_python_ast::helpers::UseSiteVariance;
+use ruff_python_ast::helpers::{TypeModifier, UseSiteVariance};
 use ruff_python_ast::{Expr, ExprContext, ExprSubscript};
 use ruff_text_size::Ranged;
 
@@ -46,9 +46,12 @@ impl FormatNodeRule<ExprSubscript> for FormatExprSubscript {
         // `in X` / `in out X` as `Subscript(Name(<marker>, Invalid), inner)`.
         // The wrapper carries no brackets in the source — emit the keyword
         // (sliced from the original source) followed by the inner expression.
+        // the same shape carries the basedpython use-site type modifiers
+        // `literal X` / `final X`, and is emitted the same way
         if let Expr::Name(name) = value.as_ref()
             && matches!(name.ctx, ExprContext::Invalid)
-            && UseSiteVariance::from_marker_id(name.id.as_str()).is_some()
+            && (UseSiteVariance::from_marker_id(name.id.as_str()).is_some()
+                || TypeModifier::from_marker_id(name.id.as_str()).is_some())
         {
             return write!(
                 f,

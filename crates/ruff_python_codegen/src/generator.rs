@@ -3,7 +3,7 @@
 use std::fmt::Write;
 use std::ops::Deref;
 
-use ruff_python_ast::helpers::use_site_variance_marker;
+use ruff_python_ast::helpers::{type_modifier_marker, use_site_variance_marker};
 use ruff_python_ast::str::Quote;
 use ruff_python_ast::{
     self as ast, Alias, AnyStringFlags, ArgOrKeyword, BoolOp, BytesLiteralFlags, CmpOp,
@@ -1567,13 +1567,22 @@ impl<'a> Generator<'a> {
                 self.p_id(attr);
             }
             Expr::Subscript(ast::ExprSubscript { value, slice, .. }) => {
-                // basedpython: a use-site variance keyword is encoded as a
-                // subscript over a synthetic marker name, and carries no
-                // brackets in the source — emit `out X` rather than the marker
-                if self.mode == Mode::BasedPython
-                    && let Some((variance, inner)) = use_site_variance_marker(ast)
-                {
-                    self.p(variance.keywords());
+                // basedpython: a use-site variance keyword (`out X`) and a use-site
+                // type modifier (`literal X`, `final X`) are both encoded as a
+                // subscript over a synthetic marker name, and carry no brackets in
+                // the source — emit the keyword rather than the marker
+                let marker = if self.mode == Mode::BasedPython {
+                    use_site_variance_marker(ast)
+                        .map(|(variance, inner)| (variance.keywords(), inner))
+                        .or_else(|| {
+                            type_modifier_marker(ast)
+                                .map(|(modifier, inner)| (modifier.keyword(), inner))
+                        })
+                } else {
+                    None
+                };
+                if let Some((keyword, inner)) = marker {
+                    self.p(keyword);
                     self.p(" ");
                     self.unparse_expr(inner, precedence::SUBSCRIPT);
                 } else {
@@ -2184,6 +2193,18 @@ mod tests {
     #[test_case::test_case("g: X[in int, in out str, out bytes, int]" ; "every form mixed")]
     #[test_case::test_case("h: list[out list[in int]]" ; "nested")]
     fn basedpython_use_site_variance_round_trip(contents: &str) {
+        assert_eq!(based_round_trip(contents), contents);
+    }
+
+    /// A use-site type modifier is a marker subscript with no brackets in the
+    /// source, so it round-trips only when told apart from a real subscript
+    #[test_case::test_case("a: literal str" ; "annotation")]
+    #[test_case::test_case("b: final int = 1" ; "annotation with value")]
+    #[test_case::test_case("c: literal str | None" ; "binds tighter than union")]
+    #[test_case::test_case("d: list[literal str]" ; "nested in a subscript")]
+    #[test_case::test_case("e: final dict[str, int]" ; "modified subscript")]
+    #[test_case::test_case("type F = literal str" ; "type alias")]
+    fn basedpython_type_modifier_round_trip(contents: &str) {
         assert_eq!(based_round_trip(contents), contents);
     }
 

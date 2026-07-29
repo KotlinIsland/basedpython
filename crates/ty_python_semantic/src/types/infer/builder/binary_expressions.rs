@@ -368,6 +368,33 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     )
                 })
             }
+            // a use-site modifier says nothing about what the value can do
+            (Type::Restricted(restricted), _, _) => {
+                visitor.visit(db, (left_ty, op, right_ty), || {
+                    self.infer_binary_expression_type_impl(
+                        node,
+                        emitted_division_by_zero_diagnostic,
+                        restricted.value_type(db),
+                        right_ty,
+                        op,
+                        visitor,
+                        tcx,
+                    )
+                })
+            }
+            (_, Type::Restricted(restricted), _) => {
+                visitor.visit(db, (left_ty, op, right_ty), || {
+                    self.infer_binary_expression_type_impl(
+                        node,
+                        emitted_division_by_zero_diagnostic,
+                        left_ty,
+                        restricted.value_type(db),
+                        op,
+                        visitor,
+                        tcx,
+                    )
+                })
+            }
             (_, Type::Overlapping(overlapping), _) => {
                 visitor.visit(db, (left_ty, op, right_ty), || {
                     self.infer_binary_expression_type_impl(

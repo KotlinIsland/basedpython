@@ -1,5 +1,5 @@
 use ruff_python_ast as ast;
-use ruff_python_ast::helpers::is_dotted_name;
+use ruff_python_ast::helpers::{is_dotted_name, type_modifier_marker};
 use ty_python_core::scope::ScopeKind;
 
 use super::{DeferredExpressionState, TypeInferenceBuilder};
@@ -183,6 +183,13 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         // id is one of `__let__`, `__final__`, `__classvar__`, `__context__`, `__modifier_assign__`,
         // `__modifier_annot__`, `__newtype__`, `__abstract_annot__`, `__sentinel__`.
         // resolve them so ty applies the right qualifier without a transpile step
+        // basedpython use-site type modifiers (`literal T`, `final T`) are type
+        // expressions, not qualifiers: they restrict the declared type rather
+        // than annotating it, so they resolve on the type-expression path
+        if type_modifier_marker(annotation).is_some() {
+            return TypeAndQualifiers::declared(self.infer_type_expression(annotation));
+        }
+
         if let Some(result) = self.synthetic_annotation_marker(annotation) {
             self.store_expression_type(annotation, result.inner_type());
             self.store_qualifiers(annotation, result.qualifiers());

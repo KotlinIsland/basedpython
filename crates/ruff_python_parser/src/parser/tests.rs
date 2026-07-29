@@ -2179,3 +2179,133 @@ fn basedpython_if_let_is_basedpython_only() {
     };
     assert!(has_error, "`if let` should be a .py syntax error");
 }
+
+#[test]
+fn basedpython_type_modifier_prefix() {
+    use ruff_python_ast::helpers::{TypeModifier, type_modifier_marker};
+
+    // each source is a single statement whose annotation/return/value carries
+    // exactly one modifier marker at its top level
+    for (source, expected) in [
+        ("a: literal str\n", TypeModifier::Literal),
+        ("a: final int = 1\n", TypeModifier::Final),
+        ("a: literal list[*]\n", TypeModifier::Literal),
+        ("a: final dict[str, int]\n", TypeModifier::Final),
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::AnnAssign(ann)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single annotated assignment for `{source}`");
+        };
+        let Some((modifier, inner)) = type_modifier_marker(&ann.annotation) else {
+            panic!("expected a type modifier marker in `{source}`");
+        };
+        assert_eq!(modifier, expected, "wrong modifier in `{source}`");
+        assert!(
+            type_modifier_marker(inner).is_none(),
+            "unexpected nested marker in `{source}`"
+        );
+    }
+}
+
+#[test]
+fn basedpython_type_modifier_binds_tighter_than_union() {
+    use ruff_python_ast::helpers::type_modifier_marker;
+
+    // `literal str | None` is `(literal str) | None`, not `literal (str | None)`
+    let parsed = parse_basedpython_module("a: literal str | None\n");
+    let [Stmt::AnnAssign(ann)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single annotated assignment");
+    };
+    assert!(
+        type_modifier_marker(&ann.annotation).is_none(),
+        "the modifier must not swallow the whole union"
+    );
+    let Expr::BinOp(binop) = ann.annotation.as_ref() else {
+        panic!("expected a union");
+    };
+    assert!(type_modifier_marker(&binop.left).is_some());
+    assert!(type_modifier_marker(&binop.right).is_none());
+}
+
+#[test]
+fn basedpython_type_modifier_in_nested_type_positions() {
+    struct MarkerFinder<'a> {
+        found: &'a mut bool,
+    }
+
+    impl ruff_python_ast::visitor::Visitor<'_> for MarkerFinder<'_> {
+        fn visit_expr(&mut self, expr: &Expr) {
+            if ruff_python_ast::helpers::type_modifier_marker(expr).is_some() {
+                *self.found = true;
+            }
+            ruff_python_ast::visitor::walk_expr(self, expr);
+        }
+    }
+
+    for source in [
+        "def f(x: literal int): ...\n",
+        "def f() -> final int: ...\n",
+        "def f(*args: literal int): ...\n",
+        "def f(**kwargs: final int): ...\n",
+        "a: list[literal str]\n",
+        "type X = literal str\n",
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let mut found = false;
+        ruff_python_ast::visitor::walk_body(
+            &mut MarkerFinder { found: &mut found },
+            &parsed.syntax().body,
+        );
+        assert!(found, "expected a type modifier marker in `{source}`");
+    }
+}
+
+#[test]
+fn basedpython_type_modifier_keywords_stay_identifiers() {
+    use ruff_python_ast::helpers::type_modifier_marker;
+
+    // a modifier is only read when a *name* follows it, so an ordinary
+    // reference to a variable called `literal` or `final` is untouched
+    for source in [
+        "a: literal\n",
+        "a: final[int]\n",
+        "a: literal.Alias\n",
+        "a: final()\n",
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::AnnAssign(ann)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single annotated assignment for `{source}`");
+        };
+        assert!(
+            type_modifier_marker(&ann.annotation).is_none(),
+            "`{source}` should stay an ordinary reference"
+        );
+    }
+}
+
+#[test]
+fn basedpython_type_modifier_not_in_value_position() {
+    use ruff_python_ast::helpers::type_modifier_marker;
+
+    // outside a type expression the keywords are ordinary identifiers, so
+    // `literal str` there is the syntax error it has always been
+    let parsed = parse_basedpython_module("a = literal\n");
+    let [Stmt::Assign(assign)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single assignment");
+    };
+    assert!(type_modifier_marker(&assign.value).is_none());
+    assert!(
+        !parse_basedpython_module_with_errors("a = literal str\n")
+            .errors()
+            .is_empty()
+    );
+}
+
+#[test]
+fn basedpython_type_modifier_is_basedpython_only() {
+    let has_error = match parse("a: literal str\n", ParseOptions::from(Mode::Module)) {
+        Ok(parsed) => !parsed.errors().is_empty(),
+        Err(_) => true,
+    };
+    assert!(has_error, "`literal T` should be a .py syntax error");
+}

@@ -136,6 +136,9 @@ impl<'db> ClassBase<'db> {
             Type::Overlapping(overlapping) => {
                 Self::try_from_type(db, overlapping.value_type(db), subclass)
             }
+            Type::Restricted(restricted) => {
+                Self::try_from_type(db, restricted.value_type(db), subclass)
+            }
             Type::Deferred(deferred) => Self::try_from_type(db, deferred.reduced(db), subclass),
             Type::Dynamic(dynamic) => Some(Self::Dynamic(dynamic)),
             Type::Divergent(divergent) => Some(Self::Divergent(divergent)),
