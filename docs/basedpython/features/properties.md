@@ -385,7 +385,8 @@ still runs
 
 note this differs from a plain `private var x: int = 0` with no accessor block,
 which is [stripped without renaming](modifiers.md) like any other class member
-annotation
+annotation — it is still private to the type checker, which is what
+[safe variance](safe-variance.md) rests on, but nothing hides it at runtime
 
 ## `late`
 

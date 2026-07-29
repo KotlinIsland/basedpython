@@ -173,8 +173,12 @@ def _helper(): ...
 - `private` strips the keyword and renames the symbol with a leading underscore
     at the definition site *and* every same-module call site. it is excluded from
     `__all__` even when no `export`/`public` declarations exist
-- visibility keywords are module-level only. inside a class they are stripped
-    without renaming
+- inside a class body only `private` means anything — `export`/`public` are
+    stripped. what `private` renames depends on the member: a `private def` is
+    name-mangled (`__helper`), a `private` [property](properties.md) becomes `_x`
+    with `__x` storage, and a `private` attribute keeps its name. either way the
+    member is private to the type checker, which is what
+    [safe variance](safe-variance.md) rests on
 
 ## inlay hints
 

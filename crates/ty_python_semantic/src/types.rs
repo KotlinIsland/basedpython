@@ -60,6 +60,7 @@ use crate::place::{
     DefinedPlace, Definedness, Place, PlaceAndQualifiers, Provenance, TypeOrigin,
     builtins_module_scope, imported_symbol, known_module_symbol, place_from_bindings,
 };
+use crate::semantic_model::NameKind;
 use crate::suppression::check_suppressions;
 use crate::types::bound_super::BoundSuperType;
 use crate::types::call::bind::ConstructorCallableKind;
@@ -8837,7 +8838,7 @@ impl std::fmt::Display for DynamicType<'_> {
 bitflags! {
     /// Type qualifiers that appear in an annotation expression.
     #[derive(Copy, Clone, Debug, Eq, PartialEq, Default, Hash)]
-    pub struct TypeQualifiers: u8 {
+    pub struct TypeQualifiers: u16 {
         /// `typing.ClassVar`
         const CLASS_VAR = 1 << 0;
         /// `typing.Final`
@@ -8858,6 +8859,10 @@ bitflags! {
         /// `__getattr__` function. We need this in order to implement precedence of submodules
         /// over module-level `__getattr__`, for compatibility with other type checkers.
         const FROM_MODULE_GETATTR = 1 << 7;
+        /// A non-standard type qualifier for the basedpython `private` member keyword.
+        /// A private member is invisible to a widened view of its class, which is what
+        /// makes a mutable field under a covariant type parameter sound.
+        const PRIVATE = 1 << 8;
     }
 }
 
@@ -8889,9 +8894,42 @@ impl TypeQualifiers {
     /// Non-standard qualifiers are internal implementation details like
     /// `IMPLICIT_INSTANCE_ATTRIBUTE` and `FROM_MODULE_GETATTR`.
     pub fn is_non_standard(self) -> bool {
-        const NON_STANDARD: TypeQualifiers =
-            TypeQualifiers::IMPLICIT_INSTANCE_ATTRIBUTE.union(TypeQualifiers::FROM_MODULE_GETATTR);
+        const NON_STANDARD: TypeQualifiers = TypeQualifiers::IMPLICIT_INSTANCE_ATTRIBUTE
+            .union(TypeQualifiers::FROM_MODULE_GETATTR)
+            .union(TypeQualifiers::PRIVATE);
         self.intersects(NON_STANDARD)
+    }
+}
+
+/// basedpython: whether the class member `name`, declared with `qualifiers` and of type
+/// `ty`, is *private* — invisible to any observer outside the class.
+///
+/// Privacy is what makes variance safe: an invisible member cannot be used to tell two
+/// specializations of its class apart, so it neither constrains the class's variance nor
+/// may be reached through a widened view of it. A dunder is *not* private — it is part of
+/// the public protocol surface.
+pub(crate) fn is_private_member<'db>(
+    db: &'db dyn Db,
+    name: &str,
+    qualifiers: TypeQualifiers,
+    ty: Type<'db>,
+) -> bool {
+    if qualifiers.contains(TypeQualifiers::PRIVATE)
+        || matches!(NameKind::classify(name), NameKind::Sunder)
+    {
+        return true;
+    }
+    // a `private def` carries no qualifier: the keyword parses as a synthetic decorator,
+    // so its privacy is recorded on the function rather than on the declaration. reached
+    // off an instance the member is already bound, so unwrap that too
+    match ty {
+        Type::FunctionLiteral(function) => {
+            function.has_known_decorator(db, FunctionDecorators::PRIVATE)
+        }
+        Type::BoundMethod(method) => method
+            .function(db)
+            .has_known_decorator(db, FunctionDecorators::PRIVATE),
+        _ => false,
     }
 }
 

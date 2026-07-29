@@ -52,7 +52,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             return false;
         }
 
-        let requirement = attribute_write_requirement(self.db(), object_ty, attribute);
+        // basedpython safe variance: a private member does not specialize, so the write is
+        // required against the class's own view of it. The only value a widened receiver
+        // can supply soundly is a real `T` — not whatever it claims the parameter is.
+        // Everything else about the write (`Final`, `ClassVar`, descriptors, a property
+        // setter) is unchanged, which is why this swaps the receiver rather than
+        // short-circuiting the requirement
+        let write_receiver = super::private_member_view(db, object_ty, attribute)
+            .map_or(object_ty, |view| view.own_view);
+
+        let requirement = attribute_write_requirement(self.db(), write_receiver, attribute);
         let mut evaluator = AssignmentAttributeWriteEvaluator {
             builder: self,
             target,
