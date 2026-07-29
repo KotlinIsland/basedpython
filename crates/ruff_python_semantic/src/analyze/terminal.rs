@@ -379,7 +379,8 @@ fn is_wildcard(pattern: &ast::MatchCase) -> bool {
             | ast::Pattern::MatchStar(_) => false,
 
             ast::Pattern::MatchAs(ast::PatternMatchAs { pattern, .. }) => pattern.is_none(),
-            ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => {
+            ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. })
+            | ast::Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
                 patterns.iter().all(is_wildcard_pattern)
             }
         }

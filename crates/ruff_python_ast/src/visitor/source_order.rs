@@ -501,6 +501,7 @@ where
             Pattern::MatchStar(pattern) => pattern.visit_source_order(visitor),
             Pattern::MatchAs(pattern) => pattern.visit_source_order(visitor),
             Pattern::MatchOr(pattern) => pattern.visit_source_order(visitor),
+            Pattern::MatchAnd(pattern) => pattern.visit_source_order(visitor),
         }
     }
     visitor.leave_node(node);

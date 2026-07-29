@@ -1,0 +1,138 @@
+---
+source: crates/ruff_python_parser/tests/fixtures.rs
+input_file: crates/ruff_python_parser/resources/inline/err/param_destructure_in_python_file.py
+---
+## AST
+
+```
+Module(
+    ModModule {
+        node_index: NodeIndex(None),
+        range: 0..33,
+        body: [
+            FunctionDef(
+                StmtFunctionDef {
+                    node_index: NodeIndex(None),
+                    range: 0..13,
+                    is_async: false,
+                    decorator_list: [],
+                    name: Identifier {
+                        id: Name("foo"),
+                        range: 4..7,
+                        node_index: NodeIndex(None),
+                    },
+                    type_params: None,
+                    parameters: Parameters {
+                        range: 7..13,
+                        node_index: NodeIndex(None),
+                        posonlyargs: [],
+                        args: [
+                            ParameterWithDefault {
+                                range: 8..13,
+                                node_index: NodeIndex(None),
+                                parameter: Parameter {
+                                    range: 8..13,
+                                    node_index: NodeIndex(None),
+                                    name: Identifier {
+                                        id: Name("Point"),
+                                        range: 8..13,
+                                        node_index: NodeIndex(None),
+                                    },
+                                    pattern: None,
+                                    annotation: None,
+                                    is_context: false,
+                                },
+                                default: None,
+                            },
+                        ],
+                        vararg: None,
+                        kwonlyargs: [],
+                        kwarg: None,
+                    },
+                    returns: None,
+                    raises: None,
+                    body: [],
+                    is_trailing_lambda: false,
+                    is_asserts_return: false,
+                },
+            ),
+            AnnAssign(
+                StmtAnnAssign {
+                    node_index: NodeIndex(None),
+                    range: 13..26,
+                    target: Tuple(
+                        ExprTuple {
+                            node_index: NodeIndex(None),
+                            range: 13..19,
+                            elts: [
+                                Name(
+                                    ExprName {
+                                        node_index: NodeIndex(None),
+                                        range: 14..15,
+                                        id: Name("x"),
+                                        ctx: Store,
+                                    },
+                                ),
+                                Name(
+                                    ExprName {
+                                        node_index: NodeIndex(None),
+                                        range: 17..18,
+                                        id: Name("y"),
+                                        ctx: Store,
+                                    },
+                                ),
+                            ],
+                            ctx: Store,
+                            parenthesized: true,
+                            is_anon_named_tuple: false,
+                            is_anon_named_tuple_value: false,
+                            callable_shape: None,
+                            is_parameter_shape: false,
+                        },
+                    ),
+                    annotation: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 21..26,
+                            id: Name("Point"),
+                            ctx: Load,
+                        },
+                    ),
+                    value: None,
+                    simple: false,
+                },
+            ),
+            Expr(
+                StmtExpr {
+                    node_index: NodeIndex(None),
+                    range: 29..32,
+                    value: EllipsisLiteral(
+                        ExprEllipsisLiteral {
+                            node_index: NodeIndex(None),
+                            range: 29..32,
+                        },
+                    ),
+                },
+            ),
+        ],
+    },
+)
+```
+## Errors
+
+  |
+1 | def foo(Point(x, y): Point): ...
+  |              ^ Syntax Error: Expected `)`, found `(`
+  |
+
+
+  |
+1 | def foo(Point(x, y): Point): ...
+  |                           ^ Syntax Error: Expected a statement
+  |
+
+
+  |
+1 | def foo(Point(x, y): Point): ...
+  |                            ^ Syntax Error: Expected a statement
+  |

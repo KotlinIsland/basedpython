@@ -1,0 +1,163 @@
+---
+source: crates/ruff_python_parser/tests/fixtures.rs
+input_file: crates/ruff_python_parser/resources/inline/err/multiple_assignment_in_let_pattern.py
+---
+## AST
+
+```
+Module(
+    ModModule {
+        node_index: NodeIndex(None),
+        range: 0..42,
+        body: [
+            Let(
+                StmtLet {
+                    node_index: NodeIndex(None),
+                    range: 0..41,
+                    pattern: MatchAnd(
+                        PatternMatchAnd {
+                            node_index: NodeIndex(None),
+                            range: 4..31,
+                            patterns: [
+                                MatchClass(
+                                    PatternMatchClass {
+                                        node_index: NodeIndex(None),
+                                        range: 4..15,
+                                        cls: Name(
+                                            ExprName {
+                                                node_index: NodeIndex(None),
+                                                range: 4..9,
+                                                id: Name("Point"),
+                                                ctx: Load,
+                                            },
+                                        ),
+                                        arguments: PatternArguments {
+                                            range: 9..15,
+                                            node_index: NodeIndex(None),
+                                            patterns: [
+                                                MatchAs(
+                                                    PatternMatchAs {
+                                                        node_index: NodeIndex(None),
+                                                        range: 10..11,
+                                                        pattern: None,
+                                                        name: Some(
+                                                            Identifier {
+                                                                id: Name("x"),
+                                                                range: 10..11,
+                                                                node_index: NodeIndex(None),
+                                                            },
+                                                        ),
+                                                    },
+                                                ),
+                                                MatchAs(
+                                                    PatternMatchAs {
+                                                        node_index: NodeIndex(None),
+                                                        range: 13..14,
+                                                        pattern: None,
+                                                        name: Some(
+                                                            Identifier {
+                                                                id: Name("y"),
+                                                                range: 13..14,
+                                                                node_index: NodeIndex(None),
+                                                            },
+                                                        ),
+                                                    },
+                                                ),
+                                            ],
+                                            keywords: [],
+                                        },
+                                    },
+                                ),
+                                MatchClass(
+                                    PatternMatchClass {
+                                        node_index: NodeIndex(None),
+                                        range: 20..31,
+                                        cls: Name(
+                                            ExprName {
+                                                node_index: NodeIndex(None),
+                                                range: 20..25,
+                                                id: Name("Point"),
+                                                ctx: Load,
+                                            },
+                                        ),
+                                        arguments: PatternArguments {
+                                            range: 25..31,
+                                            node_index: NodeIndex(None),
+                                            patterns: [
+                                                MatchAs(
+                                                    PatternMatchAs {
+                                                        node_index: NodeIndex(None),
+                                                        range: 26..27,
+                                                        pattern: None,
+                                                        name: Some(
+                                                            Identifier {
+                                                                id: Name("x"),
+                                                                range: 26..27,
+                                                                node_index: NodeIndex(None),
+                                                            },
+                                                        ),
+                                                    },
+                                                ),
+                                                MatchAs(
+                                                    PatternMatchAs {
+                                                        node_index: NodeIndex(None),
+                                                        range: 29..30,
+                                                        pattern: None,
+                                                        name: Some(
+                                                            Identifier {
+                                                                id: Name("y"),
+                                                                range: 29..30,
+                                                                node_index: NodeIndex(None),
+                                                            },
+                                                        ),
+                                                    },
+                                                ),
+                                            ],
+                                            keywords: [],
+                                        },
+                                    },
+                                ),
+                            ],
+                        },
+                    ),
+                    value: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 35..41,
+                            id: Name("origin"),
+                            ctx: Load,
+                        },
+                    ),
+                    orelse: [],
+                },
+            ),
+        ],
+    },
+)
+```
+## Errors
+
+  |
+1 | let Point(x, y) and Point(x, y) := origin
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^ Syntax Error: an `and` pattern is basedpython syntax and is not valid in .py files
+  |
+
+
+  |
+1 | let Point(x, y) and Point(x, y) := origin
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ Syntax Error: a destructuring `let` is not valid in .py files
+  |
+
+
+## Semantic Syntax Errors
+
+  |
+1 | let Point(x, y) and Point(x, y) := origin
+  |                           ^ Syntax Error: multiple assignments to name `x` in pattern
+  |
+
+
+  |
+1 | let Point(x, y) and Point(x, y) := origin
+  |                              ^ Syntax Error: multiple assignments to name `y` in pattern
+  |

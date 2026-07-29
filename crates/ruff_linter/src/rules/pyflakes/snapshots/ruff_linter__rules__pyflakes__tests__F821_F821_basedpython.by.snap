@@ -156,3 +156,13 @@ F821 Undefined name `Bleu`
 125 | missing: Colour = Bleu  # F821
     |                   ^^^^
     |
+
+F821 Undefined name `UndefinedPattern`
+   --> F821_basedpython.by:168:12
+    |
+166 | # an unbound name inside a pattern is still reported
+167 | def undefined_in_pattern(value: object) -> None:
+168 |     if let UndefinedPattern(captured) := value:  # F821
+    |            ^^^^^^^^^^^^^^^^
+169 |         print(captured)
+    |

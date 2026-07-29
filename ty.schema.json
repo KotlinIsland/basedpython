@@ -1665,6 +1665,16 @@
             }
           ]
         },
+        "refutable-destructuring": {
+          "title": "detects a destructuring binder whose pattern may not match, with nothing to handle the failure",
+          "description": "## What it does\n\nChecks for a basedpython destructuring binder whose pattern may not match the\nvalue it destructures, with nothing to handle the failure.\n\n## Why is this bad?\n\nA destructuring binder — a `let` statement, a `for` target, a `with` item, a\nparameter — binds its captures unconditionally. A pattern that does not match\nleaves them unbound, which is a `NameError` at the first use.\n\nA `let` statement can handle the failure with an `else` block, but only if the\nblock diverges: control that falls out of it reaches the same unbound captures.\n\n## Examples\n\n```by\ndef f(value: int | str) -> int:\n    let int(n) := value  # error: [refutable-destructuring]\n    return n\n\ndef g(value: int | str) -> int:\n    let int(n) := value else:  # error: [refutable-destructuring]\n        print(\"not an int\")\n    return n  # error: [possibly-unresolved-reference]\n```\n\nUse a pattern that matches every value of the type, or an `else` block that\ndiverges:\n\n```by\ndef f(value: int | str) -> int:\n    let int(n) := value else:\n        return 0\n    return n\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "reified-classmethod": {
           "title": "detects classmethods with reified type parameters",
           "description": "## What it does\nChecks for classmethods whose type parameters are reified.\n\n## Why is this bad?\nA type parameter referenced in a value position is *reified*: the\nspecialization step (`f[int]`) becomes a runtime operation that\nrebuilds the function's closure with the type arguments. The\nclassmethod binding hides the underlying function behind an opaque\nbound method, so a reified classmethod can be neither specialized\nnor called at runtime.\n\n## Example\n\n```by\nclass C:\n    @classmethod\n    def make[T](cls) -> object:\n        return T()  # error: `T` is reified, but `make` is a classmethod\n```",

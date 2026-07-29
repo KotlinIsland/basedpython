@@ -816,6 +816,7 @@ impl SemanticSyntaxContext for Checker<'_> {
             | SemanticSyntaxErrorKind::LazyFutureImport
             | SemanticSyntaxErrorKind::DuplicateTypeParameter
             | SemanticSyntaxErrorKind::MultipleCaseAssignment(_)
+            | SemanticSyntaxErrorKind::AndPatternInAlternative
             | SemanticSyntaxErrorKind::MultipleStarredNamesInSequencePattern
             | SemanticSyntaxErrorKind::IrrefutableCasePattern(_)
             | SemanticSyntaxErrorKind::SingleStarredAssignment
@@ -1642,12 +1643,17 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 range: _,
                 is_async: _,
                 target,
+                pattern,
                 iter,
                 body,
                 orelse,
             }) => {
                 self.visit_expr(iter);
                 self.visit_expr(target);
+                // basedpython: a destructuring loop binds the pattern's captures
+                if let Some(pattern) = pattern {
+                    self.visit_pattern(pattern);
+                }
                 self.visit_body(body);
                 let flags_snapshot = self.semantic.flags;
                 self.semantic.flags |= SemanticModelFlags::ORELSE;
@@ -2436,6 +2442,13 @@ impl<'a> Visitor<'a> for Checker<'a> {
             BindingKind::Argument,
             BindingFlags::empty(),
         );
+
+        // Step 2: Traversal
+        // basedpython: a destructuring parameter binds its pattern's captures in
+        // the same scope the parameter itself is bound in
+        if let Some(pattern) = parameter.pattern.as_deref() {
+            self.visit_pattern(pattern);
+        }
 
         // Step 4: Analysis
         analyze::parameter(parameter, self);

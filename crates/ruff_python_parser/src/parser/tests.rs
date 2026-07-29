@@ -1,7 +1,7 @@
 use ruff_python_ast::helpers::{UseSiteVariance, use_site_variance_marker};
 use ruff_python_ast::{
-    Expr, InterpolatedStringElement, IpyEscapeKind, ModModule, Number, Operator, Stmt, TypeParam,
-    UnaryOp,
+    Expr, InterpolatedStringElement, IpyEscapeKind, ModModule, Number, Operator, Pattern, Stmt,
+    TypeParam, UnaryOp, is_destructure_binder,
 };
 use ruff_text_size::Ranged;
 
@@ -2398,4 +2398,243 @@ fn basedpython_from_export_rejected_in_py() {
             parsed.errors()
         );
     }
+}
+
+#[test]
+fn basedpython_let_statement_binds_a_pattern() {
+    let parsed = parse_basedpython_module("let Point(x, y) := origin\n");
+    let [Stmt::Let(let_stmt)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single let statement");
+    };
+    assert!(
+        matches!(&*let_stmt.pattern, Pattern::MatchClass(_)),
+        "the pattern is the one written"
+    );
+    assert!(
+        matches!(&*let_stmt.value, Expr::Name(name) if name.id.as_str() == "origin"),
+        "the value is the subject the pattern matches against"
+    );
+    assert!(let_stmt.orelse.is_empty(), "no `else` block was written");
+}
+
+#[test]
+fn basedpython_let_statement_takes_an_else_block() {
+    let parsed = parse_basedpython_module("let int(n) := v else:\n    return\n");
+    let [Stmt::Let(let_stmt)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single let statement");
+    };
+    assert_eq!(let_stmt.orelse.len(), 1, "the `else` block was parsed");
+}
+
+/// A `let` statement is a simple statement until it has an `else` block, so what
+/// follows it on the next line is an ordinary statement either way
+#[test]
+fn basedpython_let_statement_ends_where_it_should() {
+    for source in [
+        "let int(n) := v\nprint(n)\n",
+        "let int(n) := v else:\n    raise ValueError\nprint(n)\n",
+    ] {
+        let parsed = parse_basedpython_module(source);
+        assert_eq!(
+            parsed.syntax().body.len(),
+            2,
+            "expected the `let` and the `print` for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn basedpython_let_is_still_an_identifier() {
+    // `let` only introduces a destructuring when a complete pattern followed by
+    // `:=` parses; the declaration form and the plain name are untouched
+    for source in [
+        "let = 5\n",
+        "let(3)\n",
+        "print(let)\n",
+        "let x = 1\n",
+        "let x: int = 1\n",
+    ] {
+        let parsed = parse_basedpython_module(source);
+        assert!(
+            !matches!(parsed.syntax().body.as_slice(), [Stmt::Let(_)]),
+            "`let` should not introduce a destructuring in `{source}`"
+        );
+    }
+}
+
+#[test]
+fn basedpython_destructuring_binders_carry_a_pattern() {
+    let parsed = parse_basedpython_module(
+        "for Point(x, y) in points:\n    pass\nwith ctx() as Point(a, b):\n    pass\n",
+    );
+    let [Stmt::For(for_stmt), Stmt::With(with_stmt)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a for and a with statement");
+    };
+    assert!(for_stmt.pattern.is_some(), "the loop destructures");
+    assert!(
+        matches!(&*for_stmt.target, Expr::Name(name) if is_destructure_binder(&name.id)),
+        "the target is the pattern's binder"
+    );
+    let [item] = with_stmt.items.as_slice() else {
+        panic!("expected a single with item");
+    };
+    assert!(item.pattern.is_some(), "the item destructures");
+    assert!(
+        matches!(item.optional_vars.as_deref(), Some(Expr::Name(name)) if is_destructure_binder(&name.id)),
+        "the target is the pattern's binder"
+    );
+}
+
+/// Only a binder that cannot be assigned to is reparsed as a pattern, so every
+/// loop and `with` item python accepts keeps its meaning
+#[test]
+fn basedpython_ordinary_binders_are_untouched() {
+    for source in [
+        "for x in xs:\n    pass\n",
+        "for a, b in pairs:\n    pass\n",
+        "for [a, b] in pairs:\n    pass\n",
+        "for obj.attr in xs:\n    pass\n",
+        "for xs[0] in ys:\n    pass\n",
+        "with ctx() as x:\n    pass\n",
+        "with ctx() as (a, b):\n    pass\n",
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let carries_pattern = match parsed.syntax().body.as_slice() {
+            [Stmt::For(for_stmt)] => for_stmt.pattern.is_some(),
+            [Stmt::With(with_stmt)] => with_stmt.items.iter().any(|item| item.pattern.is_some()),
+            _ => panic!("expected a single statement for `{source}`"),
+        };
+        assert!(!carries_pattern, "`{source}` binds a target, not a pattern");
+    }
+}
+
+#[test]
+fn basedpython_parameters_destructure() {
+    let parsed = parse_basedpython_module("def f(a: int, Point(x, y): Point): pass\n");
+    let [Stmt::FunctionDef(function)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single function");
+    };
+    let [plain, destructuring] = function.parameters.args.as_slice() else {
+        panic!("expected two parameters");
+    };
+    assert!(
+        plain.parameter.pattern.is_none(),
+        "an ordinary parameter carries no pattern"
+    );
+    assert!(
+        destructuring.parameter.pattern.is_some(),
+        "the second parameter destructures"
+    );
+    assert!(
+        is_destructure_binder(&destructuring.parameter.name.id),
+        "its name is the pattern's binder"
+    );
+}
+
+/// A parameter named with a soft keyword is a name, not a capture pattern
+#[test]
+fn basedpython_ordinary_parameters_are_untouched() {
+    for source in [
+        "def f(x: int): pass\n",
+        "def f(match: int): pass\n",
+        "def f(type, case): pass\n",
+        "def f(x: int = 1): pass\n",
+        "def f(*args: int, **kwargs: str): pass\n",
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::FunctionDef(function)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single function for `{source}`");
+        };
+        assert!(
+            function
+                .parameters
+                .iter()
+                .map(ruff_python_ast::AnyParameterRef::as_parameter)
+                .all(|parameter| parameter.pattern.is_none()),
+            "`{source}` names its parameters, it does not match them"
+        );
+    }
+}
+
+#[test]
+fn basedpython_destructuring_parameter_needs_an_annotation() {
+    let parsed = parse_basedpython_module_with_errors("def f(Point(x, y)): pass\n");
+    assert!(
+        parsed
+            .errors()
+            .iter()
+            .any(|error| error.to_string().contains("needs an annotation")),
+        "expected the missing-annotation error, got {:?}",
+        parsed.errors()
+    );
+}
+
+#[test]
+fn basedpython_and_pattern_binds_tighter_than_or() {
+    let parsed = parse_basedpython_module("match v:\n    case A() and B() | C():\n        pass\n");
+    let [Stmt::Match(match_stmt)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single match statement");
+    };
+    let [case] = match_stmt.cases.as_slice() else {
+        panic!("expected a single case");
+    };
+    let Pattern::MatchOr(or_pattern) = &case.pattern else {
+        panic!(
+            "expected `|` to be the outermost pattern, got {:?}",
+            case.pattern
+        );
+    };
+    assert!(
+        matches!(or_pattern.patterns.as_slice(), [Pattern::MatchAnd(_), _]),
+        "the first alternative is the conjunction"
+    );
+}
+
+#[test]
+fn basedpython_and_pattern_is_basedpython_only() {
+    let has_error = match parse(
+        "match v:\n    case A() and B():\n        pass\n",
+        ParseOptions::from(Mode::Module),
+    ) {
+        Ok(parsed) => !parsed.errors().is_empty(),
+        Err(_) => true,
+    };
+    assert!(has_error, "an `and` pattern should be a .py syntax error");
+}
+
+/// `if let P = v` is how rust spells this, so it is the first thing a reader
+/// coming from there types — and the error has to say so rather than fall apart
+/// at the `=`
+#[test]
+fn basedpython_destructuring_let_rejects_plain_equals() {
+    for source in [
+        "if let Point(x, y) = origin:\n    pass\n",
+        "let Point(x, y) = origin\n",
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert!(
+            parsed
+                .errors()
+                .iter()
+                .any(|error| error.to_string().contains("binds with `:=`, not `=`")),
+            "expected the `:=` error for `{source}`, got {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+/// every parameter of an `init(...)` becomes a field of the same name, which a
+/// pattern has none of
+#[test]
+fn basedpython_init_method_rejects_a_destructuring_parameter() {
+    let parsed = parse_basedpython_module_with_errors("class C:\n    init(Point(x, y): Point)\n");
+    assert!(
+        parsed.errors().iter().any(|error| {
+            error
+                .to_string()
+                .contains("not valid in an `init(...)` shorthand")
+        }),
+        "expected the init-shorthand error, got {:?}",
+        parsed.errors()
+    );
 }

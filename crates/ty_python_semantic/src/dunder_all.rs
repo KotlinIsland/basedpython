@@ -390,6 +390,7 @@ impl<'db> StatementVisitor<'db> for DunderAllNamesCollector<'db> {
             },
 
             ast::Stmt::For(..)
+            | ast::Stmt::Let(..)
             | ast::Stmt::While(..)
             | ast::Stmt::With(..)
             | ast::Stmt::Match(..)

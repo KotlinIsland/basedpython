@@ -38,6 +38,7 @@ Module(
                                         range: 8..9,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: None,
                                     is_context: false,
                                 },
@@ -54,6 +55,7 @@ Module(
                                         range: 11..12,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: None,
                                     is_context: false,
                                 },
@@ -79,6 +81,7 @@ Module(
                                     range: 18..19,
                                     node_index: NodeIndex(None),
                                 },
+                                pattern: None,
                                 annotation: None,
                                 is_context: false,
                             },
@@ -95,6 +98,7 @@ Module(
                                         range: 21..22,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: None,
                                     is_context: false,
                                 },
@@ -111,6 +115,7 @@ Module(
                                         range: 24..25,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: Some(
                                         Name(
                                             ExprName {
@@ -135,6 +140,7 @@ Module(
                                     range: 34..35,
                                     node_index: NodeIndex(None),
                                 },
+                                pattern: None,
                                 annotation: None,
                                 is_context: false,
                             },

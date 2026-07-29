@@ -165,6 +165,7 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
             }
             ast::Pattern::MatchSequence(_)
             | ast::Pattern::MatchOr(_)
+            | ast::Pattern::MatchAnd(_)
             | ast::Pattern::MatchClass(_) => {
                 walk_pattern(self, pattern);
             }
@@ -298,6 +299,7 @@ impl<'db> Visitor<'db> for ExportFinder<'db> {
             | ast::Stmt::Try(_)
             | ast::Stmt::Expr(_)
             | ast::Stmt::For(_)
+            | ast::Stmt::Let(_)
             | ast::Stmt::Assign(_)
             | ast::Stmt::Match(_) => walk_stmt(self, stmt),
 

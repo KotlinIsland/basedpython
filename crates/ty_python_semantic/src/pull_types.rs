@@ -82,6 +82,7 @@ impl SourceOrderVisitor<'_> for PullTypesVisitor<'_> {
             | ast::Stmt::TypeAlias(_)
             | ast::Stmt::While(_)
             | ast::Stmt::If(_)
+            | ast::Stmt::Let(_)
             | ast::Stmt::Match(_)
             | ast::Stmt::Raise(_)
             | ast::Stmt::Try(_)

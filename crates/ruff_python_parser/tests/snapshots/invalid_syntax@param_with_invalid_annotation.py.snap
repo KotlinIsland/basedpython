@@ -38,6 +38,7 @@ Module(
                                         range: 8..11,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: Some(
                                         Starred(
                                             ExprStarred {
@@ -112,6 +113,7 @@ Module(
                                         range: 32..35,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: Some(
                                         Yield(
                                             ExprYield {
@@ -187,6 +189,7 @@ Module(
                                         range: 61..64,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: Some(
                                         Name(
                                             ExprName {
@@ -212,6 +215,7 @@ Module(
                                         range: 71..74,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: None,
                                     is_context: false,
                                 },

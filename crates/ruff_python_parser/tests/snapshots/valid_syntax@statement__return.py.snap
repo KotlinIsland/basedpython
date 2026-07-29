@@ -364,6 +364,7 @@ Module(
                                                         range: 162..163,
                                                         node_index: NodeIndex(None),
                                                     },
+                                                    pattern: None,
                                                     annotation: None,
                                                     is_context: false,
                                                 },

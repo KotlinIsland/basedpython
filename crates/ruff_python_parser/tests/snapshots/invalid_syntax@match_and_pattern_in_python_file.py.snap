@@ -1,0 +1,101 @@
+---
+source: crates/ruff_python_parser/tests/fixtures.rs
+input_file: crates/ruff_python_parser/resources/inline/err/match_and_pattern_in_python_file.py
+---
+## AST
+
+```
+Module(
+    ModModule {
+        node_index: NodeIndex(None),
+        range: 0..48,
+        body: [
+            Match(
+                StmtMatch {
+                    node_index: NodeIndex(None),
+                    range: 0..47,
+                    subject: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 6..7,
+                            id: Name("x"),
+                            ctx: Load,
+                        },
+                    ),
+                    cases: [
+                        MatchCase {
+                            range: 13..47,
+                            node_index: NodeIndex(None),
+                            pattern: MatchAnd(
+                                PatternMatchAnd {
+                                    node_index: NodeIndex(None),
+                                    range: 18..33,
+                                    patterns: [
+                                        MatchClass(
+                                            PatternMatchClass {
+                                                node_index: NodeIndex(None),
+                                                range: 18..23,
+                                                cls: Name(
+                                                    ExprName {
+                                                        node_index: NodeIndex(None),
+                                                        range: 18..21,
+                                                        id: Name("int"),
+                                                        ctx: Load,
+                                                    },
+                                                ),
+                                                arguments: PatternArguments {
+                                                    range: 21..23,
+                                                    node_index: NodeIndex(None),
+                                                    patterns: [],
+                                                    keywords: [],
+                                                },
+                                            },
+                                        ),
+                                        MatchClass(
+                                            PatternMatchClass {
+                                                node_index: NodeIndex(None),
+                                                range: 28..33,
+                                                cls: Name(
+                                                    ExprName {
+                                                        node_index: NodeIndex(None),
+                                                        range: 28..31,
+                                                        id: Name("str"),
+                                                        ctx: Load,
+                                                    },
+                                                ),
+                                                arguments: PatternArguments {
+                                                    range: 31..33,
+                                                    node_index: NodeIndex(None),
+                                                    patterns: [],
+                                                    keywords: [],
+                                                },
+                                            },
+                                        ),
+                                    ],
+                                },
+                            ),
+                            guard: None,
+                            body: [
+                                Pass(
+                                    StmtPass {
+                                        node_index: NodeIndex(None),
+                                        range: 43..47,
+                                    },
+                                ),
+                            ],
+                        },
+                    ],
+                },
+            ),
+        ],
+    },
+)
+```
+## Errors
+
+  |
+1 | match x:
+2 |     case int() and str():
+  |          ^^^^^^^^^^^^^^^ Syntax Error: an `and` pattern is basedpython syntax and is not valid in .py files
+3 |         pass
+  |

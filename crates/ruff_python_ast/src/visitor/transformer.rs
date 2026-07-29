@@ -229,6 +229,7 @@ pub fn walk_stmt<V: Transformer + ?Sized>(visitor: &V, stmt: &mut Stmt) {
         }
         Stmt::For(ast::StmtFor {
             target,
+            pattern,
             iter,
             body,
             orelse,
@@ -236,6 +237,9 @@ pub fn walk_stmt<V: Transformer + ?Sized>(visitor: &V, stmt: &mut Stmt) {
         }) => {
             visitor.visit_expr(iter);
             visitor.visit_expr(target);
+            if let Some(pattern) = pattern {
+                visitor.visit_pattern(pattern);
+            }
             visitor.visit_body(body);
             visitor.visit_body(orelse);
         }
@@ -248,6 +252,17 @@ pub fn walk_stmt<V: Transformer + ?Sized>(visitor: &V, stmt: &mut Stmt) {
         }) => {
             visitor.visit_expr(test);
             visitor.visit_body(body);
+            visitor.visit_body(orelse);
+        }
+        Stmt::Let(ast::StmtLet {
+            pattern,
+            value,
+            orelse,
+            range: _,
+            node_index: _,
+        }) => {
+            visitor.visit_expr(value);
+            visitor.visit_pattern(pattern);
             visitor.visit_body(orelse);
         }
         Stmt::If(ast::StmtIf {
@@ -769,6 +784,9 @@ pub fn walk_parameters<V: Transformer + ?Sized>(visitor: &V, parameters: &mut Pa
 }
 
 pub fn walk_parameter<V: Transformer + ?Sized>(visitor: &V, parameter: &mut Parameter) {
+    if let Some(pattern) = &mut parameter.pattern {
+        visitor.visit_pattern(pattern);
+    }
     if let Some(expr) = &mut parameter.annotation {
         visitor.visit_annotation(expr);
     }
@@ -782,6 +800,9 @@ pub fn walk_with_item<V: Transformer + ?Sized>(visitor: &V, with_item: &mut With
     visitor.visit_expr(&mut with_item.context_expr);
     if let Some(expr) = &mut with_item.optional_vars {
         visitor.visit_expr(expr);
+    }
+    if let Some(pattern) = &mut with_item.pattern {
+        visitor.visit_pattern(pattern);
     }
 }
 
@@ -880,7 +901,8 @@ pub fn walk_pattern<V: Transformer + ?Sized>(visitor: &V, pattern: &mut Pattern)
                 visitor.visit_pattern(pattern);
             }
         }
-        Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => {
+        Pattern::MatchOr(ast::PatternMatchOr { patterns, .. })
+        | Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
             for pattern in patterns {
                 visitor.visit_pattern(pattern);
             }

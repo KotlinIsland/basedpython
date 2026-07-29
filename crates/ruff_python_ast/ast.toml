@@ -183,6 +183,9 @@ This type differs from the original Python AST, as it collapses the synchronous 
 fields = [
   { name = "is_async", type = "bool" },
   { name = "target", type = "Expr" },
+  { name = "pattern", type = "Box<Pattern>?", doc = """basedpython: the pattern of a
+destructuring loop, `for <pattern> in <iter>:`. When set, `target` is the synthetic binder
+the pattern destructures (see [`destructure_binder_name`](crate::destructure_binder_name))""" },
   { name = "iter", type = "Expr" },
   { name = "body", type = "ThinVec<Stmt>" },
   { name = "orelse", type = "ThinVec<Stmt>" },
@@ -204,6 +207,24 @@ fields = [
   { name = "test", type = "Expr" },
   { name = "body", type = "ThinVec<Stmt>" },
   { name = "elif_else_clauses", type = "ElifElseClause*" },
+]
+
+[Stmt.nodes.StmtLet]
+doc = """basedpython destructuring statement: `let <pattern> := <subject>`, with an
+optional `else` block that runs when the pattern does not match.
+
+```by
+let Point(x, y) := origin
+let A(foo) := value else:
+    return None
+```
+
+Without an `else` block the pattern must be irrefutable for the subject's type.
+`orelse` is empty when the statement has no `else` block."""
+fields = [
+  { name = "pattern", type = "Box<Pattern>" },
+  { name = "value", type = "Expr" },
+  { name = "orelse", type = "ThinVec<Stmt>" },
 ]
 
 [Stmt.nodes.StmtWith]
@@ -751,6 +772,19 @@ fields = [
 
 [Pattern.nodes.PatternMatchOr]
 doc = "See also [MatchOr](https://docs.python.org/3/library/ast.html#ast.MatchOr)"
+fields = [{ name = "patterns", type = "Pattern*" }]
+
+[Pattern.nodes.PatternMatchAnd]
+doc = """basedpython conjunction pattern: `P and Q`, which matches when every
+one of its patterns matches, binding the captures of all of them.
+
+```by
+case Circle(r) and Shape(name=n): ...
+```
+
+`and` binds tighter than `|`, so `A() and B() | C()` is `(A() and B()) | C()`.
+CPython has no such pattern; it is lowered by matching the subject against each
+conjunct in turn."""
 fields = [{ name = "patterns", type = "Pattern*" }]
 
 [TypeParam]

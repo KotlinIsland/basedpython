@@ -42,6 +42,7 @@ Module(
                             ],
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -99,6 +100,7 @@ Module(
                             ],
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -154,6 +156,7 @@ Module(
                             ],
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -199,6 +202,7 @@ Module(
                             ),
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -244,6 +248,7 @@ Module(
                             ),
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -297,6 +302,7 @@ Module(
                             ),
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),

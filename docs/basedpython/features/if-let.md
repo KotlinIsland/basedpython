@@ -95,6 +95,10 @@ del _by_if_let_0
 only the headers are rewritten, so every body keeps its own source. `match` is
 python 3.10 syntax, so `if let` needs a target of 3.10 or later
 
+a clause takes any pattern [destructuring](destructuring.md) does, including an
+`and` pattern, and binds with `:=` for the reasons set out there — writing `=`
+is reported
+
 ## open questions
 
 - `while let` for loop-and-peel iteration

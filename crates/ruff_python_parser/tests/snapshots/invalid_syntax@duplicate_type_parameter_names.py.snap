@@ -147,6 +147,7 @@ Module(
                                         range: 35..36,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: Some(
                                         Name(
                                             ExprName {

@@ -1,0 +1,138 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/destructure.by
+---
+## Input
+```bython
+let Point(x, y) := origin
+
+let int(n) := value else:
+    raise ValueError
+
+let (first, second) := pair
+
+let {"key": found} := mapping
+
+let int() | str() as scalar := value
+
+let Point(x=px, y=py) := point  # trailing comment
+
+let VeryLongPatternName(first_capture, second_capture, third) := some_function_name(argument)
+
+let int(n) := some_extremely_long_function_name(argument_one, argument_two, arg_three) else:
+    return None
+
+for Point(x, y) in points:
+    print(x, y)
+
+for {"name": name} in records:
+    print(name)
+
+for Point(x, y) in some_extremely_long_function_name(argument_one, argument_two, arg):
+    pass
+
+async def f():
+    async for Point(x, y) in stream:
+        print(x)
+
+
+with ctx() as Point(x, y):
+    print(x, y)
+
+with first() as A(a), second() as B(b):
+    print(a, b)
+
+
+def positional(Point(x, y): Point) -> int:
+    return x + y
+
+
+def mixed(first: int, Point(x, y): Point, *, keyword: str = "") -> int:
+    return first + x + y
+
+
+def defaulted(Point(x, y): Point = ORIGIN) -> int:
+    return x
+
+
+match value:
+    case int() and 1:
+        pass
+    case Point(x, y) and Named(n):
+        pass
+    case A() and B() | C():
+        pass
+    case VeryLongPatternNameOne() and VeryLongPatternNameTwo() and VeryLongPatternThree():
+        pass
+```
+
+## Output
+```bython
+let Point(x, y) := origin
+
+let int(n) := value else:
+    raise ValueError
+
+let (first, second) := pair
+
+let {"key": found} := mapping
+
+let int() | str() as scalar := value
+
+let Point(x=px, y=py) := point  # trailing comment
+
+let VeryLongPatternName(first_capture, second_capture, third) := some_function_name(
+    argument
+)
+
+let int(n) := some_extremely_long_function_name(
+    argument_one, argument_two, arg_three
+) else:
+    return None
+
+for Point(x, y) in points:
+    print(x, y)
+
+for {"name": name} in records:
+    print(name)
+
+for Point(x, y) in some_extremely_long_function_name(argument_one, argument_two, arg):
+    pass
+
+
+async def f():
+    async for Point(x, y) in stream:
+        print(x)
+
+
+with ctx() as Point(x, y):
+    print(x, y)
+
+with first() as A(a), second() as B(b):
+    print(a, b)
+
+
+def positional(Point(x, y): Point) -> int:
+    return x + y
+
+
+def mixed(first: int, Point(x, y): Point, *, keyword: str = "") -> int:
+    return first + x + y
+
+
+def defaulted(Point(x, y): Point = ORIGIN) -> int:
+    return x
+
+
+match value:
+    case int() and 1:
+        pass
+    case Point(x, y) and Named(n):
+        pass
+    case A() and B() | C():
+        pass
+    case (
+        VeryLongPatternNameOne() and VeryLongPatternNameTwo() and VeryLongPatternThree()
+    ):
+        pass
+```

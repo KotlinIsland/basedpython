@@ -433,6 +433,7 @@ Module(
                                                                     range: 187..188,
                                                                     node_index: NodeIndex(None),
                                                                 },
+                                                                pattern: None,
                                                                 annotation: None,
                                                                 is_context: false,
                                                             },
@@ -596,6 +597,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -666,6 +668,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -916,6 +919,7 @@ Module(
                                                                         range: 382..383,
                                                                         node_index: NodeIndex(None),
                                                                     },
+                                                                    pattern: None,
                                                                     annotation: None,
                                                                     is_context: false,
                                                                 },

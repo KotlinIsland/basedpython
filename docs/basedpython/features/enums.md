@@ -175,7 +175,7 @@ equality is structural (two `Circle(2.0)` values compare equal), values are
 hashable (usable as dict keys / in sets) when every payload field is hashable,
 and `repr` reads as the construction form (`Shape.Circle(radius=2.0)`)
 
-see also: [destructuring with `if let`](if-let.md) (planned)
+see also: [destructuring with `if let`](if-let.md) and [destructuring](destructuring.md)
 
 ## prelude enums
 

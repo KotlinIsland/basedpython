@@ -1622,6 +1622,12 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 self.add_if_let_keyword(if_stmt.start(), if_stmt.pattern.as_deref());
                 walk_stmt(self, stmt);
             }
+            // basedpython: the `let` of a destructuring statement is read from
+            // the source the same way an `if let` clause's is
+            ast::Stmt::Let(let_stmt) => {
+                self.add_if_let_keyword(let_stmt.start(), Some(&let_stmt.pattern));
+                walk_stmt(self, stmt);
+            }
             _ => {
                 // For all other statement types, let the default visitor handle them
                 walk_stmt(self, stmt);

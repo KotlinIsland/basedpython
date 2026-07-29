@@ -76,6 +76,9 @@ pub(crate) fn yield_in_for_loop(checker: &Checker, stmt_for: &ast::StmtFor) {
 
     let ast::StmtFor {
         target,
+        // a destructuring loop's target is a synthetic binder the source never
+        // wrote, and neither rule reads through to the pattern's captures
+        pattern: _,
         iter,
         body,
         orelse,

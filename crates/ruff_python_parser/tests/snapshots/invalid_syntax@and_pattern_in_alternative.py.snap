@@ -1,0 +1,150 @@
+---
+source: crates/ruff_python_parser/tests/fixtures.rs
+input_file: crates/ruff_python_parser/resources/inline/err/and_pattern_in_alternative.py
+---
+## AST
+
+```
+Module(
+    ModModule {
+        node_index: NodeIndex(None),
+        range: 0..47,
+        body: [
+            Match(
+                StmtMatch {
+                    node_index: NodeIndex(None),
+                    range: 0..46,
+                    subject: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 6..7,
+                            id: Name("x"),
+                            ctx: Load,
+                        },
+                    ),
+                    cases: [
+                        MatchCase {
+                            range: 13..46,
+                            node_index: NodeIndex(None),
+                            pattern: MatchOr(
+                                PatternMatchOr {
+                                    node_index: NodeIndex(None),
+                                    range: 18..41,
+                                    patterns: [
+                                        MatchClass(
+                                            PatternMatchClass {
+                                                node_index: NodeIndex(None),
+                                                range: 18..23,
+                                                cls: Name(
+                                                    ExprName {
+                                                        node_index: NodeIndex(None),
+                                                        range: 18..21,
+                                                        id: Name("int"),
+                                                        ctx: Load,
+                                                    },
+                                                ),
+                                                arguments: PatternArguments {
+                                                    range: 21..23,
+                                                    node_index: NodeIndex(None),
+                                                    patterns: [],
+                                                    keywords: [],
+                                                },
+                                            },
+                                        ),
+                                        MatchAnd(
+                                            PatternMatchAnd {
+                                                node_index: NodeIndex(None),
+                                                range: 27..40,
+                                                patterns: [
+                                                    MatchClass(
+                                                        PatternMatchClass {
+                                                            node_index: NodeIndex(None),
+                                                            range: 27..32,
+                                                            cls: Name(
+                                                                ExprName {
+                                                                    node_index: NodeIndex(None),
+                                                                    range: 27..30,
+                                                                    id: Name("str"),
+                                                                    ctx: Load,
+                                                                },
+                                                            ),
+                                                            arguments: PatternArguments {
+                                                                range: 30..32,
+                                                                node_index: NodeIndex(None),
+                                                                patterns: [],
+                                                                keywords: [],
+                                                            },
+                                                        },
+                                                    ),
+                                                    MatchValue(
+                                                        PatternMatchValue {
+                                                            node_index: NodeIndex(None),
+                                                            range: 37..40,
+                                                            value: StringLiteral(
+                                                                ExprStringLiteral {
+                                                                    node_index: NodeIndex(None),
+                                                                    range: 37..40,
+                                                                    value: StringLiteralValue {
+                                                                        inner: Single(
+                                                                            StringLiteral {
+                                                                                range: 37..40,
+                                                                                node_index: NodeIndex(None),
+                                                                                value: "x",
+                                                                                flags: StringLiteralFlags {
+                                                                                    quote_style: Double,
+                                                                                    prefix: Empty,
+                                                                                    triple_quoted: false,
+                                                                                    unclosed: false,
+                                                                                },
+                                                                            },
+                                                                        ),
+                                                                    },
+                                                                },
+                                                            ),
+                                                        },
+                                                    ),
+                                                ],
+                                            },
+                                        ),
+                                    ],
+                                },
+                            ),
+                            guard: None,
+                            body: [
+                                Expr(
+                                    StmtExpr {
+                                        node_index: NodeIndex(None),
+                                        range: 43..46,
+                                        value: EllipsisLiteral(
+                                            ExprEllipsisLiteral {
+                                                node_index: NodeIndex(None),
+                                                range: 43..46,
+                                            },
+                                        ),
+                                    },
+                                ),
+                            ],
+                        },
+                    ],
+                },
+            ),
+        ],
+    },
+)
+```
+## Errors
+
+  |
+1 | match x:
+2 |     case int() | (str() and "x"): ...
+  |                   ^^^^^^^^^^^^^ Syntax Error: an `and` pattern is basedpython syntax and is not valid in .py files
+  |
+
+
+## Semantic Syntax Errors
+
+  |
+1 | match x:
+2 |     case int() | (str() and "x"): ...
+  |                   ^^^^^^^^^^^^^ Syntax Error: an `and` pattern cannot be written inside an alternative of a `|` pattern
+  |

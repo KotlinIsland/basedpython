@@ -237,6 +237,11 @@ pub struct PatternMatchOr<'a> {
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
+pub struct PatternMatchAnd<'a> {
+    patterns: Vec<ComparablePattern<'a>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
 pub enum ComparablePattern<'a> {
     MatchValue(PatternMatchValue<'a>),
     MatchSingleton(PatternMatchSingleton),
@@ -246,6 +251,7 @@ pub enum ComparablePattern<'a> {
     MatchStar(PatternMatchStar<'a>),
     MatchAs(PatternMatchAs<'a>),
     MatchOr(PatternMatchOr<'a>),
+    MatchAnd(PatternMatchAnd<'a>),
 }
 
 impl<'a> From<&'a ast::Pattern> for ComparablePattern<'a> {
@@ -295,6 +301,11 @@ impl<'a> From<&'a ast::Pattern> for ComparablePattern<'a> {
             }
             ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => {
                 Self::MatchOr(PatternMatchOr {
+                    patterns: patterns.iter().map(Into::into).collect(),
+                })
+            }
+            ast::Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
+                Self::MatchAnd(PatternMatchAnd {
                     patterns: patterns.iter().map(Into::into).collect(),
                 })
             }
@@ -1612,6 +1623,7 @@ pub struct StmtAnnAssign<'a> {
 pub struct StmtFor<'a> {
     is_async: bool,
     target: ComparableExpr<'a>,
+    pattern: Option<ComparablePattern<'a>>,
     iter: ComparableExpr<'a>,
     body: Vec<ComparableStmt<'a>>,
     orelse: Vec<ComparableStmt<'a>>,
@@ -1621,6 +1633,13 @@ pub struct StmtFor<'a> {
 pub struct StmtWhile<'a> {
     test: ComparableExpr<'a>,
     body: Vec<ComparableStmt<'a>>,
+    orelse: Vec<ComparableStmt<'a>>,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct StmtLet<'a> {
+    pattern: ComparablePattern<'a>,
+    value: ComparableExpr<'a>,
     orelse: Vec<ComparableStmt<'a>>,
 }
 
@@ -1719,6 +1738,7 @@ pub enum ComparableStmt<'a> {
     For(StmtFor<'a>),
     While(StmtWhile<'a>),
     If(StmtIf<'a>),
+    Let(StmtLet<'a>),
     With(StmtWith<'a>),
     Match(StmtMatch<'a>),
     Raise(StmtRaise<'a>),
@@ -1850,6 +1870,7 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
             ast::Stmt::For(ast::StmtFor {
                 is_async,
                 target,
+                pattern,
                 iter,
                 body,
                 orelse,
@@ -1858,6 +1879,7 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
             }) => Self::For(StmtFor {
                 is_async: *is_async,
                 target: target.into(),
+                pattern: pattern.as_deref().map(Into::into),
                 iter: iter.into(),
                 body: body.iter().map(Into::into).collect(),
                 orelse: orelse.iter().map(Into::into).collect(),
@@ -1885,6 +1907,17 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 test: test.into(),
                 body: body.iter().map(Into::into).collect(),
                 elif_else_clauses: elif_else_clauses.iter().map(Into::into).collect(),
+            }),
+            ast::Stmt::Let(ast::StmtLet {
+                pattern,
+                value,
+                orelse,
+                range: _,
+                node_index: _,
+            }) => Self::Let(StmtLet {
+                pattern: pattern.as_ref().into(),
+                value: value.into(),
+                orelse: orelse.iter().map(Into::into).collect(),
             }),
             ast::Stmt::With(ast::StmtWith {
                 is_async,
