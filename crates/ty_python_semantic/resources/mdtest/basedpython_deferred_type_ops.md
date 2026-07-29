@@ -88,6 +88,22 @@ reveal_type(eq(5))  # revealed: True
 reveal_type(eq(6))  # revealed: False
 ```
 
+## only a single rich comparison folds
+
+a chain and a membership test have no fold, so they are rejected — and the message has to say which
+shape *does* fold, since the arm above proves comparisons are allowed here in general.
+
+```by
+class Holder[I: int]:
+    # error: [invalid-type-form] "A chained comparison has no symbolic fold"
+    def chained(self) -> 0 < I < 10:
+        return True
+
+    # error: [invalid-type-form] "An identity or membership comparison has no symbolic fold"
+    def member(self) -> I in (1, 2, 3):
+        return True
+```
+
 ## method calls on a type parameter
 
 a method call in a type expression views a bare type parameter as an instance of its bound (the same
