@@ -26,7 +26,8 @@ use crate::types::tuple::{
 };
 use crate::types::type_alias::{walk_manual_pep_695_type_alias, walk_pep_695_type_alias};
 use crate::types::typevar::{
-    BoundTypeVarIdentity, TypeVarIdentity, TypeVarInstance, walk_type_var_bounds,
+    BoundTypeVarIdentity, PackBoundViolation, TypeVarIdentity, TypeVarInstance,
+    pack_bound_violation, walk_type_var_bounds,
 };
 use crate::types::visitor::{
     TypeCollector, TypeVisitor, any_over_type, walk_type_with_recursion_guard,
@@ -3397,6 +3398,26 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
             (Type::TypeVar(bound_typevar), ty) | (ty, Type::TypeVar(bound_typevar))
                 if bound_typevar.is_inferable(self.db, self.inferable) =>
             {
+                // basedpython: a variadic pack's bound describes its members, or its shape, and
+                // never the pack's own value — so it is checked here rather than applied as an
+                // ordinary upper bound, which would compare a tuple against an element type
+                if bound_typevar.typevar(self.db).has_pack_bound(self.db) {
+                    if let Some(violation) = pack_bound_violation(
+                        self.db,
+                        bound_typevar,
+                        ty,
+                        self.constraints,
+                        self.inferable,
+                    ) {
+                        return Err(SpecializationError::UnsatisfiedPackBound {
+                            bound_typevar,
+                            argument: ty,
+                            violation,
+                        });
+                    }
+                    self.add_type_mapping(bound_typevar, ty, polarity);
+                    return Ok(());
+                }
                 match bound_typevar.typevar(self.db).bound_or_constraints(self.db) {
                     Some(TypeVarBoundOrConstraints::UpperBound(bound)) => {
                         if polarity.is_contravariant() {
@@ -3851,20 +3872,30 @@ pub(crate) enum SpecializationError<'db> {
         bound_typevar: BoundTypeVarInstance<'db>,
         argument: Type<'db>,
     },
+    /// basedpython: an inferred variadic pack does not satisfy the pack's bound. The bound is
+    /// not an upper bound on the pack's own value, so the violation carries which member — or
+    /// which missing field — is at fault.
+    UnsatisfiedPackBound {
+        bound_typevar: BoundTypeVarInstance<'db>,
+        argument: Type<'db>,
+        violation: PackBoundViolation<'db>,
+    },
 }
 
 impl<'db> SpecializationError<'db> {
     pub(crate) fn bound_typevar(&self) -> BoundTypeVarInstance<'db> {
         match self {
-            Self::MismatchedBound { bound_typevar, .. } => *bound_typevar,
-            Self::MismatchedConstraint { bound_typevar, .. } => *bound_typevar,
+            Self::MismatchedBound { bound_typevar, .. }
+            | Self::MismatchedConstraint { bound_typevar, .. }
+            | Self::UnsatisfiedPackBound { bound_typevar, .. } => *bound_typevar,
         }
     }
 
     pub(crate) fn argument_type(&self) -> Type<'db> {
         match self {
-            Self::MismatchedBound { argument, .. } => *argument,
-            Self::MismatchedConstraint { argument, .. } => *argument,
+            Self::MismatchedBound { argument, .. }
+            | Self::MismatchedConstraint { argument, .. }
+            | Self::UnsatisfiedPackBound { argument, .. } => *argument,
         }
     }
 }

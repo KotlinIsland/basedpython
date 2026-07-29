@@ -6663,30 +6663,15 @@ impl<'src> Parser<'src> {
                         AllowStarAnnotation::KeywordPackOnly => {
                             // basedpython: `**kwargs: **Kwargs` unpacks a keyword-variadic pack.
                             // the star count matches the pack's declaration (`[**Kwargs]`), the
-                            // way `*args: *Ts` matches `[*Ts]`. encoded as `Starred(Starred(_))`,
-                            // the same shape the callable arrow `(**P) -> R` uses
+                            // way `*args: *Ts` matches `[*Ts]`
                             if self.at(TokenKind::DoubleStar) {
                                 self.error_if_not_basedpython(
                                     "keyword-pack unpacking `**kwargs: **Pack` is not valid in \
                                      .py files"
                                         .to_string(),
                                 );
-                                let star_start = self.node_start();
-                                self.bump(TokenKind::DoubleStar);
-                                let inner = self.parse_conditional_expression_or_higher();
-                                let inner_range = inner.expr.range();
                                 ParsedExpr {
-                                    expr: Expr::Starred(ast::ExprStarred {
-                                        value: Box::new(Expr::Starred(ast::ExprStarred {
-                                            value: Box::new(inner.expr),
-                                            ctx: ExprContext::Load,
-                                            range: inner_range,
-                                            node_index: AtomicNodeIndex::NONE,
-                                        })),
-                                        ctx: ExprContext::Load,
-                                        range: self.node_range(star_start),
-                                        node_index: AtomicNodeIndex::NONE,
-                                    }),
+                                    expr: self.parse_double_starred_type_expression(),
                                     is_parenthesized: false,
                                     parameter_borrow: ast::ParameterBorrow::None,
                                 }
@@ -7254,6 +7239,33 @@ impl<'src> Parser<'src> {
     /// Parses a type parameter.
     ///
     /// See: <https://docs.python.org/3/reference/compound_stmts.html#grammar-token-python-grammar-type_param>
+    /// basedpython: parses a `**`-prefixed type expression, encoded as `Starred(Starred(_))`.
+    ///
+    /// That is the shape a keyword-variadic pack takes everywhere it is unpacked — the callable
+    /// arrow `(**P) -> R`, the parameter annotation `**kwargs: **Kwargs`, and a pack's own bound.
+    /// Python has no `**` expression form, so a second [`ast::ExprStarred`] stands in for the
+    /// second star.
+    ///
+    /// The caller is responsible for having reported [`Parser::error_if_not_basedpython`], since
+    /// the message naming the construct differs per position.
+    fn parse_double_starred_type_expression(&mut self) -> Expr {
+        let star_start = self.node_start();
+        self.bump(TokenKind::DoubleStar);
+        let inner = self.parse_conditional_expression_or_higher().expr;
+        let inner_range = inner.range();
+        Expr::Starred(ast::ExprStarred {
+            value: Box::new(Expr::Starred(ast::ExprStarred {
+                value: Box::new(inner),
+                ctx: ExprContext::Load,
+                range: inner_range,
+                node_index: AtomicNodeIndex::NONE,
+            })),
+            ctx: ExprContext::Load,
+            range: self.node_range(star_start),
+            node_index: AtomicNodeIndex::NONE,
+        })
+    }
+
     fn parse_type_param(&mut self) -> ast::TypeParam {
         let start = self.node_start();
 
@@ -7266,18 +7278,26 @@ impl<'src> Parser<'src> {
         if self.eat(TokenKind::Star) {
             let name = self.parse_identifier();
 
-            // basedpython: `*Ts: int` bounds every element of the pack. CPython rejects a
-            // bound on a `TypeVarTuple`, so this is an error in `.py` files
+            // basedpython: `*Ts: int` bounds every element of the pack, and the starred
+            // `*Ts: *(int, str)` bounds the pack as a whole — the star count follows the
+            // pack's declaration, the way `*args: *Ts` does. CPython rejects a bound on a
+            // `TypeVarTuple`, so either is an error in `.py` files
             let bound = if self.eat(TokenKind::Colon) {
                 // test_err type_param_type_var_tuple_bound
                 // type X[*T: int] = int
+                // type X[*T: *(int, str)] = int
                 self.error_if_not_basedpython(
                     "a bound on a `TypeVarTuple` is a basedpython feature and is not valid in \
                      .py files"
                         .to_string(),
                 );
                 if self.at_expr() {
-                    Some(Box::new(self.parse_conditional_expression_or_higher().expr))
+                    Some(Box::new(
+                        self.parse_conditional_expression_or_higher_impl(
+                            ExpressionContext::starred_bitwise_or(),
+                        )
+                        .expr,
+                    ))
                 } else {
                     self.add_error(
                         ParseErrorType::ExpectedExpression,
@@ -7333,6 +7353,37 @@ impl<'src> Parser<'src> {
         } else if self.eat(TokenKind::DoubleStar) {
             let name = self.parse_identifier();
 
+            // basedpython: `**Kwargs: int` bounds every field of the keyword-variadic pack, and
+            // the double-starred `**Kwargs: **{"a": int}` bounds the pack as a whole — the star
+            // count follows the pack's declaration, the way `**kwargs: **Kwargs` does. CPython
+            // rejects a bound on a `ParamSpec`, so either is an error in `.py` files
+            let bound = if self.eat(TokenKind::Colon) {
+                // test_err type_param_param_spec_bound
+                // type X[**T: int] = int
+                // type X[**T: **{"a": int}] = int
+                self.error_if_not_basedpython(
+                    "a bound on a keyword-variadic pack is a basedpython feature and is not \
+                     valid in .py files"
+                        .to_string(),
+                );
+                if self.at(TokenKind::DoubleStar) {
+                    Some(Box::new(self.parse_double_starred_type_expression()))
+                } else if self.at_expr() {
+                    Some(Box::new(self.parse_conditional_expression_or_higher().expr))
+                } else {
+                    // test_err type_param_param_spec_missing_bound
+                    // type X[**T:] = int
+                    // type X[**T:, T2] = int
+                    self.add_error(
+                        ParseErrorType::ExpectedExpression,
+                        self.current_token_range(),
+                    );
+                    None
+                }
+            } else {
+                None
+            };
+
             let default = if self.eat(TokenKind::Equal) {
                 if self.at_expr() {
                     // test_err type_param_param_spec_invalid_default_expr
@@ -7356,11 +7407,10 @@ impl<'src> Parser<'src> {
                 None
             };
 
-            // test_err type_param_param_spec_bound
-            // type X[**T: int] = int
             ast::TypeParam::ParamSpec(ast::TypeParamParamSpec {
                 range: self.node_range(start),
                 name,
+                bound,
                 default,
                 node_index: AtomicNodeIndex::NONE,
             })

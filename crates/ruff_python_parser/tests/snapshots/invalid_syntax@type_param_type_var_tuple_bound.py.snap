@@ -8,7 +8,7 @@ input_file: crates/ruff_python_parser/resources/inline/err/type_param_type_var_t
 Module(
     ModModule {
         node_index: NodeIndex(None),
-        range: 0..22,
+        range: 0..52,
         body: [
             TypeAlias(
                 StmtTypeAlias {
@@ -70,6 +70,95 @@ Module(
                     is_private: false,
                 },
             ),
+            TypeAlias(
+                StmtTypeAlias {
+                    node_index: NodeIndex(None),
+                    range: 22..51,
+                    name: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 27..28,
+                            id: Name("X"),
+                            ctx: Store,
+                        },
+                    ),
+                    type_params: Some(
+                        TypeParams {
+                            range: 28..45,
+                            node_index: NodeIndex(None),
+                            type_params: [
+                                TypeVarTuple(
+                                    TypeParamTypeVarTuple {
+                                        node_index: NodeIndex(None),
+                                        range: 29..44,
+                                        name: Identifier {
+                                            id: Name("T"),
+                                            range: 30..31,
+                                            node_index: NodeIndex(None),
+                                        },
+                                        bound: Some(
+                                            Starred(
+                                                ExprStarred {
+                                                    node_index: NodeIndex(None),
+                                                    range: 33..44,
+                                                    value: Tuple(
+                                                        ExprTuple {
+                                                            node_index: NodeIndex(None),
+                                                            range: 34..44,
+                                                            elts: [
+                                                                Name(
+                                                                    ExprName {
+                                                                        node_index: NodeIndex(None),
+                                                                        range: 35..38,
+                                                                        id: Name("int"),
+                                                                        ctx: Load,
+                                                                    },
+                                                                ),
+                                                                Name(
+                                                                    ExprName {
+                                                                        node_index: NodeIndex(None),
+                                                                        range: 40..43,
+                                                                        id: Name("str"),
+                                                                        ctx: Load,
+                                                                    },
+                                                                ),
+                                                            ],
+                                                            ctx: Load,
+                                                            parenthesized: true,
+                                                            is_anon_named_tuple: false,
+                                                            is_anon_named_tuple_value: false,
+                                                            callable_shape: None,
+                                                            is_parameter_shape: false,
+                                                        },
+                                                    ),
+                                                    ctx: Load,
+                                                },
+                                            ),
+                                        ),
+                                        default: None,
+                                    },
+                                ),
+                            ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
+                        },
+                    ),
+                    value: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 48..51,
+                            id: Name("int"),
+                            ctx: Load,
+                        },
+                    ),
+                    cases: [],
+                    is_private: false,
+                },
+            ),
         ],
     },
 )
@@ -79,4 +168,12 @@ Module(
   |
 1 | type X[*T: int] = int
   |            ^^^ Syntax Error: a bound on a `TypeVarTuple` is a basedpython feature and is not valid in .py files
+2 | type X[*T: *(int, str)] = int
+  |
+
+
+  |
+1 | type X[*T: int] = int
+2 | type X[*T: *(int, str)] = int
+  |            ^ Syntax Error: a bound on a `TypeVarTuple` is a basedpython feature and is not valid in .py files
   |

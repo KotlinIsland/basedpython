@@ -2972,9 +2972,13 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         default,
                         variance: _,
                     }) => (name, lower_bound, bound, default),
+                    // basedpython: `**Kwargs: int` bounds every field of a keyword-variadic pack
                     ast::TypeParam::ParamSpec(ast::TypeParamParamSpec {
-                        name, default, ..
-                    }) => (name, &None, &None, default),
+                        name,
+                        bound,
+                        default,
+                        ..
+                    }) => (name, &None, bound, default),
                     // basedpython: `*Ts: int` bounds every element of the pack
                     ast::TypeParam::TypeVarTuple(ast::TypeParamTypeVarTuple {
                         name,

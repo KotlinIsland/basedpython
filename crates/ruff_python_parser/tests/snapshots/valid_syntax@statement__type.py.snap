@@ -435,6 +435,7 @@ Module(
                                             range: 163..164,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),
@@ -552,6 +553,7 @@ Module(
                                             range: 201..202,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),
@@ -691,6 +693,7 @@ Module(
                                             range: 246..247,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),
@@ -1122,6 +1125,7 @@ Module(
                                             range: 394..395,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             List(
                                                 ExprList {
@@ -1916,6 +1920,7 @@ Module(
                                             range: 897..898,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),

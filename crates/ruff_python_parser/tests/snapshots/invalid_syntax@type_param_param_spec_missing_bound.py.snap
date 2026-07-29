@@ -1,6 +1,6 @@
 ---
 source: crates/ruff_python_parser/tests/fixtures.rs
-input_file: crates/ruff_python_parser/resources/inline/err/type_param_param_spec_missing_default.py
+input_file: crates/ruff_python_parser/resources/inline/err/type_param_param_spec_missing_bound.py
 ---
 ## AST
 
@@ -8,12 +8,12 @@ input_file: crates/ruff_python_parser/resources/inline/err/type_param_param_spec
 Module(
     ModModule {
         node_index: NodeIndex(None),
-        range: 0..44,
+        range: 0..42,
         body: [
             TypeAlias(
                 StmtTypeAlias {
                     node_index: NodeIndex(None),
-                    range: 0..19,
+                    range: 0..18,
                     name: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -24,15 +24,15 @@ Module(
                     ),
                     type_params: Some(
                         TypeParams {
-                            range: 6..13,
+                            range: 6..12,
                             node_index: NodeIndex(None),
                             type_params: [
                                 ParamSpec(
                                     TypeParamParamSpec {
                                         node_index: NodeIndex(None),
-                                        range: 7..12,
+                                        range: 7..11,
                                         name: Identifier {
-                                            id: Name("P"),
+                                            id: Name("T"),
                                             range: 9..10,
                                             node_index: NodeIndex(None),
                                         },
@@ -52,7 +52,7 @@ Module(
                     value: Name(
                         ExprName {
                             node_index: NodeIndex(None),
-                            range: 16..19,
+                            range: 15..18,
                             id: Name("int"),
                             ctx: Load,
                         },
@@ -64,27 +64,27 @@ Module(
             TypeAlias(
                 StmtTypeAlias {
                     node_index: NodeIndex(None),
-                    range: 20..43,
+                    range: 19..41,
                     name: Name(
                         ExprName {
                             node_index: NodeIndex(None),
-                            range: 25..26,
+                            range: 24..25,
                             id: Name("X"),
                             ctx: Store,
                         },
                     ),
                     type_params: Some(
                         TypeParams {
-                            range: 26..37,
+                            range: 25..35,
                             node_index: NodeIndex(None),
                             type_params: [
                                 ParamSpec(
                                     TypeParamParamSpec {
                                         node_index: NodeIndex(None),
-                                        range: 27..32,
+                                        range: 26..30,
                                         name: Identifier {
-                                            id: Name("P"),
-                                            range: 29..30,
+                                            id: Name("T"),
+                                            range: 28..29,
                                             node_index: NodeIndex(None),
                                         },
                                         bound: None,
@@ -94,10 +94,10 @@ Module(
                                 TypeVar(
                                     TypeParamTypeVar {
                                         node_index: NodeIndex(None),
-                                        range: 34..36,
+                                        range: 32..34,
                                         name: Identifier {
                                             id: Name("T2"),
-                                            range: 34..36,
+                                            range: 32..34,
                                             node_index: NodeIndex(None),
                                         },
                                         lower_bound: None,
@@ -118,7 +118,7 @@ Module(
                     value: Name(
                         ExprName {
                             node_index: NodeIndex(None),
-                            range: 40..43,
+                            range: 38..41,
                             id: Name("int"),
                             ctx: Load,
                         },
@@ -134,14 +134,14 @@ Module(
 ## Errors
 
   |
-1 | type X[**P =] = int
-  |             ^ Syntax Error: Expected an expression
-2 | type X[**P =, T2] = int
+1 | type X[**T:] = int
+  |            ^ Syntax Error: a bound on a keyword-variadic pack is a basedpython feature and is not valid in .py files
+2 | type X[**T:, T2] = int
   |
 
 
   |
-1 | type X[**P =] = int
-2 | type X[**P =, T2] = int
-  |             ^ Syntax Error: Expected an expression
+1 | type X[**T:] = int
+2 | type X[**T:, T2] = int
+  |            ^ Syntax Error: a bound on a keyword-variadic pack is a basedpython feature and is not valid in .py files
   |

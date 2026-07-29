@@ -789,12 +789,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             range: _,
             node_index: _,
             name,
+            bound,
             default,
         } = node;
 
         let db = self.db();
 
-        if default.is_some() {
+        if bound.is_some() || default.is_some() {
             self.deferred.insert(definition);
         }
         let identity = TypeVarIdentity::new(
@@ -803,10 +804,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             Some(definition),
             TypeVarKind::double_starred_type_param(self.source_type()),
         );
+        // a PEP-695 `ParamSpec` has no bounds or constraints; basedpython's keyword-variadic
+        // pack does — `**Kwargs: int` bounds every field, `**Kwargs: **{"a": int}` the whole
+        // pack — and the parser only accepts one in a `.by` file
         let ty = Type::KnownInstance(KnownInstanceType::TypeVar(TypeVarInstance::new(
             db,
             identity,
-            None, // ParamSpec, when declared using PEP 695 syntax, has no bounds or constraints
+            bound
+                .as_deref()
+                .map(|_| TypeVarBoundOrConstraintsEvaluation::LazyUpperBound),
             None, // _lower_bound
             None, // explicit_variance
             default.as_deref().map(|_| TypeVarDefaultEvaluation::Lazy),
@@ -823,15 +829,51 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             range: _,
             node_index: _,
             name,
-            default: Some(default),
-        } = node
-        else {
-            return;
-        };
+            bound,
+            default,
+        } = node;
         let previous_deferred_state =
             std::mem::replace(&mut self.deferred_state, DeferredExpressionState::Deferred);
-        self.infer_paramspec_default(default, Some(&name.id));
+        // basedpython: `**Kwargs: int` / `**Kwargs: **{"a": int}` — evaluated here so that
+        // `lazy_bound` can read it back
+        if let Some(bound) = bound.as_deref() {
+            let bound_ty = self.infer_pack_bound(bound);
+            // the whole-pack form names the shape the pack must have, so the bound has to be
+            // something with fields. `*Ts: *int` gets the equivalent rejection from the starred
+            // type expression itself, which has a tuple to fall back on; a `**` bound has none
+            if matches!(bound, ast::Expr::Starred(_))
+                && bound_ty.as_typed_dict().is_none()
+                && let Some(builder) = self
+                    .context
+                    .report_lint(&INVALID_TYPE_VARIABLE_BOUND, bound)
+            {
+                builder.into_diagnostic(format_args!(
+                    "The whole-pack bound of a keyword-variadic pack must be a dict literal \
+                     type or a `TypedDict`, not `{}`",
+                    bound_ty.display(self.db()),
+                ));
+            }
+        }
+        if let Some(default) = default.as_deref() {
+            self.infer_paramspec_default(default, Some(&name.id));
+        }
         self.deferred_state = previous_deferred_state;
+    }
+
+    /// basedpython: infers the upper bound of a variadic pack — `*Ts: int` / `*Ts: *(int, str)`
+    /// on a `TypeVarTuple`, `**Kwargs: int` / `**Kwargs: **{"a": int}` on a keyword-variadic
+    /// pack.
+    ///
+    /// [`InferenceFlags::IN_PACK_BOUND`] is what lets the double-starred whole-pack form
+    /// resolve here: outside a pack's bound and outside a `**kwargs` annotation, a `**` type
+    /// expression has no meaning.
+    fn infer_pack_bound(&mut self, bound: &ast::Expr) -> Type<'db> {
+        let previous = self.context.inference_flags;
+        self.context.inference_flags |=
+            InferenceFlags::IN_PACK_BOUND | InferenceFlags::IN_TYPE_VARIABLE_BOUND;
+        let bound_ty = self.infer_type_expression(bound);
+        self.context.inference_flags = previous;
+        bound_ty
     }
 
     pub(super) fn infer_paramspec_default(
@@ -994,10 +1036,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         } = node;
         let previous_deferred_state =
             std::mem::replace(&mut self.deferred_state, DeferredExpressionState::Deferred);
-        // basedpython: `*Ts: int` — the bound is an ordinary type expression, evaluated here
-        // so that `lazy_bound` can read it back
+        // basedpython: `*Ts: int` / `*Ts: *(int, str)` — evaluated here so that `lazy_bound`
+        // can read it back
         if let Some(bound) = bound.as_deref() {
-            let _ = self.infer_type_expression(bound);
+            let _ = self.infer_pack_bound(bound);
         }
         if let Some(default) = default.as_deref() {
             self.infer_typevartuple_default(default, Some(&name.id));

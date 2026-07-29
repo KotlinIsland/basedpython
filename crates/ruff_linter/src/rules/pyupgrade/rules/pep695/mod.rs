@@ -202,6 +202,7 @@ impl<'a> From<&'a TypeVar<'a>> for TypeParam {
                 default,
             }),
             TypeParamKind::ParamSpec => TypeParam::ParamSpec(TypeParamParamSpec {
+                bound: None,
                 range: TextRange::default(),
                 node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                 name: Identifier::new(*name, TextRange::default()),

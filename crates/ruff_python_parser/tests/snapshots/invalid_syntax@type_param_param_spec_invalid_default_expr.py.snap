@@ -36,6 +36,7 @@ Module(
                                             range: 9..10,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Starred(
                                                 ExprStarred {
@@ -102,6 +103,7 @@ Module(
                                             range: 34..35,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Yield(
                                                 ExprYield {
@@ -169,6 +171,7 @@ Module(
                                             range: 62..63,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             YieldFrom(
                                                 ExprYieldFrom {
@@ -234,6 +237,7 @@ Module(
                                             range: 95..96,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Name(
                                                 ExprName {
@@ -308,6 +312,7 @@ Module(
                                             range: 124..125,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Starred(
                                                 ExprStarred {

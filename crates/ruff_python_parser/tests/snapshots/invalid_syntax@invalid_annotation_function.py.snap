@@ -1064,6 +1064,7 @@ Module(
                                             range: 428..430,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Yield(
                                                 ExprYield {
@@ -1425,6 +1426,7 @@ Module(
                                             range: 684..686,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Named(
                                                 ExprNamed {
@@ -1771,6 +1773,7 @@ Module(
                                             range: 933..935,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Await(
                                                 ExprAwait {

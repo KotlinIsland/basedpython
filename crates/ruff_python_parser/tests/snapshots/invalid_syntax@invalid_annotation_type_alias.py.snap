@@ -247,6 +247,7 @@ Module(
                                             range: 162..164,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Yield(
                                                 ExprYield {

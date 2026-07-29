@@ -81,47 +81,79 @@ F821 Undefined name `UndefinedBound`
 73 | type BadBound[*Ts: UndefinedBound] = tuple[*Ts]
    |                    ^^^^^^^^^^^^^^
 74 |
-75 | # the `typing` members basedpython auto-imports are implicitly available in any
+75 | # a pack's bound is a type expression wherever it appears, so names inside the
+   |
+
+F821 Undefined name `UndefinedElement`
+  --> F821_basedpython.by:77:29
+   |
+75 | # a pack's bound is a type expression wherever it appears, so names inside the
+76 | # starred whole-pack forms and a keyword-variadic pack's bound resolve too
+77 | type WholeTuple[*Ts: *(int, UndefinedElement)] = tuple[*Ts]
+   |                             ^^^^^^^^^^^^^^^^
+78 | type EveryField[**Kwargs: UndefinedFieldBound] = int
+79 | type WholeShape[**Kwargs: **{"a": UndefinedField}] = int
+   |
+
+F821 Undefined name `UndefinedFieldBound`
+  --> F821_basedpython.by:78:27
+   |
+76 | # starred whole-pack forms and a keyword-variadic pack's bound resolve too
+77 | type WholeTuple[*Ts: *(int, UndefinedElement)] = tuple[*Ts]
+78 | type EveryField[**Kwargs: UndefinedFieldBound] = int
+   |                           ^^^^^^^^^^^^^^^^^^^
+79 | type WholeShape[**Kwargs: **{"a": UndefinedField}] = int
+80 | type BoundsAreFine[*Ts: *(int, str), **Kwargs: **{"a": int}] = int
+   |
+
+F821 Undefined name `UndefinedField`
+  --> F821_basedpython.by:79:35
+   |
+77 | type WholeTuple[*Ts: *(int, UndefinedElement)] = tuple[*Ts]
+78 | type EveryField[**Kwargs: UndefinedFieldBound] = int
+79 | type WholeShape[**Kwargs: **{"a": UndefinedField}] = int
+   |                                   ^^^^^^^^^^^^^^
+80 | type BoundsAreFine[*Ts: *(int, str), **Kwargs: **{"a": int}] = int
    |
 
 F821 Undefined name `Protocol`
-  --> F821_basedpython.by:81:15
+  --> F821_basedpython.by:88:15
    |
-79 | implicit_value = Optional
-80 | # a `typing` member basedpython does *not* auto-import is still flagged
-81 | not_implicit: Protocol
+86 | implicit_value = Optional
+87 | # a `typing` member basedpython does *not* auto-import is still flagged
+88 | not_implicit: Protocol
    |               ^^^^^^^^
-82 |
-83 | # `Some` is the present-case optional constructor, lowered to the injected
+89 |
+90 | # `Some` is the present-case optional constructor, lowered to the injected
    |
 
 F821 Undefined name `Character`
-  --> F821_basedpython.by:92:7
-   |
-90 | overlapping_arg: Overlapping[int]
-91 | # in value position they are ordinary names — still flagged when unbound
-92 | print(Character, Overlapping)
-   |       ^^^^^^^^^
-93 |
-94 | # known gap: an enum member reached by context-sensitive resolution is an
-   |
+   --> F821_basedpython.by:99:7
+    |
+ 97 | overlapping_arg: Overlapping[int]
+ 98 | # in value position they are ordinary names — still flagged when unbound
+ 99 | print(Character, Overlapping)
+    |       ^^^^^^^^^
+100 |
+101 | # known gap: an enum member reached by context-sensitive resolution is an
+    |
 
 F821 Undefined name `Overlapping`
-  --> F821_basedpython.by:92:18
-   |
-90 | overlapping_arg: Overlapping[int]
-91 | # in value position they are ordinary names — still flagged when unbound
-92 | print(Character, Overlapping)
-   |                  ^^^^^^^^^^^
-93 |
-94 | # known gap: an enum member reached by context-sensitive resolution is an
-   |
+   --> F821_basedpython.by:99:18
+    |
+ 97 | overlapping_arg: Overlapping[int]
+ 98 | # in value position they are ordinary names — still flagged when unbound
+ 99 | print(Character, Overlapping)
+    |                  ^^^^^^^^^^^
+100 |
+101 | # known gap: an enum member reached by context-sensitive resolution is an
+    |
 
 F821 Undefined name `Red`
-   --> F821_basedpython.by:101:28
+   --> F821_basedpython.by:108:28
     |
- 99 |     case Red, Green
-100 |
-101 | context_sensitive: Color = Red
+106 |     case Red, Green
+107 |
+108 | context_sensitive: Color = Red
     |                            ^^^
     |

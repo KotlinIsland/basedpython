@@ -95,3 +95,9 @@ class Callable[Parameters: (*: *, **: *), Return]:
 class A[Fn: (*: *, **: *) -> object]:
     def f(self, *args: *Fn.args, **kwargs: **Fn.kwargs) -> Fn.returns
 ```
+
+## see also
+
+- [bounds on a variadic pack](pack-bounds.md) — what a bound means on a `*Args` or `**Kwargs`
+- [keyword-variadic packs](keyword-variadic.md) — what `**Kwargs` declares
+- [type parameter separators](type-param-separators.md) — the `/` and bare `*` markers

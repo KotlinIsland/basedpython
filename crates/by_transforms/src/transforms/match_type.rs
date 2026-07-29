@@ -21,9 +21,9 @@
 //! Python < 3.14), and `object` is the honest value for a name that stands for
 //! "whatever the checker worked out".
 //!
-//! A `TypeVarTuple` bound (`*Shape: int`) is a basedpython-only annotation —
-//! CPython rejects it outright — so it is deleted wherever it appears, not just on
-//! match types.
+//! A variadic pack's bound — `*Shape: int` on a `TypeVarTuple`, `**Kwargs: **{"a": int}` on a
+//! keyword-variadic pack — is a basedpython-only annotation that CPython rejects outright, so it
+//! is deleted wherever it appears, not just on match types.
 
 use ruff_python_ast::visitor::{Visitor, walk_stmt, walk_type_param};
 use ruff_python_ast::{ModModule, Stmt, StmtTypeAlias, TypeParam};
@@ -81,13 +81,16 @@ impl<'ast> Visitor<'ast> for MatchTypeLowering<'_> {
     }
 
     fn visit_type_param(&mut self, type_param: &'ast TypeParam) {
-        if let TypeParam::TypeVarTuple(typevartuple) = type_param
-            && let Some(bound) = typevartuple.bound.as_deref()
-        {
-            self.edits.push((
-                TextRange::new(typevartuple.name.end(), bound.end()),
-                String::new(),
-            ));
+        let pack_bound = match type_param {
+            TypeParam::TypeVarTuple(typevartuple) => {
+                Some((&typevartuple.name, &typevartuple.bound))
+            }
+            TypeParam::ParamSpec(paramspec) => Some((&paramspec.name, &paramspec.bound)),
+            TypeParam::TypeVar(_) => None,
+        };
+        if let Some((name, Some(bound))) = pack_bound {
+            self.edits
+                .push((TextRange::new(name.end(), bound.end()), String::new()));
         }
         walk_type_param(self, type_param);
     }
@@ -204,6 +207,48 @@ mod tests {
                 pass
         "});
         assert!(output.contains("class Array[T, *Shape]:"), "{output}");
+    }
+
+    /// The starred whole-pack forms erase the same way — python has no bound on either kind of
+    /// pack, so nothing of them may reach the output.
+    #[test]
+    fn starred_pack_bounds_are_stripped() {
+        let output = lower_native(indoc! {r#"
+            class Array[*Shape: *(int, str), **Kwargs: **{"a": int}]:
+                pass
+        "#});
+        assert!(
+            output.contains("class Array[*Shape, **Kwargs]:"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn keyword_pack_bound_is_stripped() {
+        let output = lower_native(indoc! {"
+            class Array[**Kwargs: int]:
+                pass
+        "});
+        assert!(output.contains("class Array[**Kwargs]:"), "{output}");
+    }
+
+    /// Below 3.12 the PEP 695 polyfill re-renders the type parameter list from the AST rather
+    /// than editing the source, so a bound has to be absent from *that* path too.
+    #[test]
+    fn polyfilled_pack_bounds_are_stripped() {
+        let output = lower_polyfilled(indoc! {r#"
+            class Array[*Shape: *(int, str), **Kwargs: **{"a": int}]:
+                pass
+        "#});
+        assert!(!output.contains("int, str"), "{output}");
+        assert!(
+            output.contains("_Shape = TypeVarTuple(\"_Shape\")"),
+            "{output}"
+        );
+        assert!(
+            output.contains("_Kwargs = ParamSpec(\"_Kwargs\")"),
+            "{output}"
+        );
     }
 
     /// Comments are not part of a node's range, so an erased `case` block's comments have to

@@ -72,6 +72,13 @@ type NDTuple[T, *Shape: int] = match *Shape:
 
 type BadBound[*Ts: UndefinedBound] = tuple[*Ts]
 
+# a pack's bound is a type expression wherever it appears, so names inside the
+# starred whole-pack forms and a keyword-variadic pack's bound resolve too
+type WholeTuple[*Ts: *(int, UndefinedElement)] = tuple[*Ts]
+type EveryField[**Kwargs: UndefinedFieldBound] = int
+type WholeShape[**Kwargs: **{"a": UndefinedField}] = int
+type BoundsAreFine[*Ts: *(int, str), **Kwargs: **{"a": int}] = int
+
 # the `typing` members basedpython auto-imports are implicitly available in any
 # position — the transpiler emits the matching `from typing import ...`
 implicit_annotation: Optional[Sequence[int]]
