@@ -467,3 +467,75 @@ def helper(number) -> None:
 def test_it() -> None:
     helper("anything")
 ```
+
+## a `.by` test module is collected too
+
+A basedpython module transpiles to a `.py` of the same stem, so pytest collects it under exactly the
+same naming conventions — and a `conftest.by` provides fixtures to it just as a `conftest.py` does.
+Recognising only `.py` left every `.by` test file uncollected, so no parameter was injected and no
+fixture mismatch was reported.
+
+```toml
+[environment]
+python = "/.venv"
+```
+
+`/.venv/<path-to-site-packages>/pytest/__init__.pyi`:
+
+```pyi
+from _pytest.fixtures import fixture as fixture
+```
+
+`/.venv/<path-to-site-packages>/_pytest/__init__.pyi`:
+
+```pyi
+```
+
+`/.venv/<path-to-site-packages>/_pytest/fixtures.pyi`:
+
+```pyi
+from typing import Any, Callable, overload
+
+class FixtureFunctionDefinition: ...
+
+class FixtureFunctionMarker:
+    def __call__(self, function: Callable[..., Any]) -> FixtureFunctionDefinition: ...
+
+@overload
+def fixture(function: Callable[..., Any], *, scope: str = ..., name: str | None = None) -> FixtureFunctionDefinition: ...
+@overload
+def fixture(function: None = ..., *, scope: str = ..., name: str | None = None) -> FixtureFunctionMarker: ...
+```
+
+`conftest.by`:
+
+```by
+import pytest
+
+@pytest.fixture
+def shared() -> bytes:
+    return b""
+```
+
+`test_based.by`:
+
+```by
+import pytest
+
+@pytest.fixture
+def number() -> int:
+    return 3
+
+@pytest.fixture
+def label() -> str:
+    return "x"
+
+def test_injects(number, label, shared) -> None:
+    reveal_type(number)  # revealed: int
+    reveal_type(label)  # revealed: str
+    reveal_type(shared)  # revealed: bytes
+
+# error: [invalid-fixture-type] "Fixture `label` provides `str`, but the parameter is annotated `int`"
+def test_mismatch(label: int) -> None:
+    pass
+```
