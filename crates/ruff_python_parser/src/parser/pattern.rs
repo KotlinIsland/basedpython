@@ -84,6 +84,43 @@ impl Parser<'_> {
         }
     }
 
+    /// basedpython: parses the pattern of a destructuring binder — a `for`
+    /// target, a `with` item, or a parameter — returning `None` with the parser
+    /// rewound when what follows is not one.
+    ///
+    /// A binder is only reparsed as a pattern once the ordinary parse has come up
+    /// with something that cannot be bound at all, so the pattern must be
+    /// followed by one of `terminators` to be accepted. Without that check every
+    /// invalid target would be reported as a pattern that ran out early, and the
+    /// caller's own error is the better one.
+    pub(super) fn parse_destructure_pattern(
+        &mut self,
+        sequence: AllowSequencePattern,
+        terminators: TokenSet,
+    ) -> Option<Pattern> {
+        let checkpoint = self.checkpoint();
+
+        if self.at_pattern_start() {
+            let pattern = match sequence {
+                AllowSequencePattern::Yes => self.parse_match_patterns(),
+                AllowSequencePattern::No => self.parse_match_pattern(AllowStarPattern::No),
+            };
+            // a bare capture is what an ordinary binder already is, so it never
+            // makes one a destructure: `def f(match: int)` binds a parameter
+            // named `match`, it does not match anything
+            let is_capture = matches!(
+                &pattern,
+                Pattern::MatchAs(ast::PatternMatchAs { pattern: None, .. })
+            );
+            if !is_capture && self.at_ts(terminators) {
+                return Some(pattern);
+            }
+        }
+
+        self.rewind(checkpoint);
+        None
+    }
+
     /// Parses an `or_pattern` or an `as_pattern`.
     ///
     /// See: <https://docs.python.org/3/reference/compound_stmts.html#grammar-token-python-grammar-pattern>
@@ -114,7 +151,7 @@ impl Parser<'_> {
 
         // We don't yet know if it's an or pattern or an as pattern, so use whatever
         // was passed in.
-        let mut lhs = self.parse_match_pattern_lhs(allow_star_pattern);
+        let mut lhs = self.parse_match_pattern_conjunction(allow_star_pattern);
 
         // Or pattern
         if self.at(TokenKind::Vbar) {
@@ -128,7 +165,7 @@ impl Parser<'_> {
 
             while self.eat(TokenKind::Vbar) {
                 progress.assert_progressing(self);
-                let pattern = self.parse_match_pattern_lhs(AllowStarPattern::No);
+                let pattern = self.parse_match_pattern_conjunction(AllowStarPattern::No);
                 patterns.push(pattern);
             }
 
@@ -156,6 +193,53 @@ impl Parser<'_> {
         }
 
         lhs
+    }
+
+    /// Parses a basedpython conjunction pattern, `P and Q`, or a single pattern
+    /// when no `and` follows.
+    ///
+    /// `and` binds tighter than `|`, so `A() and B() | C()` is
+    /// `(A() and B()) | C()` — the same way `and` binds tighter than `or` in an
+    /// expression.
+    fn parse_match_pattern_conjunction(&mut self, allow_star_pattern: AllowStarPattern) -> Pattern {
+        let start = self.node_start();
+        let lhs = self.parse_match_pattern_lhs(allow_star_pattern);
+
+        if !self.at(TokenKind::And) {
+            return lhs;
+        }
+
+        // a conjunct only matches a value that every other conjunct matches too,
+        // so a star pattern — which matches a slice of a sequence rather than a
+        // value — cannot take part
+        if lhs.is_match_star() {
+            self.add_error(ParseErrorType::InvalidStarPatternUsage, &lhs);
+        }
+
+        let mut patterns = vec![lhs];
+        let mut progress = ParserProgress::default();
+
+        while self.eat(TokenKind::And) {
+            progress.assert_progressing(self);
+            patterns.push(self.parse_match_pattern_lhs(AllowStarPattern::No));
+        }
+
+        let range = self.node_range(start);
+
+        // test_err match_and_pattern_in_python_file
+        // match x:
+        //     case int() and str():
+        //         pass
+        self.error_if_not_basedpython_at(
+            "an `and` pattern is basedpython syntax and is not valid in .py files".to_string(),
+            range,
+        );
+
+        Pattern::MatchAnd(ast::PatternMatchAnd {
+            range,
+            patterns,
+            node_index: AtomicNodeIndex::NONE,
+        })
     }
 
     /// Parses a pattern.
@@ -803,6 +887,15 @@ impl AllowStarPattern {
     const fn is_no(self) -> bool {
         matches!(self, AllowStarPattern::No)
     }
+}
+
+/// Whether an unparenthesized `a, b` in a destructuring binder is one sequence
+/// pattern. It is for a `for` target, where the comma has nothing else to mean,
+/// but not for a `with` item or a parameter, where it separates the items.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum AllowSequencePattern {
+    Yes,
+    No,
 }
 
 /// Returns `true` if the given expression is a real number literal or a unary

@@ -44,6 +44,7 @@ use crate::expression::{Expression, ExpressionKind};
 use crate::fluid::{FluidUse, FluidUseRole};
 use crate::frozen::{FrozenMap, FrozenSet};
 use crate::member::MemberExprBuilder;
+use crate::node_key::NodeKey;
 use crate::place::{
     PlaceExpr, PlaceTableBuilder, PossiblyNarrowedPlacesBuilder, ScopedPlaceId,
     match_subject_place_expressions,
@@ -51,8 +52,9 @@ use crate::place::{
 use crate::predicate::{
     CallableAndCallExpr, ClassPatternKeywordPredicateKind, ClassPatternPredicateKind,
     MappingPatternEntryPredicateKind, MappingPatternPredicateKind, PatternPredicate,
-    PatternPredicateKind, Predicate, PredicateNode, PredicateOrLiteral, ScopedPredicateId,
-    SequencePatternPredicateKind, StarImportPlaceholderPredicate, SubjectElementPatternPredicate,
+    PatternPredicateKind, PatternSubject, Predicate, PredicateNode, PredicateOrLiteral,
+    ScopedPredicateId, SequencePatternPredicateKind, StarImportPlaceholderPredicate,
+    SubjectElementPatternPredicate,
 };
 use crate::program::Program;
 use crate::re_exports::exported_names;
@@ -72,7 +74,7 @@ use crate::use_def::{
 };
 use crate::{Db, Statement, StatementNodeKey};
 use crate::{
-    DefinitionsByNode, EvaluationMode, ExpressionsScopeMap, LoopHeader, LoopHeaderId,
+    DefinitionsByNode, Destructure, EvaluationMode, ExpressionsScopeMap, LoopHeader, LoopHeaderId,
     NarrowingAliasPredicate, PossiblyNarrowedPlaces, SemanticIndex, VisibleAncestorsIter,
 };
 
@@ -320,6 +322,10 @@ pub(super) struct SemanticIndexBuilder<'db, 'ast> {
     /// Alias metadata for predicate leaf names in the current file.
     alias_predicates: FxHashMap<ExpressionNodeKey, NarrowingAliasPredicate<'db>>,
 
+    /// basedpython: what each destructuring binder's pattern needs at inference
+    /// time, keyed by the pattern node
+    destructures: FxHashMap<NodeKey, Destructure<'db>>,
+
     /// basedpython: places this file's narrowing return annotations name, computed on
     /// demand. See [`Self::basedpython_guard_targets`].
     basedpython_guard_targets: Option<GuardTargets>,
@@ -376,6 +382,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             semantic_syntax_errors: RefCell::default(),
             narrowing_aliases: FxHashMap::default(),
             alias_predicates: FxHashMap::default(),
+            destructures: FxHashMap::default(),
             basedpython_guard_targets: None,
         };
 
@@ -2410,6 +2417,12 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         self.current_use_def_map_mut().mark_unreachable();
     }
 
+    /// Whether — and under which conditions — the current point in the flow is
+    /// reached at all.
+    fn current_reachability(&self) -> ScopedReachabilityConstraintId {
+        self.current_use_def_map().reachability
+    }
+
     /// Records that the current state can enter any active `finally` suites before the current
     /// terminal control-flow transfer reaches its destination.
     fn record_terminal_finally_entry(&mut self) {
@@ -2555,6 +2568,15 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     .into_boxed_slice();
                 PatternPredicateKind::Or(predicates)
             }
+            ast::Pattern::MatchAnd(pattern) => {
+                let predicates = pattern
+                    .patterns
+                    .iter()
+                    .map(|pattern| self.predicate_kind(pattern))
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice();
+                PatternPredicateKind::And(predicates)
+            }
             ast::Pattern::MatchAs(pattern) => PatternPredicateKind::As(
                 pattern
                     .pattern
@@ -2670,7 +2692,12 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             (subject_targets, sequence_subject_targets),
         )) = pattern
         {
-            let pattern_predicate = self.create_pattern_predicate(subject, pattern, None, None);
+            let pattern_predicate = self.create_pattern_predicate(
+                PatternSubject::Expression(subject),
+                pattern,
+                None,
+                None,
+            );
             let outer_match_case = self
                 .current_match_case
                 .replace(CurrentMatchCase::new(pattern, pattern_predicate));
@@ -2695,9 +2722,57 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         (falsy, predicate, narrowing_id)
     }
 
+    /// basedpython: records the captures a destructuring binder's pattern binds.
+    ///
+    /// The binder — a `for` target, a `with` item's target, a parameter — already
+    /// holds the value, so the pattern is matched against the binder's own
+    /// definition rather than against an expression. Everything a `match` case
+    /// records is recorded here too, minus the branch: a binder's pattern has to
+    /// be irrefutable, so its captures are bound unconditionally.
+    fn add_destructure_definitions(
+        &mut self,
+        pattern: &'ast ast::Pattern,
+        binder: &'ast ast::ExprName,
+    ) {
+        self.add_destructure_definitions_for(pattern, self.expect_single_definition(binder));
+    }
+
+    /// [`Self::add_destructure_definitions`] for a binder whose definition the
+    /// caller already has.
+    fn add_destructure_definitions_for(
+        &mut self,
+        pattern: &'ast ast::Pattern,
+        binder: Definition<'db>,
+    ) {
+        let predicate =
+            self.create_pattern_predicate(PatternSubject::Binder(binder), pattern, None, None);
+        self.record_destructure(pattern, predicate, None);
+        let outer_match_case = self
+            .current_match_case
+            .replace(CurrentMatchCase::new(pattern, predicate));
+        self.visit_pattern(pattern);
+        self.current_match_case = outer_match_case;
+    }
+
+    /// Records what inference needs to check a destructuring binder's pattern.
+    fn record_destructure(
+        &mut self,
+        pattern: &'ast ast::Pattern,
+        predicate: PatternPredicate<'db>,
+        after_orelse: Option<ScopedReachabilityConstraintId>,
+    ) {
+        self.destructures.insert(
+            NodeKey::from_node(pattern),
+            Destructure {
+                predicate,
+                after_orelse,
+            },
+        );
+    }
+
     fn create_pattern_predicate(
         &mut self,
-        subject: Expression<'db>,
+        subject: PatternSubject<'db>,
         pattern: &ast::Pattern,
         guard: Option<&ast::Expr>,
         previous_pattern: Option<PatternPredicate<'db>>,
@@ -2942,7 +3017,8 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 }
             }
             ast::Pattern::MatchSequence(ast::PatternMatchSequence { patterns, .. })
-            | ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => {
+            | ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. })
+            | ast::Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
                 for pattern in patterns {
                     self.add_type_match_captures(pattern);
                 }
@@ -3139,7 +3215,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
     fn declare_parameter(&mut self, parameter: &'ast ast::ParameterWithDefault) {
         let symbol = self.add_symbol(parameter.name().id().clone());
 
-        self.add_definition(
+        let definition = self.add_definition(
             symbol.into(),
             ParameterDefinitionNodeRef::Parameter(parameter),
         );
@@ -3147,6 +3223,12 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
         self.current_place_table_mut()
             .symbol_mut(symbol)
             .mark_parameter();
+
+        // basedpython: the argument went to the parameter's binder; the pattern
+        // destructures it from there
+        if let Some(pattern) = parameter.parameter.pattern.as_deref() {
+            self.add_destructure_definitions_for(pattern, definition);
+        }
     }
 
     fn declare_lambda_parameters(
@@ -3335,6 +3417,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
             basedpython_statement_calls: FrozenSet::from(self.basedpython_statement_calls),
             async_comprehensions: FrozenSet::from(self.async_comprehensions),
             narrowing_alias_predicates: FrozenMap::from(self.alias_predicates),
+            destructures: FrozenMap::from(self.destructures),
         }
     }
 
@@ -4018,6 +4101,69 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     }
                 }
             }
+            // basedpython `let <pattern> := <subject> [else: ...]`: a single
+            // `match` case that binds in the enclosing scope. Without an `else`
+            // block the pattern has to be irrefutable — inference reports one
+            // that is not — so the captures are bound unconditionally; with one,
+            // the block is what runs when the pattern did not match
+            ast::Stmt::Let(ast::StmtLet {
+                pattern,
+                value,
+                orelse,
+                range: _,
+                node_index: _,
+            }) => {
+                let subject = self.add_standalone_expression(value);
+                self.visit_expr(value);
+                let (subject_targets, sequence_subject_targets) = self.match_subject_targets(value);
+
+                // taken before the pattern is visited, so the captures it binds
+                // are not visible on the path where nothing matched
+                let no_match = self.flow_snapshot();
+
+                let predicate = self.create_pattern_predicate(
+                    PatternSubject::Expression(subject),
+                    pattern,
+                    None,
+                    None,
+                );
+                let outer_match_case = self
+                    .current_match_case
+                    .replace(CurrentMatchCase::new(pattern, predicate));
+                self.visit_pattern(pattern);
+                self.current_match_case = outer_match_case;
+
+                let (match_predicate, narrowing_id) = self.add_pattern_narrowing_constraint(
+                    predicate,
+                    &subject_targets,
+                    &sequence_subject_targets,
+                    false,
+                );
+                let reachability = self.record_reachability_constraint(match_predicate);
+
+                let after_orelse_reachability = if orelse.is_empty() {
+                    None
+                } else {
+                    let matched = self.flow_snapshot();
+                    self.flow_restore(no_match);
+                    self.record_negated_narrowing_constraint(match_predicate, narrowing_id);
+                    self.record_negated_reachability_constraint(reachability);
+                    self.visit_body(orelse);
+
+                    // the block has to diverge, which is this point being
+                    // unreachable. Recorded for inference to check, and left in
+                    // the flow: when the block does not diverge, merging it back
+                    // is what makes the captures possibly unbound
+                    let after_orelse_reachability = self.current_reachability();
+
+                    let after_orelse = self.flow_snapshot();
+                    self.flow_restore(matched);
+                    self.flow_merge(after_orelse);
+                    Some(after_orelse_reachability)
+                };
+
+                self.record_destructure(pattern, predicate, after_orelse_reachability);
+            }
             ast::Stmt::If(node) => {
                 let (mut falsy, mut last_predicate, mut last_narrowing_id) =
                     self.visit_if_condition(node.pattern.as_deref(), &node.test);
@@ -4212,6 +4358,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     node_index: _,
                     context_expr,
                     optional_vars,
+                    pattern,
                 } in items
                 {
                     self.visit_expr(context_expr);
@@ -4226,6 +4373,13 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                             optional_vars,
                             context_manager,
                         );
+                        // basedpython: the bound value went to the item's binder;
+                        // the pattern destructures it from there
+                        if let Some(pattern) = pattern.as_deref()
+                            && let ast::Expr::Name(binder) = optional_vars
+                        {
+                            self.add_destructure_definitions(pattern, binder);
+                        }
                     }
                 }
                 self.visit_body(body);
@@ -4237,6 +4391,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     node_index: _,
                     is_async,
                     target,
+                    pattern,
                     iter,
                     body,
                     orelse,
@@ -4293,6 +4448,14 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                 }
 
                 self.add_unpackable_assignment(&Unpackable::For(for_stmt), target, iter_expr);
+
+                // basedpython: the element went to the loop's binder; the pattern
+                // destructures it from there
+                if let Some(pattern) = pattern.as_deref()
+                    && let ast::Expr::Name(binder) = &**target
+                {
+                    self.add_destructure_definitions(pattern, binder);
+                }
 
                 let outer_loop = self.push_loop();
                 self.visit_body(body);
@@ -4367,7 +4530,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
 
                 for (i, case) in cases.iter().enumerate() {
                     let match_pattern_predicate = self.create_pattern_predicate(
-                        subject_expr,
+                        PatternSubject::Expression(subject_expr),
                         &case.pattern,
                         case.guard.as_deref(),
                         previous_pattern,
@@ -5466,6 +5629,15 @@ impl<'ast> Visitor<'ast> for SemanticIndexBuilder<'_, 'ast> {
         }
     }
 
+    fn visit_parameter(&mut self, parameter: &'ast ast::Parameter) {
+        // Only the annotation belongs to this scope. basedpython: a destructuring
+        // parameter's pattern binds in the function's body scope, where
+        // `declare_parameter` visits it
+        if let Some(annotation) = &parameter.annotation {
+            self.visit_annotation(annotation);
+        }
+    }
+
     fn visit_pattern(&mut self, pattern: &'ast ast::Pattern) {
         if let ast::Pattern::MatchStar(ast::PatternMatchStar {
             name: Some(name),
@@ -5876,6 +6048,7 @@ impl<'ast> FluidUseClassifier<'ast> {
                 self.visit_expr(&node.value);
             }
             ast::Stmt::If(node) => self.visit_expr(&node.test),
+            ast::Stmt::Let(node) => self.visit_expr(&node.value),
             ast::Stmt::While(node) => self.visit_expr(&node.test),
             ast::Stmt::For(node) => {
                 self.visit_expr(&node.target);

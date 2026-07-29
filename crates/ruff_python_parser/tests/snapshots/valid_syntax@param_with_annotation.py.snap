@@ -38,6 +38,7 @@ Module(
                                         range: 8..11,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: Some(
                                         Name(
                                             ExprName {
@@ -105,6 +106,7 @@ Module(
                                         range: 31..34,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: Some(
                                         Lambda(
                                             ExprLambda {
@@ -127,6 +129,7 @@ Module(
                                                                         range: 43..44,
                                                                         node_index: NodeIndex(None),
                                                                     },
+                                                                    pattern: None,
                                                                     annotation: None,
                                                                     is_context: false,
                                                                 },

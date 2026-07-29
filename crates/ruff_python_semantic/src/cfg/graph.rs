@@ -220,6 +220,7 @@ impl<'stmt> CFGBuilder<'stmt> {
 
                 // Switch statements
                 Stmt::If(_) => {}
+                Stmt::Let(_) => {}
                 Stmt::Match(_) => {}
 
                 // Exception handling statements

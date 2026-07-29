@@ -151,6 +151,18 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.infer_definition(parameter);
         }
 
+        // basedpython: a destructuring parameter's pattern binds in this scope too
+        for parameter in function
+            .parameters
+            .iter()
+            .map(ast::AnyParameterRef::as_parameter)
+        {
+            if let Some(pattern) = parameter.pattern.as_deref() {
+                self.infer_match_pattern(pattern);
+                self.check_destructure(pattern);
+            }
+        }
+
         validate_paramspec_components(&self.context, &function.parameters, |expr| {
             self.file_expression_type(expr)
         });
@@ -1259,6 +1271,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             range: _,
             node_index: _,
             name: _,
+            // the pattern of a destructuring parameter binds in the function's
+            // body scope, so it is inferred there rather than here
+            pattern: _,
             annotation,
             is_context: _,
         } = parameter;

@@ -23,6 +23,7 @@ pub(crate) mod stmt_if;
 pub(crate) mod stmt_import;
 pub(crate) mod stmt_import_from;
 pub(crate) mod stmt_ipy_escape_command;
+pub(crate) mod stmt_let;
 pub(crate) mod stmt_match;
 pub(crate) mod stmt_nonlocal;
 pub(crate) mod stmt_pass;
@@ -50,6 +51,7 @@ impl FormatRule<Stmt, PyFormatContext<'_>> for FormatStmt {
             Stmt::For(x) => x.format().fmt(f),
             Stmt::While(x) => x.format().fmt(f),
             Stmt::If(x) => x.format().fmt(f),
+            Stmt::Let(x) => x.format().fmt(f),
             Stmt::With(x) => x.format().fmt(f),
             Stmt::Match(x) => x.format().fmt(f),
             Stmt::Raise(x) => x.format().fmt(f),

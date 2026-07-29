@@ -415,6 +415,29 @@ fn match_pattern<'db>(
         ast::Pattern::MatchClass(_)
         | ast::Pattern::MatchMapping(_)
         | ast::Pattern::MatchStar(_) => PatternMatch::Undecidable,
+
+        // basedpython: a conjunction matches when every conjunct does, and binds
+        // what all of them bind. A conjunct that fails leaves nothing behind
+        ast::Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
+            let checkpoint = bindings.checkpoint();
+            let mut undecidable = false;
+            for pattern in patterns {
+                match match_pattern(db, file, subject, pattern, bindings) {
+                    PatternMatch::Matched => {}
+                    PatternMatch::Undecidable => undecidable = true,
+                    PatternMatch::NoMatch => {
+                        bindings.rollback(checkpoint);
+                        return PatternMatch::NoMatch;
+                    }
+                }
+            }
+            if undecidable {
+                bindings.rollback(checkpoint);
+                PatternMatch::Undecidable
+            } else {
+                PatternMatch::Matched
+            }
+        }
     }
 }
 

@@ -506,6 +506,7 @@ Module(
                                                             range: 173..174,
                                                             node_index: NodeIndex(None),
                                                         },
+                                                        pattern: None,
                                                         annotation: None,
                                                         is_context: false,
                                                     },

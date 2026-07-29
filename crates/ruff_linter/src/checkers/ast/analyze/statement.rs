@@ -1251,6 +1251,7 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
         Stmt::For(
             for_stmt @ ast::StmtFor {
                 target,
+                pattern: _,
                 body,
                 iter,
                 orelse,

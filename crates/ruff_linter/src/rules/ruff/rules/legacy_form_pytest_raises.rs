@@ -310,6 +310,7 @@ fn generate_with_statement(
             range: TextRange::default(),
             context_expr: context_call.into(),
             optional_vars: optional_vars.map(|var| Box::new(var.clone())),
+            pattern: None,
         }],
         body: ast::Suite::from([body]),
     })

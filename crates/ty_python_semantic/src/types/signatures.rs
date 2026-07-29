@@ -4455,7 +4455,13 @@ impl<'db> Parameters<'db> {
                 definition,
                 &param.parameter,
                 ParameterKind::PositionalOnly {
-                    name: Some(param.parameter.name.id.clone()),
+                    // basedpython: a destructuring parameter is named by a
+                    // synthetic binder. Leaving it out is what keeps that name
+                    // out of a diagnostic nobody could act on
+                    name: match param.parameter.pattern {
+                        Some(_) => None,
+                        None => Some(param.parameter.name.id.clone()),
+                    },
                     default_type: default_type(param),
                 },
             )
@@ -4482,6 +4488,11 @@ impl<'db> Parameters<'db> {
         }
 
         let positional_or_keyword = pos_or_keyword_iter.map(|arg| {
+            // basedpython: a destructuring parameter is named by a synthetic
+            // binder no call site can write, so it is positional-only
+            if arg.parameter.pattern.is_some() {
+                return pos_only_param(arg);
+            }
             Parameter::from_node_and_kind(
                 db,
                 definition,

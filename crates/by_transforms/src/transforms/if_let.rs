@@ -40,6 +40,7 @@ use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use super::destructure::{NameGen, push_destructure};
 use super::source_util::line_indent;
 use crate::type_info::TypeInfo;
 
@@ -69,6 +70,7 @@ impl TypeAwarePass for IfLetPass<'_> {
             errors: Vec::new(),
             counter: 0,
             supported: self.min_version >= MIN_VERSION,
+            names: NameGen::default(),
         };
         for stmt in stmts {
             lower.visit_stmt(stmt);
@@ -94,6 +96,8 @@ struct IfLetLower<'a, 'src> {
     /// monotonic across the file so sibling chains get distinct selectors
     counter: usize,
     supported: bool,
+    /// names the temporaries a clause's destructuring needs
+    names: NameGen,
 }
 
 impl<'ast> Visitor<'ast> for IfLetLower<'_, '_> {
@@ -198,19 +202,36 @@ impl IfLetLower<'_, '_> {
             match (index, clause.test) {
                 (0, Some(test)) => {
                     fragments.push(Fragment::Lit(format!("{selector} = 0\n{indent}")));
-                    push_guard(&mut fragments, &indent, &selector, 1, clause.pattern, test);
+                    if let Err(error) = push_guard(
+                        &mut fragments,
+                        &indent,
+                        &selector,
+                        1,
+                        clause.pattern,
+                        test,
+                        &mut self.names,
+                    ) {
+                        self.errors
+                            .push(format!("{error} (line {})", self.line_of(clause.start)));
+                        return;
+                    }
                     fragments.push(Fragment::Lit(format!("\n{indent}if {selector} == 1:")));
                 }
                 (_, Some(test)) => {
                     fragments.push(Fragment::Lit(format!("if {selector} == 0:\n{indent}    ")));
-                    push_guard(
+                    if let Err(error) = push_guard(
                         &mut fragments,
                         &format!("{indent}    "),
                         &selector,
                         index + 1,
                         clause.pattern,
                         test,
-                    );
+                        &mut self.names,
+                    ) {
+                        self.errors
+                            .push(format!("{error} (line {})", self.line_of(clause.start)));
+                        return;
+                    }
                     fragments.push(Fragment::Lit(format!(
                         "\n{indent}if {selector} == {}:",
                         index + 1
@@ -248,8 +269,8 @@ impl IfLetLower<'_, '_> {
     }
 }
 
-/// Appends the guard that records clause `value` as taken: a `match` with a
-/// single case for a pattern clause, a plain `if` for a condition
+/// Appends the guard that records clause `value` as taken: the destructuring a
+/// pattern clause stands for, a plain `if` for a condition
 fn push_guard(
     fragments: &mut Vec<Fragment>,
     indent: &str,
@@ -257,23 +278,25 @@ fn push_guard(
     value: usize,
     pattern: Option<&Pattern>,
     test: &Expr,
-) {
+    names: &mut NameGen,
+) -> Result<(), String> {
     match pattern {
-        Some(pattern) => {
-            fragments.push(Fragment::Lit("match ".to_owned()));
-            fragments.push(Fragment::Src(test.range()));
-            fragments.push(Fragment::Lit(format!(":\n{indent}    case ")));
-            fragments.push(Fragment::Src(pattern.range()));
-            fragments.push(Fragment::Lit(format!(
-                ":\n{indent}        {selector} = {value}"
-            )));
-        }
+        Some(pattern) => push_destructure(
+            fragments,
+            indent,
+            &[Fragment::Src(test.range())],
+            pattern,
+            None,
+            &format!("{selector} = {value}"),
+            names,
+        ),
         None => {
             fragments.push(Fragment::Lit("if ".to_owned()));
             fragments.push(Fragment::Src(test.range()));
             fragments.push(Fragment::Lit(format!(
                 ":\n{indent}    {selector} = {value}"
             )));
+            Ok(())
         }
     }
 }

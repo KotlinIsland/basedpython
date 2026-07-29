@@ -26,8 +26,11 @@ use builder::SemanticIndexBuilder;
 use definition::{Definition, DefinitionNodeKey, Definitions};
 use expression::Expression;
 use narrowing_constraints::ScopedNarrowingConstraint;
+use node_key::NodeKey;
 pub use place::{PlaceExprRef, PlaceTable};
+use predicate::PatternPredicate;
 pub use reachability_constraints::ReachabilityConstraintsBuilder;
+use reachability_constraints::ScopedReachabilityConstraintId;
 pub use scope::FileScopeId;
 use scope::{NodeWithScopeKey, NodeWithScopeRef, Scope, ScopeId, ScopeKind, ScopeLaziness};
 use symbol::ScopedSymbolId;
@@ -353,6 +356,24 @@ pub struct SemanticIndex<'db> {
     /// When a predicate references an alias variable (e.g., `is_none` from `is_none = x is None`),
     /// the alias Name node is mapped to its aliased expression for constraint-generation time.
     narrowing_alias_predicates: FrozenMap<ExpressionNodeKey, NarrowingAliasPredicate<'db>>,
+
+    /// basedpython: what each destructuring binder's pattern needs from the flow
+    /// analysis, keyed by the pattern node.
+    destructures: FrozenMap<NodeKey, Destructure<'db>>,
+}
+
+/// basedpython: what a destructuring binder — a `let` statement, a `for` target,
+/// a `with` item, a parameter — needs at inference time and only the flow
+/// analysis can record.
+#[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
+pub struct Destructure<'db> {
+    /// The pattern, and the value it is matched against.
+    pub predicate: PatternPredicate<'db>,
+
+    /// For a `let` statement with an `else` block, the reachability of the point
+    /// just past that block. The block has to diverge, which is exactly that
+    /// point being unreachable.
+    pub after_orelse: Option<ScopedReachabilityConstraintId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
@@ -369,6 +390,12 @@ impl<'db> SemanticIndex<'db> {
     #[track_caller]
     pub fn place_table(&self, scope_id: FileScopeId) -> &PlaceTable {
         &self.place_tables[scope_id]
+    }
+
+    /// basedpython: what the destructuring binder whose pattern is `key` needs at
+    /// inference time, if that pattern is one.
+    pub fn destructure(&self, key: impl Into<NodeKey>) -> Option<&Destructure<'db>> {
+        self.destructures.get(&key.into())
     }
 
     /// basedpython: whether this call expression is made as a bare statement.

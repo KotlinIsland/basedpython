@@ -282,10 +282,14 @@ impl TrailingLambdaLower<'_, '_> {
             fragments.push(Fragment::Lit(declarations));
         }
         let body = TextRange::new(colon + TextSize::from(1), stmt_range.end());
-        if returns.is_empty() {
-            fragments.push(Fragment::Src(body));
-        } else {
-            push_body_capturing_returns(&mut fragments, body, &returns, &ret_cell);
+        fragments.push(Fragment::Src(body));
+        // each captured `return` is an edit of its own rather than a split in the
+        // passthrough above: a construct that spans one of them — an `if let`
+        // chain, a `let ... else` — would belong to no single `Src` span and be
+        // dropped, reaching the output unlowered
+        for ret in &returns {
+            self.edits
+                .push((ret.range(), capture_return(ret, &ret_cell)));
         }
         fragments.push(Fragment::Lit(format!("\n{indent}")));
         match plain_call {
@@ -395,26 +399,17 @@ fn definitely_assigns(body: &[Stmt], name: &str) -> bool {
     })
 }
 
-fn push_body_capturing_returns(
-    fragments: &mut Vec<Fragment>,
-    body: TextRange,
-    returns: &[&StmtReturn],
-    cell: &str,
-) {
-    let mut cursor = body.start();
-    for ret in returns {
-        fragments.push(Fragment::Src(TextRange::new(cursor, ret.range().start())));
-        match &ret.value {
-            Some(value) => {
-                fragments.push(Fragment::Lit(format!("{cell}.append(")));
-                fragments.push(Fragment::Src(value.range()));
-                fragments.push(Fragment::Lit("); return".to_owned()));
-            }
-            None => fragments.push(Fragment::Lit(format!("{cell}.append(None); return"))),
-        }
-        cursor = ret.range().end();
+/// The replacement for a `return` inside a `once` block: the value goes to the
+/// cell the enclosing function reads it back from.
+fn capture_return(ret: &StmtReturn, cell: &str) -> Vec<Fragment> {
+    match &ret.value {
+        Some(value) => vec![
+            Fragment::Lit(format!("{cell}.append(")),
+            Fragment::Src(value.range()),
+            Fragment::Lit("); return".to_owned()),
+        ],
+        None => vec![Fragment::Lit(format!("{cell}.append(None); return"))],
     }
-    fragments.push(Fragment::Src(TextRange::new(cursor, body.end())));
 }
 
 impl<'ast> Visitor<'ast> for TrailingLambdaLower<'_, '_> {

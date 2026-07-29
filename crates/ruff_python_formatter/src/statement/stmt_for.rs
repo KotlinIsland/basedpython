@@ -5,6 +5,7 @@ use ruff_text_size::Ranged;
 use crate::expression::expr_tuple::TupleParentheses;
 use crate::expression::maybe_parenthesize_expression;
 use crate::expression::parentheses::Parenthesize;
+use crate::pattern::maybe_parenthesize_pattern;
 use crate::prelude::*;
 use crate::statement::clause::{ClauseHeader, ElseClause, clause};
 use crate::statement::suite::SuiteKind;
@@ -32,6 +33,7 @@ impl FormatNodeRule<StmtFor> for FormatStmtFor {
         let StmtFor {
             is_async,
             target,
+            pattern,
             iter,
             body,
             orelse,
@@ -56,7 +58,12 @@ impl FormatNodeRule<StmtFor> for FormatStmtFor {
                     is_async.then_some(format_args![token("async"), space()]),
                     token("for"),
                     space(),
-                    ExprTupleWithoutParentheses(target),
+                    // basedpython: a destructuring loop binds a pattern; `target`
+                    // is the synthetic binder holding the element it matches
+                    format_with(|f: &mut PyFormatter| match pattern {
+                        Some(pattern) => maybe_parenthesize_pattern(pattern, item).fmt(f),
+                        None => ExprTupleWithoutParentheses(target).fmt(f),
+                    }),
                     space(),
                     token("in"),
                     space(),

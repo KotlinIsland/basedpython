@@ -120,6 +120,11 @@ pub(crate) struct Parser<'src> {
     /// take this flag instead of demanding a newline of their own.
     pub(super) expr_consumed_suite: bool,
 
+    /// basedpython: how many destructuring binders have been named so far.
+    /// Counting them in source order keeps their names stable across a
+    /// reformat, and rewinding restores the count with everything else
+    destructure_binders: u32,
+
     /// Current parser recursion depth remaining before the depth limit is exceeded.
     depth_remaining: u16,
 
@@ -177,6 +182,7 @@ impl<'src> Parser<'src> {
             pending_members: Vec::new(),
             pending_narrow_props: Vec::new(),
             expr_consumed_suite: false,
+            destructure_binders: 0,
             depth_remaining,
             max_nesting_depth,
             expr_scratch: ScratchBuffer::with_capacity(16),
@@ -1001,6 +1007,7 @@ impl<'src> Parser<'src> {
             prev_token_end: self.prev_token_end,
             recovery_context: self.recovery_context,
             expr_consumed_suite: self.expr_consumed_suite,
+            destructure_binders: self.destructure_binders,
         }
     }
 
@@ -1014,6 +1021,7 @@ impl<'src> Parser<'src> {
             prev_token_end,
             recovery_context,
             expr_consumed_suite,
+            destructure_binders,
         } = checkpoint;
 
         self.tokens.rewind(tokens);
@@ -1024,6 +1032,7 @@ impl<'src> Parser<'src> {
         self.prev_token_end = prev_token_end;
         self.recovery_context = recovery_context;
         self.expr_consumed_suite = expr_consumed_suite;
+        self.destructure_binders = destructure_binders;
     }
 }
 
@@ -1055,6 +1064,7 @@ struct ParserCheckpoint {
     prev_token_end: TextSize,
     recovery_context: RecoveryContext,
     expr_consumed_suite: bool,
+    destructure_binders: u32,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1412,11 +1422,13 @@ impl RecoveryContextKind {
                     //     case a: ...
 
                     // basedpython: `:=` ends the pattern of an `if let a, b := t:`
-                    // clause. A `case` pattern is never followed by one, so this
-                    // only affects an already-invalid `match` arm
+                    // or `let a, b := t` clause, and `in` the pattern of a
+                    // destructuring `for a, b in pairs:`. A `case` pattern is
+                    // never followed by either, so this only affects an
+                    // already-invalid `match` arm
                     matches!(
                         p.current_token_kind(),
-                        TokenKind::Colon | TokenKind::If | TokenKind::ColonEqual
+                        TokenKind::Colon | TokenKind::If | TokenKind::ColonEqual | TokenKind::In
                     )
                     .then_some(ListTerminatorKind::Regular)
                 }

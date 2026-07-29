@@ -161,6 +161,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Tuple(
                         ExprTuple {
                             node_index: NodeIndex(None),
@@ -241,6 +242,7 @@ Module(
                             is_parameter_shape: false,
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),

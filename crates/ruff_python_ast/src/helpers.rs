@@ -531,6 +531,11 @@ fn any_over_pattern(pattern: &Pattern, func: &mut dyn FnMut(&Expr) -> bool) -> b
             patterns,
             range: _,
             node_index: _,
+        })
+        | Pattern::MatchAnd(ast::PatternMatchAnd {
+            patterns,
+            range: _,
+            node_index: _,
         }) => patterns
             .iter()
             .any(|pattern| any_over_pattern(pattern, &mut *func)),
@@ -665,12 +670,16 @@ where
             }
             Stmt::For(ast::StmtFor {
                 target,
+                pattern,
                 iter,
                 body,
                 orelse,
                 ..
             }) => {
                 any_over_expr(target, &mut *func)
+                    || pattern
+                        .as_deref()
+                        .is_some_and(|pattern| any_over_pattern(pattern, &mut *func))
                     || any_over_expr(iter, &mut *func)
                     || any_over_body(body, &mut *func)
                     || any_over_body(orelse, &mut *func)
@@ -684,6 +693,17 @@ where
             }) => {
                 any_over_expr(test, &mut *func)
                     || any_over_body(body, &mut *func)
+                    || any_over_body(orelse, &mut *func)
+            }
+            Stmt::Let(ast::StmtLet {
+                pattern,
+                value,
+                orelse,
+                range: _,
+                node_index: _,
+            }) => {
+                any_over_pattern(pattern, &mut *func)
+                    || any_over_expr(value, &mut *func)
                     || any_over_body(orelse, &mut *func)
             }
             Stmt::If(ast::StmtIf {
@@ -1289,11 +1309,13 @@ pub fn raises_clause_spans(
 }
 
 /// basedpython: the range of the `let` keyword introducing a pattern-matching
-/// `if let <pattern> := <subject>:` clause, read from `source`.
+/// `if let <pattern> := <subject>:` clause or a `let <pattern> := <subject>`
+/// destructuring statement, read from `source`.
 ///
 /// The AST holds only the pattern, so the keyword is recovered by tokenizing the
-/// gap between the clause keyword (`if` / `elif`, at `clause_start`) and the
-/// pattern. Returns `None` when the source does not have that shape.
+/// gap between the statement's start (the `if` / `elif` keyword, or the `let`
+/// itself) and the pattern. Returns `None` when the source does not have that
+/// shape.
 pub fn if_let_keyword_range(
     source: &str,
     clause_start: TextSize,

@@ -23,6 +23,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -55,6 +56,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Tuple(
                         ExprTuple {
                             node_index: NodeIndex(None),
@@ -133,6 +135,7 @@ Module(
                             optional: false,
                         },
                     ),
+                    pattern: None,
                     iter: Call(
                         ExprCall {
                             node_index: NodeIndex(None),
@@ -197,6 +200,7 @@ Module(
                             is_typeof: false,
                         },
                     ),
+                    pattern: None,
                     iter: Attribute(
                         ExprAttribute {
                             node_index: NodeIndex(None),
@@ -242,6 +246,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Compare(
                         ExprCompare {
                             node_index: NodeIndex(None),
@@ -293,6 +298,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: BoolOp(
                         ExprBoolOp {
                             node_index: NodeIndex(None),
@@ -372,6 +378,7 @@ Module(
                             is_parameter_shape: false,
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -426,6 +433,7 @@ Module(
                             is_parameter_shape: false,
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -458,6 +466,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: List(
                         ExprList {
                             node_index: NodeIndex(None),
@@ -509,6 +518,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Await(
                         ExprAwait {
                             node_index: NodeIndex(None),
@@ -554,6 +564,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Lambda(
                         ExprLambda {
                             node_index: NodeIndex(None),
@@ -575,6 +586,7 @@ Module(
                                                     range: 344..345,
                                                     node_index: NodeIndex(None),
                                                 },
+                                                pattern: None,
                                                 annotation: None,
                                                 is_context: false,
                                             },
@@ -627,6 +639,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: If(
                         ExprIf {
                             node_index: NodeIndex(None),
@@ -700,6 +713,7 @@ Module(
                                         ctx: Store,
                                     },
                                 ),
+                                pattern: None,
                                 iter: Name(
                                     ExprName {
                                         node_index: NodeIndex(None),

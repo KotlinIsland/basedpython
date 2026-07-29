@@ -28,6 +28,7 @@ Module(
                                 },
                             ),
                             optional_vars: None,
+                            pattern: None,
                         },
                     ],
                     body: [],

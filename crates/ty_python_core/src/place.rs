@@ -3,7 +3,7 @@ use crate::member::{
     Member, MemberExpr, MemberExprBuilder, MemberExprRef, MemberTable, MemberTableBuilder,
     ScopedMemberId,
 };
-use crate::predicate::PatternPredicate;
+use crate::predicate::{PatternPredicate, PatternSubject};
 use crate::scope::FileScopeId;
 use crate::symbol::{ScopedSymbolId, Symbol, SymbolTable, SymbolTableBuilder};
 use crate::{Db, PossiblyNarrowedPlaces};
@@ -658,7 +658,12 @@ impl<'db, 'a> PossiblyNarrowedPlacesBuilder<'db, 'a> {
         pattern: PatternPredicate<'db>,
         module: &ParsedModuleRef,
     ) -> PossiblyNarrowedPlaces {
-        self.pattern_kind(pattern.subject(self.db), module)
+        match pattern.subject(self.db) {
+            PatternSubject::Expression(subject) => self.pattern_kind(subject, module),
+            // a binder holds a value that only the pattern's captures can name,
+            // so matching it narrows nothing else
+            PatternSubject::Binder(_) => PossiblyNarrowedPlaces::default(),
+        }
     }
 
     fn expression_node(&self, expr: &ast::Expr) -> PossiblyNarrowedPlaces {

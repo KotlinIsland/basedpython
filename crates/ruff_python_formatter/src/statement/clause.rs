@@ -2,7 +2,7 @@ use ruff_formatter::{Argument, Arguments, FormatError, write};
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::{
     ElifElseClause, ExceptHandlerExceptHandler, MatchCase, StmtClassDef, StmtFor, StmtFunctionDef,
-    StmtIf, StmtMatch, StmtTry, StmtTypeAlias, StmtWhile, StmtWith, Suite,
+    StmtIf, StmtLet, StmtMatch, StmtTry, StmtTypeAlias, StmtWhile, StmtWith, Suite,
 };
 use ruff_python_trivia::{SimpleToken, SimpleTokenKind, SimpleTokenizer};
 use ruff_source_file::LineRanges;
@@ -36,6 +36,9 @@ pub(crate) enum ClauseHeader<'a> {
     For(&'a StmtFor),
     While(&'a StmtWhile),
     With(&'a StmtWith),
+    /// basedpython: the whole `let <pattern> := <subject> else:` header of a
+    /// destructuring statement that has an `else` block.
+    Let(&'a StmtLet),
     OrElse(ElseClause<'a>),
 }
 
@@ -59,6 +62,7 @@ impl<'a> ClauseHeader<'a> {
             | ClauseHeader::For(StmtFor { body, .. })
             | ClauseHeader::While(StmtWhile { body, .. })
             | ClauseHeader::With(StmtWith { body, .. })
+            | ClauseHeader::Let(StmtLet { orelse: body, .. })
             | ClauseHeader::ExceptHandler(ExceptHandlerExceptHandler { body, .. })
             | ClauseHeader::OrElse(
                 ElseClause::Try(StmtTry { orelse: body, .. })
@@ -96,6 +100,7 @@ impl<'a> ClauseHeader<'a> {
             | ClauseHeader::For(_)
             | ClauseHeader::While(_)
             | ClauseHeader::With(_)
+            | ClauseHeader::Let(_)
             | ClauseHeader::OrElse(_) => last_child_end,
 
             ClauseHeader::ExceptHandler(handler) => {
@@ -246,6 +251,7 @@ impl<'a> ClauseHeader<'a> {
             }
             ClauseHeader::For(StmtFor {
                 target,
+                pattern,
                 iter,
                 range: _,
                 node_index: _,
@@ -253,7 +259,12 @@ impl<'a> ClauseHeader<'a> {
                 body: _,
                 orelse: _,
             }) => {
-                visit(target.as_ref(), visitor);
+                // the binder is synthetic and never formatted; the pattern is
+                // what stands in the target's place
+                match pattern {
+                    Some(pattern) => visit(pattern.as_ref(), visitor),
+                    None => visit(target.as_ref(), visitor),
+                }
                 visit(iter.as_ref(), visitor);
             }
             ClauseHeader::While(StmtWhile {
@@ -264,6 +275,16 @@ impl<'a> ClauseHeader<'a> {
                 orelse: _,
             }) => {
                 visit(test.as_ref(), visitor);
+            }
+            ClauseHeader::Let(StmtLet {
+                pattern,
+                value,
+                range: _,
+                node_index: _,
+                orelse: _,
+            }) => {
+                visit(pattern.as_ref(), visitor);
+                visit(value.as_ref(), visitor);
             }
             ClauseHeader::With(StmtWith {
                 items,
@@ -405,6 +426,18 @@ impl<'a> ClauseHeader<'a> {
 
                 find_keyword(StartPosition::clause_start(header), keyword, source)
             }
+            ClauseHeader::Let(header) => {
+                // `let` is an ordinary identifier token rather than a keyword, so
+                // it is read off the statement's own start — which is where it is
+                // by construction — rather than searched for
+                let mut tokens = SimpleTokenizer::starts_at(header.start(), source).skip_trivia();
+                match tokens.next() {
+                    Some(token) if token.kind() == SimpleTokenKind::Name => Ok(token.range()),
+                    _ => Err(FormatError::syntax_error(
+                        "Expected `let` at the start of a destructuring statement.",
+                    )),
+                }
+            }
             ClauseHeader::OrElse(header) => match header {
                 ElseClause::Try(try_stmt) => {
                     let last_statement = try_stmt
@@ -449,6 +482,7 @@ impl<'a> From<ClauseHeader<'a>> for AnyNodeRef<'a> {
             ClauseHeader::For(stmt_for) => stmt_for.into(),
             ClauseHeader::While(stmt_while) => stmt_while.into(),
             ClauseHeader::With(stmt_with) => stmt_with.into(),
+            ClauseHeader::Let(stmt_let) => stmt_let.into(),
             ClauseHeader::OrElse(else_clause) => else_clause.into(),
         }
     }

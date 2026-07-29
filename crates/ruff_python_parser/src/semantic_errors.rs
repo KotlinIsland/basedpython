@@ -197,11 +197,28 @@ impl SemanticSyntaxChecker {
             Stmt::Match(match_stmt) => {
                 Self::irrefutable_match_case(match_stmt, ctx);
                 for case in &match_stmt.cases {
-                    let mut visitor = MatchPatternVisitor {
-                        names: FxHashSet::default(),
-                        ctx,
-                    };
-                    visitor.visit_pattern(&case.pattern);
+                    Self::check_pattern_bindings(&case.pattern, ctx);
+                }
+            }
+            // basedpython: every other place a pattern can be written binds the
+            // same way a `case` does, so a name bound twice is the same error
+
+            // test_err multiple_assignment_in_let_pattern
+            // let Point(x, y) and Point(x, y) := origin
+            Stmt::Let(ast::StmtLet { pattern, .. }) => {
+                Self::check_pattern_bindings(pattern, ctx);
+            }
+            Stmt::If(ast::StmtIf {
+                pattern,
+                elif_else_clauses,
+                ..
+            }) => {
+                for pattern in pattern.iter().map(|pattern| &**pattern).chain(
+                    elif_else_clauses
+                        .iter()
+                        .filter_map(|clause| clause.pattern.as_deref()),
+                ) {
+                    Self::check_pattern_bindings(pattern, ctx);
                 }
             }
             Stmt::FunctionDef(ast::StmtFunctionDef {
@@ -282,10 +299,15 @@ impl SemanticSyntaxChecker {
             }
             Stmt::For(ast::StmtFor {
                 target,
+                pattern,
                 iter,
                 is_async,
                 ..
             }) => {
+                if let Some(pattern) = pattern {
+                    Self::check_pattern_bindings(pattern, ctx);
+                }
+
                 // test_err single_star_for
                 // for _ in *x: ...
                 // for *x in xs: ...
@@ -299,12 +321,19 @@ impl SemanticSyntaxChecker {
                     );
                 }
             }
-            Stmt::With(ast::StmtWith { is_async: true, .. }) => {
-                Self::await_outside_async_function(
-                    ctx,
-                    stmt,
-                    AwaitOutsideAsyncFunctionKind::AsyncWith,
-                );
+            Stmt::With(ast::StmtWith {
+                is_async, items, ..
+            }) => {
+                for pattern in items.iter().filter_map(|item| item.pattern.as_deref()) {
+                    Self::check_pattern_bindings(pattern, ctx);
+                }
+                if *is_async {
+                    Self::await_outside_async_function(
+                        ctx,
+                        stmt,
+                        AwaitOutsideAsyncFunctionKind::AsyncWith,
+                    );
+                }
             }
             Stmt::Nonlocal(ast::StmtNonlocal { names, range, .. }) => {
                 // test_ok nonlocal_declaration_at_module_level
@@ -774,6 +803,15 @@ impl SemanticSyntaxChecker {
                 );
             }
         }
+    }
+
+    /// Reports a pattern that binds the same name more than once.
+    fn check_pattern_bindings<Ctx: SemanticSyntaxContext>(pattern: &Pattern, ctx: &Ctx) {
+        let mut visitor = MatchPatternVisitor {
+            names: FxHashSet::default(),
+            ctx,
+        };
+        visitor.visit_pattern(pattern);
     }
 
     fn irrefutable_match_case<Ctx: SemanticSyntaxContext>(stmt: &ast::StmtMatch, ctx: &Ctx) {
@@ -1321,6 +1359,9 @@ impl Display for SemanticSyntaxError {
             SemanticSyntaxErrorKind::MultipleCaseAssignment(name) => {
                 write!(f, "multiple assignments to name `{name}` in pattern")
             }
+            SemanticSyntaxErrorKind::AndPatternInAlternative => {
+                f.write_str(AND_PATTERN_IN_ALTERNATIVE)
+            }
             SemanticSyntaxErrorKind::MultipleStarredNamesInSequencePattern => {
                 f.write_str("multiple starred names in sequence pattern")
             }
@@ -1560,6 +1601,22 @@ pub enum SemanticSyntaxErrorKind {
     ///     case Class(x=1, x=2): ...
     /// ```
     MultipleCaseAssignment(ast::name::Name),
+
+    /// basedpython: represents an `and` pattern written inside an alternative of
+    /// a `|` pattern.
+    ///
+    /// Every alternative of a `|` binds the same names, which a conjunction
+    /// cannot preserve: it is lowered by matching the value against each
+    /// conjunct in turn, and only the alternative that matched would bind what
+    /// the conjuncts need.
+    ///
+    /// ## Examples
+    ///
+    /// ```by
+    /// match x:
+    ///     case int() | (str() and "x"): ...
+    /// ```
+    AndPatternInAlternative,
 
     /// Represents multiple starred names in a sequence pattern.
     ///
@@ -2135,6 +2192,49 @@ impl Visitor<'_> for ReturnVisitor {
     }
 }
 
+/// basedpython: what an `and` pattern written inside an alternative of a `|`
+/// pattern is reported as.
+///
+/// Shared with the transpiler, which reaches the same restriction from the other
+/// side — it lowers the pattern and has no semantic checker of its own — so the
+/// two cannot drift apart.
+pub const AND_PATTERN_IN_ALTERNATIVE: &str =
+    "an `and` pattern cannot be written inside an alternative of a `|` pattern";
+
+/// basedpython: the range of the first `and` pattern inside `pattern`, if it has
+/// one.
+///
+/// A conjunction is lowered by matching the value against each conjunct in turn,
+/// which needs a binder for the position it was written in. Inside an
+/// alternative of a `|` that binder would be bound by one alternative alone,
+/// which python rejects — every alternative binds the same names.
+fn first_conjunction(pattern: &Pattern) -> Option<TextRange> {
+    match pattern {
+        Pattern::MatchAnd(conjunction) => Some(conjunction.range),
+        Pattern::MatchSequence(ast::PatternMatchSequence { patterns, .. })
+        | Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => {
+            patterns.iter().find_map(first_conjunction)
+        }
+        Pattern::MatchMapping(ast::PatternMatchMapping { patterns, .. }) => {
+            patterns.iter().find_map(first_conjunction)
+        }
+        Pattern::MatchClass(ast::PatternMatchClass { arguments, .. }) => arguments
+            .patterns
+            .iter()
+            .find_map(first_conjunction)
+            .or_else(|| {
+                arguments
+                    .keywords
+                    .iter()
+                    .find_map(|keyword| first_conjunction(&keyword.pattern))
+            }),
+        Pattern::MatchAs(ast::PatternMatchAs { pattern, .. }) => {
+            pattern.as_deref().and_then(first_conjunction)
+        }
+        Pattern::MatchStar(_) | Pattern::MatchValue(_) | Pattern::MatchSingleton(_) => None,
+    }
+}
+
 struct MatchPatternVisitor<'a, Ctx> {
     names: FxHashSet<&'a ast::name::Name>,
     ctx: &'a Ctx,
@@ -2286,6 +2386,19 @@ impl<'a, Ctx: SemanticSyntaxContext> MatchPatternVisitor<'a, Ctx> {
             Pattern::MatchOr(ast::PatternMatchOr {
                 patterns, range, ..
             }) => {
+                // test_err and_pattern_in_alternative
+                // match x:
+                //     case int() | (str() and "x"): ...
+                for alternative in patterns {
+                    if let Some(conjunction) = first_conjunction(alternative) {
+                        SemanticSyntaxChecker::add_error(
+                            self.ctx,
+                            SemanticSyntaxErrorKind::AndPatternInAlternative,
+                            conjunction,
+                        );
+                    }
+                }
+
                 // each of these patterns should be visited separately because patterns can only be
                 // duplicated within a single arm of the or pattern. For example, the case below is
                 // a valid pattern.
@@ -2347,6 +2460,18 @@ impl<'a, Ctx: SemanticSyntaxContext> MatchPatternVisitor<'a, Ctx> {
                         break;
                     }
                     self.names.extend(visitor.names);
+                }
+            }
+            // every conjunct binds, so — unlike the alternatives of an `or`
+            // pattern — they share one set of names and a name bound twice is
+            // the same error as `case Class(x, x)`
+
+            // test_err multiple_assignment_in_and_pattern
+            // match 2:
+            //     case Class(x) and [x]: ...
+            Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
+                for pattern in patterns {
+                    self.visit_pattern(pattern);
                 }
             }
         }

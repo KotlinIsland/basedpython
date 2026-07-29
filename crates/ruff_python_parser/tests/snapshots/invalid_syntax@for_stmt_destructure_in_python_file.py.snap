@@ -1,0 +1,93 @@
+---
+source: crates/ruff_python_parser/tests/fixtures.rs
+input_file: crates/ruff_python_parser/resources/inline/err/for_stmt_destructure_in_python_file.py
+---
+## AST
+
+```
+Module(
+    ModModule {
+        node_index: NodeIndex(None),
+        range: 0..31,
+        body: [
+            For(
+                StmtFor {
+                    node_index: NodeIndex(None),
+                    range: 0..30,
+                    is_async: false,
+                    target: Call(
+                        ExprCall {
+                            node_index: NodeIndex(None),
+                            range: 4..15,
+                            func: Name(
+                                ExprName {
+                                    node_index: NodeIndex(None),
+                                    range: 4..9,
+                                    id: Name("Point"),
+                                    ctx: Load,
+                                },
+                            ),
+                            arguments: Arguments {
+                                range: 9..15,
+                                node_index: NodeIndex(None),
+                                args: [
+                                    Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 10..11,
+                                            id: Name("x"),
+                                            ctx: Load,
+                                        },
+                                    ),
+                                    Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 13..14,
+                                            id: Name("y"),
+                                            ctx: Load,
+                                        },
+                                    ),
+                                ],
+                                keywords: [],
+                            },
+                            is_cast: false,
+                            is_checked_cast: false,
+                            is_string_tag: false,
+                        },
+                    ),
+                    pattern: None,
+                    iter: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 19..25,
+                            id: Name("points"),
+                            ctx: Load,
+                        },
+                    ),
+                    body: [
+                        Expr(
+                            StmtExpr {
+                                node_index: NodeIndex(None),
+                                range: 27..30,
+                                value: EllipsisLiteral(
+                                    ExprEllipsisLiteral {
+                                        node_index: NodeIndex(None),
+                                        range: 27..30,
+                                    },
+                                ),
+                            },
+                        ),
+                    ],
+                    orelse: [],
+                },
+            ),
+        ],
+    },
+)
+```
+## Errors
+
+  |
+1 | for Point(x, y) in points: ...
+  |     ^^^^^^^^^^^ Syntax Error: Invalid assignment target
+  |

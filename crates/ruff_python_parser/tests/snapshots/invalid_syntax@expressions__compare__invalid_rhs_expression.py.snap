@@ -51,6 +51,7 @@ Module(
                                                                 range: 16..17,
                                                                 node_index: NodeIndex(None),
                                                             },
+                                                            pattern: None,
                                                             annotation: None,
                                                             is_context: false,
                                                         },

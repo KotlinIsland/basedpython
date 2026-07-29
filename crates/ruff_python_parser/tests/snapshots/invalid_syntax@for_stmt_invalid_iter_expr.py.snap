@@ -23,6 +23,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Starred(
                         ExprStarred {
                             node_index: NodeIndex(None),
@@ -85,6 +86,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Yield(
                         ExprYield {
                             node_index: NodeIndex(None),
@@ -131,6 +133,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),

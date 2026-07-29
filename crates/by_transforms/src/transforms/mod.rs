@@ -14,6 +14,7 @@ pub(crate) mod conversion;
 pub(crate) mod decl_site_variance;
 pub(crate) mod decorator_keyword;
 pub(crate) mod dedent_string;
+pub(crate) mod destructure;
 pub(crate) mod dynamic_keyword;
 pub(crate) mod empty_declarations;
 pub(crate) mod enums;

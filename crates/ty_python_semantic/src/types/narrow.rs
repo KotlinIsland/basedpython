@@ -29,7 +29,7 @@ use ty_python_core::frozen::FrozenMap;
 use ty_python_core::place::{PlaceExpr, PlaceTable, ScopedPlaceId};
 use ty_python_core::predicate::{
     CallableAndCallExpr, ClassPatternPredicateKind, MappingPatternPredicateKind, PatternPredicate,
-    PatternPredicateKind, Predicate, PredicateNode, SequencePatternPredicateKind,
+    PatternPredicateKind, PatternSubject, Predicate, PredicateNode, SequencePatternPredicateKind,
     SubjectElementPatternPredicate,
 };
 use ty_python_core::scope::ScopeId;
@@ -512,6 +512,22 @@ struct PatternSuccessAnalyzer<'db> {
 ///         case item:
 ///             reveal_type(item)  # str
 /// ```
+/// The type of the value a pattern is matched against.
+pub(crate) fn pattern_subject_type<'db>(
+    db: &'db dyn Db,
+    subject: PatternSubject<'db>,
+) -> Type<'db> {
+    match subject {
+        PatternSubject::Expression(expression) => {
+            infer_same_file_expression_type(db, expression, TypeContext::default())
+        }
+        // basedpython: a destructuring binder holds the value already, so its
+        // type is whatever the binder was bound to — the loop's element type, the
+        // `with` item's bound type, the parameter's declared type
+        PatternSubject::Binder(definition) => crate::types::binding_type(db, definition),
+    }
+}
+
 #[salsa::tracked(
     returns(ref),
     cycle_initial=|_, id, _| PatternSuccessTypes::cycle_initial(Type::divergent(id)),
@@ -524,8 +540,7 @@ pub(crate) fn pattern_success_types<'db>(
     db: &'db dyn Db,
     pattern: PatternPredicate<'db>,
 ) -> PatternSuccessTypes<'db> {
-    let subject = pattern.subject(db);
-    let incoming_subject_ty = infer_same_file_expression_type(db, subject, TypeContext::default());
+    let incoming_subject_ty = pattern_subject_type(db, pattern.subject(db));
     let incoming_subject_ty = type_narrowed_by_previous_patterns(db, pattern, incoming_subject_ty);
     let analyzer = PatternSuccessAnalyzer::new(db, pattern.scope(db));
     let result = analyzer.analyze_successful_pattern(pattern.kind(db), incoming_subject_ty);
@@ -1159,6 +1174,13 @@ fn necessary_match_pattern_type<'db>(
                 .iter()
                 .map(|predicate| necessary_match_pattern_type(db, predicate)),
         ),
+        // basedpython: a value that matches a conjunction matches every conjunct
+        PatternPredicateKind::And(predicates) => predicates
+            .iter()
+            .fold(IntersectionBuilder::new(db), |builder, predicate| {
+                builder.add_positive(necessary_match_pattern_type(db, predicate))
+            })
+            .build(),
         PatternPredicateKind::As(pattern, _) => pattern
             .as_deref()
             .map(|pattern| necessary_match_pattern_type(db, pattern))
@@ -1407,9 +1429,11 @@ impl<'db, 'ast> NarrowingConstraintsBuilder<'db, 'ast> {
             PatternPredicateKind::As(Some(pattern), _) => {
                 self.evaluate_negative_pattern_predicate_kind(pattern, subject)
             }
-            PatternPredicateKind::As(None, _) | PatternPredicateKind::Star(_) => {
-                PatternNarrowingResult::Possible(None)
-            }
+            // basedpython: a conjunction failing to match says only that *some*
+            // conjunct did not, which narrows nothing
+            PatternPredicateKind::And(_)
+            | PatternPredicateKind::As(None, _)
+            | PatternPredicateKind::Star(_) => PatternNarrowingResult::Possible(None),
         }
     }
 
@@ -1419,7 +1443,11 @@ impl<'db, 'ast> NarrowingConstraintsBuilder<'db, 'ast> {
         is_positive: bool,
     ) -> Option<NarrowingConstraints<'db>> {
         let kind = pattern.kind(self.db);
-        let subject = pattern.subject(self.db);
+        // basedpython: a destructuring binder holds a value nothing else can
+        // name, so matching it narrows no place
+        let PatternSubject::Expression(subject) = pattern.subject(self.db) else {
+            return None;
+        };
         if !is_positive {
             return self
                 .evaluate_negative_pattern_predicate_kind(kind, subject)
@@ -1606,6 +1634,9 @@ impl<'db> PatternSuccessAnalyzer<'db> {
             PatternPredicateKind::Or(patterns) => {
                 self.analyze_successful_or_pattern(patterns, subject_ty)
             }
+            PatternPredicateKind::And(patterns) => {
+                self.analyze_successful_and_pattern(patterns, subject_ty)
+            }
             PatternPredicateKind::As(pattern, name) => {
                 let mut result = pattern.as_deref().map_or_else(
                     || PatternSuccessResult {
@@ -1685,6 +1716,12 @@ impl<'db> PatternSuccessAnalyzer<'db> {
             PatternPredicateKind::Or(patterns) => {
                 self.matched_or_pattern_subject_type(patterns, subject_ty)
             }
+            // basedpython: every conjunct matches what its predecessors left
+            PatternPredicateKind::And(patterns) => {
+                patterns.iter().fold(subject_ty, |subject_ty, pattern| {
+                    self.matched_subject_type(pattern, subject_ty)
+                })
+            }
             PatternPredicateKind::As(Some(pattern), _) => {
                 self.matched_subject_type(pattern, subject_ty)
             }
@@ -1745,6 +1782,31 @@ impl<'db> PatternSuccessAnalyzer<'db> {
         )
         .map(|constraint| self.intersect_types(subject_ty, constraint))
         .unwrap_or(subject_ty)
+    }
+
+    /// basedpython: the types a conjunction binds when it matches.
+    ///
+    /// Each conjunct matches what its predecessors left, so the value the whole
+    /// conjunction matches is what the last one narrows to, and the captures are
+    /// those of all of them — a name can only be bound by one conjunct, which the
+    /// parser enforces.
+    fn analyze_successful_and_pattern(
+        &self,
+        patterns: &[PatternPredicateKind<'db>],
+        subject_ty: Type<'db>,
+    ) -> PatternSuccessResult<'db> {
+        let mut result = PatternSuccessResult {
+            matched_subject_ty: subject_ty,
+            binding_subject_ty: subject_ty,
+            bindings: BTreeMap::new(),
+        };
+        for pattern in patterns {
+            let conjunct = self.analyze_successful_pattern(pattern, result.matched_subject_ty);
+            Self::merge_bindings(&mut result.bindings, conjunct.bindings);
+            result.matched_subject_ty = conjunct.matched_subject_ty;
+            result.binding_subject_ty = conjunct.binding_subject_ty;
+        }
+        result
     }
 
     fn analyze_successful_or_pattern(
@@ -2786,7 +2848,11 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
         subject_element: SubjectElementPatternPredicate<'db>,
     ) -> Option<NarrowingConstraints<'db>> {
         let pattern = subject_element.pattern;
-        let subject_expression = pattern.subject(self.db);
+        // a subject element predicate only ever comes from a sequence-display
+        // subject, which is an expression the source wrote
+        let PatternSubject::Expression(subject_expression) = pattern.subject(self.db) else {
+            return None;
+        };
         let subject = subject_expression.node_ref(self.db).node(self.module);
         self.evaluate_match_pattern_for_subject_element(
             subject_expression,

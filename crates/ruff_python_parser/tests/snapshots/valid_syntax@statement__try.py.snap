@@ -1694,6 +1694,7 @@ Module(
                                                                     range: 1027..1028,
                                                                     node_index: NodeIndex(None),
                                                                 },
+                                                                pattern: None,
                                                                 annotation: None,
                                                                 is_context: false,
                                                             },

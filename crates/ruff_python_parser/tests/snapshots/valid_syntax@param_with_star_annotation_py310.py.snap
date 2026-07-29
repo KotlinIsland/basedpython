@@ -74,6 +74,7 @@ Module(
                                     range: 216..220,
                                     node_index: NodeIndex(None),
                                 },
+                                pattern: None,
                                 annotation: Some(
                                     Name(
                                         ExprName {
@@ -136,6 +137,7 @@ Module(
                                     range: 240..241,
                                     node_index: NodeIndex(None),
                                 },
+                                pattern: None,
                                 annotation: Some(
                                     Subscript(
                                         ExprSubscript {
@@ -227,6 +229,7 @@ Module(
                                     range: 305..306,
                                     node_index: NodeIndex(None),
                                 },
+                                pattern: None,
                                 annotation: Some(
                                     Subscript(
                                         ExprSubscript {
@@ -340,6 +343,7 @@ Module(
                                     range: 377..381,
                                     node_index: NodeIndex(None),
                                 },
+                                pattern: None,
                                 annotation: Some(
                                     Name(
                                         ExprName {
@@ -363,6 +367,7 @@ Module(
                                     range: 390..394,
                                     node_index: NodeIndex(None),
                                 },
+                                pattern: None,
                                 annotation: Some(
                                     Name(
                                         ExprName {
@@ -423,6 +428,7 @@ Module(
                                     range: 417..418,
                                     node_index: NodeIndex(None),
                                 },
+                                pattern: None,
                                 annotation: Some(
                                     BinOp(
                                         ExprBinOp {

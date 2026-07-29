@@ -38,6 +38,7 @@ Module(
                                         range: 13..18,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: Some(
                                         Name(
                                             ExprName {
@@ -63,6 +64,7 @@ Module(
                                         range: 29..35,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: Some(
                                         Name(
                                             ExprName {

@@ -57,6 +57,9 @@ impl Violation for LoopIteratorMutation {
 pub(crate) fn loop_iterator_mutation(checker: &Checker, stmt_for: &StmtFor) {
     let StmtFor {
         target,
+        // a destructuring loop's target is a synthetic binder the source never
+        // wrote, and neither rule reads through to the pattern's captures
+        pattern: _,
         iter,
         body,
         orelse: _,

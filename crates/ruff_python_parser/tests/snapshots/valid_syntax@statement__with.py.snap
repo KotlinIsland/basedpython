@@ -28,6 +28,7 @@ Module(
                                 },
                             ),
                             optional_vars: None,
+                            pattern: None,
                         },
                     ],
                     body: [
@@ -73,6 +74,7 @@ Module(
                                     },
                                 ),
                             ),
+                            pattern: None,
                         },
                     ],
                     body: [
@@ -109,6 +111,7 @@ Module(
                                 },
                             ),
                             optional_vars: None,
+                            pattern: None,
                         },
                         WithItem {
                             range: 184..189,
@@ -122,6 +125,7 @@ Module(
                                 },
                             ),
                             optional_vars: None,
+                            pattern: None,
                         },
                     ],
                     body: [
@@ -167,6 +171,7 @@ Module(
                                     },
                                 ),
                             ),
+                            pattern: None,
                         },
                         WithItem {
                             range: 213..224,
@@ -189,6 +194,7 @@ Module(
                                     },
                                 ),
                             ),
+                            pattern: None,
                         },
                     ],
                     body: [
@@ -246,6 +252,7 @@ Module(
                                 },
                             ),
                             optional_vars: None,
+                            pattern: None,
                         },
                     ],
                     body: [
@@ -312,6 +319,7 @@ Module(
                                     },
                                 ),
                             ),
+                            pattern: None,
                         },
                     ],
                     body: [
@@ -372,6 +380,7 @@ Module(
                                     },
                                 ),
                             ),
+                            pattern: None,
                         },
                     ],
                     body: [
@@ -445,6 +454,7 @@ Module(
                                     },
                                 ),
                             ),
+                            pattern: None,
                         },
                     ],
                     body: [

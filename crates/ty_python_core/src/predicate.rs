@@ -13,6 +13,7 @@ use ruff_python_ast::{Singleton, name::Name};
 
 use crate::ast_ids::ExpressionNodeKey;
 use crate::db::Db;
+use crate::definition::Definition;
 use crate::expression::Expression;
 use crate::global_scope;
 use crate::scope::{FileScopeId, ScopeId};
@@ -230,6 +231,8 @@ pub enum PatternPredicateKind<'db> {
     Singleton(Singleton),
     Value(Expression<'db>),
     Or(Box<[PatternPredicateKind<'db>]>),
+    /// basedpython `P and Q`: matches only what every one of its patterns matches
+    And(Box<[PatternPredicateKind<'db>]>),
     Class(ClassPatternPredicateKind<'db>),
     Mapping(MappingPatternPredicateKind<'db>),
     Sequence(SequencePatternPredicateKind<'db>),
@@ -246,7 +249,7 @@ pub struct PatternPredicate<'db> {
     pub file_scope: FileScopeId,
 
     #[returns(copy)]
-    pub subject: Expression<'db>,
+    pub subject: PatternSubject<'db>,
 
     #[returns(ref)]
     pub kind: PatternPredicateKind<'db>,
@@ -257,6 +260,19 @@ pub struct PatternPredicate<'db> {
     /// A reference to the pattern of the previous match case
     #[returns(as_deref)]
     pub previous_predicate: Option<Box<PatternPredicate<'db>>>,
+}
+
+/// The value a pattern is matched against.
+///
+/// A `match` case, an `if let` clause and a `let` statement all match an
+/// expression the source wrote. basedpython's other destructuring positions —
+/// a `for` target, a `with` item, a parameter — have no such expression: the
+/// value arrives already bound to a [synthetic binder](ruff_python_ast::destructure_binder_name),
+/// and the binder's definition is what says what its type is.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, get_size2::GetSize, salsa::SalsaValue)]
+pub enum PatternSubject<'db> {
+    Expression(Expression<'db>),
+    Binder(Definition<'db>),
 }
 
 // The Salsa heap is tracked separately.

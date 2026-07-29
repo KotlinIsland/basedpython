@@ -43,7 +43,8 @@ use crate::place::{
     place_from_declarations_with_reachability_cache, typing_extensions_symbol, typing_symbol,
 };
 use crate::reachability::{
-    ReachabilityEvaluationCache, evaluate_reachability, evaluate_reachability_with_cache,
+    ReachabilityEvaluationCache, analyze_pattern_predicate, evaluate_reachability,
+    evaluate_reachability_with_cache, is_reachable,
 };
 use crate::subscript::PyIndex;
 use crate::types::add_inferred_python_version_hint_to_diagnostic;
@@ -71,14 +72,14 @@ use crate::types::diagnostic::{
     INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM, INVALID_TYPE_VARIABLE_CONSTRAINTS,
     NARROWING_GUARD_AS_VALUE, NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST,
     OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
-    TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS,
-    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
-    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
-    hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
-    report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_bool_as_int,
-    report_bool_as_int_assignment, report_call_to_abstract_method,
-    report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
-    report_invalid_class_match_pattern, report_invalid_exception_caught,
+    REFUTABLE_DESTRUCTURING, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
+    UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
+    UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR,
+    UNUSED_AWAITABLE, hint_if_stdlib_attribute_exists_on_other_versions,
+    report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
+    report_bad_dunder_delete_call, report_bool_as_int, report_bool_as_int_assignment,
+    report_call_to_abstract_method, report_cannot_pop_required_field_on_typed_dict,
+    report_invalid_assignment, report_invalid_class_match_pattern, report_invalid_exception_caught,
     report_invalid_exception_cause, report_invalid_exception_raised,
     report_invalid_exception_tuple_caught, report_invalid_generator_yield_type,
     report_invalid_key_on_typed_dict, report_invalid_match_args_type,
@@ -110,7 +111,7 @@ use crate::types::infer::{
 use crate::types::match_pattern::{ClassPatternPositionalResult, class_pattern_positional_result};
 use crate::types::match_type::literal_pattern_type;
 use crate::types::narrow::NarrowingEvaluatorExtension;
-use crate::types::narrow::pattern_success_types;
+use crate::types::narrow::{pattern_subject_type, pattern_success_types};
 use crate::types::newtype::NewType;
 use crate::types::receivers;
 use crate::types::regex;
@@ -2141,7 +2142,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     }
                 }
             }
-            ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => {
+            ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. })
+            | ast::Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
                 for pattern in patterns {
                     self.report_invalid_match_type_pattern(pattern);
                 }
@@ -2423,6 +2425,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 self.infer_maybe_standalone_expression(value, TypeContext::default());
             }
             ast::Stmt::If(if_statement) => self.infer_if_statement(if_statement),
+            ast::Stmt::Let(let_statement) => self.infer_let_statement(let_statement),
             ast::Stmt::Try(try_statement) => self.infer_try_statement(try_statement),
             ast::Stmt::With(with_statement) => self.infer_with_statement(with_statement),
             ast::Stmt::Match(match_statement) => self.infer_match_statement(match_statement),
@@ -2527,6 +2530,71 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// basedpython `let <pattern> := <subject> [else: ...]`.
+    fn infer_let_statement(&mut self, let_statement: &ast::StmtLet) {
+        let ast::StmtLet {
+            range: _,
+            node_index: _,
+            pattern,
+            value,
+            orelse,
+        } = let_statement;
+
+        self.infer_standalone_expression(value, TypeContext::default());
+        self.infer_match_pattern(pattern);
+        self.infer_body(orelse);
+        self.check_destructure(pattern);
+    }
+
+    /// basedpython: reports a destructuring binder whose pattern may not match
+    /// the value it destructures, with nothing to handle the failure.
+    ///
+    /// The captures are bound unconditionally, so a pattern that does not match
+    /// leaves them unbound. A `let` statement can handle that with an `else`
+    /// block, but only one that diverges — control falling out of the block
+    /// reaches the same unbound captures.
+    fn check_destructure(&mut self, pattern: &ast::Pattern) {
+        let Some(destructure) = self.index.destructure(NodeKey::from_node(pattern)) else {
+            return;
+        };
+
+        let use_def = self
+            .index
+            .use_def_map(self.scope().file_scope_id(self.db()));
+        if let Some(after_orelse) = destructure.after_orelse {
+            if is_reachable(self.db(), use_def, after_orelse)
+                && let Some(builder) = self.context.report_lint(&REFUTABLE_DESTRUCTURING, pattern)
+            {
+                builder.into_diagnostic(
+                    "The `else` block of a `let` has to diverge: \
+                     what follows it needs the pattern's captures",
+                );
+            }
+            return;
+        }
+
+        if analyze_pattern_predicate(self.db(), destructure.predicate).is_always_true() {
+            return;
+        }
+
+        let subject_ty = pattern_subject_type(self.db(), destructure.predicate.subject(self.db()));
+
+        // a gradual subject cannot be shown to match *or* not to match, and code
+        // that never said what it holds is not what this check is for. `Unknown`
+        // is what an unannotated parameter, a bare `list` element and an
+        // unresolved import all arrive as
+        if subject_ty.has_dynamic(self.db()) {
+            return;
+        }
+
+        if let Some(builder) = self.context.report_lint(&REFUTABLE_DESTRUCTURING, pattern) {
+            builder.into_diagnostic(format_args!(
+                "This pattern may not match `{}`, which would leave its captures unbound",
+                subject_ty.display(self.db()),
+            ));
+        }
+    }
+
     /// Infers the condition of an `if` / `elif` clause. With a pattern the clause
     /// is a basedpython `if let <pattern> := <subject>:` — the subject is matched
     /// against the pattern rather than tested for truthiness
@@ -2608,6 +2676,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     self.infer_expression(&item.context_expr, TypeContext::default());
                 self.infer_context_expression(&item.context_expr, context_expression_ty, *is_async);
                 self.infer_optional_expression(target, TypeContext::default());
+            }
+
+            // basedpython: the item destructures the value it binds
+            if let Some(pattern) = item.pattern.as_deref() {
+                self.infer_match_pattern(pattern);
+                self.check_destructure(pattern);
             }
         }
 
@@ -3132,8 +3206,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let cls_ty = self.infer_standalone_expression(cls, TypeContext::default());
                 self.validate_class_pattern(match_class, cls_ty);
             }
-            ast::Pattern::MatchOr(match_or) => {
-                for pattern in &match_or.patterns {
+            ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. })
+            | ast::Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
+                for pattern in patterns {
                     self.infer_match_pattern(pattern);
                 }
             }
@@ -3195,8 +3270,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     self.infer_definition(name);
                 }
             }
-            ast::Pattern::MatchOr(match_or) => {
-                for pattern in &match_or.patterns {
+            ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. })
+            | ast::Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
+                for pattern in patterns {
                     self.infer_nested_match_pattern(pattern);
                 }
             }
@@ -5248,6 +5324,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             range: _,
             node_index: _,
             target,
+            pattern,
             iter,
             body,
             orelse,
@@ -5270,6 +5347,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     .homogeneous_element_type(builder.db())
             }
         });
+
+        // basedpython: the loop destructures each element
+        if let Some(pattern) = pattern.as_deref() {
+            self.infer_match_pattern(pattern);
+            self.check_destructure(pattern);
+        }
 
         self.infer_body(body);
         self.infer_body(orelse);
@@ -15144,7 +15227,8 @@ fn match_type_pattern_captures(
             Box::new(name.as_ref().into_iter())
         }
         ast::Pattern::MatchSequence(ast::PatternMatchSequence { patterns, .. })
-        | ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => {
+        | ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. })
+        | ast::Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
             Box::new(patterns.iter().flat_map(match_type_pattern_captures))
         }
         ast::Pattern::MatchValue(_)
@@ -15161,7 +15245,10 @@ fn match_type_subpatterns(pattern: &ast::Pattern) -> Box<dyn Iterator<Item = &as
             Box::new(pattern.as_deref().into_iter())
         }
         ast::Pattern::MatchSequence(ast::PatternMatchSequence { patterns, .. })
-        | ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. }) => Box::new(patterns.iter()),
+        | ast::Pattern::MatchOr(ast::PatternMatchOr { patterns, .. })
+        | ast::Pattern::MatchAnd(ast::PatternMatchAnd { patterns, .. }) => {
+            Box::new(patterns.iter())
+        }
         ast::Pattern::MatchStar(_)
         | ast::Pattern::MatchValue(_)
         | ast::Pattern::MatchSingleton(_)

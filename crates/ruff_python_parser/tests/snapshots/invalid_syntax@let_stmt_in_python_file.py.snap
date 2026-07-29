@@ -1,0 +1,86 @@
+---
+source: crates/ruff_python_parser/tests/fixtures.rs
+input_file: crates/ruff_python_parser/resources/inline/err/let_stmt_in_python_file.py
+---
+## AST
+
+```
+Module(
+    ModModule {
+        node_index: NodeIndex(None),
+        range: 0..26,
+        body: [
+            Let(
+                StmtLet {
+                    node_index: NodeIndex(None),
+                    range: 0..25,
+                    pattern: MatchClass(
+                        PatternMatchClass {
+                            node_index: NodeIndex(None),
+                            range: 4..15,
+                            cls: Name(
+                                ExprName {
+                                    node_index: NodeIndex(None),
+                                    range: 4..9,
+                                    id: Name("Point"),
+                                    ctx: Load,
+                                },
+                            ),
+                            arguments: PatternArguments {
+                                range: 9..15,
+                                node_index: NodeIndex(None),
+                                patterns: [
+                                    MatchAs(
+                                        PatternMatchAs {
+                                            node_index: NodeIndex(None),
+                                            range: 10..11,
+                                            pattern: None,
+                                            name: Some(
+                                                Identifier {
+                                                    id: Name("x"),
+                                                    range: 10..11,
+                                                    node_index: NodeIndex(None),
+                                                },
+                                            ),
+                                        },
+                                    ),
+                                    MatchAs(
+                                        PatternMatchAs {
+                                            node_index: NodeIndex(None),
+                                            range: 13..14,
+                                            pattern: None,
+                                            name: Some(
+                                                Identifier {
+                                                    id: Name("y"),
+                                                    range: 13..14,
+                                                    node_index: NodeIndex(None),
+                                                },
+                                            ),
+                                        },
+                                    ),
+                                ],
+                                keywords: [],
+                            },
+                        },
+                    ),
+                    value: Name(
+                        ExprName {
+                            node_index: NodeIndex(None),
+                            range: 19..25,
+                            id: Name("origin"),
+                            ctx: Load,
+                        },
+                    ),
+                    orelse: [],
+                },
+            ),
+        ],
+    },
+)
+```
+## Errors
+
+  |
+1 | let Point(x, y) := origin
+  | ^^^^^^^^^^^^^^^ Syntax Error: a destructuring `let` is not valid in .py files
+  |

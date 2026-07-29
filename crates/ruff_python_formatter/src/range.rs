@@ -654,6 +654,7 @@ impl Format<PyFormatContext<'_>> for FormatEnclosingNode<'_> {
             AnyNodeRef::StmtFor(node) => node.format().fmt(f),
             AnyNodeRef::StmtWhile(node) => node.format().fmt(f),
             AnyNodeRef::StmtIf(node) => node.format().fmt(f),
+            AnyNodeRef::StmtLet(node) => node.format().fmt(f),
             AnyNodeRef::StmtWith(node) => node.format().fmt(f),
             AnyNodeRef::StmtMatch(node) => node.format().fmt(f),
             AnyNodeRef::StmtRaise(node) => node.format().fmt(f),
@@ -720,6 +721,7 @@ impl Format<PyFormatContext<'_>> for FormatEnclosingNode<'_> {
             | AnyNodeRef::PatternMatchStar(_)
             | AnyNodeRef::PatternMatchAs(_)
             | AnyNodeRef::PatternMatchOr(_)
+            | AnyNodeRef::PatternMatchAnd(_)
             | AnyNodeRef::PatternArguments(_)
             | AnyNodeRef::PatternKeyword(_)
             | AnyNodeRef::Comprehension(_)

@@ -452,6 +452,34 @@ impl<'ast> IntoFormat<PyFormatContext<'ast>> for ast::StmtIf {
     }
 }
 
+impl FormatRule<ast::StmtLet, PyFormatContext<'_>> for crate::statement::stmt_let::FormatStmtLet {
+    #[inline]
+    fn fmt(&self, node: &ast::StmtLet, f: &mut PyFormatter) -> FormatResult<()> {
+        FormatNodeRule::<ast::StmtLet>::fmt(self, node, f)
+    }
+}
+impl<'ast> AsFormat<PyFormatContext<'ast>> for ast::StmtLet {
+    type Format<'a> = FormatRefWithRule<
+        'a,
+        ast::StmtLet,
+        crate::statement::stmt_let::FormatStmtLet,
+        PyFormatContext<'ast>,
+    >;
+    fn format(&self) -> Self::Format<'_> {
+        FormatRefWithRule::new(self, crate::statement::stmt_let::FormatStmtLet::default())
+    }
+}
+impl<'ast> IntoFormat<PyFormatContext<'ast>> for ast::StmtLet {
+    type Format = FormatOwnedWithRule<
+        ast::StmtLet,
+        crate::statement::stmt_let::FormatStmtLet,
+        PyFormatContext<'ast>,
+    >;
+    fn into_format(self) -> Self::Format {
+        FormatOwnedWithRule::new(self, crate::statement::stmt_let::FormatStmtLet::default())
+    }
+}
+
 impl FormatRule<ast::StmtWith, PyFormatContext<'_>>
     for crate::statement::stmt_with::FormatStmtWith
 {
@@ -2568,6 +2596,42 @@ impl<'ast> IntoFormat<PyFormatContext<'ast>> for ast::PatternMatchOr {
         FormatOwnedWithRule::new(
             self,
             crate::pattern::pattern_match_or::FormatPatternMatchOr::default(),
+        )
+    }
+}
+
+impl FormatRule<ast::PatternMatchAnd, PyFormatContext<'_>>
+    for crate::pattern::pattern_match_and::FormatPatternMatchAnd
+{
+    #[inline]
+    fn fmt(&self, node: &ast::PatternMatchAnd, f: &mut PyFormatter) -> FormatResult<()> {
+        FormatNodeRule::<ast::PatternMatchAnd>::fmt(self, node, f)
+    }
+}
+impl<'ast> AsFormat<PyFormatContext<'ast>> for ast::PatternMatchAnd {
+    type Format<'a> = FormatRefWithRule<
+        'a,
+        ast::PatternMatchAnd,
+        crate::pattern::pattern_match_and::FormatPatternMatchAnd,
+        PyFormatContext<'ast>,
+    >;
+    fn format(&self) -> Self::Format<'_> {
+        FormatRefWithRule::new(
+            self,
+            crate::pattern::pattern_match_and::FormatPatternMatchAnd::default(),
+        )
+    }
+}
+impl<'ast> IntoFormat<PyFormatContext<'ast>> for ast::PatternMatchAnd {
+    type Format = FormatOwnedWithRule<
+        ast::PatternMatchAnd,
+        crate::pattern::pattern_match_and::FormatPatternMatchAnd,
+        PyFormatContext<'ast>,
+    >;
+    fn into_format(self) -> Self::Format {
+        FormatOwnedWithRule::new(
+            self,
+            crate::pattern::pattern_match_and::FormatPatternMatchAnd::default(),
         )
     }
 }
