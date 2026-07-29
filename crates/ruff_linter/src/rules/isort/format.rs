@@ -133,7 +133,12 @@ fn format_single_line(
     }
     output.push_str("from ");
     output.push_str(&module_name);
-    output.push_str(" import ");
+    // `" export "` and `" import "` are both 8 columns wide
+    output.push_str(if import_from.is_export {
+        " export "
+    } else {
+        " import "
+    });
     line_width = line_width.add_width(5).add_str(&module_name).add_width(8);
 
     for (index, (AliasData { name, asname, .. }, _)) in aliases.iter().enumerate() {
@@ -217,7 +222,11 @@ fn format_multi_line(
     }
     output.push_str("from ");
     output.push_str(&import_from.module_name());
-    output.push_str(" import ");
+    output.push_str(if import_from.is_export {
+        " export "
+    } else {
+        " import "
+    });
     output.push('(');
     for comment in &comments.inline {
         output.push(' ');

@@ -1,6 +1,7 @@
+use ruff_python_ast::helpers::consumed_keywords;
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
-use ruff_python_ast::{Decorator, Expr, Parameters, Stmt};
-use ruff_text_size::{Ranged, TextSize};
+use ruff_python_ast::{Decorator, Expr, Parameters, Stmt, StmtImportFrom};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 /// Byte offset of the start of the line containing `pos`. Lines begin at
 /// either offset 0 or one byte past the previous `\n`
@@ -18,6 +19,32 @@ pub(crate) fn line_indent(source: &str, pos: TextSize) -> &str {
     let rest = &source[line_start..offset];
     let ws_len = rest.len() - rest.trim_start().len();
     &source[line_start..line_start + ws_len]
+}
+
+/// Source range of the keyword that separates a `from` import's module from its
+/// imported names — `import`, or basedpython's `export`.
+///
+/// The scan starts past the module name so a module *called* `import` or
+/// `export` can't be mistaken for the keyword; when the module is omitted
+/// (`from . export y`) it starts at `from`, which is neither word
+pub(crate) fn from_import_keyword_range(
+    source: &str,
+    import: &StmtImportFrom,
+) -> Option<TextRange> {
+    let keywords: &[&str] = if import.is_export {
+        &["export"]
+    } else {
+        &["import"]
+    };
+    let start = import
+        .module
+        .as_ref()
+        .map_or_else(|| import.start(), Ranged::end);
+    let end = import
+        .names
+        .first()
+        .map_or_else(|| import.end(), Ranged::start);
+    consumed_keywords(source, TextRange::new(start, end), keywords).next()
 }
 
 /// True when `dec` is a synthetic decorator emitted by the parser for a

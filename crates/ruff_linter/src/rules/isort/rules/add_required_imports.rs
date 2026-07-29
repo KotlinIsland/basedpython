@@ -79,6 +79,7 @@ fn includes_import(stmt: &Stmt, target: &NameImport) -> bool {
                 names,
                 level,
                 is_lazy: _,
+                is_export: _,
                 range: _,
                 node_index: _,
             }) = &stmt

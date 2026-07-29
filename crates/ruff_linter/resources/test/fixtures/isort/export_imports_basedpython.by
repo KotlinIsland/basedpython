@@ -1,0 +1,13 @@
+from b export z
+from a import y
+import os
+
+# an `export` statement never merges with a plain `import` one for the same
+# module — they mean different things
+from math export pi
+from math import e
+
+from math export (
+    floor,
+    ceil,
+)

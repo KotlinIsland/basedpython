@@ -57,6 +57,7 @@ pub(crate) enum AnnotatedImport<'a> {
         names: Vec<AnnotatedAliasData<'a>>,
         level: u32,
         is_lazy: bool,
+        is_export: bool,
         atop: Vec<Comment<'a>>,
         inline: Vec<Comment<'a>>,
         trailing: Vec<Comment<'a>>,
@@ -343,6 +344,7 @@ mod tests {
     #[test_case(Path::new("insert_empty_lines.py"))]
     #[test_case(Path::new("insert_empty_lines.pyi"))]
     #[test_case(Path::new("isort_skip_file.py"))]
+    #[test_case(Path::new("export_imports_basedpython.by"))]
     #[test_case(Path::new("lazy_imports.py"))]
     #[test_case(Path::new("leading_prefix.py"))]
     #[test_case(Path::new("magic_trailing_comma.py"))]

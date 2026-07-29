@@ -73,6 +73,7 @@ pub(crate) fn deprecated_c_element_tree(checker: &Checker, stmt: &Stmt) {
             names,
             level,
             is_lazy: _,
+            is_export: _,
             range: _,
             node_index: _,
         }) => {

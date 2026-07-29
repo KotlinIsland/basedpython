@@ -45,6 +45,7 @@ Module(
                     ],
                     level: 0,
                     is_lazy: false,
+                    is_export: false,
                 },
             ),
             Expr(
@@ -113,6 +114,7 @@ Module(
                     ],
                     level: 0,
                     is_lazy: false,
+                    is_export: false,
                 },
             ),
             Expr(

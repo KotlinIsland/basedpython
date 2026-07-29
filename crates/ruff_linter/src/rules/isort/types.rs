@@ -16,6 +16,10 @@ pub(crate) struct ImportFromData<'a> {
     pub(crate) module: Option<&'a str>,
     pub(crate) level: u32,
     pub(crate) is_lazy: bool,
+    /// basedpython: the statement was spelled `from x export y`. part of the
+    /// group key so an `export` statement never merges with a plain `import`
+    /// one for the same module
+    pub(crate) is_export: bool,
 }
 
 #[derive(Debug, Hash, Ord, PartialOrd, Eq, PartialEq)]

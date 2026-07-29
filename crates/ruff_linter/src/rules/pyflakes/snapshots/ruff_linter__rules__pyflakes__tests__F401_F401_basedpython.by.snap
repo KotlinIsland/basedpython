@@ -1,0 +1,18 @@
+---
+source: crates/ruff_linter/src/rules/pyflakes/mod.rs
+---
+F401 [*] `c.unused_name` imported but unused
+  --> F401_basedpython.by:8:15
+   |
+ 7 | # a plain import of an unreferenced name is still reported
+ 8 | from c import unused_name
+   |               ^^^^^^^^^^^
+ 9 |
+10 | # and an exported name may of course also be used locally
+   |
+help: Remove unused import: `c.unused_name`
+  |
+7 | # a plain import of an unreferenced name is still reported
+  - from c import unused_name
+8 |
+  |

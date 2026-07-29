@@ -257,6 +257,8 @@ fields = [
   { name = "names", type = "Alias*" },
   { name = "level", type = "u32" },
   { name = "is_lazy", type = "bool" },
+  { name = "is_export", type = "bool", doc = """basedpython: the statement was spelled `from X export Y`, which binds
+`Y` as an explicit re-export (the Python spelling is `from X import Y as Y`).""" },
 ]
 
 [Stmt.nodes.StmtGlobal]
