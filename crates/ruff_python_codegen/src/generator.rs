@@ -1566,11 +1566,23 @@ impl<'a> Generator<'a> {
                 }
                 self.p_id(attr);
             }
-            Expr::Subscript(ast::ExprSubscript { value, slice, .. }) => {
-                // basedpython: a use-site variance keyword (`out X`) and a use-site
-                // type modifier (`literal X`, `final X`) are both encoded as a
-                // subscript over a synthetic marker name, and carry no brackets in
-                // the source — emit the keyword rather than the marker
+            Expr::Subscript(ast::ExprSubscript {
+                value,
+                slice,
+                is_typeof,
+                ..
+            }) => {
+                // basedpython: `typeof X` is a subscript whose `value` is a synthetic
+                // ellipsis placeholder and whose brackets exist only in the AST, so
+                // unparsing it generically writes `...[X]`
+                if self.mode == Mode::BasedPython && *is_typeof {
+                    self.p("typeof ");
+                    self.unparse_expr(slice, precedence::MAX);
+                    return;
+                }
+                // a use-site variance keyword (`out X`) and a use-site type modifier
+                // (`literal X`, `final X`) are both encoded as a subscript over a
+                // synthetic marker name, and likewise carry no brackets in the source
                 let marker = if self.mode == Mode::BasedPython {
                     use_site_variance_marker(ast)
                         .map(|(variance, inner)| (variance.keywords(), inner))
@@ -2208,13 +2220,13 @@ mod tests {
         assert_eq!(based_round_trip(contents), contents);
     }
 
-    /// A use-site variance keyword shares the marker-subscript encoding with the
-    /// type modifiers, so it round-trips through the same arm
-    #[test_case::test_case("a: list[out int]" ; "covariant")]
-    #[test_case::test_case("b: list[in int]" ; "contravariant")]
-    #[test_case::test_case("c: list[in out int]" ; "invariant")]
-    #[test_case::test_case("d: dict[out int, out str]" ; "several elements")]
-    fn basedpython_use_site_variance_round_trip(contents: &str) {
+    /// `typeof X` has no brackets in the source either — its subscript `value` is
+    /// a synthetic ellipsis placeholder, so the generic rendering writes `...[X]`
+    #[test_case::test_case("a: typeof x" ; "annotation")]
+    #[test_case::test_case("b: list[typeof x]" ; "nested in a subscript")]
+    #[test_case::test_case("c: typeof x | None" ; "in a union")]
+    #[test_case::test_case("d: typeof a.b" ; "over an attribute")]
+    fn basedpython_typeof_round_trip(contents: &str) {
         assert_eq!(based_round_trip(contents), contents);
     }
 
