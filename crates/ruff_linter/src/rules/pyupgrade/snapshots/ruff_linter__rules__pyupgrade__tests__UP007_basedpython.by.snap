@@ -1,0 +1,70 @@
+---
+source: crates/ruff_linter/src/rules/pyupgrade/mod.rs
+---
+UP007 [*] Use `X | Y` for type annotations
+ --> UP007_basedpython.by:7:4
+  |
+5 | # built for it — a use-site variance keyword or a `literal` / `final` type
+6 | # modifier would otherwise be written back as `__variance_out__[int]`
+7 | a: Union[literal str, int]
+  |    ^^^^^^^^^^^^^^^^^^^^^^^
+8 | b: Union[final int, str]
+9 | c: Union[list[out int], None]
+  |
+help: Convert to `X | Y`
+  |
+6 | # modifier would otherwise be written back as `__variance_out__[int]`
+  - a: Union[literal str, int]
+7 + a: literal str | int
+8 | b: Union[final int, str]
+  |
+
+UP007 [*] Use `X | Y` for type annotations
+  --> UP007_basedpython.by:8:4
+   |
+ 6 | # modifier would otherwise be written back as `__variance_out__[int]`
+ 7 | a: Union[literal str, int]
+ 8 | b: Union[final int, str]
+   |    ^^^^^^^^^^^^^^^^^^^^^
+ 9 | c: Union[list[out int], None]
+10 | d: Union[list[literal str], int]
+   |
+help: Convert to `X | Y`
+  |
+7 | a: Union[literal str, int]
+  - b: Union[final int, str]
+8 + b: final int | str
+9 | c: Union[list[out int], None]
+  |
+
+UP007 [*] Use `X | Y` for type annotations
+  --> UP007_basedpython.by:9:4
+   |
+ 7 | a: Union[literal str, int]
+ 8 | b: Union[final int, str]
+ 9 | c: Union[list[out int], None]
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+10 | d: Union[list[literal str], int]
+   |
+help: Convert to `X | Y`
+   |
+8  | b: Union[final int, str]
+   - c: Union[list[out int], None]
+9  + c: list[out int] | None
+10 | d: Union[list[literal str], int]
+   |
+
+UP007 [*] Use `X | Y` for type annotations
+  --> UP007_basedpython.by:10:4
+   |
+ 8 | b: Union[final int, str]
+ 9 | c: Union[list[out int], None]
+10 | d: Union[list[literal str], int]
+   |    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: Convert to `X | Y`
+   |
+9  | c: Union[list[out int], None]
+   - d: Union[list[literal str], int]
+10 + d: list[literal str] | int
+   |

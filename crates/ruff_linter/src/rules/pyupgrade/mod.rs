@@ -45,6 +45,7 @@ mod tests {
     #[test_case(Rule::NonPEP585Annotation, Path::new("UP006_2.py"))]
     #[test_case(Rule::NonPEP585Annotation, Path::new("UP006_3.py"))]
     #[test_case(Rule::NonPEP604AnnotationUnion, Path::new("UP007_1.py"))]
+    #[test_case(Rule::NonPEP604AnnotationUnion, Path::new("UP007_basedpython.by"))]
     #[test_case(Rule::NonPEP604AnnotationOptional, Path::new("UP045_1.py"))]
     #[test_case(Rule::NonPEP604Isinstance, Path::new("UP038.py"))]
     #[test_case(Rule::OSErrorAlias, Path::new("UP024_0.py"))]
