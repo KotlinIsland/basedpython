@@ -641,6 +641,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         reverse_transforms::reified_generic::ReifiedGenericReverse::new(src);
     let mut string_tag_rev = reverse_transforms::string_tag::StringTagReverse::new(src);
     let mut typing_redirect_rev = reverse_transforms::typing_redirect::TypingRedirectReverse::new();
+    let mut export_import_rev = reverse_transforms::export_import::ExportImportReverse::new(src);
 
     for stmt in module.suite() {
         super_kw_rev.visit_stmt(stmt);
@@ -666,6 +667,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
         none_chain_rev.visit_stmt(stmt);
         reified_generic_rev.visit_stmt(stmt);
         string_tag_rev.visit_stmt(stmt);
+        export_import_rev.visit_stmt(stmt);
         // `callable` rewrites callable annotations to the arrow form. it runs
         // for stubs too, but in a restricted "stub" mode (set above) that only
         // touches the gradual `Callable[..., R]` form — the `Callable[[A, B],
@@ -721,6 +723,7 @@ pub fn reverse_transpile(source: &str, config: &Config) -> Result<String, String
     fixes.extend(reified_generic_rev.edits);
     fixes.extend(string_tag_rev.edits);
     fixes.extend(typing_redirect_rev.edits);
+    fixes.extend(export_import_rev.edits);
 
     let body = apply_transforms_once(src, fixes).0;
     // most reverse transforms swap an import-backed feature (`@dataclass`,

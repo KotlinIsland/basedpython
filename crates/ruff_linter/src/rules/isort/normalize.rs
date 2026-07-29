@@ -52,6 +52,7 @@ pub(crate) fn normalize_imports<'a>(
                 names,
                 level,
                 is_lazy,
+                is_export,
                 atop,
                 inline,
                 trailing,
@@ -74,6 +75,7 @@ pub(crate) fn normalize_imports<'a>(
                                     module,
                                     level,
                                     is_lazy,
+                                    is_export,
                                 },
                                 AliasData {
                                     name: alias.name,
@@ -109,6 +111,7 @@ pub(crate) fn normalize_imports<'a>(
                                     module,
                                     level,
                                     is_lazy,
+                                    is_export,
                                 })
                                 .or_default()
                         } else if alias.asname.is_none() || settings.combine_as_imports {
@@ -118,6 +121,7 @@ pub(crate) fn normalize_imports<'a>(
                                     module,
                                     level,
                                     is_lazy,
+                                    is_export,
                                 })
                                 .or_default()
                         } else {
@@ -128,6 +132,7 @@ pub(crate) fn normalize_imports<'a>(
                                         module,
                                         level,
                                         is_lazy,
+                                        is_export,
                                     },
                                     AliasData {
                                         name: alias.name,
@@ -160,6 +165,7 @@ pub(crate) fn normalize_imports<'a>(
                                 module,
                                 level,
                                 is_lazy,
+                                is_export,
                             })
                             .or_default()
                     } else if !isolate_aliases
@@ -171,6 +177,7 @@ pub(crate) fn normalize_imports<'a>(
                                 module,
                                 level,
                                 is_lazy,
+                                is_export,
                             })
                             .or_default()
                     } else {
@@ -181,6 +188,7 @@ pub(crate) fn normalize_imports<'a>(
                                     module,
                                     level,
                                     is_lazy,
+                                    is_export,
                                 },
                                 AliasData {
                                     name: alias.name,

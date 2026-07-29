@@ -1678,6 +1678,7 @@ pub struct StmtImportFrom<'a> {
     names: Vec<ComparableAlias<'a>>,
     level: u32,
     is_lazy: bool,
+    is_export: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1952,6 +1953,7 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 names,
                 level,
                 is_lazy,
+                is_export,
                 range: _,
                 node_index: _,
             }) => Self::ImportFrom(StmtImportFrom {
@@ -1959,6 +1961,7 @@ impl<'a> From<&'a ast::Stmt> for ComparableStmt<'a> {
                 names: names.iter().map(Into::into).collect(),
                 level: *level,
                 is_lazy: *is_lazy,
+                is_export: *is_export,
             }),
             ast::Stmt::Global(ast::StmtGlobal {
                 names,

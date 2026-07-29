@@ -65,6 +65,7 @@ pub(crate) fn annotate_imports<'a>(
                     names,
                     level,
                     is_lazy,
+                    is_export,
                     range: _,
                     node_index: _,
                 }) => {
@@ -160,6 +161,7 @@ pub(crate) fn annotate_imports<'a>(
                         names: aliases,
                         level: *level,
                         is_lazy: *is_lazy,
+                        is_export: *is_export,
                         trailing_comma: if split_on_trailing_comma {
                             trailing_comma(import, tokens)
                         } else {

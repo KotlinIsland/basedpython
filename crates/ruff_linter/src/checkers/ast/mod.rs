@@ -1137,6 +1137,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 module,
                 level,
                 is_lazy,
+                is_export,
                 range: _,
                 node_index: _,
             }) => {
@@ -1147,6 +1148,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 let module = module.as_deref();
                 let level = *level;
                 let is_lazy = *is_lazy;
+                let is_export = *is_export;
 
                 // Mark the top-level module as "seen" by the semantic model.
                 if level == 0 {
@@ -1173,10 +1175,13 @@ impl<'a> Visitor<'a> for Checker<'a> {
                         if alias.asname.is_some() {
                             flags |= BindingFlags::ALIAS;
                         }
-                        if alias
-                            .asname
-                            .as_ref()
-                            .is_some_and(|asname| asname.as_str() == alias.name.as_str())
+                        // basedpython `from x export y` *is* the explicit
+                        // re-export spelling, so it carries no `as` clause
+                        if is_export
+                            || alias
+                                .asname
+                                .as_ref()
+                                .is_some_and(|asname| asname.as_str() == alias.name.as_str())
                         {
                             flags |= BindingFlags::EXPLICIT_EXPORT;
                         }

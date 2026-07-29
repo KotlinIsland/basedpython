@@ -2309,3 +2309,93 @@ fn basedpython_type_modifier_is_basedpython_only() {
     };
     assert!(has_error, "`literal T` should be a .py syntax error");
 }
+
+#[test]
+fn basedpython_from_export() {
+    // `from x export y` parses as a from-import carrying the `is_export`
+    // spelling flag; the aliases stay bare (`as y` is what lowering adds)
+    for (source, module, level, names) in [
+        ("from x export y", Some("x"), 0, vec!["y"]),
+        ("from a.b.c export d, e", Some("a.b.c"), 0, vec!["d", "e"]),
+        ("from .mod export y", Some("mod"), 1, vec!["y"]),
+        // a module *named* `export` is not the keyword
+        ("from export export y", Some("export"), 0, vec!["y"]),
+        ("lazy from x export y", Some("x"), 0, vec!["y"]),
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::ImportFrom(import)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single ImportFrom for `{source}`");
+        };
+        assert!(import.is_export, "`{source}` should set is_export");
+        assert_eq!(import.module.as_deref(), module, "module in `{source}`");
+        assert_eq!(import.level, level, "level in `{source}`");
+        assert_eq!(
+            import
+                .names
+                .iter()
+                .map(|alias| alias.name.as_str())
+                .collect::<Vec<_>>(),
+            names,
+            "names in `{source}`"
+        );
+        assert!(
+            import.names.iter().all(|alias| alias.asname.is_none()),
+            "`export` aliases carry no `as` clause in `{source}`"
+        );
+    }
+}
+
+#[test]
+fn basedpython_from_export_module_less_relative() {
+    // a relative import may omit its module, so `export` at the module position
+    // is the keyword — unless `import` or a further `.` follows it
+    let parsed = parse_basedpython_module("from . export y");
+    let [Stmt::ImportFrom(import)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single ImportFrom");
+    };
+    assert!(import.is_export);
+    assert_eq!(import.module, None);
+    assert_eq!(import.level, 1);
+
+    for (source, module) in [
+        ("from . export import y", "export"),
+        ("from .export.sub import y", "export.sub"),
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::ImportFrom(import)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single ImportFrom for `{source}`");
+        };
+        assert!(!import.is_export, "`{source}` imports a module `export`");
+        assert_eq!(import.module.as_deref(), Some(module));
+    }
+}
+
+#[test]
+fn basedpython_from_export_rejects_star_and_asname() {
+    // `export` binds each name under itself, so a star (no single name) and a
+    // rename (a different name) are both contradictions
+    for source in ["from x export *", "from x export a as b"] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert!(
+            !parsed.errors().is_empty(),
+            "expected a parse error for `{source}`"
+        );
+    }
+}
+
+#[test]
+fn basedpython_from_export_rejected_in_py() {
+    // the keyword is `.by`-only; a `.py` file using it collects a
+    // `BasedPythonOnly` gate error
+    for source in ["from x export y", "from . export y"] {
+        let parsed = crate::Parser::new(source, ParseOptions::from(Mode::Module))
+            .parse()
+            .try_into_module()
+            .expect("recovers to a module");
+        assert!(
+            parsed.errors().iter().any(ParseError::is_basedpython_only),
+            "expected a BasedPythonOnly error for `{source}`, got {:?}",
+            parsed.errors()
+        );
+    }
+}

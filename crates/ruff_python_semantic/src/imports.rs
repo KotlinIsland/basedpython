@@ -230,6 +230,7 @@ impl<'de> serde::de::Deserialize<'de> for NameImports {
                         names,
                         level,
                         is_lazy: _,
+                        is_export: _,
                         range: _,
                         node_index: _,
                     }) => names

@@ -3813,8 +3813,9 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                     } else {
                         // As a non-standard rule to handle stubs in the wild, we consider
                         // `from . import x` and `from whatever.thispackage import x` in an
-                        // `__init__.pyi` to re-export `x` (as long as it wasn't renamed)
-                        (&alias.name.id, is_self_import)
+                        // `__init__.pyi` to re-export `x` (as long as it wasn't renamed).
+                        // basedpython's `from ... export x` says so outright
+                        (&alias.name.id, is_self_import || node.is_export)
                     };
 
                     // Look for eager imports `from __future__ import annotations`, ignore `as ...`

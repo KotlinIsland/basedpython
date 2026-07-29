@@ -319,6 +319,7 @@ impl ModuleName {
             level,
             names: _,
             is_lazy: _,
+            is_export: _,
             range: _,
             node_index: _,
         } = node;

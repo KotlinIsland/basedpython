@@ -80,7 +80,9 @@ pub(crate) fn prune_unused_imports(source: &str) -> String {
         let used_aliases: Vec<&Alias> = info
             .aliases()
             .iter()
-            .filter(|a| used.contains(binding_name(a)) || is_wildcard(a) || is_explicit_reexport(a))
+            .filter(|a| {
+                used.contains(binding_name(a)) || is_wildcard(a) || info.is_explicit_reexport(a)
+            })
             .collect();
         let total = info.aliases().len();
         if used_aliases.len() == total {
@@ -163,14 +165,25 @@ impl ImportInfo<'_> {
             ),
             Self::FromImport(_, n) => {
                 let module = n.module.as_ref().map(|m| m.id.as_str()).unwrap_or("");
+                let keyword = if n.is_export { "export" } else { "import" };
                 format!(
-                    "from {module} import {}",
+                    "from {module} {keyword} {}",
                     kept.iter()
                         .map(|a| alias_to_string(a))
                         .collect::<Vec<_>>()
                         .join(", ")
                 )
             }
+        }
+    }
+
+    /// Whether `alias` is deliberately part of this module's public api, so
+    /// pruning must leave it alone even when nothing references it locally
+    fn is_explicit_reexport(&self, alias: &Alias) -> bool {
+        match self {
+            // basedpython's `from x export y` says so in the keyword
+            Self::FromImport(_, n) if n.is_export => true,
+            _ => is_redundant_alias(alias),
         }
     }
 }
@@ -186,7 +199,7 @@ fn is_wildcard(alias: &Alias) -> bool {
 /// re-export convention used throughout typeshed stubs: the binding is
 /// intentionally part of the module's public api even when nothing references it
 /// locally, so it must not be pruned
-fn is_explicit_reexport(alias: &Alias) -> bool {
+fn is_redundant_alias(alias: &Alias) -> bool {
     alias
         .asname
         .as_ref()

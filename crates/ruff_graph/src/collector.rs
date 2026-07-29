@@ -47,6 +47,7 @@ impl<'ast> SourceOrderVisitor<'ast> for Collector<'_> {
                 module,
                 level,
                 is_lazy: _,
+                is_export: _,
                 range: _,
                 node_index: _,
             }) => {

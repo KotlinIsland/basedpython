@@ -102,6 +102,7 @@ features = [
   { "strings and characters" = "features/character.md" },
   { "repeated `_` parameters" = "features/repeated-underscore.md" },
   { "lazy imports" = "features/lazy-imports.md" },
+  { "export imports" = "features/export-imports.md" },
   { "extensions" = "features/extensions.md" },
   { "conversions (`__from__` / `__into__` / `__of__`)" = "features/conversions.md" },
   { "context parameters" = "features/context-parameters.md" },

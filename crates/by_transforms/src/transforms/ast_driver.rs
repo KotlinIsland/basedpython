@@ -36,15 +36,15 @@ use ruff_text_size::{Ranged, TextRange};
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
     coalesce_chain, compat, context_params, conversion, decl_site_variance, decorator_keyword,
-    dedent_string, dynamic_keyword, empty_declarations, extension, float_const, force_unwrap,
-    frameworks, generic_call, generics, grapheme_string, identity_swap, if_let, implementation,
-    implicit_receiver, implicit_typing, inferred_annotation, init_method, just_float, kw_subscript,
-    literal_string, literal_types, local_once, main_function, match_type, modifiers,
-    mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await, propagate,
-    properties, protocol_type, raises_clause, reified_generic, repeated_underscore, sentinel,
-    some_ctor, soundness, statement_expression, string_tag, super_keyword, symbolic_type_op,
-    top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification, typed_dict_literal,
-    typed_lambda, typeof_keyword, unpack, use_site_variance,
+    dedent_string, dynamic_keyword, empty_declarations, export_import, extension, float_const,
+    force_unwrap, frameworks, generic_call, generics, grapheme_string, identity_swap, if_let,
+    implementation, implicit_receiver, implicit_typing, inferred_annotation, init_method,
+    just_float, kw_subscript, literal_string, literal_types, local_once, main_function, match_type,
+    modifiers, mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await,
+    propagate, properties, protocol_type, raises_clause, reified_generic, repeated_underscore,
+    sentinel, some_ctor, soundness, statement_expression, string_tag, super_keyword,
+    symbolic_type_op, top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification,
+    typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -450,6 +450,7 @@ pub(crate) fn run_against_source<'a>(
         text_edits: RefCell::new(vec![]),
     };
 
+    let export_import_pass = export_import::ExportImport::new(source_ref);
     let dynamic_keyword_pass = dynamic_keyword::DynamicKeywordPass::new();
     let character_type_pass = character_type::CharacterTypePass::new();
     let grapheme_string_pass = grapheme_string::GraphemeStringPass::new();
@@ -536,6 +537,9 @@ pub(crate) fn run_against_source<'a>(
         // wins the first-wins overlap dedup over identity_swap's
         // value-context `isinstance(a, T)` rewrite
         &type_is_pass,
+        // `from x export y` → `from x import y as y`: two source edits inside
+        // an import statement, independent of every other pass
+        &export_import_pass,
         &top_star_pass,
         &identity_swap_pass,
         &compat_pass,

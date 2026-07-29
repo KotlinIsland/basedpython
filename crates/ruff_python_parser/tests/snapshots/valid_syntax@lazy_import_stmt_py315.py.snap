@@ -79,6 +79,7 @@ Module(
                     ],
                     level: 0,
                     is_lazy: true,
+                    is_export: false,
                 },
             ),
             ImportFrom(
@@ -112,6 +113,7 @@ Module(
                     ],
                     level: 0,
                     is_lazy: true,
+                    is_export: false,
                 },
             ),
             Assign(
@@ -189,6 +191,7 @@ Module(
                     ],
                     level: 0,
                     is_lazy: false,
+                    is_export: false,
                 },
             ),
         ],
