@@ -21,7 +21,7 @@ use ty_python_semantic::types::ide_support::{
     inferred_type_param_variance, inlay_hint_call_argument_details, is_reveal_type_function,
     numeric_promotion, trailing_lambda_implicit_parameter, type_parameter_names,
 };
-use ty_python_semantic::types::{Type, TypeDetail};
+use ty_python_semantic::types::{DisplaySettings, Type, TypeDetail};
 use ty_python_semantic::{HasType, SemanticModel, with_display_for_file};
 
 #[derive(Debug, Clone)]
@@ -39,6 +39,7 @@ impl InlayHint {
         rhs: &Expr,
         ty: Type,
         mut allow_edits: bool,
+        named_type_arguments: bool,
     ) -> Option<Self> {
         let InlayHintImportContext {
             db,
@@ -49,7 +50,13 @@ impl InlayHint {
 
         let position = expr.range().end();
         // Render the type to a string, and get subspans for all the types that make it up
-        let details = ty.display(db).to_string_parts();
+        let settings = DisplaySettings::from_possibly_ambiguous_types(db, [ty]);
+        let settings = if named_type_arguments {
+            settings.with_named_type_arguments()
+        } else {
+            settings
+        };
+        let details = ty.display_with(db, settings).to_string_parts();
 
         // Filter out repetitive hints like `x: T = T()`
         if call_matches_name(rhs, &details.label) {
@@ -246,12 +253,24 @@ impl InlayHint {
 
     /// The type arguments inferred for a generic call, shown between the callee
     /// and its argument list — where an explicit specialization would be written.
-    fn call_type_arguments(db: &dyn Db, position: TextSize, arguments: &[Type]) -> Self {
+    fn call_type_arguments(
+        db: &dyn Db,
+        position: TextSize,
+        arguments: &[(Name, Type)],
+        named: bool,
+    ) -> Self {
         let mut parts = vec!["[".into()];
 
-        for (index, argument) in arguments.iter().enumerate() {
+        // a lone type parameter has nothing to disambiguate, so naming it would
+        // be noise rather than orientation
+        let named = named && arguments.len() > 1;
+
+        for (index, (parameter, argument)) in arguments.iter().enumerate() {
             if index > 0 {
                 parts.push(", ".into());
+            }
+            if named {
+                parts.push(format!("{parameter}=").into());
             }
             parts.push(
                 InlayHintLabelPart::new(argument.display(db).to_string())
@@ -764,6 +783,8 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
+        let named_type_arguments = self.names_type_arguments();
+
         let context = InlayHintImportContext {
             db: self.db,
             file: self.model.file(),
@@ -771,7 +792,9 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             dynamic_imports: &mut self.dynamic_imports,
         };
 
-        if let Some(inlay_hint) = InlayHint::variable_type(context, expr, rhs, ty, allow_edits) {
+        if let Some(inlay_hint) =
+            InlayHint::variable_type(context, expr, rhs, ty, allow_edits, named_type_arguments)
+        {
             self.hints.push(inlay_hint);
         }
     }
@@ -873,14 +896,16 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     }
 
     /// Hint the type arguments inferred for a generic call.
-    fn add_call_type_arguments(&mut self, call: &ast::ExprCall, arguments: &[Type<'db>]) {
+    fn add_call_type_arguments(&mut self, call: &ast::ExprCall, arguments: &[(Name, Type<'db>)]) {
         if !self.settings.call_type_arguments || arguments.is_empty() {
             return;
         }
 
         // an explicit specialization is already written out, and a call whose
         // type arguments all went unsolved says nothing worth reading
-        if call.func.is_subscript_expr() || arguments.iter().all(Type::is_unknown) {
+        if call.func.is_subscript_expr()
+            || arguments.iter().all(|(_, argument)| argument.is_unknown())
+        {
             return;
         }
 
@@ -888,7 +913,17 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             self.db,
             call.func.range().end(),
             arguments,
+            self.names_type_arguments(),
         ));
+    }
+
+    /// Whether a rendered type argument should name the parameter it fills.
+    ///
+    /// Only in a `.by` file: `A[Key=str]` is basedpython's keyword subscript,
+    /// and a hint is read as source — python's subscript grammar has no keyword
+    /// form, so naming there would spell something unwritable.
+    fn names_type_arguments(&self) -> bool {
+        self.settings.type_argument_names && self.is_basedpython
     }
 
     /// basedpython: hint the arguments a call site fills implicitly from the
@@ -9818,6 +9853,54 @@ Source with applied edits:
 
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
             call_argument_names: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// basedpython names the type parameter each type argument fills wherever a
+    /// specialization is rendered, matching the keyword subscript it can be
+    /// written as.
+    #[test]
+    fn basedpython_named_type_arguments() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class Pair[Key, Value]:
+                init(key: Key, value: Value)
+
+            class One[Element]:
+                init(element: Element)
+
+            a = Pair(1, 'x')
+            b = One(1)
+            c: dict[str, int] = {}
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            variable_types: true,
+            call_type_arguments: true,
+            type_argument_names: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// A `.py` file has no keyword subscript to spell a named type argument, so
+    /// a rendered specialization stays positional there.
+    #[test]
+    fn type_arguments_are_not_named_outside_basedpython() {
+        let mut test = inlay_hint_test(
+            "
+            class Pair[Key, Value]:
+                def __init__(self, key: Key, value: Value) -> None: ...
+
+            a = Pair(1, 'x')
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            variable_types: true,
+            call_type_arguments: true,
+            type_argument_names: true,
             ..InlayHintSettings::none()
         }));
     }

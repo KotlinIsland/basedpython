@@ -62,5 +62,14 @@ identity⟨[int]⟩(x)
 Box⟨[int]⟩(1)
 ```
 
+a generic with more than one type parameter names each argument, in the
+[keyword subscript](kw-subscript.md#inlay-hints) form it can be written as:
+
+```by
+def pair[Key, Value](k: Key, v: Value) -> None: ...
+
+pair⟨[Key=int, Value=str]⟩(1, "x")
+```
+
 a `reveal_type` call is not hinted this way — its type argument *is* the revealed
 type, which its own hint already spells out
