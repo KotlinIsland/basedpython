@@ -1,0 +1,30 @@
+---
+source: crates/mdtest/src/lib.rs
+expression: snapshot
+---
+
+---
+mdtest name: basedpython_type_modifiers.md - basedpython: `literal` and `final` use-site type modifiers - the modifiers are basedpython-only
+mdtest path: crates/ty_python_semantic/resources/mdtest/basedpython_type_modifiers.md
+---
+
+# Python source files
+
+## mdtest_snippet.py
+
+```
+1 | # error: [invalid-syntax]
+2 | a: literal str = "x"
+```
+
+# Diagnostics
+
+```
+error[invalid-syntax]: the `literal` type modifier is not valid in .py files
+ --> src/mdtest_snippet.py:2:4
+  |
+2 | a: literal str = "x"
+  |    ^^^^^^^
+  |
+
+```

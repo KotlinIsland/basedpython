@@ -1522,6 +1522,14 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                 }
                 f.write_char(']')
             }
+            Type::Restricted(restricted) => {
+                f.write_str(restricted.modifier(self.db).keyword())?;
+                f.write_char(' ')?;
+                restricted
+                    .type_argument(self.db)
+                    .display_with(self.db, self.settings.clone())
+                    .fmt_detailed(f)
+            }
             Type::Overlapping(overlapping) => {
                 f.with_type(Type::SpecialForm(SpecialFormType::Overlapping))
                     .write_str("Overlapping")?;

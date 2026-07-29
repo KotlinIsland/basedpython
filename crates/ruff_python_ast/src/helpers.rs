@@ -1575,6 +1575,74 @@ pub fn use_site_variance_marker(expr: &Expr) -> Option<(UseSiteVariance, &Expr)>
     Some((variance, sub.slice.as_ref()))
 }
 
+/// basedpython: a use-site type modifier keyword written in front of a type
+/// expression — `literal T`, `final T`. Encoded by the parser as
+/// `Subscript(Name(id, ctx=Invalid), inner)` where `id` is one of
+/// `__modifier_literal__`, `__modifier_final__`, exactly like
+/// [`UseSiteVariance`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub enum TypeModifier {
+    /// `literal T` — only a value whose type is a literal type
+    Literal,
+    /// `final T` — only a value whose runtime class is exactly `T`'s
+    Final,
+}
+
+impl TypeModifier {
+    /// the keyword this modifier is written with
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            Self::Literal => "literal",
+            Self::Final => "final",
+        }
+    }
+
+    /// the modifier a keyword spells, or `None` if the word is not one
+    pub fn from_keyword(keyword: &str) -> Option<Self> {
+        match keyword {
+            "literal" => Some(Self::Literal),
+            "final" => Some(Self::Final),
+            _ => None,
+        }
+    }
+
+    /// the synthetic name id the parser uses for this modifier's marker
+    pub const fn marker_id(self) -> &'static str {
+        match self {
+            Self::Literal => "__modifier_literal__",
+            Self::Final => "__modifier_final__",
+        }
+    }
+
+    /// parse from a marker name id; returns `None` if not a modifier marker
+    pub fn from_marker_id(id: &str) -> Option<Self> {
+        match id {
+            "__modifier_literal__" => Some(Self::Literal),
+            "__modifier_final__" => Some(Self::Final),
+            _ => None,
+        }
+    }
+}
+
+/// basedpython: if `expr` is a parser-synthesized type modifier marker —
+/// `Subscript(Name(id=<marker>, ctx=Invalid), inner)` — return its modifier
+/// and inner expression. An invalid-context Name with one of the marker ids
+/// is unique to parser synthesis and cannot appear from any normal parse.
+pub fn type_modifier_marker(expr: &Expr) -> Option<(TypeModifier, &Expr)> {
+    let Expr::Subscript(sub) = expr else {
+        return None;
+    };
+    let Expr::Name(name) = sub.value.as_ref() else {
+        return None;
+    };
+    if !matches!(name.ctx, ExprContext::Invalid) {
+        return None;
+    }
+    let modifier = TypeModifier::from_marker_id(name.id.as_str())?;
+    Some((modifier, sub.slice.as_ref()))
+}
+
 /// basedpython: when `slice` contains at least one parser-synthesized
 /// top-star marker (`Starred(Name(id="", ctx=Invalid))`), returns the slice
 /// elements as a flat slice. The single-marker form is encoded as one

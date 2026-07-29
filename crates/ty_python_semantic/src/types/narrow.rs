@@ -582,6 +582,9 @@ impl ClassInfoConstraintFunction {
             Type::Overlapping(overlapping) => {
                 self.generate_constraint(db, overlapping.value_type(db), is_positive)
             }
+            Type::Restricted(restricted) => {
+                self.generate_constraint(db, restricted.value_type(db), is_positive)
+            }
             Type::Deferred(deferred) => {
                 self.generate_constraint(db, deferred.reduced(db), is_positive)
             }
@@ -4498,6 +4501,7 @@ impl<'db> NarrowingConstraintsBuilder<'db, '_> {
 fn is_or_contains_typeddict<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
     match ty {
         Type::Overlapping(overlapping) => is_or_contains_typeddict(db, overlapping.value_type(db)),
+        Type::Restricted(restricted) => is_or_contains_typeddict(db, restricted.value_type(db)),
         Type::Deferred(deferred) => is_or_contains_typeddict(db, deferred.reduced(db)),
         Type::TypedDict(_) => true,
         Type::Intersection(intersection) => intersection
@@ -4685,6 +4689,11 @@ fn all_matching_typeddict_fields_have_literal_types<'db>(
         Type::Overlapping(overlapping) => all_matching_typeddict_fields_have_literal_types(
             db,
             overlapping.value_type(db),
+            field_name,
+        ),
+        Type::Restricted(restricted) => all_matching_typeddict_fields_have_literal_types(
+            db,
+            restricted.value_type(db),
             field_name,
         ),
         Type::Deferred(deferred) => {

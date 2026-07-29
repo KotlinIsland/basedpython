@@ -905,7 +905,7 @@ impl<'src> Parser<'src> {
 
     /// Like [`Parser::error_if_not_basedpython`], but reports at `range` rather than at the
     /// current token.
-    fn error_if_not_basedpython_at(&mut self, message: String, range: TextRange) {
+    pub(super) fn error_if_not_basedpython_at(&mut self, message: String, range: TextRange) {
         if !self.options.is_basedpython {
             self.add_error(ParseErrorType::BasedPythonOnly(message), range);
         }
@@ -3255,7 +3255,9 @@ impl<'src> Parser<'src> {
         // type x = yield y
         // type x = yield from y
         // type x = x := 1
-        let value = self.parse_conditional_expression_or_higher();
+        let value = self.parse_conditional_expression_or_higher_impl(
+            ExpressionContext::default().with_in_type_expression(),
+        );
 
         ast::StmtTypeAlias {
             name: Box::new(name),
@@ -3583,7 +3585,9 @@ impl<'src> Parser<'src> {
         // test_err ann_assign_stmt_type_alias_annotation
         // a: type X = int
         // lambda: type X = int
-        let annotation = self.parse_conditional_expression_or_higher();
+        let annotation = self.parse_conditional_expression_or_higher_impl(
+            ExpressionContext::default().with_in_type_expression(),
+        );
 
         let value = if self.eat(TokenKind::Equal) {
             if self.at_expr() {
@@ -4379,7 +4383,8 @@ impl<'src> Parser<'src> {
                 // def foo() -> *int: ...
                 // def foo() -> (*int): ...
                 // def foo() -> yield x: ...
-                let returns = self.parse_expression_list(ExpressionContext::default());
+                let returns = self
+                    .parse_expression_list(ExpressionContext::default().with_in_type_expression());
 
                 if matches!(
                     returns.expr,
@@ -6630,7 +6635,7 @@ impl<'src> Parser<'src> {
                             // def foo(*args: *yield x): ...
                             // # def foo(*args: **int): ...
                             let parsed_expr = self.parse_conditional_expression_or_higher_impl(
-                                ExpressionContext::starred_bitwise_or(),
+                                ExpressionContext::starred_bitwise_or().with_in_type_expression(),
                             );
 
                             // test_ok param_with_star_annotation_py311
@@ -6676,7 +6681,9 @@ impl<'src> Parser<'src> {
                                     parameter_borrow: ast::ParameterBorrow::None,
                                 }
                             } else {
-                                self.parse_conditional_expression_or_higher()
+                                self.parse_conditional_expression_or_higher_impl(
+                                    ExpressionContext::default().with_in_type_expression(),
+                                )
                             }
                         }
                         AllowStarAnnotation::No => {
@@ -6688,7 +6695,9 @@ impl<'src> Parser<'src> {
                             // def foo(arg: *int): ...
                             // def foo(arg: yield int): ...
                             // def foo(arg: x := int): ...
-                            self.parse_conditional_expression_or_higher()
+                            self.parse_conditional_expression_or_higher_impl(
+                                ExpressionContext::default().with_in_type_expression(),
+                            )
                         }
                     };
                     Some(Box::new(parsed_expr.expr))
