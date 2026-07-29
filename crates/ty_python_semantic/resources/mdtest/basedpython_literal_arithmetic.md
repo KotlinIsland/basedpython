@@ -81,7 +81,7 @@ widens to the nominal `complex` instance via typeshed's `__pow__`
 reveal_type(1j // 2j)  # revealed: Unknown
 # error: [unsupported-operator]
 reveal_type(1j % 2j)  # revealed: Unknown
-reveal_type(2j ** 2)  # revealed: int | float | complex
+reveal_type(2j ** 2)  # revealed: complex
 ```
 
 ## division by zero falls back to the instance
