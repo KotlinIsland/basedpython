@@ -1412,6 +1412,35 @@ pub fn word_token_ranges(source: &str, range: TextRange) -> impl Iterator<Item =
         .map(|token| token.range)
 }
 
+/// basedpython: whether the function's `def` / `async def` header is written in
+/// `source`, rather than synthesized by the parser for another construct — a
+/// trailing-lambda block, a property accessor.
+///
+/// A synthesized function has no header to attach anything to, and the construct
+/// that owns it emits the whole thing itself, so the per-iteration loop-binding
+/// lowering leaves it alone. The lint that reports what that lowering leaves
+/// unbound (`B023`) has to draw the line in the same place, which is why the
+/// predicate lives here rather than in either of them.
+///
+/// Decided from the line the function's name sits on: a written header begins
+/// with the keyword, whatever decorators precede it on their own lines.
+pub fn has_written_def_header(source: &str, function: &ast::StmtFunctionDef) -> bool {
+    let name_start = usize::from(function.name.range().start());
+    let Some(before) = source.get(..name_start) else {
+        return false;
+    };
+    let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
+    let Some(line) = source.get(line_start..) else {
+        return false;
+    };
+    let header = line.trim_start_matches([' ', '\t']);
+    ["def", "async"].iter().any(|keyword| {
+        header
+            .strip_prefix(keyword)
+            .is_some_and(|rest| rest.starts_with([' ', '\t']))
+    })
+}
+
 /// basedpython: the parameter a trailing-lambda block binds to — the last
 /// declared parameter in signature order (keyword-only included), skipping a
 /// trailing `*args` / `**kwargs` (a block is never bound to a variadic).

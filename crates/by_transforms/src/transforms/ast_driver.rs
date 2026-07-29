@@ -44,7 +44,8 @@ use super::{
     propagate, properties, protocol_type, raises_clause, reified_generic, repeated_underscore,
     sentinel, some_ctor, soundness, statement_expression, string_tag, super_keyword,
     symbolic_type_op, top_star, trailing_lambda, tuple_index, type_fn, type_is, type_reification,
-    typed_dict_literal, typed_lambda, typeof_keyword, unpack, use_site_variance,
+    typed_dict_literal, typed_lambda, typeof_keyword, unique_loop_bindings, unpack,
+    use_site_variance,
 };
 use crate::Config;
 use crate::type_info::TypeInfo;
@@ -463,6 +464,8 @@ pub(crate) fn run_against_source<'a>(
     let super_keyword_pass = super_keyword::SuperKeyword::new();
     let postfix_await_pass = postfix_await::PostfixAwait::new(source_ref);
     let mutable_defaults_pass = mutable_defaults::MutableDefaultsPass::new(source_ref);
+    let unique_loop_bindings_pass =
+        unique_loop_bindings::UniqueLoopBindingsPass::new(source_ref, config.unique_loop_bindings);
     let auto_quote_pass = auto_quote::AutoQuote::new(
         source_ref,
         config.min_version,
@@ -710,6 +713,13 @@ pub(crate) fn run_against_source<'a>(
         // mutable defaults → `_MISSING` sentinel swap + body-prologue guard;
         // narrow edits, so the function body's own lowerings still apply
         &mutable_defaults_pass,
+        // per-iteration loop bindings: a closure made in a loop body is applied
+        // to the loop's values through a wrapper (or, for a `def`, gets a
+        // closure-rebinding decorator). the closure passes through as `Src`, so
+        // every lowering inside it still composes. after reified generics, so
+        // the `@generic` line stays above the rebind and receives the rebuilt
+        // function
+        &unique_loop_bindings_pass,
         // `Some(x)` → `Optional(x)`; a narrow identifier rename
         &some_ctor_pass,
         // `expr^` → guard hoisted before the enclosing statement + unwrapped value
@@ -748,6 +758,9 @@ pub(crate) fn run_against_source<'a>(
         ctx.required_imports
             .push("from typing import Any".to_owned());
     }
+    // typed lambdas are removed as source deletions so the statement around
+    // them is never re-rendered (see `typed_lambda`); collect them here
+    ctx.text_edits.extend(typed_lambda_inner.take_edits());
     if sentinel_inner.ever_changed() {
         ctx.required_imports
             .push("from typing_extensions import Sentinel".to_owned());

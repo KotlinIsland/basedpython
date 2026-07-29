@@ -74,6 +74,7 @@ pub(crate) mod typed_dict_literal;
 pub(crate) mod typed_lambda;
 pub(crate) mod typeof_keyword;
 pub(crate) mod typing_redirect;
+pub(crate) mod unique_loop_bindings;
 pub(crate) mod unpack;
 pub(crate) mod use_site_variance;
 pub(crate) mod wrapped_runtime;

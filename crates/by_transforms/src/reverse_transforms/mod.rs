@@ -40,4 +40,5 @@ pub(crate) mod super_keyword;
 pub(crate) mod tuple_type;
 pub(crate) mod type_is;
 pub(crate) mod typing_redirect;
+pub(crate) mod unique_loop_bindings;
 pub(crate) mod unpack;

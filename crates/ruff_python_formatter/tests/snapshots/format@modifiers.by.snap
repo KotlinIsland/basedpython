@@ -155,7 +155,7 @@ class H:
 # on its own, in a chain, and on the `var` spelling
 class I[T]:
     private t: T
-    private var u: int = 1
+    private var u: int      = 1
     override private v: str = "v"
 
     private def helper(self) -> int:
