@@ -196,6 +196,7 @@
 use std::cell::RefCell;
 
 use crate::types::function::KnownFunction;
+use crate::types::narrow::pattern_subject_type;
 use crate::{
     Db,
     dunder_all::dunder_all_names,
@@ -469,9 +470,11 @@ fn analyze_enum_literal_union_pattern_predicate<'db>(
     cycle_initial = |_, _, _| Truthiness::Ambiguous,
     heap_size = get_size2::GetSize::get_heap_size
 )]
-fn analyze_pattern_predicate<'db>(db: &'db dyn Db, predicate: PatternPredicate<'db>) -> Truthiness {
-    let subject_ty =
-        infer_same_file_expression_type(db, predicate.subject(db), TypeContext::default());
+pub(crate) fn analyze_pattern_predicate<'db>(
+    db: &'db dyn Db,
+    predicate: PatternPredicate<'db>,
+) -> Truthiness {
+    let subject_ty = pattern_subject_type(db, predicate.subject(db));
 
     if let Some(truthiness) =
         analyze_enum_literal_union_pattern_predicate(db, predicate, subject_ty)
@@ -1352,6 +1355,20 @@ fn analyze_single_pattern_predicate_kind<'db>(
                 });
             truthiness
         }
+        // basedpython: a conjunction matches exactly what all of its conjuncts do.
+        // Each conjunct is analysed against the incoming subject type rather than
+        // against the type its predecessor narrowed to, which can only lose
+        // precision, never soundness
+        PatternPredicateKind::And(predicates) => predicates
+            .iter()
+            .map(|predicate| analyze_single_pattern_predicate_kind(db, predicate, subject_ty, None))
+            .fold(Truthiness::AlwaysTrue, |acc, next| match (acc, next) {
+                (Truthiness::AlwaysFalse, _) | (_, Truthiness::AlwaysFalse) => {
+                    Truthiness::AlwaysFalse
+                }
+                (Truthiness::Ambiguous, _) | (_, Truthiness::Ambiguous) => Truthiness::Ambiguous,
+                (Truthiness::AlwaysTrue, Truthiness::AlwaysTrue) => Truthiness::AlwaysTrue,
+            }),
         PatternPredicateKind::Class(kind) => {
             let class_ty =
                 match infer_same_file_expression_type(db, kind.class, TypeContext::default()) {

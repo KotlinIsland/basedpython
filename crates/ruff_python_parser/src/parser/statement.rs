@@ -20,6 +20,7 @@ use crate::{Mode, ParseErrorType, UnsupportedSyntaxErrorKind};
 
 use super::Parenthesized;
 use super::expression::{ExpressionContext, starts_statement_expression};
+use super::pattern::AllowSequencePattern;
 
 /// Tokens that represent compound statements.
 const COMPOUND_STMT_SET: TokenSet = TokenSet::new([
@@ -140,6 +141,7 @@ fn synth_self_parameter(at: TextSize) -> ast::ParameterWithDefault {
                 range,
                 node_index: AtomicNodeIndex::NONE,
             },
+            pattern: None,
             annotation: None,
             node_index: AtomicNodeIndex::NONE,
             is_context: false,
@@ -296,6 +298,7 @@ fn synth_property_param(
                 range,
                 node_index: AtomicNodeIndex::NONE,
             },
+            pattern: None,
             annotation: annotation.map(Box::new),
             node_index: AtomicNodeIndex::NONE,
             is_context: false,
@@ -388,15 +391,42 @@ fn property_decl_type(annotation: &Expr) -> Option<Expr> {
     None
 }
 
+/// Calls `report` for every part of `expr` that cannot be assigned to.
+fn walk_invalid_assignment_targets<'a>(expr: &'a Expr, report: &mut dyn FnMut(&'a Expr)) {
+    match expr {
+        Expr::Starred(ast::ExprStarred { value, .. }) => {
+            walk_invalid_assignment_targets(value, report);
+        }
+        Expr::List(ast::ExprList { elts, .. }) | Expr::Tuple(ast::ExprTuple { elts, .. }) => {
+            for expr in elts {
+                walk_invalid_assignment_targets(expr, report);
+            }
+        }
+        Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_) => {}
+        _ => report(expr),
+    }
+}
+
+/// Whether `expr` can be assigned to. basedpython reparses a binder that cannot
+/// as a destructuring pattern
+fn is_assignment_target(expr: &Expr) -> bool {
+    let mut assignable = true;
+    walk_invalid_assignment_targets(expr, &mut |_| assignable = false);
+    assignable
+}
+
 /// basedpython: whether this statement parsed as a simple statement but already consumed an
 /// indented suite of its own, so no semicolon or newline terminator follows it.
 ///
-/// Two forms do this: a trailing lambda block (`f(2):` and a suite) and a match type alias
-/// (`type X[...] = match S:` and its `case` blocks).
+/// Three forms do this: a trailing lambda block (`f(2):` and a suite), a match type alias
+/// (`type X[...] = match S:` and its `case` blocks), and a `let ... else` destructuring.
 fn consumed_own_suite(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::FunctionDef(function) => function.is_trailing_lambda,
         Stmt::TypeAlias(alias) => !alias.cases.is_empty(),
+        // a destructuring `let` is a simple statement until it has an `else`
+        // block, whose suite it consumes along with the newline that ends it
+        Stmt::Let(let_stmt) => !let_stmt.orelse.is_empty(),
         _ => false,
     }
 }
@@ -2421,6 +2451,16 @@ impl<'src> Parser<'src> {
                     }
                 }
 
+                // basedpython: `let <pattern> := <subject>` destructures the
+                // subject. Reached after `let NAME [: T] = ...` has been ruled
+                // out, since that shape is a declaration rather than a match
+                if token == TokenKind::Name
+                    && self.src_text(self.current_token_range()) == "let"
+                    && let Some(let_stmt) = self.try_parse_let_statement()
+                {
+                    return Stmt::Let(let_stmt);
+                }
+
                 let start = self.node_start();
 
                 // test_err yield_after_comma
@@ -3805,6 +3845,25 @@ impl<'src> Parser<'src> {
         }
     }
 
+    /// basedpython: reports `let <pattern> = <subject>` — the binding operator
+    /// written as `=`.
+    ///
+    /// `if let P = v` is how Rust spells this, so it is the first thing a reader
+    /// coming from there types. Without this the parse just falls apart at the
+    /// `=` and reports three unrelated things, none of them the actual mistake
+    fn error_if_let_uses_plain_equals(&mut self, pattern_end: TextSize) -> bool {
+        if !self.at(TokenKind::Equal) {
+            return false;
+        }
+        self.add_error(
+            ParseErrorType::OtherError(
+                "A destructuring `let` binds with `:=`, not `=`".to_string(),
+            ),
+            TextRange::new(pattern_end, self.current_token_range().end()),
+        );
+        true
+    }
+
     /// Parses the `let <pattern> :=` prefix of a basedpython pattern-matching
     /// `if` / `elif` clause, leaving the parser positioned at the subject
     /// expression. Returns `None` — with the parser rewound — when the clause is
@@ -3831,6 +3890,10 @@ impl<'src> Parser<'src> {
         let pattern = self.parse_match_patterns();
 
         if !self.eat(TokenKind::ColonEqual) {
+            if self.options.is_basedpython && self.error_if_let_uses_plain_equals(pattern.end()) {
+                self.bump(TokenKind::Equal);
+                return Some(pattern);
+            }
             self.rewind(checkpoint);
             return None;
         }
@@ -3844,6 +3907,96 @@ impl<'src> Parser<'src> {
         );
 
         Some(pattern)
+    }
+
+    /// basedpython: the synthetic binder holding the value `pattern`
+    /// destructures, as an expression.
+    ///
+    /// It is zero-width at the pattern's start: the pattern is what the source
+    /// wrote, and what every tool that reads ranges should see there.
+    fn destructure_binder(&mut self, pattern: &Pattern, ctx: ExprContext) -> Expr {
+        Expr::Name(ast::ExprName {
+            id: self.next_destructure_binder_name(),
+            ctx,
+            range: TextRange::empty(pattern.start()),
+            node_index: AtomicNodeIndex::NONE,
+        })
+    }
+
+    /// [`Parser::destructure_binder`] as the identifier naming a parameter.
+    fn destructure_binder_identifier(&mut self, pattern: &Pattern) -> ast::Identifier {
+        ast::Identifier {
+            id: self.next_destructure_binder_name(),
+            range: TextRange::empty(pattern.start()),
+            node_index: AtomicNodeIndex::NONE,
+        }
+    }
+
+    /// Names the next binder. Counting them in source order — rather than
+    /// deriving the name from an offset — keeps a reformatted file parsing to
+    /// the same tree, and the count is rewound along with everything else when a
+    /// speculative parse is abandoned
+    fn next_destructure_binder_name(&mut self) -> Name {
+        let index = self.destructure_binders;
+        self.destructure_binders += 1;
+        ast::destructure_binder_name(index)
+    }
+
+    /// Parses a basedpython destructuring statement,
+    /// `let <pattern> := <subject>`, with an optional `else` block.
+    ///
+    /// Like the `if let` clause this is only committed to once a whole pattern
+    /// followed by `:=` has been parsed: `let` stays an ordinary identifier
+    /// everywhere else, and `let NAME [: T] = value` is the unrelated declaration
+    /// form handled by [`Parser::try_parse_modifier_or_introducer`]. Returns
+    /// `None` — with the parser rewound — when this is neither.
+    fn try_parse_let_statement(&mut self) -> Option<ast::StmtLet> {
+        let start = self.node_start();
+        let checkpoint = self.checkpoint();
+        self.bump(TokenKind::Name);
+
+        if !self.at_pattern_start() {
+            self.rewind(checkpoint);
+            return None;
+        }
+
+        let pattern = self.parse_match_patterns();
+
+        if !self.eat(TokenKind::ColonEqual) {
+            if self.options.is_basedpython && self.error_if_let_uses_plain_equals(pattern.end()) {
+                self.bump(TokenKind::Equal);
+            } else {
+                self.rewind(checkpoint);
+                return None;
+            }
+        }
+
+        // test_err let_stmt_in_python_file
+        // let Point(x, y) := origin
+        self.error_if_not_basedpython_at(
+            "a destructuring `let` is not valid in .py files".to_string(),
+            TextRange::new(start, pattern.end()),
+        );
+
+        let value = self.parse_expression_list(ExpressionContext::default());
+
+        // test_err let_stmt_else_missing_colon
+        // let Point(x, y) := origin else
+        //     return
+        let orelse = if self.eat(TokenKind::Else) {
+            self.expect(TokenKind::Colon);
+            self.parse_body(Clause::Else)
+        } else {
+            Suite::new()
+        };
+
+        Some(ast::StmtLet {
+            pattern: Box::new(pattern),
+            value: Box::new(value.expr),
+            orelse,
+            range: self.node_range(start),
+            node_index: AtomicNodeIndex::NONE,
+        })
     }
 
     /// Parses an `elif` or `else` clause.
@@ -4242,20 +4395,58 @@ impl<'src> Parser<'src> {
         // for -x in y: ...
         // for not x in y: ...
         // for x | y in z: ...
+        let target_checkpoint = self.checkpoint();
         let mut target =
             self.parse_expression_list(ExpressionContext::starred_conditional().with_in_excluded());
 
-        helpers::set_expr_ctx(&mut target.expr, ExprContext::Store);
+        // basedpython: a loop target that cannot be assigned to may be a
+        // destructuring pattern instead. The ordinary parse runs first and wins
+        // whenever it produced something assignable, so no loop that python
+        // accepts changes meaning here
+        let pattern = if self.options.is_basedpython && !is_assignment_target(&target.expr) {
+            self.rewind(target_checkpoint);
+            let pattern = self.parse_destructure_pattern(
+                AllowSequencePattern::Yes,
+                TokenSet::new([TokenKind::In]),
+            );
+            match pattern {
+                Some(pattern) => {
+                    // test_err for_stmt_destructure_in_python_file
+                    // for Point(x, y) in points: ...
+                    self.error_if_not_basedpython_at(
+                        "a destructuring `for` target is not valid in .py files".to_string(),
+                        pattern.range(),
+                    );
+                    target.expr = self.destructure_binder(&pattern, ExprContext::Store);
+                    Some(Box::new(pattern))
+                }
+                None => {
+                    // not a pattern either: replay the target parse so its own
+                    // errors are the ones reported. A checkpoint can only be
+                    // rewound to, so the attempt has to be paid for twice
+                    target = self.parse_expression_list(
+                        ExpressionContext::starred_conditional().with_in_excluded(),
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
 
-        // test_err for_stmt_invalid_target
-        // for 1 in x: ...
-        // for "a" in x: ...
-        // for *x and y in z: ...
-        // for *x | y in z: ...
-        // for await x in z: ...
-        // for yield x in y: ...
-        // for [x, 1, y, *["a"]] in z: ...
-        self.validate_assignment_target(&target.expr);
+        if pattern.is_none() {
+            helpers::set_expr_ctx(&mut target.expr, ExprContext::Store);
+
+            // test_err for_stmt_invalid_target
+            // for 1 in x: ...
+            // for "a" in x: ...
+            // for *x and y in z: ...
+            // for *x | y in z: ...
+            // for await x in z: ...
+            // for yield x in y: ...
+            // for [x, 1, y, *["a"]] in z: ...
+            self.validate_assignment_target(&target.expr);
+        }
 
         // test_err for_stmt_missing_in_keyword
         // for a b: ...
@@ -4307,6 +4498,7 @@ impl<'src> Parser<'src> {
 
         ast::StmtFor {
             target: Box::new(target.expr),
+            pattern,
             iter: Box::new(iter.expr),
             is_async: false,
             body,
@@ -4590,6 +4782,24 @@ impl<'src> Parser<'src> {
 
         let mut parameters = self.parse_parameters(FunctionKind::FunctionDef);
         let params_end = parameters.range().end();
+
+        // basedpython: every parameter of an `init(...)` becomes a field of the
+        // same name, and a pattern has no name to make one of. It also has no
+        // body of its own to destructure into
+        for parameter in parameters
+            .iter()
+            .map(ast::AnyParameterRef::as_parameter)
+            .filter(|parameter| parameter.pattern.is_some())
+        {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "A destructuring parameter is not valid in an `init(...)` shorthand: \
+                     it has no name to make a field of"
+                        .to_string(),
+                ),
+                parameter.range(),
+            );
+        }
 
         // `init(...)` implies `self` as the first parameter. inject a synthetic
         // (zero-width) `self` into the AST when the author omitted it, so ty
@@ -5459,6 +5669,7 @@ impl<'src> Parser<'src> {
                     range: synthetic,
                     node_index: AtomicNodeIndex::NONE,
                 },
+                pattern: None,
                 annotation: None,
                 is_context: false,
                 range: synthetic,
@@ -5886,9 +6097,12 @@ impl<'src> Parser<'src> {
             WithItemParsingState::Regular => self.parse_conditional_expression_or_higher(),
         };
 
-        let optional_vars = self
-            .at(TokenKind::As)
-            .then(|| Box::new(self.parse_with_item_optional_vars().expr));
+        let (optional_vars, pattern) = if self.at(TokenKind::As) {
+            let (target, pattern) = self.parse_with_item_optional_vars();
+            (Some(Box::new(target)), pattern)
+        } else {
+            (None, None)
+        };
 
         ParsedWithItem {
             is_parenthesized: context_expr.is_parenthesized,
@@ -5896,6 +6110,7 @@ impl<'src> Parser<'src> {
                 range: self.node_range(start),
                 context_expr: context_expr.expr,
                 optional_vars,
+                pattern,
                 node_index: AtomicNodeIndex::NONE,
             },
         }
@@ -5906,18 +6121,53 @@ impl<'src> Parser<'src> {
     /// # Panics
     ///
     /// If the parser isn't positioned at an `as` token.
-    fn parse_with_item_optional_vars(&mut self) -> ParsedExpr {
+    ///
+    /// basedpython: returns the item's pattern too when the target destructures
+    /// the bound value, `with open(path) as File(handle):`.
+    fn parse_with_item_optional_vars(&mut self) -> (Expr, Option<Box<Pattern>>) {
         self.bump(TokenKind::As);
 
+        let target_checkpoint = self.checkpoint();
         let mut target = self
             .parse_conditional_expression_or_higher_impl(ExpressionContext::starred_conditional());
+
+        // basedpython: like a `for` target, a bound value that cannot be assigned
+        // to may be destructured by a pattern instead. The item ends at the `:`
+        // of the `with`, at the `,` before the next item, or at the `)` closing a
+        // parenthesized item list
+        if self.options.is_basedpython && !is_assignment_target(&target.expr) {
+            self.rewind(target_checkpoint);
+            let pattern = self.parse_destructure_pattern(
+                AllowSequencePattern::No,
+                TokenSet::new([TokenKind::Colon, TokenKind::Comma, TokenKind::Rpar]),
+            );
+            match pattern {
+                Some(pattern) => {
+                    // test_err with_item_destructure_in_python_file
+                    // with ctx() as Point(x, y): ...
+                    self.error_if_not_basedpython_at(
+                        "a destructuring `with` target is not valid in .py files".to_string(),
+                        pattern.range(),
+                    );
+                    let binder = self.destructure_binder(&pattern, ExprContext::Store);
+                    return (binder, Some(Box::new(pattern)));
+                }
+                // not a pattern either: replay the target parse so its own errors
+                // are the ones reported
+                None => {
+                    target = self.parse_conditional_expression_or_higher_impl(
+                        ExpressionContext::starred_conditional(),
+                    );
+                }
+            }
+        }
 
         // This has the same semantics as an assignment target.
         self.validate_assignment_target(&target.expr);
 
         helpers::set_expr_ctx(&mut target.expr, ExprContext::Store);
 
-        target
+        (target.expr, None)
     }
 
     /// Try parsing a `match` statement.
@@ -6682,7 +6932,41 @@ impl<'src> Parser<'src> {
             );
             self.bump(TokenKind::Name);
         }
-        let name = self.parse_identifier();
+        // basedpython: a parameter may destructure its argument,
+        // `def foo(Point(x, y): Point)`. Only attempted for a parameter that does
+        // not start with a plain name, so an ordinary parameter — including one
+        // named with a soft keyword, `def foo(match: int)` — is never reparsed
+        let pattern = (self.options.is_basedpython
+            && matches!(function_kind, FunctionKind::FunctionDef)
+            && !(self.at_name_or_soft_keyword()
+                && matches!(
+                    self.peek(),
+                    TokenKind::Colon | TokenKind::Comma | TokenKind::Equal | TokenKind::Rpar
+                )))
+        .then(|| {
+            // `,` and `)` end a parameter with no annotation, which a
+            // destructuring parameter needs — accepting them here is what makes
+            // that the error reported rather than a stray-token one
+            self.parse_destructure_pattern(
+                AllowSequencePattern::No,
+                TokenSet::new([TokenKind::Colon, TokenKind::Comma, TokenKind::Rpar]),
+            )
+        })
+        .flatten();
+
+        let name = match &pattern {
+            Some(pattern) => {
+                // test_err param_destructure_in_python_file
+                // def foo(Point(x, y): Point): ...
+                self.error_if_not_basedpython_at(
+                    "a destructuring parameter is not valid in .py files".to_string(),
+                    pattern.range(),
+                );
+                self.destructure_binder_identifier(pattern)
+            }
+            None => self.parse_identifier(),
+        };
+        let pattern = pattern.map(Box::new);
 
         // Annotations are only allowed for function definition. For lambda expression,
         // the `:` token would indicate its body.
@@ -6782,9 +7066,21 @@ impl<'src> Parser<'src> {
             _ => None,
         };
 
+        if pattern.is_some() && annotation.is_none() {
+            self.add_error(
+                ParseErrorType::OtherError(
+                    "A destructuring parameter needs an annotation: there is nothing else to say \
+                     what it destructures"
+                        .to_string(),
+                ),
+                self.node_range(start),
+            );
+        }
+
         ast::Parameter {
             range: self.node_range(start),
             name,
+            pattern,
             annotation,
             node_index: AtomicNodeIndex::NONE,
             is_context,
@@ -7660,15 +7956,10 @@ impl<'src> Parser<'src> {
     ///
     /// Report an error for each invalid assignment expression found.
     pub(super) fn validate_assignment_target(&mut self, expr: &Expr) {
-        match expr {
-            Expr::Starred(ast::ExprStarred { value, .. }) => self.validate_assignment_target(value),
-            Expr::List(ast::ExprList { elts, .. }) | Expr::Tuple(ast::ExprTuple { elts, .. }) => {
-                for expr in elts {
-                    self.validate_assignment_target(expr);
-                }
-            }
-            Expr::Name(_) | Expr::Attribute(_) | Expr::Subscript(_) => {}
-            _ => self.add_error(ParseErrorType::InvalidAssignmentTarget, expr.range()),
+        let mut invalid = Vec::new();
+        walk_invalid_assignment_targets(expr, &mut |expr| invalid.push(expr.range()));
+        for range in invalid {
+            self.add_error(ParseErrorType::InvalidAssignmentTarget, range);
         }
     }
 

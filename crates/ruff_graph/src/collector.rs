@@ -124,6 +124,7 @@ impl<'ast> SourceOrderVisitor<'ast> for Collector<'_> {
             | Stmt::With(_)
             | Stmt::Match(_)
             | Stmt::Try(_)
+            | Stmt::Let(_)
             | Stmt::For(_) => {
                 // Always traverse into compound statements.
                 walk_stmt(self, stmt);

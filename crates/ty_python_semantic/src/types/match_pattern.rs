@@ -1095,6 +1095,14 @@ pub(crate) fn definite_match_pattern_type<'db>(
                 .iter()
                 .map(|p| definite_match_pattern_type(db, p)),
         ),
+        // basedpython: a value matches a conjunction only when every conjunct
+        // matches it
+        PatternPredicateKind::And(predicates) => predicates
+            .iter()
+            .fold(IntersectionBuilder::new(db), |builder, p| {
+                builder.add_positive(definite_match_pattern_type(db, p))
+            })
+            .build(),
         PatternPredicateKind::As(pattern, _) => pattern
             .as_deref()
             .map(|p| definite_match_pattern_type(db, p))

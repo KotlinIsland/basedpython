@@ -37,6 +37,7 @@ Module(
                                     },
                                 ),
                             ),
+                            pattern: None,
                         },
                         WithItem {
                             range: 59..67,
@@ -59,6 +60,7 @@ Module(
                                     },
                                 ),
                             ),
+                            pattern: None,
                         },
                     ],
                     body: [
@@ -95,6 +97,7 @@ Module(
                                 },
                             ),
                             optional_vars: None,
+                            pattern: None,
                         },
                         WithItem {
                             range: 85..93,
@@ -117,6 +120,7 @@ Module(
                                     },
                                 ),
                             ),
+                            pattern: None,
                         },
                     ],
                     body: [
@@ -162,6 +166,7 @@ Module(
                                     },
                                 ),
                             ),
+                            pattern: None,
                         },
                         WithItem {
                             range: 116..119,
@@ -175,6 +180,7 @@ Module(
                                 },
                             ),
                             optional_vars: None,
+                            pattern: None,
                         },
                     ],
                     body: [

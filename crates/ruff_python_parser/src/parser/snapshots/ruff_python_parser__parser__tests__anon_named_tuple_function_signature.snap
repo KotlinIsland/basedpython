@@ -34,6 +34,7 @@ ModModule {
                                     range: 6..7,
                                     node_index: NodeIndex(None),
                                 },
+                                pattern: None,
                                 annotation: Some(
                                     Tuple(
                                         ExprTuple {

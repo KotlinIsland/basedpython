@@ -94,6 +94,8 @@ features = [
   { "`super` keyword" = "features/super.md" },
   { "tuple member access" = "features/tuple-index.md" },
   { "keyword arguments in subscripts" = "features/kw-subscript.md" },
+  { "destructuring" = "features/destructuring.md" },
+  { "destructuring with `if let`" = "features/if-let.md" },
   { "statement expressions" = "features/statement-expressions.md" },
   { "trailing lambda blocks" = "features/trailing-lambdas.md" },
   { "unpack syntax" = "features/unpack-syntax.md" },
@@ -110,7 +112,6 @@ features = [
   { "local lifetimes (`local` / `once`)" = "features/local-lifetimes.md" },
   { "exception tracking (`raises`)" = "features/exceptions.md" },
   { "assignment alignment" = "features/assignment-alignment.md" },
-  { "destructuring with `if let`" = "features/if-let.md" },
   { "implementations" = "features/implementations.md" },
 ]
 

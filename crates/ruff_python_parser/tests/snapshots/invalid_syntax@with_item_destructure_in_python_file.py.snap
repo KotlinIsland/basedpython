@@ -1,0 +1,115 @@
+---
+source: crates/ruff_python_parser/tests/fixtures.rs
+input_file: crates/ruff_python_parser/resources/inline/err/with_item_destructure_in_python_file.py
+---
+## AST
+
+```
+Module(
+    ModModule {
+        node_index: NodeIndex(None),
+        range: 0..31,
+        body: [
+            With(
+                StmtWith {
+                    node_index: NodeIndex(None),
+                    range: 0..30,
+                    is_async: false,
+                    items: [
+                        WithItem {
+                            range: 5..25,
+                            node_index: NodeIndex(None),
+                            context_expr: Call(
+                                ExprCall {
+                                    node_index: NodeIndex(None),
+                                    range: 5..10,
+                                    func: Name(
+                                        ExprName {
+                                            node_index: NodeIndex(None),
+                                            range: 5..8,
+                                            id: Name("ctx"),
+                                            ctx: Load,
+                                        },
+                                    ),
+                                    arguments: Arguments {
+                                        range: 8..10,
+                                        node_index: NodeIndex(None),
+                                        args: [],
+                                        keywords: [],
+                                    },
+                                    is_cast: false,
+                                    is_checked_cast: false,
+                                    is_string_tag: false,
+                                },
+                            ),
+                            optional_vars: Some(
+                                Call(
+                                    ExprCall {
+                                        node_index: NodeIndex(None),
+                                        range: 14..25,
+                                        func: Name(
+                                            ExprName {
+                                                node_index: NodeIndex(None),
+                                                range: 14..19,
+                                                id: Name("Point"),
+                                                ctx: Load,
+                                            },
+                                        ),
+                                        arguments: Arguments {
+                                            range: 19..25,
+                                            node_index: NodeIndex(None),
+                                            args: [
+                                                Name(
+                                                    ExprName {
+                                                        node_index: NodeIndex(None),
+                                                        range: 20..21,
+                                                        id: Name("x"),
+                                                        ctx: Load,
+                                                    },
+                                                ),
+                                                Name(
+                                                    ExprName {
+                                                        node_index: NodeIndex(None),
+                                                        range: 23..24,
+                                                        id: Name("y"),
+                                                        ctx: Load,
+                                                    },
+                                                ),
+                                            ],
+                                            keywords: [],
+                                        },
+                                        is_cast: false,
+                                        is_checked_cast: false,
+                                        is_string_tag: false,
+                                    },
+                                ),
+                            ),
+                            pattern: None,
+                        },
+                    ],
+                    body: [
+                        Expr(
+                            StmtExpr {
+                                node_index: NodeIndex(None),
+                                range: 27..30,
+                                value: EllipsisLiteral(
+                                    ExprEllipsisLiteral {
+                                        node_index: NodeIndex(None),
+                                        range: 27..30,
+                                    },
+                                ),
+                            },
+                        ),
+                    ],
+                },
+            ),
+        ],
+    },
+)
+```
+## Errors
+
+  |
+1 | with ctx() as Point(x, y): ...
+  |               ^^^^^^^^^^^ Syntax Error: Invalid assignment target
+  |

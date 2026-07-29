@@ -134,6 +134,7 @@ pub enum Stmt {
     For(crate::StmtFor),
     While(crate::StmtWhile),
     If(crate::StmtIf),
+    Let(crate::StmtLet),
     With(crate::StmtWith),
     Match(crate::StmtMatch),
     Raise(crate::StmtRaise),
@@ -213,6 +214,12 @@ impl From<crate::StmtWhile> for Stmt {
 impl From<crate::StmtIf> for Stmt {
     fn from(node: crate::StmtIf) -> Self {
         Self::If(node)
+    }
+}
+
+impl From<crate::StmtLet> for Stmt {
+    fn from(node: crate::StmtLet) -> Self {
+        Self::Let(node)
     }
 }
 
@@ -314,6 +321,7 @@ impl ruff_text_size::Ranged for Stmt {
             Self::For(node) => node.range(),
             Self::While(node) => node.range(),
             Self::If(node) => node.range(),
+            Self::Let(node) => node.range(),
             Self::With(node) => node.range(),
             Self::Match(node) => node.range(),
             Self::Raise(node) => node.range(),
@@ -346,6 +354,7 @@ impl crate::HasNodeIndex for Stmt {
             Self::For(node) => node.node_index(),
             Self::While(node) => node.node_index(),
             Self::If(node) => node.node_index(),
+            Self::Let(node) => node.node_index(),
             Self::With(node) => node.node_index(),
             Self::Match(node) => node.node_index(),
             Self::Raise(node) => node.node_index(),
@@ -769,6 +778,43 @@ impl Stmt {
     pub fn as_if_stmt(&self) -> Option<&crate::StmtIf> {
         match self {
             Self::If(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub const fn is_let_stmt(&self) -> bool {
+        matches!(self, Self::Let(_))
+    }
+
+    #[inline]
+    pub fn let_stmt(self) -> Option<crate::StmtLet> {
+        match self {
+            Self::Let(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn expect_let_stmt(self) -> crate::StmtLet {
+        match self {
+            Self::Let(val) => val,
+            _ => panic!("called expect on {self:?}"),
+        }
+    }
+
+    #[inline]
+    pub fn as_let_stmt_mut(&mut self) -> Option<&mut crate::StmtLet> {
+        match self {
+            Self::Let(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn as_let_stmt(&self) -> Option<&crate::StmtLet> {
+        match self {
+            Self::Let(val) => Some(val),
             _ => None,
         }
     }
@@ -3208,6 +3254,7 @@ pub enum Pattern {
     MatchStar(crate::PatternMatchStar),
     MatchAs(crate::PatternMatchAs),
     MatchOr(crate::PatternMatchOr),
+    MatchAnd(crate::PatternMatchAnd),
 }
 
 impl From<crate::PatternMatchValue> for Pattern {
@@ -3258,6 +3305,12 @@ impl From<crate::PatternMatchOr> for Pattern {
     }
 }
 
+impl From<crate::PatternMatchAnd> for Pattern {
+    fn from(node: crate::PatternMatchAnd) -> Self {
+        Self::MatchAnd(node)
+    }
+}
+
 impl ruff_text_size::Ranged for Pattern {
     fn range(&self) -> ruff_text_size::TextRange {
         match self {
@@ -3269,6 +3322,7 @@ impl ruff_text_size::Ranged for Pattern {
             Self::MatchStar(node) => node.range(),
             Self::MatchAs(node) => node.range(),
             Self::MatchOr(node) => node.range(),
+            Self::MatchAnd(node) => node.range(),
         }
     }
 }
@@ -3284,6 +3338,7 @@ impl crate::HasNodeIndex for Pattern {
             Self::MatchStar(node) => node.node_index(),
             Self::MatchAs(node) => node.node_index(),
             Self::MatchOr(node) => node.node_index(),
+            Self::MatchAnd(node) => node.node_index(),
         }
     }
 }
@@ -3585,6 +3640,43 @@ impl Pattern {
             _ => None,
         }
     }
+
+    #[inline]
+    pub const fn is_match_and(&self) -> bool {
+        matches!(self, Self::MatchAnd(_))
+    }
+
+    #[inline]
+    pub fn match_and(self) -> Option<crate::PatternMatchAnd> {
+        match self {
+            Self::MatchAnd(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn expect_match_and(self) -> crate::PatternMatchAnd {
+        match self {
+            Self::MatchAnd(val) => val,
+            _ => panic!("called expect on {self:?}"),
+        }
+    }
+
+    #[inline]
+    pub fn as_match_and_mut(&mut self) -> Option<&mut crate::PatternMatchAnd> {
+        match self {
+            Self::MatchAnd(val) => Some(val),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn as_match_and(&self) -> Option<&crate::PatternMatchAnd> {
+        match self {
+            Self::MatchAnd(val) => Some(val),
+            _ => None,
+        }
+    }
 }
 
 /// See also [type_param](https://docs.python.org/3/library/ast.html#ast.type_param)
@@ -3821,6 +3913,12 @@ impl ruff_text_size::Ranged for crate::StmtWhile {
 }
 
 impl ruff_text_size::Ranged for crate::StmtIf {
+    fn range(&self) -> ruff_text_size::TextRange {
+        self.range
+    }
+}
+
+impl ruff_text_size::Ranged for crate::StmtLet {
     fn range(&self) -> ruff_text_size::TextRange {
         self.range
     }
@@ -4198,6 +4296,12 @@ impl ruff_text_size::Ranged for crate::PatternMatchOr {
     }
 }
 
+impl ruff_text_size::Ranged for crate::PatternMatchAnd {
+    fn range(&self) -> ruff_text_size::TextRange {
+        self.range
+    }
+}
+
 impl ruff_text_size::Ranged for crate::TypeParamTypeVar {
     fn range(&self) -> ruff_text_size::TextRange {
         self.range
@@ -4409,6 +4513,12 @@ impl crate::HasNodeIndex for crate::StmtWhile {
 }
 
 impl crate::HasNodeIndex for crate::StmtIf {
+    fn node_index(&self) -> &crate::AtomicNodeIndex {
+        &self.node_index
+    }
+}
+
+impl crate::HasNodeIndex for crate::StmtLet {
     fn node_index(&self) -> &crate::AtomicNodeIndex {
         &self.node_index
     }
@@ -4786,6 +4896,12 @@ impl crate::HasNodeIndex for crate::PatternMatchOr {
     }
 }
 
+impl crate::HasNodeIndex for crate::PatternMatchAnd {
+    fn node_index(&self) -> &crate::AtomicNodeIndex {
+        &self.node_index
+    }
+}
+
 impl crate::HasNodeIndex for crate::TypeParamTypeVar {
     fn node_index(&self) -> &crate::AtomicNodeIndex {
         &self.node_index
@@ -4955,6 +5071,7 @@ impl Stmt {
             Stmt::For(node) => node.visit_source_order(visitor),
             Stmt::While(node) => node.visit_source_order(visitor),
             Stmt::If(node) => node.visit_source_order(visitor),
+            Stmt::Let(node) => node.visit_source_order(visitor),
             Stmt::With(node) => node.visit_source_order(visitor),
             Stmt::Match(node) => node.visit_source_order(visitor),
             Stmt::Raise(node) => node.visit_source_order(visitor),
@@ -5061,6 +5178,7 @@ impl Pattern {
             Pattern::MatchStar(node) => node.visit_source_order(visitor),
             Pattern::MatchAs(node) => node.visit_source_order(visitor),
             Pattern::MatchOr(node) => node.visit_source_order(visitor),
+            Pattern::MatchAnd(node) => node.visit_source_order(visitor),
         }
     }
 }
@@ -5152,6 +5270,8 @@ pub enum StmtRef<'a> {
     While(&'a crate::StmtWhile),
     #[is(name = "if_stmt")]
     If(&'a crate::StmtIf),
+    #[is(name = "let_stmt")]
+    Let(&'a crate::StmtLet),
     #[is(name = "with_stmt")]
     With(&'a crate::StmtWith),
     #[is(name = "match_stmt")]
@@ -5196,6 +5316,7 @@ impl<'a> From<&'a Stmt> for StmtRef<'a> {
             Stmt::For(node) => StmtRef::For(node),
             Stmt::While(node) => StmtRef::While(node),
             Stmt::If(node) => StmtRef::If(node),
+            Stmt::Let(node) => StmtRef::Let(node),
             Stmt::With(node) => StmtRef::With(node),
             Stmt::Match(node) => StmtRef::Match(node),
             Stmt::Raise(node) => StmtRef::Raise(node),
@@ -5277,6 +5398,12 @@ impl<'a> From<&'a crate::StmtWhile> for StmtRef<'a> {
 impl<'a> From<&'a crate::StmtIf> for StmtRef<'a> {
     fn from(node: &'a crate::StmtIf) -> Self {
         Self::If(node)
+    }
+}
+
+impl<'a> From<&'a crate::StmtLet> for StmtRef<'a> {
+    fn from(node: &'a crate::StmtLet) -> Self {
+        Self::Let(node)
     }
 }
 
@@ -5378,6 +5505,7 @@ impl ruff_text_size::Ranged for StmtRef<'_> {
             Self::For(node) => node.range(),
             Self::While(node) => node.range(),
             Self::If(node) => node.range(),
+            Self::Let(node) => node.range(),
             Self::With(node) => node.range(),
             Self::Match(node) => node.range(),
             Self::Raise(node) => node.range(),
@@ -5410,6 +5538,7 @@ impl crate::HasNodeIndex for StmtRef<'_> {
             Self::For(node) => node.node_index(),
             Self::While(node) => node.node_index(),
             Self::If(node) => node.node_index(),
+            Self::Let(node) => node.node_index(),
             Self::With(node) => node.node_index(),
             Self::Match(node) => node.node_index(),
             Self::Raise(node) => node.node_index(),
@@ -5959,6 +6088,7 @@ pub enum PatternRef<'a> {
     MatchStar(&'a crate::PatternMatchStar),
     MatchAs(&'a crate::PatternMatchAs),
     MatchOr(&'a crate::PatternMatchOr),
+    MatchAnd(&'a crate::PatternMatchAnd),
 }
 
 impl<'a> From<&'a Pattern> for PatternRef<'a> {
@@ -5972,6 +6102,7 @@ impl<'a> From<&'a Pattern> for PatternRef<'a> {
             Pattern::MatchStar(node) => PatternRef::MatchStar(node),
             Pattern::MatchAs(node) => PatternRef::MatchAs(node),
             Pattern::MatchOr(node) => PatternRef::MatchOr(node),
+            Pattern::MatchAnd(node) => PatternRef::MatchAnd(node),
         }
     }
 }
@@ -6024,6 +6155,12 @@ impl<'a> From<&'a crate::PatternMatchOr> for PatternRef<'a> {
     }
 }
 
+impl<'a> From<&'a crate::PatternMatchAnd> for PatternRef<'a> {
+    fn from(node: &'a crate::PatternMatchAnd) -> Self {
+        Self::MatchAnd(node)
+    }
+}
+
 impl ruff_text_size::Ranged for PatternRef<'_> {
     fn range(&self) -> ruff_text_size::TextRange {
         match self {
@@ -6035,6 +6172,7 @@ impl ruff_text_size::Ranged for PatternRef<'_> {
             Self::MatchStar(node) => node.range(),
             Self::MatchAs(node) => node.range(),
             Self::MatchOr(node) => node.range(),
+            Self::MatchAnd(node) => node.range(),
         }
     }
 }
@@ -6050,6 +6188,7 @@ impl crate::HasNodeIndex for PatternRef<'_> {
             Self::MatchStar(node) => node.node_index(),
             Self::MatchAs(node) => node.node_index(),
             Self::MatchOr(node) => node.node_index(),
+            Self::MatchAnd(node) => node.node_index(),
         }
     }
 }
@@ -6128,6 +6267,7 @@ pub enum AnyNodeRef<'a> {
     StmtFor(&'a crate::StmtFor),
     StmtWhile(&'a crate::StmtWhile),
     StmtIf(&'a crate::StmtIf),
+    StmtLet(&'a crate::StmtLet),
     StmtWith(&'a crate::StmtWith),
     StmtMatch(&'a crate::StmtMatch),
     StmtRaise(&'a crate::StmtRaise),
@@ -6190,6 +6330,7 @@ pub enum AnyNodeRef<'a> {
     PatternMatchStar(&'a crate::PatternMatchStar),
     PatternMatchAs(&'a crate::PatternMatchAs),
     PatternMatchOr(&'a crate::PatternMatchOr),
+    PatternMatchAnd(&'a crate::PatternMatchAnd),
     TypeParamTypeVar(&'a crate::TypeParamTypeVar),
     TypeParamTypeVarTuple(&'a crate::TypeParamTypeVarTuple),
     TypeParamParamSpec(&'a crate::TypeParamParamSpec),
@@ -6258,6 +6399,7 @@ impl<'a> From<&'a Stmt> for AnyNodeRef<'a> {
             Stmt::For(node) => AnyNodeRef::StmtFor(node),
             Stmt::While(node) => AnyNodeRef::StmtWhile(node),
             Stmt::If(node) => AnyNodeRef::StmtIf(node),
+            Stmt::Let(node) => AnyNodeRef::StmtLet(node),
             Stmt::With(node) => AnyNodeRef::StmtWith(node),
             Stmt::Match(node) => AnyNodeRef::StmtMatch(node),
             Stmt::Raise(node) => AnyNodeRef::StmtRaise(node),
@@ -6290,6 +6432,7 @@ impl<'a> From<StmtRef<'a>> for AnyNodeRef<'a> {
             StmtRef::For(node) => AnyNodeRef::StmtFor(node),
             StmtRef::While(node) => AnyNodeRef::StmtWhile(node),
             StmtRef::If(node) => AnyNodeRef::StmtIf(node),
+            StmtRef::Let(node) => AnyNodeRef::StmtLet(node),
             StmtRef::With(node) => AnyNodeRef::StmtWith(node),
             StmtRef::Match(node) => AnyNodeRef::StmtMatch(node),
             StmtRef::Raise(node) => AnyNodeRef::StmtRaise(node),
@@ -6322,6 +6465,7 @@ impl<'a> AnyNodeRef<'a> {
             Self::StmtFor(node) => Some(StmtRef::For(node)),
             Self::StmtWhile(node) => Some(StmtRef::While(node)),
             Self::StmtIf(node) => Some(StmtRef::If(node)),
+            Self::StmtLet(node) => Some(StmtRef::Let(node)),
             Self::StmtWith(node) => Some(StmtRef::With(node)),
             Self::StmtMatch(node) => Some(StmtRef::Match(node)),
             Self::StmtRaise(node) => Some(StmtRef::Raise(node)),
@@ -6552,6 +6696,7 @@ impl<'a> From<&'a Pattern> for AnyNodeRef<'a> {
             Pattern::MatchStar(node) => AnyNodeRef::PatternMatchStar(node),
             Pattern::MatchAs(node) => AnyNodeRef::PatternMatchAs(node),
             Pattern::MatchOr(node) => AnyNodeRef::PatternMatchOr(node),
+            Pattern::MatchAnd(node) => AnyNodeRef::PatternMatchAnd(node),
         }
     }
 }
@@ -6567,6 +6712,7 @@ impl<'a> From<PatternRef<'a>> for AnyNodeRef<'a> {
             PatternRef::MatchStar(node) => AnyNodeRef::PatternMatchStar(node),
             PatternRef::MatchAs(node) => AnyNodeRef::PatternMatchAs(node),
             PatternRef::MatchOr(node) => AnyNodeRef::PatternMatchOr(node),
+            PatternRef::MatchAnd(node) => AnyNodeRef::PatternMatchAnd(node),
         }
     }
 }
@@ -6582,6 +6728,7 @@ impl<'a> AnyNodeRef<'a> {
             Self::PatternMatchStar(node) => Some(PatternRef::MatchStar(node)),
             Self::PatternMatchAs(node) => Some(PatternRef::MatchAs(node)),
             Self::PatternMatchOr(node) => Some(PatternRef::MatchOr(node)),
+            Self::PatternMatchAnd(node) => Some(PatternRef::MatchAnd(node)),
 
             _ => None,
         }
@@ -6695,6 +6842,12 @@ impl<'a> From<&'a crate::StmtWhile> for AnyNodeRef<'a> {
 impl<'a> From<&'a crate::StmtIf> for AnyNodeRef<'a> {
     fn from(node: &'a crate::StmtIf) -> AnyNodeRef<'a> {
         AnyNodeRef::StmtIf(node)
+    }
+}
+
+impl<'a> From<&'a crate::StmtLet> for AnyNodeRef<'a> {
+    fn from(node: &'a crate::StmtLet) -> AnyNodeRef<'a> {
+        AnyNodeRef::StmtLet(node)
     }
 }
 
@@ -7070,6 +7223,12 @@ impl<'a> From<&'a crate::PatternMatchOr> for AnyNodeRef<'a> {
     }
 }
 
+impl<'a> From<&'a crate::PatternMatchAnd> for AnyNodeRef<'a> {
+    fn from(node: &'a crate::PatternMatchAnd) -> AnyNodeRef<'a> {
+        AnyNodeRef::PatternMatchAnd(node)
+    }
+}
+
 impl<'a> From<&'a crate::TypeParamTypeVar> for AnyNodeRef<'a> {
     fn from(node: &'a crate::TypeParamTypeVar) -> AnyNodeRef<'a> {
         AnyNodeRef::TypeParamTypeVar(node)
@@ -7224,6 +7383,7 @@ impl ruff_text_size::Ranged for AnyNodeRef<'_> {
             AnyNodeRef::StmtFor(node) => node.range(),
             AnyNodeRef::StmtWhile(node) => node.range(),
             AnyNodeRef::StmtIf(node) => node.range(),
+            AnyNodeRef::StmtLet(node) => node.range(),
             AnyNodeRef::StmtWith(node) => node.range(),
             AnyNodeRef::StmtMatch(node) => node.range(),
             AnyNodeRef::StmtRaise(node) => node.range(),
@@ -7286,6 +7446,7 @@ impl ruff_text_size::Ranged for AnyNodeRef<'_> {
             AnyNodeRef::PatternMatchStar(node) => node.range(),
             AnyNodeRef::PatternMatchAs(node) => node.range(),
             AnyNodeRef::PatternMatchOr(node) => node.range(),
+            AnyNodeRef::PatternMatchAnd(node) => node.range(),
             AnyNodeRef::TypeParamTypeVar(node) => node.range(),
             AnyNodeRef::TypeParamTypeVarTuple(node) => node.range(),
             AnyNodeRef::TypeParamParamSpec(node) => node.range(),
@@ -7329,6 +7490,7 @@ impl crate::HasNodeIndex for AnyNodeRef<'_> {
             AnyNodeRef::StmtFor(node) => node.node_index(),
             AnyNodeRef::StmtWhile(node) => node.node_index(),
             AnyNodeRef::StmtIf(node) => node.node_index(),
+            AnyNodeRef::StmtLet(node) => node.node_index(),
             AnyNodeRef::StmtWith(node) => node.node_index(),
             AnyNodeRef::StmtMatch(node) => node.node_index(),
             AnyNodeRef::StmtRaise(node) => node.node_index(),
@@ -7391,6 +7553,7 @@ impl crate::HasNodeIndex for AnyNodeRef<'_> {
             AnyNodeRef::PatternMatchStar(node) => node.node_index(),
             AnyNodeRef::PatternMatchAs(node) => node.node_index(),
             AnyNodeRef::PatternMatchOr(node) => node.node_index(),
+            AnyNodeRef::PatternMatchAnd(node) => node.node_index(),
             AnyNodeRef::TypeParamTypeVar(node) => node.node_index(),
             AnyNodeRef::TypeParamTypeVarTuple(node) => node.node_index(),
             AnyNodeRef::TypeParamParamSpec(node) => node.node_index(),
@@ -7434,6 +7597,7 @@ impl AnyNodeRef<'_> {
             AnyNodeRef::StmtFor(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::StmtWhile(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::StmtIf(node) => std::ptr::NonNull::from(*node).cast(),
+            AnyNodeRef::StmtLet(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::StmtWith(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::StmtMatch(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::StmtRaise(node) => std::ptr::NonNull::from(*node).cast(),
@@ -7498,6 +7662,7 @@ impl AnyNodeRef<'_> {
             AnyNodeRef::PatternMatchStar(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::PatternMatchAs(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::PatternMatchOr(node) => std::ptr::NonNull::from(*node).cast(),
+            AnyNodeRef::PatternMatchAnd(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::TypeParamTypeVar(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::TypeParamTypeVarTuple(node) => std::ptr::NonNull::from(*node).cast(),
             AnyNodeRef::TypeParamParamSpec(node) => std::ptr::NonNull::from(*node).cast(),
@@ -7545,6 +7710,7 @@ impl<'a> AnyNodeRef<'a> {
             AnyNodeRef::StmtFor(node) => node.visit_source_order(visitor),
             AnyNodeRef::StmtWhile(node) => node.visit_source_order(visitor),
             AnyNodeRef::StmtIf(node) => node.visit_source_order(visitor),
+            AnyNodeRef::StmtLet(node) => node.visit_source_order(visitor),
             AnyNodeRef::StmtWith(node) => node.visit_source_order(visitor),
             AnyNodeRef::StmtMatch(node) => node.visit_source_order(visitor),
             AnyNodeRef::StmtRaise(node) => node.visit_source_order(visitor),
@@ -7607,6 +7773,7 @@ impl<'a> AnyNodeRef<'a> {
             AnyNodeRef::PatternMatchStar(node) => node.visit_source_order(visitor),
             AnyNodeRef::PatternMatchAs(node) => node.visit_source_order(visitor),
             AnyNodeRef::PatternMatchOr(node) => node.visit_source_order(visitor),
+            AnyNodeRef::PatternMatchAnd(node) => node.visit_source_order(visitor),
             AnyNodeRef::TypeParamTypeVar(node) => node.visit_source_order(visitor),
             AnyNodeRef::TypeParamTypeVarTuple(node) => node.visit_source_order(visitor),
             AnyNodeRef::TypeParamParamSpec(node) => node.visit_source_order(visitor),
@@ -7658,6 +7825,7 @@ impl AnyNodeRef<'_> {
                 | AnyNodeRef::StmtFor(_)
                 | AnyNodeRef::StmtWhile(_)
                 | AnyNodeRef::StmtIf(_)
+                | AnyNodeRef::StmtLet(_)
                 | AnyNodeRef::StmtWith(_)
                 | AnyNodeRef::StmtMatch(_)
                 | AnyNodeRef::StmtRaise(_)
@@ -7748,6 +7916,7 @@ impl AnyNodeRef<'_> {
                 | AnyNodeRef::PatternMatchStar(_)
                 | AnyNodeRef::PatternMatchAs(_)
                 | AnyNodeRef::PatternMatchOr(_)
+                | AnyNodeRef::PatternMatchAnd(_)
         )
     }
 }
@@ -8069,6 +8238,16 @@ impl<'a> TryFrom<AnyRootNodeRef<'a>> for &'a crate::StmtIf {
     fn try_from(node: AnyRootNodeRef<'a>) -> Result<&'a crate::StmtIf, ()> {
         match node {
             AnyRootNodeRef::Stmt(Stmt::If(node)) => Ok(node),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<AnyRootNodeRef<'a>> for &'a crate::StmtLet {
+    type Error = ();
+    fn try_from(node: AnyRootNodeRef<'a>) -> Result<&'a crate::StmtLet, ()> {
+        match node {
+            AnyRootNodeRef::Stmt(Stmt::Let(node)) => Ok(node),
             _ => Err(()),
         }
     }
@@ -8763,6 +8942,16 @@ impl<'a> TryFrom<AnyRootNodeRef<'a>> for &'a crate::PatternMatchOr {
     fn try_from(node: AnyRootNodeRef<'a>) -> Result<&'a crate::PatternMatchOr, ()> {
         match node {
             AnyRootNodeRef::Pattern(Pattern::MatchOr(node)) => Ok(node),
+            _ => Err(()),
+        }
+    }
+}
+
+impl<'a> TryFrom<AnyRootNodeRef<'a>> for &'a crate::PatternMatchAnd {
+    type Error = ();
+    fn try_from(node: AnyRootNodeRef<'a>) -> Result<&'a crate::PatternMatchAnd, ()> {
+        match node {
+            AnyRootNodeRef::Pattern(Pattern::MatchAnd(node)) => Ok(node),
             _ => Err(()),
         }
     }
@@ -9474,6 +9663,7 @@ pub enum NodeKind {
     StmtFor,
     StmtWhile,
     StmtIf,
+    StmtLet,
     StmtWith,
     StmtMatch,
     StmtRaise,
@@ -9536,6 +9726,7 @@ pub enum NodeKind {
     PatternMatchStar,
     PatternMatchAs,
     PatternMatchOr,
+    PatternMatchAnd,
     TypeParamTypeVar,
     TypeParamTypeVarTuple,
     TypeParamParamSpec,
@@ -9577,6 +9768,7 @@ impl AnyNodeRef<'_> {
             AnyNodeRef::StmtFor(_) => NodeKind::StmtFor,
             AnyNodeRef::StmtWhile(_) => NodeKind::StmtWhile,
             AnyNodeRef::StmtIf(_) => NodeKind::StmtIf,
+            AnyNodeRef::StmtLet(_) => NodeKind::StmtLet,
             AnyNodeRef::StmtWith(_) => NodeKind::StmtWith,
             AnyNodeRef::StmtMatch(_) => NodeKind::StmtMatch,
             AnyNodeRef::StmtRaise(_) => NodeKind::StmtRaise,
@@ -9641,6 +9833,7 @@ impl AnyNodeRef<'_> {
             AnyNodeRef::PatternMatchStar(_) => NodeKind::PatternMatchStar,
             AnyNodeRef::PatternMatchAs(_) => NodeKind::PatternMatchAs,
             AnyNodeRef::PatternMatchOr(_) => NodeKind::PatternMatchOr,
+            AnyNodeRef::PatternMatchAnd(_) => NodeKind::PatternMatchAnd,
             AnyNodeRef::TypeParamTypeVar(_) => NodeKind::TypeParamTypeVar,
             AnyNodeRef::TypeParamTypeVarTuple(_) => NodeKind::TypeParamTypeVarTuple,
             AnyNodeRef::TypeParamParamSpec(_) => NodeKind::TypeParamParamSpec,
@@ -9826,6 +10019,10 @@ pub struct StmtFor {
     pub range: ruff_text_size::TextRange,
     pub is_async: bool,
     pub target: Box<Expr>,
+    /// basedpython: the pattern of a
+    /// destructuring loop, `for <pattern> in <iter>:`. When set, `target` is the synthetic binder
+    /// the pattern destructures (see [`destructure_binder_name`](crate::destructure_binder_name))
+    pub pattern: Option<Box<Pattern>>,
     pub iter: Box<Expr>,
     pub body: thin_vec::ThinVec<Stmt>,
     pub orelse: thin_vec::ThinVec<Stmt>,
@@ -9854,6 +10051,27 @@ pub struct StmtIf {
     pub test: Box<Expr>,
     pub body: thin_vec::ThinVec<Stmt>,
     pub elif_else_clauses: Vec<crate::ElifElseClause>,
+}
+
+/// basedpython destructuring statement: `let <pattern> := <subject>`, with an
+/// optional `else` block that runs when the pattern does not match.
+///
+/// ```by
+/// let Point(x, y) := origin
+/// let A(foo) := value else:
+///     return None
+/// ```
+///
+/// Without an `else` block the pattern must be irrefutable for the subject's type.
+/// `orelse` is empty when the statement has no `else` block.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub struct StmtLet {
+    pub node_index: crate::AtomicNodeIndex,
+    pub range: ruff_text_size::TextRange,
+    pub pattern: Box<Pattern>,
+    pub value: Box<Expr>,
+    pub orelse: thin_vec::ThinVec<Stmt>,
 }
 
 /// See also [With](https://docs.python.org/3/library/ast.html#ast.With)
@@ -10611,6 +10829,24 @@ pub struct PatternMatchOr {
     pub patterns: Vec<Pattern>,
 }
 
+/// basedpython conjunction pattern: `P and Q`, which matches when every
+/// one of its patterns matches, binding the captures of all of them.
+///
+/// ```by
+/// case Circle(r) and Shape(name=n): ...
+/// ```
+///
+/// `and` binds tighter than `|`, so `A() and B() | C()` is `(A() and B()) | C()`.
+/// CPython has no such pattern; it is lowered by matching the subject against each
+/// conjunct in turn.
+#[derive(Clone, Debug, PartialEq)]
+#[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
+pub struct PatternMatchAnd {
+    pub node_index: crate::AtomicNodeIndex,
+    pub range: ruff_text_size::TextRange,
+    pub patterns: Vec<Pattern>,
+}
+
 /// See also [TypeVar](https://docs.python.org/3/library/ast.html#ast.TypeVar)
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "get-size", derive(get_size2::GetSize))]
@@ -10890,6 +11126,7 @@ impl StmtFor {
         let StmtFor {
             is_async: _,
             target,
+            pattern,
             iter,
             body,
             orelse,
@@ -10897,6 +11134,11 @@ impl StmtFor {
             node_index: _,
         } = self;
         visitor.visit_expr(target);
+
+        if let Some(pattern) = pattern {
+            visitor.visit_pattern(pattern);
+        }
+
         visitor.visit_expr(iter);
         visitor.visit_body(body);
         visitor.visit_body(orelse);
@@ -10945,6 +11187,24 @@ impl StmtIf {
         for elm in elif_else_clauses {
             visitor.visit_elif_else_clause(elm);
         }
+    }
+}
+
+impl StmtLet {
+    pub(crate) fn visit_source_order<'a, V>(&'a self, visitor: &mut V)
+    where
+        V: SourceOrderVisitor<'a> + ?Sized,
+    {
+        let StmtLet {
+            pattern,
+            value,
+            orelse,
+            range: _,
+            node_index: _,
+        } = self;
+        visitor.visit_pattern(pattern);
+        visitor.visit_expr(value);
+        visitor.visit_body(orelse);
     }
 }
 
@@ -11817,6 +12077,23 @@ impl PatternMatchOr {
         V: SourceOrderVisitor<'a> + ?Sized,
     {
         let PatternMatchOr {
+            patterns,
+            range: _,
+            node_index: _,
+        } = self;
+
+        for elm in patterns {
+            visitor.visit_pattern(elm);
+        }
+    }
+}
+
+impl PatternMatchAnd {
+    pub(crate) fn visit_source_order<'a, V>(&'a self, visitor: &mut V)
+    where
+        V: SourceOrderVisitor<'a> + ?Sized,
+    {
+        let PatternMatchAnd {
             patterns,
             range: _,
             node_index: _,

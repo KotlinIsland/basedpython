@@ -9,7 +9,7 @@ use ruff_python_ast::helpers::map_subscript;
 use ruff_python_ast::name::QualifiedName;
 use ruff_python_ast::{
     ExceptHandler, Expr, ExprName, ExprStarred, ExprSubscript, ExprTuple, Stmt, StmtFor, StmtIf,
-    StmtMatch, StmtTry, StmtWhile, StmtWith,
+    StmtLet, StmtMatch, StmtTry, StmtWhile, StmtWith,
 };
 
 /// Return `true` if any base class matches a [`QualifiedName`] predicate.
@@ -219,6 +219,17 @@ where
                     {
                         return true;
                     }
+                    None
+                }
+
+                // a destructuring `let` binds its captures in the class body,
+                // but a class member is looked up by name and the captures are
+                // not tracked here
+                Stmt::Let(StmtLet { orelse, .. }) => {
+                    if any_stmt_in_body(orelse, func, ClassMemberBoundness::PossiblyUnbound) {
+                        return true;
+                    }
+
                     None
                 }
 

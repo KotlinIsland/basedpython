@@ -1,3 +1,4 @@
+use crate::pattern::maybe_parenthesize_pattern;
 use crate::prelude::*;
 use ruff_python_ast::Parameter;
 use ruff_python_ast::helpers::parameter_modifiers;
@@ -12,6 +13,7 @@ impl FormatNodeRule<Parameter> for FormatParameter {
             range: _,
             node_index: _,
             name,
+            pattern,
             annotation,
             is_context,
         } = item;
@@ -33,7 +35,12 @@ impl FormatNodeRule<Parameter> for FormatParameter {
             space().fmt(f)?;
         }
 
-        name.format().fmt(f)?;
+        // basedpython: a destructuring parameter writes a pattern where the name
+        // would be; `name` is the synthetic binder holding the argument it matches
+        match pattern {
+            Some(pattern) => maybe_parenthesize_pattern(pattern, item).fmt(f)?,
+            None => name.format().fmt(f)?,
+        }
 
         if let Some(annotation) = annotation.as_deref() {
             token(":").fmt(f)?;

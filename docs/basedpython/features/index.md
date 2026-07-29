@@ -91,6 +91,8 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [`super` keyword](super.md)
 - [tuple member access (`expr.N`)](tuple-index.md)
 - [keyword arguments in subscripts](kw-subscript.md)
+- [destructuring](destructuring.md) — `let`, and patterns in every binding position
+- [destructuring with `if let`](if-let.md)
 - [statement expressions](statement-expressions.md)
 - [trailing lambda blocks](trailing-lambdas.md)
 - [unpack syntax](unpack-syntax.md)
@@ -113,5 +115,4 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 
 ## planned
 
-- [destructuring with `if let`](if-let.md)
 - [implementations (`implementation A for B`)](implementations.md)

@@ -16,6 +16,7 @@ use ruff_text_size::{Ranged, TextLen, TextRange};
 /// - `PatternMatchStar`: Starred expression
 /// - `PatternMatchAs`: The pattern itself or the name
 /// - `PatternMatchOr`: Binary expression with `|` operator
+/// - `PatternMatchAnd`: Boolean expression with the `and` operator
 ///
 /// Note that the sequence pattern is always converted to a list literal even
 /// if it was surrounded by parentheses.
@@ -207,5 +208,15 @@ pub(super) fn pattern_to_expr(pattern: Pattern) -> Expr {
                 _ => unreachable!("Or patterns can only be formed with at least two patterns."),
             }
         }
+        Pattern::MatchAnd(ast::PatternMatchAnd {
+            patterns,
+            range,
+            node_index,
+        }) => Expr::BoolOp(ast::ExprBoolOp {
+            range,
+            op: ast::BoolOp::And,
+            values: patterns.into_iter().map(pattern_to_expr).collect(),
+            node_index,
+        }),
     }
 }

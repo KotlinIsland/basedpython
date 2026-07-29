@@ -401,6 +401,7 @@ Module(
                                                     range: 211..212,
                                                     node_index: NodeIndex(None),
                                                 },
+                                                pattern: None,
                                                 annotation: None,
                                                 is_context: false,
                                             },

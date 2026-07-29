@@ -3,7 +3,8 @@
 use crate::AtomicNodeIndex;
 use crate::generated::{
     ExprBytesLiteral, ExprDict, ExprFString, ExprList, ExprName, ExprNamed, ExprSet,
-    ExprStringLiteral, ExprTString, ExprTuple, PatternMatchAs, PatternMatchOr, StmtClassDef,
+    ExprStringLiteral, ExprTString, ExprTuple, PatternMatchAnd, PatternMatchAs, PatternMatchOr,
+    StmtClassDef,
 };
 use std::borrow::Cow;
 use std::fmt;
@@ -3023,6 +3024,11 @@ pub struct Parameter {
     pub range: TextRange,
     pub node_index: AtomicNodeIndex,
     pub name: Identifier,
+    /// basedpython: the pattern of a destructuring parameter, `def f(Point(x, y): Point)`.
+    /// When set, `name` is the synthetic binder the pattern destructures (see
+    /// [`destructure_binder_name`]) and the parameter is positional-only, since that
+    /// name cannot be written at a call site
+    pub pattern: Option<Box<Pattern>>,
     pub annotation: Option<Box<Expr>>,
     /// basedpython: `true` when written with the `context` prefix
     /// (`def f(context b: str)`). when unmatched at a call site, the argument
@@ -3177,6 +3183,10 @@ pub struct WithItem {
     pub node_index: AtomicNodeIndex,
     pub context_expr: Expr,
     pub optional_vars: Option<Box<Expr>>,
+    /// basedpython: the pattern of a destructuring `with` item, `with open(p) as F(f):`.
+    /// When set, `optional_vars` is the synthetic binder the pattern destructures
+    /// (see [`destructure_binder_name`])
+    pub pattern: Option<Box<Pattern>>,
 }
 
 /// See also [match_case](https://docs.python.org/3/library/ast.html#ast.match_case)
@@ -3224,6 +3234,14 @@ impl Pattern {
             Pattern::MatchOr(PatternMatchOr { patterns, .. }) => {
                 patterns.iter().find_map(Pattern::irrefutable_pattern)
             }
+            // every conjunct has to match, so a conjunction is irrefutable only
+            // when all of them are
+            Pattern::MatchAnd(PatternMatchAnd { patterns, .. }) => patterns
+                .iter()
+                .map(Pattern::irrefutable_pattern)
+                .collect::<Option<Vec<_>>>()?
+                .into_iter()
+                .next(),
             _ => None,
         }
     }
@@ -3247,9 +3265,34 @@ impl Pattern {
             Pattern::MatchOr(PatternMatchOr { patterns, .. }) => {
                 patterns.iter().all(Pattern::is_wildcard)
             }
+            Pattern::MatchAnd(PatternMatchAnd { patterns, .. }) => {
+                patterns.iter().all(Pattern::is_wildcard)
+            }
             _ => false,
         }
     }
+}
+
+/// basedpython: the name of the synthetic binder a destructuring `for` target,
+/// `with` item or parameter gives the value its pattern destructures.
+///
+/// A pattern stands where a name would, but the value still has to be bound
+/// before it can be matched, and the binder is what binds it. `index` counts the
+/// binders in the file in source order, which keeps the name unique without
+/// pinning it to a byte offset — the same code reformatted has to parse to the
+/// same tree. The leading underscore keeps the "this binding is never read"
+/// lints quiet: the source reads the pattern's captures, never the binder.
+pub fn destructure_binder_name(index: u32) -> Name {
+    Name::new(format!("{DESTRUCTURE_BINDER_PREFIX}{index}"))
+}
+
+/// The prefix every [`destructure_binder_name`] carries, and the only way to
+/// recognise a binder: it names a value the source cannot refer to.
+pub const DESTRUCTURE_BINDER_PREFIX: &str = "_by_destructure_";
+
+/// Whether `name` names a [destructuring binder](destructure_binder_name).
+pub fn is_destructure_binder(name: &str) -> bool {
+    name.starts_with(DESTRUCTURE_BINDER_PREFIX)
 }
 
 pub struct IrrefutablePattern {

@@ -36,9 +36,9 @@ use ruff_text_size::{Ranged, TextRange};
 use super::{
     annotation, anon_named_tuple, auto_quote, callable, character_type, checked_cast, coalesce,
     coalesce_chain, compat, context_params, conversion, decl_site_variance, decorator_keyword,
-    dedent_string, dynamic_keyword, empty_declarations, export_import, extension, float_const,
-    force_unwrap, frameworks, generic_call, generics, grapheme_string, identity_swap, if_let,
-    implementation, implicit_receiver, implicit_typing, inferred_annotation, init_method,
+    dedent_string, destructure, dynamic_keyword, empty_declarations, export_import, extension,
+    float_const, force_unwrap, frameworks, generic_call, generics, grapheme_string, identity_swap,
+    if_let, implementation, implicit_receiver, implicit_typing, inferred_annotation, init_method,
     just_float, kw_subscript, literal_string, literal_types, local_once, main_function, match_type,
     modifiers, mutable_defaults, none_chain, optional_type, overload, parametric_is, postfix_await,
     propagate, properties, protocol_type, raises_clause, reified_generic, repeated_underscore,
@@ -63,6 +63,7 @@ enum SemDb<'p> {
 /// with any sibling edits inside them applied, so a wide rewrite (e.g.
 /// `a ?? b` → `a if a is not None else b`) composes with lowerings inside its
 /// operands instead of clobbering them via first-wins overlap dedup
+#[derive(Clone)]
 pub(crate) enum Fragment {
     Lit(String),
     Src(TextRange),
@@ -509,6 +510,7 @@ pub(crate) fn run_against_source<'a>(
     let checked_cast_pass = checked_cast::CheckedCastPass::new(config.checked_cast);
     let trailing_lambda_pass = trailing_lambda::TrailingLambdaPass::new(source_ref);
     let if_let_pass = if_let::IfLetPass::new(source_ref, config.min_version);
+    let destructure_pass = destructure::DestructurePass::new(source_ref, config.min_version);
     let statement_expression_pass = statement_expression::StatementExpressionPass::new(source_ref);
     let context_params_pass = context_params::ContextParamsPass::new(source_ref);
     let extension_block_pass = extension::ExtensionBlockPass::new(source_ref);
@@ -532,6 +534,10 @@ pub(crate) fn run_against_source<'a>(
         // below a suite; every other lowering inside that suite composes through
         // the passthrough spans it emits, so it goes first
         &statement_expression_pass,
+        // destructuring: the `let` statement, patterns in binding positions, and
+        // the `and` pattern. Like `if let` it replaces headers only, so bodies
+        // keep their source bytes and the lowerings inside them compose
+        &destructure_pass,
         // text-edit-emitting passes first (read source ranges).
         // type_is must run before identity_swap so type-position `a is T`
         // wins the first-wins overlap dedup over identity_swap's

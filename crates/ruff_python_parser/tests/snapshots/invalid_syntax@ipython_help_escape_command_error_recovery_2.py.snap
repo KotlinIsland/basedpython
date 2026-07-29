@@ -50,6 +50,7 @@ Module(
                                 },
                             ),
                             optional_vars: None,
+                            pattern: None,
                         },
                         WithItem {
                             range: 47..48,
@@ -63,6 +64,7 @@ Module(
                                 },
                             ),
                             optional_vars: None,
+                            pattern: None,
                         },
                     ],
                     body: [],

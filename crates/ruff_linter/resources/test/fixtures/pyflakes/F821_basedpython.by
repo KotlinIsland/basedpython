@@ -135,3 +135,35 @@ def run() -> None:
     apply:
         print(self)
         print(it)
+
+
+# a destructuring binder binds its pattern's captures where the binder itself is
+# bound — the parameter's in the function it heads, the loop's and the `with`
+# item's in the scope around them. the binder holding the value they came from is
+# machinery the source cannot spell, so nothing here is undefined
+class Point:
+    __match_args__ = ("x", "y")
+
+
+def destructured_parameter(Point(px, py): Point) -> int:
+    return px + py
+
+
+def destructured_binders(points: list[Point], ctx: object) -> None:
+    let Point(a, b) := points[0]
+    print(a, b)
+
+    for Point(c, d) in points:
+        print(c, d)
+
+    with ctx as Point(e, f):
+        print(e, f)
+
+    if let Point(g, h) := points[0]:
+        print(g, h)
+
+
+# an unbound name inside a pattern is still reported
+def undefined_in_pattern(value: object) -> None:
+    if let UndefinedPattern(captured) := value:  # F821
+        print(captured)

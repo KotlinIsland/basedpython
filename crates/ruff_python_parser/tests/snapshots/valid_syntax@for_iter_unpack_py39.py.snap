@@ -23,6 +23,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Tuple(
                         ExprTuple {
                             node_index: NodeIndex(None),
@@ -90,6 +91,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Tuple(
                         ExprTuple {
                             node_index: NodeIndex(None),
@@ -157,6 +159,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Tuple(
                         ExprTuple {
                             node_index: NodeIndex(None),

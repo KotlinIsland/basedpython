@@ -23,6 +23,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),

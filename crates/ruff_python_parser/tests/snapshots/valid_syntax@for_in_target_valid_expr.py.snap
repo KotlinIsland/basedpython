@@ -58,6 +58,7 @@ Module(
                             is_typeof: false,
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -132,6 +133,7 @@ Module(
                             is_typeof: false,
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),
@@ -202,6 +204,7 @@ Module(
                             optional: false,
                         },
                     ),
+                    pattern: None,
                     iter: Name(
                         ExprName {
                             node_index: NodeIndex(None),

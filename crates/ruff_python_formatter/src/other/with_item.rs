@@ -3,6 +3,7 @@ use ruff_python_ast::WithItem;
 
 use crate::expression::maybe_parenthesize_expression;
 use crate::expression::parentheses::{Parentheses, Parenthesize, parenthesized};
+use crate::pattern::maybe_parenthesize_pattern;
 use crate::prelude::*;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -95,6 +96,7 @@ impl FormatNodeRule<WithItem> for FormatWithItem {
             node_index: _,
             context_expr,
             optional_vars,
+            pattern,
         } = item;
 
         let comments = f.context().comments().clone();
@@ -156,6 +158,21 @@ impl FormatNodeRule<WithItem> for FormatWithItem {
                     )]
                 )?;
             }
+        }
+
+        // basedpython: a destructuring item binds a pattern; `optional_vars` is
+        // the synthetic binder holding the value it matches, which the source
+        // never wrote
+        if let Some(pattern) = pattern {
+            return write!(
+                f,
+                [
+                    space(),
+                    token("as"),
+                    space(),
+                    maybe_parenthesize_pattern(pattern, item)
+                ]
+            );
         }
 
         if let Some(optional_vars) = optional_vars {

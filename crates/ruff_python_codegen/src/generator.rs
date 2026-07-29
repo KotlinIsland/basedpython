@@ -585,6 +585,7 @@ impl<'a> Generator<'a> {
             Stmt::For(ast::StmtFor {
                 is_async,
                 target,
+                pattern,
                 iter,
                 body,
                 orelse,
@@ -595,7 +596,11 @@ impl<'a> Generator<'a> {
                         self.p("async ");
                     }
                     self.p("for ");
-                    self.unparse_expr(target, precedence::FOR);
+                    match pattern {
+                        // the binder is synthetic; the pattern is what was written
+                        Some(pattern) => self.unparse_pattern(pattern),
+                        None => self.unparse_expr(target, precedence::FOR),
+                    }
                     self.p(" in ");
                     self.unparse_expr(iter, precedence::MAX);
                     self.p(":");
@@ -625,6 +630,26 @@ impl<'a> Generator<'a> {
                     statement!({
                         self.p("else:");
                     });
+                    self.body(orelse);
+                }
+            }
+            Stmt::Let(ast::StmtLet {
+                pattern,
+                value,
+                orelse,
+                range: _,
+                node_index: _,
+            }) => {
+                statement!({
+                    self.p("let ");
+                    self.unparse_pattern(pattern);
+                    self.p(" := ");
+                    self.unparse_expr(value, precedence::MAX);
+                    if !orelse.is_empty() {
+                        self.p(" else:");
+                    }
+                });
+                if !orelse.is_empty() {
                     self.body(orelse);
                 }
             }
@@ -1034,6 +1059,17 @@ impl<'a> Generator<'a> {
                 let mut first = true;
                 for pattern in patterns {
                     self.p_delim(&mut first, " | ");
+                    self.unparse_pattern(pattern);
+                }
+            }
+            Pattern::MatchAnd(ast::PatternMatchAnd {
+                patterns,
+                range: _,
+                node_index: _,
+            }) => {
+                let mut first = true;
+                for pattern in patterns {
+                    self.p_delim(&mut first, " and ");
                     self.unparse_pattern(pattern);
                 }
             }
@@ -1866,7 +1902,11 @@ impl<'a> Generator<'a> {
         if self.mode == Mode::BasedPython && parameter.is_context {
             self.p("context ");
         }
-        self.p_id(&parameter.name);
+        match &parameter.pattern {
+            // the binder is synthetic; the pattern is what was written
+            Some(pattern) => self.unparse_pattern(pattern),
+            None => self.p_id(&parameter.name),
+        }
         if let Some(ann) = &parameter.annotation {
             self.p(": ");
             self.unparse_expr(ann, precedence::COMMA);
@@ -2072,9 +2112,17 @@ impl<'a> Generator<'a> {
 
     fn unparse_with_item(&mut self, with_item: &WithItem) {
         self.unparse_expr(&with_item.context_expr, precedence::MAX);
-        if let Some(optional_vars) = &with_item.optional_vars {
-            self.p(" as ");
-            self.unparse_expr(optional_vars, precedence::MAX);
+        match (&with_item.pattern, &with_item.optional_vars) {
+            // the binder is synthetic; the pattern is what was written
+            (Some(pattern), _) => {
+                self.p(" as ");
+                self.unparse_pattern(pattern);
+            }
+            (None, Some(optional_vars)) => {
+                self.p(" as ");
+                self.unparse_expr(optional_vars, precedence::MAX);
+            }
+            (None, None) => {}
         }
     }
 }

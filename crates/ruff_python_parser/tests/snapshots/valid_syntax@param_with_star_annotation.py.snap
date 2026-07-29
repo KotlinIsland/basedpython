@@ -36,6 +36,7 @@ Module(
                                     range: 9..13,
                                     node_index: NodeIndex(None),
                                 },
+                                pattern: None,
                                 annotation: Some(
                                     Starred(
                                         ExprStarred {
@@ -120,6 +121,7 @@ Module(
                                     range: 41..45,
                                     node_index: NodeIndex(None),
                                 },
+                                pattern: None,
                                 annotation: Some(
                                     Starred(
                                         ExprStarred {

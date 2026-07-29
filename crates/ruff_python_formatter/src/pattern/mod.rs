@@ -15,6 +15,7 @@ use crate::prelude::*;
 
 pub(crate) mod pattern_arguments;
 pub(crate) mod pattern_keyword;
+pub(crate) mod pattern_match_and;
 pub(crate) mod pattern_match_as;
 pub(crate) mod pattern_match_class;
 pub(crate) mod pattern_match_mapping;
@@ -49,6 +50,7 @@ impl FormatRule<Pattern, PyFormatContext<'_>> for FormatPattern {
             Pattern::MatchStar(pattern) => pattern.format().fmt(f),
             Pattern::MatchAs(pattern) => pattern.format().fmt(f),
             Pattern::MatchOr(pattern) => pattern.format().fmt(f),
+            Pattern::MatchAnd(pattern) => pattern.format().fmt(f),
         });
 
         let parenthesize = match self.parentheses {
@@ -148,6 +150,7 @@ impl NeedsParentheses for Pattern {
             Pattern::MatchStar(pattern) => pattern.needs_parentheses(parent, context),
             Pattern::MatchAs(pattern) => pattern.needs_parentheses(parent, context),
             Pattern::MatchOr(pattern) => pattern.needs_parentheses(parent, context),
+            Pattern::MatchAnd(pattern) => pattern.needs_parentheses(parent, context),
         }
     }
 }
@@ -244,7 +247,8 @@ pub(crate) fn can_pattern_omit_optional_parentheses(
                 Pattern::MatchValue(_)
                 | Pattern::MatchSingleton(_)
                 | Pattern::MatchStar(_)
-                | Pattern::MatchOr(_) => false,
+                | Pattern::MatchOr(_)
+                | Pattern::MatchAnd(_) => false,
                 Pattern::MatchAs(PatternMatchAs { pattern, .. }) => match pattern {
                     Some(pattern) => has_parentheses_and_is_non_empty(pattern, context),
                     None => false,
@@ -339,6 +343,16 @@ impl<'a> CanOmitOptionalParenthesesVisitor<'a> {
                     self.visit_sub_pattern(pattern, context);
                 }
             }
+            Pattern::MatchAnd(and_pattern) => {
+                self.update_max_precedence(
+                    OperatorPrecedence::And,
+                    and_pattern.patterns.len().saturating_sub(1),
+                );
+
+                for pattern in &and_pattern.patterns {
+                    self.visit_sub_pattern(pattern, context);
+                }
+            }
         }
     }
 
@@ -374,6 +388,7 @@ enum OperatorPrecedence {
     #[default]
     None,
     Additive,
+    And,
     Or,
 }
 

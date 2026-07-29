@@ -86,6 +86,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&INVALID_RETURN_TYPE);
     registry.register_lint(&INVALID_YIELD);
     registry.register_lint(&INVALID_ASSIGNMENT);
+    registry.register_lint(&REFUTABLE_DESTRUCTURING);
     registry.register_lint(&ITERATION_OVER_CHARACTER);
     registry.register_lint(&INVALID_AWAIT);
     registry.register_lint(&INVALID_BASE);
@@ -483,6 +484,15 @@ declare_lint! {
     pub(crate) static EMPTY_BODY = {
         summary: "detects functions with empty bodies that have a non-`None` return type annotation",
         status: LintStatus::stable("0.0.14"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    #[doc = include_str!("../../resources/lint_docs/refutable-destructuring.md")]
+    pub(crate) static REFUTABLE_DESTRUCTURING = {
+        summary: "detects a destructuring binder whose pattern may not match, with nothing to handle the failure",
+        status: LintStatus::stable("0.0.62"),
         default_level: Level::Error,
     }
 }

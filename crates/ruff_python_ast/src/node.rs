@@ -378,11 +378,15 @@ impl ast::Parameter {
             range: _,
             node_index: _,
             name,
+            pattern,
             annotation,
             is_context: _,
         } = self;
 
         visitor.visit_identifier(name);
+        if let Some(pattern) = pattern {
+            visitor.visit_pattern(pattern);
+        }
         if let Some(expr) = annotation {
             visitor.visit_annotation(expr);
         }
@@ -455,12 +459,16 @@ impl ast::WithItem {
             node_index: _,
             context_expr,
             optional_vars,
+            pattern,
         } = self;
 
         visitor.visit_expr(context_expr);
 
         if let Some(expr) = optional_vars {
             visitor.visit_expr(expr);
+        }
+        if let Some(pattern) = pattern {
+            visitor.visit_pattern(pattern);
         }
     }
 }

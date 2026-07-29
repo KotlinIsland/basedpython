@@ -241,6 +241,7 @@ Module(
                             ctx: Store,
                         },
                     ),
+                    pattern: None,
                     iter: Call(
                         ExprCall {
                             node_index: NodeIndex(None),

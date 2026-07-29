@@ -36,6 +36,7 @@ Module(
                                     range: 53..57,
                                     node_index: NodeIndex(None),
                                 },
+                                pattern: None,
                                 annotation: Some(
                                     Starred(
                                         ExprStarred {

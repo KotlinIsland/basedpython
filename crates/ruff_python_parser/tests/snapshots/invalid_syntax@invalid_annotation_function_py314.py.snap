@@ -103,6 +103,7 @@ Module(
                                         range: 75..78,
                                         node_index: NodeIndex(None),
                                     },
+                                    pattern: None,
                                     annotation: Some(
                                         Named(
                                             ExprNamed {
@@ -209,6 +210,7 @@ Module(
                                                     range: 118..119,
                                                     node_index: NodeIndex(None),
                                                 },
+                                                pattern: None,
                                                 annotation: Some(
                                                     Yield(
                                                         ExprYield {
@@ -344,6 +346,7 @@ Module(
                                                     range: 177..178,
                                                     node_index: NodeIndex(None),
                                                 },
+                                                pattern: None,
                                                 annotation: Some(
                                                     YieldFrom(
                                                         ExprYieldFrom {
@@ -562,6 +565,7 @@ Module(
                                                     range: 295..298,
                                                     node_index: NodeIndex(None),
                                                 },
+                                                pattern: None,
                                                 annotation: Some(
                                                     Await(
                                                         ExprAwait {
