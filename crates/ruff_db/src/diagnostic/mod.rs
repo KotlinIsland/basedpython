@@ -1009,6 +1009,27 @@ pub enum DiagnosticId {
     /// A glob pattern doesn't follow the expected syntax.
     InvalidGlob,
 
+    /// A class name in the configuration isn't spelled like one.
+    ///
+    /// ## Why is this bad?
+    /// An option that takes class names matches them literally, so a malformed entry silently
+    /// matches nothing. Whether a well-formed name resolves to a class that exists is not checked
+    /// — only that it *could* be one.
+    ///
+    /// ## Example
+    /// ```toml
+    /// [analysis]
+    /// overlapping-condition-exempt-types = ["list[int]"]
+    /// ```
+    ///
+    /// Use instead:
+    ///
+    /// ```toml
+    /// [analysis]
+    /// overlapping-condition-exempt-types = ["list"]
+    /// ```
+    InvalidClassName,
+
     /// An `include` glob without any patterns.
     ///
     /// ## Why is this bad?
@@ -1137,6 +1158,7 @@ impl DiagnosticId {
             DiagnosticId::RevealedType => "revealed-type",
             DiagnosticId::UnknownRule => "unknown-rule",
             DiagnosticId::InvalidGlob => "invalid-glob",
+            DiagnosticId::InvalidClassName => "invalid-class-name",
             DiagnosticId::EmptyInclude => "empty-include",
             DiagnosticId::UnnecessaryOverridesSection => "unnecessary-overrides-section",
             DiagnosticId::UselessOverridesSection => "useless-overrides-section",

@@ -262,11 +262,13 @@ from typing import Literal
 
 FEATURE_X_ACTIVATED: Literal[False] = False
 
+# error: [redundant-condition]
 if FEATURE_X_ACTIVATED:
     def feature_x():
         print("Performing 'X'")
 
 def f():
+    # error: [redundant-condition]
     if FEATURE_X_ACTIVATED:
         # Type checking this particular section as if it were reachable would
         # lead to a false positive, so we should not emit diagnostics here.

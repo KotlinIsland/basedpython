@@ -34,6 +34,7 @@ This also works for other singleton types with reversed operands:
 
 ```py
 def _(x: bool):
+    # error: [redundant-boolean-comparison]
     if False is not x:
         reveal_type(x)  # revealed: Literal[True]
     else:
@@ -49,6 +50,7 @@ def _(flag: bool):
     x = True if flag else False
     reveal_type(x)  # revealed: bool
 
+    # error: [redundant-boolean-comparison]
     if x is not False:
         reveal_type(x)  # revealed: Literal[True]
     else:

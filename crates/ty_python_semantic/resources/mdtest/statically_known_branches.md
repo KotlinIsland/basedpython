@@ -1575,6 +1575,7 @@ def _(flag: bool):
         ALWAYS_TRUE_IF_BOUND = True
 
     # error: [possibly-unresolved-reference] "Name `ALWAYS_TRUE_IF_BOUND` used when possibly not defined"
+    # error: [redundant-condition]
     if True and ALWAYS_TRUE_IF_BOUND:
         x = 1
 
@@ -1588,6 +1589,7 @@ def _(flag: bool):
         ALWAYS_TRUE_IF_BOUND = True
 
     # error: [possibly-unresolved-reference] "Name `ALWAYS_TRUE_IF_BOUND` used when possibly not defined"
+    # error: [redundant-condition]
     if True and ALWAYS_TRUE_IF_BOUND:
         x = 1
     else:

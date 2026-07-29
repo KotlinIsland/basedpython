@@ -120,8 +120,10 @@ def generate_rule_metadata(rule_doc: Path) -> None:
         lines = f.readlines()
 
     # Get the description and rule code from the rule doc lines.
-    rule_code = None
-    description = None
+    # Empty rather than `None`: both spellings mean "not found yet", and a single `str` keeps the
+    # truthiness tests below asking one question instead of two.
+    rule_code = ""
+    description = ""
     what_it_does_found = False
     for line in lines:
         if line == "\n":

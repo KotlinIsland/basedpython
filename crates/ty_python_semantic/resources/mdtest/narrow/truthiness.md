@@ -8,42 +8,53 @@ from typing import Literal, TypeAlias
 X: TypeAlias = Literal[0, -1, True, False, "", "foo", b"", b"bar", None] | tuple[()]
 
 def _(x: X):
+    # error: [overlapping-condition]
     if x:
         reveal_type(x)  # revealed: Literal[-1, True, "foo", b"bar"]
     else:
         reveal_type(x)  # revealed: Literal[0, False, "", b""] | None | tuple[()]
 
 def _(x: X):
+    # error: [overlapping-condition]
     if not x:
         reveal_type(x)  # revealed: Literal[0, False, "", b""] | None | tuple[()]
     else:
         reveal_type(x)  # revealed: Literal[-1, True, "foo", b"bar"]
 
 def _(x: X):
+    # error: [overlapping-condition]
+    # error: [redundant-condition]
     if x and not x:
         reveal_type(x)  # revealed: Never
     else:
         reveal_type(x)  # revealed: Literal[0, -1, "", "foo", b"", b"bar"] | bool | None | tuple[()]
 
 def _(x: X):
+    # error: [overlapping-condition]
+    # error: [redundant-condition]
     if not (x and not x):
         reveal_type(x)  # revealed: Literal[0, -1, "", "foo", b"", b"bar"] | bool | None | tuple[()]
     else:
         reveal_type(x)  # revealed: Never
 
 def _(x: X):
+    # error: [overlapping-condition]
+    # error: [redundant-condition]
     if x or not x:
         reveal_type(x)  # revealed: Literal[-1, 0, "foo", "", b"bar", b""] | bool | None | tuple[()]
     else:
         reveal_type(x)  # revealed: Never
 
 def _(x: X):
+    # error: [overlapping-condition]
+    # error: [redundant-condition]
     if not (x or not x):
         reveal_type(x)  # revealed: Never
     else:
         reveal_type(x)  # revealed: Literal[-1, 0, "foo", "", b"bar", b""] | bool | None | tuple[()]
 
 def _(x: X):
+    # error: [overlapping-condition]
     if (isinstance(x, int) or isinstance(x, str)) and x:
         reveal_type(x)  # revealed: Literal[-1, True, "foo"]
     else:
@@ -129,6 +140,7 @@ def bar(world: str, *args, **kwargs) -> float:
 
 x = foo if flag() else bar
 
+# error: [redundant-condition]
 if x:
     reveal_type(x)  # revealed: (def foo(hello: int) -> bytes) | (def bar(world: str, *args, **kwargs) -> int | float)
 else:
@@ -204,6 +216,7 @@ class F:
 
 t = T()
 
+# error: [redundant-condition]
 if t:
     reveal_type(t)  # revealed: T
 else:
@@ -211,6 +224,7 @@ else:
 
 f = F()
 
+# error: [redundant-condition]
 if f:
     reveal_type(f)  # revealed: Never
 else:
@@ -257,6 +271,7 @@ if isinstance(x, str) and not isinstance(x, B):
 from typing import Literal
 
 def f(x: Literal[0, 1], y: Literal["", "hello"]):
+    # error: [redundant-condition]
     if x and y and not x and not y:
         reveal_type(x)  # revealed: Never
         reveal_type(y)  # revealed: Never
@@ -265,6 +280,8 @@ def f(x: Literal[0, 1], y: Literal["", "hello"]):
         reveal_type(x)  # revealed: Literal[0, 1]
         reveal_type(y)  # revealed: Literal["", "hello"]
 
+    # error: [redundant-condition]
+    # error: [redundant-condition]
     if (x or not x) and (y and not y):
         reveal_type(x)  # revealed: Never
         reveal_type(y)  # revealed: Never
@@ -330,6 +347,7 @@ def _(
     flag: bool,
 ):
     reveal_type(ta)  # revealed: type[TruthyClass | AmbiguousClass]
+    # error: [overlapping-condition]
     if ta:
         reveal_type(ta)  # revealed: type[TruthyClass] | (type[AmbiguousClass] & ~AlwaysFalsy)
 
@@ -531,6 +549,7 @@ def f(arg1: Empty | None, arg2: NonEmpty | None, arg3: HasNotRequired1 | None, a
     if arg4:
         reveal_type(arg4)  # revealed: HasNotRequired2 & ~AlwaysFalsy
 
+    # error: [redundant-condition]
     if arg5:
         reveal_type(arg5)  # revealed: AlsoNonEmpty
 ```
@@ -550,6 +569,7 @@ def get_person() -> Person | None:
 
 def test() -> None:
     p = get_person()
+    # error: [overlapping-condition]
     if not p:
         raise ValueError("No person")
     reveal_type(p)  # revealed: Person & ~AlwaysFalsy

@@ -165,6 +165,78 @@ Defaults to `false`.
 
 ---
 
+### `overlapping-condition-assume-truthy-instances`
+
+Whether an instance with no `__bool__` and no `__len__` counts as always truthy when
+looking for an [`overlapping-condition`](rules.md#overlapping-condition).
+
+Such an instance is only *ambiguously* truthy — a subclass may define `__bool__` — so by
+default it is a falsy member of `if not x` just as `None` is. Enabling this assumes the
+class means what it looks like it means, which drops the reports for the very common
+`if not x` over an optional instance.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # `if not x` over a `Foo | None` only selects `None`
+    overlapping-condition-assume-truthy-instances = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # `if not x` over a `Foo | None` only selects `None`
+    overlapping-condition-assume-truthy-instances = true
+    ```
+
+---
+
+### `overlapping-condition-exempt-types`
+
+A list of classes whose values do not count as a distinct member of an
+[`overlapping-condition`](rules.md#overlapping-condition).
+
+`if not x` over an `int | None` selects both a falsy `int` and `None`, and is reported
+because the branch cannot tell them apart. Listing `int` here says that conflating a falsy
+`int` with anything else is fine, so only `None` is left and the condition is accepted.
+
+Entries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be
+spelled bare (`int`), and `None` stands for the type of `None`.
+
+**Default value**: `[]`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Accept a falsy `int` or `str` sharing a branch with another member
+    overlapping-condition-exempt-types = ["int", "str"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Accept a falsy `int` or `str` sharing a branch with another member
+    overlapping-condition-exempt-types = ["int", "str"]
+    ```
+
+---
+
 ### `replace-imports-with-any`
 
 A list of module glob patterns whose imports should be replaced with `typing.Any`.
@@ -892,6 +964,78 @@ Defaults to `false`.
     [overrides.analysis]
     # Turn off fluid specializations
     disable-fluid-specializations = true
+    ```
+
+---
+
+#### `overlapping-condition-assume-truthy-instances`
+
+Whether an instance with no `__bool__` and no `__len__` counts as always truthy when
+looking for an [`overlapping-condition`](rules.md#overlapping-condition).
+
+Such an instance is only *ambiguously* truthy — a subclass may define `__bool__` — so by
+default it is a falsy member of `if not x` just as `None` is. Enabling this assumes the
+class means what it looks like it means, which drops the reports for the very common
+`if not x` over an optional instance.
+
+Defaults to `false`.
+
+**Default value**: `false`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # `if not x` over a `Foo | None` only selects `None`
+    overlapping-condition-assume-truthy-instances = true
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # `if not x` over a `Foo | None` only selects `None`
+    overlapping-condition-assume-truthy-instances = true
+    ```
+
+---
+
+#### `overlapping-condition-exempt-types`
+
+A list of classes whose values do not count as a distinct member of an
+[`overlapping-condition`](rules.md#overlapping-condition).
+
+`if not x` over an `int | None` selects both a falsy `int` and `None`, and is reported
+because the branch cannot tell them apart. Listing `int` here says that conflating a falsy
+`int` with anything else is fine, so only `None` is left and the condition is accepted.
+
+Entries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be
+spelled bare (`int`), and `None` stands for the type of `None`.
+
+**Default value**: `[]`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # Accept a falsy `int` or `str` sharing a branch with another member
+    overlapping-condition-exempt-types = ["int", "str"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # Accept a falsy `int` or `str` sharing a branch with another member
+    overlapping-condition-exempt-types = ["int", "str"]
     ```
 
 ---

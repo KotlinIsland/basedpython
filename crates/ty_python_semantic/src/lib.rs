@@ -143,6 +143,21 @@ pub struct AnalysisSettings {
     /// constrains variance not at all. When this is disabled, private attributes are instead
     /// treated as immutable-but-readable, which constrains the type parameter to covariance.
     pub bivariant_private_attributes: bool,
+
+    /// Classes whose values do not count as a distinct member of an overlapping condition.
+    ///
+    /// Entries are qualified class names (`decimal.Decimal`); a class in `builtins` may also be
+    /// spelled bare (`int`), and `None` stands for the type of `None`.
+    pub overlapping_condition_exempt_types: Box<[Box<str>]>,
+
+    /// Whether an instance with no `__bool__` and no `__len__` counts as always truthy when
+    /// looking for an overlapping condition.
+    ///
+    /// Such an instance is only *ambiguously* truthy — a subclass may define `__bool__` — so by
+    /// default it is a falsy member of `if not x` just as `None` is. Enabling this assumes the
+    /// class means what it looks like it means, which drops the reports for the very common
+    /// `if not x` over an optional instance.
+    pub overlapping_condition_assume_truthy_instances: bool,
 }
 
 impl Default for AnalysisSettings {
@@ -155,6 +170,8 @@ impl Default for AnalysisSettings {
             disable_fluid_specializations: false,
             sound_types: false,
             bivariant_private_attributes: true,
+            overlapping_condition_exempt_types: Box::default(),
+            overlapping_condition_assume_truthy_instances: false,
         }
     }
 }

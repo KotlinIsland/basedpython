@@ -434,7 +434,9 @@ fn unbound_symbol_no_reachability_constraint_check() {
     .unwrap();
 
     db.clear_salsa_events();
-    assert_file_diagnostics(&db, "src/a.py", &[]);
+    // `flag` narrows to `Literal[True]` at the `if`, so the condition is redundant; that is
+    // beside the point here, but it is what the file has to say
+    assert_file_diagnostics(&db, "src/a.py", &["This condition is always true"]);
     let events = db.take_salsa_events();
     let cycles = salsa::attach(&db, || {
         events

@@ -33,6 +33,7 @@ features = [
   { "fluid specializations" = "features/fluid-specializations.md" },
   { "sound types" = "features/sound-types.md" },
   { "regex group types" = "features/regex-groups.md" },
+  { "boolean conditions" = "features/conditions.md" },
   { "tuple type literals" = "features/tuple-types.md" },
   { "callable arrow syntax" = "features/callable.md" },
   { "implicit receivers" = "features/implicit-receivers.md" },
