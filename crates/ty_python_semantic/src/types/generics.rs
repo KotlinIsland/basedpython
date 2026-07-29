@@ -34,9 +34,9 @@ use crate::types::visitor::{
 use crate::types::{
     ApplyTypeMappingVisitor, BindingContext, BoundTypeVarInstance, CallableType, CallableTypes,
     ClassLiteral, FindLegacyTypeVarsVisitor, IntersectionType, KnownClass, KnownInstanceType,
-    MaterializationKind, SubclassOfInner, Type, TypeAliasType, TypeContext, TypeMapping,
-    TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, UnionAccumulator, UnionType,
-    binding_type, infer_definition_types, inferred_declaration,
+    MaterializationKind, PromotionKind, PromotionMode, SubclassOfInner, Type, TypeAliasType,
+    TypeContext, TypeMapping, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance,
+    UnionAccumulator, UnionType, binding_type, infer_definition_types, inferred_declaration,
 };
 use crate::{Db, FxIndexMap, FxOrderMap, FxOrderSet};
 use ty_python_core::definition::{Definition, DefinitionKind};
@@ -1572,6 +1572,23 @@ impl<'db> Specialization<'db> {
                     tcx,
                     visitor,
                 ),
+                // a covariant argument is free to stay as narrow as it was inferred: nothing
+                // reads a different type back out of it, so widening its literals only loses
+                // precision. (an invariant or contravariant argument keeps its literals too — the
+                // arm below flips promotion off, because widening it would be unsound)
+                (variance, TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular))
+                    if variance.is_covariant() =>
+                {
+                    ty.apply_type_mapping_impl(
+                        db,
+                        &TypeMapping::Promote(
+                            PromotionMode::On,
+                            PromotionKind::RegularKeepingLiterals,
+                        ),
+                        tcx,
+                        visitor,
+                    )
+                }
                 (variance, _) if variance.is_covariant() => {
                     ty.apply_type_mapping_impl(db, type_mapping, tcx, visitor)
                 }
@@ -2351,6 +2368,10 @@ pub(crate) struct SpecializationBuilder<'db, 'c> {
     inferable: InferableTypeVars<'db>,
     pending: ConstraintSet<'db, 'c>,
     types: FxHashMap<BoundTypeVarIdentity<'db>, UnionAccumulator<'db>>,
+    /// Typevars that were inferred only from bivariant positions, which contribute no bound to
+    /// `pending`. The constraint solver therefore has nothing to solve them from, even though
+    /// `types` holds the type we inferred for them.
+    unconstrained: FxHashSet<BoundTypeVarIdentity<'db>>,
     paramspec_seen: FxHashSet<BoundTypeVarIdentity<'db>>,
 }
 
@@ -2426,6 +2447,7 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
             inferable,
             pending: ConstraintSet::from_bool(constraints, true),
             types: FxHashMap::default(),
+            unconstrained: FxHashSet::default(),
             paramspec_seen: FxHashSet::default(),
         }
     }
@@ -2582,6 +2604,19 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
             }
         }
 
+        // A typevar that only ever appeared in a bivariant position has no constraint to solve, so
+        // the solutions above say nothing about it. Its inferred type is still the one we recorded
+        // while walking the arguments, which is what the pre-constraint-set solver would have
+        // used.
+        for (identity, variable) in generic_context.variables_inner(self.db) {
+            if types.contains_key(identity) || !self.unconstrained.contains(identity) {
+                continue;
+            }
+            if let Some(ty) = self.mapped_type(*variable, choose) {
+                types.insert(*identity, ty);
+            }
+        }
+
         // TODO: Replace this fallback with expanding-cycle detection in the constraint-set
         // solution layer.
         if types
@@ -2734,20 +2769,30 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
             .variables_inner(self.db)
             .iter()
             .filter_map(|(identity, variable)| {
-                let mapped_ty = self
-                    .types
-                    .get_mut(identity)
-                    .map(|accumulator| accumulator.get_or_build(self.db));
-                let chosen = match mapped_ty {
-                    Some(mapped_ty) => {
-                        let path_bound = PathBound::exact(*variable, mapped_ty);
-                        choose(*variable, Some(&path_bound)).unwrap_or(mapped_ty)
-                    }
-                    None => choose(*variable, None)?,
-                };
-                Some((*identity, chosen))
+                Some((*identity, self.mapped_type(*variable, choose)?))
             })
             .collect()
+    }
+
+    /// The type inferred for `variable` while walking the arguments, as the `choose` hook projects
+    /// it.
+    fn mapped_type(
+        &mut self,
+        variable: BoundTypeVarInstance<'db>,
+        choose: &mut impl FnMut(BoundTypeVarInstance<'db>, Option<&PathBound<'db>>) -> Option<Type<'db>>,
+    ) -> Option<Type<'db>> {
+        let mapped_ty = self
+            .types
+            .get_mut(&variable.identity(self.db))
+            .map(|accumulator| accumulator.get_or_build(self.db));
+
+        match mapped_ty {
+            Some(mapped_ty) => {
+                let path_bound = PathBound::exact(variable, mapped_ty);
+                Some(choose(variable, Some(&path_bound)).unwrap_or(mapped_ty))
+            }
+            None => choose(variable, None),
+        }
     }
 
     fn insert_hash_map_type_mapping(
@@ -2863,7 +2908,12 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
             TypeVarVariance::Covariant => ConstraintBounds::new(Some(ty), None),
             TypeVarVariance::Contravariant => ConstraintBounds::new(None, Some(ty)),
             TypeVarVariance::Invariant => ConstraintBounds::exact(ty),
-            TypeVarVariance::Bivariant => return,
+            // a bivariant position accepts every type, so there is nothing to constrain — but the
+            // mapping is still the type we inferred for this typevar, so remember that we have one
+            TypeVarVariance::Bivariant => {
+                self.unconstrained.insert(bound_typevar.identity(self.db));
+                return;
+            }
         };
         self.intersect_pending_typevar_constraint(bound_typevar, bounds);
     }

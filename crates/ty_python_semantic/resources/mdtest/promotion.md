@@ -401,6 +401,33 @@ reveal_type(f12(1))  # revealed: ((int, /) -> bool) | None
 reveal_type(f13(1))  # revealed: ((bool, /) -> Invariant[int]) | None
 ```
 
+## An inferred declaration keeps a covariant argument
+
+The type a binding is declared with follows the same rule, including the type a nested scope sees
+(which is not flow-sensitive, so it is the widened one where widening applies at all):
+
+```py
+class Covariant[T]:
+    def __init__(self, value: T): ...
+    def pop(self) -> T:
+        raise NotImplementedError
+
+class Invariant[T]:
+    x: T
+
+    def __init__(self, value: T): ...
+
+covariant = Covariant(1)
+invariant = Invariant(1)
+
+reveal_type(covariant)  # revealed: Covariant[Literal[1]]
+reveal_type(invariant)  # revealed: Invariant[int]
+
+def nested() -> None:
+    reveal_type(covariant)  # revealed: Covariant[Literal[1]]
+    reveal_type(invariant)  # revealed: Invariant[int]
+```
+
 ## Promotion is recursive
 
 ```py

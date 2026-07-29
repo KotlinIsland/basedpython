@@ -245,14 +245,16 @@ impl<'db> FluidFold<'db, '_> {
     /// build the cumulative solution, matching the promotion policy of
     /// [`TypeInferenceBuilder::solve_fluid_specialization`]
     fn build(&mut self, db: &'db dyn Db, promote: bool) -> Type<'db> {
-        let specialization = self.builder.build_with(self.generic_context, |_, bounds| {
-            let lower = bounds?.lower?;
-            Some(if promote {
-                lower.promote(db).promote_singletons_recursively(db)
-            } else {
-                lower
-            })
-        });
+        let specialization = self
+            .builder
+            .build_with(self.generic_context, |typevar, bounds| {
+                let lower = bounds?.lower?;
+                Some(if promote && typevar.widens_literal_solutions(db) {
+                    lower.promote(db).promote_singletons_recursively(db)
+                } else {
+                    lower
+                })
+            });
         self.identity_instance
             .apply_specialization(db, specialization)
     }
@@ -961,9 +963,9 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             builder.infer(identity_instance, constraint).ok()?;
         }
 
-        let specialization = builder.build_with(generic_context, |_, bounds| {
+        let specialization = builder.build_with(generic_context, |typevar, bounds| {
             let lower = bounds?.lower?;
-            Some(if promote {
+            Some(if promote && typevar.widens_literal_solutions(db) {
                 // Match the promotion policy of collection-literal inference: promote
                 // literal types in invariant position, and promote singleton types to
                 // `T | Unknown` (e.g. `[None]` is inferred as `list[None | Unknown]`).
