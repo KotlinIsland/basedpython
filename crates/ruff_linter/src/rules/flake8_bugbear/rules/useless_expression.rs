@@ -78,6 +78,13 @@ pub(crate) fn useless_expression(checker: &Checker, value: &Expr) {
         return;
     }
 
+    // basedpython: a branch of a statement expression ends on the value that
+    // branch takes, so the expression there is the whole point of the construct
+    // rather than a discarded one.
+    if checker.semantic().in_statement_expression() {
+        return;
+    }
+
     // Ignore strings, to avoid false positives with docstrings.
     if matches!(
         value,

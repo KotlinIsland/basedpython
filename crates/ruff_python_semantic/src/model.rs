@@ -1594,6 +1594,24 @@ impl<'a> SemanticModel<'a> {
             .expect("No current statement")
     }
 
+    /// basedpython: whether the current node sits inside a
+    /// [statement expression](https://docs.basedpython.org/features/statement-expressions),
+    /// a compound statement standing where a value is expected.
+    ///
+    /// Unlike [`Self::current_expressions`] this crosses statement boundaries,
+    /// because that is the whole shape of the construct: the expression at the
+    /// end of a branch is a `Stmt::Expr` whose parent is the `Expr::Statement`.
+    pub fn in_statement_expression(&self) -> bool {
+        let Some(id) = self.node_id else {
+            return false;
+        };
+        self.nodes.ancestor_ids(id).any(|id| {
+            self.nodes[id]
+                .as_expression()
+                .is_some_and(Expr::is_statement_expr)
+        })
+    }
+
     /// Return the parent [`Stmt`] of the current [`Stmt`], if any.
     pub fn current_statement_parent(&self) -> Option<&'a Stmt> {
         self.current_statements().nth(1)

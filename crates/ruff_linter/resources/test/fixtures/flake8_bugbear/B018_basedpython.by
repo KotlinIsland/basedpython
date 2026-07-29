@@ -1,0 +1,29 @@
+# a statement expression's branches end on the value that branch takes, so the
+# expression there is the point of the construct rather than a discarded one
+
+
+def classify(command: str, count: int, numbers: list[int]) -> None:
+    direction = match command:
+        case "up":
+            1
+        case _:
+            0
+
+    label = if count == 0:
+        "none"
+    else:
+        "many"
+
+    first = for n in numbers:
+        if n % 2 == 0:
+            break n
+    else:
+        -1
+
+    print(direction, label, first)
+
+
+def genuinely_useless(x: object) -> None:
+    x  # B018
+    1  # B018
+    x.attr  # B018
