@@ -7,6 +7,7 @@ use crate::expression::is_invalid_type_expression;
 use crate::expression::maybe_parenthesize_expression;
 use crate::expression::parentheses::{Parentheses, Parenthesize};
 use crate::prelude::*;
+use crate::statement::assignment_alignment::AssignmentPadding;
 use crate::statement::clause::{ClauseHeader, clause_header};
 use crate::statement::stmt_assign::{
     AnyAssignmentOperator, AnyBeforeOperator, FormatStatementsLastExpression,
@@ -59,7 +60,8 @@ impl FormatNodeRule<StmtTypeAlias> for FormatStmtTypeAlias {
         if let Some(type_params) = type_params {
             return FormatStatementsLastExpression::RightToLeft {
                 before_operator: AnyBeforeOperator::TypeParams(type_params),
-                operator: AnyAssignmentOperator::Assign,
+                // Type aliases aren't part of the runs of assignments that get lined up.
+                operator: AnyAssignmentOperator::assign(AssignmentPadding::None),
                 value,
                 statement: item.into(),
             }

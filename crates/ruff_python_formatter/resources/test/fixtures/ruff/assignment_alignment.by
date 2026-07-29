@@ -1,0 +1,125 @@
+# a run of plain assignments
+x = 1
+yy = 2
+zzz = 3
+
+# a blank line starts a new run
+a = 1
+bbbbbbbbbbbb = 2
+
+# every kind of assignment lines its `=` up with the others
+name = "a"
+count += 1
+total: int = 0
+first, second = 1, 2
+(third, fourth) = 3, 4
+[fifth, sixth] = 5, 6
+*head, tail = [1, 2, 3]
+matrix[0] = 7
+obj.attr = 8
+
+# a chain lines up the `=` that introduces the value, so the values of the run
+# stay in one column no matter how many targets precede them
+chained = also = 1
+deep = chain = of = targets = 2
+plain = 3
+
+# augmented assignments with operators of different widths
+n = 0
+n += 1
+n //= 2
+n **= 3
+n >>= 4
+n @= 5
+
+# a lone assignment is left alone
+solitary = 1
+
+# statements that aren't assignments end a run
+before = 1
+del before
+after = 1
+another = 2
+
+# a bare annotation has no `=` and ends the run
+declared: int
+valued: int = 1
+other = 2
+
+# comments don't end a run
+alpha = 1
+# a comment about beta
+beta = 2  # trailing
+gamma = 3
+
+# a blank line inside the comments does end a run
+one = 1
+# about two
+
+# about three
+three = 3
+
+# nested bodies are aligned independently
+def f():
+    inner = 1
+    longer_inner = 2
+
+    class C:
+        deep = 1
+        deeper_still = 2
+
+if True:
+    branch = 1
+    branch_two = 2
+else:
+    other_branch = 1
+    other_branch_two = 2
+
+# values that break stay aligned
+short = 1
+much_longer_name = some_function_call(argument_one, argument_two, argument_three, argument_four)
+
+# a target that always breaks can't be aligned, but its neighbours still are
+small = 1
+(
+    unpacked,
+    over_several_lines,
+) = 2, 3
+tiny = 4
+
+# a left side with no room left for the value is left out of the run rather than
+# dragging it along; the assignments around it still line up with each other
+compact = 1
+a_name_so_long_that_padding_the_shorter_assignment_out_to_it_would_leave_no_room_for_a_value = 2
+also_compact = 3
+
+# a left side the printer splits sets no column either. it would measure flat on a
+# wide enough line, but splitting it leaves a magic trailing comma behind, so a
+# second format would measure it differently
+header = fileobj.read(24)
+tzh = (tzh_ttisgmtcnt, tzh_ttisstdcnt, tzh_leapcnt, tzh_timecnt, tzh_typecnt, tzh_charcnt) = struct.unpack(">6l", header)
+transitions = array("i")
+
+# basedpython declaration keywords
+let declared_let = 1
+var declared_var = 2
+final declared_final: int = 3
+
+# assignments on one line are still one run
+one = 1; two = 2
+
+# the empty line after a statement that ends in a semicolon isn't printed, so it
+# doesn't end the run either
+semi = (1 + 2);
+
+following_the_semicolon = 3
+
+# a suppressed assignment keeps its own spacing, and ends the run
+kept = 1
+# fmt: off
+suppressed   =   2
+# fmt: on
+resumed = 3
+
+skipped   =   1  # fmt: skip
+formatted = 2

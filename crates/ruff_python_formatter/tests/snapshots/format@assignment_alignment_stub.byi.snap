@@ -1,0 +1,25 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/assignment_alignment_stub.byi
+---
+## Input
+```python
+# a stub file aligns its assignments too
+alias = int
+longer_alias = str
+
+class C:
+    field: int = 0
+    other_field: str = ""
+```
+
+## Output
+```python
+# a stub file aligns its assignments too
+alias        = int
+longer_alias = str
+
+class C:
+    field: int       = 0
+    other_field: str = ""
+```

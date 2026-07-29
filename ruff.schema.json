@@ -858,6 +858,21 @@
         "msg"
       ]
     },
+    "AssignmentAlignment": {
+      "description": "Whether the `=` of a run of consecutive assignments should line up.\n\n```python\nalpha    = 1\nbeta    += 2\ngamma: int = 3\n```",
+      "oneOf": [
+        {
+          "description": "Pad the left side of each assignment so that the `=` of every assignment in\nthe run is printed at the same column.",
+          "type": "string",
+          "const": "enabled"
+        },
+        {
+          "description": "Separate the left side from the `=` by a single space.",
+          "type": "string",
+          "const": "disabled"
+        }
+      ]
+    },
     "BannedAliases": {
       "type": "array",
       "items": {
@@ -1563,6 +1578,17 @@
       "description": "Configures the way Ruff formats your code.",
       "type": "object",
       "properties": {
+        "assignment-alignment": {
+          "description": "Whether to line up the `=` of consecutive assignments.\n\nA run of assignments that isn't interrupted by a blank line or by another kind\nof statement is padded so that every `=` in it is printed at the same column:\n\n```python\nalpha      = 1\nbeta      += 2\ngamma: int = 3\n```\n\nThis is enabled by default, for python and basedpython alike, and is a\ndeliberate deviation from black.\n\nIt conflicts with `E221` (`multiple-spaces-before-operator`), which lints\nagainst the very spaces the alignment inserts. Disable one or the other.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AssignmentAlignment"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "docstring-code-format": {
           "description": "Whether to format code snippets in docstrings.\n\nWhen this is enabled, Python code examples within docstrings are\nautomatically reformatted.\n\nFor example, when this is enabled, the following code:\n\n```python\ndef f(x):\n    \"\"\"\n    Something about `f`. And an example in doctest format:\n\n    >>> f(  x  )\n\n    Markdown is also supported:\n\n    ```py\n    f(  x  )\n    ```\n\n    As are reStructuredText literal blocks::\n\n        f(  x  )\n\n\n    And reStructuredText code blocks:\n\n    .. code-block:: python\n\n        f(  x  )\n    \"\"\"\n    pass\n```\n\n... will be reformatted (assuming the rest of the options are set to\ntheir defaults) as:\n\n```python\ndef f(x):\n    \"\"\"\n    Something about `f`. And an example in doctest format:\n\n    >>> f(x)\n\n    Markdown is also supported:\n\n    ```py\n    f(x)\n    ```\n\n    As are reStructuredText literal blocks::\n\n        f(x)\n\n\n    And reStructuredText code blocks:\n\n    .. code-block:: python\n\n        f(x)\n    \"\"\"\n    pass\n```\n\nIf a code snippet in a docstring contains invalid Python code or if the\nformatter would otherwise write invalid Python code, then the code\nexample is ignored by the formatter and kept as-is.\n\nCurrently, doctest, Markdown, reStructuredText literal blocks, and\nreStructuredText code blocks are all supported and automatically\nrecognized. In the case of unlabeled fenced code blocks in Markdown and\nreStructuredText literal blocks, the contents are assumed to be Python\nand reformatted. As with any other format, if the contents aren't valid\nPython, then the block is left untouched automatically.",
           "type": [

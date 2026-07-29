@@ -63,6 +63,12 @@ pub struct PyFormatOptions {
     /// whether the file being formatted is a basedpython `.by` file
     is_basedpython: bool,
 
+    /// Whether to line up the `=` of consecutive assignments.
+    ///
+    /// Unset means [`AssignmentAlignment::Enabled`], for python as well as for
+    /// basedpython. This is a deliberate deviation from black.
+    assignment_alignment: Option<AssignmentAlignment>,
+
     /// Whether preview style formatting is enabled or not
     preview: PreviewMode,
 
@@ -101,6 +107,7 @@ impl Default for PyFormatOptions {
             docstring_code: DocstringCode::default(),
             docstring_code_line_width: DocstringCodeLineWidth::default(),
             is_basedpython: false,
+            assignment_alignment: None,
             preview: PreviewMode::default(),
             nested_string_quote_style: NestedStringQuoteStyle::default(),
         }
@@ -169,6 +176,31 @@ impl PyFormatOptions {
 
     pub const fn is_basedpython(&self) -> bool {
         self.is_basedpython
+    }
+
+    /// Whether the `=` of consecutive assignments should line up.
+    ///
+    /// Aligned unless configured otherwise, in python and basedpython alike.
+    pub const fn assignment_alignment(&self) -> AssignmentAlignment {
+        match self.assignment_alignment {
+            Some(alignment) => alignment,
+            None => AssignmentAlignment::Enabled,
+        }
+    }
+
+    /// The alignment as configured, before the default is applied; `None` when the
+    /// option is unset.
+    pub const fn configured_assignment_alignment(&self) -> Option<AssignmentAlignment> {
+        self.assignment_alignment
+    }
+
+    #[must_use]
+    pub fn with_assignment_alignment(
+        mut self,
+        assignment_alignment: Option<AssignmentAlignment>,
+    ) -> Self {
+        self.assignment_alignment = assignment_alignment;
+        self
     }
 
     #[must_use]
@@ -369,6 +401,58 @@ impl FromStr for MagicTrailingComma {
     }
 }
 
+/// Whether the `=` of a run of consecutive assignments should line up.
+///
+/// ```python
+/// alpha    = 1
+/// beta    += 2
+/// gamma: int = 3
+/// ```
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Default, CacheKey)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize, serde::Deserialize),
+    serde(rename_all = "kebab-case")
+)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub enum AssignmentAlignment {
+    /// Pad the left side of each assignment so that the `=` of every assignment in
+    /// the run is printed at the same column.
+    Enabled,
+
+    /// Separate the left side from the `=` by a single space.
+    #[default]
+    Disabled,
+}
+
+impl AssignmentAlignment {
+    pub const fn is_enabled(self) -> bool {
+        matches!(self, AssignmentAlignment::Enabled)
+    }
+}
+
+impl fmt::Display for AssignmentAlignment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            AssignmentAlignment::Enabled => "enabled",
+            AssignmentAlignment::Disabled => "disabled",
+        })
+    }
+}
+
+impl FromStr for AssignmentAlignment {
+    type Err = &'static str;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "enabled" | "Enabled" => Ok(Self::Enabled),
+            "disabled" | "Disabled" => Ok(Self::Disabled),
+            // TODO: replace this error with a diagnostic
+            _ => Err("Value not supported for AssignmentAlignment"),
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Default, CacheKey)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
@@ -530,5 +614,49 @@ where
             serde::de::Unexpected::Str(s),
             &"dynamic",
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use ruff_python_ast::PySourceType;
+
+    use super::{AssignmentAlignment, PyFormatOptions};
+
+    #[test]
+    fn assignments_are_aligned_unless_configured_otherwise() {
+        for source_type in [
+            PySourceType::Python,
+            PySourceType::Stub,
+            PySourceType::Ipynb,
+            PySourceType::BasedPython,
+            PySourceType::BasedPythonStub,
+        ] {
+            let options = PyFormatOptions::from_source_type(source_type);
+
+            assert_eq!(options.configured_assignment_alignment(), None);
+            assert_eq!(
+                options.assignment_alignment(),
+                AssignmentAlignment::Enabled,
+                "{source_type:?} should align its assignments by default"
+            );
+        }
+    }
+
+    #[test]
+    fn configured_assignment_alignment_wins() {
+        let options = PyFormatOptions::from_extension(Path::new("a.py"))
+            .with_assignment_alignment(Some(AssignmentAlignment::Disabled));
+
+        assert_eq!(
+            options.configured_assignment_alignment(),
+            Some(AssignmentAlignment::Disabled)
+        );
+        assert_eq!(
+            options.assignment_alignment(),
+            AssignmentAlignment::Disabled
+        );
     }
 }
