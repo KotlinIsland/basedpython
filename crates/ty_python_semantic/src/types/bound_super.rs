@@ -770,6 +770,9 @@ impl<'db> BoundSuperType<'db> {
             Type::Overlapping(overlapping) => {
                 return delegate_to(overlapping.value_type(db));
             }
+            Type::Restricted(restricted) => {
+                return delegate_to(restricted.value_type(db));
+            }
             Type::Deferred(deferred) => {
                 return delegate_to(deferred.reduced(db));
             }

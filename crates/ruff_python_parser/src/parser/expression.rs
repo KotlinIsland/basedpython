@@ -224,6 +224,69 @@ impl<'src> Parser<'src> {
         })
     }
 
+    /// basedpython: consume a use-site type modifier keyword (`literal`, `final`)
+    /// standing in front of a type expression, returning the modifier and the
+    /// range of the keyword itself. Returns `None` if no modifier is present.
+    ///
+    /// Disambiguated exactly like [`Self::eat_basedpython_variance_prefix`]: the
+    /// modifier form requires the next token to be a *name*, and two adjacent
+    /// names are never valid Python. So `literal str` is unambiguously the
+    /// modifier, while `literal`, `final[x]`, `literal.attr`, `final(x)` etc.
+    /// stay ordinary references to a variable of that name. The consequence is
+    /// that a type which does not start with a name — a parenthesized callable
+    /// type, a string forward reference, a starred type — cannot carry a bare
+    /// modifier; see the docs for the recommended spelling.
+    pub(super) fn eat_basedpython_type_modifier_prefix(
+        &mut self,
+    ) -> Option<(ruff_python_ast::helpers::TypeModifier, TextRange)> {
+        use ruff_python_ast::helpers::TypeModifier;
+
+        if !self.at(TokenKind::Name) || !matches!(self.peek(), TokenKind::Name) {
+            return None;
+        }
+        let range = self.current_token_range();
+        let modifier = TypeModifier::from_keyword(self.src_text(range))?;
+        self.bump(TokenKind::Name);
+        self.error_if_not_basedpython_at(
+            format!(
+                "the `{}` type modifier is not valid in .py files",
+                modifier.keyword()
+            ),
+            range,
+        );
+        Some((modifier, range))
+    }
+
+    /// wraps a type expression `inner` in a use-site type modifier marker. The
+    /// marker is `Subscript(Name(<marker-id>, ctx=Invalid), inner)`, the same
+    /// shape [`Self::wrap_variance_marker`] uses — an invalid-context name with
+    /// a `__modifier_*__` id is unique to parser synthesis and cannot appear
+    /// from any normal parse.
+    ///
+    /// `marker_range` covers the keyword token only (no trailing whitespace) so
+    /// the formatter can emit the exact source text on round-trip.
+    pub(super) fn wrap_type_modifier_marker(
+        inner: Expr,
+        modifier: ruff_python_ast::helpers::TypeModifier,
+        marker_range: TextRange,
+    ) -> Expr {
+        let inner_range = inner.range();
+        let marker_name = Expr::Name(ast::ExprName {
+            range: marker_range,
+            id: Name::from(modifier.marker_id()),
+            ctx: ExprContext::Invalid,
+            node_index: AtomicNodeIndex::NONE,
+        });
+        Expr::Subscript(ast::ExprSubscript {
+            value: Box::new(marker_name),
+            slice: Box::new(inner),
+            ctx: ExprContext::Load,
+            range: TextRange::new(marker_range.start(), inner_range.end()),
+            node_index: AtomicNodeIndex::NONE,
+            is_typeof: false,
+        })
+    }
+
     /// Returns `true` if the current token ends a sequence.
     pub(super) fn at_sequence_end(&self) -> bool {
         self.at_ts(END_SEQUENCE_SET)
@@ -633,6 +696,26 @@ impl<'src> Parser<'src> {
         left_precedence: OperatorPrecedence,
         context: ExpressionContext,
     ) -> ParsedExpr {
+        // basedpython: a use-site type modifier (`literal T`, `final T`) binds to
+        // the operand it precedes and nothing more, so `literal str | None` is
+        // `(literal str) | None`. Consuming it here — at the operand level of the
+        // binary-expression parse — is what gives it that precedence.
+        if context.is_in_type_expression()
+            && let Some((modifier, marker_range)) = self.eat_basedpython_type_modifier_prefix()
+        {
+            let Some(inner) =
+                self.with_recursion(|parser| parser.parse_lhs_expression(left_precedence, context))
+            else {
+                self.report_recursion_limit_exceeded(self.current_token_range());
+                return self.recursion_recovery_expr();
+            };
+            return ParsedExpr {
+                expr: Self::wrap_type_modifier_marker(inner.expr, modifier, marker_range),
+                is_parenthesized: false,
+                parameter_borrow: inner.parameter_borrow,
+            };
+        }
+
         let token = self.current_token_kind();
         if !Self::token_starts_recursive_lhs(token) {
             return self.parse_lhs_expression_inner(left_precedence, context, token);
@@ -1866,7 +1949,9 @@ impl<'src> Parser<'src> {
 
         let lower = if self.at_expr() {
             let lower = self.parse_named_expression_or_higher(
-                ExpressionContext::starred_conditional().with_subscript_slice(),
+                ExpressionContext::starred_conditional()
+                    .with_subscript_slice()
+                    .with_in_type_expression(),
             );
 
             // This means we're in a subscript.
@@ -5198,7 +5283,7 @@ pub(super) struct ExpressionContext(ExpressionContextFlags);
 
 bitflags! {
     #[derive(Default, Debug, Copy, Clone, PartialEq, Eq)]
-    struct ExpressionContextFlags: u8 {
+    struct ExpressionContextFlags: u16 {
         /// This flag is set when the `in` keyword should be excluded from a comparison expression.
         /// It is to avoid ambiguity in `for ... in ...` statements.
         const EXCLUDE_IN = 1 << 0;
@@ -5235,6 +5320,13 @@ bitflags! {
         /// (`T: Lower..Upper`). Suppresses the `..` attribute-access recovery so the `..`
         /// stays available as the range separator.
         const IN_TYPE_PARAM_BOUND = 1 << 7;
+
+        /// basedpython: set while parsing a type expression (an annotation, a return
+        /// type, a type-alias value, a subscript slice element, a callable type's
+        /// parameter or return). Enables the `literal T` / `final T` use-site type
+        /// modifiers, which are meaningless — and ambiguous with an ordinary
+        /// reference to a variable named `literal` or `final` — anywhere else.
+        const IN_TYPE_EXPRESSION = 1 << 8;
     }
 }
 
@@ -5311,6 +5403,17 @@ impl ExpressionContext {
     /// basedpython: returns `true` if currently parsing a subscript slice element
     pub(super) const fn is_subscript_slice(self) -> bool {
         self.0.contains(ExpressionContextFlags::SUBSCRIPT_SLICE)
+    }
+
+    /// basedpython: returns a new context that marks parsing as being inside a type
+    /// expression, enabling the `literal T` / `final T` use-site type modifiers
+    pub(super) fn with_in_type_expression(self) -> Self {
+        ExpressionContext(self.0 | ExpressionContextFlags::IN_TYPE_EXPRESSION)
+    }
+
+    /// basedpython: returns `true` if currently parsing a type expression
+    pub(super) const fn is_in_type_expression(self) -> bool {
+        self.0.contains(ExpressionContextFlags::IN_TYPE_EXPRESSION)
     }
 
     /// basedpython: returns a new context that marks parsing as being inside the

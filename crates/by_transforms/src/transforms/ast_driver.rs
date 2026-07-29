@@ -326,8 +326,9 @@ pub(crate) fn run_against_source<'a>(
     config: &Config,
     project: Option<(&dyn ty_python_semantic::Db, ruff_db::files::File)>,
 ) -> (Cow<'a, str>, Vec<String>, Vec<Option<u32>>) {
-    // blank use-site variance out up front; downstream passes (callable,
-    // intersection) copy operand source verbatim and would leak `out`/`in`
+    // blank the keyword-prefix type markers — use-site variance and the
+    // `literal`/`final` type modifiers — out up front; downstream passes
+    // (callable, intersection) copy operand source verbatim and would leak the
     // keywords otherwise. blanking is length-preserving, so every range below
     // is valid in both the original and the blanked source
     let blanked = use_site_variance::blank(source);

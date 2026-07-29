@@ -218,6 +218,14 @@ impl<'db> Type<'db> {
             // a deferred operation is never itself a runtime value
             | Type::Deferred(_) => Truthiness::Ambiguous,
 
+            // a use-site modifier only narrows which values fit; the values
+            // themselves are the wrapped type's
+            Type::Restricted(restricted) => {
+                restricted
+                    .value_type(db)
+                    .try_bool_impl(db, allow_short_circuit, visitor)?
+            }
+
             Type::TypedDict(td) => {
                 if td.items(db).values().any(TypedDictField::is_required) {
                     Truthiness::AlwaysTrue

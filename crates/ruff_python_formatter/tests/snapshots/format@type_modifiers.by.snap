@@ -1,0 +1,51 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/type_modifiers.by
+---
+## Input
+```bython
+a: literal str = "asdf"
+b: final int = 1
+c: literal str | None = None
+d: list[literal str] = []
+e: final dict[str, int] = {}
+f: literal list[*] = []
+
+type G = literal str
+
+
+def h(x: literal int, *args: literal str, **kwargs: final int) -> final bool: ...
+
+
+class I:
+    j: final int = 1
+
+
+# `literal` and `final` are only modifiers when a name follows them
+k: literal
+m: final[int]
+```
+
+## Output
+```bython
+a: literal str = "asdf"
+b: final int = 1
+c: literal str | None = None
+d: list[literal str] = []
+e: final dict[str, int] = {}
+f: literal list[*] = []
+
+type G = literal str
+
+
+def h(x: literal int, *args: literal str, **kwargs: final int) -> final bool: ...
+
+
+class I:
+    j: final int = 1
+
+
+# `literal` and `final` are only modifiers when a name follows them
+k: literal
+m: final[int]
+```

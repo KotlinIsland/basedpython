@@ -606,6 +606,13 @@ impl<'db> Type<'db> {
                 tcx,
             )),
 
+            (Type::Restricted(restricted), _) => Some(restricted.value_type(db).subscript(
+                db,
+                slice_ty,
+                expr_context,
+                tcx,
+            )),
+
             (Type::Deferred(deferred), _) => Some(deferred.reduced(db).subscript(
                 db,
                 slice_ty,

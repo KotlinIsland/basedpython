@@ -229,6 +229,9 @@ pub(super) fn attribute_write_requirement<'db>(
         Type::Overlapping(overlapping) => {
             attribute_write_requirement(db, overlapping.value_type(db), attribute)
         }
+        Type::Restricted(restricted) => {
+            attribute_write_requirement(db, restricted.value_type(db), attribute)
+        }
         Type::Deferred(deferred) => {
             attribute_write_requirement(db, deferred.reduced(db), attribute)
         }
@@ -696,6 +699,7 @@ pub(super) fn assignment_attribute_members<'db>(
             | Type::TypeGuard(_)
             | Type::TypeForm(_)
             | Type::Overlapping(_)
+            | Type::Restricted(_)
             | Type::Deferred(_)
             | Type::TypedDict(_)
             | Type::NewTypeInstance(_) => object_ty.instance_member(db, attribute),

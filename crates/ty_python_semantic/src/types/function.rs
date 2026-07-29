@@ -2198,6 +2198,9 @@ fn is_instance_truthiness<'db>(
         Type::Overlapping(overlapping) => {
             is_instance_truthiness(db, overlapping.value_type(db), class)
         }
+        Type::Restricted(restricted) => {
+            is_instance_truthiness(db, restricted.value_type(db), class)
+        }
         Type::Deferred(deferred) => is_instance_truthiness(db, deferred.reduced(db), class),
         Type::Union(..) => {
             // We do not handle unions specifically here, because something like `A | SubclassOfA` would

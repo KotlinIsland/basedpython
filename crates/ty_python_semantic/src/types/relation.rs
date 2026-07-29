@@ -22,6 +22,7 @@ use crate::types::constraints::{
 use crate::types::cyclic::{HasIdentity, PairVisitor, TypeIdentity};
 use crate::types::enums::is_single_member_enum;
 use crate::types::function::FunctionDecorators;
+use crate::types::restricted::restriction_admits;
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{ParametersKind, SignatureRelationVisitor};
 use crate::types::tuple::TupleType;
@@ -314,6 +315,7 @@ impl<'db> Type<'db> {
             | Type::TypeGuard(_)
             | Type::TypeForm(_)
             | Type::Overlapping(_)
+            | Type::Restricted(_)
             | Type::Deferred(_)
             | Type::TypedDict(_)
             | Type::TypeAlias(_)
@@ -1268,6 +1270,24 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
 
             (_, Type::Overlapping(target_overlapping)) => {
                 self.check_type_pair(db, source, target_overlapping.type_argument(db))
+            }
+
+            // basedpython: a use-site modifier (`literal T`, `final T`) narrows the
+            // set of values a *target* accepts, so the target arm comes first: the
+            // source must both relate to the wrapped type and satisfy the
+            // restriction. In source position the modifier says nothing new — a
+            // `final A` value is an `A` — so it is simply unwrapped
+            (_, Type::Restricted(target_restricted)) => {
+                let inner = target_restricted.type_argument(db);
+                if restriction_admits(db, target_restricted.modifier(db), inner, source) {
+                    self.check_type_pair(db, source, inner)
+                } else {
+                    self.never()
+                }
+            }
+
+            (Type::Restricted(source_restricted), _) => {
+                self.check_type_pair(db, source_restricted.value_type(db), target)
             }
 
             (Type::Deferred(source_deferred), _) => {
@@ -2835,6 +2855,18 @@ impl<'a, 'c, 'db> DisjointnessChecker<'a, 'c, 'db> {
 
             (_, Type::Overlapping(overlapping)) => {
                 self.check_type_pair(db, left, overlapping.type_argument(db))
+            }
+
+            // a restriction only shrinks the set of values, so two types that are
+            // disjoint without it stay disjoint with it. the converse is not
+            // exploited: treating the restriction as narrowing here could only make
+            // the checker claim disjointness it cannot back up
+            (Type::Restricted(restricted), _) => {
+                self.check_type_pair(db, restricted.value_type(db), right)
+            }
+
+            (_, Type::Restricted(restricted)) => {
+                self.check_type_pair(db, left, restricted.value_type(db))
             }
 
             (Type::Deferred(deferred), _) => self.check_type_pair(db, deferred.reduced(db), right),

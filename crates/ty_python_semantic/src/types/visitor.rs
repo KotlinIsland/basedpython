@@ -10,8 +10,9 @@ use crate::{
         BoundMethodType, BoundSuperType, BoundTypeVarInstance, CallableType, DeferredType,
         EnumComplementType, GenericAlias, IntersectionType, KnownBoundMethodType,
         KnownInstanceType, NominalInstanceType, OverlappingType, PropertyInstanceType,
-        ProtocolInstanceType, StaticClassLiteral, SubclassOfType, Type, TypeAliasType,
-        TypeFormType, TypeGuardType, TypeIsType, TypedDictType, UnionType, UnsafeUnionType,
+        ProtocolInstanceType, RestrictedType, StaticClassLiteral, SubclassOfType, Type,
+        TypeAliasType, TypeFormType, TypeGuardType, TypeIsType, TypedDictType, UnionType,
+        UnsafeUnionType,
         bound_super::walk_bound_super_type,
         callable::walk_callable_type,
         class::walk_generic_alias,
@@ -24,6 +25,7 @@ use crate::{
         newtype::{NewType, walk_newtype_instance_type},
         overlapping::walk_overlapping_type,
         protocol_class::walk_protocol_instance_interface,
+        restricted::walk_restricted_type,
         set_theoretic::{walk_intersection_type, walk_union},
         subclass_of::walk_subclass_of_type,
         type_alias::walk_type_alias_type,
@@ -86,6 +88,10 @@ pub(crate) trait TypeVisitor<'db> {
 
     fn visit_overlapping_type(&self, db: &'db dyn Db, overlapping: OverlappingType<'db>) {
         walk_overlapping_type(db, overlapping, self);
+    }
+
+    fn visit_restricted_type(&self, db: &'db dyn Db, restricted: RestrictedType<'db>) {
+        walk_restricted_type(db, restricted, self);
     }
 
     fn visit_subclass_of_type(&self, db: &'db dyn Db, subclass_of: SubclassOfType<'db>) {
@@ -174,6 +180,7 @@ pub(super) enum NonAtomicType<'db> {
     TypeGuard(TypeGuardType<'db>),
     TypeForm(TypeFormType<'db>),
     Overlapping(OverlappingType<'db>),
+    Restricted(RestrictedType<'db>),
     TypeVar(BoundTypeVarInstance<'db>),
     ProtocolInstance(ProtocolInstanceType<'db>),
     TypedDict(TypedDictType<'db>),
@@ -252,6 +259,9 @@ impl<'db> From<Type<'db>> for TypeKind<'db> {
             Type::Overlapping(overlapping) => {
                 TypeKind::NonAtomic(NonAtomicType::Overlapping(overlapping))
             }
+            Type::Restricted(restricted) => {
+                TypeKind::NonAtomic(NonAtomicType::Restricted(restricted))
+            }
             Type::TypedDict(typed_dict) => {
                 TypeKind::NonAtomic(NonAtomicType::TypedDict(typed_dict))
             }
@@ -301,6 +311,9 @@ pub(super) fn walk_non_atomic_type<'db, V: TypeVisitor<'db> + ?Sized>(
         NonAtomicType::TypeForm(typeform) => visitor.visit_typeform_type(db, typeform),
         NonAtomicType::Overlapping(overlapping) => {
             visitor.visit_overlapping_type(db, overlapping);
+        }
+        NonAtomicType::Restricted(restricted) => {
+            visitor.visit_restricted_type(db, restricted);
         }
         NonAtomicType::TypeVar(bound_typevar) => {
             visitor.visit_bound_type_var_type(db, bound_typevar);

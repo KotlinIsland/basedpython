@@ -167,6 +167,9 @@ impl<'db> AllMembers<'db> {
             Type::Overlapping(overlapping) => {
                 self.extend_with_type(db, overlapping.value_type(db));
             }
+            Type::Restricted(restricted) => {
+                self.extend_with_type(db, restricted.value_type(db));
+            }
             Type::Deferred(deferred) => {
                 self.extend_with_type(db, deferred.reduced(db));
             }

@@ -119,6 +119,9 @@ impl<'db> Type<'db> {
             Type::Overlapping(overlapping) => overlapping
                 .value_type(db)
                 .try_upcast_to_callable_with_policy_and_context(db, policy, context),
+            Type::Restricted(restricted) => restricted
+                .value_type(db)
+                .try_upcast_to_callable_with_policy_and_context(db, policy, context),
 
             Type::Deferred(deferred) => deferred
                 .reduced(db)

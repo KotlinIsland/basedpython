@@ -3298,6 +3298,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 attribute,
                 emit_diagnostics,
             ),
+            Type::Restricted(restricted) => self.validate_attribute_deletion(
+                target,
+                restricted.value_type(db),
+                attribute,
+                emit_diagnostics,
+            ),
             Type::Deferred(deferred) => self.validate_attribute_deletion(
                 target,
                 deferred.reduced(db),
@@ -5577,6 +5583,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 // parameter-only marker; behaves as the type a body sees (bound of `Key`)
                 Type::Overlapping(overlapping) => {
                     propagate_callable_kind(db, overlapping.value_type(db), kind, provenance)
+                }
+                Type::Restricted(restricted) => {
+                    propagate_callable_kind(db, restricted.value_type(db), kind, provenance)
                 }
                 Type::Deferred(deferred) => {
                     propagate_callable_kind(db, deferred.reduced(db), kind, provenance)
@@ -12880,6 +12889,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         match (op, operand_type) {
             // parameter-only marker; behaves as the type a body sees (bound of `Key`)
             (_, Type::Overlapping(overlapping)) => overlapping.value_type(self.db()),
+            (_, Type::Restricted(restricted)) => {
+                self.infer_unary_expression_type(op, restricted.value_type(self.db()), unary)
+            }
             (_, Type::Deferred(deferred)) => deferred.reduced(self.db()),
             (ast::UnaryOp::Invert | ast::UnaryOp::UAdd | ast::UnaryOp::USub, Type::Dynamic(_))
             | (_, Type::Divergent(_)) => operand_type,

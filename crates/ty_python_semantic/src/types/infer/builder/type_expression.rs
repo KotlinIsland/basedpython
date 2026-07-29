@@ -1,7 +1,7 @@
 use itertools::Either;
 use ruff_python_ast::helpers::{
     UseSiteVariance, is_dotted_name, is_top_star_marker, top_star_marker_ranges_in_slice,
-    top_star_slice_elements, use_site_variance_marker,
+    top_star_slice_elements, type_modifier_marker, use_site_variance_marker,
 };
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{self as ast, ParameterBorrow, PythonVersion};
@@ -33,9 +33,9 @@ use crate::types::{
     BindingContext, CallableType, DeferredOperation, DeferredType, DynamicType, GenericContext,
     InternedType, IntersectionBuilder, IntersectionType, KnownClass, KnownInstanceType,
     LintDiagnosticGuard, LiteralValueTypeKind, OverlappingType, Parameter, Parameters,
-    SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeContext, TypeFormType, TypeGuardType,
-    TypeIsType, TypeMapping, TypeVarKind, UnionBuilder, UnionType, UnsafeUnionType, any_over_type,
-    todo_type,
+    RestrictedType, SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeContext,
+    TypeFormType, TypeGuardType, TypeIsType, TypeMapping, TypeVarKind, UnionBuilder, UnionType,
+    UnsafeUnionType, any_over_type, todo_type,
 };
 use crate::{FxOrderSet, Program, add_inferred_python_version_hint_to_diagnostic};
 
@@ -237,6 +237,14 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     .inference_flags()
                     .contains(InferenceFlags::IN_PEP_613_ALIAS_FIRST_PASS)
         };
+
+        // basedpython: a use-site type modifier (`literal T`, `final T`). The
+        // parser encodes it as a marker subscript, so it has to be recognised
+        // before the generic subscript arm reads it as a subscription
+        if let Some((modifier, inner)) = type_modifier_marker(expression) {
+            let inner_ty = self.infer_type_expression(inner);
+            return RestrictedType::from_type_expression(self.db(), modifier, inner_ty);
+        }
 
         // https://typing.python.org/en/latest/spec/annotations.html#grammar-token-expression-grammar-type_expression
         match expression {

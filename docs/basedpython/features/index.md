@@ -34,6 +34,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [strict `float` and `complex`](no-number-promotions.md)
 - [infinity and nan float literals](float-literals.md)
 - [literal type promotion](literal-types.md)
+- [use-site type modifiers (`literal T`, `final T`)](type-modifiers.md)
 - [symbolic operations in types](symbolic-type-ops.md)
 - [match types](match-types.md)
 - [`type def` type functions](type-def.md)
