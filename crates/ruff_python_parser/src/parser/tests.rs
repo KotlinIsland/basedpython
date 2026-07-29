@@ -1,7 +1,9 @@
+use ruff_python_ast::helpers::{UseSiteVariance, use_site_variance_marker};
 use ruff_python_ast::{
     Expr, InterpolatedStringElement, IpyEscapeKind, ModModule, Number, Operator, Stmt, TypeParam,
     UnaryOp,
 };
+use ruff_text_size::Ranged;
 
 use crate::{
     Mode, ParseError, ParseErrorType, ParseOptions, Parsed, parse, parse_expression, parse_module,
@@ -1386,6 +1388,99 @@ fn test_top_star_subscript_in_py_errors() {
         errors.iter().any(|e| e.contains("bare `*`")),
         "expected parse error mentioning bare `*`, got: {errors:?}"
     );
+}
+
+/// The elements of the subscript annotation in `a: X[...]`.
+fn annotation_slice_elements(module: &ModModule) -> &[Expr] {
+    let [Stmt::AnnAssign(assign)] = module.body.as_slice() else {
+        panic!("expected a single annotated assignment");
+    };
+    let Expr::Subscript(subscript) = assign.annotation.as_ref() else {
+        panic!("expected a subscript annotation");
+    };
+    match subscript.slice.as_ref() {
+        Expr::Tuple(tuple) if !tuple.parenthesized => &tuple.elts,
+        single => std::slice::from_ref(single),
+    }
+}
+
+/// The use-site variance of each element of the subscript annotation in
+/// `a: X[...]`, with `None` where an element carries no variance keyword.
+fn annotation_slice_variances(module: &ModModule) -> Vec<Option<UseSiteVariance>> {
+    annotation_slice_elements(module)
+        .iter()
+        .map(|element| use_site_variance_marker(element).map(|(variance, _)| variance))
+        .collect()
+}
+
+/// basedpython: every slice element takes a use-site variance keyword, not just
+/// the first. `in` is a hard keyword and so never starts an expression, which
+/// made it invisible to the comma-separated element path that later elements go
+/// through, while `out` (a name) sailed past it.
+#[test]
+fn basedpython_use_site_variance_in_any_slice_element() {
+    for (source, expected) in [
+        ("a: dict[in str]\n", vec![Some(UseSiteVariance::In)]),
+        (
+            "a: dict[out int, in str]\n",
+            vec![Some(UseSiteVariance::Out), Some(UseSiteVariance::In)],
+        ),
+        (
+            "a: dict[int, in str]\n",
+            vec![None, Some(UseSiteVariance::In)],
+        ),
+        (
+            "a: X[in int, in out str, out bytes, int]\n",
+            vec![
+                Some(UseSiteVariance::In),
+                Some(UseSiteVariance::InOut),
+                Some(UseSiteVariance::Out),
+                None,
+            ],
+        ),
+    ] {
+        let parsed = parse_basedpython_module(source);
+        assert_eq!(
+            annotation_slice_variances(parsed.syntax()),
+            expected,
+            "unexpected variances for `{source}`"
+        );
+    }
+}
+
+/// basedpython: a later element's marker range covers exactly the variance
+/// keywords, the way the first element's does — the formatter reprints the
+/// keywords from that range.
+#[test]
+fn basedpython_use_site_variance_marker_range_covers_the_keywords() {
+    let source = "a: X[in out int, in str, out bytes]\n";
+    let parsed = parse_basedpython_module(source);
+    let keywords: Vec<&str> = annotation_slice_elements(parsed.syntax())
+        .iter()
+        .map(|element| {
+            let Expr::Subscript(marker) = element else {
+                panic!("expected a variance marker subscript");
+            };
+            &source[marker.value.range()]
+        })
+        .collect();
+    assert_eq!(keywords, ["in out", "in", "out"]);
+}
+
+/// basedpython: a variance keyword is rejected in `.py` files wherever it
+/// appears, not only in the first slice element.
+#[test]
+fn basedpython_use_site_variance_rejected_in_py() {
+    for source in ["a: dict[in str]\n", "a: dict[int, in str]\n"] {
+        let parsed = crate::parse_unchecked(source, ParseOptions::from(Mode::Module));
+        let errors: Vec<_> = parsed.errors().iter().map(ToString::to_string).collect();
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("use-site variance keywords")),
+            "expected a use-site variance error for `{source}`, got: {errors:?}"
+        );
+    }
 }
 
 #[test]

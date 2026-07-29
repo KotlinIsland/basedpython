@@ -103,6 +103,28 @@ def _(a: list[in out int | str]):
     reveal_type(a[0])  # revealed: int | str
 ```
 
+## variance on a slice element other than the first
+
+Every element of the subscript carries its own variance, not just the first one:
+
+```by
+def _(d: dict[str, in int]):
+    reveal_type(d)  # revealed: dict[str, in int]
+    d["a"] = 1  # ok
+    # error: [invalid-assignment]
+    d["a"] = "bad"
+    reveal_type(d["a"])  # revealed: object
+```
+
+## mixed variance across the parameters
+
+```by
+def _(d: dict[out str, in int]):
+    reveal_type(d)  # revealed: dict[out str, in int]
+    # the key projects covariantly and the value contravariantly
+    reveal_type(d.keys())  # revealed: dict_keys[str, object]
+```
+
 ## mutating methods under `out`
 
 The projection is not limited to subscripts and attributes — it reaches every member. A method that

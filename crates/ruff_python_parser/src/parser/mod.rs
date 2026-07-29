@@ -1520,7 +1520,13 @@ impl RecoveryContextKind {
             RecoveryContextKind::ImportFromAsNames(_) => {
                 p.at(TokenKind::Star) || p.at_name_or_soft_keyword()
             }
-            RecoveryContextKind::Slices => p.at(TokenKind::Colon) || p.at_expr(),
+            // basedpython: `in` is a hard keyword, so a use-site variance prefix
+            // (`in X`, `in out X`) never looks like an expression start and has
+            // to be admitted here — the `out X` form leads with a name and is
+            // already covered by `at_expr`
+            RecoveryContextKind::Slices => {
+                p.at(TokenKind::Colon) || p.at(TokenKind::In) || p.at_expr()
+            }
             RecoveryContextKind::ListElements
             | RecoveryContextKind::SetElements
             | RecoveryContextKind::TupleElements(_) => p.at_expr(),

@@ -405,6 +405,23 @@ if True:
         Ok(())
     }
 
+    /// basedpython: use-site variance round-trips in a slice element other than
+    /// the first, where `in` reaches the parser through the comma-separated
+    /// element path rather than the subscript prologue.
+    #[test]
+    fn use_site_variance_later_element_round_trip() -> Result<()> {
+        for input in [
+            "a: dict[out int, in str]\n",
+            "a: dict[int, in str]\n",
+            "a: X[in int, in out str, out bytes, int]\n",
+        ] {
+            let options = PyFormatOptions::from_extension(Path::new("test.by"));
+            let actual = format_module_source(input, options)?.as_code().to_string();
+            assert_eq!(input, actual);
+        }
+        Ok(())
+    }
+
     /// basedpython: a `var` declaration round-trips — the parser models it as an
     /// annotated assignment over a synthetic marker, so the surface keyword has
     /// to be recovered from the marker's source range rather than printed as an
