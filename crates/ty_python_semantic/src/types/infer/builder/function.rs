@@ -649,6 +649,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // effect — and would otherwise resolve to `Unknown` and poison the
             // function type. (`final`/`abstract`/`static`/… map to real stdlib
             // decorators via `synthetic_decorator_target_type` and are kept.)
+            // `private` has no decorator either, but it *is* recorded: privacy is
+            // what makes a class's variance safe, so ty has to know about it
             if let ast::Expr::Name(n) = &decorator.expression
                 && matches!(n.ctx, ast::ExprContext::Invalid)
                 && matches!(
@@ -658,6 +660,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     "decorator_keyword" | "private" | "export" | "open" | "__init_method__"
                 )
             {
+                if n.id.as_str() == "private" {
+                    function_decorators |= FunctionDecorators::PRIVATE;
+                }
                 continue;
             }
             // `type def` parses as a synthetic `type_fn` marker. it is not a

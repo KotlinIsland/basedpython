@@ -371,15 +371,16 @@ fn synth_backing_attr(backing: &Name, ctx: ExprContext, at: TextSize) -> Expr {
 
 /// The declared type of a property, peeled out of the synthetic `let` / `var`
 /// declaration marker: `__let__[T]` / `__modifier_annot__[T]` carry the type in
-/// the subscript slice. A `final` anywhere in the modifier chain swaps the marker
-/// for `__final__`, which carries the type the same way. An untyped declaration
-/// (`let x` / `var x = v`, whose marker is a bare `Name`) has no declared type.
+/// the subscript slice. A `final` or a `private` anywhere in the modifier chain
+/// swaps the marker for `__final__` / `__private_annot__`, which carry the type the
+/// same way. An untyped declaration (`let x` / `var x = v`, whose marker is a bare
+/// `Name`) has no declared type.
 fn property_decl_type(annotation: &Expr) -> Option<Expr> {
     if let Expr::Subscript(subscript) = annotation
         && let Expr::Name(marker) = subscript.value.as_ref()
         && matches!(
             marker.id.as_str(),
-            "__let__" | "__modifier_annot__" | "__final__"
+            "__let__" | "__modifier_annot__" | "__private_annot__" | "__final__"
         )
     {
         return Some((*subscript.slice).clone());
@@ -1430,16 +1431,20 @@ impl<'src> Parser<'src> {
         let modifier_range = self.current_token_range();
         // consume modifier keywords until we reach the variable name (the Name
         // token immediately followed by `:`), so chains like `final override x: T`
-        // strip in full — not just the first modifier. remember a `final` in the
-        // chain: unlike the other modifiers (which ty ignores) its `Final`
-        // qualifier must survive
+        // strip in full — not just the first modifier. remember a `final` and a
+        // `private` in the chain: unlike the other modifiers (which ty ignores)
+        // `final`'s `Final` qualifier and `private`'s invisibility to a widened
+        // view of the class must both survive
         let mut final_range = None;
+        let mut is_private = false;
         loop {
             if self.peek() == TokenKind::Colon {
                 break;
             }
-            if self.src_text(self.current_token_range()) == "final" {
-                final_range = Some(self.current_token_range());
+            match self.src_text(self.current_token_range()) {
+                "final" => final_range = Some(self.current_token_range()),
+                "private" => is_private = true,
+                _ => {}
             }
             self.bump(TokenKind::Name);
         }
@@ -1463,17 +1468,20 @@ impl<'src> Parser<'src> {
             node_index: AtomicNodeIndex::NONE,
         });
         // a `final` anywhere in the chain carries the `Final` qualifier, which ty
-        // must apply in every scope; the other modifiers are no-ops to ty. either
-        // way the declared type stays under the marker in annotation position, so
-        // `T` is the declaration — stashing it in `value` instead would make
-        // `override x: T = v` declare nothing and read as `x = v`
+        // must apply in every scope; a `private` carries the privacy that safe
+        // variance rests on. the rest are no-ops to ty. either way the declared
+        // type stays under the marker in annotation position, so `T` is the
+        // declaration — stashing it in `value` instead would make
+        // `override x: T = v` declare nothing and read as `x = v`.
+        // `final` wins over `private`: a `Final` member is read-only, so it can
+        // neither be written through a widened view nor lose its qualifier here
         let marker_range = final_range
             .unwrap_or_else(|| TextRange::new(modifier_range.start(), name.range.start()));
         let marker = Expr::Name(ast::ExprName {
-            id: Name::new_static(if final_range.is_some() {
-                "__final__"
-            } else {
-                synthetic_id
+            id: Name::new_static(match (final_range.is_some(), is_private) {
+                (true, _) => "__final__",
+                (false, true) => "__private_annot__",
+                (false, false) => synthetic_id,
             }),
             ctx: ExprContext::Invalid,
             range: marker_range,

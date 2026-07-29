@@ -11,7 +11,7 @@ use rustc_hash::FxHashSet;
 use std::cell::RefCell;
 
 use crate::{
-    Db, FxIndexMap, FxIndexSet, NameKind, Program, TypeQualifiers,
+    Db, FxIndexMap, FxIndexSet, Program, TypeQualifiers,
     place::{
         DefinedPlace, Definedness, Place, PlaceAndQualifiers, Provenance, PublicTypePolicy,
         TypeOrigin, place_from_bindings, place_from_declarations,
@@ -3917,7 +3917,8 @@ impl<'db> VarianceInferable<'db> for StaticClassLiteral<'db> {
                     // tell two specializations of its class apart, and therefore can't constrain
                     // the class's variance at all. Dunders are excluded: they are part of the
                     // public protocol surface.
-                    let is_private = matches!(NameKind::classify(&name), NameKind::Sunder);
+                    let is_private =
+                        crate::types::is_private_member(db, &name, place_and_qual.qualifiers, ty);
                     let variance = if is_private && bivariant_private_attributes {
                         TypeVarVariance::Bivariant
                     } else if place_and_qual
@@ -3929,7 +3930,12 @@ impl<'db> VarianceInferable<'db> for StaticClassLiteral<'db> {
                         || ty.is_function_literal()
                         || ty.is_property_instance()
                         // Underscore-prefixed attributes are assumed not to be externally mutated
+                        // (this covers dunders too, which `is_private` deliberately does not)
                         || name.starts_with('_')
+                        // …and neither is anything else private, however it is spelled: with
+                        // `bivariant-private-attributes` off, a private member falls back to
+                        // immutable-but-readable rather than all the way to invariant
+                        || is_private
                         // A field frozen on its own can't be written to either
                         || frozen_field_names.contains(name.as_str())
                     {
