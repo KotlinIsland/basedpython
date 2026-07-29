@@ -1258,6 +1258,17 @@ impl<'db> BoundTypeVarInstance<'db> {
         self.variance_with_polarity(db, TypeVarVariance::Covariant)
     }
 
+    /// Whether a literal type solved for this type parameter has to widen before it can be part
+    /// of an inferred declaration.
+    ///
+    /// Only an invariant or contravariant parameter does: it is written through, so a later write
+    /// of a different type would conflict with the one the first write happened to have. Nothing
+    /// writes through a covariant parameter (and nothing reads a bivariant one), so the literal
+    /// stands. This mirrors how promotion descends into an already-built specialization.
+    pub(crate) fn widens_literal_solutions(self, db: &'db dyn Db) -> bool {
+        !self.variance(db).is_covariant()
+    }
+
     pub(super) fn apply_type_mapping_impl<'a>(
         self,
         db: &'db dyn Db,

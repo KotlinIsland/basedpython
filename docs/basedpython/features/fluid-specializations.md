@@ -31,8 +31,21 @@ foo(a)         # an invariant observer — locks the specialization to A[object]
 a.x()          # object
 ```
 
-> **note (performance):** element types are promoted (`a = [1]` is `list[int]`, not
-> `list[Literal[1]]`). retaining literals is the intended behavior, but literal-parametrized
+a literal type is only widened where the parameter it fills is written through — an invariant or
+contravariant one. a covariant parameter (a bivariant one counts as covariant) keeps the literal
+it was inferred from, since nothing can read a different type back out of it:
+
+```python
+class Covariant[T]:
+    def __init__(self, v: T): ...
+    def get(self) -> T: ...
+
+c = Covariant(1)  # Covariant[Literal[1]]
+i = [1]           # list[int] — list is invariant in its element
+```
+
+> **note (performance):** an invariant element type is promoted (`a = [1]` is `list[int]`, not
+> `list[Literal[1]]`). retaining literals there is the intended behavior, but literal-parametrized
 > generics are currently too expensive in the cross-module constraint solver (~40x, ecosystem
 > timeouts), so precision is traded for performance until that cost is addressed.
 
@@ -119,9 +132,9 @@ a.append(3)
 c = a         # the lock: a and c are list[int], agreeing with b's view
 ```
 
-element types are promoted at creation time (`a = [1]` is `list[int]`) and accumulate through
-widening events as promoted types — literal precision is currently traded for performance (see the
-note above)
+an invariant element type is promoted at creation time (`a = [1]` is `list[int]`) and accumulates
+through widening events as promoted types — literal precision is currently traded for performance
+there (see the note above); a covariant parameter keeps its literals
 
 the binding's public type — what nested scopes and post-lock uses see — is the solution at
 the lock (or at the end of the scope), so the flow-sensitive narrowing is always a refinement
@@ -139,5 +152,5 @@ known limitations:
 - a use whose binding is not unique (e.g. conditionally reassigned names) is not fluid
 - inside a loop, a widening event is conservatively visible to every use in the loop,
     including uses that appear earlier in the source. a loop event may execute any number of
-    times with different values, so its literal types are promoted (this also keeps
-    self-feeding loops like `for n in nums: nums.add(n + 1)` convergent)
+    times with different values, so its literal types are promoted wherever promotion applies at
+    all (this also keeps self-feeding loops like `for n in nums: nums.add(n + 1)` convergent)

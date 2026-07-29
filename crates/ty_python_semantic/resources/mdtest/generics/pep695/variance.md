@@ -365,6 +365,32 @@ static_assert(not is_equivalent_to(D[Any], C[Any]))
 static_assert(not is_equivalent_to(D[Any], C[Unknown]))
 ```
 
+## Inferring a bivariant typevar
+
+A bivariant position accepts every type, so an argument passed there constrains nothing. The
+argument still says which type the call inferred for the typevar, and that holds whether or not the
+other typevars of the same class are constrained — they are all solved together.
+
+`U` is bivariant here because `__init__` is excluded from variance inference, while the attribute
+makes `T` invariant:
+
+```py
+class C[T, U]:
+    def __init__(self, t: T, u: U) -> None:
+        self.t: T = t
+
+reveal_type(C(1, "a"))  # revealed: C[int, Literal["a"]]
+```
+
+With every typevar bivariant, there is nothing to solve together with:
+
+```py
+class D[T, U]:
+    def __init__(self, t: T, u: U) -> None: ...
+
+reveal_type(D(1, "a"))  # revealed: D[Literal[1], Literal["a"]]
+```
+
 ## Only specialized types of generic class instances influence variance
 
 ```toml

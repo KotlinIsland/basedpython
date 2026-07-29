@@ -231,6 +231,24 @@ mod tests {
     }
 
     #[test]
+    fn declared_variance_beside_an_inferred_parameter() {
+        // a parameter used only by `__init__` is bivariant, which constrains
+        // nothing — its argument must still reach the specialization
+        let out = out_at(
+            indoc! {"
+                class A[out T, U]:
+                    def __init__(self, t: T, u: U): ...
+                a = A(1, \"x\")
+            "},
+            PythonVersion::PY312,
+        );
+        assert!(
+            out.contains("a = A[int, str](1, \"x\")"),
+            "both arguments should reify: {out}"
+        );
+    }
+
+    #[test]
     fn non_generic_constructor_untouched() {
         let out = out(indoc! {"
             class A:

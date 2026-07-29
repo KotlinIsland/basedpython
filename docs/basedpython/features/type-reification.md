@@ -47,10 +47,13 @@ reads it back.
 ## where the types come from
 
 the injected spelling is read from the specialization ty already inferred for
-the expression — the same solution the checker reports — after literal
-promotion (`Literal[1]` → `int`). there is no separate solver, so the
-injected arguments never disagree with the checker, and usage-based widening
-of an inferred specialization flows straight into the injection
+the expression — the same solution the checker reports — promoting each
+argument as it is spelled (`Literal[1]` → `int`, since only a class object can
+be written at runtime; a covariant parameter keeps its literal in the checker's
+own view, see [fluid specializations](fluid-specializations.md)). there is no
+separate solver, so the injected arguments never disagree with the checker, and
+usage-based widening of an inferred specialization flows straight into the
+injection
 
 an explicit specialization is always kept as written: `A[int](1)` and
 `list[int]([1, 2])` transpile unchanged
