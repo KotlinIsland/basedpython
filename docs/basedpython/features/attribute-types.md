@@ -97,10 +97,26 @@ class B[T: A1]:
     x: T.nope       # error: `T@B` has no attribute `nope`
 ```
 
-a *constrained* type parameter is the one case with no members to look up:
-member access on one does not union over the constraints (the same limit applies
-to `t.a` in a value position), so `T.a` over `T: (A1, A2)` is an unresolved
-attribute even when both constraints declare `a`.
+`T: (A1, A2)` is a *tuple* bound, not a constraint list — `T` is bounded by the
+tuple type, which has no `a`, so `T.a` there is an unresolved attribute:
+
+```by
+class B[T: (A1, A2)]:
+    x: T.a      # error: `T@B` has no attribute `a`
+```
+
+an [explicitly constrained](constraints.md) parameter does resolve, per
+constraint, because each specialization picks one of them:
+
+```by
+class C[T: constraints (A1, A2)]:
+    y: T.a      # `int` for `C[A1]`, `bool` for `C[A2]`
+```
+
+in a value position the same access unions over the constraints, since the
+parameter stands for any one of them: `t.a` over `T: constraints (A1, A2)` is
+`int | bool`. the lowered annotation is that union too, which is the widening
+every attribute type makes when python cannot spell the dependency.
 
 before it is specialized, an attribute type behaves as the member's type on the
 parameter's bound — the guarantee every specialization satisfies:

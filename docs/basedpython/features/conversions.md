@@ -5,10 +5,10 @@ transpiler inserts the call wherever the checker asked for that type:
 
 ```by
 class Celsius:
-    init(degrees: float)
+    init(let degrees: float)
 
 class Fahrenheit:
-    init(degrees: float)
+    init(let degrees: float)
 
     @classmethod
     def __from__(cls, value: Celsius) -> Self:
@@ -18,6 +18,9 @@ def report(temperature: Fahrenheit) -> None: ...
 
 report(Celsius(100.0))          # `report(Fahrenheit.__from__(Celsius(100.0)))`
 ```
+
+(the `let` is what makes each parameter an attribute — see
+[the init shorthand](init-method.md#let-parameter-modifier).)
 
 | dunder     | declared on | converts                          | lowers to       |
 | ---------- | ----------- | --------------------------------- | --------------- |

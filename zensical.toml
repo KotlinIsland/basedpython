@@ -48,6 +48,7 @@ features = [
   { "literal type promotion" = "features/literal-types.md" },
   { "symbolic operations in types" = "features/symbolic-type-ops.md" },
   { "match types" = "features/match-types.md" },
+  { "`type def` type functions" = "features/type-def.md" },
   { "typed dict literals" = "features/typed-dict-literal.md" },
   { "anonymous named tuple types" = "features/anonymous-named-tuple.md" },
   { "inline protocol types" = "features/inline-protocol.md" },
