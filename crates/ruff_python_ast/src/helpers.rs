@@ -2621,6 +2621,26 @@ pub fn is_type_def(function: &crate::StmtFunctionDef) -> bool {
     })
 }
 
+/// The synthetic marker decorator the parser attaches to an `enum class`.
+///
+/// Spelled the same way as [`TYPE_FN_MARKER`] — a zero-binding `Name` with
+/// [`crate::ExprContext::Invalid`] — so that every consumer agrees on it rather
+/// than matching the string itself.
+pub const ENUM_DEF_MARKER: &str = "enum_def";
+
+/// Whether `class` came from basedpython's `enum class`, whose `case` members
+/// are its variants.
+pub fn is_based_enum(class: &crate::StmtClassDef) -> bool {
+    class.decorator_list.iter().any(|decorator| {
+        matches!(
+            &decorator.expression,
+            crate::Expr::Name(name)
+                if name.id.as_str() == ENUM_DEF_MARKER
+                    && matches!(name.ctx, crate::ExprContext::Invalid)
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::borrow::Cow;

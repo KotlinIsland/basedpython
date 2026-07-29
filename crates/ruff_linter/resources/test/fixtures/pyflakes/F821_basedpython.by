@@ -106,3 +106,32 @@ enum class Color:
     case Red, Green
 
 context_sensitive: Color = Red
+
+
+# context-sensitive resolution writes an enum variant bare where the expected
+# type is its enum; the transpiler rewrites it to `Colour.Red`. whether *this*
+# site really has that expected type takes the type, so the linter defers — but
+# a name matching no variant at all is still reported
+enum class Colour:
+    case Red
+    case Green
+
+
+def paint(c: Colour = Red) -> Colour:
+    return c
+
+
+chosen: Colour = Green
+missing: Colour = Bleu  # F821
+
+
+# a trailing-lambda block filling a receiver callback binds the receiver as
+# `self`, in a parameter the source cannot spell
+def apply(fn: int.(str) -> None) -> None:
+    fn(1, "a")
+
+
+def run() -> None:
+    apply:
+        print(self)
+        print(it)
