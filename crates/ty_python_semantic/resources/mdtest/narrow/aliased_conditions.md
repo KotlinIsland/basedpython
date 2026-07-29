@@ -243,6 +243,7 @@ def _(a: A):
 
 def _(x: int | None):
     # In-place reassignment
+    # error: [bool-as-int] "`bool` is implicitly used as `int | None`"
     x = x is None
     if x:
         reveal_type(x)  # revealed: Literal[True]

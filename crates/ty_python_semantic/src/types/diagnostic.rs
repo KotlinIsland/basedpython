@@ -30,7 +30,10 @@ use crate::types::{
     ProtocolInstanceType, SpecialFormType, SubclassOfInner, Type, TypeContext, TypeVarVariance,
     binding_type, protocol_class::ProtocolClass,
 };
-use crate::types::{KnownInstanceType, MemberLookupPolicy, TypeVarKind, TypedDictType, UnionType};
+use crate::types::{
+    KnownInstanceType, LiteralValueTypeKind, MemberLookupPolicy, TypeVarKind, TypedDictType,
+    UnionType,
+};
 use crate::{Db, DisplaySettings, FxIndexMap, Program, declare_lint};
 use itertools::Itertools;
 use ruff_db::source::source_text;
@@ -161,6 +164,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&NON_OVERLAPPING_CAST);
     registry.register_lint(&OPTIONAL_OBJECT_CONVERSION);
+    registry.register_lint(&BOOL_AS_INT);
     registry.register_lint(&MISSING_CONTEXT_ARGUMENT);
     registry.register_lint(&AMBIGUOUS_CONTEXT_ARGUMENT);
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
@@ -1821,6 +1825,43 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
+    /// Checks for a `bool` value in a position that expects a number, where it is
+    /// admitted only because `bool` is a subclass of `int`.
+    ///
+    /// ## Why is this bad?
+    /// Nothing is converted here — `bool` really is a subclass of `int`, and `True`
+    /// and `False` really are `1` and `0`. That is the problem: the value satisfies
+    /// an `int` (or `float`, or `complex`) annotation silently, so a boolean that
+    /// reached a numeric slot by mistake type-checks exactly like one that was meant
+    /// to. Writing `int(...)` says the number is what you meant, and widening the
+    /// annotation to `bool` says the flag is.
+    ///
+    /// The value has to be a boolean and the target a number for this to fire, so
+    /// arithmetic on booleans, a `bool` annotation, and a container of booleans are
+    /// all left alone. Note that `int | bool` is not an escape hatch: a union of a
+    /// class and its subclass simplifies to the supertype, so that annotation *is*
+    /// `int` and is reported as such.
+    ///
+    /// ## Examples
+    /// ```python
+    /// def take(n: int): ...
+    ///
+    /// a: int = True       # warning: `bool` used as `int`
+    /// take(True)          # warning: `bool` used as `int`
+    ///
+    /// a2: int = int(True) # ok — explicit
+    /// a3: bool = True     # ok
+    /// a4 = True + 1       # ok — a boolean used as a boolean
+    /// ```
+    pub(crate) static BOOL_AS_INT = {
+        summary: "detects a `bool` implicitly used as an `int`",
+        status: LintStatus::stable("0.0.61"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
     /// Checks for calls that leave a basedpython `context` parameter unfilled:
     /// no explicit argument matches it and no `context` declaration in scope
     /// has a type assignable to it.
@@ -2702,6 +2743,112 @@ pub(super) fn add_invariant_generic_hints<'db>(
     );
 }
 
+/// The numeric types a `bool` reaches by way of `int`: `int` itself, which it
+/// subclasses, plus the two the language promotes `int` to.
+const NUMERIC_SUPERTYPES_OF_BOOL: [KnownClass; 3] =
+    [KnownClass::Int, KnownClass::Float, KnownClass::Complex];
+
+/// Whether `ty` is a boolean and nothing else — `bool`, `Literal[True]`,
+/// `Literal[False]`, or a union of those.
+///
+/// This deliberately walks the type rather than asking whether it is a subtype of
+/// `bool`: resolving `KnownClass::Bool` to an instance looks `builtins.bool` up by
+/// name, and every declaration in typeshed's own `builtins.pyi` runs through this
+/// check, so that lookup is a salsa cycle. Reading the known class *off* a class
+/// that is already in hand is the safe direction.
+fn is_boolean_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    match ty {
+        Type::LiteralValue(literal) => matches!(literal.kind(), LiteralValueTypeKind::Bool(_)),
+        Type::Union(union) => {
+            let elements = union.elements(db);
+            !elements.is_empty() && elements.iter().all(|element| is_boolean_type(db, *element))
+        }
+        other => other.is_instance_of(db, KnownClass::Bool),
+    }
+}
+
+/// Whether `target` admits a `bool` only because `bool` subclasses `int`: it
+/// mentions a numeric type `bool` reaches via `int`, and is not gradual — a
+/// dynamic or unsolved component can stand for `bool` in its own right, so the
+/// subclass edge is not what let the value through.
+///
+/// There is deliberately no "unless the annotation also names `bool`" escape. A
+/// union of a class and its subclass simplifies to the supertype, so `int | bool`
+/// has already become plain `int` before any check sees it; the boolean arm is
+/// not something this function could still observe. The one shape that does keep
+/// its `bool` arm — `Literal[1] | bool` — has no `int` arm to widen through, and
+/// goes unreported for that reason instead.
+fn target_admits_bool_via_int<'db>(db: &'db dyn Db, target: Type<'db>) -> bool {
+    let components = match &target {
+        Type::Union(union) => union.elements(db),
+        other => std::slice::from_ref(other),
+    };
+
+    !components
+        .iter()
+        .any(|component| matches!(component, Type::Dynamic(_) | Type::TypeVar(_)))
+        && components.iter().any(|component| {
+            NUMERIC_SUPERTYPES_OF_BOOL
+                .iter()
+                .any(|numeric| component.is_instance_of(db, *numeric))
+        })
+}
+
+/// Report a `bool` reaching a numeric target purely because `bool` subclasses
+/// `int`. Every caller sits on a path where the assignment already type-checks:
+/// whenever this fires the value *is* assignable to the target, so it never
+/// doubles up with an assignability error.
+pub(super) fn report_bool_as_int<'db>(
+    context: &InferContext<'db, '_>,
+    node: impl Ranged,
+    value_ty: Type<'db>,
+    target_ty: Type<'db>,
+) {
+    let db = context.db();
+    if !is_boolean_type(db, value_ty) || !target_admits_bool_via_int(db, target_ty) {
+        return;
+    }
+    let Some(builder) = context.report_lint(&BOOL_AS_INT, node) else {
+        return;
+    };
+    let mut diagnostic = builder.into_diagnostic(format_args!(
+        "`{}` is implicitly used as `{}`",
+        value_ty.display(db),
+        target_ty.display(db)
+    ));
+    diagnostic.help("Write `int(...)` if the number is meant, or annotate `bool` if the flag is");
+}
+
+/// The right-hand side of the assignment `definition` binds, when it has one.
+fn assigned_value_node<'ast, 'db>(
+    context: &'ast InferContext<'db, '_>,
+    definition: Definition<'db>,
+) -> Option<&'ast ast::Expr> {
+    match definition.kind(context.db()) {
+        DefinitionKind::Assignment(def) => Some(def.value(context.module())),
+        DefinitionKind::AnnotatedAssignment(def) => def.value(context.module()),
+        DefinitionKind::NamedExpression(def) => Some(&*def.node(context.module()).value),
+        _ => None,
+    }
+}
+
+/// [`report_bool_as_int`] for an assignment, anchored on the assigned value
+/// rather than on the target it is being written into.
+pub(super) fn report_bool_as_int_assignment<'db>(
+    context: &InferContext<'db, '_>,
+    target_node: AnyNodeRef,
+    definition: Definition<'db>,
+    target_ty: Type<'db>,
+    value_ty: Type<'db>,
+) {
+    match assigned_value_node(context, definition) {
+        Some(value_node) => {
+            report_bool_as_int(context, value_node, value_ty, target_ty);
+        }
+        None => report_bool_as_int(context, target_node, value_ty, target_ty),
+    }
+}
+
 pub(super) fn report_invalid_assignment<'db>(
     context: &InferContext<'db, '_>,
     target_node: AnyNodeRef,
@@ -2710,12 +2857,7 @@ pub(super) fn report_invalid_assignment<'db>(
     value_ty: Type<'db>,
 ) {
     let definition_kind = definition.kind(context.db());
-    let value_node = match definition_kind {
-        DefinitionKind::Assignment(def) => Some(def.value(context.module())),
-        DefinitionKind::AnnotatedAssignment(def) => def.value(context.module()),
-        DefinitionKind::NamedExpression(def) => Some(&*def.node(context.module()).value),
-        _ => None,
-    };
+    let value_node = assigned_value_node(context, definition);
 
     if let Some(value_node) = value_node
         && is_invalid_typed_dict_literal(context.db(), target_ty, value_node.into())

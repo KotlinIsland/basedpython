@@ -12,7 +12,7 @@ use crate::{
             INVALID_PARAMETRIZE, INVALID_PARAMSPEC, INVALID_TYPE_FORM, REIFIED_CLASSMETHOD,
             TRAILING_LAMBDA_PARAMETERS, TRAILING_LAMBDA_RETURN_TYPE, UNKNOWN_FIXTURE,
             USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
-            is_invalid_typed_dict_literal, report_implicit_return_type,
+            is_invalid_typed_dict_literal, report_bool_as_int, report_implicit_return_type,
             report_invalid_generator_function_return_type, report_invalid_return_type,
             report_shadowed_type_variable,
         },
@@ -318,6 +318,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
 
                 if let Some(expected_return_ty) = declared_ty.generator_return_type(db) {
+                    for returned in self.return_types_and_ranges.iter().copied() {
+                        report_bool_as_int(
+                            &self.context,
+                            returned.range,
+                            returned.ty,
+                            expected_return_ty,
+                        );
+                    }
                     for invalid in
                         self.return_types_and_ranges
                             .iter()
@@ -353,6 +361,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
 
                 return;
+            }
+
+            for returned in self.return_types_and_ranges.iter().copied() {
+                report_bool_as_int(&self.context, returned.range, returned.ty, declared_ty);
             }
 
             for invalid in self
@@ -1318,6 +1330,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             if let Some(default_expr) = default_expr {
                 let default_expr = default_expr.as_ref();
                 let default_ty = self.file_expression_type(default_expr);
+
+                report_bool_as_int(&self.context, default_expr, default_ty, declared_ty);
 
                 // Avoid duplicate diagnostics: invalid TypedDict literals already emit specific errors.
                 let suppress_invalid_default =
