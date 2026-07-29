@@ -442,6 +442,7 @@ Module(
                                             range: 128..129,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),

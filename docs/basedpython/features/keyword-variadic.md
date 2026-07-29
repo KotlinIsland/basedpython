@@ -153,6 +153,7 @@ before specialization the pack shows as a pending splice — `{"tag": int, **Kwa
 
 ## see also
 
+- [bounds on a variadic pack](pack-bounds.md) — `**Kwargs: int` and `**Kwargs: **{"a": int}`
 - [callable arrow syntax](callable.md) — the `**` unpacking position
 - [keyword arguments in subscripts](kw-subscript.md) — binding typevars by name
 - [`ParamSpec` / `Concatenate` arrow callables](callable.md)

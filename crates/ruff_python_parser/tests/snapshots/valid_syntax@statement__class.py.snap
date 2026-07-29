@@ -1363,6 +1363,7 @@ Module(
                                             range: 895..896,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),
@@ -1424,6 +1425,7 @@ Module(
                                             range: 944..945,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             List(
                                                 ExprList {
@@ -1563,6 +1565,7 @@ Module(
                                             range: 1010..1011,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),

@@ -51,6 +51,7 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [generics](generics.md)
 - [explicit typevar constraints](constraints.md)
 - [type parameter bound ranges](bound-ranges.md)
+- [bounds on a variadic pack](pack-bounds.md)
 - [attribute types (`T.a`)](attribute-types.md)
 - [`TypedDict` and `Self` in type parameters](typeddict-self-bounds.md)
 - [keyword-variadic packs](keyword-variadic.md)

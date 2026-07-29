@@ -36,6 +36,7 @@ Module(
                                             range: 9..10,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),
@@ -86,6 +87,7 @@ Module(
                                             range: 27..28,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Name(
                                                 ExprName {
@@ -160,6 +162,7 @@ Module(
                                             range: 54..55,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: None,
                                     },
                                 ),
@@ -225,6 +228,7 @@ Module(
                                             range: 75..76,
                                             node_index: NodeIndex(None),
                                         },
+                                        bound: None,
                                         default: Some(
                                             Name(
                                                 ExprName {
