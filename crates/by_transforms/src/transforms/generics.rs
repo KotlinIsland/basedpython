@@ -55,6 +55,15 @@ pub(crate) struct GenericPolyfill<'src> {
     /// `(range, rendered)` for every symbolic fold in the module. A fold inside a
     /// statement this pass replaces wholesale is dropped unless spliced in here
     symbolic_substitutions: Vec<(TextRange, String)>,
+    /// text edits earlier passes already emitted. one of these covering a type
+    /// expression hides the source bytes our typevar rename would have patched
+    /// — the arrow lowering's `(T) -> R` → `Callable[[T], R]` is the common case
+    /// — so the covered expression is re-rendered through the rename instead,
+    /// and the pending edit is superseded
+    pending_edits: Vec<(TextRange, String)>,
+    /// ranges of `pending_edits` this pass re-rendered; the driver drops them so
+    /// the stale un-renamed text cannot win the overlap race
+    pub(crate) superseded: Vec<TextRange>,
 }
 
 #[derive(Default)]
@@ -114,12 +123,28 @@ impl ImportNeeds {
     }
 }
 
+/// the pieces a polyfilled type-parameter list lowers to
+struct ProcessedTypeParams {
+    /// each parameter as it is written *inside a subscript* — a variadic carries
+    /// its `*Ts` / `Unpack[Ts]` spelling here
+    generic_args: Vec<String>,
+    /// each parameter's bare mangled name, for the positions that want the
+    /// `TypeVar` / `TypeVarTuple` / `ParamSpec` object itself rather than a
+    /// subscript element (`TypeAliasType(..., type_params=…)`)
+    param_names: Vec<String>,
+    /// the `_T = TypeVar("_T")` definition lines to emit above the statement
+    defs: Vec<String>,
+    /// `source_name → mangled_name`
+    renames: HashMap<String, String>,
+}
+
 impl<'src> GenericPolyfill<'src> {
     pub(crate) fn new(
         source: &'src str,
         types: &'src dyn TypeInfo,
         config: Config,
         symbolic_substitutions: Vec<(TextRange, String)>,
+        pending_edits: Vec<(TextRange, String)>,
     ) -> Self {
         Self {
             source,
@@ -135,17 +160,93 @@ impl<'src> GenericPolyfill<'src> {
             generic_class_renames: HashMap::new(),
             private_aliases: HashMap::new(),
             symbolic_substitutions,
+            pending_edits,
+            superseded: Vec::new(),
         }
     }
 
-    /// the symbolic folds that fall inside `range`, ready to splice into a
-    /// replacement that subsumes them
-    fn substitutions_within(&self, range: TextRange) -> Vec<(TextRange, String)> {
-        self.symbolic_substitutions
+    /// every rewrite that already exists inside `range`, ready to splice into a
+    /// replacement that subsumes them: the symbolic folds (`Dim + 1` → `int`)
+    /// and the text edits earlier passes queued (`kw_subscript`'s positional
+    /// rebuild, `unpack`'s `Unpack[…]`). without the second group a keyword
+    /// subscript or a variadic inside a polyfilled `type` alias value or a
+    /// type-parameter bound reaches the output in its `.by` spelling
+    fn substitutions_within(&mut self, range: TextRange) -> Vec<(TextRange, String)> {
+        let mut within: Vec<(TextRange, String)> = self
+            .symbolic_substitutions
             .iter()
             .filter(|(folded, _)| range.contains_range(*folded))
             .cloned()
-            .collect()
+            .collect();
+        // a zero-width entry is an insertion — `unpack` spells `*Ts` as a
+        // `Unpack[` replacement plus a `]` insertion — so it has to come along
+        // too, or the subsumed rewrite arrives half-applied
+        for (pending, text) in &self.pending_edits {
+            if range.contains_range(*pending)
+                && !within
+                    .iter()
+                    .any(|(seen, seen_text)| seen == pending && seen_text == text)
+            {
+                within.push((*pending, text.clone()));
+                self.superseded.push(*pending);
+            }
+        }
+        within
+    }
+
+    /// reconcile this pass's typevar renames with the edits earlier passes
+    /// already queued.
+    ///
+    /// a rename is a narrow edit on a `Name` node, so it is lost whenever an
+    /// earlier pass replaced the whole type expression around it — the arrow
+    /// lowering's `(T) -> R` → `Callable[[T], R]` is the common case, and the
+    /// emitted module then raises `NameError` because the polyfill bound `_T`.
+    /// the fix is to apply the rename to that pass's *replacement text* and drop
+    /// the now-redundant narrow edit
+    /// `from` is the index this construct's renames start at. only they are
+    /// considered: an edit an *earlier* construct already reconciled must not be
+    /// rewritten again under this construct's map, which would undo the renames
+    /// only the earlier map knew about
+    fn reconcile_pending(&mut self, renames: &HashMap<String, String>, from: usize) {
+        if renames.is_empty() || from >= self.edits.len() {
+            return;
+        }
+        let pending = &self.pending_edits;
+        let superseded = &self.superseded;
+        let mut rewritten: Vec<(TextRange, String)> = Vec::new();
+        let mut index = 0usize;
+        self.edits.retain(|fix| {
+            let at = index;
+            index += 1;
+            if at < from {
+                return true;
+            }
+            let mut keep = true;
+            for edit in fix.edits() {
+                // the *widest* covering edit is the one that wins the overlap
+                // race, so it is the one that has to carry the rename — patching
+                // a narrower edit nested inside it would be dropped in turn
+                let Some((range, text)) = pending
+                    .iter()
+                    .filter(|(p, _)| {
+                        p.contains_range(edit.range()) && !superseded.contains(p)
+                    })
+                    .max_by_key(|(p, _)| p.len())
+                else {
+                    continue;
+                };
+                keep = false;
+                if !rewritten.iter().any(|(seen, _)| seen == range) {
+                    rewritten.push((*range, apply_renames_to_rendered(text, renames)));
+                }
+            }
+            keep
+        });
+        for (range, text) in rewritten {
+            self.superseded.push(range);
+            self.edits
+                .push(Fix::safe_edit(Edit::range_replacement(text, range)));
+        }
     }
 
     /// pre-scan for `private type` aliases so a reference inside a later
@@ -263,13 +364,9 @@ impl<'src> GenericPolyfill<'src> {
         (start, indent)
     }
 
-    /// Returns (`mangled_names_for_Generic`, `TypeVar_definition_lines`,
-    /// `source_name → mangled_name rename map`)
-    fn process_type_params(
-        &mut self,
-        params: &[TypeParam],
-    ) -> (Vec<String>, Vec<String>, HashMap<String, String>) {
+    fn process_type_params(&mut self, params: &[TypeParam]) -> ProcessedTypeParams {
         let mut generic_args: Vec<String> = Vec::new();
+        let mut param_names: Vec<String> = Vec::new();
         let mut defs: Vec<String> = Vec::new();
         let mut renames: HashMap<String, String> = HashMap::new();
 
@@ -287,6 +384,7 @@ impl<'src> GenericPolyfill<'src> {
                         renames.insert(name.to_owned(), mangled.clone());
                         defs.push(format!("{mangled} = ParamSpec(\"{mangled}\")"));
                         self.needed_imports.paramspec = true;
+                        param_names.push(mangled.clone());
                         generic_args.push(mangled);
                         continue;
                     }
@@ -399,7 +497,8 @@ impl<'src> GenericPolyfill<'src> {
                     let def = format!("{mangled} = TypeVar({})", args.join(", "));
 
                     self.needed_imports.typevar = true;
-                    generic_args.push(mangled.clone());
+                    param_names.push(mangled.clone());
+                    generic_args.push(mangled);
                     defs.push(def);
                 }
 
@@ -418,6 +517,7 @@ impl<'src> GenericPolyfill<'src> {
                     } else {
                         format!("Unpack[{mangled}]")
                     };
+                    param_names.push(mangled);
                     generic_args.push(arg);
                 }
 
@@ -427,12 +527,18 @@ impl<'src> GenericPolyfill<'src> {
                     renames.insert(name.to_owned(), mangled.clone());
                     defs.push(format!("{mangled} = ParamSpec(\"{mangled}\")"));
                     self.needed_imports.paramspec = true;
+                    param_names.push(mangled.clone());
                     generic_args.push(mangled);
                 }
             }
         }
 
-        (generic_args, defs, renames)
+        ProcessedTypeParams {
+            generic_args,
+            param_names,
+            defs,
+            renames,
+        }
     }
 
     /// For 3.12+ pass-through, strip `constraints` prefix from `TypeVar` bounds
@@ -532,7 +638,12 @@ impl<'src> GenericPolyfill<'src> {
             return;
         }
 
-        let (generic_args, defs, rename_map) = self.process_type_params(&tp.type_params);
+        let ProcessedTypeParams {
+            generic_args,
+            defs,
+            renames: rename_map,
+            ..
+        } = self.process_type_params(&tp.type_params);
         // record for module-level variant subclasses that reference these params
         self.generic_class_renames
             .insert(class.name.id.as_str().to_owned(), rename_map.clone());
@@ -596,9 +707,11 @@ impl<'src> GenericPolyfill<'src> {
         }
 
         // Rename type param references in class body.
+        let mark = self.edits.len();
         for stmt in &class.body {
             rename_in_stmt(stmt, &rename_map, &mut self.edits);
         }
+        self.reconcile_pending(&rename_map, mark);
     }
 
     /// Rename a generic enum's type params in a module-level variant subclass.
@@ -638,7 +751,11 @@ impl<'src> GenericPolyfill<'src> {
             return;
         }
 
-        let (_, defs, rename_map) = self.process_type_params(&tp.type_params);
+        let ProcessedTypeParams {
+            defs,
+            renames: rename_map,
+            ..
+        } = self.process_type_params(&tp.type_params);
 
         // Remove `[T, ...]` from the function signature.
         self.edits
@@ -654,6 +771,7 @@ impl<'src> GenericPolyfill<'src> {
         }
 
         // Rename type param references in parameter annotations, return type, and body.
+        let mark = self.edits.len();
         let all_params = func
             .parameters
             .posonlyargs
@@ -665,15 +783,15 @@ impl<'src> GenericPolyfill<'src> {
                 rename_in_expr(ann, &rename_map, &mut self.edits);
             }
         }
-        if let Some(vararg) = &func.parameters.vararg {
-            if let Some(ann) = &vararg.annotation {
-                rename_in_expr(ann, &rename_map, &mut self.edits);
-            }
+        if let Some(vararg) = &func.parameters.vararg
+            && let Some(ann) = &vararg.annotation
+        {
+            rename_in_expr(ann, &rename_map, &mut self.edits);
         }
-        if let Some(kwarg) = &func.parameters.kwarg {
-            if let Some(ann) = &kwarg.annotation {
-                rename_in_expr(ann, &rename_map, &mut self.edits);
-            }
+        if let Some(kwarg) = &func.parameters.kwarg
+            && let Some(ann) = &kwarg.annotation
+        {
+            rename_in_expr(ann, &rename_map, &mut self.edits);
         }
         if let Some(ret) = &func.returns {
             rename_in_expr(ret, &rename_map, &mut self.edits);
@@ -681,6 +799,7 @@ impl<'src> GenericPolyfill<'src> {
         for stmt in &func.body {
             rename_in_stmt(stmt, &rename_map, &mut self.edits);
         }
+        self.reconcile_pending(&rename_map, mark);
     }
 
     fn process_type_alias(&mut self, alias: &StmtTypeAlias) {
@@ -712,15 +831,17 @@ impl<'src> GenericPolyfill<'src> {
         let mut rename_map = self.private_aliases.clone();
 
         let (type_params_arg, defs) = if let Some(tp) = &alias.type_params {
-            let (generic_args, type_defs, tp_renames) = self.process_type_params(&tp.type_params);
+            let ProcessedTypeParams {
+                param_names,
+                defs: type_defs,
+                renames: tp_renames,
+                ..
+            } = self.process_type_params(&tp.type_params);
             rename_map.extend(tp_renames);
 
-            // TypeVarTuple entries have a leading `*` in generic_args (for
-            // Generic[*_Ts]) but `type_params=` wants the bare name.
-            let param_names: Vec<&str> = generic_args
-                .iter()
-                .map(|s| s.trim_start_matches('*'))
-                .collect();
+            // `type_params=` wants each parameter object itself, so a variadic
+            // goes in bare — neither the `*_Ts` nor the `Unpack[_Ts]` spelling
+            // a subscript would use is accepted there
             let trailing = if param_names.len() == 1 { "," } else { "" };
             let tps = format!(", type_params=({}{})", param_names.join(", "), trailing);
 
@@ -923,6 +1044,38 @@ fn is_parameters_bound(bound: &Expr) -> bool {
     ruff_python_ast::helpers::is_top_parameters_form(bound)
 }
 
+/// apply a type-parameter rename to text an earlier pass already rendered.
+///
+/// the input is always a type expression another pass built from the very
+/// source expression being renamed (`(T) -> R` → `Callable[[T], R]`), so every
+/// identifier in it is a type name — except an attribute, which names a member
+/// of the preceding one and is skipped. renaming a forward-reference string's
+/// contents is wanted, so quotes are not treated specially
+fn apply_renames_to_rendered(rendered: &str, renames: &HashMap<String, String>) -> String {
+    if renames.is_empty() {
+        return rendered.to_owned();
+    }
+    let mut out = String::with_capacity(rendered.len());
+    let mut rest = rendered;
+    while let Some(start) = rest.find(|c: char| c.is_alphabetic() || c == '_') {
+        let (before, tail) = rest.split_at(start);
+        out.push_str(before);
+        let end = tail
+            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .unwrap_or(tail.len());
+        let (ident, tail) = tail.split_at(end);
+        // `x.T` names a member of `x`, not the type parameter `T`
+        let is_attribute = before.trim_end_matches(char::is_whitespace).ends_with('.');
+        match renames.get(ident) {
+            Some(new) if !is_attribute => out.push_str(new),
+            _ => out.push_str(ident),
+        }
+        rest = tail;
+    }
+    out.push_str(rest);
+    out
+}
+
 fn rename_in_expr(expr: &Expr, renames: &HashMap<String, String>, edits: &mut Vec<Fix>) {
     match expr {
         Expr::Name(n) => {
@@ -1086,11 +1239,17 @@ impl super::ast_driver::TypeAwarePass for GenericPolyfillPass<'_> {
             types,
             self.config.clone(),
             ctx.symbolic_substitutions.clone(),
+            ctx.text_edits.clone(),
         );
         inner.collect_private_aliases(stmts);
         for stmt in stmts {
             inner.visit_stmt(stmt);
         }
+        // an edit we re-rendered with the typevar rename applied has to lose its
+        // original, or the un-renamed text can still win the overlap race
+        let superseded = std::mem::take(&mut inner.superseded);
+        ctx.text_edits
+            .retain(|(range, _)| !superseded.contains(range));
         let emits_any = inner.needed_imports_any;
         for line in std::mem::take(&mut inner.needed_imports).into_lines() {
             ctx.required_imports.push(line);
