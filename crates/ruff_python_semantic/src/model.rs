@@ -3,7 +3,7 @@ use std::path::Path;
 use bitflags::bitflags;
 use rustc_hash::FxHashMap;
 
-use ruff_python_ast::helpers::{from_relative_import, map_subscript};
+use ruff_python_ast::helpers::{from_relative_import, is_based_enum, map_subscript};
 use ruff_python_ast::name::{QualifiedName, UnqualifiedName};
 use ruff_python_ast::{self as ast, Expr, ExprContext, PySourceType, PythonVersion, Stmt};
 use ruff_python_stdlib::builtins::{is_python_builtin, python_builtins, python_magic_globals};
@@ -833,8 +833,35 @@ impl<'a> SemanticModel<'a> {
             // have; ty reports a `self` that resolves to nothing, so deferring
             // to it is the same split the rest of this list already makes
             "self" => self.in_trailing_lambda_block(),
-            other => ruff_python_stdlib::basedpython::is_implicit_typing_name(other),
+            other => {
+                ruff_python_stdlib::basedpython::is_implicit_typing_name(other)
+                    || self.is_based_enum_variant(other)
+            }
         }
+    }
+
+    /// True if `name` is a `case` of an `enum class` declared at module scope.
+    ///
+    /// [Context-sensitive resolution](https://docs.basedpython.org/features/context-sensitive-resolution)
+    /// lets a variant be written bare where the expected type is its enum
+    /// (`a: Color = Red`), which the transpiler rewrites to `Color.Red`. Whether
+    /// *this* use site really has that expected type takes the type, which the
+    /// linter does not have — so it defers, exactly as it does for a receiver
+    /// block's `self`. A name matching no variant at all is still reported, and
+    /// ty reports one whose expected type does not accept it.
+    fn is_based_enum_variant(&self, name: &str) -> bool {
+        self.global_scope().binding_ids().any(|binding_id| {
+            let BindingKind::ClassDefinition(scope_id) = self.bindings[binding_id].kind else {
+                return false;
+            };
+            let ScopeKind::Class(class_def) = self.scopes[scope_id].kind else {
+                return false;
+            };
+            is_based_enum(class_def)
+                && self.scopes[scope_id]
+                    .get(name)
+                    .is_some_and(|id| !self.bindings[id].is_unbound())
+        })
     }
 
     /// True when the innermost function scope is a
