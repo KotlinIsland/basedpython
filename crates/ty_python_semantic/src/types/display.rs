@@ -105,6 +105,10 @@ impl SignatureNameDisplay {
 
 /// Settings for displaying types and signatures
 #[derive(Debug, Clone, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent rendering options"
+)]
 pub struct DisplaySettings<'db> {
     /// Whether rendering can be multiline
     pub multiline: bool,
@@ -128,9 +132,23 @@ pub struct DisplaySettings<'db> {
     /// Whether to hide the return type of the outermost signature.
     /// Return types of nested callable types inside parameters are still shown.
     pub hide_return_type: bool,
+    /// basedpython: whether a specialization names the type parameter each of
+    /// its arguments fills (`A[Key=str, Value=int]`), the way a keyword
+    /// subscript writes it. Only ever set for `.by` output — python's subscript
+    /// grammar has no keyword form.
+    pub name_type_arguments: bool,
 }
 
 impl<'db> DisplaySettings<'db> {
+    /// basedpython: name the type parameter each type argument fills.
+    #[must_use]
+    pub fn with_named_type_arguments(&self) -> Self {
+        Self {
+            name_type_arguments: true,
+            ..self.clone()
+        }
+    }
+
     #[must_use]
     pub fn multiline(&self) -> Self {
         Self {
@@ -2330,6 +2348,11 @@ impl<'db> DisplaySpecialization<'db> {
 
             if wrote_any {
                 f.write_str(", ")?;
+            }
+            // a lone type parameter has nothing to disambiguate, so naming it
+            // would be noise rather than orientation
+            if self.settings.name_type_arguments && variables.len() > 1 {
+                write!(f, "{}=", typevar.name(self.db))?;
             }
             ty.display_with(self.db, self.settings.clone())
                 .fmt_detailed(f)?;

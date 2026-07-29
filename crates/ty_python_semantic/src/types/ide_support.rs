@@ -588,9 +588,10 @@ pub struct CallSignatureDetails<'db> {
     /// displayed signatures that synthesize parameters, like bare `ParamSpec` signatures.
     pub argument_to_displayed_parameter_mapping: Vec<Option<usize>>,
 
-    /// The type arguments inferred for the callee's own generic context, in
+    /// The type arguments inferred for the callee's own generic context, as the
+    /// type parameter each fills paired with the type it was solved to, in
     /// declaration order. Empty when the callee is not generic.
-    pub type_arguments: Vec<Type<'db>>,
+    pub type_arguments: Vec<(Name, Type<'db>)>,
 }
 
 /// A single displayed parameter in a callable signature for IDE support.
@@ -640,7 +641,14 @@ impl<'db> CallSignatureDetails<'db> {
         // which the receiver already fixed
         let type_arguments = specialization
             .filter(|_| signature.generic_context.is_some())
-            .map(|specialization| specialization.types(db).to_vec())
+            .map(|specialization| {
+                specialization
+                    .generic_context(db)
+                    .variables(db)
+                    .map(|variable| variable.name(db).clone())
+                    .zip(specialization.types(db).iter().copied())
+                    .collect()
+            })
             .unwrap_or_default();
 
         CallSignatureDetails {
@@ -1240,9 +1248,10 @@ pub struct InlayHintCallArgumentDetails<'db> {
     /// The position of the arguments mapped to their name and the range of the argument definition in the signature.
     pub argument_names: HashMap<usize, (String, Option<FileRange>)>,
 
-    /// The type arguments inferred for the callee's own generic context, in
+    /// The type arguments inferred for the callee's own generic context, as the
+    /// type parameter each fills paired with the type it was solved to, in
     /// declaration order. Empty when the callee is not generic.
-    pub type_arguments: Vec<Type<'db>>,
+    pub type_arguments: Vec<(Name, Type<'db>)>,
 }
 
 pub fn inlay_hint_call_argument_details<'db>(
