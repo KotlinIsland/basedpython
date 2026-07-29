@@ -685,7 +685,7 @@ class C[**P]:
 
 # Note that the return type must match exactly, since C is invariant on the return type of C.f.
 def f(x: int, y: str) -> int:
-    return True
+    return 1
 
 c = C(f)
 reveal_type(c.f)  # revealed: (x: int, y: str) -> int

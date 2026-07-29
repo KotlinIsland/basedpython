@@ -37,6 +37,7 @@ static_assert(not is_equivalent_to(Bar, Foo))
 Foo(42)
 Foo(Foo(42))  # allowed: `Foo` is a subtype of `int`.
 Foo(Bar(Foo(42)))  # allowed: `Bar` is a subtype of `int`.
+# error: [bool-as-int] "`Literal[True]` is implicitly used as `int`"
 Foo(True)  # allowed: `bool` is a subtype of `int`.
 Foo("forty-two")  # error: [invalid-argument-type] "Argument is incorrect: Expected `int`, found `Literal["forty-two"]`"
 
