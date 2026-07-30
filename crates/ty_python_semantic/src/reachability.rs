@@ -206,8 +206,9 @@ use crate::{
         KnownInstanceType, NarrowingConstraint, SpecialFormType, Type, TypeContext, UnionType,
         callable_pattern_type, definite_match_pattern_type,
         definite_match_pattern_type_for_subject, equality_truthiness, expand_type,
-        infer_narrowing_constraints, infer_same_file_expression_type, mapping_pattern_type,
-        pattern_binding_fallthrough_type, sequence_pattern_type_builder, singleton_pattern_type,
+        infer_expression_types, infer_narrowing_constraints, infer_same_file_expression_type,
+        mapping_pattern_type, pattern_binding_fallthrough_type, sequence_pattern_type_builder,
+        singleton_pattern_type,
     },
 };
 use ruff_index::{Idx, IndexSlice};
@@ -1510,8 +1511,14 @@ fn analyze_non_terminal_call<'db>(
     } else if all_overloads_return_never {
         Truthiness::AlwaysFalse
     } else {
-        let call_expr_ty = infer_same_file_expression_type(db, call_expr, TypeContext::default());
-        if call_expr_ty.is_equivalent_to(db, Type::Never) {
+        let inference = infer_expression_types(db, call_expr, TypeContext::default());
+        let call_expr_ty = inference.expression_type(call_expr.node_ref(db));
+
+        // basedpython: a type variable the call left unsolved is solved to `Never`, which says
+        // that the call's result cannot be described — not that the call does not return.
+        if call_expr_ty.is_equivalent_to(db, Type::Never)
+            && !inference.is_unsolved_typevar_call(call_expr.node_ref(db))
+        {
             Truthiness::AlwaysFalse
         } else {
             Truthiness::AlwaysTrue

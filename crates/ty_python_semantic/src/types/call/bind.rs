@@ -1318,6 +1318,15 @@ impl<'db> Bindings<'db> {
         )
     }
 
+    /// Whether this call returns `Never` only because it left a type variable unsolved.
+    pub(crate) fn returns_unsolved_typevar(&self, db: &'db dyn Db) -> bool {
+        self.elements.iter().any(|element| {
+            element
+                .callables()
+                .any(|callable| callable.returns_unsolved_typevar(db))
+        })
+    }
+
     /// Returns the inferred type for the argument at the specified index.
     pub(crate) fn type_for_argument<'a>(
         &'a self,
@@ -4342,6 +4351,17 @@ impl<'db> CallableBinding<'db> {
         Type::unknown()
     }
 
+    /// Whether this call returns `Never` only because it left a type variable unsolved.
+    pub(crate) fn returns_unsolved_typevar(&self, db: &'db dyn Db) -> bool {
+        if let Some((_, first_overload)) = self.matching_overloads().next() {
+            return first_overload.returns_unsolved_typevar(db);
+        }
+        if let [overload] = self.overloads.as_slice() {
+            return overload.returns_unsolved_typevar(db);
+        }
+        false
+    }
+
     fn report_diagnostics(
         &self,
         context: &InferContext<'db, '_>,
@@ -5343,6 +5363,18 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
             .map(|inference| call_specialization(self.db, self.signature, inference))
     }
 
+    /// The call's specialization with a type variable the call left unsolved kept gradual.
+    ///
+    /// Solving an unsolved type variable to `Never` describes the call's *result*. A parameter
+    /// type is contravariant, so the same substitution would say the parameter accepts nothing:
+    /// `Callable[..., T]` becomes `(...) -> Never`, which no callable is assignable to. An
+    /// unsolved type variable carries no information about the argument, so checking against it
+    /// has to stay vacuous.
+    fn argument_specialization(&self) -> Option<Specialization<'db>> {
+        self.inference
+            .map(|inference| inference.specialization(self.db))
+    }
+
     fn infer_specialization(&mut self, constraints: &ConstraintSetBuilder<'db>) {
         let Some(generic_context) = self.signature.generic_context else {
             return;
@@ -5778,7 +5810,7 @@ impl<'a, 'db> ArgumentTypeChecker<'a, 'db> {
         }
 
         let mut expected_ty = parameter.annotated_type();
-        if let Some(specialization) = self.specialization() {
+        if let Some(specialization) = self.argument_specialization() {
             argument_type = argument_type.apply_specialization(self.db, specialization);
             expected_ty = expected_ty.apply_specialization(self.db, specialization);
         }
@@ -6535,22 +6567,32 @@ fn inferable_typevar_occurrences<'db>(
 
 /// Project a call's type-variable inference into a specialization.
 ///
-/// basedpython: under `sound-types`, a type variable that the call left entirely unsolved is
-/// solved to `Never` — the precise type of "no value ever reaches this position" — rather than
-/// the gradual `Unknown`. This mirrors what fluid specializations already do for an empty
-/// collection literal.
+/// basedpython: a type variable that the call left entirely unsolved is solved to `Never` — the
+/// precise type of "no value ever reaches this position" — rather than the gradual `Unknown`.
+/// This mirrors what fluid specializations already do for an empty collection literal, and is
+/// disabled by `analysis.precise-unsolved-typevars`.
+///
+/// Variance decides where that is the right answer. Where the type variable is only ever read out
+/// of the call's result, `Never` describes a value nobody can observe. Where it is also written or
+/// passed back in — an invariant `list[T]`, a contravariant `(T) -> None` — the same substitution
+/// would instead say that nothing can ever be put there, turning a failure to infer into an error
+/// at every later use of the result, so those keep the gradual `Unknown`.
 ///
 /// Every consumer of a call's specialization must go through here, or the return type and the
-/// binding's reported specialization would disagree about the same call.
+/// binding's reported specialization would disagree about the same call. The one exception is
+/// argument checking, which needs the gradual reading — see `Binding::argument_specialization`.
 fn call_specialization<'db>(
     db: &'db dyn Db,
     signature: &Signature<'db>,
     inference: TypeVarInference<'db>,
 ) -> Specialization<'db> {
-    let sound_types = signature
-        .definition()
-        .is_some_and(|definition| db.analysis_settings(definition.file(db)).sound_types);
-    if !sound_types {
+    // the module that declares the callable governs its calls; a synthesized signature declared by
+    // no module follows the default
+    let precise_unsolved_typevars = signature.definition().is_none_or(|definition| {
+        db.analysis_settings(definition.file(db))
+            .precise_unsolved_typevars
+    });
+    if !precise_unsolved_typevars {
         return inference.specialization(db);
     }
 
@@ -6562,6 +6604,10 @@ fn call_specialization<'db>(
             || typevar.is_paramspec(db)
             || typevar.is_parameter_pack(db)
             || typevar.is_typevartuple(db)
+            || !matches!(
+                typevar.positional_variance(db),
+                TypeVarVariance::Covariant | TypeVarVariance::Bivariant
+            )
         {
             None
         } else {
@@ -7161,6 +7207,17 @@ impl<'db> Binding<'db> {
 
     pub(crate) fn return_type(&self) -> Type<'db> {
         self.return_ty
+    }
+
+    /// Whether this call returns `Never` only because it left a type variable unsolved.
+    ///
+    /// Such a `Never` says that the call's result cannot be described, not that the call does not
+    /// return, so it must not make the rest of the scope unreachable.
+    pub(crate) fn returns_unsolved_typevar(&self, db: &'db dyn Db) -> bool {
+        self.return_ty.is_never()
+            && self
+                .inference
+                .is_some_and(|inference| inference.has_unsolved(db))
     }
 
     /// Returns the bound types for each parameter, in parameter source order, or `None` if no

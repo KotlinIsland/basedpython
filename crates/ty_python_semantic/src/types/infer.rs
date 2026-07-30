@@ -1707,6 +1707,10 @@ struct ExpressionInferenceExtra<'db> {
     /// String annotations found in this region
     string_annotations: FrozenSet<ExpressionNodeKey>,
 
+    /// Call expressions in this region whose type is `Never` only because the call left a type
+    /// variable unsolved.
+    unsolved_typevar_calls: FrozenSet<ExpressionNodeKey>,
+
     /// Expected types for expression nodes tracked for IDE completion.
     expected_types: FrozenMap<ExpressionNodeKey, Type<'db>>,
 
@@ -1826,6 +1830,17 @@ impl<'db> ExpressionInference<'db> {
     pub(crate) fn expression_type(&self, expression: impl Into<ExpressionNodeKey>) -> Type<'db> {
         self.try_expression_type(expression)
             .unwrap_or_else(Type::unknown)
+    }
+
+    /// Whether this call expression's type is `Never` only because the call left a type variable
+    /// unsolved, rather than because the callee does not return.
+    pub(crate) fn is_unsolved_typevar_call(
+        &self,
+        expression: impl Into<ExpressionNodeKey>,
+    ) -> bool {
+        self.extra
+            .as_ref()
+            .is_some_and(|extra| extra.unsolved_typevar_calls.contains(&expression.into()))
     }
 
     pub(crate) fn collection_use_constraints(

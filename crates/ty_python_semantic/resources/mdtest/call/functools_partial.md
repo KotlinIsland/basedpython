@@ -338,7 +338,7 @@ type.
 from functools import partial
 
 p = partial(42)  # error: [invalid-argument-type]
-reveal_type(p)  # revealed: partial[Unknown]
+reveal_type(p)  # revealed: partial[Never]
 ```
 
 ### Keyword binding to positional-only param

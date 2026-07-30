@@ -32,6 +32,7 @@ features = [
   { "api lockfile" = "features/api-lock.md" },
   { "fluid specializations" = "features/fluid-specializations.md" },
   { "sound types" = "features/sound-types.md" },
+  { "precise unsolved type variables" = "features/precise-unsolved-typevars.md" },
   { "regex group types" = "features/regex-groups.md" },
   { "boolean conditions" = "features/conditions.md" },
   { "tuple type literals" = "features/tuple-types.md" },

@@ -281,6 +281,87 @@ fn sound_types_is_per_module() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `precise-unsolved-typevars` is resolved per module: the module that *declares* a function
+/// governs how a call leaving its type variables unsolved is solved, and callers see the result
+/// regardless of their own setting.
+#[test]
+fn precise_unsolved_typevars_is_per_module() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.ty.environment]
+            python-version = "3.13"
+
+            [[tool.ty.overrides]]
+            include = ["gradual/**"]
+
+            [tool.ty.overrides.analysis]
+            precise-unsolved-typevars = false
+            "#,
+        ),
+        (
+            "precise/lib.py",
+            r#"
+            def f[T]() -> T:
+                raise NotImplementedError
+            "#,
+        ),
+        (
+            "gradual/lib.py",
+            r#"
+            def g[T]() -> T:
+                raise NotImplementedError
+            "#,
+        ),
+        (
+            "gradual/main.py",
+            r#"
+            from precise.lib import f
+            from typing_extensions import reveal_type
+
+            # `f` is declared in a precise module, so its unsolved type variable is `Never` here too
+            reveal_type(f())
+            "#,
+        ),
+        (
+            "precise/main.py",
+            r#"
+            from gradual.lib import g
+            from typing_extensions import reveal_type
+
+            # `g` is declared in a gradual module, so its unsolved type variable stays `Unknown`
+            reveal_type(g())
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    info[revealed-type]: Revealed type
+     --> gradual/main.py:6:13
+      |
+    6 | reveal_type(f())
+      |             ^^^ `Never`
+      |
+
+    info[revealed-type]: Revealed type
+     --> precise/main.py:6:13
+      |
+    6 | reveal_type(g())
+      |             ^^^ `Unknown`
+      |
+
+    Found 2 diagnostics
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
 /// `bivariant-private-attributes` is resolved per module: the module that *declares* a class
 /// governs how its variance is inferred, and consumers see the result regardless of their own
 /// setting.

@@ -237,6 +237,59 @@ spelled bare (`int`), and `None` stands for the type of `None`.
 
 ---
 
+### `precise-unsolved-typevars`
+
+Whether a type variable that a call leaves unsolved is solved to `Never`. This is a
+basedpython feature.
+
+A call can leave a type variable entirely unsolved, because no argument mentions it:
+
+```python
+def f[T]() -> T: ...
+
+a = f()
+```
+
+`Never` is the precise answer here: no value ever reaches that position, so nothing the
+call returns can be observed at type `T`. When set to `false`, the type variable falls back
+to the gradual `Unknown` instead, which silences any error that would follow from the call
+site.
+
+This applies where the type variable is an output. Where it is instead written through or
+passed back in — the element of an invariant `list[T]`, the parameter of a returned
+`Callable[[T], R]` — `Never` would say that nothing can ever be put there, so an invariant
+or contravariant occurrence keeps the gradual `Unknown`.
+
+A PEP 696 default (`def f[T = str]()`) always takes priority, and a `ParamSpec`,
+`TypeVarTuple` or keyword-variadic pack is unaffected because `Never` is not a valid
+solution for one.
+
+Defaults to `true`.
+
+**Default value**: `true`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Solve an unsolved type variable to `Unknown` rather than `Never`
+    precise-unsolved-typevars = false
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Solve an unsolved type variable to `Unknown` rather than `Never`
+    precise-unsolved-typevars = false
+    ```
+
+---
+
 ### `replace-imports-with-any`
 
 A list of module glob patterns whose imports should be replaced with `typing.Any`.
@@ -332,8 +385,8 @@ guarantee and uses the precise type instead. It affects:
   `abstractmethod` declarations.
 - **Bare `ClassVar` annotations**: `x: ClassVar = 1` declares `int` rather than the union of
   `Unknown` and the inferred type.
-- **Unsolved type variables**: a type variable that a call leaves unsolved is solved to
-  `Never` rather than `Unknown`.
+- **Empty collection literals**: `[]` has element type `Never`, so passing one to a generic
+  call solves from it precisely instead of leaking `Unknown`.
 
 An explicit annotation always takes priority over any of the above.
 
@@ -1040,6 +1093,59 @@ spelled bare (`int`), and `None` stands for the type of `None`.
 
 ---
 
+#### `precise-unsolved-typevars`
+
+Whether a type variable that a call leaves unsolved is solved to `Never`. This is a
+basedpython feature.
+
+A call can leave a type variable entirely unsolved, because no argument mentions it:
+
+```python
+def f[T]() -> T: ...
+
+a = f()
+```
+
+`Never` is the precise answer here: no value ever reaches that position, so nothing the
+call returns can be observed at type `T`. When set to `false`, the type variable falls back
+to the gradual `Unknown` instead, which silences any error that would follow from the call
+site.
+
+This applies where the type variable is an output. Where it is instead written through or
+passed back in — the element of an invariant `list[T]`, the parameter of a returned
+`Callable[[T], R]` — `Never` would say that nothing can ever be put there, so an invariant
+or contravariant occurrence keeps the gradual `Unknown`.
+
+A PEP 696 default (`def f[T = str]()`) always takes priority, and a `ParamSpec`,
+`TypeVarTuple` or keyword-variadic pack is unaffected because `Never` is not a valid
+solution for one.
+
+Defaults to `true`.
+
+**Default value**: `true`
+
+**Type**: `bool`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # Solve an unsolved type variable to `Unknown` rather than `Never`
+    precise-unsolved-typevars = false
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # Solve an unsolved type variable to `Unknown` rather than `Never`
+    precise-unsolved-typevars = false
+    ```
+
+---
+
 #### `replace-imports-with-any`
 
 A list of module glob patterns whose imports should be replaced with `typing.Any`.
@@ -1135,8 +1241,8 @@ guarantee and uses the precise type instead. It affects:
   `abstractmethod` declarations.
 - **Bare `ClassVar` annotations**: `x: ClassVar = 1` declares `int` rather than the union of
   `Unknown` and the inferred type.
-- **Unsolved type variables**: a type variable that a call leaves unsolved is solved to
-  `Never` rather than `Unknown`.
+- **Empty collection literals**: `[]` has element type `Never`, so passing one to a generic
+  call solves from it precisely instead of leaking `Unknown`.
 
 An explicit annotation always takes priority over any of the above.
 
