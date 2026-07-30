@@ -417,12 +417,12 @@ class GenericShape[T]:
 
 class GenericCircle[T](GenericShape[T]): ...
 
-reveal_type(GenericShape().foo())  # revealed: GenericShape[Unknown]
+reveal_type(GenericShape().foo())  # revealed: GenericShape[Never]
 reveal_type(GenericShape.bar())  # revealed: GenericShape[Unknown]
 reveal_type(GenericShape[int].bar())  # revealed: GenericShape[int]
 reveal_type(GenericShape.baz(1))  # revealed: GenericShape[Literal[1]]
 
-reveal_type(GenericCircle().foo())  # revealed: GenericCircle[Unknown]
+reveal_type(GenericCircle().foo())  # revealed: GenericCircle[Never]
 reveal_type(GenericCircle.bar())  # revealed: GenericCircle[Unknown]
 reveal_type(GenericCircle[int].bar())  # revealed: GenericCircle[int]
 reveal_type(GenericCircle.baz(1))  # revealed: GenericShape[Literal[1]]

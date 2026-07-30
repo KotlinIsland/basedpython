@@ -1027,7 +1027,7 @@ class Row[*Cells]:
 def f(pair: Row[int, str], triple: Row[int, str, bytes]) -> None:
     reveal_type(pair.get())  # revealed: Row[str, int]
     # TODO: Should reveal `Row[str, bytes, int]`.
-    reveal_type(triple.get())  # revealed: Row[Unknown, Unknown]
+    reveal_type(triple.get())  # revealed: Row[Never]
 ```
 
 ## Invalid Forms

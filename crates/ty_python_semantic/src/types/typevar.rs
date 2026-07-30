@@ -1332,6 +1332,27 @@ impl<'db> BoundTypeVarInstance<'db> {
         self.variance_with_polarity(db, TypeVarVariance::Covariant)
     }
 
+    /// The variance of this type variable at the position it is bound.
+    ///
+    /// A declared variance only says something about a generic *class*: it fixes how two
+    /// specializations of that class relate. A type variable bound to a function has no such
+    /// relation to declare, and a legacy `TypeVar("T")` is nevertheless invariant by python's own
+    /// rules, so the declaration is read past and the type variable's position within the
+    /// function's own signature answers instead. This keeps `def f[T]() -> T` and its legacy
+    /// spelling saying the same thing.
+    pub(crate) fn positional_variance(self, db: &'db dyn Db) -> TypeVarVariance {
+        let BindingContext::Definition(definition) = self.binding_context(db) else {
+            return self.variance(db);
+        };
+        let binding_ty = binding_type(db, definition);
+        if binding_ty.is_function_literal() {
+            return binding_ty
+                .with_polarity(TypeVarVariance::Covariant)
+                .variance_of(db, self.identity(db));
+        }
+        self.variance(db)
+    }
+
     /// basedpython: whether this parameter is declared `in out` on a class whose
     /// body never writes through it.
     ///

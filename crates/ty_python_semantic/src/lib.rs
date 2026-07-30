@@ -132,8 +132,8 @@ pub struct AnalysisSettings {
     /// This deliberately breaks the gradual guarantee. With it enabled: an unannotated parameter
     /// with a default is declared with the default's promoted type (`def f(a=1)` declares `int`),
     /// an unannotated method inherits the signature of the base method it overrides, a bare
-    /// `ClassVar` declares its inferred type instead of `Unknown | <inferred>`, and a type
-    /// variable left unsolved by a call is solved to `Never` rather than `Unknown`.
+    /// `ClassVar` declares its inferred type instead of `Unknown | <inferred>`, and an empty
+    /// collection literal has element type `Never` rather than `Unknown`.
     pub sound_types: bool,
 
     /// Whether a private attribute leaves an inferred type parameter bivariant.
@@ -143,6 +143,16 @@ pub struct AnalysisSettings {
     /// constrains variance not at all. When this is disabled, private attributes are instead
     /// treated as immutable-but-readable, which constrains the type parameter to covariance.
     pub bivariant_private_attributes: bool,
+
+    /// Whether a type variable that a call leaves unsolved is solved to `Never`.
+    ///
+    /// `Never` is the precise answer for a type variable that no argument mentions: no value ever
+    /// reaches that position. When this is disabled, such a type variable falls back to the
+    /// gradual `Unknown`. A PEP 696 default always takes priority over either.
+    ///
+    /// Only an occurrence that is an output is solved this way; an invariant or contravariant
+    /// occurrence stays gradual, since `Never` there would say nothing can be written or passed.
+    pub precise_unsolved_typevars: bool,
 
     /// Classes whose values do not count as a distinct member of an overlapping condition.
     ///
@@ -170,6 +180,7 @@ impl Default for AnalysisSettings {
             disable_fluid_specializations: false,
             sound_types: false,
             bivariant_private_attributes: true,
+            precise_unsolved_typevars: true,
             overlapping_condition_exempt_types: Box::default(),
             overlapping_condition_assume_truthy_instances: false,
         }

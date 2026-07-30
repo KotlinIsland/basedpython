@@ -445,7 +445,7 @@ reveal_type(generic_context(D))
 reveal_type(generic_context(into_regular_callable(D)))
 
 # Because `C[T, U]` is not an instance of `D`, we never hit `D.__init__` at all.
-reveal_type(D(1))  # revealed: C[Unknown, int]
+reveal_type(D(1))  # revealed: C[Never, int]
 ```
 
 ### Generic class inherits `__init__` from generic base class
@@ -643,7 +643,7 @@ reveal_type(generic_context(C))
 # revealed: ty_extensions._internal.GenericContext[T@C, U@C]
 reveal_type(generic_context(into_regular_callable(C)))
 
-reveal_type(C())  # revealed: C[Unknown, Unknown]
+reveal_type(C())  # revealed: C[Never, Never]
 
 class D[T, U = T]:
     def __init__(self) -> None: ...
@@ -653,7 +653,7 @@ reveal_type(generic_context(D))
 # revealed: ty_extensions._internal.GenericContext[T@D, U@D]
 reveal_type(generic_context(into_regular_callable(D)))
 
-reveal_type(D())  # revealed: D[Unknown, Unknown]
+reveal_type(D())  # revealed: D[Never, Never]
 ```
 
 ## Generic subclass
