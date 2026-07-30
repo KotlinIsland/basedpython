@@ -165,6 +165,8 @@ pub(crate) struct Analysis {
 
     pub(crate) bivariant_private_attributes: Option<bool>,
 
+    pub(crate) precise_unsolved_typevars: Option<bool>,
+
     pub(crate) overlapping_condition_exempt_types: Option<Vec<String>>,
 
     pub(crate) overlapping_condition_assume_truthy_instances: Option<bool>,

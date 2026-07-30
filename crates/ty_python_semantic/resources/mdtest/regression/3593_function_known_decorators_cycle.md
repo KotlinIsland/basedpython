@@ -14,7 +14,7 @@ class C:
     a: D
 
 C.a
-reveal_type(C().a)  # revealed: Unknown | D
+reveal_type(C().a)  # revealed: D
 
 class D:
     @overload

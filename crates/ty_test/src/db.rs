@@ -259,6 +259,7 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
         disable_fluid_specializations: disable_fluid_specializations_default,
         sound_types: sound_types_default,
         bivariant_private_attributes: bivariant_private_attributes_default,
+        precise_unsolved_typevars: precise_unsolved_typevars_default,
         overlapping_condition_exempt_types: overlapping_condition_exempt_types_default,
         overlapping_condition_assume_truthy_instances:
             overlapping_condition_assume_truthy_instances_default,
@@ -306,6 +307,9 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
         bivariant_private_attributes: options
             .bivariant_private_attributes
             .unwrap_or(bivariant_private_attributes_default),
+        precise_unsolved_typevars: options
+            .precise_unsolved_typevars
+            .unwrap_or(precise_unsolved_typevars_default),
         overlapping_condition_exempt_types: options
             .overlapping_condition_exempt_types
             .as_deref()

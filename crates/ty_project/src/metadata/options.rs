@@ -1618,8 +1618,8 @@ pub struct AnalysisOptions {
     ///   `abstractmethod` declarations.
     /// - **Bare `ClassVar` annotations**: `x: ClassVar = 1` declares `int` rather than the union of
     ///   `Unknown` and the inferred type.
-    /// - **Unsolved type variables**: a type variable that a call leaves unsolved is solved to
-    ///   `Never` rather than `Unknown`.
+    /// - **Empty collection literals**: `[]` has element type `Never`, so passing one to a generic
+    ///   call solves from it precisely instead of leaking `Unknown`.
     ///
     /// An explicit annotation always takes priority over any of the above.
     ///
@@ -1665,6 +1665,43 @@ pub struct AnalysisOptions {
         "#
     )]
     pub bivariant_private_attributes: Option<bool>,
+
+    /// Whether a type variable that a call leaves unsolved is solved to `Never`. This is a
+    /// basedpython feature.
+    ///
+    /// A call can leave a type variable entirely unsolved, because no argument mentions it:
+    ///
+    /// ```python
+    /// def f[T]() -> T: ...
+    ///
+    /// a = f()
+    /// ```
+    ///
+    /// `Never` is the precise answer here: no value ever reaches that position, so nothing the
+    /// call returns can be observed at type `T`. When set to `false`, the type variable falls back
+    /// to the gradual `Unknown` instead, which silences any error that would follow from the call
+    /// site.
+    ///
+    /// This applies where the type variable is an output. Where it is instead written through or
+    /// passed back in — the element of an invariant `list[T]`, the parameter of a returned
+    /// `Callable[[T], R]` — `Never` would say that nothing can ever be put there, so an invariant
+    /// or contravariant occurrence keeps the gradual `Unknown`.
+    ///
+    /// A PEP 696 default (`def f[T = str]()`) always takes priority, and a `ParamSpec`,
+    /// `TypeVarTuple` or keyword-variadic pack is unaffected because `Never` is not a valid
+    /// solution for one.
+    ///
+    /// Defaults to `true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"true"#,
+        value_type = "bool",
+        example = r#"
+        # Solve an unsolved type variable to `Unknown` rather than `Never`
+        precise-unsolved-typevars = false
+        "#
+    )]
+    pub precise_unsolved_typevars: Option<bool>,
 
     /// A list of classes whose values do not count as a distinct member of an
     /// [`overlapping-condition`](rules.md#overlapping-condition).
@@ -1770,6 +1807,7 @@ impl AnalysisOptions {
             disable_fluid_specializations,
             sound_types,
             bivariant_private_attributes,
+            precise_unsolved_typevars,
             overlapping_condition_exempt_types,
             overlapping_condition_assume_truthy_instances,
         } = self;
@@ -1782,6 +1820,7 @@ impl AnalysisOptions {
             disable_fluid_specializations: disable_fluid_specializations_default,
             sound_types: sound_types_default,
             bivariant_private_attributes: bivariant_private_attributes_default,
+            precise_unsolved_typevars: precise_unsolved_typevars_default,
             overlapping_condition_exempt_types: overlapping_condition_exempt_types_default,
             overlapping_condition_assume_truthy_instances:
                 overlapping_condition_assume_truthy_instances_default,
@@ -1821,6 +1860,8 @@ impl AnalysisOptions {
             sound_types: sound_types.unwrap_or(sound_types_default),
             bivariant_private_attributes: bivariant_private_attributes
                 .unwrap_or(bivariant_private_attributes_default),
+            precise_unsolved_typevars: precise_unsolved_typevars
+                .unwrap_or(precise_unsolved_typevars_default),
             overlapping_condition_exempt_types: overlapping_condition_exempt_types
                 .as_ref()
                 .map(|types| build_class_name_list(db, types, diagnostics))

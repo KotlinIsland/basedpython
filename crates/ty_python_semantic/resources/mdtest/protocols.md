@@ -2781,9 +2781,10 @@ class StrValue:
 
 static_assert(not is_assignable_to(StrValue, HasValue[int]))
 
-# TODO: This should be a property with an `int` read type once decorator calls preserve enclosing
-# type variables.
-# revealed: {"value": AttributeMember(`cached_property[Unknown]`)}
+# TODO: The read type should be `int` once decorator calls preserve enclosing type variables. The
+# `cached_property` call leaves its own type variable unsolved, and an unsolved type variable is
+# solved to `Never`.
+# revealed: {"value": PropertyMember { read: `Never`, write: `Never` }}
 reveal_protocol_interface(HasValue[int])
 ```
 

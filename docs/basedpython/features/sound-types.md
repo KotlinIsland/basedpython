@@ -127,30 +127,13 @@ class C:
     y = 1             # int
 ```
 
-## unsolved type variables
-
-a type variable that a call leaves entirely unsolved is solved to `Never` — the precise type of
-"no value ever reaches this position" — rather than the gradual `Unknown`
-
-```python
-class Box[T]:
-    def __init__(self, *values: T) -> None: ...
-
-reveal_type(Box())   # Box[Never]
-```
-
-a pep 696 default still takes priority. `ParamSpec` and `TypeVarTuple` are unaffected: their
-specializations are callable- and tuple-shaped, and `Never` is not a valid value for them
+## empty collection literals
 
 an empty collection literal has element type `Never`, so `first([])` solves `T` to `Never`
 instead of leaking `Unknown`. a non-empty literal is unaffected
 
-a class whose `__init__` is *overloaded* is not covered — `dict()` is still `dict[Unknown, Unknown]`
-— because the overloaded-constructor path analyses its return types separately
-
-for a [reified](reified-generics.md) type parameter an unsolved type variable is always an error
-(`unspecialized-reified-generic`), in both modes — the specialization is a runtime step, so there
-is no type that could stand in for it
+a type variable a call leaves *unsolved* is a separate matter, and is covered by
+[precise unsolved type variables](precise-unsolved-typevars.md), which is on by default
 
 ## not covered
 

@@ -52,7 +52,7 @@ python-version = "3.13"
 ```py
 class Valid[T, U = T, V = T | U]: ...
 
-reveal_type(Valid())  # revealed: Valid[Unknown, Unknown, Unknown]
+reveal_type(Valid())  # revealed: Valid[Never, Never, Never]
 reveal_type(Valid[int]())  # revealed: Valid[int, int, int]
 reveal_type(Valid[int, str]())  # revealed: Valid[int, str, int | str]
 reveal_type(Valid[int, str, None]())  # revealed: Valid[int, str, None]

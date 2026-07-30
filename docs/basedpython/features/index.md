@@ -17,6 +17,8 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 
 - [fluid specializations](fluid-specializations.md)
 - [sound types](sound-types.md) — infer precise types instead of gradual ones
+- [precise unsolved type variables](precise-unsolved-typevars.md) — an unsolved type variable is
+    `Never`, not `Unknown`
 - [regex group types](regex-groups.md) — type a match from the pattern it came from
 - [boolean conditions](conditions.md) — catch a test that conflates two members, or asks nothing
 

@@ -575,7 +575,7 @@ def regular_callable_replacement_factory() -> Callable[[type[object]], T]:
 @regular_callable_replacement_factory()
 class RegularCallableReplacementDecorated: ...
 
-reveal_type(RegularCallableReplacementDecorated)  # revealed: Unknown
+reveal_type(RegularCallableReplacementDecorated)  # revealed: Never
 ```
 
 An unknown class decorator still makes the class binding unknown:

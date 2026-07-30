@@ -2405,6 +2405,14 @@ impl<'db> TypeVarInference<'db> {
         specialization_inner(db, self)
     }
 
+    /// Whether inference left any type variable unsolved that has no default to fall back on.
+    pub(crate) fn has_unsolved(self, db: &'db dyn Db) -> bool {
+        self.generic_context(db)
+            .variables(db)
+            .zip(self.types(db).iter())
+            .any(|(typevar, inferred)| inferred.is_none() && typevar.default_type(db).is_none())
+    }
+
     /// Project this inference result into a specialization with explicit handling for each
     /// type variable.
     ///

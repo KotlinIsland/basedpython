@@ -389,6 +389,11 @@ pub(super) struct TypeInferenceBuilder<'db, 'ast> {
     /// Expressions that are string annotations
     string_annotations: FxHashSet<ExpressionNodeKey>,
 
+    /// Call expressions whose type is `Never` only because the call left a type variable
+    /// unsolved. Reachability analysis reads this to tell such a call apart from one that
+    /// genuinely does not return.
+    unsolved_typevar_calls: FxHashSet<ExpressionNodeKey>,
+
     /// Expected types for expression nodes tracked for IDE completion.
     expected_types: FxHashMap<ExpressionNodeKey, Type<'db>>,
 
@@ -586,6 +591,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             fluid_creation: None,
             fluid_timeline: None,
             string_annotations: FxHashSet::default(),
+            unsolved_typevar_calls: FxHashSet::default(),
             expected_types: FxHashMap::default(),
             bindings: VecMap::default(),
             declarations: VecMap::default(),
@@ -817,6 +823,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             .extend(inference.called_functions.iter().copied());
         self.string_annotations
             .extend(inference.string_annotations.iter().copied());
+        self.unsolved_typevar_calls
+            .extend(inference.unsolved_typevar_calls.iter().copied());
         self.expected_types
             .extend(inference.expected_types.iter().map(|(key, ty)| (*key, *ty)));
         self.type_expression_flags.extend(
@@ -10883,7 +10891,9 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             Ok(()) => bindings,
             Err(_) => {
                 bindings.report_diagnostics(&self.context, call_expression.into());
-                return bindings.return_type(self.db());
+                let return_ty = bindings.return_type(self.db());
+                self.record_unsolved_typevar_call(call_expression, return_ty, &bindings);
+                return return_ty;
             }
         };
 
@@ -11054,6 +11064,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
         self.check_narrowing_guard_as_value(call_expression, &bindings);
 
+        self.record_unsolved_typevar_call(call_expression, return_ty, &bindings);
+
         typeguard::bind_type_guard_return_type(
             db,
             self.scope(),
@@ -11061,6 +11073,19 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             &bindings,
             call_expression,
         )
+    }
+
+    /// basedpython: remember a call that only returns `Never` because it left a type variable
+    /// unsolved, so that reachability analysis does not read it as a call that never returns.
+    fn record_unsolved_typevar_call(
+        &mut self,
+        call_expression: &ast::ExprCall,
+        return_ty: Type<'db>,
+        bindings: &Bindings<'db>,
+    ) {
+        if return_ty.is_never() && bindings.returns_unsolved_typevar(self.db()) {
+            self.unsolved_typevar_calls.insert(call_expression.into());
+        }
     }
 
     /// basedpython: report a call to an assertion guard whose result is used as a value.
@@ -13601,6 +13626,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             fluid_creation,
             fluid_timeline,
             string_annotations,
+            unsolved_typevar_calls,
             expected_types,
             scope,
             bindings,
@@ -13646,6 +13672,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             fluid_creation,
             fluid_timeline,
             string_annotations,
+            unsolved_typevar_calls,
             expected_types,
             bindings,
             diagnostics,
@@ -13677,6 +13704,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             cycle_recovery,
             called_functions,
             mut return_types_and_ranges,
+            unsolved_typevar_calls: _,
 
             // Ignored; only relevant to definition regions
             undecorated_type: _,
@@ -13795,6 +13823,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             deferred: _,
             scope: _,
             string_annotations: _,
+            unsolved_typevar_calls: _,
             expected_types: _,
             return_types_and_ranges: _,
             fluid_creation: _,
@@ -13852,6 +13881,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             undecorated_type,
             discards_dict_key_assignments,
             called_functions,
+            unsolved_typevar_calls: _,
 
             // builder only state
             expression_cache: _,
@@ -13983,6 +14013,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let Self {
             context,
             string_annotations,
+            unsolved_typevar_calls: _,
             expected_types,
             type_expression_flags,
             fluid_creation: _,
@@ -14081,6 +14112,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             collection_use_constraints: _,
             expressions: _,
             string_annotations: _,
+            unsolved_typevar_calls: _,
             expected_types: _,
             scope: _,
             bindings: _,
@@ -14137,6 +14169,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             fluid_adoptions,
             collection_use_constraints,
             string_annotations,
+            unsolved_typevar_calls,
             expected_types,
             scope,
             bindings,
@@ -14180,6 +14213,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         self.extend_cycle_recovery(cycle_recovery);
         self.string_annotations
             .extend(string_annotations.iter().copied());
+        self.unsolved_typevar_calls
+            .extend(unsolved_typevar_calls.iter().copied());
         self.expected_types.extend(expected_types.iter());
         self.type_expression_flags
             .extend(type_expression_flags.iter());
@@ -14302,6 +14337,7 @@ struct FullExpressionCacheEntry<'db> {
     fluid_creation: Option<Type<'db>>,
     fluid_timeline: Option<FluidTimeline<'db>>,
     string_annotations: FxHashSet<ExpressionNodeKey>,
+    unsolved_typevar_calls: FxHashSet<ExpressionNodeKey>,
     expected_types: FxHashMap<ExpressionNodeKey, Type<'db>>,
     bindings: VecMap<Definition<'db>, Type<'db>>,
     diagnostics: TypeCheckDiagnostics,
@@ -14329,6 +14365,7 @@ impl<'db> FullExpressionCacheEntry<'db> {
             && self.fluid_creation.is_none()
             && self.fluid_timeline.is_none()
             && self.string_annotations.is_empty()
+            && self.unsolved_typevar_calls.is_empty()
             && self.expected_types.is_empty()
             && self.bindings.is_empty()
             && self.diagnostics.is_empty()
@@ -14341,6 +14378,7 @@ impl<'db> FullExpressionCacheEntry<'db> {
         region: InferenceRegion<'db>,
     ) -> ExpressionInference<'db> {
         let extra = (!self.string_annotations.is_empty()
+            || !self.unsolved_typevar_calls.is_empty()
             || !self.type_expression_flags.is_empty()
             || !self.collection_use_constraints.is_empty()
             || !self.fluid_adoptions.is_empty()
@@ -14365,6 +14403,7 @@ impl<'db> FullExpressionCacheEntry<'db> {
             self.diagnostics.shrink_to_fit();
             Box::new(ExpressionInferenceExtra {
                 string_annotations: FrozenSet::from(self.string_annotations),
+                unsolved_typevar_calls: FrozenSet::from(self.unsolved_typevar_calls),
                 fluid_adoptions: self.fluid_adoptions,
                 fluid_creation: self.fluid_creation,
                 fluid_timeline: self.fluid_timeline,

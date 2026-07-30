@@ -83,6 +83,22 @@ pub(in crate::types) fn field_constructor_instance_type<'db>(
         return None;
     }
 
+    // a fact that doesn't resolve degrades to no pinning, and that degradation is pinned to
+    // `Unknown` explicitly: `_ST`/`_GT` appear in no constructor parameter, so leaving them to
+    // the call's own inference would solve them to `Never` rather than leave them gradual
+    Some(
+        pinned_field_instance_type(db, class, to_arg, null_arg, through_arg)
+            .unwrap_or_else(|| specialized_instance(db, class, [Type::unknown(), Type::unknown()])),
+    )
+}
+
+fn pinned_field_instance_type<'db>(
+    db: &'db dyn Db,
+    class: StaticClassLiteral<'db>,
+    to_arg: Option<Type<'db>>,
+    null_arg: Option<Type<'db>>,
+    through_arg: Option<Type<'db>>,
+) -> Option<Type<'db>> {
     // `ManyToManyField` is generic over `(_To, _Through)`, not `(_ST, _GT)`
     if has_base(db, class, KnownClass::DjangoManyToManyField) {
         let target = model_target_instance(db, to_arg?)?;

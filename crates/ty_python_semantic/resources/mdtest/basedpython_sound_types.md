@@ -194,7 +194,7 @@ reveal_type(C.x)  # revealed: int
 reveal_type(C.y)  # revealed: int
 ```
 
-## unsolved type variables
+## empty collection literals
 
 ```toml
 [environment]
@@ -202,26 +202,6 @@ python-version = "3.13"
 
 [analysis]
 sound-types = true
-```
-
-a type variable that a call leaves entirely unsolved is solved to `Never` — the precise type of "no
-value ever reaches this position" — rather than the gradual `Unknown`:
-
-```py
-class Box[T]:
-    def __init__(self, *values: T) -> None: ...
-
-reveal_type(Box())  # revealed: Box[Never]
-reveal_type(Box(1))  # revealed: Box[Literal[1]]
-```
-
-a pep 696 default still takes priority over `Never`:
-
-```py
-class Defaulted[T = str]:
-    def __init__(self, *values: T) -> None: ...
-
-reveal_type(Defaulted())  # revealed: Defaulted[str]
 ```
 
 an empty collection literal has element type `Never`, so passing one straight to a generic call
@@ -269,8 +249,8 @@ class C:
 
 reveal_type(C.x)  # revealed: Unknown | Literal[1]
 
-class Box[T]:
-    def __init__(self, *values: T) -> None: ...
+def first[T](xs: list[T]) -> T:
+    return xs[0]
 
-reveal_type(Box())  # revealed: Box[Unknown]
+reveal_type(first([]))  # revealed: Unknown
 ```
