@@ -28,7 +28,7 @@ use crate::{
             InferenceFlags, TypeExpressionFlags, TypeInferenceBuilder,
             builder::{
                 DeclaredAndInferredType, DeferredExpressionState, TypeAndRange,
-                validate_paramspec_components,
+                TypeParamReification, validate_paramspec_components,
             },
             function_known_decorators, infer_statement_types, nearest_enclosing_function,
             original_class_type,
@@ -779,13 +779,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             if let Some(first) = reified.first()
                 && let Some(builder) = self.context.report_lint(&REIFIED_CLASSMETHOD, type_params)
             {
+                let declared = type_params
+                    .iter()
+                    .any(|param| param.is_reified() && param.name().id == *first);
                 let mut diagnostic = builder.into_diagnostic(format_args!(
                     "Classmethod `{name}` cannot have reified type parameters"
                 ));
+                let cause = if declared {
+                    "is declared `reified`"
+                } else {
+                    "is referenced in a value position, which reifies it"
+                };
                 diagnostic.info(format_args!(
-                    "type parameter `{first}` is referenced in a value position, \
-                     which reifies it — the classmethod binding hides the function \
-                     whose closure would hold its value"
+                    "type parameter `{first}` {cause} — the classmethod binding \
+                     hides the function whose closure would hold its value"
                 ));
                 if is_implicit_classmethod(&name.id) {
                     diagnostic.info(format_args!("`{name}` is implicitly a classmethod"));
@@ -1090,7 +1097,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.typevar_binding_context.replace(binding_context);
         self.infer_return_type_annotation(function);
         self.infer_raises_clause(function);
-        self.infer_type_parameters(type_params);
+        // basedpython: a `type def` is not a runtime function — the transpiler erases the
+        // declaration, so there is no closure for the specialization step to rebuild
+        let reification = if ast::helpers::is_type_def(function) {
+            TypeParamReification::TypeDef
+        } else {
+            TypeParamReification::Function
+        };
+        self.infer_type_parameters(type_params, reification);
         self.infer_parameters(&function.parameters);
         self.typevar_binding_context = previous_typevar_binding_context;
     }

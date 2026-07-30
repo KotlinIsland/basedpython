@@ -8,7 +8,7 @@ use crate::types::{
     function::KnownFunction,
     infer::{
         InferenceFlags, TypeInferenceBuilder,
-        builder::{DeclaredAndInferredType, DeferredExpressionState},
+        builder::{DeclaredAndInferredType, DeferredExpressionState, TypeParamReification},
         original_class_type,
     },
     special_form::TypeQualifier,
@@ -33,7 +33,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         let previous_typevar_binding_context =
             self.typevar_binding_context.replace(binding_context);
 
-        self.infer_type_parameters(type_params);
+        self.infer_type_parameters(type_params, TypeParamReification::Class);
 
         if class.arguments.is_some() {
             let defer_class_args = self.in_stub() || self.is_basedpython_file();

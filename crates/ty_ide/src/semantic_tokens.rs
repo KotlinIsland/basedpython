@@ -208,9 +208,9 @@ const LIFETIME_MODIFIERS: &[&str] = &["local", "once"];
 /// between the `->` and the places it asserts.
 const ASSERTS_RETURN: &[&str] = &["asserts"];
 
-/// basedpython's use-site and declaration-site variance keywords, written ahead
-/// of the type parameter or subscript argument they qualify.
-const VARIANCE: &[&str] = &["in", "out"];
+/// The keywords a basedpython type-parameter declaration writes ahead of its
+/// name — `reified`, then the variance keywords.
+const TYPE_PARAM_MODIFIERS: &[&str] = &["reified", "in", "out"];
 
 /// The keyword introducing an `implementation A for B` block, written ahead of the
 /// interface the block implements.
@@ -1969,12 +1969,13 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
     }
 
     fn visit_type_param(&mut self, type_param: &TypeParam) {
-        // basedpython declares variance ahead of the name (`class C[out T]`), and
-        // the keywords are consumed — the parameter's own range covers them
+        // basedpython declares reification and variance ahead of the name
+        // (`def f[reified out T]`), and the keywords are consumed — the
+        // parameter's own range covers them
         self.add_consumed_keywords(
             type_param.range().start(),
             type_param.name().range().start(),
-            VARIANCE,
+            TYPE_PARAM_MODIFIERS,
         );
 
         // Emit token for the type parameter name
@@ -6289,6 +6290,47 @@ def read(data: list[out int], sink: Both[in str]) -> None: ...
         "in" @ 95..97: Keyword
         "str" @ 98..101: Class
         "None" @ 107..111: BuiltinConstant
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_reified_type_param() {
+        // `reified` is consumed by the parser like the variance keywords, and
+        // stacks ahead of them; it modifies a pack the same way it modifies a
+        // plain type parameter
+        let test = SemanticTokenTest::new_by(
+            "
+def plain[reified T]() -> None: ...
+
+def variadic[reified *Ts]() -> None: ...
+
+def pack[reified **Kwargs]() -> None: ...
+
+def both[reified in out T]() -> None: ...
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "plain" @ 5..10: Function [definition]
+        "reified" @ 11..18: Keyword
+        "T" @ 19..20: TypeParameter [definition]
+        "None" @ 27..31: BuiltinConstant
+        "variadic" @ 42..50: Function [definition]
+        "reified" @ 51..58: Keyword
+        "Ts" @ 60..62: TypeParameter [definition]
+        "None" @ 69..73: BuiltinConstant
+        "pack" @ 84..88: Function [definition]
+        "reified" @ 89..96: Keyword
+        "Kwargs" @ 99..105: TypeParameter [definition]
+        "None" @ 112..116: BuiltinConstant
+        "both" @ 127..131: Function [definition]
+        "reified" @ 132..139: Keyword
+        "in" @ 140..142: Keyword
+        "out" @ 143..146: Keyword
+        "T" @ 147..148: TypeParameter [definition]
+        "None" @ 155..159: BuiltinConstant
         "#);
     }
 

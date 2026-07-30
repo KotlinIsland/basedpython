@@ -3047,6 +3047,7 @@ impl<'db, 'ast> SemanticIndexBuilder<'db, 'ast> {
                         bound,
                         default,
                         variance: _,
+                        is_reified: _,
                     }) => (name, lower_bound, bound, default),
                     // basedpython: `**Kwargs: int` bounds every field of a keyword-variadic pack
                     ast::TypeParam::ParamSpec(ast::TypeParamParamSpec {

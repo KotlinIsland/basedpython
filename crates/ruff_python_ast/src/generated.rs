@@ -10859,6 +10859,10 @@ pub struct TypeParamTypeVar {
     pub bound: Option<Box<Expr>>,
     pub default: Option<Box<Expr>>,
     pub variance: Option<crate::Variance>,
+    /// basedpython: when true, the parameter is
+    /// declared `reified T`, which makes it a runtime value whether or not the body ever reads it as
+    /// one. Reification is otherwise inferred from a value-position use in the body
+    pub is_reified: bool,
 }
 
 /// See also [TypeVarTuple](https://docs.python.org/3/library/ast.html#ast.TypeVarTuple)
@@ -10873,6 +10877,10 @@ pub struct TypeParamTypeVarTuple {
     /// as a whole. CPython rejects a bound on a `TypeVarTuple`
     pub bound: Option<Box<Expr>>,
     pub default: Option<Box<Expr>>,
+    /// basedpython: when true, the pack is declared
+    /// `reified *Ts`, which binds the run of type arguments it absorbs as a runtime tuple whether or
+    /// not the body ever reads it
+    pub is_reified: bool,
 }
 
 /// See also [ParamSpec](https://docs.python.org/3/library/ast.html#ast.ParamSpec)
@@ -10887,6 +10895,11 @@ pub struct TypeParamParamSpec {
     /// to bound the pack as a whole. CPython rejects a bound on a `ParamSpec`
     pub bound: Option<Box<Expr>>,
     pub default: Option<Box<Expr>>,
+    /// basedpython: when true, the pack is declared
+    /// `reified **Kwargs`, which binds the mapping of its fields as a runtime value whether or not the
+    /// body ever reads it. Outside a basedpython source file the same spelling declares a PEP 612
+    /// `ParamSpec`, which has no runtime object to bind and so cannot be reified
+    pub is_reified: bool,
 }
 
 impl ModModule {
@@ -12116,6 +12129,7 @@ impl TypeParamTypeVar {
             bound,
             default,
             variance: _,
+            is_reified: _,
             range: _,
             node_index: _,
         } = self;
@@ -12144,6 +12158,7 @@ impl TypeParamTypeVarTuple {
             name,
             bound,
             default,
+            is_reified: _,
             range: _,
             node_index: _,
         } = self;
@@ -12168,6 +12183,7 @@ impl TypeParamParamSpec {
             name,
             bound,
             default,
+            is_reified: _,
             range: _,
             node_index: _,
         } = self;

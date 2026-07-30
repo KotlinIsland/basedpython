@@ -21,6 +21,7 @@ Settings: WorkspaceSettings {
         call_argument_names: true,
         inferred_raises: true,
         inferred_variance: true,
+        inferred_reification: true,
         call_type_arguments: true,
         type_argument_names: true,
         inferred_override: true,

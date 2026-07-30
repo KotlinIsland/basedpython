@@ -16,10 +16,15 @@ impl FormatNodeRule<TypeParamTypeVar> for FormatTypeParamTypeVar {
             bound,
             default,
             variance,
+            is_reified,
         } = item;
-        // basedpython variance keywords precede the typevar name. plain
-        // python output ignores them — they're only emitted in `.by`/`.byi`
+        // basedpython writes `reified` and the variance keywords ahead of the
+        // typevar name. plain python output ignores them — they're only
+        // emitted in `.by`/`.byi`
         if f.options().is_basedpython() {
+            if *is_reified {
+                write!(f, [token("reified"), space()])?;
+            }
             match variance {
                 Some(Variance::Covariant) => write!(f, [token("out"), space()])?,
                 Some(Variance::Contravariant) => write!(f, [token("in"), space()])?,

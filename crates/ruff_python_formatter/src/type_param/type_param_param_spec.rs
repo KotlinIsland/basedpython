@@ -14,7 +14,12 @@ impl FormatNodeRule<TypeParamParamSpec> for FormatTypeParamParamSpec {
             name,
             bound,
             default,
+            is_reified,
         } = item;
+        // basedpython writes `reified` ahead of the pack's own `**`
+        if *is_reified && f.options().is_basedpython() {
+            write!(f, [token("reified"), space()])?;
+        }
         write!(f, [token("**"), name.format()])?;
         if let Some(bound) = bound {
             write!(f, [token(":"), space(), bound.format()])?;

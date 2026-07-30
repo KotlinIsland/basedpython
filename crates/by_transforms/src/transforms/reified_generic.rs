@@ -1,10 +1,10 @@
 //! reified type parameters (basedpython).
 //!
-//! a pep 695 type parameter referenced in a value position — anywhere other
-//! than a type annotation — becomes a real runtime value. the function is
-//! wrapped in the `generic` polyfill and its specialized call sites
-//! (`f[int](…)`) route through `generic.__getitem__` instead of being stripped
-//! by [`generic_call`](super::generic_call).
+//! a pep 695 type parameter declared `reified`, or referenced in a value
+//! position — anywhere other than a type annotation — becomes a real runtime
+//! value. the function is wrapped in the `generic` polyfill and its
+//! specialized call sites (`f[int](…)`) route through `generic.__getitem__`
+//! instead of being stripped by [`generic_call`](super::generic_call).
 //!
 //! ```by
 //! def f[T](t: object):

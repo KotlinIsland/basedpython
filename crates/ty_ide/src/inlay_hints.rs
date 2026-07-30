@@ -10,11 +10,14 @@ use ruff_db::parsed::parsed_module;
 use ruff_db::source::source_text;
 use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::source_order::{self, SourceOrderVisitor, TraversalSignal};
-use ruff_python_ast::{self as ast, AnyNodeRef, ArgOrKeyword, Expr, ExprUnaryOp, Stmt, UnaryOp};
+use ruff_python_ast::{
+    self as ast, AnyNodeRef, ArgOrKeyword, Expr, ExprUnaryOp, PySourceType, Stmt, UnaryOp,
+};
 use ruff_python_codegen::Stylist;
 use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use ty_module_resolver::file_to_module;
+use ty_python_semantic::reified::inferred_reified_type_param_names;
 use ty_python_semantic::types::context_params::implicit_context_arguments;
 use ty_python_semantic::types::ide_support::{
     InlayHintCallArgumentDetails, hintable_parameter_type, inferred_override, inferred_raises,
@@ -238,6 +241,19 @@ impl InlayHint {
         }
     }
 
+    /// basedpython: a type parameter reified by a value-position use in the
+    /// body rather than by the keyword, shown where the keyword would go.
+    fn inferred_reification(position: TextSize) -> Self {
+        Self {
+            position,
+            kind: InlayHintKind::Reification,
+            label: InlayHintLabel {
+                parts: vec!["reified ".into()],
+            },
+            text_edits: vec![],
+        }
+    }
+
     /// basedpython: a method that overrides a superclass member without saying
     /// so, shown where the `override` modifier would be written.
     fn inferred_override(position: TextSize, superclass: Option<NavigationTarget>) -> Self {
@@ -406,6 +422,8 @@ pub enum InlayHintKind {
     Raises,
     /// basedpython: the variance inferred for a class type parameter
     Variance,
+    /// basedpython: a type parameter reified without saying so
+    Reification,
     /// The type arguments inferred for a generic call, or the name of the type
     /// parameter a positional type argument fills
     TypeArgument,
@@ -580,6 +598,15 @@ pub struct InlayHintSettings {
     /// ```
     pub inferred_variance: bool,
 
+    /// basedpython: whether to show `reified` on a function type parameter that
+    /// the body reifies without saying so.
+    ///
+    /// ```by
+    /// def f["reified "T]():
+    ///     print(T)
+    /// ```
+    pub inferred_reification: bool,
+
     /// Whether to show the type arguments inferred for a generic call.
     ///
     /// ```by
@@ -659,6 +686,7 @@ impl InlayHintSettings {
             call_argument_names: false,
             inferred_raises: false,
             inferred_variance: false,
+            inferred_reification: false,
             call_type_arguments: false,
             type_argument_names: false,
             inferred_override: false,
@@ -676,6 +704,7 @@ impl InlayHintSettings {
             call_argument_names,
             inferred_raises,
             inferred_variance,
+            inferred_reification,
             call_type_arguments,
             type_argument_names,
             inferred_override,
@@ -690,6 +719,7 @@ impl InlayHintSettings {
             || call_argument_names
             || inferred_raises
             || inferred_variance
+            || inferred_reification
             || call_type_arguments
             || type_argument_names
             || inferred_override
@@ -708,6 +738,7 @@ impl Default for InlayHintSettings {
             call_argument_names: true,
             inferred_raises: true,
             inferred_variance: true,
+            inferred_reification: true,
             call_type_arguments: true,
             type_argument_names: true,
             inferred_override: true,
@@ -727,7 +758,6 @@ struct InlayHintImportContext<'a, 'db> {
     dynamic_imports: &'a mut FxHashMap<DynamicallyImportedMember, ImportAction>,
 }
 
-#[expect(clippy::struct_excessive_bools, reason = "independent traversal state")]
 struct InlayHintVisitor<'a, 'db> {
     db: &'db dyn Db,
     model: SemanticModel<'db>,
@@ -741,8 +771,10 @@ struct InlayHintVisitor<'a, 'db> {
     range: TextRange,
     settings: &'a InlayHintSettings,
     in_no_edits_allowed: bool,
-    /// Whether the file uses basedpython syntax, which several hints spell.
-    is_basedpython: bool,
+    /// The kind of file being hinted. Several hints only exist in basedpython,
+    /// and reification reads it directly: `**P` is a reifiable keyword pack
+    /// only in a basedpython source file.
+    source_type: PySourceType,
     /// Whether we are inside a type expression, where `float` promotes and a
     /// subscript's arguments fill type parameters.
     in_type_expression: bool,
@@ -772,11 +804,16 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             range,
             settings,
             in_no_edits_allowed: false,
-            is_basedpython: file.source_type(db).is_basedpython(),
+            source_type: file.source_type(db),
             in_type_expression: false,
             in_lambda: false,
             enclosing_class: None,
         }
+    }
+
+    /// Whether the file uses basedpython syntax, which several hints spell.
+    fn is_basedpython(&self) -> bool {
+        self.source_type.is_basedpython()
     }
 
     fn add_type_hint(&mut self, expr: &Expr, rhs: &Expr, ty: Type<'db>, allow_edits: bool) {
@@ -836,7 +873,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         type_params: Option<&ast::TypeParams>,
         owner: impl FnOnce(&SemanticModel<'db>) -> Option<Type<'db>>,
     ) {
-        if !self.settings.inferred_variance || !self.is_basedpython {
+        if !self.settings.inferred_variance || !self.is_basedpython() {
             return;
         }
 
@@ -874,10 +911,33 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
         }
     }
 
+    /// basedpython: hint `reified` on each type parameter of `function` that a
+    /// value-position use in the body reifies without saying so.
+    fn add_inferred_reification(&mut self, function: &ast::StmtFunctionDef) {
+        if !self.settings.inferred_reification || !self.is_basedpython() {
+            return;
+        }
+
+        let Some(type_params) = function.type_params.as_deref() else {
+            return;
+        };
+
+        let inferred = inferred_reified_type_param_names(self.source, self.source_type, function);
+
+        // the hint goes where the keyword would be written, which is ahead of
+        // everything the parameter's own declaration spells
+        for type_param in type_params {
+            if inferred.contains(&type_param.name().id) {
+                self.hints
+                    .push(InlayHint::inferred_reification(type_param.range().start()));
+            }
+        }
+    }
+
     /// basedpython: hint `override` on a method that overrides a superclass
     /// member without saying so.
     fn add_inferred_override(&mut self, function: &ast::StmtFunctionDef) {
-        if !self.settings.inferred_override || !self.is_basedpython {
+        if !self.settings.inferred_override || !self.is_basedpython() {
             return;
         }
 
@@ -928,14 +988,14 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// and a hint is read as source — python's subscript grammar has no keyword
     /// form, so naming there would spell something unwritable.
     fn names_type_arguments(&self) -> bool {
-        self.settings.type_argument_names && self.is_basedpython
+        self.settings.type_argument_names && self.is_basedpython()
     }
 
     /// basedpython: hint the arguments a call site fills implicitly from the
     /// `context` declarations in scope, written where the lowering writes them
     /// — after the explicit arguments, by keyword.
     fn add_implicit_context_arguments(&mut self, call: &ast::ExprCall, callee: Option<Type<'db>>) {
-        if !self.settings.implicit_arguments || !self.is_basedpython {
+        if !self.settings.implicit_arguments || !self.is_basedpython() {
             return;
         }
 
@@ -1049,7 +1109,7 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
     /// those an empty range at the position they would occupy.
     fn add_implicit_parameter(&mut self, parameter: &ast::Parameter) {
         if !self.settings.implicit_parameters
-            || !self.is_basedpython
+            || !self.is_basedpython()
             || !parameter.range().is_empty()
         {
             return;
@@ -1223,6 +1283,7 @@ impl<'a> SourceOrderVisitor<'a> for InlayHintVisitor<'a, '_> {
             }
             Stmt::FunctionDef(function) => {
                 self.add_inferred_raises(function);
+                self.add_inferred_reification(function);
                 self.add_inferred_override(function);
 
                 // a function nested in a method is not itself a class member
@@ -9741,6 +9802,37 @@ Source with applied edits:
 
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
             inferred_variance: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    #[test]
+    fn basedpython_inferred_reification() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def value_use[T]():
+                print(T)
+
+            def pack_use[*Ts, **Kwargs]():
+                print(Ts, Kwargs)
+
+            def annotation_only[T](t: T) -> T:
+                return t
+
+            def declared[reified T]():
+                pass
+
+            def half_declared[reified T, U]():
+                print(U)
+
+            class C:
+                def method[T](self):
+                    print(T)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            inferred_reification: true,
             ..InlayHintSettings::none()
         }));
     }

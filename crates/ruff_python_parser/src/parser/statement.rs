@@ -7641,6 +7641,8 @@ impl<'src> Parser<'src> {
     fn parse_type_param(&mut self) -> ast::TypeParam {
         let start = self.node_start();
 
+        let is_reified = self.eat_reified_modifier();
+
         // test_ok type_param_type_var_tuple
         // type X[*Ts] = int
         // type X[*Ts = int] = int
@@ -7714,6 +7716,7 @@ impl<'src> Parser<'src> {
                 name,
                 bound,
                 default,
+                is_reified,
                 node_index: AtomicNodeIndex::NONE,
             })
 
@@ -7784,6 +7787,7 @@ impl<'src> Parser<'src> {
                 name,
                 bound,
                 default,
+                is_reified,
                 node_index: AtomicNodeIndex::NONE,
             })
             // test_ok type_param_type_var
@@ -7911,9 +7915,39 @@ impl<'src> Parser<'src> {
                 bound,
                 default,
                 variance,
+                is_reified,
                 node_index: AtomicNodeIndex::NONE,
             })
         }
+    }
+
+    /// basedpython: consumes a leading `reified` modifier on a type parameter, reporting an error
+    /// in `.py` files.
+    ///
+    /// `reified` is a soft keyword: it only modifies the parameter when something that can open
+    /// one follows it — a name, a `*` / `**` pack, or a variance keyword. A list that ends right
+    /// after it (`[reified]`, `[reified: int]`, `[reified = int]`) declares a parameter *named*
+    /// `reified`.
+    fn eat_reified_modifier(&mut self) -> bool {
+        if !self.at(TokenKind::Name) || self.src_text(self.current_token_range()) != "reified" {
+            return false;
+        }
+        if !matches!(
+            self.peek(),
+            TokenKind::Name | TokenKind::Star | TokenKind::DoubleStar | TokenKind::In
+        ) {
+            return false;
+        }
+
+        // test_err type_param_reified_py
+        // def f[reified T](): ...
+        // class C[reified T]: ...
+        // type X[reified T] = int
+        self.error_if_not_basedpython(
+            "reified type parameters are not valid in `.py` files".to_string(),
+        );
+        self.bump(TokenKind::Name);
+        true
     }
 
     /// Parses the upper half of a basedpython bound range, with the parser sitting on the `..`

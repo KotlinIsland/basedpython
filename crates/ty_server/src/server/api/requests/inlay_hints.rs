@@ -97,6 +97,7 @@ fn inlay_hint_kind(inlay_hint_kind: &InlayHintKind) -> lsp_types::InlayHintKind 
         // basedpython: an inferred exception set is a type, like a return type
         | InlayHintKind::Raises
         | InlayHintKind::Variance
+        | InlayHintKind::Reification
         | InlayHintKind::TypeArgument
         | InlayHintKind::Override
         | InlayHintKind::NumericPromotion

@@ -3401,6 +3401,16 @@ impl TypeParam {
             Self::TypeVarTuple(x) => x.default.as_deref(),
         }
     }
+
+    /// basedpython: whether the parameter is declared `reified`, which reifies
+    /// it whether or not the body reads it in a value position.
+    pub const fn is_reified(&self) -> bool {
+        match self {
+            Self::TypeVar(x) => x.is_reified,
+            Self::ParamSpec(x) => x.is_reified,
+            Self::TypeVarTuple(x) => x.is_reified,
+        }
+    }
 }
 
 /// basedpython: the header of an `implementation A for B as N:` declaration —

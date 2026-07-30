@@ -1,13 +1,13 @@
 //! detection of reified type parameters (basedpython)
 //!
-//! a pep 695 type parameter is *reified* when the function body references it
-//! in a value position — anywhere other than a type annotation — or when a
-//! parameter whose annotation mentions it is parametrically type-tested
-//! (`x is list[int]` on `x: T`, which lowers to a comparison of the reified
-//! `T` cell). detection is purely syntactic so the transpiler and the type
-//! checker agree on it without sharing inference state; the source text is
-//! needed only to tell the keyword `is` form from the `===` identity
-//! operator, which the parser flattens to the same ast
+//! a pep 695 type parameter is *reified* when it is declared `reified`, when
+//! the function body references it in a value position — anywhere other than a
+//! type annotation — or when a parameter whose annotation mentions it is
+//! parametrically type-tested (`x is list[int]` on `x: T`, which lowers to a
+//! comparison of the reified `T` cell). detection is purely syntactic so the
+//! transpiler and the type checker agree on it without sharing inference
+//! state; the source text is needed only to tell the keyword `is` form from
+//! the `===` identity operator, which the parser flattens to the same ast
 
 use ruff_python_ast::name::Name;
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
@@ -15,13 +15,14 @@ use ruff_python_ast::{self as ast, CmpOp, Expr, PySourceType, Stmt};
 use ruff_text_size::Ranged;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-/// names of the function's type parameters that its body references in a
-/// value position, in declaration order. every kind of parameter can carry a
-/// runtime value: a plain `T` the type argument, a `*Ts` the tuple of the run
-/// it absorbs, and a `**Kwargs` the mapping of its fields. `**Kwargs` is a
-/// keyword-variadic pack only in a basedpython *source* file — elsewhere the
-/// same spelling declares a `ParamSpec`, a parameter list with no runtime
-/// object to bind — so `source_type` decides whether it is a candidate
+/// names of the function's type parameters that are reified — declared
+/// `reified`, or referenced by the body in a value position — in declaration
+/// order. every kind of parameter can carry a runtime value: a plain `T` the
+/// type argument, a `*Ts` the tuple of the run it absorbs, and a `**Kwargs`
+/// the mapping of its fields. `**Kwargs` is a keyword-variadic pack only in a
+/// basedpython *source* file — elsewhere the same spelling declares a
+/// `ParamSpec`, a parameter list with no runtime object to bind — so
+/// `source_type` decides whether it is a candidate
 pub fn reified_type_param_names(
     source: &str,
     source_type: PySourceType,
@@ -36,22 +37,23 @@ pub fn reified_type_param_names(
     if ast::helpers::is_type_def(function) {
         return Vec::new();
     }
-    let candidates: Vec<&Name> = type_params
+    // `(name, declared)` — a declared `reified` is reified whether or not the body
+    // ever reads it, which is the point of writing the keyword
+    let candidates: Vec<(&Name, bool)> = type_params
         .type_params
         .iter()
         .filter_map(|param| match param {
-            ast::TypeParam::TypeVar(tv) => Some(&tv.name.id),
-            ast::TypeParam::TypeVarTuple(tvt) => Some(&tvt.name.id),
-            ast::TypeParam::ParamSpec(ps) => {
-                matches!(source_type, PySourceType::BasedPython).then_some(&ps.name.id)
-            }
+            ast::TypeParam::TypeVar(tv) => Some((&tv.name.id, tv.is_reified)),
+            ast::TypeParam::TypeVarTuple(tvt) => Some((&tvt.name.id, tvt.is_reified)),
+            ast::TypeParam::ParamSpec(ps) => matches!(source_type, PySourceType::BasedPython)
+                .then_some((&ps.name.id, ps.is_reified)),
         })
         .collect();
     if candidates.is_empty() {
         return Vec::new();
     }
 
-    let mut active: FxHashSet<&str> = candidates.iter().map(|name| name.as_str()).collect();
+    let mut active: FxHashSet<&str> = candidates.iter().map(|(name, _)| name.as_str()).collect();
     shadow_bound_names(&function.body, &mut active);
     let param_typevars = param_annotation_typevars(&function.parameters, &active);
     let mut finder = ValueUseFinder {
@@ -66,9 +68,31 @@ pub fn reified_type_param_names(
 
     candidates
         .into_iter()
-        .filter(|name| finder.found.contains(name.as_str()))
-        .cloned()
+        .filter(|(name, declared)| *declared || finder.found.contains(name.as_str()))
+        .map(|(name, _)| name.clone())
         .collect()
+}
+
+/// names of the function's type parameters that are reified *only* because the
+/// body reads them in a value position, in declaration order — everything
+/// [`reified_type_param_names`] finds that does not already say so itself.
+/// this is what an editor hints, where the keyword would be written
+pub fn inferred_reified_type_param_names(
+    source: &str,
+    source_type: PySourceType,
+    function: &ast::StmtFunctionDef,
+) -> Vec<Name> {
+    let declared: FxHashSet<&str> = function
+        .type_params
+        .as_deref()
+        .into_iter()
+        .flat_map(|type_params| type_params.iter())
+        .filter(|param| param.is_reified())
+        .map(|param| param.name().id.as_str())
+        .collect();
+    let mut names = reified_type_param_names(source, source_type, function);
+    names.retain(|name| !declared.contains(name.as_str()));
+    names
 }
 
 /// whether the `is` / `is not` between two compare operands is the keyword

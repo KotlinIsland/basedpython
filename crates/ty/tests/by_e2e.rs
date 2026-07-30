@@ -1188,6 +1188,74 @@ f[int](1)
 }
 
 #[test]
+fn declared_reified_generic_wraps_a_body_that_never_reads_it() {
+    // the `reified` modifier drives the whole pipeline on its own: the keyword
+    // is stripped from the output, the function is wrapped, and the call site
+    // keeps its type argument even though the body never reads `T`
+    let out = transpile_at_313(
+        "\
+def f[reified T]():
+    print(\"ok\")
+
+f[int]()
+",
+    );
+    assert!(
+        out.contains("@generic  # basedpython: reified"),
+        "declared reification should wrap the function:\n{out}"
+    );
+    assert!(
+        out.contains("def f[T]():"),
+        "the modifier has no python spelling and must be stripped:\n{out}"
+    );
+    assert!(
+        out.contains("f[int]()"),
+        "reified call site must keep its type args:\n{out}"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "a skipped test prints why it was skipped"
+)]
+fn declared_reified_generic_runs() {
+    // the specialization step is a real runtime operation, so `f[int]()` only
+    // works because the keyword put the wrapper there — a plain `def f[T]` is
+    // not subscriptable
+    let Some(python) = ["python3.13"].into_iter().find(|p| {
+        Command::new(p)
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }) else {
+        eprintln!("skipping: no python 3.13 interpreter available");
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("main.by"),
+        "def f[reified T]():\n    print(\"ok\")\n\nf[int]()\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "main"])
+        .env("PYTHON", python)
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+}
+
+#[test]
 #[expect(
     clippy::print_stderr,
     reason = "a skipped test prints why it was skipped"

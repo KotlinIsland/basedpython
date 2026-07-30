@@ -83,6 +83,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             bound,
             default,
             variance,
+            is_reified: _,
         } = node;
 
         let db = self.db();
@@ -191,6 +192,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             bound,
             default,
             variance: _,
+            is_reified: _,
         } = node;
         // basedpython: skip type-expression inference for a top-parameters bound — it denotes a
         // parameter list, not a type
@@ -214,6 +216,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             bound,
             default,
             variance: _,
+            is_reified: _,
         } = node;
 
         let db = self.db();
@@ -791,6 +794,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             name,
             bound,
             default,
+            is_reified: _,
         } = node;
 
         let db = self.db();
@@ -831,6 +835,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             name,
             bound,
             default,
+            is_reified: _,
         } = node;
         let previous_deferred_state =
             std::mem::replace(&mut self.deferred_state, DeferredExpressionState::Deferred);
@@ -962,6 +967,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             name,
             bound,
             default,
+            is_reified: _,
         } = node;
 
         let db = self.db();
@@ -1033,6 +1039,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             name,
             bound,
             default,
+            is_reified: _,
         } = node;
         let previous_deferred_state =
             std::mem::replace(&mut self.deferred_state, DeferredExpressionState::Deferred);

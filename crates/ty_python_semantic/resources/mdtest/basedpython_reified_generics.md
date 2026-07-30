@@ -1,10 +1,10 @@
 # basedpython: reified type parameters
 
-A PEP 695 type parameter is *reified* when the function body references it in a value position —
-anywhere other than a type annotation. The reference becomes a real runtime value (the supplied type
-argument), so it types as `type[T]` rather than as the `TypeVar` object. Reification makes the
-`[...]` specialization step required — written explicitly, or inferred from the arguments and
-injected by the transpiler.
+A PEP 695 type parameter is *reified* when it is declared `reified`, or when the function body
+references it in a value position — anywhere other than a type annotation. The reference becomes a
+real runtime value (the supplied type argument), so it types as `type[T]` rather than as the
+`TypeVar` object. Reification makes the `[...]` specialization step required — written explicitly,
+or inferred from the arguments and injected by the transpiler.
 
 ## a value-position type parameter is `type[T]`
 
@@ -36,6 +36,140 @@ def f[T](x: T) -> T:
     return x
 
 reveal_type(f[int](1))  # revealed: int
+```
+
+## `reified` declares reification outright
+
+The `reified` modifier reifies a type parameter whether or not the body ever reads it as a value.
+That makes the runtime value part of the declaration rather than a consequence of how the body
+happens to be written:
+
+```by
+def f[reified T]():
+    pass
+
+f[int]()
+```
+
+## a declared parameter still requires its specialization
+
+Reification is what makes the `[...]` step mandatory, so a declared parameter that no argument
+solves has to be written out:
+
+```by
+def f[reified T]():
+    pass
+
+# error: [unspecialized-reified-generic] "Cannot call reified generic function `f` without explicit specialization"
+f()
+```
+
+## a declared parameter is solved from the arguments like any other
+
+```by
+def f[reified T](t: T) -> T:
+    return t
+
+f(1)  # runs as f[int](1)
+reveal_type(f(""))  # revealed: ""
+```
+
+## packs take the modifier too
+
+```by
+def f[reified *Ts, reified **Kwargs]():
+    pass
+
+f[int, str]()
+f[foo=int]()
+f()
+```
+
+## `reified` beside plain parameters
+
+Only the declared parameter reifies; the rest stay erased, so nothing about them changes:
+
+```by
+def f[reified T, U](u: U) -> U:
+    return u
+
+reveal_type(f[int, str](""))  # revealed: str
+```
+
+## a declared reified classmethod is an error
+
+The modifier reaches the same rule a value-position use does — the classmethod binding has no
+closure to rebuild:
+
+```by
+class C:
+    @classmethod
+    # error: [reified-classmethod]
+    def f[reified T](cls) -> None:
+        pass
+```
+
+## a class type parameter cannot be reified
+
+Reification rebuilds a *function's* closure. A class has no such step, so the modifier would promise
+a runtime value that never arrives:
+
+```by
+# error: [invalid-reified-type-param] "Type parameter `T` cannot be reified"
+class C[reified T]:
+    pass
+```
+
+## a type alias type parameter cannot be reified
+
+```by
+# error: [invalid-reified-type-param]
+type Alias[reified T] = list[T]
+```
+
+## a stub declares the reified interface
+
+A stub says what a runtime function's interface is, and reification is part of it — so the modifier
+is honoured there and callers still have to specialize:
+
+`m.byi`:
+
+```byi
+def f[reified T](t: T) -> T: ...
+```
+
+```by
+from m import f
+
+reveal_type(f[int](1))  # revealed: int
+```
+
+## a `ParamSpec` has nothing to reify
+
+`**P` is a keyword-variadic pack only in a `.by` source file. Everywhere else it declares a PEP 612
+`ParamSpec` — a parameter list, which has no runtime object to bind:
+
+`m.byi`:
+
+```byi
+def f[reified **P]() -> None: ...  # error: [invalid-reified-type-param] "Type parameter `P` cannot be reified"
+```
+
+```by
+from m import f
+
+f()
+```
+
+## a `type def` type parameter cannot be reified
+
+A `type def` is erased by the transpiler — its type parameters are the type arguments of an
+application, not runtime values:
+
+```by
+# error: [invalid-reified-type-param]
+type def Pair[reified T]:
+    return tuple[T, T]
 ```
 
 ## specialization is inferred from arguments
