@@ -1,0 +1,23 @@
+---
+source: crates/ty_ide/src/inlay_hints.rs
+expression: "test.inlay_hints_with_settings(&InlayHintSettings\n{ inferred_reification: true, ..InlayHintSettings::none() })"
+---
+
+def value_use[[reified ]T]():
+    print(T)
+
+def pack_use[[reified ]*Ts, [reified ]**Kwargs]():
+    print(Ts, Kwargs)
+
+def annotation_only[T](t: T) -> T:
+    return t
+
+def declared[reified T]():
+    pass
+
+def half_declared[reified T, [reified ]U]():
+    print(U)
+
+class C:
+    def method[[reified ]T](self):
+        print(T)

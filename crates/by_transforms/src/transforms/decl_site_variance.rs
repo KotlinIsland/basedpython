@@ -1,7 +1,8 @@
-//! AST pass: strips def-site `out` / `in` / `in out` keyword from
-//! `class C[out T]` type-parameter declarations. variance info preserved
-//! on the AST node and consumed by ty's type checker directly — this
-//! only deletes surface bytes so output is valid Python.
+//! AST pass: strips the def-site keywords a type-parameter declaration writes
+//! ahead of its name — `out` / `in` / `in out` in `class C[out T]`, and
+//! `reified` in `def f[reified T]`. both are preserved on the AST node and
+//! consumed by ty's type checker directly — this only deletes surface bytes so
+//! output is valid Python.
 //!
 //! also strips the lower end of a basedpython bound range (`class C[T: int..object]`), which
 //! ty enforces from the AST node; python bounds only have an upper end
@@ -16,6 +17,7 @@
 //! `Generic[_T]`, its wider replacement wins via `ast_driver`'s first-wins
 //! dedup and this pass's narrow deletion becomes a no-op for that stmt
 
+use ruff_python_ast::helpers::consumed_keywords;
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Stmt, TypeParam, TypeParams};
 use ruff_text_size::{Ranged, TextRange, TextSize};
@@ -48,12 +50,39 @@ impl TypeAwarePass for VarianceStripPass<'_> {
     }
 }
 
+/// basedpython: the keywords a type-parameter declaration may write ahead of
+/// its name, none of which python's own grammar has
+const MODIFIERS: &[&str] = &["reified", "in", "out"];
+
 struct State<'src> {
     source: &'src str,
     edits: Vec<(TextRange, String)>,
 }
 
 impl State<'_> {
+    /// basedpython: delete the modifier keywords written ahead of a type parameter's own
+    /// declaration. a pack writes its `*` / `**` after them, so the deletion stops at the last
+    /// modifier rather than running to the name
+    fn strip_modifiers(&mut self, param: &TypeParam) {
+        let start = param.range().start();
+        let name_start = param.name().range().start();
+        let Some(last) =
+            consumed_keywords(self.source, TextRange::new(start, name_start), MODIFIERS).last()
+        else {
+            return;
+        };
+        // swallow the spaces separating the last modifier from what it modifies, so
+        // `reified *Ts` collapses to `*Ts` rather than ` *Ts`
+        let mut end = usize::from(last.end());
+        while self.source[end..].starts_with(' ') {
+            end += 1;
+        }
+        self.edits.push((
+            TextRange::new(start, TextSize::try_from(end).unwrap_or(last.end())),
+            String::new(),
+        ));
+    }
+
     /// basedpython: delete a `/` or bare `*` separator token along with one adjacent comma, so the
     /// remaining type-parameter list is valid python. the comma after the separator is preferred;
     /// a trailing separator (`[A, /]`) takes the comma before it instead.
@@ -95,20 +124,19 @@ impl<'ast> Visitor<'ast> for State<'_> {
 
         if let Some(tp) = type_params {
             for param in &tp.type_params {
-                if let TypeParam::TypeVar(tv) = param {
-                    if tv.variance.is_some() {
-                        let prefix = TextRange::new(tv.range().start(), tv.name.range().start());
-                        self.edits.push((prefix, String::new()));
-                    }
-                    // `T: int..object` keeps only its upper end, so delete `int..`
-                    if let Some(lower) = &tv.lower_bound
-                        && let Some(bound) = &tv.bound
-                    {
-                        self.edits.push((
-                            TextRange::new(lower.range().start(), bound.range().start()),
-                            String::new(),
-                        ));
-                    }
+                if param.is_reified() || param.as_type_var().is_some_and(|tv| tv.variance.is_some())
+                {
+                    self.strip_modifiers(param);
+                }
+                // `T: int..object` keeps only its upper end, so delete `int..`
+                if let TypeParam::TypeVar(tv) = param
+                    && let Some(lower) = &tv.lower_bound
+                    && let Some(bound) = &tv.bound
+                {
+                    self.edits.push((
+                        TextRange::new(lower.range().start(), bound.range().start()),
+                        String::new(),
+                    ));
                 }
             }
             if let Some(slash) = tp.separators.slash_range {
@@ -267,6 +295,59 @@ mod tests {
     #[test]
     fn strips_separators_with_variance() {
         check_py312("class C[out A, /, in B]: ...\n", "class C[A, B]: ...\n");
+    }
+
+    /// a reified function keeps its native `[T]` list, so the modifier has to go
+    /// even though nothing else about the header changes
+    #[test]
+    fn strips_reified_keyword() {
+        for (input, expected) in [
+            (
+                "def f[reified T]() -> None: ...\n",
+                "def f[T]() -> None: ...\n",
+            ),
+            (
+                "def f[reified *Ts]() -> None: ...\n",
+                "def f[*Ts]() -> None: ...\n",
+            ),
+            (
+                "def f[reified **Kwargs]() -> None: ...\n",
+                "def f[**Kwargs]() -> None: ...\n",
+            ),
+            (
+                "def f[T, reified U]() -> None: ...\n",
+                "def f[T, U]() -> None: ...\n",
+            ),
+            (
+                "def f[reified T: int]() -> None: ...\n",
+                "def f[T: int]() -> None: ...\n",
+            ),
+        ] {
+            let config = Config {
+                min_version: PythonVersion::PY312,
+                ..Config::test_default()
+            };
+            let out = transpile(input, &config).unwrap();
+            assert!(
+                out.ends_with(expected),
+                "expected {expected:?} at the end of {out:?}"
+            );
+            assert!(!out.contains("reified T"), "modifier survived: {out}");
+        }
+    }
+
+    /// both modifiers stack, in that order, and go together
+    #[test]
+    fn strips_reified_beside_variance() {
+        let config = Config {
+            min_version: PythonVersion::PY312,
+            ..Config::test_default()
+        };
+        let out = transpile("def f[reified out T]() -> None: ...\n", &config).unwrap();
+        assert!(
+            out.ends_with("def f[T]() -> None: ...\n"),
+            "expected a bare type-parameter list: {out}"
+        );
     }
 
     #[test]

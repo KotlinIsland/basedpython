@@ -13,7 +13,7 @@ use ruff_python_ast::helpers::{
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{
     self as ast, AnyNodeRef, ArgOrKeyword, ArgumentsSourceOrder, ExprContext, HasNodeIndex,
-    PythonVersion,
+    PySourceType, PythonVersion,
 };
 use ruff_python_stdlib::builtins::version_builtin_was_added;
 use ruff_python_stdlib::typing::as_pep_585_generic;
@@ -69,17 +69,18 @@ use crate::types::diagnostic::{
     GeneratorMismatchKind, INEFFECTIVE_FINAL, INVALID_ARGUMENT_TYPE, INVALID_ASSIGNMENT,
     INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_FIELD_LOOKUP,
     INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_REGEX,
-    INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM, INVALID_TYPE_VARIABLE_CONSTRAINTS,
-    NARROWING_GUARD_AS_VALUE, NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST,
-    OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
-    REFUTABLE_DESTRUCTURING, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
-    UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
-    UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR,
-    UNUSED_AWAITABLE, hint_if_stdlib_attribute_exists_on_other_versions,
-    report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
-    report_bad_dunder_delete_call, report_bool_as_int, report_bool_as_int_assignment,
-    report_call_to_abstract_method, report_cannot_pop_required_field_on_typed_dict,
-    report_invalid_assignment, report_invalid_class_match_pattern, report_invalid_exception_caught,
+    INVALID_REIFIED_TYPE_PARAM, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM,
+    INVALID_TYPE_VARIABLE_CONSTRAINTS, NARROWING_GUARD_AS_VALUE,
+    NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST, OPTIONAL_OBJECT_CONVERSION,
+    POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE, REFUTABLE_DESTRUCTURING,
+    TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS,
+    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
+    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
+    hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
+    report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_bool_as_int,
+    report_bool_as_int_assignment, report_call_to_abstract_method,
+    report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
+    report_invalid_class_match_pattern, report_invalid_exception_caught,
     report_invalid_exception_cause, report_invalid_exception_raised,
     report_invalid_exception_tuple_caught, report_invalid_generator_yield_type,
     report_invalid_key_on_typed_dict, report_invalid_match_args_type,
@@ -2026,7 +2027,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         let binding_context = self.index.expect_single_definition(type_alias);
         let previous_typevar_binding_context =
             self.typevar_binding_context.replace(binding_context);
-        self.infer_type_parameters(type_params);
+        self.infer_type_parameters(type_params, TypeParamReification::TypeAlias);
         self.typevar_binding_context = previous_typevar_binding_context;
     }
 
@@ -13586,14 +13587,36 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         ));
     }
 
-    fn infer_type_parameters(&mut self, type_parameters: &ast::TypeParams) {
+    /// `reification` names the owner of this list, which decides whether a
+    /// basedpython `reified` parameter can take effect; one that cannot is
+    /// reported here rather than silently dropped.
+    fn infer_type_parameters(
+        &mut self,
+        type_parameters: &ast::TypeParams,
+        reification: TypeParamReification,
+    ) {
         let ast::TypeParams {
             range: _,
             node_index: _,
             type_params,
             separators: _,
         } = type_parameters;
+        // the modifier is basedpython-only surface syntax, so a `.py` file that spells it
+        // already has the parser's error and this would only pile on
+        let source_type = self.file().source_type(self.db());
         for type_param in type_params {
+            if source_type.is_basedpython()
+                && type_param.is_reified()
+                && let Some(reason) = reification.rejection(type_param, source_type)
+                && let Some(builder) = self
+                    .context
+                    .report_lint(&INVALID_REIFIED_TYPE_PARAM, type_param)
+            {
+                let name = type_param.name();
+                let mut diagnostic = builder
+                    .into_diagnostic(format_args!("Type parameter `{name}` cannot be reified"));
+                diagnostic.info(reason);
+            }
             match type_param {
                 ast::TypeParam::TypeVar(node) => self.infer_definition(node),
                 ast::TypeParam::ParamSpec(node) => self.infer_definition(node),
@@ -14495,6 +14518,53 @@ impl Drop for MultiInferenceGuard<'_, '_, '_> {
 /// An expression representing the function argument at the given index, along with its type
 /// context.
 type ArgExpr<'db, 'ast> = (usize, &'ast ast::Expr, TypeContext<'db>);
+
+/// basedpython: the owner of a type-parameter list, as far as reification is
+/// concerned.
+///
+/// Reification rebuilds the *function's* closure so its body sees the type
+/// argument as a value; nothing else has such a step, so a `reified` parameter
+/// declared elsewhere promises a runtime value that never arrives.
+#[derive(Clone, Copy)]
+pub(super) enum TypeParamReification {
+    Function,
+    Class,
+    TypeAlias,
+    /// a `type def`, whose declaration the transpiler erases entirely
+    TypeDef,
+}
+
+impl TypeParamReification {
+    /// Why `type_param` cannot be reified on this owner, or `None` when it can.
+    ///
+    /// This mirrors what [`crate::reified::reified_type_param_names`] honours,
+    /// so the modifier is reported exactly when it would otherwise be silently
+    /// dropped.
+    fn rejection(
+        self,
+        type_param: &ast::TypeParam,
+        source_type: PySourceType,
+    ) -> Option<&'static str> {
+        match self {
+            Self::Function => (type_param.is_param_spec()
+                && !matches!(source_type, PySourceType::BasedPython))
+            .then_some(
+                "outside a `.by` source file `**P` declares a PEP 612 `ParamSpec`, and a \
+                 parameter list has no runtime object to bind",
+            ),
+            Self::Class => {
+                Some("a class's type parameters are erased; only a function reifies one")
+            }
+            Self::TypeAlias => {
+                Some("a type alias's type parameters are erased; only a function reifies one")
+            }
+            Self::TypeDef => Some(
+                "a `type def` is erased by the transpiler, so its type parameters have no \
+                 runtime value",
+            ),
+        }
+    }
+}
 
 #[derive(Clone, Copy)]
 enum CallArgumentInferenceMode {

@@ -16,6 +16,34 @@ the type parameter behaves like an ordinary positional parameter that happens
 to be filled by the `[...]` specialization step rather than the `(...)` call
 step
 
+## declaring it
+
+reification is inferred from the body, which means it can also be *declared*.
+`reified` ahead of a type parameter reifies it whether or not the body ever
+reads it as a value:
+
+```by
+def f[reified T](t: T):
+    print(T)
+```
+
+writing the keyword is the difference between reification being a consequence
+of how the body happens to be written and it being part of the declaration —
+the specialization step is required either way, so a signature that promises a
+runtime `T` keeps promising it when the body stops printing it. it stacks ahead
+of the [variance](variance.md) keywords (`reified out T`) and applies to a
+variadic and a keyword pack as well (`reified *Ts`, `reified **Kwargs`)
+
+`reified` is a soft keyword: a type parameter *named* `reified` is still just
+that, since nothing that can open a parameter follows it
+
+reification is a property of a function — nothing else has a closure for the
+specialization step to rebuild — so `reified` on a class, a type alias, or a
+`type def` is an error (`invalid-reified-type-param`)
+
+the editor hints the modifier wherever the body reifies a type parameter
+without declaring it, so what is inferred and what is written read the same
+
 ## why this is safe to do
 
 PEP 695 already compiles the type-parameter list as an implicit enclosing
@@ -31,10 +59,10 @@ reuse the closure machinery cpython already builds
 
 ## desugaring
 
-a function is reified only when one of its type parameters is referenced in a
-*value* position (anywhere other than a type annotation). that function is
-wrapped in the `generic` [polyfill](polyfills.md) and its call sites route
-through specialization instead of being stripped:
+a function is reified when one of its type parameters is declared `reified` or
+is referenced in a *value* position (anywhere other than a type annotation).
+that function is wrapped in the `generic` [polyfill](polyfills.md) and its call
+sites route through specialization instead of being stripped:
 
 ```by
 def f[T](t: object):

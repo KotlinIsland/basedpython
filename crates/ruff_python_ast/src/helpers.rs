@@ -2841,6 +2841,7 @@ mod tests {
             default: None,
             name: Identifier::new("x", TextRange::default()),
             variance: None,
+            is_reified: false,
         });
         let type_var_two = TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound: None,
@@ -2850,6 +2851,7 @@ mod tests {
             default: Some(Box::new(constant_two.clone())),
             name: Identifier::new("x", TextRange::default()),
             variance: None,
+            is_reified: false,
         });
         let type_alias = Stmt::TypeAlias(StmtTypeAlias {
             cases: Vec::new(),
@@ -2885,6 +2887,7 @@ mod tests {
             default: None,
             name: Identifier::new("x", TextRange::default()),
             variance: None,
+            is_reified: false,
         });
         assert!(!any_over_type_param(&type_var_no_bound, &mut |_expr| true));
 
@@ -2902,6 +2905,7 @@ mod tests {
             default: None,
             name: Identifier::new("x", TextRange::default()),
             variance: None,
+            is_reified: false,
         });
         assert!(
             any_over_type_param(&type_var_with_bound, &mut |expr| {
@@ -2922,6 +2926,7 @@ mod tests {
             bound: None,
             name: Identifier::new("x", TextRange::default()),
             variance: None,
+            is_reified: false,
         });
         assert!(
             any_over_type_param(&type_var_with_default, &mut |expr| {
@@ -2943,6 +2948,7 @@ mod tests {
             node_index: AtomicNodeIndex::NONE,
             name: Identifier::new("x", TextRange::default()),
             default: None,
+            is_reified: false,
         });
         assert!(
             !any_over_type_param(&type_var_tuple, &mut |_expr| true),
@@ -2961,6 +2967,7 @@ mod tests {
             node_index: AtomicNodeIndex::NONE,
             default: Some(Box::new(constant.clone())),
             name: Identifier::new("x", TextRange::default()),
+            is_reified: false,
         });
         assert!(
             any_over_type_param(&type_var_tuple_with_default, &mut |expr| {
@@ -2991,6 +2998,7 @@ mod tests {
                 node_index: AtomicNodeIndex::NONE,
                 name: Identifier::new("x", TextRange::default()),
                 default: None,
+                is_reified: false,
             }),
             TypeParam::ParamSpec(TypeParamParamSpec {
                 bound: Some(Box::new(constant.clone())),
@@ -2998,6 +3006,7 @@ mod tests {
                 node_index: AtomicNodeIndex::NONE,
                 name: Identifier::new("x", TextRange::default()),
                 default: None,
+                is_reified: false,
             }),
         ];
 
@@ -3023,6 +3032,7 @@ mod tests {
             name: Identifier::new("x", TextRange::default()),
             bound: None,
             default: None,
+            is_reified: false,
         });
         assert!(
             !any_over_type_param(&type_param_spec, &mut |_expr| true),
@@ -3041,6 +3051,7 @@ mod tests {
             node_index: AtomicNodeIndex::NONE,
             default: Some(Box::new(constant.clone())),
             name: Identifier::new("x", TextRange::default()),
+            is_reified: false,
         });
         assert!(
             any_over_type_param(&param_spec_with_default, &mut |expr| {

@@ -814,6 +814,7 @@ pub fn walk_type_param<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, type_param:
             lower_bound,
             bound,
             default,
+            is_reified: _,
             name: _,
             range: _,
             node_index: _,
@@ -832,6 +833,7 @@ pub fn walk_type_param<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, type_param:
         TypeParam::TypeVarTuple(TypeParamTypeVarTuple {
             bound,
             default,
+            is_reified: _,
             name: _,
             range: _,
             node_index: _,
@@ -846,6 +848,7 @@ pub fn walk_type_param<'a, V: Visitor<'a> + ?Sized>(visitor: &mut V, type_param:
         TypeParam::ParamSpec(TypeParamParamSpec {
             bound,
             default,
+            is_reified: _,
             name: _,
             range: _,
             node_index: _,

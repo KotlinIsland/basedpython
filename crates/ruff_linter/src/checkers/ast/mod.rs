@@ -2528,6 +2528,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 range: _,
                 node_index: _,
                 variance: _,
+                is_reified: _,
             }) => {
                 if let Some(expr) = lower_bound {
                     self.visit
@@ -2551,6 +2552,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 name: _,
                 range: _,
                 node_index: _,
+                is_reified: _,
             }) => {
                 if let Some(expr) = bound {
                     self.visit
@@ -2569,6 +2571,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 name: _,
                 range: _,
                 node_index: _,
+                is_reified: _,
             }) => {
                 if let Some(expr) = bound {
                     self.visit

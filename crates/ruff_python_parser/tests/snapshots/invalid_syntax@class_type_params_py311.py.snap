@@ -69,6 +69,7 @@ Module(
                                         ),
                                         default: None,
                                         variance: None,
+                                        is_reified: false,
                                     },
                                 ),
                                 TypeVar(
@@ -93,6 +94,7 @@ Module(
                                         ),
                                         default: None,
                                         variance: None,
+                                        is_reified: false,
                                     },
                                 ),
                                 TypeVarTuple(
@@ -106,6 +108,7 @@ Module(
                                         },
                                         bound: None,
                                         default: None,
+                                        is_reified: false,
                                     },
                                 ),
                                 ParamSpec(
@@ -119,6 +122,7 @@ Module(
                                         },
                                         bound: None,
                                         default: None,
+                                        is_reified: false,
                                     },
                                 ),
                             ],

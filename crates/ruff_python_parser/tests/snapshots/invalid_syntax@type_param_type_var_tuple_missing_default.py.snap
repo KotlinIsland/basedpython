@@ -38,6 +38,7 @@ Module(
                                         },
                                         bound: None,
                                         default: None,
+                                        is_reified: false,
                                     },
                                 ),
                             ],
@@ -89,6 +90,7 @@ Module(
                                         },
                                         bound: None,
                                         default: None,
+                                        is_reified: false,
                                     },
                                 ),
                                 TypeVar(
@@ -104,6 +106,7 @@ Module(
                                         bound: None,
                                         default: None,
                                         variance: None,
+                                        is_reified: false,
                                     },
                                 ),
                             ],

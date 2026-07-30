@@ -798,6 +798,9 @@ fields = [
   { name = "bound", type = "Box<Expr>?" },
   { name = "default", type = "Box<Expr>?" },
   { name = "variance", type = "Variance?", skip_visit = true },
+  { name = "is_reified", type = "bool", doc = """basedpython: when true, the parameter is
+declared `reified T`, which makes it a runtime value whether or not the body ever reads it as
+one. Reification is otherwise inferred from a value-position use in the body""" },
 ]
 
 [TypeParam.nodes.TypeParamTypeVarTuple]
@@ -808,6 +811,9 @@ fields = [
 element of the pack, written `*Ts: int`, or — when starred, as `*Ts: *(int, str)` — to the pack
 as a whole. CPython rejects a bound on a `TypeVarTuple`""" },
   { name = "default", type = "Box<Expr>?" },
+  { name = "is_reified", type = "bool", doc = """basedpython: when true, the pack is declared
+`reified *Ts`, which binds the run of type arguments it absorbs as a runtime tuple whether or
+not the body ever reads it""" },
 ]
 
 [TypeParam.nodes.TypeParamParamSpec]
@@ -818,6 +824,10 @@ fields = [
 keyword-variadic pack, written `**Kwargs: int` to bound every field, or `**Kwargs: **{"a": int}`
 to bound the pack as a whole. CPython rejects a bound on a `ParamSpec`""" },
   { name = "default", type = "Box<Expr>?" },
+  { name = "is_reified", type = "bool", doc = """basedpython: when true, the pack is declared
+`reified **Kwargs`, which binds the mapping of its fields as a runtime value whether or not the
+body ever reads it. Outside a basedpython source file the same spelling declares a PEP 612
+`ParamSpec`, which has no runtime object to bind and so cannot be reified""" },
 ]
 
 [ungrouped.nodes]

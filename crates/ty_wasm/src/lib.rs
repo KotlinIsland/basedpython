@@ -1431,6 +1431,7 @@ impl From<ty_ide::InlayHintKind> for InlayHintKind {
             // basedpython: an inferred exception set is a type, like a return type
             | ty_ide::InlayHintKind::Raises
             | ty_ide::InlayHintKind::Variance
+            | ty_ide::InlayHintKind::Reification
             | ty_ide::InlayHintKind::TypeArgument
             | ty_ide::InlayHintKind::Override
             | ty_ide::InlayHintKind::NumericPromotion

@@ -1111,6 +1111,11 @@ impl<'a> Generator<'a> {
     }
 
     pub(crate) fn unparse_type_param(&mut self, ast: &TypeParam) {
+        // basedpython: the `reified` modifier is surface syntax with no python
+        // spelling, so it is only re-emitted when rendering basedpython
+        if ast.is_reified() && self.mode == Mode::BasedPython {
+            self.p("reified ");
+        }
         match ast {
             TypeParam::TypeVar(TypeParamTypeVar {
                 name,
@@ -2274,6 +2279,18 @@ mod tests {
     #[test_case::test_case("type F = literal str" ; "type alias")]
     fn basedpython_type_modifier_round_trip(contents: &str) {
         assert_eq!(based_round_trip(contents), contents);
+    }
+
+    /// The `reified` modifier is carried on the type-parameter node rather than
+    /// spelled by anything the generic rendering emits, so it survives only when
+    /// basedpython rendering is asked for
+    #[test_case::test_case("def f[reified T]():\n    print(T)" ; "type var")]
+    #[test_case::test_case("def f[reified *Ts]():\n    print(Ts)" ; "variadic")]
+    #[test_case::test_case("def f[reified **Kwargs]():\n    print(Kwargs)" ; "keyword pack")]
+    #[test_case::test_case("def f[T, reified U]():\n    print(U)" ; "beside a plain parameter")]
+    #[test_case::test_case("def f[reified T: int]():\n    print(T)" ; "with a bound")]
+    fn basedpython_reified_type_param_round_trip(contents: &str) {
+        assert_eq!(based_round_trip(contents).trim_end(), contents);
     }
 
     /// `typeof X` has no brackets in the source either — its subscript `value` is
