@@ -84,31 +84,47 @@ fn by_blocks(markdown: &str) -> Vec<(String, bool)> {
     let mut blocks: Vec<(String, usize)> = Vec::new();
     let mut multi_file_sections: Vec<usize> = Vec::new();
     let mut section = 0usize;
+    // the backtick run of the fence currently open, if any. every fence is
+    // tracked, not just the `by` ones: a `# error:` comment at column 0 inside a
+    // ```py or ```byi block is python code, and counting it as a heading would
+    // split the section, separating a companion-module marker from the ```by
+    // block that imports it
+    let mut fence: Option<usize> = None;
     let mut current: Option<String> = None;
     for line in markdown.lines() {
-        if current.is_none() && line.starts_with('#') {
+        let trimmed = line.trim();
+        let info = trimmed.trim_start_matches('`');
+        let ticks = trimmed.len() - info.len();
+        if let Some(open) = fence {
+            // a closing fence is a bare run at least as long as the opening one
+            if ticks >= open && info.is_empty() {
+                fence = None;
+                if let Some(block) = current.take() {
+                    blocks.push((block, section));
+                }
+            } else if let Some(block) = &mut current {
+                block.push_str(line);
+                block.push('\n');
+            }
+            continue;
+        }
+        if ticks >= 3 {
+            fence = Some(ticks);
+            if info.trim() == "by" {
+                current = Some(String::new());
+            }
+            continue;
+        }
+        if line.starts_with('#') {
             section += 1;
         }
         // a companion-module marker: `` `pylib.py`: `` ahead of its fence
-        if current.is_none()
-            && line.trim().starts_with('`')
-            && (line.trim().ends_with(".py`:")
-                || line.trim().ends_with(".by`:")
-                || line.trim().ends_with(".byi`:"))
+        if trimmed.starts_with('`')
+            && (trimmed.ends_with(".py`:")
+                || trimmed.ends_with(".by`:")
+                || trimmed.ends_with(".byi`:"))
         {
             multi_file_sections.push(section);
-        }
-        match &mut current {
-            None if line.trim() == "```by" => current = Some(String::new()),
-            None => {}
-            Some(block) => {
-                if line.trim() == "```" {
-                    blocks.push((current.take().expect("block in progress"), section));
-                } else {
-                    block.push_str(line);
-                    block.push('\n');
-                }
-            }
         }
     }
     blocks
@@ -336,5 +352,64 @@ fn clean_mdtest_blocks_run() {
         failures.len(),
         total,
         failures.join("\n\n")
+    );
+}
+
+/// A `#` comment inside a non-`by` fence is code, not a heading: counting it as
+/// one would move the following `by` block into a section of its own, away from
+/// the companion-module marker, and the harness would try to run it standalone.
+#[test]
+fn comment_in_companion_fence_keeps_section() {
+    let markdown = "\
+## a section
+
+`m.byi`:
+
+```byi
+# error: [some-rule]
+def f() -> None: ...
+```
+
+```by
+from m import f
+f()
+```
+";
+    let blocks = by_blocks(markdown);
+    assert_eq!(
+        blocks,
+        vec![("from m import f\nf()\n".to_string(), true)],
+        "the block belongs to the marker's section"
+    );
+}
+
+#[test]
+fn sections_split_on_headings_outside_fences() {
+    let markdown = "\
+## multi-file
+
+`m.by`:
+
+```by
+def f() -> None: ...
+```
+
+```by
+from m import f
+```
+
+## standalone
+
+```by
+print(1)
+```
+";
+    assert_eq!(
+        by_blocks(markdown),
+        vec![
+            ("def f() -> None: ...\n".to_string(), true),
+            ("from m import f\n".to_string(), true),
+            ("print(1)\n".to_string(), false),
+        ]
     );
 }
