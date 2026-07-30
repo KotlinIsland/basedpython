@@ -49,6 +49,7 @@ Module(
                                         ),
                                         default: None,
                                         variance: None,
+                                        is_reified: false,
                                     },
                                 ),
                             ],

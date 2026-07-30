@@ -1,6 +1,6 @@
 ---
 source: crates/ruff_python_parser/tests/fixtures.rs
-input_file: crates/ruff_python_parser/resources/inline/err/type_param_type_var_missing_default.py
+input_file: crates/ruff_python_parser/resources/inline/err/type_param_reified_py.py
 ---
 ## AST
 
@@ -8,39 +8,38 @@ input_file: crates/ruff_python_parser/resources/inline/err/type_param_type_var_m
 Module(
     ModModule {
         node_index: NodeIndex(None),
-        range: 0..64,
+        range: 0..72,
         body: [
-            TypeAlias(
-                StmtTypeAlias {
+            FunctionDef(
+                StmtFunctionDef {
                     node_index: NodeIndex(None),
-                    range: 0..17,
-                    name: Name(
-                        ExprName {
-                            node_index: NodeIndex(None),
-                            range: 5..6,
-                            id: Name("X"),
-                            ctx: Store,
-                        },
-                    ),
+                    range: 0..23,
+                    is_async: false,
+                    decorator_list: [],
+                    name: Identifier {
+                        id: Name("f"),
+                        range: 4..5,
+                        node_index: NodeIndex(None),
+                    },
                     type_params: Some(
                         TypeParams {
-                            range: 6..11,
+                            range: 5..16,
                             node_index: NodeIndex(None),
                             type_params: [
                                 TypeVar(
                                     TypeParamTypeVar {
                                         node_index: NodeIndex(None),
-                                        range: 7..10,
+                                        range: 6..15,
                                         name: Identifier {
                                             id: Name("T"),
-                                            range: 7..8,
+                                            range: 14..15,
                                             node_index: NodeIndex(None),
                                         },
                                         lower_bound: None,
                                         bound: None,
                                         default: None,
                                         variance: None,
-                                        is_reified: false,
+                                        is_reified: true,
                                     },
                                 ),
                             ],
@@ -52,58 +51,124 @@ Module(
                             },
                         },
                     ),
-                    value: Name(
-                        ExprName {
+                    parameters: Parameters {
+                        range: 16..18,
+                        node_index: NodeIndex(None),
+                        posonlyargs: [],
+                        args: [],
+                        vararg: None,
+                        kwonlyargs: [],
+                        kwarg: None,
+                    },
+                    returns: None,
+                    raises: None,
+                    body: [
+                        Expr(
+                            StmtExpr {
+                                node_index: NodeIndex(None),
+                                range: 20..23,
+                                value: EllipsisLiteral(
+                                    ExprEllipsisLiteral {
+                                        node_index: NodeIndex(None),
+                                        range: 20..23,
+                                    },
+                                ),
+                            },
+                        ),
+                    ],
+                    is_trailing_lambda: false,
+                    is_asserts_return: false,
+                },
+            ),
+            ClassDef(
+                StmtClassDef {
+                    node_index: NodeIndex(None),
+                    range: 24..47,
+                    decorator_list: [],
+                    name: Identifier {
+                        id: Name("C"),
+                        range: 30..31,
+                        node_index: NodeIndex(None),
+                    },
+                    type_params: Some(
+                        TypeParams {
+                            range: 31..42,
                             node_index: NodeIndex(None),
-                            range: 14..17,
-                            id: Name("int"),
-                            ctx: Load,
+                            type_params: [
+                                TypeVar(
+                                    TypeParamTypeVar {
+                                        node_index: NodeIndex(None),
+                                        range: 32..41,
+                                        name: Identifier {
+                                            id: Name("T"),
+                                            range: 40..41,
+                                            node_index: NodeIndex(None),
+                                        },
+                                        lower_bound: None,
+                                        bound: None,
+                                        default: None,
+                                        variance: None,
+                                        is_reified: true,
+                                    },
+                                ),
+                            ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
                         },
                     ),
-                    cases: [],
-                    is_private: false,
+                    arguments: None,
+                    body: [
+                        Expr(
+                            StmtExpr {
+                                node_index: NodeIndex(None),
+                                range: 44..47,
+                                value: EllipsisLiteral(
+                                    ExprEllipsisLiteral {
+                                        node_index: NodeIndex(None),
+                                        range: 44..47,
+                                    },
+                                ),
+                            },
+                        ),
+                    ],
+                    implementation: None,
                 },
             ),
             TypeAlias(
                 StmtTypeAlias {
                     node_index: NodeIndex(None),
-                    range: 18..40,
+                    range: 48..71,
                     name: Name(
                         ExprName {
                             node_index: NodeIndex(None),
-                            range: 23..24,
+                            range: 53..54,
                             id: Name("X"),
                             ctx: Store,
                         },
                     ),
                     type_params: Some(
                         TypeParams {
-                            range: 24..34,
+                            range: 54..65,
                             node_index: NodeIndex(None),
                             type_params: [
                                 TypeVar(
                                     TypeParamTypeVar {
                                         node_index: NodeIndex(None),
-                                        range: 25..33,
+                                        range: 55..64,
                                         name: Identifier {
                                             id: Name("T"),
-                                            range: 25..26,
+                                            range: 63..64,
                                             node_index: NodeIndex(None),
                                         },
                                         lower_bound: None,
-                                        bound: Some(
-                                            Name(
-                                                ExprName {
-                                                    node_index: NodeIndex(None),
-                                                    range: 28..31,
-                                                    id: Name("int"),
-                                                    ctx: Load,
-                                                },
-                                            ),
-                                        ),
+                                        bound: None,
                                         default: None,
                                         variance: None,
-                                        is_reified: false,
+                                        is_reified: true,
                                     },
                                 ),
                             ],
@@ -118,77 +183,7 @@ Module(
                     value: Name(
                         ExprName {
                             node_index: NodeIndex(None),
-                            range: 37..40,
-                            id: Name("int"),
-                            ctx: Load,
-                        },
-                    ),
-                    cases: [],
-                    is_private: false,
-                },
-            ),
-            TypeAlias(
-                StmtTypeAlias {
-                    node_index: NodeIndex(None),
-                    range: 41..63,
-                    name: Name(
-                        ExprName {
-                            node_index: NodeIndex(None),
-                            range: 46..47,
-                            id: Name("X"),
-                            ctx: Store,
-                        },
-                    ),
-                    type_params: Some(
-                        TypeParams {
-                            range: 47..57,
-                            node_index: NodeIndex(None),
-                            type_params: [
-                                TypeVar(
-                                    TypeParamTypeVar {
-                                        node_index: NodeIndex(None),
-                                        range: 48..52,
-                                        name: Identifier {
-                                            id: Name("T1"),
-                                            range: 48..50,
-                                            node_index: NodeIndex(None),
-                                        },
-                                        lower_bound: None,
-                                        bound: None,
-                                        default: None,
-                                        variance: None,
-                                        is_reified: false,
-                                    },
-                                ),
-                                TypeVar(
-                                    TypeParamTypeVar {
-                                        node_index: NodeIndex(None),
-                                        range: 54..56,
-                                        name: Identifier {
-                                            id: Name("T2"),
-                                            range: 54..56,
-                                            node_index: NodeIndex(None),
-                                        },
-                                        lower_bound: None,
-                                        bound: None,
-                                        default: None,
-                                        variance: None,
-                                        is_reified: false,
-                                    },
-                                ),
-                            ],
-                            separators: TypeParamSeparators {
-                                positional_only_count: None,
-                                keyword_only_start: None,
-                                slash_range: None,
-                                star_range: None,
-                            },
-                        },
-                    ),
-                    value: Name(
-                        ExprName {
-                            node_index: NodeIndex(None),
-                            range: 60..63,
+                            range: 68..71,
                             id: Name("int"),
                             ctx: Load,
                         },
@@ -204,24 +199,24 @@ Module(
 ## Errors
 
   |
-1 | type X[T =] = int
-  |           ^ Syntax Error: Expected an expression
-2 | type X[T: int =] = int
-3 | type X[T1 =, T2] = int
+1 | def f[reified T](): ...
+  |       ^^^^^^^ Syntax Error: reified type parameters are not valid in `.py` files
+2 | class C[reified T]: ...
+3 | type X[reified T] = int
   |
 
 
   |
-1 | type X[T =] = int
-2 | type X[T: int =] = int
-  |                ^ Syntax Error: Expected an expression
-3 | type X[T1 =, T2] = int
+1 | def f[reified T](): ...
+2 | class C[reified T]: ...
+  |         ^^^^^^^ Syntax Error: reified type parameters are not valid in `.py` files
+3 | type X[reified T] = int
   |
 
 
   |
-1 | type X[T =] = int
-2 | type X[T: int =] = int
-3 | type X[T1 =, T2] = int
-  |            ^ Syntax Error: Expected an expression
+1 | def f[reified T](): ...
+2 | class C[reified T]: ...
+3 | type X[reified T] = int
+  |        ^^^^^^^ Syntax Error: reified type parameters are not valid in `.py` files
   |

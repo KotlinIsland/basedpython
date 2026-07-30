@@ -422,6 +422,27 @@ if True:
         Ok(())
     }
 
+    /// basedpython: a `reified` type-parameter modifier round-trips. The keyword
+    /// is consumed by the parser and survives only as a flag on the type
+    /// parameter, so the formatter has to write it back out.
+    #[test]
+    fn reified_type_param_round_trip() -> Result<()> {
+        for input in [
+            "def f[reified T]() -> None: ...\n",
+            "def f[reified *Ts]() -> None: ...\n",
+            "def f[reified **Kwargs]() -> None: ...\n",
+            "def f[T, reified U]() -> None: ...\n",
+            "def f[reified T: int = str]() -> None: ...\n",
+            "def f[reified out T]() -> None: ...\n",
+            "def f[reified in out T]() -> None: ...\n",
+        ] {
+            let options = PyFormatOptions::from_extension(Path::new("test.by"));
+            let actual = format_module_source(input, options)?.as_code().to_string();
+            assert_eq!(input, actual);
+        }
+        Ok(())
+    }
+
     /// basedpython: a `var` declaration round-trips — the parser models it as an
     /// annotated assignment over a synthetic marker, so the surface keyword has
     /// to be recovered from the marker's source range rather than printed as an

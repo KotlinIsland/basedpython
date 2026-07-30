@@ -1541,6 +1541,7 @@ impl<'a> From<&'a ast::TypeParam> for ComparableTypeParam<'a> {
                 lower_bound,
                 bound,
                 default,
+                is_reified,
                 range: _,
                 node_index: _,
                 variance: _,
@@ -1549,28 +1550,33 @@ impl<'a> From<&'a ast::TypeParam> for ComparableTypeParam<'a> {
                 lower_bound: lower_bound.as_ref().map(Into::into),
                 bound: bound.as_ref().map(Into::into),
                 default: default.as_ref().map(Into::into),
+                is_reified: *is_reified,
             }),
             ast::TypeParam::TypeVarTuple(ast::TypeParamTypeVarTuple {
                 name,
                 bound,
                 default,
+                is_reified,
                 range: _,
                 node_index: _,
             }) => Self::TypeVarTuple(TypeParamTypeVarTuple {
                 name: name.as_str(),
                 bound: bound.as_ref().map(Into::into),
                 default: default.as_ref().map(Into::into),
+                is_reified: *is_reified,
             }),
             ast::TypeParam::ParamSpec(ast::TypeParamParamSpec {
                 name,
                 bound,
                 default,
+                is_reified,
                 range: _,
                 node_index: _,
             }) => Self::ParamSpec(TypeParamParamSpec {
                 name: name.as_str(),
                 bound: bound.as_ref().map(Into::into),
                 default: default.as_ref().map(Into::into),
+                is_reified: *is_reified,
             }),
         }
     }
@@ -1582,6 +1588,7 @@ pub struct TypeParamTypeVar<'a> {
     pub lower_bound: Option<Box<ComparableExpr<'a>>>,
     pub bound: Option<Box<ComparableExpr<'a>>>,
     pub default: Option<Box<ComparableExpr<'a>>>,
+    pub is_reified: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1589,6 +1596,7 @@ pub struct TypeParamParamSpec<'a> {
     pub name: &'a str,
     pub bound: Option<Box<ComparableExpr<'a>>>,
     pub default: Option<Box<ComparableExpr<'a>>>,
+    pub is_reified: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -1596,6 +1604,7 @@ pub struct TypeParamTypeVarTuple<'a> {
     pub name: &'a str,
     pub bound: Option<Box<ComparableExpr<'a>>>,
     pub default: Option<Box<ComparableExpr<'a>>>,
+    pub is_reified: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash)]

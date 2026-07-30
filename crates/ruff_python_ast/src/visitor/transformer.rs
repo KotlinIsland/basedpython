@@ -818,6 +818,7 @@ pub fn walk_type_param<V: Transformer + ?Sized>(visitor: &V, type_param: &mut Ty
             lower_bound,
             bound,
             default,
+            is_reified: _,
             name: _,
             range: _,
             node_index: _,
@@ -836,6 +837,7 @@ pub fn walk_type_param<V: Transformer + ?Sized>(visitor: &V, type_param: &mut Ty
         TypeParam::TypeVarTuple(TypeParamTypeVarTuple {
             bound,
             default,
+            is_reified: _,
             name: _,
             range: _,
             node_index: _,
@@ -850,6 +852,7 @@ pub fn walk_type_param<V: Transformer + ?Sized>(visitor: &V, type_param: &mut Ty
         TypeParam::ParamSpec(TypeParamParamSpec {
             bound,
             default,
+            is_reified: _,
             name: _,
             range: _,
             node_index: _,

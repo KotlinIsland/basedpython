@@ -170,6 +170,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&AMBIGUOUS_CONTEXT_ARGUMENT);
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
     registry.register_lint(&REIFIED_CLASSMETHOD);
+    registry.register_lint(&INVALID_REIFIED_TYPE_PARAM);
     registry.register_lint(&ERASED_TYPE_CHECK);
     registry.register_lint(&OVERRIDE_OF_FINAL_METHOD);
     registry.register_lint(&OVERRIDE_OF_FINAL_VARIABLE);
@@ -1957,6 +1958,31 @@ declare_lint! {
     pub(crate) static UNSPECIALIZED_REIFIED_GENERIC = {
         summary: "detects calls to reified generic functions without explicit specialization",
         status: LintStatus::stable("0.0.1-alpha.3"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a basedpython `reified` type parameter declared somewhere
+    /// reification cannot happen.
+    ///
+    /// ## Why is this bad?
+    /// Reification is a property of a *function*: the specialization step
+    /// rebuilds the function's closure so the body sees the type argument as a
+    /// runtime value. A class, a type alias and a `type def` have no such step —
+    /// their type parameters are erased — so `reified` there promises a runtime
+    /// value that never arrives.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// class C[reified T]:  # error: a class type parameter is never reified
+    ///     ...
+    /// ```
+    pub(crate) static INVALID_REIFIED_TYPE_PARAM = {
+        summary: "detects `reified` type parameters that cannot be reified",
+        status: LintStatus::stable("0.0.62"),
         default_level: Level::Error,
     }
 }

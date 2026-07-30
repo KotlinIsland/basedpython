@@ -1954,6 +1954,108 @@ fn spaced_dots_are_not_a_bound_range() {
     assert!(type_var.lower_bound.is_none());
 }
 
+/// The `reified` flag of each type parameter of the module's single function.
+fn function_type_param_reification(module: &ModModule) -> Vec<bool> {
+    let [Stmt::FunctionDef(function)] = module.body.as_slice() else {
+        panic!("expected a single function definition");
+    };
+    function
+        .type_params
+        .as_ref()
+        .expect("type params")
+        .type_params
+        .iter()
+        .map(TypeParam::is_reified)
+        .collect()
+}
+
+#[test]
+fn basedpython_reified_type_param_parses_for_every_kind() {
+    for (source, expected) in [
+        ("def f[reified T](): ...\n", vec![true]),
+        ("def f[reified *Ts](): ...\n", vec![true]),
+        ("def f[reified **Kwargs](): ...\n", vec![true]),
+        ("def f[T, reified U](): ...\n", vec![false, true]),
+        ("def f[reified T: int = str](): ...\n", vec![true]),
+    ] {
+        let parsed = parse_basedpython_module(source);
+        assert_eq!(
+            function_type_param_reification(parsed.syntax()),
+            expected,
+            "unexpected reification for {source:?}"
+        );
+    }
+}
+
+#[test]
+fn basedpython_reified_precedes_the_variance_keywords() {
+    let parsed = parse_basedpython_module("class C[reified in out T]: ...\n");
+    let [Stmt::ClassDef(class)] = parsed.syntax().body.as_slice() else {
+        panic!("expected a single class definition");
+    };
+    let [TypeParam::TypeVar(type_var)] = class
+        .type_params
+        .as_ref()
+        .expect("type params")
+        .type_params
+        .as_slice()
+    else {
+        panic!("expected a single type variable");
+    };
+    assert!(type_var.is_reified);
+    assert_eq!(
+        type_var.variance,
+        Some(ruff_python_ast::Variance::Invariant)
+    );
+    assert_eq!(type_var.name.id.as_str(), "T");
+}
+
+#[test]
+fn reified_alone_is_a_type_parameter_name() {
+    // the modifier is a soft keyword: without a parameter after it, `reified`
+    // is the parameter's own name
+    for source in [
+        "def f[reified](): ...\n",
+        "def f[reified: int](): ...\n",
+        "def f[reified = int](): ...\n",
+        "def f[reified, T](): ...\n",
+    ] {
+        let parsed = parse_basedpython_module(source);
+        let [Stmt::FunctionDef(function)] = parsed.syntax().body.as_slice() else {
+            panic!("expected a single function definition");
+        };
+        let first = &function
+            .type_params
+            .as_ref()
+            .expect("type params")
+            .type_params[0];
+        assert_eq!(first.name().id.as_str(), "reified", "for {source:?}");
+        assert!(!first.is_reified(), "for {source:?}");
+    }
+}
+
+#[test]
+fn reified_type_param_is_basedpython_only() {
+    // in a `.py` file the modifier is rejected, but still consumed so the rest
+    // of the list parses
+    let parsed = crate::Parser::new(
+        "def f[reified T](): ...\n",
+        ParseOptions::from(Mode::Module),
+    )
+    .parse()
+    .try_into_module()
+    .expect("expected a module");
+    assert!(
+        parsed
+            .errors()
+            .iter()
+            .any(|error| matches!(error.error, ParseErrorType::BasedPythonOnly(_))),
+        "expected a basedpython-only error, got {:?}",
+        parsed.errors()
+    );
+    assert_eq!(function_type_param_reification(parsed.syntax()), vec![true]);
+}
+
 #[test]
 fn basedpython_type_param_separators_parse() {
     // `/` and a bare `*` divide a type parameter list the way they divide a

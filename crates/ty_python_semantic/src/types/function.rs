@@ -507,8 +507,8 @@ impl<'db> OverloadLiteral<'db> {
     }
 
     /// basedpython: names of the pep 695 type parameters this definition
-    /// reifies (referenced in a value position in the body), in declaration
-    /// order. always empty outside basedpython files
+    /// reifies (declared `reified`, or referenced in a value position in the
+    /// body), in declaration order. always empty outside basedpython files
     #[salsa::tracked(returns(ref), heap_size=ruff_memory_usage::heap_size)]
     pub(crate) fn reified_type_params(self, db: &'db dyn Db) -> Box<[ast::name::Name]> {
         let file = self.file(db);
