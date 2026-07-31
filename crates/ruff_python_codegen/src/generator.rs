@@ -2290,7 +2290,12 @@ mod tests {
     #[test_case::test_case("def f[T, reified U]():\n    print(U)" ; "beside a plain parameter")]
     #[test_case::test_case("def f[reified T: int]():\n    print(T)" ; "with a bound")]
     fn basedpython_reified_type_param_round_trip(contents: &str) {
-        assert_eq!(based_round_trip(contents).trim_end(), contents);
+        // the generator writes the platform's line ending, so the expected text
+        // takes it too — the same normalization `assert_round_trip!` does
+        assert_eq!(
+            based_round_trip(contents).trim_end(),
+            contents.replace('\n', LineEnding::default().as_str())
+        );
     }
 
     /// `typeof X` has no brackets in the source either — its subscript `value` is
