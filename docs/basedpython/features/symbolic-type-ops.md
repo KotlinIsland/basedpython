@@ -101,6 +101,18 @@ def twice[I: int](i: I) -> I + 2:
     return succ(succ(i))
 ```
 
+a bare type parameter is the expression `I`, so it takes part in the same
+comparison: terms that cancel back to what was asked for agree with it, whichever
+side they were written on.
+
+```by
+def cancels[I: int](i: I) -> I:
+    return i + 1 - 1
+
+def annotated[I: int](i: I) -> I + 0:
+    return i
+```
+
 `+`, `-`, `*` and the unary operators are decided this way. a comparison, a
 method call or an [attribute type](attribute-types.md) has no such decision
 procedure, so a body annotated with one is checked only against the type the
