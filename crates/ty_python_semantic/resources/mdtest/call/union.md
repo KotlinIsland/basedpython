@@ -132,7 +132,7 @@ class B:
 
 def _(flag: bool):
     cls = A if flag else B
-    # error: [invalid-argument-type] "Argument to `B.__init__` is incorrect: Expected `str`, found `Literal[1]`"
+    # error: [invalid-argument-type] "Argument to class `B` is incorrect: Expected `str`, found `Literal[1]`"
     reveal_type(cls(1))  # revealed: A | B
 ```
 
@@ -148,8 +148,8 @@ class B:
     def __init__(self, x: int) -> None: ...
 
 def _(factory: type[A] | type[B]):
-    # error: [invalid-argument-type] "Argument to `A.__init__` is incorrect: Expected `int`, found `Literal["hello"]`"
-    # error: [invalid-argument-type] "Argument to `B.__init__` is incorrect: Expected `int`, found `Literal["hello"]`"
+    # error: [invalid-argument-type] "Argument to class `A` is incorrect: Expected `int`, found `Literal["hello"]`"
+    # error: [invalid-argument-type] "Argument to class `B` is incorrect: Expected `int`, found `Literal["hello"]`"
     factory("hello")
 ```
 
@@ -174,8 +174,8 @@ class IntDiag(DeferredDiagBase[int]): ...
 class StrDiag(DeferredDiagBase[str]): ...
 
 def _(factory: type[IntDiag] | type[StrDiag]):
-    # error: [invalid-argument-type] "Argument to `DeferredDiagBase.__init__` is incorrect: Expected `int`, found `float`"
-    # error: [invalid-argument-type] "Argument to `DeferredDiagBase.__init__` is incorrect: Expected `str`, found `float`"
+    # error: [invalid-argument-type] "Argument to class `IntDiag` is incorrect: Expected `int`, found `float`"
+    # error: [invalid-argument-type] "Argument to class `StrDiag` is incorrect: Expected `str`, found `float`"
     factory(1.2)
 ```
 
