@@ -1321,6 +1321,25 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                 }
             }
 
+            // basedpython: the same question from the other side. a bare type parameter is
+            // the expression `I`, so the source names the target's value exactly when their
+            // linear forms agree — `i + 1 - 1` satisfies `-> I` for the same reason `i`
+            // satisfies `-> I + 0`. reducing the source first would compare `int` against
+            // `I` and reject it. as above, a gradual operand keeps its licence to stand for
+            // anything and an undecidable comparison falls back to the reduced relation
+            (Type::Deferred(source_deferred), Type::TypeVar(_))
+                if source_deferred.is_checked_arithmetic(db) =>
+            {
+                match LinearForm::same_value(db, source, target) {
+                    // the same value, so the target's own relation to itself is the answer
+                    Some(true) => self.check_type_pair(db, target, target),
+                    Some(false) if !any_over_type(db, source, false, |ty| ty.is_dynamic()) => {
+                        self.never()
+                    }
+                    _ => self.check_type_pair(db, source_deferred.reduced(db), target),
+                }
+            }
+
             (Type::Deferred(source_deferred), _) => {
                 self.check_type_pair(db, source_deferred.reduced(db), target)
             }

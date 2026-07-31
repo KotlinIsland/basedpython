@@ -199,6 +199,35 @@ def scaled[I: int](i: I) -> I * 2:
     return i + i
 ```
 
+a bare type parameter is the expression `I`, so the agreement is decided the same way when only the
+*body* is arithmetic — the terms cancelling back to what was asked for is an agreement like any
+other:
+
+```by
+def cancels[I: int](i: I) -> I:
+    return i + 1 - 1
+
+def added_nothing[I: int](i: I) -> I:
+    return i + 0
+
+def scaled_by_one[I: int](i: I) -> I:
+    return i * 1
+
+def twice_negated[I: int](i: I) -> I:
+    return -(-i)
+
+def off_by_one[I: int](i: I) -> I:
+    # error: [invalid-return-type] "Return type does not match returned value: expected `I@off_by_one`, found `I@off_by_one + 1`"
+    return i + 1
+```
+
+which is the same relation the other way round, where the annotation carries the terms that cancel:
+
+```by
+def annotated[I: int](i: I) -> I + 0:
+    return i
+```
+
 that holds of several parameters at once — the terms are compared as terms, not in the order the
 expression happens to introduce them:
 
