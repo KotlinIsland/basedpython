@@ -52,6 +52,66 @@ an operation ty cannot resolve to a concrete type (for example `+` between two
 classes) is left untouched and reported as an invalid type form, the same as any
 other unusable annotation.
 
+## a type parameter operand
+
+an operand may be a type parameter, which is not known where the annotation is
+written. the operation is then kept symbolic rather than collapsed to the
+parameter's bound, and re-evaluated against each specialization:
+
+```by
+class Array[Dim: int]
+
+def extend[Dim: int](a: Array[Dim]) -> Array[Dim + 1]:
+    return a
+
+def f(data: Array[5]):
+    reveal_type(extend(data))       # `Array[6]`
+    reveal_type(extend(extend(data)))  # `Array[7]`
+```
+
+collapsing `Dim + 1` to `int` at the definition would throw the relationship
+away and infer `Array[int]` at every call site.
+
+### the body is checked against the operation
+
+`I + 1` names one value per specialization, so a body has to produce *that*
+value — checking against the reduced form would ask only for an `int`:
+
+```by
+def succ[I: int](i: I) -> I + 1:
+    return i + 1        # ok
+
+def wrong[I: int](i: I) -> I + 1:
+    return i            # error: expected `I + 1`, found `I`
+```
+
+arithmetic on values is kept symbolic for this, so `i + 1` has the type `I + 1`
+rather than `int`. two expressions naming the same value need not be written the
+same way: operands may be commuted, constants folded together, terms cancelled,
+and calls whose own return type is symbolic composed.
+
+```by
+def commuted[I: int](i: I) -> I + 1:
+    return 1 + i
+
+def rearranged[I: int](i: I) -> I * 2 + 1:
+    return 1 + 2 * i
+
+def twice[I: int](i: I) -> I + 2:
+    return succ(succ(i))
+```
+
+`+`, `-`, `*` and the unary operators are decided this way. a comparison, a
+method call or an [attribute type](attribute-types.md) has no such decision
+procedure, so a body annotated with one is checked only against the type the
+operation reduces to. a body that is correct for a reason the checker cannot see
+takes the escape hatch every other unprovable assignment takes:
+
+```by
+def from_len[I: int](i: I, xs: list[int]) -> I + 1:
+    return len(xs) cast I + 1
+```
+
 ## polyfill
 
 there is no runtime construct: the operation is resolved at transpile time and

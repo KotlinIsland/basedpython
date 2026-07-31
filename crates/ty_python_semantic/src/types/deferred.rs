@@ -43,13 +43,13 @@ use super::infer::{
     deferred_comparison, fold_tuple_concat, fold_tuple_repeat, literal_binary_op, literal_unary_op,
 };
 use super::visitor::{self, any_over_type};
-use crate::Db;
 use crate::types::call::CallArguments;
 use crate::types::match_type::{MatchTypeOutcome, evaluate_match_type};
 use crate::types::type_fn::{
     TypeFnArguments, TypeFnOutcome, declared_return_type, evaluate_type_fn,
 };
 use crate::types::{KnownClass, KnownInstanceType, TypeContext};
+use crate::{Db, FxOrderMap};
 
 /// The kind of a [`DeferredType`]'s pending operation. Each variant fixes how many
 /// operands the deferral carries and which value-level fold re-evaluates it.
@@ -87,6 +87,23 @@ pub enum DeferredOperation {
 }
 
 impl DeferredOperation {
+    /// basedpython: whether a body written against this operation can be checked.
+    ///
+    /// [`LinearForm`] decides when two integer expressions name the same value, which
+    /// covers `+`, `-`, `*` and the unary operators. Every other kind — a call, a
+    /// `type def`, a match type, an attribute type — has no such decision procedure, so
+    /// annotating with one leaves the body checked only against the reduced form.
+    pub(crate) const fn is_checked_arithmetic(&self) -> bool {
+        matches!(
+            self,
+            DeferredOperation::Binary(
+                ast::Operator::Add | ast::Operator::Sub | ast::Operator::Mult
+            ) | DeferredOperation::Unary(
+                ast::UnaryOp::USub | ast::UnaryOp::UAdd | ast::UnaryOp::Invert
+            )
+        )
+    }
+
     /// The operands that decide whether the operation can be evaluated yet.
     ///
     /// For most kinds that is every operand. A [`DeferredOperation::MatchType`] carries the
@@ -193,6 +210,176 @@ impl<'db> DeferredType<'db> {
     /// basedpython: whether this deferral is an attribute type (`T.a`).
     pub(crate) fn is_attribute(self, db: &'db dyn Db) -> bool {
         matches!(self.operation(db), DeferredOperation::Attribute(_))
+    }
+
+    /// basedpython: see [`DeferredOperation::is_checked_arithmetic`].
+    pub(crate) fn is_checked_arithmetic(self, db: &'db dyn Db) -> bool {
+        self.operation(db).is_checked_arithmetic()
+    }
+}
+
+/// basedpython: whether a value-level operand is one whose value a specialization decides.
+///
+/// Unlike [`DeferredType::is_deferred`] this looks only at the operand itself instead of
+/// walking into it. An arithmetic operand is a scalar, so a type parameter buried inside one
+/// — the `T` in `list[T]` — contributes no value to keep symbolic; staying shallow also keeps
+/// this off the hot path of every `+` in a basedpython file.
+pub(crate) const fn is_symbolic_operand(ty: Type<'_>) -> bool {
+    matches!(ty, Type::TypeVar(_) | Type::Deferred(_))
+}
+
+/// basedpython: whether a value-level operand is an integer, and so has a [`LinearForm`] that
+/// can be compared against a declared return type. A non-integer operand — `str`
+/// concatenation, say — has no such form, so keeping its operation symbolic would buy a
+/// weaker relation and nothing else.
+pub(crate) fn is_integer_operand<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
+    ty.reduce_deferred(db)
+        .is_subtype_of(db, KnownClass::Int.to_instance(db))
+}
+
+/// basedpython: an integer expression over type parameters flattened to
+/// `constant + Σ coefficient × atom`.
+///
+/// A symbolic return type names one specific value per specialization, so a body must be
+/// checked against the operation itself rather than against its reduced form — otherwise
+/// `-> I + 1` accepts every `int`, including `i`. Two expressions that name the same value
+/// need not be the same tree, though: `1 + i` differs from `i + 1` only in operand order,
+/// and two applications of `-> I + 1` build `(I + 1) + 1` where the author wrote `I + 2`.
+/// Flattening decides those agreements without needing a canonical form, which would have
+/// to rank types against each other and make the answer depend on that ranking.
+///
+/// Only the operations [`DeferredOperation::is_checked_arithmetic`] admits are taken apart.
+/// Anything else — a call, an attribute type, a bare type parameter — is an *atom*: it
+/// stands for itself and agrees only with an identical type.
+#[derive(Debug)]
+pub(crate) struct LinearForm<'db> {
+    constant: i64,
+    /// A zero coefficient is dropped rather than stored, so that two forms are equal exactly
+    /// when they agree on every term.
+    terms: FxOrderMap<Type<'db>, i64>,
+}
+
+impl PartialEq for LinearForm<'_> {
+    /// Two forms are compared term by term rather than in the order the terms happen to have
+    /// been collected, so `A + B` and `B + A` are the same form. The map's own `Eq` would
+    /// answer by insertion order, which is an artefact of the expression's shape — the very
+    /// thing flattening exists to look past.
+    fn eq(&self, other: &Self) -> bool {
+        self.constant == other.constant
+            && self.terms.len() == other.terms.len()
+            && self
+                .terms
+                .iter()
+                .all(|(atom, coefficient)| other.terms.get(atom) == Some(coefficient))
+    }
+}
+
+impl Eq for LinearForm<'_> {}
+
+impl<'db> LinearForm<'db> {
+    fn constant(constant: i64) -> Self {
+        Self {
+            constant,
+            terms: FxOrderMap::default(),
+        }
+    }
+
+    fn atom(ty: Type<'db>) -> Self {
+        Self {
+            constant: 0,
+            terms: std::iter::once((ty, 1)).collect(),
+        }
+    }
+
+    fn as_constant(&self) -> Option<i64> {
+        self.terms.is_empty().then_some(self.constant)
+    }
+
+    fn add(mut self, other: Self) -> Option<Self> {
+        self.constant = self.constant.checked_add(other.constant)?;
+        for (atom, coefficient) in other.terms {
+            let combined = self
+                .terms
+                .get(&atom)
+                .copied()
+                .unwrap_or_default()
+                .checked_add(coefficient)?;
+            if combined == 0 {
+                self.terms.remove(&atom);
+            } else {
+                self.terms.insert(atom, combined);
+            }
+        }
+        Some(self)
+    }
+
+    fn scale(mut self, factor: i64) -> Option<Self> {
+        if factor == 0 {
+            return Some(Self::constant(0));
+        }
+        self.constant = self.constant.checked_mul(factor)?;
+        for coefficient in self.terms.values_mut() {
+            *coefficient = coefficient.checked_mul(factor)?;
+        }
+        Some(self)
+    }
+
+    fn negate(self) -> Option<Self> {
+        self.scale(-1)
+    }
+
+    /// Flatten `ty`. `None` means the question cannot be decided — the arithmetic overflowed
+    /// — rather than that the type has no form; the caller must not read that as disagreement.
+    fn of(db: &'db dyn Db, ty: Type<'db>) -> Option<Self> {
+        if let Some(value) = ty
+            .as_literal_value()
+            .and_then(super::literal::LiteralValueType::as_int)
+        {
+            return Some(Self::constant(value));
+        }
+
+        let Type::Deferred(deferred) = ty else {
+            return Some(Self::atom(ty));
+        };
+        if !deferred.is_checked_arithmetic(db) {
+            return Some(Self::atom(ty));
+        }
+
+        match (deferred.operation(db), deferred.operands(db)) {
+            (DeferredOperation::Binary(op), [left, right]) => {
+                let left = Self::of(db, *left)?;
+                let right = Self::of(db, *right)?;
+                match op {
+                    ast::Operator::Add => left.add(right),
+                    ast::Operator::Sub => left.add(right.negate()?),
+                    // a product of two unknowns is not linear, so it stands for itself
+                    ast::Operator::Mult => match (left.as_constant(), right.as_constant()) {
+                        (Some(factor), _) => right.scale(factor),
+                        (_, Some(factor)) => left.scale(factor),
+                        _ => Some(Self::atom(ty)),
+                    },
+                    _ => Some(Self::atom(ty)),
+                }
+            }
+            (DeferredOperation::Unary(op), [operand]) => match op {
+                ast::UnaryOp::USub => Self::of(db, *operand)?.negate(),
+                ast::UnaryOp::UAdd => Self::of(db, *operand),
+                // `~I` is `-I - 1`, but only for an integer, and the operand's bound is not
+                // consulted here. leaving it whole costs nothing: it still agrees with itself
+                _ => Some(Self::atom(ty)),
+            },
+            _ => Some(Self::atom(ty)),
+        }
+    }
+
+    /// Whether `source` and `target` name the same value. `None` when undecidable, in which
+    /// case the caller falls back to the reduced relation rather than inventing an answer.
+    pub(crate) fn same_value(
+        db: &'db dyn Db,
+        source: Type<'db>,
+        target: Type<'db>,
+    ) -> Option<bool> {
+        Some(Self::of(db, source)? == Self::of(db, target)?)
     }
 }
 

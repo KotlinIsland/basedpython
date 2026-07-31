@@ -20,12 +20,14 @@ use crate::types::constraints::{
     OwnedConstraintSet,
 };
 use crate::types::cyclic::{HasIdentity, PairVisitor, TypeIdentity};
+use crate::types::deferred::LinearForm;
 use crate::types::enums::is_single_member_enum;
 use crate::types::function::FunctionDecorators;
 use crate::types::restricted::restriction_admits;
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{ParametersKind, SignatureRelationVisitor};
 use crate::types::tuple::TupleType;
+use crate::types::visitor::any_over_type;
 use crate::types::{
     ApplyTypeMappingVisitor, CallableType, ClassBase, ClassLiteral, ClassType, CycleDetector,
     IntersectionType, KnownBoundMethodType, KnownClass, KnownInstanceType, LiteralValueTypeKind,
@@ -1288,6 +1290,33 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
 
             (Type::Restricted(source_restricted), _) => {
                 self.check_type_pair(db, source_restricted.value_type(db), target)
+            }
+
+            // basedpython: in *target* position an arithmetic deferral names one specific
+            // value per specialization, so reducing it the way the source arm below does
+            // would let any `int` stand in for `I + 1` — including `I` itself. the source has
+            // to name the same value, which [`LinearForm`] decides. a gradual source keeps
+            // its licence to stand for anything, and an undecidable comparison falls back to
+            // the reduced relation rather than reporting a disagreement it did not establish.
+            //
+            // this has to precede the source arm: a source that is itself an arithmetic
+            // deferral is exactly the interesting case, and reducing it first would compare
+            // `int` against `int` and always agree
+            (_, Type::Deferred(target_deferred)) if target_deferred.is_checked_arithmetic(db) => {
+                let names_another_value = !any_over_type(db, source, false, |ty| ty.is_dynamic())
+                    && LinearForm::same_value(db, source, target) == Some(false);
+                if names_another_value {
+                    self.never()
+                } else {
+                    // the symbolic question is settled, so both sides reduce here rather
+                    // than falling through — reducing only the source would re-enter this
+                    // arm and ask it of a source that no longer mentions the parameter
+                    self.check_type_pair(
+                        db,
+                        source.reduce_deferred(db),
+                        target_deferred.reduced(db),
+                    )
+                }
             }
 
             (Type::Deferred(source_deferred), _) => {

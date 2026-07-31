@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use ruff_db::files::FilePath;
 use ruff_db::source::{line_index, source_text};
+use ruff_python_ast as ast;
 use ruff_python_ast::str::{Quote, TripleQuotes};
 use ruff_python_literal::escape::AsciiEscape;
 use ruff_source_file::LineColumn;
@@ -31,11 +32,11 @@ use crate::types::tuple::{TupleSpec, VariableSegment};
 use crate::types::typevar::BoundTypeVarIdentity;
 use crate::types::visitor::TypeVisitor;
 use crate::types::{
-    CallableType, DynamicType, IntersectionType, KnownBoundMethodType, KnownClass,
-    KnownInstanceType, LiteralValueType, LiteralValueTypeKind, MaterializationKind,
-    PropertyInstanceType, Protocol, ProtocolInstanceType, SpecialFormType, StringLiteralType,
-    SubclassOfInner, SubclassOfType, Type, TypeAliasType, TypeGuardLike, TypedDictModule,
-    TypedDictType, UnionType, WrapperDescriptorKind, visitor,
+    CallableType, DeferredOperation, DeferredType, DynamicType, IntersectionType,
+    KnownBoundMethodType, KnownClass, KnownInstanceType, LiteralValueType, LiteralValueTypeKind,
+    MaterializationKind, PropertyInstanceType, Protocol, ProtocolInstanceType, SpecialFormType,
+    StringLiteralType, SubclassOfInner, SubclassOfType, Type, TypeAliasType, TypeGuardLike,
+    TypedDictModule, TypedDictType, UnionType, WrapperDescriptorKind, visitor,
 };
 use ty_python_core::definition::Definition;
 use ty_python_core::scope::{FileScopeId, ScopeKind};
@@ -137,6 +138,12 @@ pub struct DisplaySettings<'db> {
     /// subscript writes it. Only ever set for `.by` output — python's subscript
     /// grammar has no keyword form.
     pub name_type_arguments: bool,
+    /// basedpython: whether a symbolic arithmetic operation is shown as the type it
+    /// reduces to (`int`) rather than as the expression it stands for (`I + 1`). Only
+    /// ever set by the transpiler: an expression reads better everywhere a human sees
+    /// it, but emitting one as python would evaluate `_I + 1` on a `TypeVar` object at
+    /// import time.
+    pub reduce_symbolic_operations: bool,
 }
 
 impl<'db> DisplaySettings<'db> {
@@ -145,6 +152,16 @@ impl<'db> DisplaySettings<'db> {
     pub fn with_named_type_arguments(&self) -> Self {
         Self {
             name_type_arguments: true,
+            ..self.clone()
+        }
+    }
+
+    /// basedpython: show a symbolic arithmetic operation as the type it reduces to, for
+    /// output that has to be valid python.
+    #[must_use]
+    pub fn with_reduced_symbolic_operations(&self) -> Self {
+        Self {
+            reduce_symbolic_operations: true,
             ..self.clone()
         }
     }
@@ -1011,6 +1028,72 @@ fn fmt_type_guard_like<'db, T: TypeGuardLike<'db>>(
     f.write_str("]")
 }
 
+/// basedpython: how tightly a symbolic arithmetic operation binds, so that a nested operand
+/// is parenthesised exactly when the expression would otherwise read as a different one.
+/// Anything that is not such an operation is a leaf and never needs parentheses.
+fn deferred_binding_power(db: &dyn Db, ty: Type<'_>) -> u8 {
+    let Type::Deferred(deferred) = ty else {
+        return u8::MAX;
+    };
+    match deferred.operation(db) {
+        DeferredOperation::Binary(ast::Operator::Add | ast::Operator::Sub) => 1,
+        DeferredOperation::Binary(ast::Operator::Mult) => 2,
+        DeferredOperation::Unary(_) => 3,
+        _ => u8::MAX,
+    }
+}
+
+/// basedpython: write a symbolic arithmetic operation back out as the expression it stands
+/// for, e.g. `I@succ + 1`. `minimum_binding_power` is what the surrounding operator requires
+/// of this position; a weaker-binding operation there is parenthesised.
+fn fmt_deferred_arithmetic<'db>(
+    db: &'db dyn Db,
+    deferred: DeferredType<'db>,
+    settings: &DisplaySettings<'db>,
+    minimum_binding_power: u8,
+    f: &mut TypeWriter<'_, '_, 'db>,
+) -> fmt::Result {
+    let binding_power = deferred_binding_power(db, Type::Deferred(deferred));
+    let parenthesised = binding_power < minimum_binding_power;
+    if parenthesised {
+        f.write_char('(')?;
+    }
+
+    let operand = |f: &mut TypeWriter<'_, '_, 'db>, ty: Type<'db>, minimum: u8| match ty {
+        Type::Deferred(nested) if nested.is_checked_arithmetic(db) => {
+            fmt_deferred_arithmetic(db, nested, settings, minimum, f)
+        }
+        _ => ty.display_with(db, settings.clone()).fmt_detailed(f),
+    };
+
+    match (deferred.operation(db), deferred.operands(db)) {
+        (DeferredOperation::Binary(op), [left, right]) => {
+            operand(f, *left, binding_power)?;
+            f.write_char(' ')?;
+            f.write_str(op.as_str())?;
+            f.write_char(' ')?;
+            // `a - (b - c)` is not `a - b - c`, so the right operand of a left-associative
+            // operator has to bind one step tighter to go unparenthesised
+            operand(f, *right, binding_power + 1)?;
+        }
+        (DeferredOperation::Unary(op), [inner]) => {
+            f.write_str(op.as_str())?;
+            operand(f, *inner, binding_power)?;
+        }
+        // `is_checked_arithmetic` admits no other shape; a deferral built with the wrong
+        // operand count is still better shown reduced than not at all
+        _ => Type::Deferred(deferred)
+            .reduce_deferred(db)
+            .display_with(db, settings.clone())
+            .fmt_detailed(f)?,
+    }
+
+    if parenthesised {
+        f.write_char(')')?;
+    }
+    Ok(())
+}
+
 /// Writes the string representation of a type, which is the value displayed either as
 /// `Literal[<repr>]` or `Literal[<repr1>, <repr2>]` for literal types or as `<repr>` for
 /// non literals
@@ -1540,9 +1623,18 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                     .fmt_detailed(f)?;
                 f.write_char(']')
             }
-            // an unspecialized deferred operation displays as its reduced form (e.g.
-            // `Array[Dim + 1]` shows as `Array[int]`); once specialized it has folded
-            // to a concrete type and this arm is not reached
+            // an arithmetic operation is written back out as the expression it stands for:
+            // a body checked against `I + 1` is rejected by naming a *different* value, and
+            // the reduced form would report that as `int` against `int`
+            Type::Deferred(deferred)
+                if deferred.is_checked_arithmetic(self.db)
+                    && !self.settings.reduce_symbolic_operations =>
+            {
+                fmt_deferred_arithmetic(self.db, deferred, &self.settings, 0, f)
+            }
+            // every other unspecialized operation displays as its reduced form (`T.a` shows
+            // as the bound's `a`); once specialized it has folded to a concrete type and
+            // this arm is not reached
             Type::Deferred(deferred) => deferred
                 .reduced(self.db)
                 .display_with(self.db, self.settings.clone())

@@ -63,6 +63,7 @@ use crate::types::constraints::{ConstraintSetBuilder, PathBounds, Solutions};
 use crate::types::context::InferContext;
 use crate::types::context_sensitive;
 use crate::types::dedicated::{django, pydantic};
+use crate::types::deferred::{is_integer_operand, is_symbolic_operand};
 use crate::types::diagnostic::{
     self, AMBIGUOUS_EXTENSION_MEMBER, CALL_NON_CALLABLE, CONFLICTING_DECLARATIONS,
     CYCLIC_TYPE_ALIAS_DEFINITION, ERASED_CAST_ARGUMENT, ERASED_TYPE_CHECK, FINAL_ON_VARIABLE,
@@ -13065,6 +13066,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             (_, Type::Overlapping(overlapping)) => overlapping.value_type(self.db()),
             (_, Type::Restricted(restricted)) => {
                 self.infer_unary_expression_type(op, restricted.value_type(self.db()), unary)
+            }
+            // basedpython: the counterpart of the symbolic arithmetic in
+            // `infer_binary_expression_type_impl` — `-i` has to build the same operation the
+            // annotation `-> -I` builds, or the two could never be compared
+            (op, operand_type)
+                if self.is_basedpython_file()
+                    && DeferredOperation::Unary(op).is_checked_arithmetic()
+                    && is_symbolic_operand(operand_type)
+                    && is_integer_operand(self.db(), operand_type) =>
+            {
+                DeferredType::build(
+                    self.db(),
+                    &DeferredOperation::Unary(op),
+                    Box::new([operand_type]),
+                )
             }
             (_, Type::Deferred(deferred)) => deferred.reduced(self.db()),
             (ast::UnaryOp::Invert | ast::UnaryOp::UAdd | ast::UnaryOp::USub, Type::Dynamic(_))
