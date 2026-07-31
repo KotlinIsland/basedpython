@@ -674,26 +674,13 @@ impl<'db> StaticClassLiteral<'db> {
             // basedpython `enum class Foo` and `protocol Foo` parse to a class with a
             // synthetic decorator (`enum_class` / `protocol_class`). inject the matching
             // base so ty treats the class as an Enum/Protocol subclass without needing the
-            // transpile step
-            let source = ruff_db::source::source_text(db, class.file(db));
-            for decorator in &class_stmt.decorator_list {
-                let start = usize::from(decorator.range.start());
-                if source.as_bytes().get(start).copied() == Some(b'@') {
-                    continue;
-                }
-                let ast::Expr::Name(name) = &decorator.expression else {
-                    continue;
-                };
-                let injected = match name.id.as_str() {
-                    "enum_class" => Some(KnownClass::Enum.to_class_literal(db)),
-                    "protocol_class" => {
-                        Some(Type::SpecialForm(crate::types::SpecialFormType::Protocol))
-                    }
-                    _ => None,
-                };
-                if let Some(ty) = injected {
-                    bases.push(ty);
-                }
+            // transpile step. `has_injected_base` lists every form this applies to and is
+            // what keeps `HAS_EXPLICIT_BASES` in step with it
+            if class_stmt.has_synthetic_marker("enum_class") {
+                bases.push(KnownClass::Enum.to_class_literal(db));
+            }
+            if class_stmt.has_synthetic_marker("protocol_class") {
+                bases.push(Type::SpecialForm(crate::types::SpecialFormType::Protocol));
             }
 
             // a based all-unit enum (`enum class Color: case Red, Green`) lowers
