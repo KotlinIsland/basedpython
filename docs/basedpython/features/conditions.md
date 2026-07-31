@@ -108,6 +108,29 @@ the check applies to a value *read* — a name, an attribute, a subscript. a com
 computes a fresh value, and ty folding *that* one is the statically-known-branch machinery doing its
 job: `elif isinstance(x, B):` closing an exhaustive chain is deliberate, and so is `while True`
 
+what a read is worth differs by what ty knows about the place, so the same flag written two ways
+does not report the same way. a *name* is read at its narrowed type, so a module-level constant is
+one — its single assignment fixes the outcome and a branch guarded by it is dead. an attribute or a
+subscript is read at its *declared* type, which for a `bool`-valued flag is `bool`, so the same
+constant written as a class attribute is not reported
+
+```by
+DEBUG = False
+
+if DEBUG:  # warning: always false — the branch is dead
+
+class Settings:
+    ENABLED: bool = False
+
+    def run(self) -> None:
+        if self.ENABLED:  # ok — an attribute reads as its declared `bool`
+            ...
+```
+
+a constant flag whose dead branch is deliberate is what `# ty: ignore[redundant-condition]` is for,
+or turn the rule off for the module. the [artificial](#artificial-truthiness) exemption below is not
+it: that covers constants ty *manufactures*, not ones the program sets
+
 ## artificial truthiness
 
 some constants are constant only because of how ty models the build it is checking for.
