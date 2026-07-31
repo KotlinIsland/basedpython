@@ -233,11 +233,11 @@ class C(NamedTuple("C", [("x", "A")])): ...
 
 reveal_type(A(x=B(x=C(x=A(x=None)))))  # revealed: A
 
-# error: [invalid-argument-type] "Argument is incorrect: Expected `B | None`, found `C`"
+# error: [invalid-argument-type] "Argument to class `A` is incorrect: Expected `B | None`, found `C`"
 # error: [missing-argument] "No argument provided for required parameter `x`"
 A(x=C())
 
-# error: [invalid-argument-type] "Argument is incorrect: Expected `B | None`, found `C`"
+# error: [invalid-argument-type] "Argument to class `A` is incorrect: Expected `B | None`, found `C`"
 A(x=C(x=A(x=None)))
 ```
 

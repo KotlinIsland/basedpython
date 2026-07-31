@@ -294,7 +294,7 @@ emit an error:
 ```py
 class NoInit: ...
 
-# error: [too-many-positional-arguments] "Too many positional arguments to `object.__init__`: expected 1, got 2"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `NoInit`: expected 0, got 1"
 @NoInit
 def foo(): ...
 
@@ -361,7 +361,7 @@ Using `type[SomeClass]` as a decorator validates against the class's constructor
 class Base: ...
 
 def apply_decorator(cls: type[Base]) -> None:
-    # error: [too-many-positional-arguments] "Too many positional arguments to `object.__init__`: expected 1, got 2"
+    # error: [too-many-positional-arguments] "Too many positional arguments to class `Base`: expected 0, got 1"
     @cls
     def inner() -> None: ...
 ```

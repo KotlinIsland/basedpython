@@ -110,3 +110,26 @@ x = A(1)
 # the public name is not an attribute — it is name-mangled
 x.a  # error: [unresolved-attribute]
 ```
+
+## call diagnostics name the class
+
+`init` has no `__init__` in the source to point at, so a bad constructor call names the class the
+caller actually wrote.
+
+```by
+class A:
+    init(a: int)
+
+# error: [invalid-argument-type] "Argument to class `A` is incorrect: Expected `int`, found `"s"`"
+A("s")
+
+# error: [missing-argument] "No argument provided for required parameter `a` of class `A`"
+A()
+
+# error: [too-many-positional-arguments] "Too many positional arguments to class `A`: expected 1, got 2"
+A(1, 2)
+
+# error: [unknown-argument] "Argument `b` does not match any known parameter of class `A`"
+# error: [missing-argument] "No argument provided for required parameter `a` of class `A`"
+A(b=1)
+```

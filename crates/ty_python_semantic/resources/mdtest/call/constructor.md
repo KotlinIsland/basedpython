@@ -42,7 +42,7 @@ class Foo: ...
 
 reveal_type(Foo())  # revealed: Foo
 
-# error: [too-many-positional-arguments] "Too many positional arguments to `object.__init__`: expected 1, got 2"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Foo`: expected 0, got 1"
 reveal_type(Foo(1))  # revealed: Foo
 ```
 
@@ -68,11 +68,11 @@ class Foo:
 
 reveal_type(Foo(1))  # revealed: Foo
 
-# error: [invalid-argument-type] "Argument to constructor `Foo.__new__` is incorrect: Expected `int`, found `Literal["x"]`"
+# error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `Literal["x"]`"
 reveal_type(Foo("x"))  # revealed: Foo
-# error: [missing-argument] "No argument provided for required parameter `x` of constructor `Foo.__new__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
 reveal_type(Foo())  # revealed: Foo
-# error: [too-many-positional-arguments] "Too many positional arguments to constructor `Foo.__new__`: expected 2, got 3"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Foo`: expected 1, got 2"
 reveal_type(Foo(1, 2))  # revealed: Foo
 ```
 
@@ -114,9 +114,9 @@ class Foo(Base): ...
 
 reveal_type(Foo(1))  # revealed: Foo
 
-# error: [missing-argument] "No argument provided for required parameter `x` of constructor `Base.__new__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
 reveal_type(Foo())  # revealed: Foo
-# error: [too-many-positional-arguments] "Too many positional arguments to constructor `Base.__new__`: expected 2, got 3"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Foo`: expected 1, got 2"
 reveal_type(Foo(1, 2))  # revealed: Foo
 ```
 
@@ -133,7 +133,7 @@ class Foo:
 reveal_type(Foo(1))  # revealed: Foo
 
 Foo(1)
-# error: [too-many-positional-arguments] "Too many positional arguments to constructor `Foo.__new__`: expected 2, got 3"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Foo`: expected 1, got 2"
 Foo(1, 2)
 ```
 
@@ -149,13 +149,13 @@ def _(flag: bool) -> None:
             def __new__(cls, x: int, y: int = 1): ...
 
     reveal_type(Foo(1))  # revealed: Foo
-    # error: [invalid-argument-type] "Argument to constructor `Foo.__new__` is incorrect: Expected `int`, found `Literal["1"]`"
-    # error: [invalid-argument-type] "Argument to constructor `Foo.__new__` is incorrect: Expected `int`, found `Literal["1"]`"
+    # error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `Literal["1"]`"
+    # error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `Literal["1"]`"
     reveal_type(Foo("1"))  # revealed: Foo
-    # error: [missing-argument] "No argument provided for required parameter `x` of constructor `Foo.__new__`"
-    # error: [missing-argument] "No argument provided for required parameter `x` of constructor `Foo.__new__`"
+    # error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
+    # error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
     reveal_type(Foo())  # revealed: Foo
-    # error: [too-many-positional-arguments] "Too many positional arguments to constructor `Foo.__new__`: expected 2, got 3"
+    # error: [too-many-positional-arguments] "Too many positional arguments to class `Foo`: expected 1, got 2"
     reveal_type(Foo(1, 2))  # revealed: Foo
 ```
 
@@ -176,7 +176,7 @@ class Foo:
     __new__: Descriptor = Descriptor()
 
 reveal_type(Foo(1))  # revealed: Foo
-# error: [missing-argument] "No argument provided for required parameter `x` of bound method `SomeCallable.__call__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
 reveal_type(Foo())  # revealed: Foo
 ```
 
@@ -214,7 +214,7 @@ class D:
     def __init__(self, value: int) -> None:
         pass
 
-# error: [missing-argument] "No argument provided for required parameter `value` of `D.__init__`"
+# error: [missing-argument] "No argument provided for required parameter `value` of class `D`"
 D()
 ```
 
@@ -239,7 +239,7 @@ class E(SubclassFactory):
         pass
 
 # TODO should also be - error: [invalid-argument-type] "Argument to `E.__init__` is incorrect: Expected `int`, found `<class 'E'>`"
-# error: [missing-argument] "No argument provided for required parameter `value` of `E.__init__`"
+# error: [missing-argument] "No argument provided for required parameter `value` of class `E`"
 E()
 ```
 
@@ -289,8 +289,8 @@ class Foo:
     def __new__(cls, x: int):
         return object.__new__(cls)
 
-# error: [invalid-argument-type] "Argument to bound method `Foo.__new__` is incorrect: Expected `int`, found `<class 'Foo'>`"
-# error: [too-many-positional-arguments] "Too many positional arguments to bound method `Foo.__new__`: expected 1, got 2"
+# error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `<class 'Foo'>`"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Foo`: expected 0, got 1"
 Foo(1)
 
 class Bar:
@@ -298,7 +298,7 @@ class Bar:
     def __new__(cls) -> Self:
         raise NotImplementedError
 
-# error: [too-many-positional-arguments] "Too many positional arguments to bound method `Bar.__new__`: expected 0, got 1"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Bar`: expected 0, got 1"
 reveal_type(Bar())  # revealed: Bar
 ```
 
@@ -315,7 +315,7 @@ class Foo:
     __new__ = Callable()
 
 reveal_type(Foo(1))  # revealed: Foo
-# error: [missing-argument] "No argument provided for required parameter `x` of bound method `Callable.__call__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
 reveal_type(Foo())  # revealed: Foo
 ```
 
@@ -368,9 +368,9 @@ class Foo:
 
 reveal_type(Foo(1))  # revealed: Foo
 
-# error: [missing-argument] "No argument provided for required parameter `x` of `Foo.__init__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
 reveal_type(Foo())  # revealed: Foo
-# error: [too-many-positional-arguments] "Too many positional arguments to `Foo.__init__`: expected 2, got 3"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Foo`: expected 1, got 2"
 reveal_type(Foo(1, 2))  # revealed: Foo
 ```
 
@@ -1376,9 +1376,9 @@ class Foo(Base): ...
 
 reveal_type(Foo(1))  # revealed: Foo
 
-# error: [missing-argument] "No argument provided for required parameter `x` of `Base.__init__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
 reveal_type(Foo())  # revealed: Foo
-# error: [too-many-positional-arguments] "Too many positional arguments to `Base.__init__`: expected 2, got 3"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Foo`: expected 1, got 2"
 reveal_type(Foo(1, 2))  # revealed: Foo
 ```
 
@@ -1394,13 +1394,13 @@ def _(flag: bool) -> None:
             def __init__(self, x: int, y: int = 1): ...
 
     reveal_type(Foo(1))  # revealed: Foo
-    # error: [invalid-argument-type] "Argument to `Foo.__init__` is incorrect: Expected `int`, found `Literal["1"]`"
-    # error: [invalid-argument-type] "Argument to `Foo.__init__` is incorrect: Expected `int`, found `Literal["1"]`"
+    # error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `Literal["1"]`"
+    # error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `Literal["1"]`"
     reveal_type(Foo("1"))  # revealed: Foo
-    # error: [missing-argument] "No argument provided for required parameter `x` of `Foo.__init__`"
-    # error: [missing-argument] "No argument provided for required parameter `x` of `Foo.__init__`"
+    # error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
+    # error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
     reveal_type(Foo())  # revealed: Foo
-    # error: [too-many-positional-arguments] "Too many positional arguments to `Foo.__init__`: expected 2, got 3"
+    # error: [too-many-positional-arguments] "Too many positional arguments to class `Foo`: expected 1, got 2"
     reveal_type(Foo(1, 2))  # revealed: Foo
 ```
 
@@ -1423,7 +1423,7 @@ class Foo:
     __init__: Descriptor = Descriptor()
 
 reveal_type(Foo(1))  # revealed: Foo
-# error: [missing-argument] "No argument provided for required parameter `x` of bound method `SomeCallable.__call__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
 reveal_type(Foo())  # revealed: Foo
 ```
 
@@ -1440,7 +1440,7 @@ class Foo:
     __init__ = Callable()
 
 reveal_type(Foo(1))  # revealed: Foo
-# error: [missing-argument] "No argument provided for required parameter `x` of bound method `Callable.__call__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
 reveal_type(Foo())  # revealed: Foo
 ```
 
@@ -1479,11 +1479,11 @@ class Foo:
     def __init__(self, x: int) -> None:
         self.x = x
 
-# error: [missing-argument] "No argument provided for required parameter `x` of `Foo.__init__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
 reveal_type(Foo())  # revealed: Foo
 reveal_type(Foo(1))  # revealed: Foo
 
-# error: [too-many-positional-arguments] "Too many positional arguments to `Foo.__init__`: expected 2, got 3"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Foo`: expected 1, got 2"
 reveal_type(Foo(1, 2))  # revealed: Foo
 ```
 
@@ -1497,10 +1497,10 @@ class Foo:
     def __init__(self, x: str) -> None:
         self.x = x
 
-# error: [invalid-argument-type] "Argument to `Foo.__init__` is incorrect: Expected `str`, found `Literal[1]`"
+# error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `str`, found `Literal[1]`"
 Foo(1)
 
-# error: [invalid-argument-type] "Argument to constructor `Foo.__new__` is incorrect: Expected `int`, found `Literal["x"]`"
+# error: [invalid-argument-type] "Argument to class `Foo` is incorrect: Expected `int`, found `Literal["x"]`"
 Foo("x")
 ```
 
@@ -1516,10 +1516,10 @@ class Foo:
     def __init__(self, x):
         self.x = 42
 
-# error: [missing-argument] "No argument provided for required parameter `x` of `Foo.__init__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo`"
 reveal_type(Foo())  # revealed: Foo
 
-# error: [too-many-positional-arguments] "Too many positional arguments to constructor `Foo.__new__`: expected 1, got 2"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Foo`: expected 0, got 1"
 reveal_type(Foo(42))  # revealed: Foo
 
 class Foo2:
@@ -1529,10 +1529,10 @@ class Foo2:
     def __init__(self):
         pass
 
-# error: [missing-argument] "No argument provided for required parameter `x` of constructor `Foo2.__new__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo2`"
 reveal_type(Foo2())  # revealed: Foo2
 
-# error: [too-many-positional-arguments] "Too many positional arguments to `Foo2.__init__`: expected 1, got 2"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Foo2`: expected 0, got 1"
 reveal_type(Foo2(42))  # revealed: Foo2
 
 class Foo3(metaclass=abc.ABCMeta):
@@ -1542,10 +1542,10 @@ class Foo3(metaclass=abc.ABCMeta):
     def __init__(self, x):
         self.x = 42
 
-# error: [missing-argument] "No argument provided for required parameter `x` of `Foo3.__init__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo3`"
 reveal_type(Foo3())  # revealed: Foo3
 
-# error: [too-many-positional-arguments] "Too many positional arguments to constructor `Foo3.__new__`: expected 1, got 2"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Foo3`: expected 0, got 1"
 reveal_type(Foo3(42))  # revealed: Foo3
 
 class Foo4(metaclass=abc.ABCMeta):
@@ -1555,10 +1555,10 @@ class Foo4(metaclass=abc.ABCMeta):
     def __init__(self):
         pass
 
-# error: [missing-argument] "No argument provided for required parameter `x` of constructor `Foo4.__new__`"
+# error: [missing-argument] "No argument provided for required parameter `x` of class `Foo4`"
 reveal_type(Foo4())  # revealed: Foo4
 
-# error: [too-many-positional-arguments] "Too many positional arguments to `Foo4.__init__`: expected 1, got 2"
+# error: [too-many-positional-arguments] "Too many positional arguments to class `Foo4`: expected 0, got 1"
 reveal_type(Foo4(42))  # revealed: Foo4
 ```
 

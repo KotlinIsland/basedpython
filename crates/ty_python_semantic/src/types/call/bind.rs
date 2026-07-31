@@ -262,6 +262,12 @@ impl<'db> CallableItem<'db> {
         }
     }
 
+    /// basedpython: the instance type this item constructs, if it was reached through a `C(...)`
+    /// call
+    fn constructed_instance_type(&self) -> Option<Type<'db>> {
+        Some(self.as_constructor()?.constructed_instance_type())
+    }
+
     fn as_constructor(&self) -> Option<&ConstructorBinding<'db>> {
         match self {
             CallableItem::Regular(_) => None,
@@ -1408,7 +1414,12 @@ impl<'db> Bindings<'db> {
 
         if let Some(item) = self.single_item() {
             if item.has_own_diagnostics() {
-                item.callable().report_diagnostics(context, node, None);
+                item.callable().report_diagnostics(
+                    context,
+                    node,
+                    None,
+                    item.constructed_instance_type(),
+                );
             }
         } else {
             // Report diagnostics for each element (union variant).
@@ -1471,14 +1482,24 @@ impl<'db> Bindings<'db> {
                             intersection_callable_type: intersection_type,
                             binding,
                         };
-                        binding.report_diagnostics(context, node, Some(&layered_diag));
+                        binding.report_diagnostics(
+                            context,
+                            node,
+                            Some(&layered_diag),
+                            item.constructed_instance_type(),
+                        );
                     } else {
                         // Just intersection, no union context needed
                         let intersection_diag = IntersectionDiagnostic {
                             callable_type: intersection_type,
                             binding,
                         };
-                        binding.report_diagnostics(context, node, Some(&intersection_diag));
+                        binding.report_diagnostics(
+                            context,
+                            node,
+                            Some(&intersection_diag),
+                            item.constructed_instance_type(),
+                        );
                     }
                 }
             }
@@ -1496,7 +1517,12 @@ impl<'db> Bindings<'db> {
                     callable_type: self.callable_type(),
                     binding,
                 };
-                binding.report_diagnostics(context, node, Some(&union_diag));
+                binding.report_diagnostics(
+                    context,
+                    node,
+                    Some(&union_diag),
+                    item.constructed_instance_type(),
+                );
             }
         }
     }
@@ -4362,12 +4388,23 @@ impl<'db> CallableBinding<'db> {
         false
     }
 
+    /// Report diagnostics for this callable.
+    ///
+    /// `constructed_instance_type` is `Some` when this callable was reached through a `C(...)`
+    /// constructor call; diagnostics then name the class rather than the constructor method
     fn report_diagnostics(
         &self,
         context: &InferContext<'db, '_>,
         node: ast::AnyNodeRef,
         compound_diag: Option<&dyn CompoundDiagnostic>,
+        constructed_instance_type: Option<Type<'db>>,
     ) {
+        let describe = |callable_type: Type<'db>| {
+            constructed_instance_type
+                .and_then(|instance| CallableDescription::constructed_class(context.db(), instance))
+                .or_else(|| CallableDescription::new(context.db(), callable_type))
+        };
+
         if !self.is_callable() {
             let range = all_arguments_range(node);
             if let Some(builder) = context.report_lint(&CALL_NON_CALLABLE, range) {
@@ -4399,8 +4436,7 @@ impl<'db> CallableBinding<'db> {
         match self.overloads.as_slice() {
             [] => {}
             [overload] => {
-                let callable_description =
-                    CallableDescription::new(context.db(), self.signature_type);
+                let callable_description = describe(self.signature_type);
                 overload.report_diagnostics(
                     context,
                     node,
@@ -4430,8 +4466,7 @@ impl<'db> CallableBinding<'db> {
 
                 // If only one overload passed arity check, report its errors directly.
                 if let Some(matching_overload_index) = self.matching_overload_before_type_checking {
-                    let callable_description =
-                        CallableDescription::new(context.db(), self.signature_type);
+                    let callable_description = describe(self.signature_type);
                     let matching_overload =
                         function_type_and_kind.map(|(kind, function)| MatchingOverloadLiteral {
                             index: self.overloads[matching_overload_index].source_overload_index(),
@@ -4458,8 +4493,7 @@ impl<'db> CallableBinding<'db> {
                 // (possibly with semantic errors), report its errors directly instead
                 // of the generic "no matching overload" message.
                 if let Ok((matching_overload_index, _)) = self.matching_overloads().exactly_one() {
-                    let callable_description =
-                        CallableDescription::new(context.db(), self.signature_type);
+                    let callable_description = describe(self.signature_type);
                     let matching_overload =
                         function_type_and_kind.map(|(kind, function)| MatchingOverloadLiteral {
                             index: self.overloads[matching_overload_index].source_overload_index(),
@@ -4486,8 +4520,7 @@ impl<'db> CallableBinding<'db> {
                 let Some(builder) = context.report_lint(&NO_MATCHING_OVERLOAD, range) else {
                     return;
                 };
-                let callable_description =
-                    CallableDescription::new(context.db(), self.callable_type);
+                let callable_description = describe(self.callable_type);
                 let mut diag = builder.into_diagnostic(format_args!(
                     "No overload{} matches arguments",
                     callable_description
@@ -4634,6 +4667,8 @@ struct ArgumentMatcher<'a, 'db> {
     next_positional: usize,
     first_excess_positional: Option<usize>,
     num_synthetic_args: usize,
+    /// How many of `num_synthetic_args` consumed a positional parameter.
+    num_synthetic_args_matched: usize,
     variadic_argument_matched_to_variadic_parameter: bool,
 
     /// Parameter indices that have explicit keyword arguments (e.g., `foo=value`).
@@ -4669,6 +4704,7 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
             next_positional: 0,
             first_excess_positional: None,
             num_synthetic_args: 0,
+            num_synthetic_args_matched: 0,
             variadic_argument_matched_to_variadic_parameter: false,
             explicit_keyword_parameters,
         }
@@ -4744,7 +4780,8 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
         argument_type: Option<Type<'db>>,
         variable_argument_length: bool,
     ) -> Result<(), ()> {
-        if matches!(argument, Argument::Synthetic) {
+        let is_synthetic = matches!(argument, Argument::Synthetic);
+        if is_synthetic {
             self.num_synthetic_args += 1;
         }
         let Some((parameter_index, parameter)) = self
@@ -4757,6 +4794,9 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
             self.next_positional += 1;
             return Err(());
         };
+        if is_synthetic {
+            self.num_synthetic_args_matched += 1;
+        }
         self.next_positional += 1;
         self.assign_argument(
             argument_index,
@@ -5164,10 +5204,19 @@ impl<'a, 'db> ArgumentMatcher<'a, 'db> {
 
     fn finish(self) -> Box<[MatchedArgument<'db>]> {
         if let Some(first_excess_argument_index) = self.first_excess_positional {
+            // synthetic arguments (a bound receiver, the instance a constructor is initialising)
+            // are not written at the call site, so neither they nor the parameters they consumed
+            // belong in counts the caller reads. a synthetic argument that matched no parameter
+            // is itself the excess one, so both counts keep it
+            let matched = self.num_synthetic_args_matched;
             self.errors.push(BindingError::TooManyPositionalArguments {
                 first_excess_argument_index: self.get_argument_index(first_excess_argument_index),
-                expected_positional_count: self.parameters.positional().count(),
-                provided_positional_count: self.next_positional,
+                expected_positional_count: self
+                    .parameters
+                    .positional()
+                    .count()
+                    .saturating_sub(matched),
+                provided_positional_count: self.next_positional.saturating_sub(matched),
             });
         }
 
@@ -7743,6 +7792,23 @@ impl<'db> CallableDescription<'db> {
             }),
             _ => None,
         }
+    }
+
+    /// describe the class being constructed by a `C(...)` call
+    ///
+    /// the call site names the class, not the constructor method that was resolved for it, so
+    /// naming `C.__init__`/`C.__new__` would point at something the caller never wrote. this is
+    /// especially misleading in basedpython, where an `init(...)` shorthand has no `__init__` in
+    /// the source at all
+    fn constructed_class(
+        db: &'db dyn Db,
+        instance_type: Type<'db>,
+    ) -> Option<CallableDescription<'db>> {
+        let class = instance_type.as_nominal_instance()?.class(db);
+        Some(CallableDescription {
+            kind: Some("class"),
+            name: Cow::Borrowed(class.class_literal(db).name(db)),
+        })
     }
 }
 
