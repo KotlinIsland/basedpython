@@ -7826,7 +7826,9 @@ impl<'src> Parser<'src> {
                     // type X[T: x := int] = int
                     let first = Box::new(
                         self.parse_conditional_expression_or_higher_impl(
-                            ExpressionContext::default().with_in_type_param_bound(),
+                            ExpressionContext::default()
+                                .with_in_type_param_bound()
+                                .with_in_type_expression(),
                         )
                         .expr,
                     );
@@ -7844,9 +7846,14 @@ impl<'src> Parser<'src> {
                     );
                     let dots = self.eat_double_dot();
                     self.add_error(ParseErrorType::IncompleteTypeParamBoundRange, dots);
-                    let upper = self
-                        .at_expr()
-                        .then(|| Box::new(self.parse_conditional_expression_or_higher().expr));
+                    let upper = self.at_expr().then(|| {
+                        Box::new(
+                            self.parse_conditional_expression_or_higher_impl(
+                                ExpressionContext::default().with_in_type_expression(),
+                            )
+                            .expr,
+                        )
+                    });
                     (None, upper)
                 } else {
                     // test_err type_param_missing_bound
@@ -7872,7 +7879,12 @@ impl<'src> Parser<'src> {
                     // type X[T = yield from x] = int
                     // type X[T = x := int] = int
                     // type X[T: int = *int] = int
-                    Some(Box::new(self.parse_conditional_expression_or_higher().expr))
+                    Some(Box::new(
+                        self.parse_conditional_expression_or_higher_impl(
+                            ExpressionContext::default().with_in_type_expression(),
+                        )
+                        .expr,
+                    ))
                 } else {
                     // test_err type_param_type_var_missing_default
                     // type X[T =] = int
@@ -7968,10 +7980,14 @@ impl<'src> Parser<'src> {
             dots,
         );
 
-        let Some(upper) = self
-            .at_expr()
-            .then(|| Box::new(self.parse_conditional_expression_or_higher().expr))
-        else {
+        let Some(upper) = self.at_expr().then(|| {
+            Box::new(
+                self.parse_conditional_expression_or_higher_impl(
+                    ExpressionContext::default().with_in_type_expression(),
+                )
+                .expr,
+            )
+        }) else {
             self.add_error(ParseErrorType::IncompleteTypeParamBoundRange, dots);
             return (None, Some(lower));
         };

@@ -1219,7 +1219,7 @@ impl<'src> Parser<'src> {
                 self.parse_strings()
             }
             TokenKind::Lpar => {
-                return self.parse_parenthesized_expression();
+                return self.parse_parenthesized_expression(context);
             }
             TokenKind::Lsqb => self.parse_list_like_expression(),
             TokenKind::Lbrace => self.parse_set_or_dict_like_expression(),
@@ -1311,7 +1311,7 @@ impl<'src> Parser<'src> {
                             .to_string(),
                     );
                     self.bump(TokenKind::Dot);
-                    let params = self.parse_parenthesized_expression();
+                    let params = self.parse_parenthesized_expression(context);
                     break self.parse_callable_type_arrow(Some(lhs), params, start, context);
                 }
                 TokenKind::Dot => {
@@ -3517,7 +3517,7 @@ impl<'src> Parser<'src> {
     /// Matches the `(tuple | group | genexp)` rule in the [Python grammar].
     ///
     /// [Python grammar]: https://docs.python.org/3/reference/grammar.html
-    fn parse_parenthesized_expression(&mut self) -> ParsedExpr {
+    fn parse_parenthesized_expression(&mut self, outer: ExpressionContext) -> ParsedExpr {
         let start = self.node_start();
         self.bump(TokenKind::Lpar);
 
@@ -3613,7 +3613,9 @@ impl<'src> Parser<'src> {
         // Use the more general rule of the three to parse the first element
         // and limit it later.
         let mut parsed_expr = self.parse_named_expression_or_higher(
-            ExpressionContext::yield_or_starred_bitwise_or().with_for_excluded(),
+            ExpressionContext::yield_or_starred_bitwise_or()
+                .with_for_excluded()
+                .inheriting_type_expression(outer),
         );
 
         // basedpython: a positional first element followed by a named field
@@ -3685,8 +3687,12 @@ impl<'src> Parser<'src> {
                 // elements collected so far. this lets `(int, str, /, name:
                 // T)` reach the spec parser without requiring a single-token
                 // dispatch
-                let tuple =
-                    self.parse_tuple_or_parameters_spec(parsed_expr.expr, first_borrow, start);
+                let tuple = self.parse_tuple_or_parameters_spec(
+                    parsed_expr.expr,
+                    first_borrow,
+                    start,
+                    outer,
+                );
 
                 ParsedExpr {
                     expr: tuple.into(),
@@ -3988,6 +3994,7 @@ impl<'src> Parser<'src> {
         first_element: Expr,
         first_borrow: ParameterBorrow,
         start: TextSize,
+        outer: ExpressionContext,
     ) -> ast::ExprTuple {
         let mut elts = vec![first_element];
         let mut borrows = Vec::new();
@@ -4055,8 +4062,9 @@ impl<'src> Parser<'src> {
                 return self.continue_anon_named_tuple_value(start, elts);
             }
 
-            let parsed =
-                self.parse_named_expression_or_higher(ExpressionContext::starred_bitwise_or());
+            let parsed = self.parse_named_expression_or_higher(
+                ExpressionContext::starred_bitwise_or().inheriting_type_expression(outer),
+            );
             record_parameter_borrow(&mut borrows, elts.len(), borrow);
             elts.push(parsed.expr);
 
@@ -5414,6 +5422,20 @@ impl ExpressionContext {
     /// basedpython: returns `true` if currently parsing a type expression
     pub(super) const fn is_in_type_expression(self) -> bool {
         self.0.contains(ExpressionContextFlags::IN_TYPE_EXPRESSION)
+    }
+
+    /// basedpython: carry `outer`'s type-expression flag onto this context.
+    ///
+    /// Parentheses build their elements' contexts from scratch — the starred /
+    /// yield / comprehension rules inside them are their own — but being in a
+    /// type expression is a property of the *position*, and a parenthesis does
+    /// not leave it. Without this, `(literal str)` reads `literal` as a name
+    pub(super) fn inheriting_type_expression(self, outer: Self) -> Self {
+        if outer.is_in_type_expression() {
+            self.with_in_type_expression()
+        } else {
+            self
+        }
     }
 
     /// basedpython: returns a new context that marks parsing as being inside the
