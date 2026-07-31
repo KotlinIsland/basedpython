@@ -71,7 +71,7 @@ use crate::types::diagnostic::{
     INVALID_DECLARATION, INVALID_ENUM_MEMBER_ANNOTATION, INVALID_FIELD_LOOKUP,
     INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_REGEX,
     INVALID_REIFIED_TYPE_PARAM, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM,
-    INVALID_TYPE_VARIABLE_CONSTRAINTS, NARROWING_GUARD_AS_VALUE,
+    INVALID_TYPE_VARIABLE_CONSTRAINTS, INVALID_VARIANCE_DECLARATION, NARROWING_GUARD_AS_VALUE,
     NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST, NON_OVERLAPPING_TYPE_TEST,
     OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
     REFUTABLE_DESTRUCTURING, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
@@ -13792,8 +13792,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     }
 
     /// `reification` names the owner of this list, which decides whether a
-    /// basedpython `reified` parameter can take effect; one that cannot is
-    /// reported here rather than silently dropped.
+    /// basedpython `reified` parameter — or a declared variance — can take
+    /// effect; one that cannot is reported here rather than silently dropped.
     fn infer_type_parameters(
         &mut self,
         type_parameters: &ast::TypeParams,
@@ -13819,6 +13819,20 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 let name = type_param.name();
                 let mut diagnostic = builder
                     .into_diagnostic(format_args!("Type parameter `{name}` cannot be reified"));
+                diagnostic.info(reason);
+            }
+            if source_type.is_basedpython()
+                && let ast::TypeParam::TypeVar(type_var) = type_param
+                && type_var.variance.is_some()
+                && let Some(reason) = reification.variance_rejection()
+                && let Some(builder) = self
+                    .context
+                    .report_lint(&INVALID_VARIANCE_DECLARATION, type_param)
+            {
+                let name = type_param.name();
+                let mut diagnostic = builder.into_diagnostic(format_args!(
+                    "Type parameter `{name}` cannot declare a variance"
+                ));
                 diagnostic.info(reason);
             }
             match type_param {
@@ -14765,6 +14779,29 @@ impl TypeParamReification {
             Self::TypeDef => Some(
                 "a `type def` is erased by the transpiler, so its type parameters have no \
                  runtime value",
+            ),
+        }
+    }
+
+    /// Why a variance keyword on this owner's type parameter decides nothing, or
+    /// `None` when it decides something.
+    ///
+    /// Variance relates two *specializations*. A function's type parameter is
+    /// solved afresh at each call and never specializes, so the keyword decides
+    /// nothing there; an alias does specialize, taking its variance from the
+    /// type it expands to.
+    fn variance_rejection(self) -> Option<&'static str> {
+        match self {
+            // an alias keeps the keyword: it is exactly as variant as the type it expands
+            // to, so writing the variance out is a statement about that expansion
+            Self::Class | Self::TypeAlias => None,
+            Self::Function => Some(
+                "a function's type parameter is solved afresh at each call, so no two uses of \
+                 it are related by variance",
+            ),
+            Self::TypeDef => Some(
+                "a `type def` is erased by the transpiler, so nothing observes its type \
+                 parameters",
             ),
         }
     }

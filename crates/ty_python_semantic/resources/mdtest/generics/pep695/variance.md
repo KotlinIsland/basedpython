@@ -1385,8 +1385,9 @@ static_assert(not is_subtype_of(Invariant[A], Invariant[B]))
 
 ### type alias
 
-`out T` / `in T` syntax is accepted on type alias statements. the explicit variance applies to the
-typevar, consistent with the body.
+`out T` / `in T` syntax is accepted on type alias statements. an alias is exactly as variant as the
+type it expands to, so the keyword records that expansion's variance rather than deciding one of its
+own.
 
 ```by
 from ty_extensions import static_assert
@@ -1414,6 +1415,33 @@ type ContravariantAlias[in T] = Consumer[T]
 
 static_assert(not is_subtype_of(ContravariantAlias[B], ContravariantAlias[A]))
 static_assert(is_subtype_of(ContravariantAlias[A], ContravariantAlias[B]))
+```
+
+### a type parameter that never specializes
+
+variance relates two specializations, so a keyword on a type parameter that has none decides
+nothing. a function's is solved afresh at each call, and a `type def`'s is erased outright:
+
+```by
+# error: [invalid-variance-declaration] "Type parameter `T` cannot declare a variance"
+def produced[out T](t: T) -> None: ...
+
+# error: [invalid-variance-declaration] "Type parameter `T` cannot declare a variance"
+def consumed[in T](t: T) -> None: ...
+
+class Holder[T]:
+    # error: [invalid-variance-declaration] "Type parameter `U` cannot declare a variance"
+    def method[out U](self, u: U) -> None: ...
+```
+
+the class's own parameter is untouched by any of that, and so is an alias's:
+
+```by
+class Producer[out T]:
+    def get(self) -> T:
+        raise ValueError
+
+type Alias[out T] = Producer[T]
 ```
 
 ### usage consistent with the declaration
