@@ -3798,15 +3798,43 @@ impl<'db> VarianceInferable<'db> for StaticClassLiteral<'db> {
         if !typevar_in_generic_context {
             return TypeVarVariance::Bivariant;
         }
-        let class_body_scope = self.body_scope(db);
-
-        let file = class_body_scope.file(db);
-        let index = semantic_index(db, file);
 
         let explicit_bases_variances = self
             .explicit_bases(db)
             .iter()
             .map(|class| class.variance_of(db, typevar));
+
+        std::iter::once(self.own_variance_of(db, typevar))
+            .chain(explicit_bases_variances)
+            .collect()
+    }
+}
+
+#[salsa::tracked]
+impl<'db> StaticClassLiteral<'db> {
+    /// The variance of `typevar` in this class's *own* members, ignoring the contribution of its
+    /// bases.
+    ///
+    /// This is what a declared variance has to agree with: an incompatible base is reported
+    /// against that base instead, so folding the bases in here would report the same problem
+    /// twice.
+    #[salsa::tracked(returns(copy), cycle_initial=|_, _, _, _| TypeVarVariance::Bivariant, heap_size=ruff_memory_usage::heap_size)]
+    pub(crate) fn own_variance_of(
+        self,
+        db: &'db dyn Db,
+        typevar: BoundTypeVarIdentity<'db>,
+    ) -> TypeVarVariance {
+        let typevar_in_generic_context = self
+            .generic_context(db)
+            .is_some_and(|generic_context| generic_context.contains(db, typevar));
+
+        if !typevar_in_generic_context {
+            return TypeVarVariance::Bivariant;
+        }
+        let class_body_scope = self.body_scope(db);
+
+        let file = class_body_scope.file(db);
+        let index = semantic_index(db, file);
 
         let field_policy = CodeGeneratorKind::from_static_class(db, self);
 
@@ -3968,7 +3996,6 @@ impl<'db> VarianceInferable<'db> for StaticClassLiteral<'db> {
 
         attribute_variances
             .chain(unfrozen_inherited_field_variances)
-            .chain(explicit_bases_variances)
             .chain(extra_items_variance)
             .collect()
     }

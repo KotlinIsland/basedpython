@@ -829,6 +829,8 @@ pub(crate) fn check_static_class_definitions<'db>(
     }
 
     if context.is_lint_enabled(&INVALID_GENERIC_CLASS) {
+        check_declared_variance_usage(context, class, class_node);
+
         if !class.has_pep_695_type_params(db)
             && let Some(generic_context) = class.legacy_generic_context(db)
         {
@@ -1072,6 +1074,72 @@ pub(crate) fn check_static_class_definitions<'db>(
     }
 
     class.validate_members(context);
+}
+
+/// Check that a type variable with an explicitly declared variance is actually used that way by
+/// the class that binds it.
+///
+/// Declaring `class A[out T]` promises that an `A[Derived]` can stand in for an `A[Base]`, so a
+/// member that *consumes* a `T` — `def f(self, t: T)` — breaks the promise: through that widened
+/// reference a caller may pass a `Base` where the object really requires a `Derived`. The same
+/// holds in reverse for `in T`, and for a mutable attribute, which both consumes and produces its
+/// type and so pins it to invariance.
+///
+/// An incompatible *base class* is reported against that base, so this only looks at the
+/// variance the class's own members require ([`StaticClassLiteral::own_variance_of`]).
+fn check_declared_variance_usage<'db>(
+    context: &InferContext<'db, '_>,
+    class: StaticClassLiteral<'db>,
+    class_node: &ast::StmtClassDef,
+) {
+    let db = context.db();
+
+    let Some(generic_context) = class.generic_context(db) else {
+        return;
+    };
+
+    for bound_typevar in generic_context.variables(db) {
+        let typevar = bound_typevar.typevar(db);
+        // An invariant declaration accepts every usage, and an inferred variance is by
+        // construction the one its usage requires.
+        let Some(declared_variance @ (TypeVarVariance::Covariant | TypeVarVariance::Contravariant)) =
+            typevar.explicit_variance(db)
+        else {
+            continue;
+        };
+
+        let required_variance = class.own_variance_of(db, bound_typevar.identity(db));
+        if declared_variance.join(required_variance) == declared_variance {
+            continue;
+        }
+
+        let name = typevar.name(db);
+        // Point at the declaration where the class binds it (`out T`). A legacy type variable is
+        // declared away from the class, so fall back to the class header there.
+        let declaration_range = class_node
+            .type_params
+            .as_deref()
+            .and_then(|type_params| {
+                type_params
+                    .iter()
+                    .find(|type_param| type_param.name().id == *name)
+            })
+            .map_or_else(|| class.header_range(db), Ranged::range);
+
+        let Some(builder) = context.report_lint(&INVALID_GENERIC_CLASS, declaration_range) else {
+            continue;
+        };
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "Variance of type variable `{name}` is incompatible with its usage in `{}`",
+            class.name(db),
+        ));
+        diagnostic.help(format_args!(
+            "Type variable `{name}` is declared as {}, but `{}` uses it {}ly",
+            declared_variance.as_str(),
+            class.name(db),
+            required_variance.as_str(),
+        ));
+    }
 }
 
 /// Check compatibility between class namespace values and attributes populated by its metaclass.

@@ -6551,6 +6551,8 @@ static_assert(not is_equivalent_to(Awaitable[A], Awaitable[Any]))
 static_assert(not is_subtype_of(Awaitable[A], Awaitable[B]))
 static_assert(not is_assignable_to(Awaitable[A], Awaitable[B]))
 
+# `Generator` is invariant in its return type here, which drags `T_co` to invariance too
+# error: [invalid-generic-class] "Variance of type variable `T_co` is incompatible with its usage in `CustomCovariantProtocol`"
 class CustomCovariantProtocol(Protocol[T_co]):
     def foo(self) -> tuple[list[Generator[None, None, T_co]]]: ...
 
@@ -6593,6 +6595,8 @@ static_assert(not is_equivalent_to(Awaitable[A], Awaitable[Any]))
 static_assert(not is_subtype_of(Awaitable[A], Awaitable[B]))
 static_assert(not is_assignable_to(Awaitable[A], Awaitable[B]))
 
+# `Generator` is invariant in its return type here, which drags `T_co` to invariance too
+# error: [invalid-generic-class] "Variance of type variable `T_co` is incompatible with its usage in `CustomCovariantProtocol`"
 class CustomCovariantProtocol(Protocol[T_co]):
     def foo(self) -> tuple[list[Generator[None, None, T_co]]]: ...
 

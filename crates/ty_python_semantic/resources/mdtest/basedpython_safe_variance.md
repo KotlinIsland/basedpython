@@ -70,7 +70,11 @@ class A[out T]:
 
 ## a write through a widened view must supply a real `T`
 
+Privacy is what exempts `t` from constraining variance; the public `f` below still consumes a `T`,
+so the class is separately reported for not honouring its own `out`.
+
 ```by
+# error: [invalid-generic-class] "Variance of type variable `T` is incompatible with its usage in `A`"
 class A[out T]:
     private t: T
 
@@ -134,7 +138,11 @@ class A[T]:
 
 ## a public member is unaffected
 
+A public mutable attribute is exactly what the erasure rule does *not* cover, so it pins `A` to
+invariance and the `out` declaration is reported.
+
 ```by
+# error: [invalid-generic-class] "Variance of type variable `T` is incompatible with its usage in `A`"
 class A[out T]:
     t: T
 
