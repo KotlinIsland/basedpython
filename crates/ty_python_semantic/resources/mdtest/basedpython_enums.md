@@ -415,6 +415,21 @@ print(Fruit.Apple.name)
 print(Fruit.Pear.value)
 ```
 
+the `Enum` base is injected rather than written, so it is also the class's *metaclass* — the class
+iterates, sizes and looks members up like any other enum:
+
+```by
+enum class Berry:
+    case Straw, Rasp
+
+for berry in Berry:
+    reveal_type(berry)  # revealed: Berry
+
+reveal_type(len(Berry))  # revealed: int
+reveal_type(Berry.__members__)  # revealed: MappingProxyType[str, Berry]
+reveal_type(Berry["Straw"])  # revealed: Berry
+```
+
 ## constants in an enum body stay constants
 
 an assignment member disqualifies the idiomatic-`Enum` lowering (python's `Enum` would turn the

@@ -173,9 +173,11 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         }
         let mut dataclass_transformer_params = None;
         let mut total_ordering = false;
-        // an implementation's interface is a base even though the header has no
-        // argument list, so the flag has to account for it
-        let has_explicit_bases = class_node.is_implementation()
+        // a basedpython header with no argument list can still have bases — an
+        // implementation's interface, a based enum's `Enum` — so the flag has to
+        // account for them, or the metaclass fast path below reads the class as
+        // base-less and answers `type`
+        let has_explicit_bases = class_node.has_injected_base()
             || class_node
                 .arguments
                 .as_deref()
