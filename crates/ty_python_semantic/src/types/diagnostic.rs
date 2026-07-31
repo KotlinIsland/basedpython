@@ -172,6 +172,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&UNSPECIALIZED_REIFIED_GENERIC);
     registry.register_lint(&REIFIED_CLASSMETHOD);
     registry.register_lint(&INVALID_REIFIED_TYPE_PARAM);
+    registry.register_lint(&INVALID_VARIANCE_DECLARATION);
     registry.register_lint(&ERASED_TYPE_CHECK);
     registry.register_lint(&OVERRIDE_OF_FINAL_METHOD);
     registry.register_lint(&OVERRIDE_OF_FINAL_VARIABLE);
@@ -2021,6 +2022,33 @@ declare_lint! {
     /// ```
     pub(crate) static INVALID_REIFIED_TYPE_PARAM = {
         summary: "detects `reified` type parameters that cannot be reified",
+        status: LintStatus::stable("0.0.62"),
+        default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a basedpython variance keyword (`in`, `out`, `in out`) on a
+    /// type parameter that never specializes, so the keyword decides nothing.
+    ///
+    /// ## Why is this bad?
+    /// Variance says how two *specializations* relate. A function's type
+    /// parameter is solved afresh at each call and never specializes, and a
+    /// `type def` is erased before anything could observe one — so the keyword
+    /// decides nothing in either position. Reported rather than dropped, because
+    /// a keyword nothing checks reads as a promise that something does.
+    ///
+    /// A generic class and a generic type alias both specialize, and both keep
+    /// the keyword.
+    ///
+    /// ## Example
+    ///
+    /// ```by
+    /// def f[out T](t: T) -> None: ...  # error: a function's `T` has no variance
+    /// ```
+    pub(crate) static INVALID_VARIANCE_DECLARATION = {
+        summary: "detects variance keywords outside a generic class declaration",
         status: LintStatus::stable("0.0.62"),
         default_level: Level::Error,
     }
