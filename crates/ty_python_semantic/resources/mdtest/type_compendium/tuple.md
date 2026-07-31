@@ -63,7 +63,7 @@ reveal_type(x1)  # revealed: tuple[int, ...]
 # error: [invalid-argument-type]
 reveal_type(tuple[int]([1]))  # revealed: tuple[int]
 
-# error: [invalid-argument-type] "Argument is incorrect: Expected `tuple[int, str]`, found `tuple[Literal[1]]`"
+# error: [invalid-argument-type] "Argument to class `tuple` is incorrect: Expected `tuple[int, str]`, found `tuple[Literal[1]]`"
 reveal_type(tuple[int, str]((1,)))  # revealed: tuple[int, str]
 
 # error: [missing-argument] "No argument provided for required parameter `iterable`"
@@ -103,7 +103,7 @@ reveal_type(VariadicAnyTupleSubclass([1, 2, "foo", b"bar"]))  # revealed: Variad
 reveal_type(EmptyTupleSubclass())  # revealed: EmptyTupleSubclass
 reveal_type(EmptyTupleSubclass(()))  # revealed: EmptyTupleSubclass
 
-# error: [invalid-argument-type] "Argument is incorrect: Expected `tuple[()]`, found `tuple[Literal[1], Literal[2]]`"
+# error: [invalid-argument-type] "Argument to class `EmptyTupleSubclass` is incorrect: Expected `tuple[()]`, found `tuple[Literal[1], Literal[2]]`"
 reveal_type(EmptyTupleSubclass((1, 2)))  # revealed: EmptyTupleSubclass
 
 reveal_type(SingleElementTupleSubclass((1,)))  # revealed: SingleElementTupleSubclass
@@ -119,16 +119,16 @@ reveal_type(VariadicTupleSubclass((1, 2, 3, 4)))  # revealed: VariadicTupleSubcl
 reveal_type(MixedTupleSubclass((1,)))  # revealed: MixedTupleSubclass
 reveal_type(MixedTupleSubclass((1, "foo")))  # revealed: MixedTupleSubclass
 
-# error: [invalid-argument-type] "Argument is incorrect: Expected `tuple[int, *tuple[str, ...]]`, found `tuple[Literal[1], Literal[b"foo"]]`"
+# error: [invalid-argument-type] "Argument to class `MixedTupleSubclass` is incorrect: Expected `tuple[int, *tuple[str, ...]]`, found `tuple[Literal[1], Literal[b"foo"]]`"
 reveal_type(MixedTupleSubclass((1, b"foo")))  # revealed: MixedTupleSubclass
 
 # error: [missing-argument] "No argument provided for required parameter `iterable`"
 reveal_type(MixedTupleSubclass())  # revealed: MixedTupleSubclass
 
 def _(empty: EmptyTupleSubclass, single_element: SingleElementTupleSubclass, mixed: MixedTupleSubclass, x: tuple[int, int]):
-    # error: [invalid-argument-type] "Argument is incorrect: Expected `tuple[()]`, found `tuple[Literal[1], Literal[2]]`"
+    # error: [invalid-argument-type] "Argument to class `EmptyTupleSubclass` is incorrect: Expected `tuple[()]`, found `tuple[Literal[1], Literal[2]]`"
     empty.__class__((1, 2))
-    # error: [invalid-argument-type] "Argument is incorrect: Expected `tuple[int]`, found `tuple[Literal[1], Literal[2]]`"
+    # error: [invalid-argument-type] "Argument to class `SingleElementTupleSubclass` is incorrect: Expected `tuple[int]`, found `tuple[Literal[1], Literal[2]]`"
     single_element.__class__((1, 2))
     # error: [missing-argument] "No argument provided for required parameter `iterable`"
     mixed.__class__()
