@@ -152,3 +152,151 @@ def extend[Dim: int](a: Array[Dim]) -> Array[Dim + 1]:
 def foo(data: Array[int]):
     reveal_type(extend(data))  # revealed: Array[int]
 ```
+
+## a body is checked against the operation, not its reduced form
+
+`I + 1` names one value per specialization, so a body has to produce *that* value. checking against
+the reduced form would ask only for an `int`, which `i` already is.
+
+```by
+def wrong[I: int](i: I) -> I + 1:
+    # error: [invalid-return-type] "Return type does not match returned value: expected `I@wrong + 1`, found `I@wrong`"
+    return i
+
+def off_by_one[I: int](i: I) -> I + 1:
+    # error: [invalid-return-type] "Return type does not match returned value: expected `I@off_by_one + 1`, found `I@off_by_one + 2`"
+    return i + 2
+
+def unrelated[I: int](i: I, n: int) -> I + 1:
+    # error: [invalid-return-type] "Return type does not match returned value: expected `I@unrelated + 1`, found `int`"
+    return n
+```
+
+the arithmetic on values is kept symbolic for this, so the two sides can be compared at all:
+
+```by
+def succ[I: int](i: I) -> I + 1:
+    reveal_type(i + 1)  # revealed: I@succ + 1
+    return i + 1
+```
+
+## agreement is decided by value, not by shape
+
+two expressions naming the same value need not be written the same way. operands may be commuted,
+constants folded together, and terms cancelled.
+
+```by
+def commuted[I: int](i: I) -> I + 1:
+    return 1 + i
+
+def cancelling[I: int](i: I) -> I + 1:
+    return (i + 3) - 2
+
+def rearranged[I: int](i: I) -> I * 2 + 1:
+    return 1 + 2 * i
+
+def scaled[I: int](i: I) -> I * 2:
+    return i + i
+```
+
+that holds of several parameters at once — the terms are compared as terms, not in the order the
+expression happens to introduce them:
+
+```by
+def sum_of[A: int, B: int](a: A, b: B) -> A + B:
+    return b + a
+
+def difference[A: int, B: int](a: A, b: B) -> A - B:
+    # error: [invalid-return-type] "Return type does not match returned value: expected `A@difference - B@difference`, found `B@difference - A@difference`"
+    return b - a
+```
+
+a call whose own return type is symbolic composes, so applying `succ` twice reaches `I + 2`:
+
+```by
+def succ[I: int](i: I) -> I + 1:
+    return i + 1
+
+def twice[I: int](i: I) -> I + 2:
+    return succ(succ(i))
+
+def thrice[I: int](i: I) -> I + 3:
+    # error: [invalid-return-type] "Return type does not match returned value: expected `I@thrice + 3`, found `I@thrice + 1 + 1`"
+    return succ(succ(i))
+```
+
+## subtraction and the unary operators
+
+```by
+def pred[I: int](i: I) -> I - 1:
+    return i - 1
+
+def negate[I: int](i: I) -> -I:
+    return -i
+
+def wrong_sign[I: int](i: I) -> -I:
+    # error: [invalid-return-type] "Return type does not match returned value: expected `-I@wrong_sign`, found `I@wrong_sign`"
+    return i
+
+def invert[I: int](i: I) -> ~I:
+    return ~i
+```
+
+`~I` is left whole rather than rewritten as `-I - 1`, so it agrees with itself and nothing else:
+
+```by
+def spelled_out[I: int](i: I) -> ~I:
+    # error: [invalid-return-type] "Return type does not match returned value: expected `~I@spelled_out`, found `-I@spelled_out - 1`"
+    return -i - 1
+```
+
+## a gradual value still satisfies a symbolic return type
+
+`Unknown` stands for anything, including the value the annotation names — rejecting it would make an
+unannotated helper unusable in symbolic code.
+
+```by
+def unannotated(x):
+    return x
+
+def gradual[I: int](i: I) -> I + 1:
+    return unannotated(i)
+```
+
+## only operations with a decision procedure are checked
+
+`+`, `-`, `*` and the unary operators flatten to a form that decides whether two expressions name
+the same value. a comparison, a method call or an attribute type has no such form, so a body
+annotated with one is still checked only against the reduced type.
+
+```by
+def compares[I: int](i: I) -> I < 10:
+    return True
+
+def starts[S: str](s: S) -> S.startswith("foo"):
+    return False
+```
+
+## a product of two parameters is not linear
+
+neither operand is a constant, so the product stands for itself and agrees only with an identical
+expression.
+
+```by
+def area[W: int, H: int](w: W, h: H) -> W * H:
+    return w * h
+
+def transposed[W: int, H: int](w: W, h: H) -> W * H:
+    # error: [invalid-return-type] "Return type does not match returned value: expected `W@transposed * H@transposed`, found `H@transposed * W@transposed`"
+    return h * w
+```
+
+## an unprovable body can be cast
+
+a body may be correct for a reason the checker cannot see. the escape hatch is the one every other
+unprovable assignment uses.
+
+```by
+def from_len[I: int](i: I, xs: list[int]) -> I + 1:
+    return len(xs) cast I + 1
+```

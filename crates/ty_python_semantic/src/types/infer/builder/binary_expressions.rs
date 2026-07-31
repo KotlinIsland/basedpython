@@ -6,6 +6,7 @@ use crate::Db;
 use crate::types::call::CallArguments;
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::cyclic::CycleDetector;
+use crate::types::deferred::{is_integer_operand, is_symbolic_operand};
 use crate::types::diagnostic::{
     DIVISION_BY_ZERO, report_unsupported_augmented_assignment, report_unsupported_binary_operation,
 };
@@ -13,9 +14,10 @@ use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::tuple::Tuple;
 use crate::types::typevar::TypeVarConstraints;
 use crate::types::{
-    DynamicType, InternedConstraintSet, KnownClass, KnownInstanceType, LiteralValueTypeKind,
-    MemberLookupPolicy, Type, TypeContext, TypeVarBoundOrConstraints, TypedDictType, UnionBuilder,
-    UnionType, UnionTypeInstance, UnsafeUnionType,
+    DeferredOperation, DeferredType, DynamicType, InternedConstraintSet, KnownClass,
+    KnownInstanceType, LiteralValueTypeKind, MemberLookupPolicy, Type, TypeContext,
+    TypeVarBoundOrConstraints, TypedDictType, UnionBuilder, UnionType, UnionTypeInstance,
+    UnsafeUnionType,
 };
 
 enum BinaryExpressionOperandTypes<'db> {
@@ -407,6 +409,23 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                         tcx,
                     )
                 })
+            }
+            // basedpython: arithmetic on a type parameter names a value that depends on the
+            // specialization, so evaluating it through the bound's `__add__` would answer
+            // `int` and throw that away. build the same symbolic operation the annotation
+            // `-> I + 1` builds, so a body can be checked against its declared return type
+            (left, right, op)
+                if self.is_basedpython_file()
+                    && DeferredOperation::Binary(op).is_checked_arithmetic()
+                    && (is_symbolic_operand(left) || is_symbolic_operand(right))
+                    && is_integer_operand(db, left)
+                    && is_integer_operand(db, right) =>
+            {
+                Some(DeferredType::build(
+                    db,
+                    &DeferredOperation::Binary(op),
+                    Box::new([left, right]),
+                ))
             }
             (Type::Deferred(deferred), _, _) => visitor.visit(db, (left_ty, op, right_ty), || {
                 self.infer_binary_expression_type_impl(

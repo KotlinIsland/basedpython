@@ -6,9 +6,9 @@ use ruff_text_size::TextRange;
 use ty_python_core::scope::ScopeKind;
 use ty_python_core::{global_scope, place_table, semantic_index};
 use ty_python_semantic::types::{
-    DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
+    DisplaySettings, DynamicType, KnownClass, KnownInstanceType, Type, UnpackedKwargs, character,
 };
-use ty_python_semantic::{HasType, ImplicitReceiverReference, SemanticModel};
+use ty_python_semantic::{Db, HasType, ImplicitReceiverReference, SemanticModel};
 
 /// How the postfix `^` / `!` operators test the "absent" arm of an operand's
 /// wrapped type. `T?` lowers to `T | None`, so its absent arm is `None`; a
@@ -702,7 +702,7 @@ impl TypeInfo for SemanticModel<'_> {
     fn promoted_type_display(&self, expr: &Expr) -> Option<String> {
         let ty = expr.inferred_type(self)?;
         let promoted = ty.promote(self.db());
-        let rendered = promoted.display(self.db()).to_string();
+        let rendered = display_for_python(self.db(), promoted);
         // ty's default display tags type variables with their binding scope
         // for disambiguation (e.g. `T@render`); that suffix is not valid in
         // emitted Python source. strip it before returning so the rendered
@@ -721,9 +721,10 @@ impl TypeInfo for SemanticModel<'_> {
         }
         // display with the standard (non-basedpython) renderer so literals come
         // out as `Literal[..]` rather than bare — the transpiler emits python
-        Some(strip_binding_context_suffix(
-            &ty.display(self.db()).to_string(),
-        ))
+        Some(strip_binding_context_suffix(&display_for_python(
+            self.db(),
+            ty,
+        )))
     }
 
     fn class_typevars(&self, expr: &Expr) -> Option<Vec<(String, Option<String>)>> {
@@ -736,7 +737,7 @@ impl TypeInfo for SemanticModel<'_> {
                     let name = tv.name(self.db()).to_string();
                     let default = tv
                         .default_type(self.db())
-                        .map(|d| d.display(self.db()).to_string());
+                        .map(|d| display_for_python(self.db(), d));
                     (name, default)
                 })
                 .collect(),
@@ -760,7 +761,7 @@ impl TypeInfo for SemanticModel<'_> {
                     .map(|(name, ty)| {
                         (
                             name.to_string(),
-                            strip_binding_context_suffix(&ty.display(db).to_string()),
+                            strip_binding_context_suffix(&display_for_python(db, ty)),
                         )
                     })
                     .collect(),
@@ -954,9 +955,10 @@ impl TypeInfo for SemanticModel<'_> {
             return None;
         }
         let promoted = ty.promote(self.db());
-        Some(strip_binding_context_suffix(
-            &promoted.display(self.db()).to_string(),
-        ))
+        Some(strip_binding_context_suffix(&display_for_python(
+            self.db(),
+            promoted,
+        )))
     }
 
     fn class_body_annotation_is_semantic(&self, class_def: &StmtClassDef) -> bool {
@@ -974,6 +976,18 @@ impl TypeInfo for SemanticModel<'_> {
             Some(Type::KnownInstance(KnownInstanceType::Field(_)))
         )
     }
+}
+
+/// Render a type as python source text. ty's own display is written for the reader of a
+/// diagnostic, where a symbolic arithmetic operation is shown as the expression it stands
+/// for (`I + 1`); emitting that would evaluate `_I + 1` on a `TypeVar` object at import, so
+/// the transpiler asks for the type it reduces to instead
+fn display_for_python<'db>(db: &'db dyn Db, ty: Type<'db>) -> String {
+    ty.display_with(
+        db,
+        DisplaySettings::default().with_reduced_symbolic_operations(),
+    )
+    .to_string()
 }
 
 /// Strip ty's `@<scope>` binding-context suffix from type variable display
