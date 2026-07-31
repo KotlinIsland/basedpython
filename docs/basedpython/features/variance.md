@@ -32,6 +32,32 @@ affects subtyping in the obvious way:
     consumed)
 - `Both[Dog]` and `Both[Animal]` are assignable to neither (invariant)
 
+## the declaration has to match the usage
+
+a keyword is a promise the rest of the program is checked against, so the class
+that makes it has to keep it. `out T` may only be *produced*, `in T` may only be
+*consumed*, and a mutable `T`-typed attribute does both — so it needs `in out T`:
+
+```by
+class Bad[out T]:      # error: `T` is declared covariant, but `Bad` uses it contravariantly
+    def set(self, value: T) -> None: ...
+```
+
+without the check the promise is a lie that nothing catches: `Bad[int]` would be
+assignable to `Bad[object]`, and calling `set("asdf")` through that widened view
+would file a `str` away in `int` storage
+
+`in out T` is invariance, which every usage satisfies, so it is never reported —
+and neither is a bare `T`, whose variance is inferred from the usage in the
+first place. a constructor is exempt: it produces the instance rather than
+writing through an existing one
+
+two things a covariant class *can* do with a `T` in an input position: keep it
+[private](safe-variance.md), which takes it off the observable surface
+altogether, or mark the position
+[`Overlapping[T]`](overlapping.md), which asks only that the argument overlap
+`T` rather than be one
+
 ## transpilation
 
 on Python 3.12+ the keywords are stripped because PEP 695 itself does not

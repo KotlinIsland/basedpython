@@ -785,6 +785,8 @@ from typing_extensions import TypeVar
 T = TypeVar("T", bound=BaseException, covariant=True)
 S = TypeVar("S", bound=BaseException, default=BaseException, covariant=True)
 
+# `self.check` is a mutable attribute consuming a `T`, so `Base` is invariant in it
+# error: [invalid-generic-class] "Variance of type variable `T` is incompatible with its usage in `Base`"
 class Base(Generic[T]):
     def __init__(self, check: Callable[[T], bool] | None) -> None:
         self.check = check

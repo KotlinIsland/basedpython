@@ -19,8 +19,10 @@ the classic hole is a mutable `T`-typed field: `A[int]` is assignable to
 field then the underlying `int` storage gets corrupted with a `str`
 
 mainstream checkers close this hole by forbidding `out T` from appearing in
-any mutable or input position — which rules out a great deal of otherwise
-reasonable code. basedpython closes it with a narrower observation:
+any mutable or input position, private ones included — which rules out a great
+deal of otherwise reasonable code. basedpython keeps [the
+rule](variance.md#the-declaration-has-to-match-the-usage) for the class's public
+surface, and narrows it with one observation:
 **privacy is what makes variance safe**. a [private](modifiers.md) member is
 invisible to external observers, so it cannot be used to distinguish two
 specializations of the same class, so it cannot break variance. the type
@@ -38,6 +40,9 @@ back only what such a view actually knows — `T`'s bound
 class A[out T]:
     private t: T
 
+    # the public `t: T` parameter is itself reported — `out T` may not be consumed
+    # in public (see [variance](variance.md)); it is written that way here only to
+    # name a real `T` inside the body
     def f(self, other: A[object], t: T):
         reveal_type(self.t)    # T@A — `self` carries `A`'s own parameter
         reveal_type(other.t)   # object — a widened view knows only the bound
@@ -59,7 +64,7 @@ receiver you may write a `T` to:
 class A[out T]:
     private t: T
 
-    def f(self: A[object], t: T):
+    def f(self: A[object], t: T):   # the `t: T` parameter is reported, as above
         self.t = t             # ok — `t` is a real `T`
         self.t = "asdf"        # error: `str` is not a `T`
 ```
