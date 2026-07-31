@@ -19,6 +19,7 @@ from typing_extensions import Generic, TypeVar
 
 T = TypeVar("T")
 U = TypeVar("U", default=int)
+V = TypeVar("V", covariant=True)
 
 
 # class uses both PEP-695 syntax and legacy syntax
@@ -27,6 +28,11 @@ class C[U](Generic[T]): ...  # error
 
 # type parameter with default comes before type parameter without default
 class D(Generic[U, T]): ...  # error
+
+
+# covariant type parameter used in a position that requires contravariance
+class E(Generic[V]):  # error
+    def set(self, value: V) -> None: ...
 ```
 
 ## References

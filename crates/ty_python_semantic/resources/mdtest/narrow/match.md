@@ -958,6 +958,8 @@ class PartiallySpecializedGenericPatternChild(
 
 class CovariantGenericPatternBase(Generic[CovariantGenericPatternT]): ...
 
+# the mutable `item` makes the child invariant, contradicting the covariant typevar
+# error: [invalid-generic-class] "Variance of type variable `CovariantGenericPatternT` is incompatible with its usage in `CovariantGenericPatternChild`"
 class CovariantGenericPatternChild(CovariantGenericPatternBase[CovariantGenericPatternT]):
     item: CovariantGenericPatternT
 

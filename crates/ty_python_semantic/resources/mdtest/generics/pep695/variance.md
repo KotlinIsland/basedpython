@@ -1416,6 +1416,144 @@ static_assert(not is_subtype_of(ContravariantAlias[B], ContravariantAlias[A]))
 static_assert(is_subtype_of(ContravariantAlias[A], ContravariantAlias[B]))
 ```
 
+### usage consistent with the declaration
+
+a declared variance is a promise about how the class may be used, so the class has to keep it: an
+`out` parameter may only be produced, an `in` parameter may only be consumed.
+
+#### consistent usage
+
+```by
+class Producer[out T]:
+    def get(self) -> T:
+        raise ValueError
+
+class Consumer[in T]:
+    def set(self, value: T) -> None:
+        pass
+
+class Invariant[in out T]:
+    value: T
+```
+
+#### `out` in a consuming position
+
+a method that consumes an `out` parameter would let a caller pass a supertype of what the class
+holds:
+
+```by
+# snapshot: invalid-generic-class
+class BadProducer[out T]:
+    def set(self, value: T) -> None:
+        pass
+```
+
+```snapshot
+error[invalid-generic-class]: Variance of type variable `T` is incompatible with its usage in `BadProducer`
+ --> src/mdtest_snippet.by:2:19
+  |
+2 | class BadProducer[out T]:
+  |                   ^^^^^
+  |
+help: Type variable `T` is declared as covariant, but `BadProducer` uses it contravariantly
+```
+
+#### `in` in a producing position
+
+a method that produces an `in` parameter would hand back a subtype of what the caller wrote:
+
+```by
+# error: [invalid-generic-class] "Variance of type variable `T` is incompatible with its usage in `BadConsumer`"
+class BadConsumer[in T]:
+    def get(self) -> T:
+        raise ValueError
+```
+
+#### a mutable attribute pins the parameter
+
+a mutable attribute both produces and consumes its type, forcing invariance:
+
+```by
+# error: [invalid-generic-class] "Variance of type variable `T` is incompatible with its usage in `BadAttribute`"
+class BadAttribute[out T]:
+    value: T
+```
+
+#### `in out` accepts every usage
+
+`in out` is invariance, which every usage satisfies, so it is never reported:
+
+```by
+class Whatever[in out T]:
+    value: T
+
+    def get(self) -> T:
+        raise ValueError
+
+    def set(self, value: T) -> None:
+        pass
+```
+
+#### an inferred variance is never reported
+
+it is by construction the variance its usage requires:
+
+```by
+class Inferred[T]:
+    value: T
+```
+
+#### a constructor doesn't constrain variance
+
+it produces the instance rather than writing through an existing one:
+
+```by
+class Frozen[out T]:
+    _value: T
+
+    init(self, value: T):
+        self._value = value
+
+    def get(self) -> T:
+        return self._value
+```
+
+#### a private member is off the observable surface
+
+so it constrains nothing, and consuming a `T` through one is not reported:
+
+```by
+class Private[out T]:
+    private t: T
+
+    private def consume(self, t: T) -> None:
+        self.t = t
+```
+
+#### `Overlapping[T]` asks only that the argument overlap `T`
+
+which is the escape hatch for a covariant parameter that has to appear in an input position:
+
+```by
+from ty_extensions import Overlapping
+
+class Contains[out T]:
+    def __contains__(self, item: Overlapping[T], /) -> bool:
+        return False
+```
+
+#### an incompatible base is only reported once
+
+against the base itself, rather than a second time against the declaration:
+
+```by
+class InvariantBase[in out T]:
+    value: T
+
+# error: [invalid-generic-class] "Variance of type variable `T` is incompatible with base class `InvariantBase`"
+class Derived[out T](InvariantBase[T])
+```
+
 [linear-time-variance-talk]: https://www.youtube.com/watch?v=7uixlNTOY4s&t=9705s
 [spec]: https://typing.python.org/en/latest/spec/generics.html#variance
 [typeis-spec]: https://typing.python.org/en/latest/spec/narrowing.html#typeis

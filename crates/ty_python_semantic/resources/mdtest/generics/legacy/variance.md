@@ -296,6 +296,53 @@ equivalent to) each other.
 
 It is not possible to construct a legacy typevar that is explicitly bivariant.
 
+## Using a typevar with explicit variance
+
+A class cannot use a typevar in a way that contradicts the variance the typevar declares. A
+covariant typevar may only be produced, and a contravariant one may only be consumed; a mutable
+attribute does both, and so requires an invariant typevar.
+
+```py
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
+T_co = TypeVar("T_co", covariant=True)
+T_contra = TypeVar("T_contra", contravariant=True)
+
+class GoodCovariant(Generic[T_co]):
+    def get(self) -> T_co:
+        raise ValueError
+
+class GoodContravariant(Generic[T_contra]):
+    def set(self, value: T_contra) -> None: ...
+
+class GoodInvariant(Generic[T]):
+    value: T
+
+# snapshot: invalid-generic-class
+class BadCovariantParameter(Generic[T_co]):
+    def set(self, value: T_co) -> None: ...
+
+# error: [invalid-generic-class] "Variance of type variable `T_contra` is incompatible with its usage in `BadContravariantReturn`"
+class BadContravariantReturn(Generic[T_contra]):
+    def get(self) -> T_contra:
+        raise ValueError
+
+# error: [invalid-generic-class] "Variance of type variable `T_co` is incompatible with its usage in `BadCovariantAttribute`"
+class BadCovariantAttribute(Generic[T_co]):
+    value: T_co
+```
+
+```snapshot
+error[invalid-generic-class]: Variance of type variable `T_co` is incompatible with its usage in `BadCovariantParameter`
+  --> src/mdtest_snippet.py:18:7
+   |
+18 | class BadCovariantParameter(Generic[T_co]):
+   |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+help: Type variable `T_co` is declared as covariant, but `BadCovariantParameter` uses it contravariantly
+```
+
 ## Inheriting from generic classes with explicit variance
 
 A generic subclass cannot claim a variance that is less restrictive than the variance required by
