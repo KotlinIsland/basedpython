@@ -258,6 +258,43 @@ def f(a: literal str, b: final int, c: literal list[*]) -> None:
     e: int = b
 ```
 
+## modifiers in a type parameter's bound, constraints and default
+
+A bound is a type expression like any other, and so is each element of a constraint tuple.
+
+```by
+def bounded[T: literal str](t: T) -> T:
+    return t
+
+def constrained[T: (literal str, literal int)](t: T) -> T:
+    return t
+
+def defaulted[T: literal int = literal int](t: T) -> T:
+    return t
+
+class C[T: final int]: ...
+
+type Alias[T: literal str] = list[T]
+
+def ranged[T: literal int..object](t: T) -> T:
+    return t
+```
+
+## a modifier inside parentheses is still a modifier
+
+A parenthesis does not leave the type expression, so the keyword before a name is read the same way
+inside one.
+
+```by
+a: (literal str) = "x"
+b: (literal str) | None = None
+c: list[(final int)] = [1]
+
+def f() -> None:
+    # error: [invalid-assignment]
+    d: (literal str) = str(1)
+```
+
 ## a modifier is only a modifier when a name follows it
 
 ```by

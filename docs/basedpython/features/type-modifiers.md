@@ -160,8 +160,9 @@ c: final mod.Widget
 ## where it may be written
 
 anywhere a type expression appears: a variable annotation, a parameter, a return
-type, a [type alias](../development/how-transpilation-works.md) value, and nested
-inside a subscript
+type, a [type alias](../development/how-transpilation-works.md) value, a type
+parameter's bound, constraints or default, and nested inside a subscript or a
+parenthesis
 
 the keyword is only read as a modifier when a **name** follows it, exactly as for
 the [use-site variance keywords](variance.md). two adjacent names are never valid
