@@ -93,6 +93,17 @@ variance keywords are recognized in two surface positions:
 they are not allowed on bare `TypeVar(...)` calls (use the `covariant=` /
 `contravariant=` arguments directly there).
 
+variance relates two *specializations*, so the declaration position has to be one
+that specializes: a class, or a [generic type alias](#transpilation) — which is
+exactly as variant as the type it expands to. a function's type parameter is
+solved afresh at every call and never specializes, and a `type def` is erased
+before anything could observe one, so a keyword there decides nothing and is
+reported (`invalid-variance-declaration`) rather than dropped:
+
+```by
+def f[out T](t: T) -> None: ...   # error: a function's `T` has no variance
+```
+
 ## use-site variance
 
 writing `Container[out T]`, `Container[in T]`, or `Container[in out T]`

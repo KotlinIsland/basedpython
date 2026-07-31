@@ -1303,6 +1303,16 @@
             }
           ]
         },
+        "invalid-variance-declaration": {
+          "title": "detects variance keywords outside a generic class declaration",
+          "description": "## What it does\nChecks for a basedpython variance keyword (`in`, `out`, `in out`) on a\ntype parameter that never specializes, so the keyword decides nothing.\n\n## Why is this bad?\nVariance says how two *specializations* relate. A function's type\nparameter is solved afresh at each call and never specializes, and a\n`type def` is erased before anything could observe one — so the keyword\ndecides nothing in either position. Reported rather than dropped, because\na keyword nothing checks reads as a promise that something does.\n\nA generic class and a generic type alias both specialize, and both keep\nthe keyword.\n\n## Example\n\n```by\ndef f[out T](t: T) -> None: ...  # error: a function's `T` has no variance\n```",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-yield": {
           "title": "detects yield expressions where the \"yield\" or \"send\" type is incompatible with the annotated return type",
           "description": "## What it does\n\nDetects `yield` and `yield from` expressions where the \"yield\" or \"send\" type\nis incompatible with the generator function's annotated return type.\n\n## Why is this bad?\n\nYielding a value of a type that doesn't match the generator's declared yield type,\nor using `yield from` with a sub-iterator whose yield or send type is incompatible,\nis a type error that may cause downstream consumers of the generator to receive\nvalues of an unexpected type.\n\n## Examples\n\n```python\nfrom typing import Iterator\n\n\ndef gen() -> Iterator[int]:\n    yield \"not an int\"  # error: [invalid-yield]\n```",
