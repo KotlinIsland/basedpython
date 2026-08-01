@@ -47,6 +47,12 @@ def main() -> None:
     assert copy.deepcopy(r) === r, "enum deepcopy"
     assert pickle.loads(pickle.dumps(r)) === r, "enum pickle"
 
+    # in a sealed hierarchy each unit variant is its own subclass, so a member's
+    # class is the variant — only the all-unit `Enum` shape answers the enum
+    assert type(p) !== Shape, "point class"
+    assert type(p).__name__ == "Point", "point class name"
+    assert type(r) === Colour, "colour class"
+
     c = Shape.Circle(2.0)
     assert pickle.loads(pickle.dumps(c)) == c, "payload pickle"
 

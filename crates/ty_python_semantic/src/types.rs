@@ -6900,7 +6900,17 @@ impl<'db> Type<'db> {
                 LiteralValueTypeKind::Bytes(_) => KnownClass::Bytes.to_class_literal(db),
                 LiteralValueTypeKind::Int(_) => KnownClass::Int.to_class_literal(db),
                 LiteralValueTypeKind::Enum(enum_literal) => {
-                    Type::ClassLiteral(enum_literal.enum_class(db))
+                    // a based enum's unit variant is a singleton instance of its
+                    // own subclass, not of the enum — only the all-unit `Enum`
+                    // shape makes a member's class the enum itself
+                    let variant_class = enum_literal.enum_class(db).as_static().and_then(|class| {
+                        crate::types::class::based_enum_unit_variant_class(
+                            db,
+                            class,
+                            enum_literal.name(db),
+                        )
+                    });
+                    Type::ClassLiteral(variant_class.unwrap_or_else(|| enum_literal.enum_class(db)))
                 }
                 LiteralValueTypeKind::String(_) | LiteralValueTypeKind::LiteralString => {
                     KnownClass::Str.to_class_literal(db)

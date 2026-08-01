@@ -4112,6 +4112,36 @@ pub(crate) fn based_enum_unit_member_names<'db>(
     (!names.is_empty()).then_some(names)
 }
 
+/// The class a unit variant's *value* is an instance of.
+///
+/// An all-unit based enum lowers to an idiomatic `enum.Enum`, where a member's
+/// class is the enum itself — the same as any python enum. Every other based
+/// enum lowers to a sealed hierarchy in which each unit variant is its own
+/// subclass and the member is a singleton instance of it, so `type(A.Baz)` is
+/// that subclass and not `A`. Returns `None` for the `Enum` shape, and for a
+/// name that is not a unit variant of `class`.
+pub(crate) fn based_enum_unit_variant_class<'db>(
+    db: &'db dyn Db,
+    class: StaticClassLiteral<'db>,
+    name: &str,
+) -> Option<ClassLiteral<'db>> {
+    let module = parsed_module(db, class.file(db)).load(db);
+    let class_stmt = class.node(db, &module);
+    if !class_stmt.is_based_enum() || class_stmt.is_all_unit_enum() {
+        return None;
+    }
+    let index = semantic_index(db, class.file(db));
+    class_stmt.body.iter().find_map(|stmt| {
+        let ast::Stmt::ClassDef(variant) = stmt else {
+            return None;
+        };
+        if !variant.has_synthetic_marker("variant_unit") || variant.name.id != name {
+            return None;
+        }
+        binding_type(db, index.expect_single_definition(variant)).as_class_literal()
+    })
+}
+
 /// True when `class` is a based enum that declares at least one payload-bearing
 /// variant alongside its unit variants.
 ///
