@@ -229,6 +229,50 @@ def f(x: Foo[int]):
     reveal_type(x.foo())  # revealed: int
 ```
 
+## An alias in an argument position solves a generic protocol
+
+An alias annotation is expanded before the argument is matched against the parameter, so a generic
+*protocol* parameter — `Iterable[T]`, `SupportsIter[T]`, a user-written one — solves the same way it
+does for the type the alias names.
+
+```py
+from typing import Protocol
+
+type Ints = list[int]
+
+class Box[T](Protocol):
+    def get(self) -> T: ...
+
+class Impl:
+    def get(self) -> int:
+        return 1
+
+type BoxAlias = Impl
+
+def unbox[T](b: Box[T]) -> T:
+    return b.get()
+
+def f(a: Ints, b: list[int], c: BoxAlias, d: Impl) -> None:
+    reveal_type(iter(a))  # revealed: Iterator[int]
+    reveal_type(iter(b))  # revealed: Iterator[int]
+    reveal_type(list(a))  # revealed: list[int]
+    reveal_type(sorted(a))  # revealed: list[int]
+    reveal_type(unbox(c))  # revealed: int
+    reveal_type(unbox(d))  # revealed: int
+```
+
+An alias matched against a bare type variable still binds the alias itself, not its value:
+
+```py
+type Ints = list[int]
+
+def ident[T](x: T) -> T:
+    return x
+
+def g(a: Ints) -> None:
+    reveal_type(ident(a))  # revealed: list[int]
+```
+
 ## Stringified values
 
 Stringifying the right-hand side of a type alias is redundant, but allowed:

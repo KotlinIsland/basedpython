@@ -3238,6 +3238,21 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                 );
             }
 
+            // Expand PEP 695 type aliases in the actual type, so that every structural arm
+            // below sees the type the alias names. The one arm that must *not* see it expanded
+            // is the inferable-typevar arm — `reveal_type(alias)` reveals the alias, not its
+            // value type — so that case is excluded here rather than by arm ordering, which
+            // would leave the alias unexpanded for any arm with a wildcard actual pattern.
+            (formal, Type::TypeAlias(alias))
+                if !matches!(
+                    formal,
+                    Type::TypeVar(bound_typevar)
+                        if bound_typevar.is_inferable(self.db, self.inferable)
+                ) =>
+            {
+                return self.infer_map_impl(formal, alias.value_type(self.db), polarity, seen);
+            }
+
             (Type::TypeForm(formal_typeform), Type::TypeForm(actual_typeform)) => {
                 let variance = TypeVarVariance::Covariant.compose(polarity);
                 return self.infer_map_impl(
@@ -3873,15 +3888,6 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                 let formal_signature = formal_callable.signatures(self.db);
 
                 self.infer_from_callable_signature(formal_signature, &actual_callables)?;
-            }
-
-            // Expand type aliases in the actual type.
-            //
-            // This is placed at the end of the match block to avoid expanding the type alias
-            // when it can be matched directly against a type variable in the formal type,
-            // e.g., `reveal_type(alias)` should reveal the type alias, not its value type.
-            (formal, Type::TypeAlias(alias)) => {
-                return self.infer_map_impl(formal, alias.value_type(self.db), polarity, seen);
             }
 
             // TODO: Add more forms that we can structurally induct into: type[C], callables
