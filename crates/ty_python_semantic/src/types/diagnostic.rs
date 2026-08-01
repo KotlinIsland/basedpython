@@ -2029,8 +2029,10 @@ declare_lint! {
 
 declare_lint! {
     /// ## What it does
-    /// Checks for a basedpython variance keyword (`in`, `out`, `in out`) on a
-    /// type parameter that never specializes, so the keyword decides nothing.
+    /// Checks for a basedpython variance keyword (`in`, `out`, `in out`) that
+    /// the program does not honour: one on a type parameter that never
+    /// specializes, and one on a type alias that names a variance its expansion
+    /// does not have.
     ///
     /// ## Why is this bad?
     /// Variance says how two *specializations* relate. A function's type
@@ -2039,16 +2041,22 @@ declare_lint! {
     /// decides nothing in either position. Reported rather than dropped, because
     /// a keyword nothing checks reads as a promise that something does.
     ///
-    /// A generic class and a generic type alias both specialize, and both keep
-    /// the keyword.
+    /// A generic class and a generic type alias both specialize and both keep
+    /// the keyword. An alias has no variance of its own — it relates exactly as
+    /// the type it expands to does — so its keyword is a claim about that
+    /// expansion, and a claim the expansion contradicts is reported too. A
+    /// class's own keyword is checked against its members by
+    /// `invalid-generic-class`.
     ///
     /// ## Example
     ///
     /// ```by
     /// def f[out T](t: T) -> None: ...  # error: a function's `T` has no variance
+    ///
+    /// type Alias[out T] = list[T]      # error: `list` is invariant
     /// ```
     pub(crate) static INVALID_VARIANCE_DECLARATION = {
-        summary: "detects variance keywords outside a generic class declaration",
+        summary: "detects a variance keyword the program does not honour",
         status: LintStatus::stable("0.0.62"),
         default_level: Level::Error,
     }
