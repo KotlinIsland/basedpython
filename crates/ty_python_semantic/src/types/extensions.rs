@@ -67,7 +67,16 @@ pub(crate) fn is_prelude_extension(
 }
 
 /// all extension declarations in a module, in source order
-#[salsa::tracked(returns(deref), heap_size = ruff_memory_usage::heap_size)]
+///
+/// resolving a declaration to its class literal infers module-level code, and
+/// that inference asks which extensions apply — so this query can re-enter
+/// itself. it starts a cycle from "no extensions" and iterates: a member
+/// lookup made while the set is still being discovered simply does not see one
+#[salsa::tracked(
+    returns(deref),
+    cycle_initial = |_, _, _| Box::default(),
+    heap_size = ruff_memory_usage::heap_size
+)]
 pub(crate) fn extensions_in_module(db: &dyn Db, file: File) -> Box<[StaticClassLiteral<'_>]> {
     // only basedpython files declare extensions. a `.py` file containing an
     // `extension` block already has a parse error; don't serve its members
@@ -95,7 +104,14 @@ pub(crate) fn extensions_in_module(db: &dyn Db, file: File) -> Box<[StaticClassL
 /// the extensions applicable in `file`: its own, then those of every module it
 /// imports with a plain `import mod` (in that order — a same-module extension
 /// wins over an imported one when both apply)
-#[salsa::tracked(returns(deref), heap_size = ruff_memory_usage::heap_size)]
+///
+/// cycles for the same reason [`extensions_in_module`] does, and recovers the
+/// same way
+#[salsa::tracked(
+    returns(deref),
+    cycle_initial = |_, _, _| Box::default(),
+    heap_size = ruff_memory_usage::heap_size
+)]
 pub(crate) fn applicable_extensions(db: &dyn Db, file: File) -> Box<[StaticClassLiteral<'_>]> {
     if !file.source_type(db).is_basedpython() {
         return Box::default();
