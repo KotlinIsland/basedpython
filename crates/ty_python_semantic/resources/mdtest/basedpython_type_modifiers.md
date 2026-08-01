@@ -295,6 +295,53 @@ def f() -> None:
     d: (literal str) = str(1)
 ```
 
+## a modifier in a `Callable` parameter list
+
+The parameter list of `Callable[[...], R]` is a list display, but every element of it is a type
+expression, so a modifier is read there too.
+
+```by
+from typing import Callable
+
+a: Callable[[literal str], None]
+b: Callable[[int, final int], list[literal str]]
+
+def f(g: Callable[[literal str], None]) -> None:
+    # error: [invalid-argument-type]
+    g(str(1))
+```
+
+## a modifier in an inline protocol member
+
+```by
+a: protocol(m: literal str)
+b: protocol(def f(self) -> final int)
+
+def f(p: protocol(m: literal str)) -> None:
+    reveal_type(p.m)  # revealed: LiteralString
+```
+
+## a modifier in an anonymous named tuple field
+
+```by
+a: (m: literal str, n: final int) = ("x", 1)
+
+def f(p: (m: literal str)) -> None:
+    reveal_type(p.m)  # revealed: LiteralString
+```
+
+## a modifier on a `cast` target
+
+The right operand of `cast` is the type being cast to, so it is a type expression.
+
+```by
+def f(a: object) -> None:
+    b = a cast literal str
+    reveal_type(b)  # revealed: LiteralString
+    c = a cast? final int
+    reveal_type(c)  # revealed: final int | None
+```
+
 ## a modifier is only a modifier when a name follows it
 
 ```by
@@ -311,4 +358,15 @@ def f(a: literal) -> None:
 ```py
 # error: [invalid-syntax]
 a: literal str = "x"
+```
+
+## a `Callable` parameter list is still python in a `.py` file
+
+<!-- snapshot-diagnostics -->
+
+```py
+from typing import Callable
+
+# error: [invalid-syntax]
+a: Callable[[literal str], None]
 ```

@@ -38,6 +38,7 @@ use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtAnnAssign, StmtFunctionDef, StmtReturn};
 use ruff_text_size::Ranged;
 
+use crate::transforms::callable::CallableSyntax;
 use crate::type_info::TypeInfo;
 
 /// Synthetic field name for the i-th positional element of a mixed
@@ -97,6 +98,12 @@ pub(crate) struct AnonNamedTuple<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
     config: crate::Config,
+    /// One lowerer drives every field type in the run, so its imports and the
+    /// classes it synthesizes can be collected at the end. A hoisted class body
+    /// leaves the statement the field type was written in, so no sibling
+    /// transform's edit reaches it — the field type has to be lowered here or
+    /// the surface syntax lands in the output verbatim
+    pub(crate) callable: CallableSyntax<'src>,
     pub(crate) edits: Vec<Fix>,
     /// Insertion-ordered map of shape → synthesized class name. Visitor
     /// processes nested anonymous-named-tuple expressions before their
@@ -151,6 +158,7 @@ impl<'src> AnonNamedTuple<'src> {
             source,
             types,
             config,
+            callable: CallableSyntax::new(source).with_types(types),
             edits: Vec::new(),
             shapes: indexmap::IndexMap::new(),
             range_to_class: Vec::new(),
@@ -194,6 +202,25 @@ impl<'src> AnonNamedTuple<'src> {
         // quotes so the annotation is stored as a string and only resolved
         // by type checkers, not at class-construction time.
         if renamed != raw && !raw.is_empty() {
+            format!("\"{renamed}\"")
+        } else {
+            renamed
+        }
+    }
+
+    /// Lower a field's type expression to python source.
+    ///
+    /// The synthesized class body is hoisted out of the statement the field type
+    /// was written in, so a sibling transform's edit never reaches it. Driving
+    /// the shared type-expression lowerer here is what keeps `dynamic`, `T?`,
+    /// `typeof x`, a callable arrow and a nested anonymous named tuple from
+    /// reaching the output as surface syntax.
+    fn render_field_type(&mut self, expr: &Expr) -> String {
+        let lowered = self.callable.lower_type_expr(expr);
+        let renamed = self.apply_typevar_renames(&lowered);
+        // same forward-reference quoting as `render_subbed`: a renamed typevar is
+        // declared below the hoisted class, so the annotation must stay a string
+        if renamed != lowered && !lowered.is_empty() {
             format!("\"{renamed}\"")
         } else {
             renamed
@@ -297,7 +324,7 @@ impl<'src> AnonNamedTuple<'src> {
     /// name). Returns `Ok(None)` only when this isn't an anon-NT type tuple
     /// at all (so the caller can ignore it).
     fn extract_type_shape(
-        &self,
+        &mut self,
         tuple: &ruff_python_ast::ExprTuple,
     ) -> Result<Option<Shape>, String> {
         if !tuple.is_anon_named_tuple {
@@ -313,12 +340,10 @@ impl<'src> AnonNamedTuple<'src> {
                             self.src(named.target.range())
                         ));
                     };
-                    (
-                        name_expr.id.as_str().to_owned(),
-                        self.render_subbed(named.value.range()),
-                    )
+                    let name = name_expr.id.as_str().to_owned();
+                    (name, self.render_field_type(&named.value))
                 }
-                other => (synth_pos_name(i), self.render_subbed(other.range())),
+                other => (synth_pos_name(i), self.render_field_type(other)),
             };
             fields.push((name, type_source));
         }
@@ -404,8 +429,11 @@ impl<'src> AnonNamedTuple<'src> {
         };
         // Track this anon-NT's source range → class name so any *outer* anon-NT
         // that contains this one can substitute its source span when rendering
-        // its own field types in the synthesized class body.
+        // its own field types in the synthesized class body. the lowerer needs
+        // the same table so an outer field type resolves a nested anon-NT at any
+        // depth, not only when it is the whole field type
         self.range_to_class.push((source_range, name.clone()));
+        self.callable.add_substitution(source_range, name.clone());
         name
     }
 
@@ -487,7 +515,7 @@ impl<'src> AnonNamedTuple<'src> {
         self.apply_coercion(&target, value);
     }
 
-    fn return_shape_for(&self, func: &StmtFunctionDef) -> Option<Shape> {
+    fn return_shape_for(&mut self, func: &StmtFunctionDef) -> Option<Shape> {
         let returns = func.returns.as_deref()?;
         let Expr::Tuple(t) = returns else { return None };
         // Errors in shape extraction surface through the visitor's own pass
@@ -500,7 +528,7 @@ impl<'src> AnonNamedTuple<'src> {
     /// expected shape and the surrounding container so the caller knows
     /// whether to wrap the value directly or to wrap each element of an
     /// outer collection literal.
-    fn coercion_target(&self, annotation: &Expr) -> Option<CoercionTarget> {
+    fn coercion_target(&mut self, annotation: &Expr) -> Option<CoercionTarget> {
         // Direct: `x: (name: T, ...)`
         if let Expr::Tuple(t) = annotation {
             return self
@@ -810,12 +838,17 @@ impl super::ast_driver::TypeAwarePass for AnonNamedTuplePass<'_> {
         if inner.needs_import {
             ctx.required_imports
                 .push("from typing import NamedTuple".to_owned());
-            let defs = inner.class_defs();
+            // the field lowerer's own classes come first: a field type may name
+            // one. they go in as a single entry so the sort below cannot part
+            // them from the classes that reference them
+            let defs = format!("{}{}", inner.callable.class_defs(), inner.class_defs());
             if !defs.is_empty() {
                 let trimmed = defs.trim_end_matches('\n');
                 ctx.required_imports.push(format!("{trimmed}\n"));
             }
         }
+        ctx.required_imports
+            .extend(inner.callable.take_import_lines());
         for fix in std::mem::take(&mut inner.edits) {
             for edit in fix.edits() {
                 let range = edit.range();
@@ -836,6 +869,52 @@ mod tests {
         assert_eq!(
             transpile(input, &Config::test_default()).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    /// the synthesized class body leaves the statement the field type was
+    /// written in, so nothing else lowers it — `dynamic` reaching the output
+    /// verbatim is a `NameError` at import, and a wrapped type is a syntax error
+    #[test]
+    fn field_types_are_lowered() {
+        check(
+            "a: (m: dynamic, n: int?)\n",
+            indoc! {"
+                from typing import Any, NamedTuple
+                class _AnonNamedTuple_b4e69f63(NamedTuple):
+                    m: Any
+                    n: int | None
+
+                a: _AnonNamedTuple_b4e69f63
+            "},
+        );
+    }
+
+    /// `typeof` is lowered by an AST pass that re-renders its whole statement,
+    /// which drops this pass's edit — the cleanup run then re-lowers the
+    /// restored surface form, and must not emit the class a second time
+    #[test]
+    fn a_re_rendered_statement_does_not_duplicate_the_class() {
+        let out = transpile("b: int = 1\na: (m: typeof b)\n", &Config::test_default()).unwrap();
+        assert_eq!(
+            out.matches("class _AnonNamedTuple_").count(),
+            1,
+            "expected a single class def, got: {out}"
+        );
+        assert!(out.contains("    m: TypeOf[b]"), "got: {out}");
+    }
+
+    #[test]
+    fn a_callable_arrow_field_type_is_lowered() {
+        check(
+            "a: (m: (int) -> str)\n",
+            indoc! {"
+                from typing import Callable, NamedTuple
+                class _AnonNamedTuple_7905e5a7(NamedTuple):
+                    m: Callable[[int], str]
+
+                a: _AnonNamedTuple_7905e5a7
+            "},
         );
     }
 
