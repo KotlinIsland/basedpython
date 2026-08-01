@@ -821,6 +821,12 @@ impl<'a, 'db> InlayHintVisitor<'a, 'db> {
             return;
         }
 
+        // the hint is an annotation the user can accept, so it offers the type the
+        // declaration would have. basedpython infers `A()` as `final A`, but the
+        // declaration it widens to is `A` — writing the modifier down would be a
+        // stricter declaration than the code asked for
+        let ty = ty.erase_restriction(self.db);
+
         if is_ignored_variable_assignment_target(expr) {
             return;
         }
@@ -9955,6 +9961,27 @@ Source with applied edits:
 
         assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
             call_argument_names: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// basedpython infers a constructor call as `final A`, but the hint offers the
+    /// type the declaration would have — writing the modifier down would be a
+    /// stricter declaration than the code asked for.
+    #[test]
+    fn basedpython_constructor_hint_drops_the_final_modifier() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            class Wrapper[Element]:
+                init(element: Element)
+
+            def f():
+                a = Wrapper(1)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            variable_types: true,
             ..InlayHintSettings::none()
         }));
     }

@@ -8,7 +8,7 @@ use ruff_db::files::File;
 use ruff_db::parsed::ParsedModuleRef;
 use ruff_db::source::source_text;
 use ruff_python_ast::helpers::{
-    is_dotted_name, is_untyped_declaration_marker, untyped_declaration_context,
+    TypeModifier, is_dotted_name, is_untyped_declaration_marker, untyped_declaration_context,
 };
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{
@@ -72,16 +72,16 @@ use crate::types::diagnostic::{
     INVALID_LEGACY_TYPE_VARIABLE, INVALID_NEWTYPE, INVALID_PARAMSPEC, INVALID_REGEX,
     INVALID_REIFIED_TYPE_PARAM, INVALID_TYPE_ALIAS_TYPE, INVALID_TYPE_FORM,
     INVALID_TYPE_VARIABLE_CONSTRAINTS, NARROWING_GUARD_AS_VALUE,
-    NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST, OPTIONAL_OBJECT_CONVERSION,
-    POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE, REFUTABLE_DESTRUCTURING,
-    TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD, UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS,
-    UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE, UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE,
-    UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR, UNUSED_AWAITABLE,
-    hint_if_stdlib_attribute_exists_on_other_versions, report_attempted_protocol_instantiation,
-    report_bad_dunder_delattr_call, report_bad_dunder_delete_call, report_bool_as_int,
-    report_bool_as_int_assignment, report_call_to_abstract_method,
-    report_cannot_pop_required_field_on_typed_dict, report_invalid_assignment,
-    report_invalid_class_match_pattern, report_invalid_exception_caught,
+    NON_EXHAUSTIVE_STATEMENT_EXPRESSION, NON_OVERLAPPING_CAST, NON_OVERLAPPING_TYPE_TEST,
+    OPTIONAL_OBJECT_CONVERSION, POSSIBLY_MISSING_IMPLICIT_CALL, POSSIBLY_MISSING_SUBMODULE,
+    REFUTABLE_DESTRUCTURING, TypeCheckDiagnostics, UNANNOTATED_MODEL_FIELD,
+    UNAVAILABLE_IMPLICIT_SUPER_ARGUMENTS, UNDEFINED_REVEAL, UNRESOLVED_ATTRIBUTE,
+    UNRESOLVED_GLOBAL, UNRESOLVED_REFERENCE, UNSPECIALIZED_REIFIED_GENERIC, UNSUPPORTED_OPERATOR,
+    UNUSED_AWAITABLE, hint_if_stdlib_attribute_exists_on_other_versions,
+    report_attempted_protocol_instantiation, report_bad_dunder_delattr_call,
+    report_bad_dunder_delete_call, report_bool_as_int, report_bool_as_int_assignment,
+    report_call_to_abstract_method, report_cannot_pop_required_field_on_typed_dict,
+    report_invalid_assignment, report_invalid_class_match_pattern, report_invalid_exception_caught,
     report_invalid_exception_cause, report_invalid_exception_raised,
     report_invalid_exception_tuple_caught, report_invalid_generator_yield_type,
     report_invalid_key_on_typed_dict, report_invalid_match_args_type,
@@ -135,15 +135,15 @@ use crate::types::typevar::{BoundTypeVarIdentity, TypeVarConstraints, TypeVarIde
 use crate::types::unpacker::UnpackResult;
 use crate::types::{
     BoundTypeVarInstance, CallDunderError, CallableBinding, CallableType, CallableTypes, ClassType,
-    DeferredOperation, DeferredType, DynamicType, InferenceFlags, InternedConstraintSet,
-    InternedType, IntersectionBuilder, IntersectionType, KnownClass, KnownInstanceType, KnownUnion,
-    LiteralValueType, LiteralValueTypeKind, MemberLookupPolicy, ParamSpecAttrKind, Parameter,
-    Parameters, SentinelInstance, Signature, SpecialFormType, SubclassOfType, Type, TypeAliasType,
-    TypeAndQualifiers, TypeContext, TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind,
-    TypeVarVariance, TypedDictModule, TypedDictType, UnionAccumulator, UnionBuilder, UnionType,
-    any_over_type, binding_type, extract_fixed_length_iterable_element_types,
-    infer_complete_scope_types, infer_scope_types, is_discarded_dict_key_assignment,
-    report_iteration_over_character, todo_type,
+    DeferredOperation, DeferredType, DynamicType, InferenceFlags, InstanceProjection,
+    InternedConstraintSet, InternedType, IntersectionBuilder, IntersectionType, KnownClass,
+    KnownInstanceType, KnownUnion, LiteralValueType, LiteralValueTypeKind, MemberLookupPolicy,
+    ParamSpecAttrKind, Parameter, Parameters, RestrictedType, SentinelInstance, Signature,
+    SpecialFormType, SubclassOfType, Type, TypeAliasType, TypeAndQualifiers, TypeContext,
+    TypeQualifiers, TypeVarBoundOrConstraints, TypeVarKind, TypeVarVariance, TypedDictModule,
+    TypedDictType, UnionAccumulator, UnionBuilder, UnionType, any_over_type, binding_type,
+    extract_fixed_length_iterable_element_types, infer_complete_scope_types, infer_scope_types,
+    is_discarded_dict_key_assignment, report_iteration_over_character, todo_type,
 };
 use crate::{AnalysisSettings, Db, FxIndexSet, Program};
 use fluid::FluidTimeline;
@@ -9888,6 +9888,39 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         self.basedpython_chain_result(call_expression, return_type, in_chain)
     }
 
+    /// basedpython: a constructor call names the class it builds, so the value it
+    /// produces has *exactly* that runtime class — `final A`, not merely `A`.
+    ///
+    /// This is the constructor counterpart of literal inference: `1` is inferred
+    /// as `Literal[1]` and widens to `int` when a declaration is inferred from it,
+    /// and `A()` is inferred as `final A` and widens the same way (see the
+    /// `Type::Restricted` arm of `apply_type_mapping_impl`). It only applies when
+    /// the callee is the class itself — a `type[A]` variable may hold a subclass —
+    /// and when the call really did build one, so a `__new__` or metaclass
+    /// `__call__` returning something else keeps its own return type.
+    fn basedpython_exact_construction(
+        &self,
+        callable_type: Type<'db>,
+        return_type: Type<'db>,
+    ) -> Type<'db> {
+        if !self.is_basedpython_file() {
+            return return_type;
+        }
+        let db = self.db();
+        let constructed = match callable_type {
+            Type::ClassLiteral(class) => class,
+            Type::GenericAlias(alias) => ClassType::Generic(alias).class_literal(db),
+            _ => return return_type,
+        };
+        let Type::NominalInstance(instance) = return_type else {
+            return return_type;
+        };
+        if instance.class(db).class_literal(db) != constructed {
+            return return_type;
+        }
+        RestrictedType::from_type_expression(db, TypeModifier::Final, return_type)
+    }
+
     fn infer_empty_list_or_set_constructor(
         &mut self,
         collection_class: KnownClass,
@@ -10358,6 +10391,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     }
 
     fn infer_call_expression_impl(
+        &mut self,
+        call_expression: &ast::ExprCall,
+        callable_type: Type<'db>,
+        call_expression_tcx: TypeContext<'db>,
+    ) -> Type<'db> {
+        let return_type =
+            self.infer_call_expression_inner(call_expression, callable_type, call_expression_tcx);
+        self.basedpython_exact_construction(callable_type, return_type)
+    }
+
+    fn infer_call_expression_inner(
         &mut self,
         call_expression: &ast::ExprCall,
         callable_type: Type<'db>,
@@ -13547,17 +13591,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         )
     }
 
-    /// basedpython: classify a keyword-form `is`/`is not` pair that performs
-    /// an *instance check* rather than python identity. Returns `Some(bool)`
-    /// — the runtime result type — for any such pair, so the identity folds
-    /// (disjointness → `Literal[False]`) never apply to it; reachability is
-    /// decided by narrowing instead. errors when the pair is a parametric
-    /// test (`x is list[int]`) against a builtin collection whose runtime
-    /// instances erase their type arguments, so no runtime probe of the
-    /// value can ever confirm the specialization. `None` when the pair keeps
-    /// python identity semantics (`===` spelling, a literal or other
-    /// plain-value rhs such as an enum member — mirroring the transpiler's
-    /// lowering), so the caller keeps its usual comparison typing
+    /// basedpython: type a keyword-form `is`/`is not` pair that performs an
+    /// *instance check* rather than python identity, and check it. Returns
+    /// `Some(bool)` — the runtime result type — for any such pair, so the
+    /// identity folds (disjointness → `Literal[False]`) never apply to it;
+    /// reachability is decided by narrowing instead
     fn check_basedpython_is_test(
         &mut self,
         left: &ast::Expr,
@@ -13566,6 +13604,85 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         right_ty: Type<'db>,
         op: ast::CmpOp,
     ) -> Option<Type<'db>> {
+        let (bool_ty, decision) =
+            self.classify_basedpython_is_test(left, right, left_ty, right_ty, op)?;
+        self.report_non_overlapping_type_test(left, right, left_ty, right_ty, op, decision);
+        Some(bool_ty)
+    }
+
+    /// The type a keyword-form `is`/`is not` asks its left operand to have: the
+    /// instance type of the class on the right, or the union of the arms' instance
+    /// types for a union target. `None` for a target with no instance form.
+    fn is_test_target_instance(&self, right: &ast::Expr, right_ty: Type<'db>) -> Option<Type<'db>> {
+        // an over-approximating projection is the safe direction here: a wider
+        // target can only overlap more, so it never invents a disjointness
+        let db = self.db();
+        let Some(arms) = union_target_arms(right) else {
+            return right_ty.to_instance(db).map(InstanceProjection::into_inner);
+        };
+        let mut instances = Vec::with_capacity(arms.len());
+        for arm in arms {
+            instances.push(self.expression_type(arm).to_instance(db)?.into_inner());
+        }
+        Some(UnionType::from_elements(db, instances))
+    }
+
+    /// Warn when a keyword-form `is`/`is not` tests a value against a type it can
+    /// never have. The test is then a constant — `is` never holds and `is not`
+    /// always does — so either the guarded branch is dead or the wrong type was
+    /// named. `Any`/`Unknown` overlap everything, so those never fire.
+    fn report_non_overlapping_type_test(
+        &self,
+        left: &ast::Expr,
+        right: &ast::Expr,
+        left_ty: Type<'db>,
+        right_ty: Type<'db>,
+        op: ast::CmpOp,
+        decision: IsTestDecision,
+    ) {
+        let db = self.db();
+        let Some(target) = self.is_test_target_instance(right, right_ty) else {
+            return;
+        };
+        let never_holds = match decision {
+            IsTestDecision::Instance => left_ty.is_disjoint_from(db, target),
+            IsTestDecision::ParametricNeverHolds => true,
+            IsTestDecision::Undecided => false,
+        };
+        if !never_holds {
+            return;
+        }
+        let range = TextRange::new(left.start(), right.end());
+        let Some(builder) = self.context.report_lint(&NON_OVERLAPPING_TYPE_TEST, range) else {
+            return;
+        };
+        let always = if op == ast::CmpOp::Is {
+            "False"
+        } else {
+            "True"
+        };
+        builder.into_diagnostic(format_args!(
+            "`{}` and `{}` are non-overlapping types, so this test is always `{always}`",
+            left_ty.display(db),
+            target.display(db),
+        ));
+    }
+
+    /// Decide whether this pair is an instance check, erroring when the pair is a
+    /// parametric test (`x is list[int]`) against a builtin collection whose
+    /// runtime instances erase their type arguments, so no runtime probe of the
+    /// value can ever confirm the specialization. `None` when the pair keeps
+    /// python identity semantics (`===` spelling, a literal or other plain-value
+    /// rhs such as an enum member — mirroring the transpiler's lowering), so the
+    /// caller keeps its usual comparison typing
+    fn classify_basedpython_is_test(
+        &mut self,
+        left: &ast::Expr,
+        right: &ast::Expr,
+        left_ty: Type<'db>,
+        right_ty: Type<'db>,
+        op: ast::CmpOp,
+    ) -> Option<(Type<'db>, IsTestDecision)> {
         if !matches!(op, ast::CmpOp::Is | ast::CmpOp::IsNot) || !self.is_basedpython_file() {
             return None;
         }
@@ -13585,6 +13702,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // standalone erased target, may not fold to a constant inside the
         // disjunction — that would be unsound — so it is rejected per arm
         if let Some(arms) = union_target_arms(right) {
+            let mut decision = IsTestDecision::Instance;
             for arm in arms {
                 let Some(alias) = crate::types::reified_infer::parametric_is_target(
                     self.db(),
@@ -13592,6 +13710,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ) else {
                     continue;
                 };
+                // a parametric arm is decided by the engine rather than by
+                // disjointness, and the test holds as soon as *any* arm does, so
+                // one such arm puts the whole disjunction out of the lint's reach
+                decision = IsTestDecision::Undecided;
                 if let crate::types::reified_infer::ParametricIsPlan::ErasedTarget(_) =
                     crate::types::reified_infer::classify_parametric_is(
                         self.db(),
@@ -13604,7 +13726,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     self.report_erased_type_check(arm.range(), &source[arm.range()]);
                 }
             }
-            return Some(bool_ty);
+            return Some((bool_ty, decision));
         }
 
         // a plain-value rhs (an enum member, an instance of a non-type class)
@@ -13620,7 +13742,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // instance check that lowers to `isinstance`, so it always yields a
             // `bool` — the identity folds (disjointness → `Literal[False]`)
             // must not apply
-            return Some(bool_ty);
+            return Some((bool_ty, IsTestDecision::Instance));
         };
         let plan = crate::types::reified_infer::classify_parametric_is(
             self.db(),
@@ -13638,7 +13760,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 &source[right.range()],
             );
         }
-        Some(bool_ty)
+        let decision = if plan == crate::types::reified_infer::ParametricIsPlan::Fold(false) {
+            IsTestDecision::ParametricNeverHolds
+        } else {
+            IsTestDecision::Undecided
+        };
+        Some((bool_ty, decision))
     }
 
     /// report an `erased-type-check` for a parametric `is`-target (or one arm
@@ -14676,6 +14803,22 @@ fn is_collection_literal(expression: &ast::Expr) -> bool {
 /// the flat arms of a `|` union type expression (`A | B | C` → `[A, B, C]`), or
 /// `None` when `expr` is not a union — used to test each arm of a parametric
 /// `is`-target union independently
+/// basedpython: how a keyword-form `is`/`is not` instance check is decided, which
+/// is what the `non-overlapping-type-test` lint reads to know whether the test can
+/// ever hold.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum IsTestDecision {
+    /// a bare class target (`x is int`): ordinary disjointness decides it
+    Instance,
+    /// a parametric target (`x is list[int]`) the parametric engine folded to
+    /// `False`. That engine is asked rather than disjointness directly because it
+    /// also honours a use-site variance projection (`a is A[out int]`)
+    ParametricNeverHolds,
+    /// a parametric target left to a runtime probe, or a union with such an arm —
+    /// nothing the lint can call constant
+    Undecided,
+}
+
 fn union_target_arms(expr: &ast::Expr) -> Option<Vec<&ast::Expr>> {
     fn collect<'a>(expr: &'a ast::Expr, arms: &mut Vec<&'a ast::Expr>) {
         if let ast::Expr::BinOp(binop) = expr

@@ -61,6 +61,34 @@ Genre.A is not Genre.B  # stays `is not` — members are singleton instances
 
 a payload-bearing variant (`Shape.Circle`) *is* a class, so `x is Shape.Circle` lowers to `isinstance(x, Shape.Circle)` as usual
 
+## a test that can never hold
+
+`non-overlapping-type-test` warns when the value's type and the tested type share
+no value at all. the test is then a constant — `is` never holds, `is not` always
+does — so either the branch it guards is dead or the wrong type was named:
+
+```by
+class Shape: ...
+
+def f(x: None, s: Shape):
+    if x is int: ...      # warning: `None` and `int` are non-overlapping
+    if s is str: ...      # warning: `Shape` and `str` are non-overlapping
+
+def g(o: object):
+    if o is int: ...      # ok — `object` overlaps `int`
+```
+
+the value's *narrowed* type is what is tested, so it is often sharper than the
+declaration: `c = 1` is a `Literal[1]`, and a constructor call is
+[`final A`](type-modifiers.md#a-constructor-call-is-inferred-final) — a value
+whose runtime class is exactly `A`'s, and therefore not a `str` and not a
+subclass of `A` either.
+
+a [parametric target](parametric-type-tests.md) is judged by the same fold that
+decides the test, so a use-site variance projection (`a is A[out int]`) that
+makes the test possible keeps it quiet. a union target is never reported: any arm
+matching makes the whole test hold
+
 ## interaction with `==`
 
 `==` is unchanged — it still calls `__eq__` exactly as in Python. only `is`

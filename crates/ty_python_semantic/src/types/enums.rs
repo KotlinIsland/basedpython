@@ -1574,6 +1574,11 @@ pub fn basedpython_is_keeps_identity<'db>(db: &'db dyn Db, ty: Type<'db>) -> boo
             .all(|element| basedpython_is_keeps_identity(db, *element)),
         // literal values (enum members included) are never classes
         Type::LiteralValue(_) | Type::EnumComplement(_) => true,
+        // a use-site modifier says nothing about whether the value is a class:
+        // a unit enum variant is a `final _Shape_Point`, still an instance
+        Type::Restricted(restricted) => {
+            basedpython_is_keeps_identity(db, restricted.value_type(db))
+        }
         Type::NominalInstance(instance) => {
             !instance.has_known_class(db, KnownClass::Object)
                 && !ty.is_assignable_to(db, KnownClass::Type.to_instance(db))

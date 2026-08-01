@@ -92,6 +92,54 @@ class is `bool`)
 on a class already marked [`@final`](modifiers.md) the modifier adds nothing —
 such a class has no subclasses — so it reduces to the bare type
 
+### a constructor call is inferred `final`
+
+a call that *names* the class it builds produces a value whose runtime class is
+exactly that class, so it is inferred as `final A` rather than `A`:
+
+```by
+class A: ...
+
+a = A()                # final A
+reveal_type(a)         # final A
+
+def f(make: type[A]):
+    make()             # A — the variable may hold a subclass
+```
+
+this is the constructor counterpart of literal inference. `1` is inferred as
+`Literal[1]` and widens to `int` wherever a declaration is inferred from it, and
+`final A` widens to `A` in exactly the same places:
+
+```by
+class A: ...
+class B(A): ...
+
+class C:
+    x = A()            # declared `A`, so a subclass still assigns
+
+def g(c: C):
+    c.x = B()          # ok
+
+xs = [A()]             # list[A], not list[final A]
+```
+
+what the extra precision buys is disjointness. a value whose class is exactly
+`A`'s cannot also be a `str`, and cannot be a *subclass* of `A` either, so both
+narrow away — which is what lets a
+[`non-overlapping-type-test`](identity-swap.md#a-test-that-can-never-hold) catch
+a test that can never hold:
+
+```by
+class A: ...
+class B(A): ...
+
+def f():
+    a = A()
+    if a is str: ...   # warning: `final A` and `str` are non-overlapping
+    if a is B: ...      # warning: an exactly-`A` value is never a `B`
+```
+
 ## precedence
 
 a modifier binds to the type expression it precedes, and no further. so it is

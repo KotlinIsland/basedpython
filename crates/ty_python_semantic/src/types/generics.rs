@@ -3216,6 +3216,28 @@ impl<'db, 'c> SpecializationBuilder<'db, 'c> {
                 return self.infer_map_impl(alias.value_type(self.db), actual, polarity, seen);
             }
 
+            // basedpython: a use-site modifier constrains which values fit, not
+            // what shape they have, so the solve reads through it on both sides.
+            // Without this a `final list[int]` argument (which is what
+            // `list[int]()` infers) matches no `list[T]` formal at all
+            (Type::Restricted(formal_restricted), _) => {
+                return self.infer_map_impl(
+                    formal_restricted.value_type(self.db),
+                    actual,
+                    polarity,
+                    seen,
+                );
+            }
+
+            (_, Type::Restricted(actual_restricted)) => {
+                return self.infer_map_impl(
+                    formal,
+                    actual_restricted.value_type(self.db),
+                    polarity,
+                    seen,
+                );
+            }
+
             (Type::TypeForm(formal_typeform), Type::TypeForm(actual_typeform)) => {
                 let variance = TypeVarVariance::Covariant.compose(polarity);
                 return self.infer_map_impl(

@@ -157,7 +157,12 @@ impl<'db> SemanticModel<'db> {
             ),
             kind: resolution.kind,
             import_from,
-            receiver_is_class: receiver_ty.nominal_class(db).is_none(),
+            // a use-site modifier does not turn an instance into a class object:
+            // `A()` is a `final A`, still a receiver a `class def` has to widen
+            receiver_is_class: receiver_ty
+                .erase_restriction(db)
+                .nominal_class(db)
+                .is_none(),
         })
     }
 

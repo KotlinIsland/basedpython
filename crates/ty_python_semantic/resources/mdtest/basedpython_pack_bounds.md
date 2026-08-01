@@ -141,7 +141,7 @@ class A[**Kwargs: int]:
     init(**kwargs: **Kwargs)
 
 ok = A(x=1, y=True)
-reveal_type(ok)  # revealed: A[x=int, y=bool]
+reveal_type(ok)  # revealed: final A[x=int, y=bool]
 
 # error: [invalid-argument-type] "Type `str` is not assignable to upper bound `int` of keyword-variadic pack `Kwargs@A`"
 bad = A(x=1, y="s")
@@ -154,7 +154,7 @@ class A[**Kwargs: **{"a": int}]:
     init(**kwargs: **Kwargs)
 
 ok = A(a=1)
-reveal_type(ok)  # revealed: A[a=int]
+reveal_type(ok)  # revealed: final A[a=int]
 
 # error: [invalid-argument-type] "Upper bound `{"a": int}` of keyword-variadic pack `Kwargs@A` requires a field `a`"
 missing = A(b=1)

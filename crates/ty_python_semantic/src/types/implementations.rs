@@ -391,7 +391,12 @@ pub(crate) fn repair_with_implementation<'db>(
     if source.is_assignable_to(db, target) {
         return None;
     }
-    let source_class = source.nominal_class(db)?.class_literal(db);
+    // a use-site modifier restricts which values reach here, not which class they
+    // are instances of, so `final B` finds `B`'s implementations
+    let source_class = source
+        .erase_restriction(db)
+        .nominal_class(db)?
+        .class_literal(db);
 
     let mut repair: Option<ImplementationRepair<'db>> = None;
     for &implementation in applicable_implementations(db, file) {

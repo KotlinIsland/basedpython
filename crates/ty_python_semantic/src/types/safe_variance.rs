@@ -89,7 +89,9 @@ pub(super) fn private_member_view<'db>(
     object_ty: Type<'db>,
     attribute: &str,
 ) -> Option<PrivateMemberView<'db>> {
-    let instance = object_ty.as_nominal_instance()?;
+    // a use-site modifier restricts which values the receiver may hold, not which
+    // specialization it is a view of
+    let instance = object_ty.erase_restriction(db).as_nominal_instance()?;
     let super::ClassType::Generic(alias) = instance.class(db) else {
         return None;
     };

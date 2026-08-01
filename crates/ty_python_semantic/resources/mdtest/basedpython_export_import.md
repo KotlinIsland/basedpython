@@ -85,7 +85,7 @@ class Widget: ...
 ```by
 from pkg import Widget
 
-reveal_type(Widget())  # revealed: Widget
+reveal_type(Widget())  # revealed: final Widget
 ```
 
 ## the exported name is bound locally as well
@@ -103,7 +103,7 @@ class Widget: ...
 ```by
 from b export Widget
 
-reveal_type(Widget())  # revealed: Widget
+reveal_type(Widget())  # revealed: final Widget
 ```
 
 ## `export` is not valid in a `.py` file

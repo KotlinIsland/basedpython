@@ -14,13 +14,17 @@ annotation, a method member against the value method's reified parameter (contra
 (covariant) annotations. Only a protocol with a member whose specialized type has no runtime
 spelling (a callable attribute, a dynamic type) has no runtime residue and stays an error.
 
-## statically decided tests are silent
+## statically decided tests raise no `erased-type-check`
+
+A fold needs no runtime probe, so the erased-target error never applies to one. A fold to `False` is
+still reported as a [non-overlapping test](#a-test-that-can-never-hold-is-reported).
 
 ```by
 xs = [1, 2]
 ys: list[object] = [1]
 
 b1 = xs is list[int]
+# error: [non-overlapping-type-test]
 b2 = ys is list[int]
 ```
 
@@ -195,6 +199,7 @@ def h(a: A[*]) -> bool:
 
 # without a projection `T` stays invariant, so a wider value is not a match
 def i(a: A[bool]) -> bool:
+    # error: [non-overlapping-type-test]
     return a is A[int]
 ```
 
@@ -535,6 +540,7 @@ builtin.
 
 ```by
 def f(x: int | str) -> bool:
+    # error: [non-overlapping-type-test]
     return x is list[int]
 ```
 
@@ -597,6 +603,36 @@ error.
 ```by
 def f(y: object) -> bool:
     return y is int
+```
+
+## a test that can never hold is reported
+
+A fold to `False` means the value's static type rules the specialization out, so the test is a
+constant. `non-overlapping-type-test` reports it — the answer is decided by the same fold, so a
+use-site variance projection that makes the test possible keeps it quiet.
+
+```by
+class A[in out T]:
+    def __init__(self): ...
+
+def never(a: A[bool]) -> bool:
+    # error: [non-overlapping-type-test] "`A[bool]` and `A[int]` are non-overlapping types, so this test is always `False`"
+    return a is A[int]
+
+def projected(a: A[bool]) -> bool:
+    return a is A[out int]
+```
+
+## a union target is left alone
+
+Any arm matching makes the whole test hold, so one arm ruled out proves nothing.
+
+```by
+class A[in out T]:
+    def __init__(self): ...
+
+def f(a: A[bool]) -> bool:
+    return a is A[int] | A[bool]
 ```
 
 ## a union target tests each arm

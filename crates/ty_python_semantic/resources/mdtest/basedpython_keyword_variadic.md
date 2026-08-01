@@ -50,10 +50,10 @@ class A[**Kwargs]:
     def __init__(self, **kwargs: **Kwargs) -> None: ...
 
 a = A(x=1, y="s")
-reveal_type(a)  # revealed: A[x=int, y=str]
+reveal_type(a)  # revealed: final A[x=int, y=str]
 
 empty = A()
-reveal_type(empty)  # revealed: A[()]
+reveal_type(empty)  # revealed: final A[()]
 ```
 
 the pack is solved as a whole, so a class that also has ordinary type variables still infers them
@@ -65,7 +65,7 @@ class Two[T, **Kwargs]:
 
 # TODO: `T` should promote to `bytes`. a generic context containing a parameter pack skips
 # literal promotion for its other type variables — pre-existing, and shared with `ParamSpec`
-reveal_type(Two(b"x", p=1.5))  # revealed: Two[b"x", p=float]
+reveal_type(Two(b"x", p=1.5))  # revealed: final Two[b"x", p=float]
 ```
 
 ## the inferred pack flows into the rest of the class

@@ -110,3 +110,90 @@ def f(x: object):
     assert x is int
     reveal_type(x)  # revealed: int
 ```
+
+## A test against a disjoint type is reported
+
+An instance check whose value can never have the tested type is a constant: `is` never holds and
+`is not` always does. Either the guarded branch is dead or the wrong type was named.
+
+```by
+def f(x: None):
+    # error: [non-overlapping-type-test] "`None` and `int` are non-overlapping types, so this test is always `False`"
+    if x is int:
+        ...
+```
+
+`is not` inverts the constant.
+
+```by
+def f(x: None):
+    # error: [non-overlapping-type-test] "`None` and `int` are non-overlapping types, so this test is always `True`"
+    if x is not int:
+        ...
+```
+
+A narrowed literal is tested as the literal, not as its class.
+
+```by
+def f():
+    c = 1
+    # error: [non-overlapping-type-test] "`1` and `bool` are non-overlapping types, so this test is always `False`"
+    if c is bool:
+        ...
+```
+
+A constructor call produces a value whose runtime class is exactly the class it names, so it is
+disjoint from every unrelated class even though the class itself is open to subclassing.
+
+```by
+class A: ...
+
+def f():
+    a = A()
+    # error: [non-overlapping-type-test] "`final A` and `str` are non-overlapping types, so this test is always `False`"
+    if a is str:
+        ...
+```
+
+## A test that could hold is not reported
+
+```by
+class A: ...
+
+class B(A): ...
+
+def f(o: object, a: A, x: int | str, u):
+    if o is int:
+        ...
+    if a is B:
+        ...
+    if x is str:
+        ...
+    # a gradual value overlaps everything
+    if u is int:
+        ...
+```
+
+## A union target holds when any arm does
+
+```by
+def f(x: None):
+    # error: [non-overlapping-type-test] "`None` and `int | str` are non-overlapping types, so this test is always `False`"
+    if x is int | str:
+        ...
+
+def g(x: int):
+    if x is int | str:
+        ...
+```
+
+## Identity comparisons are left alone
+
+The `===` operators and the literal/enum-member forms keep Python identity semantics, where an
+always-`False` comparison is already typed `Literal[False]`.
+
+```by
+def f(x: None):
+    b = x === 1
+    reveal_type(b)  # revealed: False
+```
