@@ -6973,6 +6973,11 @@ impl<'db> Type<'db> {
                 .map(Type::from)
                 // Guard against user-customized typesheds with a broken `dict` class
                 .unwrap_or_else(Type::unknown),
+            // An alias is only a name for its value, so `__class__` has to be
+            // answered by the value — otherwise the fallback below gives the
+            // *meta* type, which for a `TypedDict` is the class it is modelled
+            // by rather than the `dict` its inhabitants really are
+            Type::TypeAlias(alias) => alias.value_type(db).dunder_class(db),
             _ => self.to_meta_type(db),
         }
     }

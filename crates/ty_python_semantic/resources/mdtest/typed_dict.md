@@ -2583,6 +2583,23 @@ def _(p: Person) -> None:
     reveal_type(p.__class__)  # revealed: <class 'dict[str, object]'>
 ```
 
+An alias is only a name for the type it stands for, so reaching the same `TypedDict` through one
+does not turn it back into a normal class:
+
+```py
+from typing import TypedDict
+
+class Person(TypedDict):
+    name: str
+
+type Alias = Person
+
+def _(p: Alias) -> None:
+    reveal_type(type(p))  # revealed: <class 'dict[str, object]'>
+
+    reveal_type(p.__class__)  # revealed: <class 'dict[str, object]'>
+```
+
 Passing a `TypedDict` to `dict()` copies it into a regular dictionary:
 
 ```py

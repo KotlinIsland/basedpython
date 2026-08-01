@@ -69,6 +69,18 @@ def f(x: {"b": str, "a": int}) -> None:
     reveal_type(x)  # revealed: {"a": int, "b": str}
 ```
 
+The generated class name must not surface through an alias either — a typed dict's inhabitants are
+`dict`s at runtime whichever way the annotation names the shape.
+
+```by
+type Point = {"x": int}
+
+
+def f(p: Point, q: {"x": int}) -> None:
+    reveal_type(type(p))  # revealed: <class 'dict[str, object]'>
+    reveal_type(type(q))  # revealed: <class 'dict[str, object]'>
+```
+
 ## Type variables in a dict literal type
 
 A dict-literal type is not a generic class of its own, but its fields can mention the type variables
