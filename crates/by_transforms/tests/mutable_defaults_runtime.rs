@@ -92,6 +92,21 @@ assert in_body() == "1S", "and is unchanged in ordinary body code"
 print("ok")
 "#;
 
+/// an extension member's backing `def` is hoisted to the module top, and its
+/// signature reads the `_MISSING` sentinel the preamble defines — a `def` runs
+/// its defaults at definition time, so it has to land *below* the preamble
+const EXTENSION: &str = r#"
+extension list:
+    def tagged(self, xs = []) -> int:
+        xs.append(1)
+        return len(xs)
+
+assert [1].tagged() == 1, "an extension member with a mutable default is callable"
+assert [1].tagged() == 1, "and its default is re-evaluated per call"
+
+print("ok")
+"#;
+
 fn run(python: &str, program: &str) {
     let config = Config {
         min_version: PythonVersion::PY313,
@@ -127,4 +142,12 @@ fn a_context_argument_inside_a_default_survives_the_move_into_the_body() {
         return;
     };
     run(&python, CONTEXT);
+}
+
+#[test]
+fn an_extension_members_default_is_hoisted_below_the_preamble() {
+    let Some(python) = python() else {
+        return;
+    };
+    run(&python, EXTENSION);
 }

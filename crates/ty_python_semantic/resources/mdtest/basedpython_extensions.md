@@ -247,3 +247,19 @@ extension Crate:
 # error: [unresolved-attribute]
 reveal_type(Crate.size)  # revealed: Unknown
 ```
+
+## a member is reachable from more than one narrowing statement
+
+resolving an extension declaration infers module-level code, and that inference asks which
+extensions apply — a re-entry the query recovers from rather than crashing on.
+
+```by
+extension list:
+    def tagged(self) -> int:
+        return 1
+
+assert [1].tagged()
+assert [1].tagged()
+
+reveal_type([1].tagged())  # revealed: int
+```
