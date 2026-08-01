@@ -107,6 +107,11 @@ assert [1].tagged() == 1, "and its default is re-evaluated per call"
 print("ok")
 "#;
 
+/// the same program behind a UTF-8 BOM. the preamble the transform emits has to
+/// splice in *after* it — a BOM is only a BOM at offset 0, and pushed onto the
+/// second line it is an ordinary character python refuses to tokenize
+const BOM: &str = "\u{feff}\ndef fresh(items = []):\n    items.append(1)\n    return items\n\nassert fresh() == [1], \"the default is re-evaluated per call\"\n\nprint(\"ok\")\n";
+
 fn run(python: &str, program: &str) {
     let config = Config {
         min_version: PythonVersion::PY313,
@@ -150,4 +155,45 @@ fn an_extension_members_default_is_hoisted_below_the_preamble() {
         return;
     };
     run(&python, EXTENSION);
+}
+
+/// both preamble paths have to leave the BOM at offset 0: the sentinel the
+/// transform emits, and the `from __future__ import annotations` line every
+/// target below 3.10 gets
+#[test]
+fn a_leading_bom_stays_ahead_of_the_preamble() {
+    let Some(python) = python() else {
+        return;
+    };
+
+    for version in [PythonVersion::PY313, PythonVersion::PY39] {
+        let config = Config {
+            min_version: version,
+            ..Config::default()
+        };
+        let transpiled = transpile(BOM, &config).expect("transpile should succeed");
+        assert!(
+            transpiled.starts_with('\u{feff}'),
+            "the BOM must stay at offset 0 on {version:?}:\n{transpiled}"
+        );
+
+        // cpython strips a leading BOM when it reads a source *file*; `-c` does
+        // not, so this one has to run from disk to mean anything
+        let dir = tempfile::tempdir().expect("failed to create a temp dir");
+        let path = dir.path().join("emitted.py");
+        std::fs::write(&path, &transpiled).expect("failed to write the module");
+
+        let output = Command::new(&python)
+            .arg(&path)
+            .output()
+            .expect("failed to spawn python");
+
+        assert!(
+            output.status.success(),
+            "transpiled program failed on {python} for {version:?}:\n--- stdout ---\n{}\n--- stderr ---\n{}\n--- transpiled ---\n{transpiled}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+    }
 }

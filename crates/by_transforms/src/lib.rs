@@ -13,6 +13,7 @@ use ruff_db::system::{DbWithWritableSystem as _, SystemPathBuf};
 use ruff_diagnostics::{Edit, Fix, IsolationLevel};
 use ruff_python_ast::Stmt;
 use ruff_python_ast::visitor::Visitor;
+use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextSize};
 use ty_project::{ProjectMetadata, TestDb};
 
@@ -617,7 +618,10 @@ fn output_offset_to_by_range(
         newline_count(&final_output[..usize::from(output_offset).min(final_output.len())]);
     let by_line = (*line_map.get(output_line)?)? as usize;
 
-    let mut start = 0usize;
+    // the first line starts after any BOM: the diagnostic renderer strips one
+    // from the snippet it prints, so an annotation that covered it would run
+    // past the end of that buffer
+    let mut start = usize::from(by_source.bom_start_offset());
     for _ in 0..by_line {
         start = by_source[start..].find('\n').map(|i| start + i + 1)?;
     }
@@ -650,6 +654,10 @@ fn run_lowering_phase(
     _types: &dyn TypeInfo,
 ) -> LoweringResult {
     let mut output = String::new();
+    // a BOM stays at offset 0 — moved off it by the preamble it is no longer a
+    // BOM, just a character python refuses to tokenize
+    let (bom, source) = source.split_at(usize::from(source.bom_start_offset()));
+    output.push_str(bom);
     // below 3.10 the runtime cannot evaluate pep 604 `X | Y` annotations —
     // which the optional lowering itself produces — so annotation evaluation
     // must always be deferred on those targets
@@ -1196,6 +1204,17 @@ mod transpile_error {
         let range = output_offset_to_by_range(&line_map, final_output, by_source, offset)
             .expect("offset should map to a .by line");
         assert_eq!(&by_source[range], "c = 3");
+    }
+
+    #[test]
+    fn first_line_range_excludes_a_bom() {
+        let by_source = "\u{feff}a = 1\nb = 2\n";
+        let final_output = "a = 1\nb = 2\n";
+        let line_map = [Some(0), Some(1)];
+
+        let range = output_offset_to_by_range(&line_map, final_output, by_source, TextSize::new(0))
+            .expect("offset should map to a .by line");
+        assert_eq!(&by_source[range], "a = 1");
     }
 }
 
