@@ -166,3 +166,13 @@ F821 Undefined name `UndefinedPattern`
     |            ^^^^^^^^^^^^^^^^
 169 |         print(captured)
     |
+
+F821 Undefined name `UndefinedInterface`
+   --> F821_basedpython.by:193:16
+    |
+191 | # looked up rather than resolved, so an undefined one is a known gap here — `by
+192 | # check` reports it as an unresolved type
+193 | implementation UndefinedInterface for UndefinedImplemented:  # F821
+    |                ^^^^^^^^^^^^^^^^^^
+194 |     pass
+    |

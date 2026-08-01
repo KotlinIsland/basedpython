@@ -14,6 +14,26 @@ f:
     print(it)
 
 
+# an `extension T:` / `implementation I for T:` header names the type it extends
+# or implements — a reference to that declaration, not a second one
+class Target:
+    pass
+
+
+class Iface:
+    pass
+
+
+extension Target:
+    def extra(self) -> int:
+        return 0
+
+
+implementation Iface for Target as TargetAsIface:
+    def m(self) -> int:
+        return 1
+
+
 # a real redefinition still fires
 def g():
     pass
