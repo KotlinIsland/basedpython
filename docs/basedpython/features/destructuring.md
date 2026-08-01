@@ -187,13 +187,13 @@ an `else` block cannot move into a `case _:` arm without being re-indented, so a
 selector records whether the pattern matched and the block keeps its own source:
 
 ```py
-_by_let_0 = 0
+__by_let_0__ = 0
 match v:
     case int(n):
-        _by_let_0 = 1
-if _by_let_0 == 0:
+        __by_let_0__ = 1
+if __by_let_0__ == 0:
     return 0
-del _by_let_0
+del __by_let_0__
 ```
 
 a binding position binds the value to a binder and destructures it at the top of
@@ -220,15 +220,15 @@ it is done (left behind, one would become a member of the surrounding namespace 
 a class attribute, or a bogus variant in an `enum class` body):
 
 ```py
-_by_and_0 = None
+__by_and_0__ = None
 match subject:
-    case Point(x=_by_and_0, y=y):
-        match _by_and_0:
+    case Point(x=__by_and_0__, y=y):
+        match __by_and_0__:
             case int():
-                match _by_and_0:
+                match __by_and_0__:
                     case 0:
                         ...
-del _by_and_0
+del __by_and_0__
 ```
 
 a binder is bound up front because a failed match may or may not have reached the

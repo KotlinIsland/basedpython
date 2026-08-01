@@ -344,11 +344,12 @@ fn build_coalesce(lhs: Expr, rhs: Expr) -> Expr {
         });
     }
 
-    // otherwise walrus into `_t`: `_t if (_t := lhs) is not None else rhs`.
+    // otherwise walrus into a temp: `t if (t := lhs) is not None else rhs`.
     // NB: name choice mirrors the legacy text-edit transform; the surrounding
-    // scope cannot have a pre-existing `_t` because the legacy pass already
-    // tags those calls. AST-level scope analysis is future work
-    let temp_name = "_t";
+    // scope cannot have a pre-existing binding of it because the legacy pass
+    // already tags those calls. AST-level scope analysis is future work
+    let temp_name = super::none_chain::temp_var(0);
+    let temp_name = temp_name.as_str();
     let target = Expr::Name(ExprName {
         node_index: AtomicNodeIndex::NONE,
         range: TextRange::default(),

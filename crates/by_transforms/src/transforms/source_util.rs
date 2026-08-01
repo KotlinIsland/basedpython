@@ -1,7 +1,25 @@
+use std::fmt::Display;
+
 use ruff_python_ast::helpers::consumed_keywords;
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Decorator, Expr, Parameters, Stmt, StmtImportFrom};
 use ruff_text_size::{Ranged, TextRange, TextSize};
+
+/// Names a temporary a lowering needs in its output.
+///
+/// The name is a dunder because a lowering fires wherever its construct was
+/// written, and a class body is one of those places. Python's `enum` turns
+/// every ordinary name assigned in a class body into a member, and `EnumDict`
+/// records the name on assignment, so a later `del` cannot take it back — the
+/// name has to be one `enum` never records. A dunder is machinery to `enum` as
+/// much as it is to us, and it is not name-mangled, because mangling wants at
+/// most one *trailing* underscore.
+///
+/// The parser's destructuring binder is a dunder for the same reason — see
+/// [`destructure_binder_name`](ruff_python_ast::destructure_binder_name).
+pub(crate) fn temporary_name(kind: &str, index: impl Display) -> String {
+    format!("__by_{kind}_{index}__")
+}
 
 /// Byte offset of the start of the line containing `pos`. Lines begin at
 /// either offset 0 or one byte past the previous `\n`

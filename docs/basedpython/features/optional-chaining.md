@@ -29,7 +29,7 @@ country = user?.address?.country
 transpiles to:
 
 ```python
-country = (None if user is None else None if (_t := user.address) is None else _t.country)
+country = (None if user is None else None if (__by_t_0__ := user.address) is None else __by_t_0__.country)
 ```
 
 mixed chains — `?.` followed by regular `.` — only guard at the explicit
