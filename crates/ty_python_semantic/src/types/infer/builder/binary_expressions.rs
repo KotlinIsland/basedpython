@@ -990,7 +990,7 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 }
 
 /// basedpython: extract an f64 value from a numeric-ish literal kind (bool/int/float)
-fn as_f64_value(kind: LiteralValueTypeKind<'_>) -> Option<f64> {
+pub(super) fn as_f64_value(kind: LiteralValueTypeKind<'_>) -> Option<f64> {
     match kind {
         LiteralValueTypeKind::Bool(b) => Some(if b { 1.0 } else { 0.0 }),
         #[expect(clippy::cast_precision_loss)]
