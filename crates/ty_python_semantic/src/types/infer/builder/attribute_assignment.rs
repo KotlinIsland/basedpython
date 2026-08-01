@@ -13,6 +13,7 @@ use crate::types::diagnostic::{
     INVALID_ASSIGNMENT, INVALID_ATTRIBUTE_ACCESS, UNRESOLVED_ATTRIBUTE, report_bad_dunder_set_call,
     report_bool_as_int, report_invalid_attribute_assignment, report_possibly_missing_attribute,
 };
+use crate::types::safe_variance::private_member_view;
 use crate::types::{CallDunderError, MemberLookupPolicy, Type, TypeContext, TypeQualifiers};
 
 impl<'db> TypeInferenceBuilder<'db, '_> {
@@ -52,16 +53,19 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             return false;
         }
 
-        // basedpython safe variance: a private member does not specialize, so the write is
-        // required against the class's own view of it. The only value a widened receiver
-        // can supply soundly is a real `T` — not whatever it claims the parameter is.
-        // Everything else about the write (`Final`, `ClassVar`, descriptors, a property
-        // setter) is unchanged, which is why this swaps the receiver rather than
-        // short-circuiting the requirement
-        let write_receiver = super::private_member_view(db, object_ty, attribute)
-            .map_or(object_ty, |view| view.own_view);
+        // basedpython safe variance: a private member does not specialize, and the class's own
+        // receiver is the implicit `self` however it is annotated — so the write is required
+        // against the class's own view of itself, not the one `self` was widened to. Swapping the
+        // receiver rather than the requirement keeps `Final`, `ClassVar`, descriptors and property
+        // setters working. Every other receiver is a widened view, and `attribute_write_requirement`
+        // erases those itself
+        let write_receiver = if self.is_own_receiver_attribute(target) {
+            private_member_view(db, object_ty, attribute).map_or(object_ty, |view| view.own_view)
+        } else {
+            object_ty
+        };
 
-        let requirement = attribute_write_requirement(self.db(), write_receiver, attribute);
+        let requirement = attribute_write_requirement(db, write_receiver, attribute);
         let mut evaluator = AssignmentAttributeWriteEvaluator {
             builder: self,
             target,

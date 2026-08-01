@@ -9,7 +9,7 @@ class A[out T]:
     private t: T      # mutable field under `out T` — sound because it is private
 
     def f(self, other: A[object]):
-        other.t = 1   # error: `int` is not a `T`
+        other.t = 1   # error: a widened view cannot write what it cannot see
 ```
 
 a [covariant](variance.md) type parameter (`out T`) is only sound while `T`
@@ -31,10 +31,11 @@ checker leans on this in three places
 ## private members do not specialize
 
 a private member is invisible outside its class, so a *widened* view of the
-class learns nothing about it. that is the whole rule: through any receiver but
-the class's own, a private member keeps its declared type instead of picking up
-the receiver's type arguments. a write has to supply a real `T`, and a read gets
-back only what such a view actually knows — `T`'s bound
+class learns nothing about it. that is the whole rule: a private member keeps
+its declared type instead of picking up the receiver's type arguments, and
+through any receiver but the class's own — anything that is not the `self` the
+body was handed — that type is erased to what such a view actually knows. a
+read gets back `T`'s bound; a write is accepted from nothing
 
 ```by
 class A[out T]:
@@ -47,37 +48,49 @@ class A[out T]:
         reveal_type(self.t)    # T@A — `self` carries `A`'s own parameter
         reveal_type(other.t)   # object — a widened view knows only the bound
 
-        other.t = t            # ok — a real `T`
-        other.t = 1            # error: `int` is not a `T`
+        other.t = 1            # error: nothing is assignable to `Never`
+        other.t = t            # error: `self`'s `T` is not `other`'s
         self.t = other.t       # error: `object` is not a `T`
 ```
 
-nothing here needs its own diagnostic. the member's type simply never picks up
-`object`, so an ordinary assignability check does the work, and the erased read
-cannot be funnelled back into `T`-typed storage — which is the only operation
-that could corrupt the field
+storage is invariant in its own type, so a write has to be valid for whatever
+the object really holds — and a widened view does not know. not even a real `T`
+gets through: the `T` the body is written against belongs to `self`, and says
+nothing about the parameter `other` is hiding. the write type is the erasure's
+*bottom* materialization, `Never`, the same one a `private def consume(self, t: T)`
+reached through a widened view takes
 
-an explicitly widened `self` is a widened view like any other, but it is still a
-receiver you may write a `T` to:
+nothing here needs its own diagnostic. the member's type simply never picks up
+the receiver's argument, so an ordinary assignability check does the work, and
+the erased read cannot be funnelled back into `T`-typed storage — which is the
+only operation that could corrupt the field
+
+writing to a private member is a thing you do through `self`, and `self` is
+never a widened view of its own class, whatever it is annotated as — it is
+bound to the receiver the call site had, so `A`'s type parameters are that
+receiver's. through it the member keeps its declared type, un-erased:
 
 ```by
 class A[out T]:
     private t: T
 
     def f(self: A[object], t: T):   # the `t: T` parameter is reported, as above
-        self.t = t             # ok — `t` is a real `T`
+        reveal_type(self.t)    # T@A — not `object`, however `self` is annotated
+        self.t = t             # ok — a real `T`
         self.t = "asdf"        # error: `str` is not a `T`
 ```
 
-and so is a construction: inside `A`'s own body `A()` is an `A[Unknown]`, not
-the `A[T]` the body is written against
+a `Self` or `A[T]` parameter next to `self` is the class's own view for the same
+reason — it carries the class's own arguments. a *construction* is not: inside
+`A`'s own body `A()` is an `A[Unknown]`, not the `A[T]` the body is written
+against
 
 ```by
 class A[T]:
     private t: T
 
     def f(self):
-        A().t = 1              # error: `int` is not a `T`
+        A().t = 1              # error: `A()` is not the `A[T]` we are inside
 ```
 
 without this rule the field would have to be invariant (`A[int]` not
@@ -107,8 +120,9 @@ erasure applies to a private *method*: a `private def consume(self, t: T)`
 reached through a widened view takes a `Never`, so nothing can be passed to it,
 while a `private def produce(self) -> T` still returns the bound
 
-the erasure is the type's top materialization, not a naive swap of the bound, so
-it stays sound where the parameter is nested in an invariant position:
+the erasure is a materialization of the type — the top for a read, the bottom
+for a write — not a naive swap of the bound, so it stays sound where the
+parameter is nested in an invariant position:
 
 ```by
 class A[T]:
@@ -117,6 +131,11 @@ class A[T]:
 def f(a: A[int]):
     reveal_type(a.items)       # list[*]
 ```
+
+neither materialization can say more than "some list" about an invariant
+occurrence, so `list[T]` erases to a gradual element either way: an `a.items`
+write is neither precise nor rejected, exactly as a read of `a.items[0]` is
+neither
 
 ### an invariant type parameter specializes as usual
 
@@ -242,8 +261,8 @@ not part of the type's observable interface, so:
 
 1. it may be a mutable field under `out T`, because a widened view of the class
     never learns what its type parameter is — the member does not specialize, so
-    only a real `T` can be written to it and only the bound can be read back
-    (section 1)
+    only the bound can be read back through such a view and nothing at all can
+    be written (section 1)
 1. it may be the sink for a `SafeVariance[T]` parameter's value — except the
     body is handed only the bound, so the sink stays unreachable in practice
     (section 2)

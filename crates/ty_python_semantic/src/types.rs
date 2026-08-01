@@ -201,6 +201,7 @@ pub(crate) mod reified_infer;
 pub(crate) mod relation;
 mod relation_error;
 mod restricted;
+mod safe_variance;
 mod set_theoretic;
 mod signatures;
 pub mod soundness;

@@ -12616,11 +12616,17 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             value_type = super_value_type;
         }
 
-        // basedpython safe variance: a private member does not specialize. Through a
-        // receiver carrying anything but the class's own type parameters, the read is
-        // erased to what such a view actually knows — the parameter's bound
-        if let Some(view) = private_member_view(db, value_type, attr.as_str()) {
-            let read_type = view.read_type(db);
+        // basedpython safe variance: a private member does not specialize. It keeps the type it
+        // was declared with, and through any receiver but the class's own that type is erased to
+        // what such a view actually knows — the parameter's bound
+        if let Some(view) =
+            crate::types::safe_variance::private_member_view(db, value_type, attr.as_str())
+        {
+            let read_type = if self.is_own_receiver_attribute(attribute) {
+                view.declared_ty
+            } else {
+                view.read_type(db)
+            };
             return self.basedpython_chain_result(attribute, read_type, none_chain_was_optional);
         }
 
@@ -15275,112 +15281,6 @@ fn attribute_has_covariant_projected_typevar<'db>(
         } else {
             false
         }
-    })
-}
-
-/// basedpython safe variance: a private member seen through a view of its class that is
-/// not the class's own.
-///
-/// The `attribute` is private, its declared type names one or more of the class's
-/// *non-invariant* type parameters, and the receiver substitutes something else for them.
-struct PrivateMemberView<'db> {
-    /// The class's own view of itself — the receiver the member is declared against.
-    own_view: Type<'db>,
-    /// The member's declared type on that view, with the type parameters left intact.
-    declared_ty: Type<'db>,
-    /// The non-invariant type parameters the receiver substituted something else for.
-    substituted: Box<[BoundTypeVarInstance<'db>]>,
-}
-
-impl<'db> PrivateMemberView<'db> {
-    /// The type a *read* through this view yields.
-    ///
-    /// The receiver's own type argument says nothing about what the object really holds —
-    /// that is what its being widened means — so every substituted parameter is erased to
-    /// its top materialization. The value can be treated as its bound, but it is no longer
-    /// a `T`, so it can never be funnelled back into the `T`-typed storage it came from.
-    fn read_type(&self, db: &'db dyn crate::Db) -> Type<'db> {
-        self.substituted
-            .iter()
-            .fold(self.declared_ty, |ty, typevar| {
-                ty.substitute_one_typevar(db, *typevar, Type::any())
-            })
-            .top_materialization(db)
-    }
-}
-
-/// basedpython safe variance: a private member does not specialize.
-///
-/// Privacy is what makes variance safe. A private member is invisible outside its class, so
-/// it cannot be used to tell two specializations apart — which is what lets a covariant
-/// class hold a mutable field of its type parameter. The flip side is that a widened view
-/// of the class learns nothing about that member: through any receiver but the class's own,
-/// the member keeps its declared type rather than picking up the receiver's arguments, so a
-/// write must supply a real `T` and a read gets back only `T`'s bound.
-///
-/// A type parameter that is *invariant* is left alone. No specialization of the class is
-/// assignable to another, so every receiver's argument is exact and ordinary specialization
-/// is already sound.
-fn private_member_view<'db>(
-    db: &'db dyn crate::Db,
-    object_ty: Type<'db>,
-    attribute: &str,
-) -> Option<PrivateMemberView<'db>> {
-    let instance = object_ty.as_nominal_instance()?;
-    let crate::types::ClassType::Generic(alias) = instance.class(db) else {
-        return None;
-    };
-    let specialization = alias.specialization(db);
-    let class = ClassLiteral::Static(alias.origin(db));
-
-    // the substituted type parameters, cheapest first: a receiver that carries the class's
-    // own parameters *is* the class's own view of every member, so there is nothing to do.
-    // this is the whole of the hot path — `self.x` inside the class's own methods — and it
-    // settles without a member lookup
-    let generic_context = specialization.generic_context(db);
-    let substituted = || {
-        generic_context
-            .variables(db)
-            .zip(specialization.types(db))
-            .filter(|(typevar, argument)| **argument != Type::TypeVar(*typevar))
-            .map(|(typevar, _)| typevar)
-    };
-    substituted().next()?;
-
-    // look the member up on the class's own identity specialization, so its declared type
-    // still names the class's type parameters rather than the receiver's arguments. a
-    // `__getattr__` result is not a declared member of anything, so it is never private
-    // however its name is spelled
-    let own_view = Type::instance(db, class.identity_specialization(db));
-    let member =
-        own_view.member_lookup_with_policy(db, attribute, MemberLookupPolicy::NO_GETATTR_LOOKUP);
-    let declared_ty = member.place.ignore_possibly_undefined()?;
-    if !crate::types::is_private_member(db, attribute, member.qualifiers, declared_ty) {
-        return None;
-    }
-
-    let substituted: Box<[_]> = substituted()
-        .filter(|typevar| {
-            let identity = typevar.identity(db);
-            let mentions_typevar = crate::types::any_over_type(
-                db,
-                declared_ty,
-                false,
-                |ty| matches!(ty, Type::TypeVar(other) if other.identity(db) == identity),
-            );
-            // an invariant parameter is checked last: inferring variance is expensive, and
-            // it re-enters the class body this access may itself be inside of
-            mentions_typevar && typevar.variance(db) != TypeVarVariance::Invariant
-        })
-        .collect();
-    if substituted.is_empty() {
-        return None;
-    }
-
-    Some(PrivateMemberView {
-        own_view,
-        declared_ty,
-        substituted,
     })
 }
 
