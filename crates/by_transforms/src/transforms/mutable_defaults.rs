@@ -28,7 +28,7 @@
 use ruff_python_ast::helpers::is_immutable_scalar_default;
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, StmtFunctionDef};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::source_util::{line_indent, line_start};
@@ -69,6 +69,18 @@ struct MutableDefaults<'src> {
     source: &'src str,
     edits: Vec<(TextRange, Vec<Fragment>)>,
     used: bool,
+    /// functions whose body starts with parser-synthesized statements, so a
+    /// guard has no source position to anchor to
+    unanchored: Vec<String>,
+}
+
+/// the statement's range when it is a position in the *body*. a statement the
+/// parser synthesized for an `init(…)` shorthand carries either an empty range
+/// or the range of the parameter it was built from, so it points into the
+/// header — splicing a guard there lands it in the middle of the signature
+fn body_range(stmt: &Stmt, header_end: TextSize) -> Option<TextRange> {
+    let range = stmt.range();
+    (!range.is_empty() && range.start() >= header_end).then_some(range)
 }
 
 impl MutableDefaults<'_> {
@@ -143,9 +155,19 @@ impl MutableDefaults<'_> {
         } else {
             0
         };
+        // the body begins after everything the header can span
+        let header_end = f.parameters.range().end().max(
+            f.returns
+                .as_ref()
+                .map_or(TextSize::new(0), |r| r.range().end()),
+        );
         let mut frags: Vec<Fragment> = Vec::new();
-        if let Some(stmt) = f.body.get(docstring_count) {
-            let insert_at = stmt.range().start();
+        if let Some(range) = f
+            .body
+            .get(docstring_count)
+            .and_then(|s| body_range(s, header_end))
+        {
+            let insert_at = range.start();
             let prefix = &self.source
                 [usize::from(line_start(self.source, insert_at))..usize::from(insert_at)];
             if prefix.trim().is_empty() {
@@ -167,15 +189,23 @@ impl MutableDefaults<'_> {
                 frags.push(Fragment::Lit(format!("\n{base}")));
             }
             self.edits.push((TextRange::empty(insert_at), frags));
-        } else {
+        } else if let Some(range) = docstring_count
+            .checked_sub(1)
+            .and_then(|i| f.body.get(i))
+            .and_then(|s| body_range(s, header_end))
+        {
             // docstring-only body: append the guards after it
-            let doc_end = f.body[docstring_count - 1].range().end();
             let base = format!("{}    ", line_indent(self.source, f.range().start()));
             for guard in &guards {
                 frags.push(Fragment::Lit(format!("\n{base}")));
                 guard.push(&mut frags, &base);
             }
-            self.edits.push((TextRange::empty(doc_end), frags));
+            self.edits.push((TextRange::empty(range.end()), frags));
+        } else {
+            // nothing in the body came from the source, so there is nowhere to
+            // put the guard. say so rather than splice it at a synthesized
+            // node's offset, which lands inside the signature
+            self.unanchored.push(f.name.to_string());
         }
     }
 }
@@ -205,9 +235,16 @@ impl TypeAwarePass for MutableDefaultsPass<'_> {
             source: self.source,
             edits: Vec::new(),
             used: false,
+            unanchored: Vec::new(),
         };
         for stmt in stmts {
             inner.visit_stmt(stmt);
+        }
+        if let Some(name) = inner.unanchored.first() {
+            ctx.errors.push(format!(
+                "a re-evaluated default in `{name}` has no body position to lower into — write it as a `def` with a body"
+            ));
+            return;
         }
         if inner.used {
             ctx.required_imports.push("_MISSING = object()".to_owned());
@@ -226,6 +263,85 @@ mod tests {
         assert_eq!(
             transpile(input, &crate::Config::test_default()).unwrap(),
             crate::python_passthrough::lazify_expected(expected)
+        );
+    }
+
+    fn check_err(input: &str, needle: &str) {
+        let err = transpile(input, &crate::Config::test_default()).unwrap_err();
+        assert!(err.contains(needle), "got: {err}");
+    }
+
+    /// an `init(…)` shorthand generates its own body, so a guard has no source
+    /// position to anchor to. each of these used to splice the guard into the
+    /// middle of the parameter list — and the bodyless plain form panicked with
+    /// an arithmetic overflow reaching for `body[-1]`
+    #[test]
+    fn a_generated_constructor_body_is_not_an_anchor() {
+        const NEEDLE: &str = "has no body position to lower into";
+
+        // no parameter modifier and no body at all: the body is empty
+        check_err(
+            indoc! {"
+                class S:
+                    init(items: list[int] = [])
+            "},
+            NEEDLE,
+        );
+        // `let` generates a field assignment that reuses the parameter's range
+        check_err(
+            indoc! {"
+                class S:
+                    init(let items: list[int] = [])
+            "},
+            NEEDLE,
+        );
+        check_err(
+            indoc! {"
+                class S:
+                    init(var items: list[int] = [])
+            "},
+            NEEDLE,
+        );
+        // and it still leads the body when the shorthand has one of its own
+        check_err(
+            indoc! {"
+                class S:
+                    init(let items: list[int] = []):
+                        pass
+            "},
+            NEEDLE,
+        );
+    }
+
+    /// the neighbouring shapes still lower: a scalar default needs no guard at
+    /// all, and a hand-written constructor has a real body to lower into
+    #[test]
+    fn a_hand_written_constructor_still_lowers() {
+        check(
+            indoc! {"
+                class S:
+                    init(let items: int = 0)
+            "},
+            indoc! {"
+                class S:
+                    def __init__(self, items: int = 0):
+                        self.items: int = items
+            "},
+        );
+        check(
+            indoc! {"
+                class S:
+                    def __init__(self, items: list[int] = []) -> None:
+                        self.items = items
+            "},
+            indoc! {"
+                _MISSING = object()
+                class S:
+                    def __init__(self, items: list[int] = _MISSING) -> None:
+                        if items is _MISSING:
+                            items = []
+                        self.items = items
+            "},
         );
     }
 
