@@ -10,7 +10,7 @@ use crate::comments::{SourceComment, leading_comments, trailing_comments};
 use crate::prelude::*;
 use crate::statement::clause::{ClauseHeader, clause};
 use crate::statement::suite::SuiteKind;
-use crate::verbatim::verbatim_text;
+use crate::verbatim::{verbatim_node_range, write_verbatim_node};
 
 /// True when this class is a basedpython `enum class` declaration: the parser
 /// tags it with a synthetic `enum_def` marker decorator (a zero-binding `Name`
@@ -37,7 +37,9 @@ impl FormatNodeRule<StmtClassDef> for FormatStmtClassDef {
         // them verbatim so formatting doesn't rewrite `enum Name:` / bare
         // variants into `enum class Name:` / `class Variant`
         if is_based_enum(item) {
-            return write!(f, [verbatim_text(item.range())]);
+            let comments = f.context().comments().clone();
+            let range = verbatim_node_range(item.into(), &comments);
+            return write_verbatim_node(item, range, f);
         }
 
         let StmtClassDef {

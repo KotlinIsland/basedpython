@@ -27,3 +27,11 @@ t: int.(...) -> str
 
 def takes_receiver(cb: int.() -> str) -> str:
     return cb(0)
+
+
+# the verbatim range carries the comments written between the parameters
+type Commented = (
+    int,  # end-of-line on a parameter
+    # own-line between parameters
+    str,
+) -> bool

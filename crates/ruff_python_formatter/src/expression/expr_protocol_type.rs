@@ -1,14 +1,13 @@
 use ruff_python_ast::ExprProtocolType;
-use ruff_text_size::Ranged;
 
 use crate::prelude::*;
-use crate::verbatim::verbatim_text;
+use crate::expression::format_verbatim_expr;
 
 #[derive(Default)]
 pub struct FormatExprProtocolType;
 
 impl FormatNodeRule<ExprProtocolType> for FormatExprProtocolType {
     fn fmt_fields(&self, item: &ExprProtocolType, f: &mut PyFormatter) -> FormatResult<()> {
-        verbatim_text(item.range()).fmt(f)
+        format_verbatim_expr(item, f)
     }
 }
