@@ -1378,6 +1378,42 @@ def narrow_match(x: str) -> None:
 
 ---
 
+## `run`
+
+### `main`
+
+The module `by run` executes when no module is given on the command line.
+
+This is the project's entry point: with it set, `by run` alone transpiles the project and
+runs `python -m <main>`, exactly as if the module had been named on the command line. A
+module named explicitly always wins.
+
+The value is a module path, not a file path — `app.cli`, not `app/cli.by`.
+
+Defaults to `null`, in which case `by run` requires a module argument.
+
+**Default value**: `null`
+
+**Type**: `str`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.run]
+    main = "app.cli"
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [run]
+    main = "app.cli"
+    ```
+
+---
+
 ## `src`
 
 ### `exclude`

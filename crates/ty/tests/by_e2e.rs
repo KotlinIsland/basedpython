@@ -143,6 +143,126 @@ fn run_invokes_async_main_via_asyncio() {
     );
 }
 
+#[test]
+fn run_uses_the_configured_entry_point() {
+    // `run.main` names the module `by run` executes when none is given
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("ty.toml"), "[run]\nmain = \"app\"\n").unwrap();
+    fs::write(dir.path().join("app.by"), "print('ran the entry point')\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("run")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "ran the entry point"
+    );
+}
+
+#[test]
+fn run_reads_the_entry_point_from_pyproject() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n\n[tool.ty.run]\nmain = \"pkg.cli\"\n",
+    )
+    .unwrap();
+    fs::create_dir(dir.path().join("pkg")).unwrap();
+    fs::write(dir.path().join("pkg/__init__.by"), "").unwrap();
+    fs::write(dir.path().join("pkg/cli.by"), "print('ran pkg.cli')\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("run")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "ran pkg.cli"
+    );
+}
+
+#[test]
+fn run_prefers_an_explicit_module_over_the_configured_entry_point() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("ty.toml"), "[run]\nmain = \"app\"\n").unwrap();
+    fs::write(dir.path().join("app.by"), "print('configured')\n").unwrap();
+    fs::write(dir.path().join("other.by"), "print('explicit')\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "other"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "explicit");
+}
+
+#[test]
+fn run_forwards_arguments_to_the_named_entry_point() {
+    // arguments belong to the module, so reaching the configured entry point's
+    // parameters means naming it: the first positional is always the module
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("ty.toml"), "[run]\nmain = \"app\"\n").unwrap();
+    fs::write(
+        dir.path().join("app.by"),
+        "def main(name: str):\n    print(name)\n",
+    )
+    .unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .args(["run", "app", "--name", "asdf"])
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(
+        output.status.success(),
+        "by run failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "asdf");
+}
+
+#[test]
+fn run_without_a_module_or_entry_point_reports_both_ways_out() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    fs::write(dir.path().join("main.by"), "print('unreached')\n").unwrap();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_by"))
+        .arg("run")
+        .current_dir(dir.path())
+        .output()
+        .expect("failed to spawn by");
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("no module given and no entry point configured"),
+        "stderr:\n{stderr}"
+    );
+    assert!(stderr.contains("run.main"), "stderr:\n{stderr}");
+}
+
 /// write `source` as `main.by`, run it with `args`, and return
 /// `(stdout, stderr, exit code)`
 fn run_main_with_args(source: &str, args: &[&str]) -> (String, String, i32) {

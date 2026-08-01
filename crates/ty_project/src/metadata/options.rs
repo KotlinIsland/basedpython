@@ -100,6 +100,11 @@ pub struct Options {
     #[option_group]
     pub analysis: Option<AnalysisOptions>,
 
+    /// Configures how `by run` executes the project.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option_group]
+    pub run: Option<RunOptions>,
+
     /// Override configurations for specific file patterns.
     ///
     /// Each override specifies include/exclude patterns and rule configurations
@@ -1456,6 +1461,42 @@ pub struct TerminalOptions {
         "#
     )]
     pub error_on_warning: Option<bool>,
+}
+
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Eq,
+    PartialEq,
+    Hash,
+    Combine,
+    Serialize,
+    Deserialize,
+    OptionsMetadata,
+    get_size2::GetSize,
+)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct RunOptions {
+    /// The module `by run` executes when no module is given on the command line.
+    ///
+    /// This is the project's entry point: with it set, `by run` alone transpiles the project and
+    /// runs `python -m <main>`, exactly as if the module had been named on the command line. A
+    /// module named explicitly always wins.
+    ///
+    /// The value is a module path, not a file path — `app.cli`, not `app/cli.by`.
+    ///
+    /// Defaults to `null`, in which case `by run` requires a module argument.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"null"#,
+        value_type = "str",
+        example = r#"
+            main = "app.cli"
+        "#
+    )]
+    pub main: Option<RangedValue<String>>,
 }
 
 #[derive(

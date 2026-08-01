@@ -84,7 +84,7 @@ where
             args,
             min_version,
             lowering,
-        } => by_commands::cmd_run(&module, &args, min_version.as_deref(), &lowering),
+        } => by_commands::cmd_run(module.as_deref(), &args, min_version.as_deref(), &lowering),
         Command::Build {
             min_version,
             lowering,

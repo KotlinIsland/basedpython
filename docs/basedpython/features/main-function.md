@@ -97,6 +97,19 @@ positional-only parameter is still passed positionally to `main` even when the
 command line named it with `--`, and a keyword-only one never takes a
 positional slot.
 
+## the project entry point
+
+`main` makes a *module* runnable; `run.main` says which module that is for the
+project as a whole:
+
+```toml
+[tool.ty.run]
+main = "app.cli"
+```
+
+`by run` with no module then runs `app.cli`. see the
+[cli reference](../cli-reference.md#by-run)
+
 ## scope
 
 only a *top-level* function named `main` is recognized — a `main` method on a
