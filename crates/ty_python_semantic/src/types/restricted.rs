@@ -202,13 +202,27 @@ pub(crate) fn restriction_admits<'db>(
         TypeModifier::Final => {
             // "the runtime class is exactly `inner`'s": promote a literal to the
             // class it is an instance of (`Literal[1]` → `int`, `True` → `bool`)
-            // and require the result to be that very type. `True` therefore
-            // fails against `final int`, which is the point of the modifier
+            // and require the result to be that very class. `True` therefore
+            // fails against `final int`, which is the point of the modifier.
+            //
+            // only the class is asked here. whether the type *arguments* fit is
+            // the enclosing relation's question, and it answers it gradually —
+            // asking it a second time as an equivalence would reject
+            // `list[Unknown]` against `final list[int]`, which every other
+            // relation in the system admits
             let promoted = source
                 .erase_restriction(db)
                 .literal_fallback_instance(db)
                 .unwrap_or_else(|| source.erase_restriction(db));
-            promoted.is_equivalent_to(db, inner.erase_restriction(db))
+            let inner = inner.erase_restriction(db);
+            match (promoted, inner) {
+                (Type::NominalInstance(source), Type::NominalInstance(inner)) => {
+                    source.class(db).class_literal(db) == inner.class(db).class_literal(db)
+                }
+                // a type with no class behind it — a callable, a protocol —
+                // degenerates to plain type equality
+                _ => promoted.is_equivalent_to(db, inner),
+            }
         }
     }
 }
