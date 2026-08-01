@@ -164,6 +164,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&ESCAPING_LOOP_VARIABLE);
     registry.register_lint(&ERASED_CAST_ARGUMENT);
     registry.register_lint(&NON_OVERLAPPING_CAST);
+    registry.register_lint(&NON_OVERLAPPING_TYPE_TEST);
     registry.register_lint(&OPTIONAL_OBJECT_CONVERSION);
     registry.register_lint(&BOOL_AS_INT);
     registry.register_lint(&MISSING_CONTEXT_ARGUMENT);
@@ -1801,6 +1802,44 @@ declare_lint! {
     pub(crate) static NON_OVERLAPPING_CAST = {
         summary: "detects casts between non-overlapping types",
         status: LintStatus::stable("0.0.61"),
+        default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for an `is` / `is not` type test whose tested value is disjoint
+    /// from the type it is tested against, so no value could ever belong to both.
+    ///
+    /// ## Why is this bad?
+    /// The test has a constant answer: `is` is always `False` and `is not` is
+    /// always `True`. Either the branch it guards is dead code, or the wrong type
+    /// was named.
+    ///
+    /// The value's *narrowed* type is what is tested, which is often sharper
+    /// than its declaration: a constructor call is a `final Shape`, a value whose
+    /// runtime class is exactly `Shape`'s.
+    ///
+    /// ## Examples
+    /// ```by
+    /// class Shape
+    ///
+    /// def f(x: None):
+    ///     if x is int:          # warning: `None` and `int` are disjoint
+    ///         ...
+    ///     s = Shape()
+    ///     if s is str:          # warning: `final Shape` and `str` are disjoint
+    ///         ...
+    ///
+    /// def g(o: object, shape: Shape):
+    ///     if o is int:          # ok — `object` overlaps `int`
+    ///         ...
+    ///     if shape is str:      # ok — a `Shape` subclass could inherit `str`
+    ///         ...
+    /// ```
+    pub(crate) static NON_OVERLAPPING_TYPE_TEST = {
+        summary: "detects `is` type tests between non-overlapping types",
+        status: LintStatus::stable("0.0.62"),
         default_level: Level::Warn,
     }
 }

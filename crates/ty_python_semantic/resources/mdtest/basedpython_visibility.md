@@ -12,7 +12,7 @@ private class Box:
     value: int = 0
 
 b = Box()
-reveal_type(b)  # revealed: Box
+reveal_type(b)  # revealed: final Box
 reveal_type(b.value)  # revealed: int
 ```
 

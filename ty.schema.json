@@ -1463,6 +1463,16 @@
             }
           ]
         },
+        "non-overlapping-type-test": {
+          "title": "detects `is` type tests between non-overlapping types",
+          "description": "## What it does\nChecks for an `is` / `is not` type test whose tested value is disjoint\nfrom the type it is tested against, so no value could ever belong to both.\n\n## Why is this bad?\nThe test has a constant answer: `is` is always `False` and `is not` is\nalways `True`. Either the branch it guards is dead code, or the wrong type\nwas named.\n\nThe value's *narrowed* type is what is tested, which is often sharper\nthan its declaration: a constructor call is a `final Shape`, a value whose\nruntime class is exactly `Shape`'s.\n\n## Examples\n```by\nclass Shape\n\ndef f(x: None):\n    if x is int:          # warning: `None` and `int` are disjoint\n        ...\n    s = Shape()\n    if s is str:          # warning: `final Shape` and `str` are disjoint\n        ...\n\ndef g(o: object, shape: Shape):\n    if o is int:          # ok — `object` overlaps `int`\n        ...\n    if shape is str:      # ok — a `Shape` subclass could inherit `str`\n        ...\n```",
+          "default": "warn",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "not-iterable": {
           "title": "detects iteration over an object that is not iterable",
           "description": "## What it does\n\nChecks for objects that are not iterable but are used in a context that requires them to be.\n\n## Why is this bad?\n\nIterating over an object that is not iterable will raise a `TypeError` at runtime.\n\n## Examples\n\n```python\n# TypeError: 'int' object is not iterable\nfor i in 34:  # error\n    pass\n```",

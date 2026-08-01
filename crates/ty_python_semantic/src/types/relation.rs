@@ -23,7 +23,9 @@ use crate::types::cyclic::{HasIdentity, PairVisitor, TypeIdentity};
 use crate::types::deferred::LinearForm;
 use crate::types::enums::is_single_member_enum;
 use crate::types::function::FunctionDecorators;
-use crate::types::restricted::restriction_admits;
+use ruff_python_ast::helpers::TypeModifier;
+
+use crate::types::restricted::{RestrictedType, restriction_admits};
 use crate::types::set_theoretic::RecursivelyDefined;
 use crate::types::signatures::{ParametersKind, SignatureRelationVisitor};
 use crate::types::tuple::TupleType;
@@ -2779,6 +2781,28 @@ impl<'a, 'c, 'db> DisjointnessChecker<'a, 'c, 'db> {
         self.disjointness_visitor.visit(db, (source, target), work)
     }
 
+    /// basedpython: when a value can be both a `final A` and an `other`.
+    ///
+    /// `final A` holds exactly the values whose runtime class is `A`, so it meets
+    /// `other` in only two ways: `other` is wide enough to hold every `A` (`A` is
+    /// assignable to it), or `other` is itself made of nothing but exactly-`A`
+    /// values (`Literal[1]` against `final int`). A proper subclass of `A`
+    /// satisfies neither, which is what makes `final A` disjoint from it.
+    fn when_exact_instances_meet(
+        &self,
+        db: &'db dyn Db,
+        restricted: RestrictedType<'db>,
+        other: Type<'db>,
+    ) -> ConstraintSet<'db, 'c> {
+        let exact = restricted.value_type(db);
+        let assignability = self.as_relation_checker(TypeRelation::Assignability);
+        assignability
+            .check_type_pair(db, exact, other)
+            .or(db, self.constraints, || {
+                assignability.check_type_pair(db, other, Type::Restricted(restricted))
+            })
+    }
+
     fn any_protocol_members_absent_or_disjoint(
         &self,
         db: &'db dyn Db,
@@ -2886,8 +2910,23 @@ impl<'a, 'c, 'db> DisjointnessChecker<'a, 'c, 'db> {
                 self.check_type_pair(db, left, overlapping.type_argument(db))
             }
 
-            // a restriction only shrinks the set of values, so two types that are
-            // disjoint without it stay disjoint with it. the converse is not
+            // `final A` inhabits only the values whose runtime class is exactly
+            // `A`'s, which is a sharper question than "is an `A` also a `B`".
+            // This mirrors the literal arms below: `Literal[1]` is an instance of
+            // exactly `int`, so it is disjoint from every type `int` is not
+            // assignable to
+            (Type::Restricted(restricted), _) if restricted.modifier(db) == TypeModifier::Final => {
+                self.when_exact_instances_meet(db, restricted, right)
+                    .negate(db, self.constraints)
+            }
+
+            (_, Type::Restricted(restricted)) if restricted.modifier(db) == TypeModifier::Final => {
+                self.when_exact_instances_meet(db, restricted, left)
+                    .negate(db, self.constraints)
+            }
+
+            // `literal T` only shrinks the set of values, so two types that are
+            // disjoint without it stay disjoint with it. The converse is not
             // exploited: treating the restriction as narrowing here could only make
             // the checker claim disjointness it cannot back up
             (Type::Restricted(restricted), _) => {

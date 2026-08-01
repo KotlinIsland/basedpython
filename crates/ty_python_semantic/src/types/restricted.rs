@@ -83,7 +83,8 @@ impl<'db> RestrictedType<'db> {
 impl<'db> Type<'db> {
     /// Erase a top-level use-site modifier, leaving the type it wraps. Any other
     /// type is returned unchanged.
-    pub(crate) fn erase_restriction(self, db: &'db dyn Db) -> Type<'db> {
+    #[must_use]
+    pub fn erase_restriction(self, db: &'db dyn Db) -> Type<'db> {
         match self {
             Type::Restricted(restricted) => restricted.value_type(db),
             _ => self,

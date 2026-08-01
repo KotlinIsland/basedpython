@@ -190,7 +190,7 @@ implementation A for B:
 
 def f() -> None:
     x: A
-    # error: [invalid-assignment] "Object of type `B` is not assignable to `A`"
+    # error: [invalid-assignment] "Object of type `final B` is not assignable to `A`"
     x = B()
     # annotating it converts
     y: A = B()
@@ -252,7 +252,7 @@ implementation A for B as BAsA:
         return self.a
 
 b = B()
-reveal_type(BAsA(b))  # revealed: BAsA
+reveal_type(BAsA(b))  # revealed: final BAsA
 reveal_type(BAsA(b).a)  # revealed: int
 reveal_type(BAsA(b).__implemented__)  # revealed: B
 
@@ -281,7 +281,7 @@ implementation A for B as BAsA:
 def takes_b(b: B) -> int:
     return b.a
 
-# error: [invalid-argument-type] "Expected `B`, found `BAsA`"
+# error: [invalid-argument-type] "Expected `B`, found `final BAsA`"
 takes_b(BAsA(B()))
 ```
 
@@ -357,7 +357,7 @@ def g(x: A) -> int:
 
 args = (B(),)
 
-# error: [invalid-argument-type] "Expected `A`, found `B`"
+# error: [invalid-argument-type] "Expected `A`, found `final B`"
 g(*args)
 
 # the explicit form works
@@ -590,7 +590,7 @@ from iface import A, B
 def takes_a(a: A) -> int:
     return a.f()
 
-# error: [invalid-argument-type] "Expected `A`, found `B`"
+# error: [invalid-argument-type] "Expected `A`, found `final B`"
 takes_a(B())
 ```
 
@@ -656,7 +656,7 @@ implementation A for B:
         return self.a
 
 reveal_type(B)  # revealed: <class 'B'>
-reveal_type(B())  # revealed: B
+reveal_type(B())  # revealed: final B
 ```
 
 ## a protocol interface

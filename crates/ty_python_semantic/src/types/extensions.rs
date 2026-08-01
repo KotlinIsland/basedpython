@@ -279,6 +279,10 @@ pub(crate) fn resolve_extension_member<'db>(
         return None;
     }
 
+    // a use-site modifier says nothing about which class the receiver is an
+    // instance of, so a `final Box` reaches `Box`'s extensions
+    let receiver = receiver.erase_restriction(db);
+
     // an instance receiver serves every member kind; a class-object receiver
     // serves only `static def` / `class def` members
     let (receiver_class, instance) = if let Some(class) = receiver.nominal_class(db) {

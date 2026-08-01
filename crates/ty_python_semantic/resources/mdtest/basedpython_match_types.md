@@ -47,9 +47,9 @@ class Array[T, *Shape]:
 
 def main() -> None:
     a = Array[int, 2, 3](((1, 2, 3), (4, 5, 6)))
-    reveal_type(a)  # revealed: Array[int, 2, 3]
+    reveal_type(a)  # revealed: final Array[int, 2, 3]
     b = Array[str]("x")
-    reveal_type(b)  # revealed: Array[str]
+    reveal_type(b)  # revealed: final Array[str]
 ```
 
 ## the shape has to match
