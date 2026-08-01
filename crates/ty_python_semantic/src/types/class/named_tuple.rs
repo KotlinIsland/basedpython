@@ -339,11 +339,11 @@ impl<'db> DynamicNamedTupleLiteral<'db> {
             return member.inner;
         }
 
-        // Fall back to tuple class members.
-        let result = self
-            .tuple_base_class(db)
-            .class_literal(db)
-            .class_member(db, name, policy);
+        // fall back to tuple class members. the base is looked up as the
+        // *specialized* `tuple[int, str]`, not the bare `tuple` literal, so
+        // inherited members keep the element types — `__iter__` answers
+        // `Iterator[int | str]` rather than `Iterator[Unknown]`
+        let result = self.tuple_base_class(db).class_member(db, name, policy);
 
         // If fields are unknown (dynamic) and the attribute wasn't found,
         // return `Any` instead of failing.

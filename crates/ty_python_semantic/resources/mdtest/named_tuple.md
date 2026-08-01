@@ -1048,6 +1048,22 @@ reveal_type(alice < bob)  # revealed: bool
 reveal_type(alice >= bob)  # revealed: bool
 ```
 
+### Inherited tuple members keep the element types
+
+A namedtuple inherits from the *specialized* tuple base (`tuple[int, int]`), so a member reached
+through that base is specialized too:
+
+```py
+from typing import NamedTuple
+
+Point = NamedTuple("Point", [("x", int), ("y", int)])
+
+def f(p: Point) -> None:
+    reveal_type(p.__iter__)  # revealed: bound method Point.__iter__() -> Iterator[int]
+    reveal_type(list(p))  # revealed: list[int]
+    reveal_type(p[0])  # revealed: int
+```
+
 ### Inheriting from a `NamedTuple`
 
 Inheriting from a `NamedTuple` is supported, but new fields on the subclass will not be part of the
