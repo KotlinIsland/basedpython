@@ -390,13 +390,16 @@ fn match_pattern<'db>(
         }
 
         // `case 2:` — a literal in a shape. `Literal[2]` is what the subject element is, so
-        // the comparison is against the literal type the pattern's expression denotes
+        // the comparison is against the literal type the pattern's expression denotes.
+        // it has to be equivalence rather than identity: a literal carries whether it may
+        // widen, so a written-out `Literal[2]` and an inferred `2` are the same type held
+        // two different ways
         ast::Pattern::MatchValue(ast::PatternMatchValue { value, .. }) => {
             let Some(expected) = literal_pattern_type(db, value) else {
                 // not a literal type at all — reported where the alias is written
                 return PatternMatch::Undecidable;
             };
-            decide(subject, subject == expected)
+            decide(subject, subject.is_equivalent_to(db, expected))
         }
 
         ast::Pattern::MatchSingleton(ast::PatternMatchSingleton { value, .. }) => {
@@ -405,7 +408,7 @@ fn match_pattern<'db>(
                 ast::Singleton::True => Type::bool_literal(true),
                 ast::Singleton::False => Type::bool_literal(false),
             };
-            decide(subject, subject == expected)
+            decide(subject, subject.is_equivalent_to(db, expected))
         }
 
         // a class or mapping pattern destructures a *value*; there is nothing at the type
