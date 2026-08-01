@@ -1,9 +1,9 @@
 use ruff_macros::{ViolationMetadata, derive_message_formats};
-use ruff_python_ast::helpers::has_written_def_header;
+use ruff_python_ast::helpers::{has_written_def_header, is_immutable_scalar_default};
 use ruff_python_ast::types::Node;
 use ruff_python_ast::visitor;
 use ruff_python_ast::visitor::Visitor;
-use ruff_python_ast::{self as ast, Comprehension, Expr, ExprContext, Stmt};
+use ruff_python_ast::{self as ast, AnyParameterRef, Comprehension, Expr, ExprContext, Stmt};
 use ruff_text_size::Ranged;
 
 use crate::Violation;
@@ -98,14 +98,18 @@ struct SuspiciousName<'a> {
 
 struct SuspiciousVariablesVisitor<'a> {
     source: &'a str,
+    /// basedpython relocates a non-scalar parameter default into the body, so
+    /// the reads in one have to be collected alongside the body's own
+    relocates_defaults: bool,
     names: Vec<SuspiciousName<'a>>,
     safe_functions: Vec<&'a Expr>,
 }
 
 impl<'a> SuspiciousVariablesVisitor<'a> {
-    fn new(source: &'a str) -> Self {
+    fn new(source: &'a str, relocates_defaults: bool) -> Self {
         Self {
             source,
+            relocates_defaults,
             names: Vec::new(),
             safe_functions: Vec::new(),
         }
@@ -140,6 +144,22 @@ impl<'a> Visitor<'a> for SuspiciousVariablesVisitor<'a> {
                 // Collect all loaded variable names.
                 let mut visitor = LoadedNamesVisitor::default();
                 visitor.visit_body(body);
+
+                // basedpython re-evaluates every non-scalar default per call by
+                // moving it into the body, so a name one reads is read where the
+                // body runs — after the loop has moved on — exactly like a body
+                // read. A scalar default stays in the signature and keeps
+                // python's eager binding, which is what makes `value=i` the
+                // documented workaround rather than a trap.
+                if self.relocates_defaults {
+                    for default in parameters
+                        .iter()
+                        .filter_map(AnyParameterRef::default)
+                        .filter(|default| !is_immutable_scalar_default(default))
+                    {
+                        visitor.visit_expr(default);
+                    }
+                }
 
                 let read_by = if has_written_def_header(self.source, function) {
                     ReadBy::WrittenFunctionDef
@@ -400,7 +420,10 @@ pub(crate) fn function_uses_loop_variable(checker: &Checker, node: &Node) {
     // Identify any "suspicious" variables. These are defined as variables that are
     // referenced in a function or lambda body, but aren't bound as arguments.
     let suspicious_variables = {
-        let mut visitor = SuspiciousVariablesVisitor::new(checker.source());
+        let mut visitor = SuspiciousVariablesVisitor::new(
+            checker.source(),
+            checker.source_type.is_basedpython(),
+        );
         match node {
             Node::Stmt(stmt) => visitor.visit_stmt(stmt),
             Node::Expr(expr) => visitor.visit_expr(expr),

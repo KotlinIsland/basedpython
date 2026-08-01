@@ -190,6 +190,40 @@ enum SubPatch {
     Template(Vec<Fragment>),
 }
 
+/// The sub-edits a template materializes, in position order: those nested in
+/// its own range, plus those its `Src` passthrough spans contain.
+///
+/// The two normally coincide, because a template re-emits the span it replaces.
+/// A *relocating* template passes source through from somewhere else — the
+/// default re-evaluation guard re-emits a parameter default at the body start —
+/// and the lowerings inside that span have to materialize where the source
+/// lands, not where it was written.
+fn template_claimees(
+    frags: &[Fragment],
+    all: &[(usize, usize, SubPatch)],
+    claimed: &[bool],
+    self_idx: usize,
+    own: Option<(usize, usize)>,
+) -> Vec<usize> {
+    (0..all.len())
+        .filter(|&m| m != self_idx && claimed[m])
+        .filter(|&m| {
+            let (s, e) = (all[m].0, all[m].1);
+            let in_own = own.is_some_and(|(start, end)| s >= start && e <= end && s != end);
+            // a boundary insertion at a passthrough's end is left to
+            // `apply_within`'s `include_end`, which knows whether an adjacent
+            // span will re-emit it
+            let in_src = frags.iter().any(|frag| match frag {
+                Fragment::Lit(_) => false,
+                Fragment::Src(span) => {
+                    s >= usize::from(span.start()) && e <= usize::from(span.end())
+                }
+            });
+            in_own || in_src
+        })
+        .collect()
+}
+
 /// Materialize a template's fragments into `out`. `Src` passthrough spans are
 /// emitted from original source with the contained sub-edits (indices into
 /// `all`) applied.
@@ -910,15 +944,29 @@ pub(crate) fn run_against_source<'a>(
     //   2. then wider replacements before narrower ones — so a wider edit
     //      wins over (or, for templates, absorbs) a narrow one nested inside
     //      it
+    //   3. at one identical span, a *substitution* — plain text, or a template
+    //      with no `Src` passthrough — ahead of a *rewrite*, a template that
+    //      re-emits part of the span. a substitution says the construct does not
+    //      appear here at all, which a rewrite of it cannot outrank: the pass
+    //      that substitutes may be relocating the construct (default
+    //      re-evaluation moves a parameter default into the body), and the
+    //      rewrite still materializes wherever the passthrough re-emits it
     sub_edits.sort_by(|a, b| {
         let priority = |e: &(usize, usize, SubPatch)| {
-            // (start, is_replacement_not_insertion, neg_end-for-wider-first)
+            let rewrites = i64::from(match &e.2 {
+                SubPatch::Text(_) => false,
+                SubPatch::Template(frags) => {
+                    frags.iter().any(|frag| matches!(frag, Fragment::Src(_)))
+                }
+            });
+            // (start, is_replacement_not_insertion, neg_end-for-wider-first,
+            //  substitution-before-rewrite)
             if e.1 == e.0 {
-                (e.0, 0i64, 0i64) // insertion
+                (e.0, 0i64, 0i64, rewrites) // insertion
             } else {
                 #[allow(clippy::cast_possible_wrap)]
                 let neg_end = -(e.1 as i64);
-                (e.0, 1i64, neg_end)
+                (e.0, 1i64, neg_end, rewrites)
             }
         };
         priority(a).cmp(&priority(b))
@@ -984,12 +1032,14 @@ pub(crate) fn run_against_source<'a>(
                     match &sub_edits[j].2 {
                         SubPatch::Text(t) => combined.push_str(t),
                         SubPatch::Template(frags) => {
+                            let contained =
+                                template_claimees(frags, &sub_edits, &claimed, j, None);
                             materialize_fragments(
                                 &mut combined,
                                 frags,
                                 source_ref,
                                 &sub_edits,
-                                &[],
+                                &contained,
                             );
                         }
                     }
@@ -1006,15 +1056,8 @@ pub(crate) fn run_against_source<'a>(
             SubPatch::Template(frags) => {
                 // the claimees nested in this span materialize inside the
                 // template's `Src` passthrough fragments
-                let contained: Vec<usize> = (0..sub_edits.len())
-                    .filter(|&m| {
-                        m != i
-                            && claimed[m]
-                            && sub_edits[m].0 >= start
-                            && sub_edits[m].1 <= end
-                            && sub_edits[m].0 != end
-                    })
-                    .collect();
+                let contained =
+                    template_claimees(frags, &sub_edits, &claimed, i, Some((start, end)));
                 let mut out = String::new();
                 materialize_fragments(&mut out, frags, source_ref, &sub_edits, &contained);
                 out
