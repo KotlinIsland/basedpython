@@ -292,11 +292,20 @@ fn variadic_elements<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Vec<Type<'db
     }
 }
 
-/// whether the solver produced an actual answer for a type parameter —
-/// dynamic types and leaked typevars mean "nothing to reify"
+/// whether the solver produced an actual answer for a type parameter — a
+/// dynamic type means "nothing to reify", and so does a typevar with no
+/// runtime cell behind it. a *reified* typevar does have one, so it counts
 fn is_solution<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
-    let _ = db;
-    !matches!(ty, Type::Dynamic(_) | Type::TypeVar(_) | Type::Never)
+    match ty {
+        Type::Dynamic(_) | Type::Never => false,
+        // a reified type parameter is a live runtime cell holding its type
+        // argument, so a call that solves to one is answerable by forwarding
+        // that cell (`f(data)` inside a reified caller becomes `f[T](data)`).
+        // the cell is in scope by construction: the solver only reaches it
+        // through an argument whose type mentions it
+        Type::TypeVar(bound_typevar) => is_reified_function_typevar(db, bound_typevar),
+        _ => true,
+    }
 }
 
 /// A python expression that evaluates, in `file`'s module scope, to the
@@ -307,6 +316,12 @@ fn runtime_spelling<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<S
     }
     match ty {
         Type::NominalInstance(instance) => spell_class(db, file, instance.class(db)),
+        // a reified type parameter spells as its own name: pep 695 compiles it
+        // into the enclosing function's closure, and the `generic` wrapper fills
+        // that cell with the type argument, so the name evaluates to the type
+        Type::TypeVar(bound_typevar) if is_reified_function_typevar(db, bound_typevar) => {
+            Some(bound_typevar.name(db).to_string())
+        }
         Type::Union(union) => Some(
             union
                 .elements(db)
@@ -494,6 +509,104 @@ pub enum ErasedTargetReason {
     /// and a structural `isinstance` check sees no type arguments (and raises
     /// outright unless the protocol is `@runtime_checkable`)
     Protocol,
+}
+
+/// a type whose arms are specializations of one *erased* origin, differing in
+/// a single type argument — `list[int] | list[str]`. the runtime cannot tell
+/// those arms apart, so a value of this type carries no record of which one it
+/// is; the specialization has to travel with the call instead
+pub struct ErasedUnion {
+    /// the shared origin's runtime spelling — `list`
+    pub origin: String,
+    /// which type-argument position the arms differ in
+    pub position: usize,
+    /// the differing argument of each arm, in declaration order — `int`, `str`
+    pub arms: Vec<String>,
+    /// the arguments the arms agree on, by position, so the rewritten
+    /// annotation can put them back (`dict[str, int] | dict[str, bool]` keeps
+    /// `str` in position 0)
+    pub fixed: Vec<(usize, String)>,
+}
+
+/// classify `ty` as an [`ErasedUnion`], or `None` when it is anything else.
+///
+/// every arm must be a specialization of the *same* builtin-collection origin
+/// and every argument must have a runtime spelling — an unspellable argument
+/// (a scope-local class, a dynamic type) disqualifies the whole union rather
+/// than producing a rewrite that cannot be spelled back out
+pub(crate) fn erased_union<'db>(db: &'db dyn Db, file: File, ty: Type<'db>) -> Option<ErasedUnion> {
+    let Type::Union(union) = ty else {
+        return None;
+    };
+    let mut origin: Option<ClassLiteral<'db>> = None;
+    let mut rows: Vec<Vec<Type<'db>>> = Vec::new();
+    for element in union.elements(db) {
+        let Type::NominalInstance(instance) = element else {
+            return None;
+        };
+        let ClassType::Generic(alias) = instance.class(db) else {
+            return None;
+        };
+        let arm_origin = alias.origin(db);
+        if !matches!(
+            erased_target_reason(db, ClassLiteral::Static(arm_origin)),
+            Some(ErasedTargetReason::BuiltinCollection)
+        ) {
+            return None;
+        }
+        match origin {
+            Some(seen) if seen != ClassLiteral::Static(arm_origin) => return None,
+            Some(_) => {}
+            None => origin = Some(ClassLiteral::Static(arm_origin)),
+        }
+        rows.push(alias.specialization(db).types(db).to_vec());
+    }
+    let origin = origin?;
+    // a single arm is already decidable — nothing to discriminate
+    if rows.len() < 2 {
+        return None;
+    }
+    let width = rows.first()?.len();
+    if rows.iter().any(|row| row.len() != width) {
+        return None;
+    }
+
+    // exactly one position may vary; the rest must agree across every arm, or
+    // no single type parameter can stand for the difference
+    let mut varying = None;
+    for position in 0..width {
+        let first = rows[0][position];
+        if rows.iter().all(|row| row[position] == first) {
+            continue;
+        }
+        if varying.is_some() {
+            return None;
+        }
+        varying = Some(position);
+    }
+    let position = varying?;
+    // the arms must be pairwise distinct at that position, else two of them are
+    // the same specialization and the test could not tell them apart anyway
+    if !rows.iter().map(|row| row[position]).all_unique() {
+        return None;
+    }
+
+    let arms = rows
+        .iter()
+        .map(|row| runtime_spelling(db, file, row[position].promote(db)))
+        .collect::<Option<Vec<_>>>()?;
+    let fixed = (0..width)
+        .filter(|index| *index != position)
+        .map(|index| {
+            runtime_spelling(db, file, rows[0][index].promote(db)).map(|text| (index, text))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(ErasedUnion {
+        origin: spell_class_literal(db, file, origin)?,
+        position,
+        arms,
+        fixed,
+    })
 }
 
 /// how the runtime probe matches one type argument of the reified
