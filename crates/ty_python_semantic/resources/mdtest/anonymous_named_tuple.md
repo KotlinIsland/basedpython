@@ -169,6 +169,39 @@ a = (name = 1, age = 1)
 b: (name: str, age: int) = a
 ```
 
+## Inherited tuple members
+
+### The tuple base keeps its element types
+
+The synthesized class inherits from the *specialized* `tuple[int, int]`, so a member reached through
+the base is specialized too — the same answer a written `NamedTuple` subclass gives.
+
+```by
+from typing import NamedTuple
+
+class P(NamedTuple):
+    x: int
+    y: int
+
+def f(a: P, b: (x: int, y: int)) -> None:
+    reveal_type(a.__iter__)  # revealed: bound method P.__iter__() -> Iterator[int]
+    reveal_type(b.__iter__)  # revealed: bound method (x: int, y: int).__iter__() -> Iterator[int]
+    reveal_type(list(a))  # revealed: final list[int]
+    reveal_type(list(b))  # revealed: final list[int]
+    reveal_type(b[0])  # revealed: int
+    # the concatenation widens for a written `NamedTuple` too, so the two forms still agree
+    reveal_type(a + (1,))  # revealed: (*: int)
+    reveal_type(b + (1,))  # revealed: (*: int)
+```
+
+### A mixed-type shape unions its element types
+
+```by
+def f(b: (name: str, age: int)) -> None:
+    reveal_type(b.__iter__)  # revealed: bound method (name: str, age: int).__iter__() -> Iterator[str | int]
+    reveal_type(list(b))  # revealed: final list[str | int]
+```
+
 ## Structural identity
 
 ### Two identical shapes share a type
