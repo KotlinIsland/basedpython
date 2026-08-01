@@ -4767,6 +4767,12 @@ impl<'db> Type<'db> {
                     let receiver = receiver.unwrap_or(this);
                     let enum_class = match this {
                         Type::ClassLiteral(literal) => literal.into_enum_class(db),
+                        // a subscripted generic enum still reaches its own members:
+                        // `Tree[int].Leaf` is the same value as `Tree.Leaf`, and
+                        // reading it off the class instead makes the member a class
+                        Type::GenericAlias(alias) => {
+                            ClassType::from(alias).class_literal(db).into_enum_class(db)
+                        }
                         Type::SubclassOf(subclass_of) => subclass_of
                             .subclass_of()
                             .into_class(db)
