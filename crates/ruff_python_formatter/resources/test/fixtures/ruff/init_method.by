@@ -51,3 +51,9 @@ class OnlySelf:
 
 class Empty:
     init()
+
+
+# an `init` that ends the class body: its trailing comment belongs to the
+# enclosing rule, so the verbatim range must not swallow it as well
+class LastInBody:
+    init(self, let a: int)  # trailing comment

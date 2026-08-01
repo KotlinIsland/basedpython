@@ -28,3 +28,10 @@ type Multiline = protocol(
 
 # `protocol` is a soft keyword — a call still formats as a call
 result = protocol(x)
+
+# the verbatim range carries the comments written inside the members
+type Commented = protocol(
+    a: int;  # end-of-line on a member
+    # own-line between members
+    def f(self) -> str;
+)

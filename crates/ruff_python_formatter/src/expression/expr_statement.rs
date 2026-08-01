@@ -3,7 +3,7 @@ use ruff_text_size::Ranged;
 
 use crate::expression::parentheses::{NeedsParentheses, OptionalParentheses};
 use crate::prelude::*;
-use crate::verbatim::verbatim_text;
+use crate::verbatim::write_verbatim_node;
 
 #[derive(Default)]
 pub struct FormatExprStatement;
@@ -13,11 +13,7 @@ impl FormatNodeRule<ExprStatement> for FormatExprStatement {
         // a statement expression spans an indented suite, which the expression
         // formatter has no layout for. reproducing the source keeps the suite
         // and its comments intact
-        verbatim_text(item.range()).fmt(f)?;
-        f.context()
-            .comments()
-            .mark_verbatim_node_comments_formatted(item.into());
-        Ok(())
+        write_verbatim_node(item, item.range(), f)
     }
 }
 

@@ -19,6 +19,28 @@ enum class Expr:
                 return v
             case Add(a, b):
                 return a + b
+
+
+# an enum body prints verbatim, so every comment written inside it has to be
+# carried by that range rather than dropped or printed a second time
+enum class Commented:
+    # own-line comment before a variant
+    case Red  # end-of-line comment on a variant
+    case Green  # fmt: skip
+    # own-line comment after the last variant
+
+
+enum class CommentedPayload:
+    case Circle(radius: int)  # a payload variant
+
+    def area(self) -> int:
+        # a comment inside a method of an enum
+        return self.radius
+    # a comment after the last method
+
+
+# a comment following the enum belongs to the module, not the enum body
+x = 1
 ```
 
 ## Output
@@ -38,4 +60,26 @@ enum class Expr:
                 return v
             case Add(a, b):
                 return a + b
+
+
+# an enum body prints verbatim, so every comment written inside it has to be
+# carried by that range rather than dropped or printed a second time
+enum class Commented:
+    # own-line comment before a variant
+    case Red  # end-of-line comment on a variant
+    case Green  # fmt: skip
+    # own-line comment after the last variant
+
+
+enum class CommentedPayload:
+    case Circle(radius: int)  # a payload variant
+
+    def area(self) -> int:
+        # a comment inside a method of an enum
+        return self.radius
+    # a comment after the last method
+
+
+# a comment following the enum belongs to the module, not the enum body
+x = 1
 ```

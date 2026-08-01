@@ -6,13 +6,14 @@ use itertools::PeekingNext;
 use ruff_formatter::{FormatError, write};
 use ruff_python_ast::AnyNodeRef;
 use ruff_python_ast::Stmt;
+use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, TraversalSignal};
 use ruff_python_ast::token::{Token as AstToken, TokenKind};
 use ruff_python_trivia::lines_before;
 use ruff_source_file::LineRanges;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::comments::format::{empty_lines, format_comment};
-use crate::comments::{SourceComment, leading_comments, trailing_comments};
+use crate::comments::{Comments, SourceComment, leading_comments, trailing_comments};
 use crate::prelude::*;
 use crate::statement::clause::ClauseHeader;
 use crate::statement::suite::SuiteChildStatement;
@@ -904,6 +905,65 @@ where
     VerbatimText {
         verbatim_range: item.range(),
     }
+}
+
+/// Prints `node` over `range` exactly as written and accounts for the comments
+/// inside it.
+///
+/// A verbatim range already carries its own comments, so they must be marked
+/// formatted: a comment the formatter neither prints nor accounts for trips the
+/// debug assertion that every comment was handled.
+pub(crate) fn write_verbatim_node<'a>(
+    node: impl Into<AnyNodeRef<'a>>,
+    range: TextRange,
+    f: &mut PyFormatter,
+) -> FormatResult<()> {
+    write!(f, [verbatim_text(range)])?;
+    f.context()
+        .comments()
+        .mark_verbatim_node_comments_formatted(node.into());
+    Ok(())
+}
+
+/// The source range a node printed verbatim has to cover.
+///
+/// A block's own range stops at its last statement, so the comments written
+/// inside it — an end-of-line comment on that statement, or own-line comments
+/// after it — sit outside the range. Printing the node verbatim skips its
+/// children, so nothing else prints those comments and the range has to carry
+/// them.
+///
+/// The node's *own* leading and trailing comments are deliberately excluded:
+/// they sit outside the node and the enclosing rule prints them, so covering
+/// them here would emit them twice.
+pub(crate) fn verbatim_node_range(node: AnyNodeRef, comments: &Comments) -> TextRange {
+    struct LastCommentEnd<'a, 'b> {
+        comments: &'b Comments<'a>,
+        end: TextSize,
+    }
+
+    impl<'a> SourceOrderVisitor<'a> for LastCommentEnd<'a, '_> {
+        fn enter_node(&mut self, node: AnyNodeRef<'a>) -> TraversalSignal {
+            for comment in self.comments.leading_dangling_trailing(node) {
+                self.end = self.end.max(comment.end());
+            }
+
+            TraversalSignal::Traverse
+        }
+    }
+
+    // `visit_source_order` enters the descendants but not `node` itself, so the
+    // node's own leading and trailing comments stay out of the range
+    let mut visitor = LastCommentEnd {
+        comments,
+        end: node.end(),
+    };
+    for dangling in comments.dangling(node) {
+        visitor.end = visitor.end.max(dangling.end());
+    }
+    node.visit_source_order(&mut visitor);
+
+    TextRange::new(node.start(), visitor.end)
 }
 
 impl Format<PyFormatContext<'_>> for VerbatimText {

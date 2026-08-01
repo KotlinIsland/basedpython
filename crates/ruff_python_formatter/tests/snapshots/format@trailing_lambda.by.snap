@@ -26,6 +26,13 @@ def outer():
     f:
         print(it)
     return None
+
+
+# a block prints verbatim, so a comment inside it has to be carried by that range
+f(2):  # end-of-line on the header
+    # own-line inside the block
+    print(it)
+    # own-line at the end of the block
 ```
 
 ## Output
@@ -52,4 +59,11 @@ def outer():
     f:
         print(it)
     return None
+
+
+# a block prints verbatim, so a comment inside it has to be carried by that range
+f(2):  # end-of-line on the header
+    # own-line inside the block
+    print(it)
+    # own-line at the end of the block
 ```
