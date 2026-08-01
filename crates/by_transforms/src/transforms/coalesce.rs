@@ -262,7 +262,9 @@ mod tests {
         // stranded
         let out = transpile("x = f()! ?? 1\n", &Config::test_default()).unwrap();
         assert!(
-            out.contains("x = __by_t_0__ if (__by_t_0__ := _force_unwrap(f())) is not None else 1\n"),
+            out.contains(
+                "x = __by_t_0__ if (__by_t_0__ := _force_unwrap(f())) is not None else 1\n"
+            ),
             "got: {out}"
         );
     }
