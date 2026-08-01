@@ -9965,6 +9965,53 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }))
     }
 
+    /// basedpython: fold a `float(...)` call over literal arguments into the float
+    /// literal it constructs, so that `float("inf")` infers the same `inf` type the
+    /// `float.inf` annotation spells — python's only way to write the special values.
+    ///
+    /// Falls back to the ordinary `float` instance for keyword, starred, or
+    /// non-literal arguments, and for any string rust declines to parse (python
+    /// additionally accepts underscores and surrounding whitespace, so a string
+    /// rust parses is always one python parses too).
+    fn infer_basedpython_float_literal_call(
+        &self,
+        callable_type: Type<'db>,
+        arguments: &ast::Arguments,
+        call_arguments: &CallArguments<'_, 'db>,
+    ) -> Option<Type<'db>> {
+        if !self.is_basedpython_file() {
+            return None;
+        }
+        let Type::ClassLiteral(class) = callable_type else {
+            return None;
+        };
+        if !class.is_known(self.db(), KnownClass::Float)
+            || !arguments.keywords.is_empty()
+            || arguments.args.iter().any(ast::Expr::is_starred_expr)
+        {
+            return None;
+        }
+
+        let value = match arguments.args.len() {
+            0 => 0.0,
+            1 => {
+                let kind = call_arguments
+                    .argument_types(0)?
+                    .get_default()?
+                    .as_literal_value_kind()?;
+                match kind {
+                    LiteralValueTypeKind::String(string) => {
+                        string.value(self.db()).parse::<f64>().ok()?
+                    }
+                    kind => binary_expressions::as_f64_value(kind)?,
+                }
+            }
+            _ => return None,
+        };
+
+        Some(Type::float_literal(value))
+    }
+
     /// Validate a django `Manager`/`QuerySet` method call against the bound
     /// model's fields: lookup kwargs (`filter`, `get`, …), `create()` kwargs,
     /// and literal field-name arguments (`order_by`, `only`, …). No-op for any
@@ -11044,6 +11091,14 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.infer_builtin_range_instance_type(callable_type, arguments, &call_arguments)
         {
             bindings = bindings.with_constructed_instance_type(self.db(), instance_ty);
+        }
+
+        // basedpython: `float(...)` over literal arguments constructs a known float, and
+        // `float("inf")` / `float("nan")` are python's only spelling of the special values
+        if let Some(literal_ty) =
+            self.infer_basedpython_float_literal_call(callable_type, arguments, &call_arguments)
+        {
+            bindings = bindings.with_constructed_instance_type(self.db(), literal_ty);
         }
 
         let db = self.db();
