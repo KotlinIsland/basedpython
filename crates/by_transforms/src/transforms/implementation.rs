@@ -53,6 +53,12 @@ pub(crate) const WITNESS_NAME_PREFIX: &str = "_by_impl__";
 /// interface leaves them to `object` — carried on this base they would sit ahead
 /// of the interface in the MRO and silently shadow an interface's own version
 /// (see [`delegated_dunder_source`])
+///
+/// `__reduce__` does belong here: it is how `copy` and `pickle` rebuild the
+/// object, and a witness must always be rebuilt *as a witness* around a copy of
+/// what it wraps. without it both reach for the default state protocol, which
+/// sets attributes on a half-built witness and forwards them into a slot that is
+/// not filled yet
 pub(crate) const IMPLEMENTATION_RUNTIME: &str = "\
 class _by_Implementation:
     __slots__ = (\"__implemented__\",)
@@ -67,6 +73,9 @@ class _by_Implementation:
 
     def __setattr__(self, name, value):
         setattr(self.__implemented__, name, value)
+
+    def __reduce__(self):
+        return (self.__class__, (self.__implemented__,))
 ";
 
 /// the body of one delegating dunder, indented for a class body. `__eq__` and

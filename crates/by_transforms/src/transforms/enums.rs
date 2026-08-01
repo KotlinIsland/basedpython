@@ -450,6 +450,12 @@ fn emit_variant_class(
                 "    def __repr__(self): return {:?}\n",
                 variant.name
             ));
+            // the singleton is reachable only as `Enum.Variant`, and its class is
+            // not — so `copy`/`pickle` would rebuild it as a second instance (or
+            // fail outright) unless it reduces to that path. a `__reduce__`
+            // returning a name makes both return the original object, which is
+            // what the idiomatic `Enum` lowering of an all-unit enum already does
+            out.push_gen("    def __reduce__(self): return type(self).__qualname__\n");
             emit_variant_name_reset(out, enum_name, &variant.name, &mangled);
             out.push_gen(&format!("{enum_name}.{} = {mangled}()\n", variant.name));
         }
@@ -491,11 +497,16 @@ fn emit_variant_class(
 /// name (`_Enum_Variant`) to the public qualified form (`Enum.Variant`), so
 /// dataclass `repr` and `type(x).__name__` read naturally rather than leaking
 /// the internal name.
+///
+/// The qualified half is built from the enum's *own* `__qualname__` rather than
+/// spelled out, because it is also the path `copy` and `pickle` resolve a
+/// variant through: a `private enum class` is renamed to `_Enum` by a later
+/// pass, and a literal `"Enum.Variant"` would then name nothing.
 fn emit_variant_name_reset(out: &mut Out, enum_name: &str, variant: &str, mangled: &str) {
     out.push_gen(&format!("{mangled}.__name__ = {variant:?}\n"));
     out.push_gen(&format!(
-        "{mangled}.__qualname__ = {:?}\n",
-        format!("{enum_name}.{variant}")
+        "{mangled}.__qualname__ = {enum_name}.__qualname__ + {:?}\n",
+        format!(".{variant}")
     ));
 }
 
@@ -669,7 +680,10 @@ mod tests {
     fn private_enum_renames_whole_hierarchy() {
         // `private enum class` becomes a `private class` prefix; modifiers renames
         // the declaration *and* every module-level reference (the variant bases and
-        // attachments the enum synthesized), so the private name stays consistent
+        // attachments the enum synthesized), so the private name stays consistent.
+        // that includes the `__qualname__` reset, which is why it reads the enum's
+        // own qualname instead of spelling the surface name: `copy` and `pickle`
+        // resolve a variant through that path and `Shape` is not a module binding
         check(
             indoc! {"
                 private enum class Shape:
@@ -687,7 +701,7 @@ mod tests {
                 class _Shape_Circle(_Shape):
                     radius: int
                 _Shape_Circle.__name__ = \"Circle\"
-                _Shape_Circle.__qualname__ = \"Shape.Circle\"
+                _Shape_Circle.__qualname__ = _Shape.__qualname__ + \".Circle\"
                 _Shape.Circle = _Shape_Circle
             "},
         );
@@ -713,8 +727,9 @@ mod tests {
                 class _E_A(E):
                     __slots__ = ()
                     def __repr__(self): return \"A\"
+                    def __reduce__(self): return type(self).__qualname__
                 _E_A.__name__ = \"A\"
-                _E_A.__qualname__ = \"E.A\"
+                _E_A.__qualname__ = E.__qualname__ + \".A\"
                 E.A = _E_A()
             "},
         );
@@ -740,14 +755,15 @@ mod tests {
                 class _Shape_Circle(Shape):
                     radius: int
                 _Shape_Circle.__name__ = \"Circle\"
-                _Shape_Circle.__qualname__ = \"Shape.Circle\"
+                _Shape_Circle.__qualname__ = Shape.__qualname__ + \".Circle\"
                 Shape.Circle = _Shape_Circle
 
                 class _Shape_Point(Shape):
                     __slots__ = ()
                     def __repr__(self): return \"Point\"
+                    def __reduce__(self): return type(self).__qualname__
                 _Shape_Point.__name__ = \"Point\"
-                _Shape_Point.__qualname__ = \"Shape.Point\"
+                _Shape_Point.__qualname__ = Shape.__qualname__ + \".Point\"
                 Shape.Point = _Shape_Point()
             "},
         );
@@ -776,7 +792,7 @@ mod tests {
                     width: int
                     height: int
                 _Shape_Rectangle.__name__ = \"Rectangle\"
-                _Shape_Rectangle.__qualname__ = \"Shape.Rectangle\"
+                _Shape_Rectangle.__qualname__ = Shape.__qualname__ + \".Rectangle\"
                 Shape.Rectangle = _Shape_Rectangle
 
                 @final
@@ -785,7 +801,7 @@ mod tests {
                     sides: int
                     closed: bool = True
                 _Shape_Polygon.__name__ = \"Polygon\"
-                _Shape_Polygon.__qualname__ = \"Shape.Polygon\"
+                _Shape_Polygon.__qualname__ = Shape.__qualname__ + \".Polygon\"
                 Shape.Polygon = _Shape_Polygon
             "},
         );
@@ -812,14 +828,15 @@ mod tests {
                     _0: int
                     _1: str
                 _Value_Pair.__name__ = \"Pair\"
-                _Value_Pair.__qualname__ = \"Value.Pair\"
+                _Value_Pair.__qualname__ = Value.__qualname__ + \".Pair\"
                 Value.Pair = _Value_Pair
 
                 class _Value_Nothing(Value):
                     __slots__ = ()
                     def __repr__(self): return \"Nothing\"
+                    def __reduce__(self): return type(self).__qualname__
                 _Value_Nothing.__name__ = \"Nothing\"
-                _Value_Nothing.__qualname__ = \"Value.Nothing\"
+                _Value_Nothing.__qualname__ = Value.__qualname__ + \".Nothing\"
                 Value.Nothing = _Value_Nothing()
             "},
         );
@@ -851,7 +868,7 @@ mod tests {
                 class _Shape_Circle(Shape):
                     radius: int
                 _Shape_Circle.__name__ = \"Circle\"
-                _Shape_Circle.__qualname__ = \"Shape.Circle\"
+                _Shape_Circle.__qualname__ = Shape.__qualname__ + \".Circle\"
                 Shape.Circle = _Shape_Circle
             "},
         );
@@ -902,7 +919,7 @@ mod tests {
                 class _Shape_Circle(Shape):
                     radius: int
                 _Shape_Circle.__name__ = \"Circle\"
-                _Shape_Circle.__qualname__ = \"Shape.Circle\"
+                _Shape_Circle.__qualname__ = Shape.__qualname__ + \".Circle\"
                 Shape.Circle = _Shape_Circle
             "},
         );
@@ -931,14 +948,15 @@ mod tests {
                 class _E_A(E):
                     pass
                 _E_A.__name__ = \"A\"
-                _E_A.__qualname__ = \"E.A\"
+                _E_A.__qualname__ = E.__qualname__ + \".A\"
                 E.A = _E_A
 
                 class _E_B(E):
                     __slots__ = ()
                     def __repr__(self): return \"B\"
+                    def __reduce__(self): return type(self).__qualname__
                 _E_B.__name__ = \"B\"
-                _E_B.__qualname__ = \"E.B\"
+                _E_B.__qualname__ = E.__qualname__ + \".B\"
                 E.B = _E_B()
             "},
         );
@@ -971,7 +989,7 @@ mod tests {
                 class _Result_Ok(Result):
                     _0: _T
                 _Result_Ok.__name__ = \"Ok\"
-                _Result_Ok.__qualname__ = \"Result.Ok\"
+                _Result_Ok.__qualname__ = Result.__qualname__ + \".Ok\"
                 Result.Ok = _Result_Ok
 
                 @final
@@ -979,7 +997,7 @@ mod tests {
                 class _Result_Err(Result):
                     _0: _E
                 _Result_Err.__name__ = \"Err\"
-                _Result_Err.__qualname__ = \"Result.Err\"
+                _Result_Err.__qualname__ = Result.__qualname__ + \".Err\"
                 Result.Err = _Result_Err
             "},
         );
@@ -1006,7 +1024,7 @@ mod tests {
                 class _Result_Ok(Result):
                     _0: T
                 _Result_Ok.__name__ = \"Ok\"
-                _Result_Ok.__qualname__ = \"Result.Ok\"
+                _Result_Ok.__qualname__ = Result.__qualname__ + \".Ok\"
                 Result.Ok = _Result_Ok
 
                 @final
@@ -1014,7 +1032,7 @@ mod tests {
                 class _Result_Err(Result):
                     _0: E
                 _Result_Err.__name__ = \"Err\"
-                _Result_Err.__qualname__ = \"Result.Err\"
+                _Result_Err.__qualname__ = Result.__qualname__ + \".Err\"
                 Result.Err = _Result_Err
             "},
         );
@@ -1042,8 +1060,9 @@ mod tests {
                 class _Tree_Leaf(Tree):
                     __slots__ = ()
                     def __repr__(self): return \"Leaf\"
+                    def __reduce__(self): return type(self).__qualname__
                 _Tree_Leaf.__name__ = \"Leaf\"
-                _Tree_Leaf.__qualname__ = \"Tree.Leaf\"
+                _Tree_Leaf.__qualname__ = Tree.__qualname__ + \".Leaf\"
                 Tree.Leaf = _Tree_Leaf()
 
                 @final
@@ -1053,7 +1072,7 @@ mod tests {
                     _1: Tree[T]
                     _2: Tree[T]
                 _Tree_Node.__name__ = \"Node\"
-                _Tree_Node.__qualname__ = \"Tree.Node\"
+                _Tree_Node.__qualname__ = Tree.__qualname__ + \".Node\"
                 Tree.Node = _Tree_Node
             "},
         );
