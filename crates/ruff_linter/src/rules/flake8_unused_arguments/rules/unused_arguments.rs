@@ -349,7 +349,6 @@ fn call<'a>(
     checker: &Checker,
 ) {
     let semantic = checker.semantic();
-    let dummy_variable_rgx = &checker.settings().dummy_variable_rgx;
     for arg in parameters {
         let Some(binding) = scope
             .get(arg.name())
@@ -359,7 +358,7 @@ fn call<'a>(
         };
         if binding.kind.is_argument()
             && binding.is_unused()
-            && !dummy_variable_rgx.is_match(arg.name())
+            && !checker.settings().ignores_unused_binding(arg.name())
         {
             argumentable.check_for(checker, arg.name.to_string(), binding.range());
         }

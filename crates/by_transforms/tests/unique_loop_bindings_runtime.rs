@@ -55,6 +55,32 @@ for left, right in [(1, 2), (3, 4)]:
     pairs.append(lambda: (left, right))
 assert [fn() for fn in pairs] == [(1, 2), (3, 4)], "each unpacked target binds"
 
+# a pattern in the target position binds its captures, not the binder the
+# destructuring lowering matches against
+class Pair:
+    __match_args__ = ("left", "right")
+
+    def __init__(self, left: int, right: int):
+        self.left = left
+        self.right = right
+
+patterned = []
+for Pair(left, right) in [Pair(1, 2), Pair(3, 4)]:
+    patterned.append(lambda: (left, right))
+assert [fn() for fn in patterned] == [(1, 2), (3, 4)], "each pattern capture binds"
+
+# a `def`'s parameter default is re-evaluated per call from inside the body, so
+# a loop binding it names is captured there like any other body read
+def collect_defaults() -> list:
+    made = []
+    for i in [1, 2]:
+        def defaulted(value=i):
+            return value
+        made.append(defaulted)
+    return made
+
+assert [fn() for fn in collect_defaults()] == [1, 2], "a default captures its own iteration"
+
 # nested loops each contribute their own binding
 grid = []
 for row in [1, 2]:

@@ -99,6 +99,22 @@ impl StmtClassDef {
         self.has_synthetic_marker("enum_def")
     }
 
+    /// True when basedpython gives this class a base its header does not spell:
+    /// an implementation's interface, a based enum's `Enum`, a variant's
+    /// enclosing enum, and the classes the `enum_class` / `protocol_class`
+    /// markers stand for.
+    ///
+    /// Anything keyed on "does this class have bases at all" has to account for
+    /// them, or it reads an injected base as no base — which is how a based
+    /// enum came to have `type` for its metaclass rather than `EnumMeta`.
+    pub fn has_injected_base(&self) -> bool {
+        self.is_implementation()
+            || self.is_based_enum()
+            || self.is_enum_variant()
+            || self.has_synthetic_marker("enum_class")
+            || self.has_synthetic_marker("protocol_class")
+    }
+
     /// True for an extension declaration (`extension list:`) — methods and
     /// computed properties added to an existing type. the class name is the
     /// *extended* type, a reference to an existing declaration, so an
@@ -3280,15 +3296,22 @@ impl Pattern {
 /// before it can be matched, and the binder is what binds it. `index` counts the
 /// binders in the file in source order, which keeps the name unique without
 /// pinning it to a byte offset — the same code reformatted has to parse to the
-/// same tree. The leading underscore keeps the "this binding is never read"
-/// lints quiet: the source reads the pattern's captures, never the binder.
+/// same tree. The source reads the pattern's captures and never the binder, so
+/// the "this binding is never read" rules pass it over — see
+/// `LinterSettings::ignores_unused_binding`, which recognises it by prefix.
+///
+/// The name is a dunder because a binding position may be written in a class
+/// body, and an `enum` class body turns every ordinary name assigned in it into
+/// a member. A dunder is machinery to `enum` as much as it is to us, so the
+/// binder stays invisible there; it is not name-mangled, because mangling wants
+/// at most one *trailing* underscore.
 pub fn destructure_binder_name(index: u32) -> Name {
-    Name::new(format!("{DESTRUCTURE_BINDER_PREFIX}{index}"))
+    Name::new(format!("{DESTRUCTURE_BINDER_PREFIX}{index}__"))
 }
 
 /// The prefix every [`destructure_binder_name`] carries, and the only way to
 /// recognise a binder: it names a value the source cannot refer to.
-pub const DESTRUCTURE_BINDER_PREFIX: &str = "_by_destructure_";
+pub const DESTRUCTURE_BINDER_PREFIX: &str = "__by_destructure_";
 
 /// Whether `name` names a [destructuring binder](destructure_binder_name).
 pub fn is_destructure_binder(name: &str) -> bool {

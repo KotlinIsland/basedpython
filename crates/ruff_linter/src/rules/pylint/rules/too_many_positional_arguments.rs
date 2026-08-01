@@ -86,7 +86,7 @@ pub(crate) fn too_many_positional_arguments(
         .posonlyargs
         .iter()
         .chain(&function_def.parameters.args)
-        .filter(|param| !checker.settings().dummy_variable_rgx.is_match(param.name()))
+        .filter(|param| !checker.settings().ignores_unused_binding(param.name()))
         .count();
 
     if num_positional_args <= checker.settings().pylint.max_positional_args {

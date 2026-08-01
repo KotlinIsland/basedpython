@@ -223,14 +223,20 @@ pub(crate) trait TypeInfo {
     /// a function — the nearest such enclosing scope of the block at `anchor`
     fn trailing_block_fresh_capture(&self, anchor: &Expr) -> Option<CaptureKind>;
 
-    /// how `reference` reaches the binding established at `target`, when it
+    /// how `reference` reaches the binding `anchor`'s scope holds, when it
     /// reaches it at all: the name has to resolve outward, past every scope the
-    /// reference sits in, to the scope that binds `target`. `Nonlocal` means
-    /// that scope is a function or lambda, so the read goes through a closure
-    /// cell; `Global` means it is the module, where python compiles the read as
-    /// a global instead. `None` when the two share a scope (no closure is
-    /// involved) or when a scope in between binds the name itself
-    fn reads_binding_of(&self, reference: &ExprName, target: &ExprName) -> Option<CaptureKind>;
+    /// reference sits in, to `anchor`'s scope. `Nonlocal` means that scope is a
+    /// function or lambda, so the read goes through a closure cell; `Global`
+    /// means it is the module, where python compiles the read as a global
+    /// instead. `None` when the two share a scope (no closure is involved) or
+    /// when a scope in between binds the name itself
+    fn reads_binding_of(&self, reference: &ExprName, anchor: &Expr) -> Option<CaptureKind>;
+
+    /// whether `reference` is written in `anchor`'s own scope, and that scope
+    /// is one python compiles its bindings as closure cells — so the same read
+    /// relocated into a nested function would reach the binding through a cell
+    /// rather than as a global
+    fn shares_a_cell_scope(&self, reference: &ExprName, anchor: &Expr) -> bool;
 
     /// rendered inferred (literal-promoted) type of `expr`, or `None` when ty
     /// cannot resolve a type (unresolved import, parse error, etc.).
@@ -672,12 +678,12 @@ impl TypeInfo for SemanticModel<'_> {
         None
     }
 
-    fn reads_binding_of(&self, reference: &ExprName, target: &ExprName) -> Option<CaptureKind> {
+    fn reads_binding_of(&self, reference: &ExprName, anchor: &Expr) -> Option<CaptureKind> {
         let db = self.db();
         let file = self.file();
         let index = semantic_index(db, file);
         let reference_scope = index.try_expression_scope_id(&ExprRef::from(reference))?;
-        let target_scope = index.try_expression_scope_id(&ExprRef::from(target))?;
+        let target_scope = index.try_expression_scope_id(&ExprRef::from(anchor))?;
         // a reference in the binding's own scope reads the live binding, not a
         // captured copy of it
         if reference_scope == target_scope {
@@ -707,6 +713,26 @@ impl TypeInfo for SemanticModel<'_> {
             };
         }
         None
+    }
+
+    fn shares_a_cell_scope(&self, reference: &ExprName, anchor: &Expr) -> bool {
+        let db = self.db();
+        let index = semantic_index(db, self.file());
+        let Some(reference_scope) = index.try_expression_scope_id(&ExprRef::from(reference)) else {
+            return false;
+        };
+        if index.try_expression_scope_id(&ExprRef::from(anchor)) != Some(reference_scope) {
+            return false;
+        }
+        index
+            .ancestor_scopes(reference_scope)
+            .next()
+            .is_some_and(|(_, scope)| {
+                matches!(
+                    scope.kind(),
+                    ScopeKind::Function | ScopeKind::Lambda | ScopeKind::Comprehension
+                )
+            })
     }
 
     fn promoted_type_display(&self, expr: &Expr) -> Option<String> {

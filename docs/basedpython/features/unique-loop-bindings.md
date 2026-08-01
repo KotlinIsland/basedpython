@@ -24,11 +24,15 @@ assert [fn() for fn in fns] == [1, 2, 3]
 ```
 
 every target of a destructuring loop binds, and nested loops each contribute
-their own:
+their own. a [pattern](destructuring.md) in the target position binds the names
+*it* binds, not the binder its lowering matches against:
 
 ```by
 for left, right in pairs:
     fns.append(lambda: (left, right))
+
+for Point(x, y) in points:
+    fns.append(lambda: (x, y))
 ```
 
 ## what is captured
@@ -45,6 +49,12 @@ for i in items:
 
 shadowing is decided by real name resolution, not by matching text, so an
 intervening scope that binds the name also ends the capture
+
+a parameter *default* is captured too, though nothing about the source says so:
+[default re-evaluation](mutable-defaults.md) moves every non-scalar default into
+the body, where it runs once per call and reads the loop binding like the body's
+own code does. so `def handler(value=i)` names this iteration's `i`, the same as
+the `lambda value=i:` spelling beside it
 
 a name a nested function writes through with `nonlocal` or `global` is never
 captured — the write has to reach the binding the loop itself holds:

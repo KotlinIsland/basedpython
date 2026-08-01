@@ -164,7 +164,7 @@ pub(crate) fn deferred_scopes(checker: &Checker) {
                             && !binding.is_nonlocal()
                             && !binding.is_global()
                             && !is_context_declaration(binding, checker.semantic())
-                            && !checker.settings().dummy_variable_rgx.is_match(name)
+                            && !checker.settings().ignores_unused_binding(name)
                             && !matches!(
                                 name,
                                 "__tracebackhide__"
