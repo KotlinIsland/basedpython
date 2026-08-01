@@ -464,8 +464,12 @@ impl<'src> Parser<'src> {
                 self.bump(TokenKind::Question);
                 let operator_range =
                     TextRange::new(cast_keyword_range.start(), question_range.end());
-                let right =
-                    self.parse_binary_expression_or_higher(OperatorPrecedence::None, context);
+                // the right operand is the cast's target type, so it admits the
+                // use-site type modifiers wherever the cast itself is written
+                let right = self.parse_binary_expression_or_higher(
+                    OperatorPrecedence::None,
+                    context.with_in_type_expression(),
+                );
                 let value_expr = left.expr;
                 let type_expr = right.expr;
                 let args_range = TextRange::new(operator_range.end(), type_expr.range().end());
@@ -512,8 +516,10 @@ impl<'src> Parser<'src> {
                 );
                 let cast_keyword_range = self.current_token_range();
                 self.bump(TokenKind::Cast);
-                let right =
-                    self.parse_binary_expression_or_higher(OperatorPrecedence::None, context);
+                let right = self.parse_binary_expression_or_higher(
+                    OperatorPrecedence::None,
+                    context.with_in_type_expression(),
+                );
                 let value_expr = left.expr;
                 let type_expr = right.expr;
                 let args_range = TextRange::new(cast_keyword_range.end(), type_expr.range().end());
@@ -961,7 +967,9 @@ impl<'src> Parser<'src> {
                 parameter_borrow: ParameterBorrow::None,
             };
         }
-        self.parse_conditional_expression_or_higher_impl(ExpressionContext::default())
+        self.parse_conditional_expression_or_higher_impl(
+            ExpressionContext::default().with_in_type_expression(),
+        )
     }
 
     pub(super) fn parse_name(&mut self, context: ExpressionContext) -> ast::ExprName {
@@ -1221,7 +1229,7 @@ impl<'src> Parser<'src> {
             TokenKind::Lpar => {
                 return self.parse_parenthesized_expression(context);
             }
-            TokenKind::Lsqb => self.parse_list_like_expression(),
+            TokenKind::Lsqb => self.parse_list_like_expression(context),
             TokenKind::Lbrace => self.parse_set_or_dict_like_expression(),
 
             kind => {
@@ -2985,7 +2993,7 @@ impl<'src> Parser<'src> {
     /// If the parser isn't positioned at a `[` token.
     ///
     /// See: <https://docs.python.org/3/reference/expressions.html#list-displays>
-    fn parse_list_like_expression(&mut self) -> Expr {
+    fn parse_list_like_expression(&mut self, outer: ExpressionContext) -> Expr {
         let start = self.node_start();
 
         self.bump(TokenKind::Lsqb);
@@ -3009,9 +3017,12 @@ impl<'src> Parser<'src> {
         }
 
         // Parse the first element with a more general rule and limit it later.
-        let first_element = self.parse_named_expression_or_higher(
-            ExpressionContext::starred_bitwise_or().with_for_excluded(),
-        );
+        // basedpython: a list display inside a type expression is the parameter
+        // list of `Callable[[…], R]`, so its elements are type expressions too
+        let element_context = ExpressionContext::starred_bitwise_or()
+            .with_for_excluded()
+            .inheriting_type_expression(outer);
+        let first_element = self.parse_named_expression_or_higher(element_context);
 
         match self.current_token_kind() {
             TokenKind::Async | TokenKind::For => {
@@ -3037,7 +3048,7 @@ impl<'src> Parser<'src> {
 
                 Expr::ListComp(self.parse_list_comprehension_expression(first_element.expr, start))
             }
-            _ => Expr::List(self.parse_list_expression(first_element.expr, start)),
+            _ => Expr::List(self.parse_list_expression(first_element.expr, start, outer)),
         }
     }
 
@@ -3402,7 +3413,9 @@ impl<'src> Parser<'src> {
                 // reads as it does on a `def` statement: the union is the return type
                 self.expect(TokenKind::Rarrow);
                 let returns = self
-                    .parse_conditional_expression_or_higher_impl(ExpressionContext::default())
+                    .parse_conditional_expression_or_higher_impl(
+                        ExpressionContext::default().with_in_type_expression(),
+                    )
                     .expr;
 
                 Expr::ProtocolMethod(ast::ExprProtocolMethod {
@@ -3426,7 +3439,9 @@ impl<'src> Parser<'src> {
                 self.bump(TokenKind::DoubleStar);
                 let inner_start = self.node_start();
                 let value = self
-                    .parse_conditional_expression_or_higher_impl(ExpressionContext::default())
+                    .parse_conditional_expression_or_higher_impl(
+                        ExpressionContext::default().with_in_type_expression(),
+                    )
                     .expr;
                 Expr::Starred(ast::ExprStarred {
                     value: Box::new(Expr::Starred(ast::ExprStarred {
@@ -3457,7 +3472,9 @@ impl<'src> Parser<'src> {
                 check_duplicate(self, &target.id, target.range);
                 self.expect(TokenKind::Colon);
                 let value = self
-                    .parse_conditional_expression_or_higher_impl(ExpressionContext::default())
+                    .parse_conditional_expression_or_higher_impl(
+                        ExpressionContext::default().with_in_type_expression(),
+                    )
                     .expr;
                 Expr::Named(ast::ExprNamed {
                     target: Box::new(Expr::Name(target)),
@@ -3877,6 +3894,14 @@ impl<'src> Parser<'src> {
             TokenKind::Colon
         };
 
+        // basedpython: a type-form field's value *is* the field's type, so it
+        // admits the use-site type modifiers. the value form's is a value
+        let field_context = if is_type_form {
+            ExpressionContext::default().with_in_type_expression()
+        } else {
+            ExpressionContext::default()
+        };
+
         loop {
             // Trailing comma already absorbed up the loop with `eat`; reaching
             // `)` is a clean exit.
@@ -3911,8 +3936,7 @@ impl<'src> Parser<'src> {
                 let mut target_name = self.parse_name(ExpressionContext::default());
                 target_name.ctx = ExprContext::Invalid;
                 self.bump(other_separator);
-                let inner =
-                    self.parse_conditional_expression_or_higher_impl(ExpressionContext::default());
+                let inner = self.parse_conditional_expression_or_higher_impl(field_context);
                 let field_range = self.node_range(field_start);
                 elts.push(Expr::Named(ast::ExprNamed {
                     target: Box::new(Expr::Name(target_name)),
@@ -3939,8 +3963,7 @@ impl<'src> Parser<'src> {
                 // them as undefined references.
                 target_name.ctx = ExprContext::Invalid;
                 self.expect(separator);
-                let inner =
-                    self.parse_conditional_expression_or_higher_impl(ExpressionContext::default());
+                let inner = self.parse_conditional_expression_or_higher_impl(field_context);
                 let field_range = self.node_range(field_start);
                 elts.push(Expr::Named(ast::ExprNamed {
                     target: Box::new(Expr::Name(target_name)),
@@ -3949,8 +3972,7 @@ impl<'src> Parser<'src> {
                     node_index: AtomicNodeIndex::NONE,
                 }));
             } else {
-                let inner =
-                    self.parse_conditional_expression_or_higher_impl(ExpressionContext::default());
+                let inner = self.parse_conditional_expression_or_higher_impl(field_context);
                 elts.push(inner.expr);
             }
 
@@ -4426,7 +4448,12 @@ impl<'src> Parser<'src> {
     /// Parses a list expression.
     ///
     /// See: <https://docs.python.org/3/reference/expressions.html#list-displays>
-    fn parse_list_expression(&mut self, first_element: Expr, start: TextSize) -> ast::ExprList {
+    fn parse_list_expression(
+        &mut self,
+        first_element: Expr,
+        start: TextSize,
+        outer: ExpressionContext,
+    ) -> ast::ExprList {
         if !self.at_sequence_end() {
             self.expect(TokenKind::Comma);
         }
@@ -4434,9 +4461,11 @@ impl<'src> Parser<'src> {
         let elts_snapshot = self.expr_scratch.snapshot();
         self.expr_scratch.push(first_element);
 
+        let element_context =
+            ExpressionContext::starred_bitwise_or().inheriting_type_expression(outer);
         self.parse_comma_separated_list(RecoveryContextKind::ListElements, |parser| {
             let element = parser
-                .parse_named_expression_or_higher(ExpressionContext::starred_bitwise_or())
+                .parse_named_expression_or_higher(element_context)
                 .expr;
             parser.expr_scratch.push(element);
         });
