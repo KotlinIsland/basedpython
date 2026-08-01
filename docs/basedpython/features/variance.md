@@ -104,6 +104,17 @@ reported (`invalid-variance-declaration`) rather than dropped:
 def f[out T](t: T) -> None: ...   # error: a function's `T` has no variance
 ```
 
+an alias's keyword is a claim about the expansion rather than a decision of its
+own, so it is checked against it — the same rule as
+[a class's](#the-declaration-has-to-match-the-usage), reported at the same place:
+
+```by
+type Alias[out T] = list[T]   # error: `T` is declared covariant, but the expansion is invariant
+```
+
+`in out` is invariance, which every expansion satisfies, and a parameter the
+expansion never mentions is never reported
+
 ## use-site variance
 
 writing `Container[out T]`, `Container[in T]`, or `Container[in out T]`
