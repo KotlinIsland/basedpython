@@ -601,6 +601,51 @@ def f[**Kwargs](**kwargs: **Kwargs) -> None:
 f(a=1, b="x")  # runs as f[a=int, b=str](a=1, b="x")
 ```
 
+## a reified cell forwards as a type argument
+
+A caller that reifies `T` holds it in a runtime cell, so a bare call that solves the callee's
+parameter to that same `T` is answerable: the cell forwards as the type argument. Without this a
+specialization dies at the first hop that only passes a value along.
+
+```by
+def inner[reified T](data: list[T]) -> None:
+    assert T == int
+
+def outer[reified T](data: list[T]) -> None:
+    inner(data)  # runs as inner[T](data)
+
+outer(list[int]())
+```
+
+## an erased type parameter has no cell to forward
+
+The mirror of the above. An erased type parameter is not a runtime value, so there is nothing to
+forward and the call still needs an explicit specialization:
+
+```by
+def inner[reified T](data: list[T]) -> None: ...
+
+def outer[T](data: list[T]) -> None:
+    # error: [unspecialized-reified-generic]
+    inner(data)
+```
+
+## a class type parameter has no cell to forward
+
+A class type parameter lives on the class, not in a function closure, so it is never a forwardable
+cell:
+
+```by
+def inner[reified T](data: list[T]) -> None: ...
+
+class C[T]:
+    xs: list[T]
+
+    def m(self) -> None:
+        # error: [unspecialized-reified-generic]
+        inner(self.xs)
+```
+
 ## a variadic used only in annotations is not reified
 
 ```by

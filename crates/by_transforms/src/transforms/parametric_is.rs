@@ -1534,17 +1534,19 @@ mod tests {
     }
 
     #[test]
-    fn builtin_union_probes_each_value() {
-        // a union of builtin specializations is still probeable — the runtime
-        // unwinds each value's mro; a bare list in either arm simply answers
-        // False, no element-witness heuristic involved
+    fn builtin_union_compares_the_reified_cell() {
+        // a union of builtin specializations is not probeable — the arms are
+        // the same C-level `list` and a bare list answers False for every one.
+        // the parameter is given a reified type parameter instead (see
+        // [`erased_union`](super::super::erased_union)), so the test compares
+        // the cell the call site supplied rather than interrogating the value
         let out = out(indoc! {"
             def f(x: list[int] | list[str]) -> bool:
                 return x is list[int]
         "});
         assert!(
-            out.contains("return _parametric_is(x, list[int], (0,))"),
-            "builtin union probes via mro: {out}"
+            out.contains("return (__by_erased_0 == int)"),
+            "builtin union compares the reified cell: {out}"
         );
     }
 
@@ -1567,16 +1569,20 @@ mod tests {
     }
 
     #[test]
-    fn union_excluding_target_folds_false() {
-        // no arm matches `list[bytes]`, so the whole test folds statically,
-        // independent of runtime erasure
+    fn a_target_outside_the_union_compares_the_cell() {
+        // no arm matches `list[bytes]`, so this can never be true. it used to
+        // fold to `False` statically; now the parameter carries a reified type
+        // parameter constrained to `(int, str)`, so it lowers to a cell
+        // comparison that is always false at runtime instead. same answer, one
+        // comparison rather than a constant — the fold is not recoverable from
+        // the token path, which carries source ranges rather than types
         let out = out(indoc! {"
             def f(x: list[int] | list[str]) -> bool:
                 return x is list[bytes]
         "});
         assert!(
-            out.contains("return False"),
-            "target outside the union folds false: {out}"
+            out.contains("return (__by_erased_0 == bytes)"),
+            "target outside the union compares the cell: {out}"
         );
     }
 

@@ -51,11 +51,20 @@ the value's static type decides the strategy:
     variance. a method member is checked the same way through its parameter and
     return annotations. see [below](#a-protocol-target-is-checked-structurally)
 
-- **undecidable, builtin target → error**. a runtime `list` / `dict` / `set`
-    / `tuple` carries no record of its type arguments, so it cannot be checked
-    at runtime. this is an [`erased-type-check`](#the-erased-type-check-error)
-    error — there is deliberately no "check the first element" heuristic, since
-    an empty collection has no element and a builtin's element type is erased
+- **erased union parameter → the call site answers**. a parameter typed as a
+    union of specializations of one erased origin (`list[int] | list[str]`)
+    cannot be discriminated by looking at the value — both arms are the same
+    C-level `list`. the missing fact is not a property of the value but of the
+    *binding*, so it travels with the call: the parameter is given a reified
+    type parameter and the test compares that cell. see
+    [below](#an-erased-union-parameter-carries-its-specialization)
+
+- **undecidable, builtin target → error**. any other runtime `list` / `dict` /
+    `set` / `tuple` carries no record of its type arguments, so it cannot be
+    checked at runtime. this is an
+    [`erased-type-check`](#the-erased-type-check-error) error — there is
+    deliberately no "check the first element" heuristic, since an empty
+    collection has no element and a builtin's element type is erased
 
 so of the two undecidable cases, only the *target* distinguishes them:
 
@@ -220,3 +229,63 @@ and the residue has to run.
 so the two can differ on the same class: the cast succeeds, the test refuses.
 both are right for what they were asked, but it is worth knowing the cast is not
 re-verifying what the checker already concluded.
+
+## an erased union parameter carries its specialization
+
+A union of specializations of one erased origin is undecidable at runtime — `list[int]` and
+`list[str]` are the same `list`, and a builtin rejects the `__orig_class__` stamp. Probing the value
+answered `False` for every arm, which is sound (only the positive branch narrows) but useless:
+
+```by
+def f(data: list[int] | list[str]):
+    if data is list[int]: ...   # every arm answered False
+    if data is list[str]: ...
+```
+
+The specialization is a static fact about the binding, known wherever the argument was written. So
+it travels with the call instead of being asked of the value: the parameter becomes generic over the
+differing argument, and that type parameter is [reified](reified-generics.md).
+
+```by
+def f(data: list[int] | list[str]):
+    if data is list[int]:       # compares the reified cell
+        print("it's ints")
+```
+
+This is a lowering detail, not surface syntax. The checker keeps seeing the union you declared —
+`reveal_type(data)` is `list[int] | list[str]`, and nothing basedpython reports ever names the
+synthesized parameter.
+
+The rewrite is driven by the *signature*, so a function that only forwards its value is rewritten
+too and the specialization survives the hop:
+
+```by
+def middle(data: list[int] | list[str]):
+    f(data)                     # forwards its own cell
+
+middle(list[int]())             # supplies the specialization
+```
+
+### when it does not apply
+
+- **below python 3.12.** Reification compiles the type parameter into a PEP 695 closure cell, which
+    needs native type-parameter syntax in the output. On an older target the parameter keeps its
+    union and the test keeps the probe it always had.
+- **a union the runtime can already discriminate.** Different origins (`list[int] | set[int]`) are
+    separated by `isinstance`, and a user-defined generic carries `__orig_class__`.
+- **more than one differing argument.** `dict[str, int] | dict[bool, str]` varies in two positions,
+    so no single type parameter stands for the difference.
+- **an argument with no runtime spelling**, such as a scope-local class.
+
+### when the call site cannot supply it
+
+Reaching the function through a value whose type the checker could not pin down — a callable
+variable, a dynamic value — leaves nothing to supply the specialization. That raises rather than
+guessing:
+
+```text
+TypeError: f() cannot tell which specialization it was given: the argument's
+type arguments are erased at runtime, and the call site did not record them
+```
+
+This is the same line the erased builtin target takes: refuse, never guess.

@@ -691,3 +691,43 @@ xs = [1]
 
 b = xs === list[int]
 ```
+
+## an erased union answers from the call site
+
+A union of specializations of one erased origin (`list[int] | list[str]`) cannot be told apart by
+looking at a value — both arms are the same C-level `list`, which rejects the `__orig_class__`
+stamp. The specialization is a static fact about the *binding*, known wherever the argument was
+written, so it travels with the call instead: the parameter is given a reified type parameter and
+the test compares that cell.
+
+This is invisible in the checker — the parameter keeps the union it was declared with:
+
+```by
+def f(data: list[int] | list[str]) -> str:
+    reveal_type(data)  # revealed: list[int] | list[str]
+    if data is list[int]:
+        return "ints"
+    return "strs"
+
+# an *empty* list, so no element could ever have witnessed this
+print(f(list[int]()))  # ints
+print(f(list[str]()))  # strs
+```
+
+## an erased union survives a forwarding hop
+
+An intermediate function that only passes the value along is reified from its own signature, so the
+specialization is not lost at the boundary:
+
+```by
+def inner(data: list[int] | list[str]) -> str:
+    if data is list[int]:
+        return "ints"
+    return "strs"
+
+def outer(data: list[int] | list[str]) -> str:
+    return inner(data)
+
+print(outer(list[int]()))  # ints
+print(outer(list[str]()))  # strs
+```
