@@ -114,9 +114,9 @@ impl FormatRule<Expr, PyFormatContext<'_>> for FormatExpr {
             Expr::Tuple(expr) => expr.format().fmt(f),
             Expr::Slice(expr) => expr.format().fmt(f),
             Expr::IpyEscapeCommand(expr) => expr.format().fmt(f),
-            Expr::CallableType(expr) => source_text_slice(expr.range()).fmt(f),
-            Expr::ProtocolType(expr) => source_text_slice(expr.range()).fmt(f),
-            Expr::ProtocolMethod(expr) => source_text_slice(expr.range()).fmt(f),
+            Expr::CallableType(expr) => format_verbatim_expr(expr, f),
+            Expr::ProtocolType(expr) => format_verbatim_expr(expr, f),
+            Expr::ProtocolMethod(expr) => format_verbatim_expr(expr, f),
             Expr::Statement(expr) => expr.format().fmt(f),
         });
         let parenthesize = match parentheses {
@@ -150,6 +150,23 @@ impl FormatRule<Expr, PyFormatContext<'_>> for FormatExpr {
             write!(f, [format_expr])
         }
     }
+}
+
+/// Reproduces a basedpython expression form that has no AST-faithful printer
+/// (`(A) -> R`, `protocol(...)` and its methods) from the source.
+///
+/// The slice already carries every comment written inside the form, so those
+/// comments have to be marked formatted: one the formatter neither prints nor
+/// accounts for trips the debug assertion that every comment was handled.
+pub(crate) fn format_verbatim_expr<'a, T>(expr: T, f: &mut PyFormatter) -> FormatResult<()>
+where
+    T: Into<AnyNodeRef<'a>> + Ranged,
+{
+    source_text_slice(expr.range()).fmt(f)?;
+    f.context()
+        .comments()
+        .mark_verbatim_node_comments_formatted(expr.into());
+    Ok(())
 }
 
 /// The comments below are trailing on the addition, but it's also outside the
@@ -298,9 +315,9 @@ fn format_with_parentheses_comments(
         Expr::Tuple(expr) => FormatNodeRule::fmt_fields(expr.format().rule(), expr, f),
         Expr::Slice(expr) => FormatNodeRule::fmt_fields(expr.format().rule(), expr, f),
         Expr::IpyEscapeCommand(expr) => FormatNodeRule::fmt_fields(expr.format().rule(), expr, f),
-        Expr::CallableType(expr) => source_text_slice(expr.range()).fmt(f),
-        Expr::ProtocolType(expr) => source_text_slice(expr.range()).fmt(f),
-        Expr::ProtocolMethod(expr) => source_text_slice(expr.range()).fmt(f),
+        Expr::CallableType(expr) => format_verbatim_expr(expr, f),
+        Expr::ProtocolType(expr) => format_verbatim_expr(expr, f),
+        Expr::ProtocolMethod(expr) => format_verbatim_expr(expr, f),
         Expr::Statement(expr) => FormatNodeRule::fmt_fields(expr.format().rule(), expr, f),
     });
 

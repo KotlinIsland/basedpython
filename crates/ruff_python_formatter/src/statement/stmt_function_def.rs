@@ -7,10 +7,9 @@ use crate::prelude::*;
 use crate::statement::clause::{ClauseHeader, clause};
 use crate::statement::stmt_class_def::FormatDecorators;
 use crate::statement::suite::SuiteKind;
-use crate::verbatim::verbatim_text;
+use crate::verbatim::{verbatim_node_range, write_verbatim_node};
 use ruff_formatter::write;
 use ruff_python_ast::{Expr, ExprContext, NodeKind, StmtFunctionDef};
-use ruff_text_size::{Ranged, TextRange, TextSize};
 
 /// True when this function is a basedpython `init(...)` constructor shorthand:
 /// the parser tags it with a synthetic `__init_method__` marker decorator (a
@@ -37,24 +36,11 @@ impl FormatNodeRule<StmtFunctionDef> for FormatStmtFunctionDef {
         // basedpython trailing lambda blocks (`f(2):` + suite) and `init(...)`
         // constructor shorthands have no AST-faithful surface printer — their
         // identifiers are synthetic and zero-width — so emit them verbatim, like
-        // based enums. the range extends to the end of the final line so a
-        // trailing end-of-line comment (outside the node range but marked
-        // formatted below) is carried along rather than dropped
+        // based enums
         if item.is_trailing_lambda || is_init_method(item) {
-            let source = f.context().source();
-            let end_offset = usize::from(item.range().end());
-            let line_end = source[end_offset..]
-                .find(['\n', '\r'])
-                .map_or(source.len(), |eol| end_offset + eol);
-            let verbatim_range = TextRange::new(
-                item.range().start(),
-                TextSize::try_from(line_end).expect("source length fits u32"),
-            );
-            write!(f, [verbatim_text(verbatim_range)])?;
-            f.context()
-                .comments()
-                .mark_verbatim_node_comments_formatted(item.into());
-            return Ok(());
+            let comments = f.context().comments().clone();
+            let range = verbatim_node_range(item.into(), &comments);
+            return write_verbatim_node(item, range, f);
         }
 
         let StmtFunctionDef {
