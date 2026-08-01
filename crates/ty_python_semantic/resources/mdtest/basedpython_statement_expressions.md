@@ -41,6 +41,49 @@ def f(c: bool):
     reveal_type(a)  # revealed: 1 | 2
 ```
 
+## a branch's value may be a call
+
+A call is a standalone expression in the semantic index, so inferring one as a branch value has to
+go through the standalone path rather than re-inferring it.
+
+```by
+def make() -> int:
+    return 1
+
+def f(c: bool):
+    a = if c:
+        make()
+    else:
+        "two"
+    reveal_type(a)  # revealed: int | "two"
+```
+
+## a branch's value may be a comprehension
+
+```by
+def f(c: bool):
+    a = if c:
+        [x for x in [1, 2]]
+    else:
+        "two"
+    reveal_type(a)  # revealed: list[int] | "two"
+```
+
+## a `match` branch's value may be a call
+
+```by
+def make() -> int:
+    return 1
+
+def f(n: int):
+    a = match n:
+        case 0:
+            make()
+        case _:
+            "other"
+    reveal_type(a)  # revealed: int | "other"
+```
+
 ## an `if` without `else` is not exhaustive
 
 ```by

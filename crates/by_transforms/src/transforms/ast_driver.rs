@@ -1032,8 +1032,7 @@ pub(crate) fn run_against_source<'a>(
                     match &sub_edits[j].2 {
                         SubPatch::Text(t) => combined.push_str(t),
                         SubPatch::Template(frags) => {
-                            let contained =
-                                template_claimees(frags, &sub_edits, &claimed, j, None);
+                            let contained = template_claimees(frags, &sub_edits, &claimed, j, None);
                             materialize_fragments(
                                 &mut combined,
                                 frags,
