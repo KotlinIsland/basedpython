@@ -35,7 +35,7 @@ use super::ast_driver::{PassContext, TypeAwarePass};
 use super::source_util::{line_indent, line_start};
 use crate::type_info::TypeInfo;
 
-fn is_immutable_scalar(expr: &Expr) -> bool {
+pub(crate) fn is_immutable_scalar(expr: &Expr) -> bool {
     match expr {
         Expr::NumberLiteral(_)
         | Expr::BooleanLiteral(_)

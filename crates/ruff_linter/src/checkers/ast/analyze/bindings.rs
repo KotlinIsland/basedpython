@@ -53,8 +53,7 @@ pub(crate) fn bindings(checker: &Checker) {
                 && binding.is_unused()
                 && !checker
                     .settings()
-                    .dummy_variable_rgx
-                    .is_match(binding.name(checker.source()))
+                    .ignores_unused_binding(binding.name(checker.source()))
             {
                 checker
                     .report_diagnostic(

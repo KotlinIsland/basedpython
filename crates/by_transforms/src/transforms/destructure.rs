@@ -38,15 +38,23 @@
 //! named it with, and put the destructure at the top of the body:
 //!
 //! ```text
-//! for Point(x, y) in points:     ⇒    for _by_destructure_N in points:
-//!     use(x, y)                           match _by_destructure_N:
+//! for Point(x, y) in points:     ⇒    for __by_destructure_N__ in points:
+//!     use(x, y)                           match __by_destructure_N__:
 //!                                             case Point(x, y):
 //!                                                 pass
+//!                                         del __by_destructure_N__
 //!                                         use(x, y)
 //! ```
 //!
 //! Only the header and the point the body starts at are rewritten, so every body
 //! keeps its exact source bytes and the lowerings inside it compose.
+//!
+//! The binder is dropped as soon as the captures are bound. Left behind it would
+//! become a member of whatever namespace surrounds it — a class attribute, or a
+//! bogus variant in an `enum class` body — and nothing after the destructure
+//! reads it. The drop goes at the *top* of the body rather than after the
+//! statement so it runs whatever the body does with the iteration, and so a
+//! `for` re-binds it on the next one.
 
 use ruff_python_ast::visitor::{Visitor, walk_pattern, walk_stmt};
 use ruff_python_ast::{
@@ -430,6 +438,7 @@ impl DestructureLower<'_> {
         if !self.push_destructure(&mut fragments, &body_indent, &subject, pattern, "pass") {
             return;
         }
+        fragments.push(Fragment::Lit(format!("\n{body_indent}del {binder}")));
         if span_end != header_end {
             fragments.push(Fragment::Lit(format!("\n{body_indent}")));
         }
@@ -810,11 +819,18 @@ mod tests {
                 .find(|(_, character)| !(character.is_alphanumeric() || *character == '_'))
                 .map_or(tail.len(), |(index, _)| index);
             let (name, remainder) = tail.split_at(end);
-            let stem = name.trim_end_matches(|character: char| character.is_ascii_digit());
+            // a binder is a dunder (see `destructure_binder_name`); every other
+            // generated name ends at its counter
+            let (body, suffix) = match name.strip_suffix("__") {
+                Some(body) => (body, "__"),
+                None => (name, ""),
+            };
+            let stem = body.trim_end_matches(|character: char| character.is_ascii_digit());
             normalized.push_str(stem);
-            if stem.len() != name.len() {
+            if stem.len() != body.len() {
                 normalized.push('N');
             }
+            normalized.push_str(suffix);
             rest = remainder;
         }
         normalized.push_str(rest);
@@ -876,10 +892,11 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                 def f(ps: list[Point]):
-                    for _by_destructure_N in ps:
-                        match _by_destructure_N:
+                    for __by_destructure_N__ in ps:
+                        match __by_destructure_N__:
                             case Point(x, y):
                                 pass
+                        del __by_destructure_N__
                         print(x, y)
             "}),
             "got:\n{out}"
@@ -896,10 +913,11 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                 def f(ps: list[Point]):
-                    for _by_destructure_N in ps:
-                        match _by_destructure_N:
+                    for __by_destructure_N__ in ps:
+                        match __by_destructure_N__:
                             case Point(x, y):
                                 pass
+                        del __by_destructure_N__
                         print(x)
             "}),
             "got:\n{out}"
@@ -914,10 +932,11 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                 def f(cm: ContextManager[Point]):
-                    with cm as _by_destructure_N:
-                        match _by_destructure_N:
+                    with cm as __by_destructure_N__:
+                        match __by_destructure_N__:
                             case Point(x, y):
                                 pass
+                        del __by_destructure_N__
                         print(x, y)
             "}),
             "got:\n{out}"
@@ -931,11 +950,33 @@ mod tests {
         ));
         assert!(
             out.contains(indoc! {"
-                def f(_by_destructure_N: Point):
-                    match _by_destructure_N:
+                def f(__by_destructure_N__: Point):
+                    match __by_destructure_N__:
                         case Point(x, y):
                             pass
+                    del __by_destructure_N__
                     print(x, y)
+            "}),
+            "got:\n{out}"
+        );
+    }
+
+    /// the binder is dropped once the captures are bound: left in a class body it
+    /// would be an attribute, and in an `enum class` body a bogus variant
+    #[test]
+    fn a_binder_does_not_outlive_the_destructure() {
+        let out = check(&format!(
+            "{POINT}\nclass Holder:\n    for Point(x, y) in ps:\n        print(x, y)\n"
+        ));
+        assert!(
+            out.contains(indoc! {"
+                class Holder:
+                    for __by_destructure_N__ in ps:
+                        match __by_destructure_N__:
+                            case Point(x, y):
+                                pass
+                        del __by_destructure_N__
+                        print(x, y)
             "}),
             "got:\n{out}"
         );
@@ -950,9 +991,9 @@ mod tests {
         ));
         assert!(
             out.contains(indoc! {"
-                def f(_by_destructure_N: Point):
+                def f(__by_destructure_N__: Point):
                     'what f does'
-                    match _by_destructure_N:
+                    match __by_destructure_N__:
             "}),
             "got:\n{out}"
         );
@@ -1054,7 +1095,11 @@ mod tests {
         let out = check(&format!(
             "{POINT}\ndef f(Point(a, b): Point, Point(c, d): Point) -> int:\n    return a + b + c + d\n"
         ));
-        for binder in ["_by_destructure_N", "case Point(a, b)", "case Point(c, d)"] {
+        for binder in [
+            "__by_destructure_N__",
+            "case Point(a, b)",
+            "case Point(c, d)",
+        ] {
             assert!(out.contains(binder), "expected `{binder}`, got:\n{out}");
         }
     }

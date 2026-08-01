@@ -1,0 +1,23 @@
+class Point:
+    __match_args__ = ("x", "y")
+
+    def __init__(self, x: int, y: int) -> None:
+        self.x = x
+        self.y = y
+
+
+# a destructuring parameter is bound to a synthetic binder no call site can
+# write; the body reads the pattern's captures, so the binder is never "unused"
+def area(Point(w, h): Point) -> int:
+    return w * h
+
+
+# the captures themselves are ordinary bindings — one that goes unread is a
+# `let`-style dead local, not an argument, and this rule says nothing about it
+def width(Point(w, h): Point) -> int:
+    return w
+
+
+# a parameter the author wrote and never read still fires
+def unused(spare: int) -> int:  # ARG001
+    return 1

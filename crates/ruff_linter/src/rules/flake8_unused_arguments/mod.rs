@@ -18,6 +18,7 @@ mod tests {
     #[test_case(Rule::UnusedClassMethodArgument, Path::new("ARG.py"))]
     #[test_case(Rule::UnusedStaticMethodArgument, Path::new("ARG.py"))]
     #[test_case(Rule::UnusedLambdaArgument, Path::new("ARG.py"))]
+    #[test_case(Rule::UnusedFunctionArgument, Path::new("ARG_basedpython.by"))]
     fn rules(rule_code: Rule, path: &Path) -> Result<()> {
         let snapshot = format!("{}_{}", rule_code.noqa_code(), path.to_string_lossy());
         let diagnostics = test_path(

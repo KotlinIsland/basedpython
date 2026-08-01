@@ -102,7 +102,7 @@ pub(crate) fn unused_loop_control_variable(checker: &Checker, stmt_for: &ast::St
     )]
     for (name, expr) in control_names {
         // Ignore names that are already underscore-prefixed.
-        if checker.settings().dummy_variable_rgx.is_match(name) {
+        if checker.settings().ignores_unused_binding(name) {
             continue;
         }
 

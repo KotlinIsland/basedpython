@@ -114,20 +114,46 @@ assert guarded(1, False) == "other", "a failed guard falls through"
 
 # the machinery a destructuring generates is never left behind — a stray name in a
 # class body is an attribute, and in an `enum class` body an outright bogus variant
+def one_point() -> list[Point]:
+    return [Point(1, 2)]
+
 class Holder:
     p: Point = Point(1, 2)
     let Point(x, y) := p
     let Point(a, b) and object() := p
     let Point(x=int() and 1, y=c) := p
 
+    for Point(fx, fy) in one_point():
+        pass
+
+    with borrow(p) as Point(wx, wy):
+        pass
+
 assert Holder.x == 1, "a class-body `let` still binds"
 assert Holder.a == 1, "so does one with a conjunction"
 assert Holder.c == 2, "so does one with a hoisted conjunction"
-assert not [name for name in vars(Holder) if name.startswith("_by_")], (
+assert (Holder.fx, Holder.fy) == (1, 2), "so does a class-body `for` pattern"
+assert (Holder.wx, Holder.wy) == (1, 2), "so does a class-body `with` pattern"
+assert not [name for name in vars(Holder) if "_by_" in name], (
     "no machinery survives as a class attribute"
 )
-assert not [name for name in dict(globals()) if name.startswith("_by_let")], (
+assert not [name for name in dict(globals()) if "_by_let" in name], (
     "no selector survives at module level"
+)
+
+# an `enum class` body turns every ordinary name assigned in it into a member, so
+# a binder left there is a variant of the enum
+enum class Colour:
+    case Red, Green
+
+    for Point(ex, ey) in one_point():
+        pass
+
+assert [member.name for member in Colour] == ["Red", "Green"], (
+    "no binder became an enum member"
+)
+assert not [name for name in vars(Colour) if "_by_" in name], (
+    "no machinery survives in the enum's namespace"
 )
 
 print("ok")
