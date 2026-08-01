@@ -29,7 +29,10 @@ impl<'src> NoneCoalesce<'src> {
 fn expand_none_chain(expr: &Expr, source: &str, types: &dyn TypeInfo) -> Option<Vec<Fragment>> {
     let (form, guards, base) = super::none_chain::expand_chain(expr, source, types)?;
     Some(super::none_chain::build_expansion(
-        &guards, &form, "_t", base,
+        &guards,
+        &form,
+        &super::none_chain::temp_var(0),
+        base,
     ))
 }
 
@@ -57,8 +60,8 @@ impl NoneCoalesce<'_> {
     /// Lower a `??` expression to a conditional template. Chained `??`
     /// recurses, so `a ?? b ?? c` becomes a nested `… if … is not None else …`
     /// rather than stranding the inner `??` as verbatim source. The walrus
-    /// temp `_t` is reused safely: a nested `_t` only lives inside a branch
-    /// that is no longer referenced once the enclosing `(_t := …)` is taken.
+    /// temp is reused safely: a nested one only lives inside a branch that is
+    /// no longer referenced once the enclosing walrus is taken.
     fn expand_coalesce(&self, expr: &Expr) -> Vec<Fragment> {
         let Expr::BinOp(b) = expr else {
             return self.operand_value(expr);
@@ -79,9 +82,10 @@ impl NoneCoalesce<'_> {
         } else {
             ""
         };
+        let temp = super::none_chain::temp_var(0);
         match expand_none_chain(&b.left, self.source, self.types) {
             Some(expanded) => {
-                let mut t = vec![Fragment::Lit(format!("_t{unwrap} if (_t := "))];
+                let mut t = vec![Fragment::Lit(format!("{temp}{unwrap} if ({temp} := "))];
                 t.extend(expanded);
                 t.push(Fragment::Lit(") is not None else ".to_owned()));
                 t.extend(rhs);
@@ -101,7 +105,7 @@ impl NoneCoalesce<'_> {
                 // a chained (left-associative) `??` puts another coalesce on the
                 // left; recurse through `operand_value` so it is lowered rather
                 // than copied verbatim. hoist to walrus so the LHS runs once
-                let mut t = vec![Fragment::Lit(format!("_t{unwrap} if (_t := "))];
+                let mut t = vec![Fragment::Lit(format!("{temp}{unwrap} if ({temp} := "))];
                 t.extend(self.operand_value(&b.left));
                 t.push(Fragment::Lit(") is not None else ".to_owned()));
                 t.extend(rhs);
@@ -202,7 +206,7 @@ mod tests {
         // rather than stranding it as verbatim `??` source
         check(
             "x = a ?? b ?? c\n",
-            "x = _t if (_t := a if a is not None else b) is not None else c\n",
+            "x = __by_t_0__ if (__by_t_0__ := a if a is not None else b) is not None else c\n",
         );
     }
 
@@ -217,7 +221,7 @@ mod tests {
             "},
             indoc::indoc! {"
                 def f(a: int | None, b: int | None, c: int) -> int:
-                    return _t if (_t := a if a is not None else b) is not None else c
+                    return __by_t_0__ if (__by_t_0__ := a if a is not None else b) is not None else c
             "},
         );
     }
@@ -231,7 +235,7 @@ mod tests {
             "},
             indoc::indoc! {"
                 def f(a):
-                    _t if (_t := None if a is None else a.a.b) is not None else 1
+                    __by_t_0__ if (__by_t_0__ := None if a is None else a.a.b) is not None else 1
             "},
         );
     }
@@ -258,7 +262,7 @@ mod tests {
         // stranded
         let out = transpile("x = f()! ?? 1\n", &Config::test_default()).unwrap();
         assert!(
-            out.contains("x = _t if (_t := _force_unwrap(f())) is not None else 1\n"),
+            out.contains("x = __by_t_0__ if (__by_t_0__ := _force_unwrap(f())) is not None else 1\n"),
             "got: {out}"
         );
     }
@@ -273,7 +277,7 @@ mod tests {
         )
         .unwrap();
         assert!(
-            out.contains("x = _t.value if (_t := g()) is not None else -1\n"),
+            out.contains("x = __by_t_0__.value if (__by_t_0__ := g()) is not None else -1\n"),
             "got: {out}"
         );
     }
@@ -288,7 +292,7 @@ mod tests {
     fn call_lhs_hoisted_to_walrus_single_eval() {
         check(
             "x = f() ?? 1\n",
-            "x = _t if (_t := f()) is not None else 1\n",
+            "x = __by_t_0__ if (__by_t_0__ := f()) is not None else 1\n",
         );
     }
 
@@ -296,7 +300,7 @@ mod tests {
     fn attr_lhs_hoisted_to_walrus_single_eval() {
         check(
             "x = a.b ?? 1\n",
-            "x = _t if (_t := a.b) is not None else 1\n",
+            "x = __by_t_0__ if (__by_t_0__ := a.b) is not None else 1\n",
         );
     }
 

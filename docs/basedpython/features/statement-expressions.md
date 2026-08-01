@@ -162,10 +162,10 @@ a = match command:
 ```py
 match command:
     case "up":
-        _by_stmt_expr_0 = 1
+        __by_stmt_expr_0__ = 1
     case _:
-        _by_stmt_expr_0 = 0
-a = _by_stmt_expr_0
+        __by_stmt_expr_0__ = 0
+a = __by_stmt_expr_0__
 ```
 
 `break <value>` becomes an assignment followed by a bare `break`. a diverging
@@ -176,8 +176,8 @@ v = table.get(k) ?? raise KeyError(k)
 ```
 
 ```py
-_by_stmt_expr_0 = table.get(k)
-if _by_stmt_expr_0 is None:
+__by_stmt_expr_0__ = table.get(k)
+if __by_stmt_expr_0__ is None:
     raise KeyError(k)
-v = _by_stmt_expr_0
+v = __by_stmt_expr_0__
 ```

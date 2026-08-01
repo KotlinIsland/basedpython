@@ -19,10 +19,10 @@
 //! ```text
 //! match command:
 //!     case "up":
-//!         _by_stmt_expr_0 = 1
+//!         __by_stmt_expr_0__ = 1
 //!     case "down":
-//!         _by_stmt_expr_0 = -1
-//! a = _by_stmt_expr_0
+//!         __by_stmt_expr_0__ = -1
+//! a = __by_stmt_expr_0__
 //! ```
 //!
 //! `break <value>` becomes an assignment followed by a bare `break`; the loop's
@@ -38,10 +38,10 @@
 //! ```
 //!
 //! ```text
-//! _by_stmt_expr_0 = table.get(k)
-//! if _by_stmt_expr_0 is None:
+//! __by_stmt_expr_0__ = table.get(k)
+//! if __by_stmt_expr_0__ is None:
 //!     raise KeyError(k)
-//! v = _by_stmt_expr_0
+//! v = __by_stmt_expr_0__
 //! ```
 //!
 //! Every rewrite keeps operand source as [`Fragment::Src`] passthrough spans, so
@@ -54,7 +54,7 @@ use ruff_text_size::{Ranged, TextRange};
 use std::collections::HashSet;
 
 use super::ast_driver::{AstPass, Fragment, PassContext};
-use super::source_util::{line_indent, line_start};
+use super::source_util::{line_indent, line_start, temporary_name};
 
 pub(crate) struct StatementExpressionPass<'src> {
     source: &'src str,
@@ -133,7 +133,7 @@ impl<'ast> Visitor<'ast> for Lower<'_> {
 
 impl Lower<'_> {
     fn next_temp(&mut self) -> String {
-        let name = format!("_by_stmt_expr_{}", self.counter);
+        let name = temporary_name("stmt_expr", self.counter);
         self.counter += 1;
         name
     }
@@ -405,10 +405,10 @@ mod tests {
                 def f(command: str) -> int:
                     match command:
                         case "up":
-                            _by_stmt_expr_0 = 1
+                            __by_stmt_expr_0__ = 1
                         case _:
-                            _by_stmt_expr_0 = 0
-                    direction = _by_stmt_expr_0
+                            __by_stmt_expr_0__ = 0
+                    direction = __by_stmt_expr_0__
                     return direction
             "#}),
             "got:\n{out}"
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn parenthesized_branch_value() {
         // the assignment goes ahead of the parentheses. inside them
-        // `(_by_stmt_expr_0 = ...)` is the anonymous named tuple value form, and
+        // `(__by_stmt_expr_0__ = ...)` is the anonymous named tuple value form, and
         // the branch silently lowered to a `NamedTuple` constructor instead
         let out = check(indoc! {"
             def f(c: bool) -> int:
@@ -432,10 +432,10 @@ mod tests {
             out.contains(indoc! {"
                 def f(c: bool) -> int:
                     if c:
-                        _by_stmt_expr_0 = (1 + 2)
+                        __by_stmt_expr_0__ = (1 + 2)
                     else:
-                        _by_stmt_expr_0 = 0
-                    a = _by_stmt_expr_0
+                        __by_stmt_expr_0__ = 0
+                    a = __by_stmt_expr_0__
                     return a
             "}),
             "got:\n{out}"
@@ -456,10 +456,10 @@ mod tests {
             out.contains(indoc! {"
                 def f(c: bool) -> int:
                     if c:
-                        _by_stmt_expr_0 = 1
+                        __by_stmt_expr_0__ = 1
                     else:
-                        _by_stmt_expr_0 = 2
-                    a = _by_stmt_expr_0
+                        __by_stmt_expr_0__ = 2
+                    a = __by_stmt_expr_0__
                     return a
             "}),
             "got:\n{out}"
@@ -482,11 +482,11 @@ mod tests {
                 def f(xs: list[int]) -> int:
                     for x in xs:
                         if x:
-                            _by_stmt_expr_0 = x
+                            __by_stmt_expr_0__ = x
                             break
                     else:
-                        _by_stmt_expr_0 = -1
-                    a = _by_stmt_expr_0
+                        __by_stmt_expr_0__ = -1
+                    a = __by_stmt_expr_0__
             "}),
             "got:\n{out}"
         );
@@ -505,10 +505,10 @@ mod tests {
             out.contains(indoc! {"
                 def f(c: bool) -> int:
                     if c:
-                        _by_stmt_expr_0 = 1
+                        __by_stmt_expr_0__ = 1
                     else:
-                        _by_stmt_expr_0 = 2
-                    return _by_stmt_expr_0
+                        __by_stmt_expr_0__ = 2
+                    return __by_stmt_expr_0__
             "}),
             "got:\n{out}"
         );
@@ -524,10 +524,10 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                 def f(table: dict[str, int], k: str) -> int:
-                    _by_stmt_expr_0 = table.get(k)
-                    if _by_stmt_expr_0 is None:
+                    __by_stmt_expr_0__ = table.get(k)
+                    if __by_stmt_expr_0__ is None:
                         raise KeyError(k)
-                    v = _by_stmt_expr_0
+                    v = __by_stmt_expr_0__
             "}),
             "got:\n{out}"
         );
@@ -544,10 +544,10 @@ mod tests {
             out.contains(indoc! {"
                 def f(x: int) -> int:
                     if x > 0:
-                        _by_stmt_expr_0 = x
+                        __by_stmt_expr_0__ = x
                     else:
                         raise ValueError(x)
-                    a = _by_stmt_expr_0
+                    a = __by_stmt_expr_0__
             "}),
             "got:\n{out}"
         );
@@ -563,10 +563,10 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                 def f(x: int) -> int:
-                    _by_stmt_expr_0 = x
-                    if not _by_stmt_expr_0:
+                    __by_stmt_expr_0__ = x
+                    if not __by_stmt_expr_0__:
                         return 0
-                    a = _by_stmt_expr_0
+                    a = __by_stmt_expr_0__
             "}),
             "got:\n{out}"
         );
@@ -586,8 +586,8 @@ mod tests {
                     3
                 return a
         "});
-        assert!(out.contains("_by_stmt_expr_0"), "got:\n{out}");
-        assert!(out.contains("_by_stmt_expr_1"), "got:\n{out}");
+        assert!(out.contains("__by_stmt_expr_0__"), "got:\n{out}");
+        assert!(out.contains("__by_stmt_expr_1__"), "got:\n{out}");
     }
 
     #[test]
@@ -606,7 +606,7 @@ mod tests {
                 return v
         "});
         assert!(!out.contains("?."), "got:\n{out}");
-        assert!(out.contains("_by_stmt_expr_0 = "), "got:\n{out}");
+        assert!(out.contains("__by_stmt_expr_0__ = "), "got:\n{out}");
     }
 
     #[test]
@@ -623,11 +623,11 @@ mod tests {
             out.contains(indoc! {"
                 def f() -> int:
                     while True:
-                        _by_stmt_expr_0 = 1
+                        __by_stmt_expr_0__ = 1
                         break
                     else:
-                        _by_stmt_expr_0 = 0
-                    a = _by_stmt_expr_0
+                        __by_stmt_expr_0__ = 0
+                    a = __by_stmt_expr_0__
             "}),
             "got:\n{out}"
         );
@@ -649,12 +649,12 @@ mod tests {
             out.contains(indoc! {r#"
                 def f(n: int) -> str:
                     if n == 0:
-                        _by_stmt_expr_0 = "none"
+                        __by_stmt_expr_0__ = "none"
                     elif n == 1:
-                        _by_stmt_expr_0 = "one"
+                        __by_stmt_expr_0__ = "one"
                     else:
-                        _by_stmt_expr_0 = "many"
-                    a = _by_stmt_expr_0
+                        __by_stmt_expr_0__ = "many"
+                    a = __by_stmt_expr_0__
             "#}),
             "got:\n{out}"
         );
@@ -679,13 +679,13 @@ mod tests {
                 def f(c: bool, xs: list[int]) -> int:
                     if c:
                         for x in xs:
-                            _by_stmt_expr_0 = x
+                            __by_stmt_expr_0__ = x
                             break
                         else:
-                            _by_stmt_expr_0 = -1
+                            __by_stmt_expr_0__ = -1
                     else:
-                        _by_stmt_expr_0 = 0
-                    a = _by_stmt_expr_0
+                        __by_stmt_expr_0__ = 0
+                    a = __by_stmt_expr_0__
             "}),
             "got:\n{out}"
         );
@@ -704,11 +704,11 @@ mod tests {
             out.contains(indoc! {"
                 def f(c: bool) -> int:
                     if c:
-                        _by_stmt_expr_0 = 1
+                        __by_stmt_expr_0__ = 1
                     else:
                         raise ValueError()
-                    b = _by_stmt_expr_0
-                    v = _by_stmt_expr_0
+                    b = __by_stmt_expr_0__
+                    v = __by_stmt_expr_0__
             "}),
             "got:\n{out}"
         );
@@ -725,7 +725,7 @@ mod tests {
                     raise TypeError()
                 return a
         "});
-        assert!(!out.contains("a = _by_stmt_expr_0"), "got:\n{out}");
+        assert!(!out.contains("a = __by_stmt_expr_0__"), "got:\n{out}");
         assert!(out.contains("raise TypeError()"), "got:\n{out}");
     }
 

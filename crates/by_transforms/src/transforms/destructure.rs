@@ -23,10 +23,10 @@
 //!
 //! ```text
 //! match subject:
-//!     case A(foo=_by_and_N):
-//!         match _by_and_N:
+//!     case A(foo=__by_and_N__):
+//!         match __by_and_N__:
 //!             case int():
-//!                 match _by_and_N:
+//!                 match __by_and_N__:
 //!                     case B(y):
 //!                         ...
 //! ```
@@ -66,7 +66,7 @@ use ruff_python_trivia::{SimpleTokenKind, SimpleTokenizer};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, Fragment, PassContext};
-use super::source_util::{line_indent, line_start};
+use super::source_util::{line_indent, line_start, temporary_name};
 
 /// `match` statements — which every destructuring lowers to — are python 3.10
 /// syntax.
@@ -242,7 +242,7 @@ impl DestructureLower<'_> {
             ));
             return;
         };
-        let selector = format!("_by_let_{}", u32::from(let_stmt.range().start()));
+        let selector = temporary_name("let", u32::from(let_stmt.range().start()));
 
         let mut fragments = vec![Fragment::Lit(format!("{selector} = 0\n{indent}"))];
         if !self.push_destructure(
@@ -466,8 +466,8 @@ impl DestructureLower<'_> {
         let indent = line_indent(self.source, match_stmt.range().start()).to_owned();
         let case_indent = format!("{indent}    ");
         let offset = u32::from(match_stmt.range().start());
-        let subject_name = format!("_by_subject_{offset}");
-        let selector = format!("_by_case_{offset}");
+        let subject_name = temporary_name("subject", offset);
+        let selector = temporary_name("case", offset);
 
         let Some(header_colon) = self.colon_end(match_stmt.subject.range().end()) else {
             self.errors.push(format!(
@@ -674,7 +674,7 @@ impl NameGen {
     fn next(&mut self, kind: &str) -> String {
         let index = self.0;
         self.0 += 1;
-        format!("_by_{kind}_{index}")
+        temporary_name(kind, index)
     }
 }
 
@@ -871,13 +871,13 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                 def f(v: int | str) -> str:
-                    _by_let_N = 0
+                    __by_let_N__ = 0
                     match v:
                         case int(n):
-                            _by_let_N = 1
-                    if _by_let_N == 0:
+                            __by_let_N__ = 1
+                    if __by_let_N__ == 0:
                         return 'no'
-                    del _by_let_N
+                    del __by_let_N__
                     return str(n)
             "}),
             "got:\n{out}"
@@ -1011,13 +1011,13 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                 def f(v: object):
-                    _by_let_N = 0
-                    _by_subject_N = v
-                    match _by_subject_N:
+                    __by_let_N__ = 0
+                    __by_subject_N__ = v
+                    match __by_subject_N__:
                         case int():
-                            match _by_subject_N:
+                            match __by_subject_N__:
                                 case 3:
-                                    _by_let_N = 1
+                                    __by_let_N__ = 1
             "}),
             "got:\n{out}"
         );
@@ -1033,15 +1033,15 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                 def f(p: Point):
-                    _by_and_N = None
+                    __by_and_N__ = None
                     match p:
-                        case Point(x=_by_and_N, y=y):
-                            match _by_and_N:
+                        case Point(x=__by_and_N__, y=y):
+                            match __by_and_N__:
                                 case int():
-                                    match _by_and_N:
+                                    match __by_and_N__:
                                         case 1:
                                             pass
-                    del _by_and_N
+                    del __by_and_N__
                     print(y)
             "}),
             "got:\n{out}"
@@ -1061,12 +1061,12 @@ mod tests {
             out.contains(indoc! {"
                 class Holder:
                     p: Point = Point(0, 1)
-                    _by_subject_N = p
+                    __by_subject_N__ = p
             "}),
             "got:\n{out}"
         );
         assert!(
-            out.contains("    del _by_subject_N\n"),
+            out.contains("    del __by_subject_N__\n"),
             "the hoisted subject is dropped, got:\n{out}"
         );
     }
@@ -1140,7 +1140,7 @@ mod tests {
             "the `let` lowered, got:\n{out}"
         );
         assert!(
-            out.contains("        if _by_let_N == 0:\n            _trailing_lambda_0_return.append(None); return"),
+            out.contains("        if __by_let_N__ == 0:\n            _trailing_lambda_0_return.append(None); return"),
             "got:\n{out}"
         );
     }
@@ -1181,22 +1181,22 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                 def f(v: object):
-                    _by_subject_N = v
-                    _by_case_N = 0
+                    __by_subject_N__ = v
+                    __by_case_N__ = 0
                     if True:
-                        if _by_case_N == 0:
-                            match _by_subject_N:
+                        if __by_case_N__ == 0:
+                            match __by_subject_N__:
                                 case int():
-                                    match _by_subject_N:
+                                    match __by_subject_N__:
                                         case 1:
-                                            _by_case_N = 1
-                        if _by_case_N == 1:
+                                            __by_case_N__ = 1
+                        if __by_case_N__ == 1:
                             print('one')
             "}),
             "got:\n{out}"
         );
         assert!(
-            out.contains("    del _by_case_N\n    del _by_subject_N\n"),
+            out.contains("    del __by_case_N__\n    del __by_subject_N__\n"),
             "the machinery is dropped after the statement, got:\n{out}"
         );
     }
@@ -1235,13 +1235,13 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                 def f(v: object):
-                    _by_if_let_N = 0
-                    _by_subject_N = v
-                    match _by_subject_N:
+                    __by_if_let_N__ = 0
+                    __by_subject_N__ = v
+                    match __by_subject_N__:
                         case int():
-                            match _by_subject_N:
+                            match __by_subject_N__:
                                 case 1:
-                                    _by_if_let_N = 1
+                                    __by_if_let_N__ = 1
             "}),
             "got:\n{out}"
         );
