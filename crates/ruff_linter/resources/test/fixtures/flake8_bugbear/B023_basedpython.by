@@ -46,6 +46,41 @@ def collect() -> list:
     return handlers
 
 
+# Not OK: a non-scalar default is re-evaluated per call from inside the body, so
+# it reads the module-level target as a global just as a body read does.
+defaulted = []
+for x in [1, 2, 3]:
+
+    def defaulted_handler(value=x):
+        return value
+
+    defaulted.append(defaulted_handler)
+
+
+# OK: a scalar default stays a plain python default, bound eagerly at `def`
+# time, so it still captures this iteration's value.
+scalars = []
+for x in [1, 2, 3]:
+
+    def scalar_handler(value=1):
+        return value
+
+    scalars.append(scalar_handler)
+
+
+def collect_defaults() -> list:
+    # OK: inside a function the relocated default reads a closure cell, which
+    # the rebind reaches, so it names this iteration's value.
+    handlers = []
+    for x in [1, 2, 3]:
+
+        def handler(value=x):
+            return value
+
+        handlers.append(handler)
+    return handlers
+
+
 def accumulate() -> list:
     # Not OK: a name merely *assigned* in the body is not a loop binding —
     # basedpython resolves those late, exactly as python does.

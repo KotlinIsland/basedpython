@@ -14,7 +14,7 @@ use crate::token::parenthesized_range;
 use crate::visitor::Visitor;
 use crate::{
     self as ast, Arguments, AtomicNodeIndex, CmpOp, DictItem, ExceptHandler, Expr, ExprNoneLiteral,
-    InterpolatedStringElement, MatchCase, Operator, Pattern, Stmt, TypeParam,
+    InterpolatedStringElement, MatchCase, Operator, Pattern, Stmt, TypeParam, UnaryOp,
 };
 use crate::{AnyNodeRef, ExprContext};
 
@@ -1461,6 +1461,37 @@ pub fn has_written_def_header(source: &str, function: &ast::StmtFunctionDef) -> 
             .strip_prefix(keyword)
             .is_some_and(|rest| rest.starts_with([' ', '\t']))
     })
+}
+
+/// basedpython: whether a parameter default is kept as a plain python default
+/// rather than re-evaluated per call.
+///
+/// Numbers, bools, `None`, strings and `...` (and a unary `+` / `-` on a number)
+/// are immutable, cheap, and carry no hidden state, so they stay in the
+/// signature. Every other default is moved into the function body by the
+/// default re-evaluation lowering, where it runs once per call.
+///
+/// That relocation is what makes the predicate shared: a default the lowering
+/// moves is read where the body runs, not where the `def` is written, so the
+/// lint that reports a loop variable read after the loop has moved on (`B023`)
+/// has to treat those defaults as body reads. It must draw the line in the same
+/// place as the lowering, which is why the predicate lives here rather than in
+/// either of them.
+pub fn is_immutable_scalar_default(expr: &Expr) -> bool {
+    match expr {
+        Expr::NumberLiteral(_)
+        | Expr::BooleanLiteral(_)
+        | Expr::NoneLiteral(_)
+        | Expr::StringLiteral(_)
+        | Expr::EllipsisLiteral(_) => true,
+        Expr::UnaryOp(unary)
+            if matches!(unary.op, UnaryOp::USub | UnaryOp::UAdd)
+                && matches!(&*unary.operand, Expr::NumberLiteral(_)) =>
+        {
+            true
+        }
+        _ => false,
+    }
 }
 
 /// basedpython: the parameter a trailing-lambda block binds to — the last

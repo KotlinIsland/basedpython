@@ -25,53 +25,41 @@
 //! function, body included, keeps its source bytes, so sibling lowerings
 //! (`??`, `?.`, `int?` annotations, …) anywhere in the function still apply.
 
-use std::fmt::Write as _;
-
+use ruff_python_ast::helpers::is_immutable_scalar_default;
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
-use ruff_python_ast::{Expr, Stmt, StmtFunctionDef, UnaryOp};
+use ruff_python_ast::{Expr, Stmt, StmtFunctionDef};
 use ruff_text_size::{Ranged, TextRange};
 
-use super::ast_driver::{PassContext, TypeAwarePass};
+use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::source_util::{line_indent, line_start};
 use crate::type_info::TypeInfo;
 
-pub(crate) fn is_immutable_scalar(expr: &Expr) -> bool {
-    match expr {
-        Expr::NumberLiteral(_)
-        | Expr::BooleanLiteral(_)
-        | Expr::NoneLiteral(_)
-        | Expr::StringLiteral(_)
-        | Expr::EllipsisLiteral(_) => true,
-        Expr::UnaryOp(u)
-            if matches!(u.op, UnaryOp::USub | UnaryOp::UAdd)
-                && matches!(&*u.operand, Expr::NumberLiteral(_)) =>
-        {
-            true
-        }
-        _ => false,
-    }
-}
-
 /// what a `_MISSING`-sentinel guard does when the argument was not supplied
 enum Guard {
-    /// re-evaluate the written default per call (mutable defaults)
-    Reevaluate { name: String, default: String },
+    /// re-evaluate the written default per call (mutable defaults). the default
+    /// is carried as its source *range*, not its text: the guard re-emits it
+    /// through a [`Fragment::Src`] passthrough so the lowerings written inside
+    /// it (`?.`, `!`, an `is` test, a `context` argument) land in the body copy
+    /// rather than being dropped with the signature they came from
+    Reevaluate { name: String, default: TextRange },
     /// raise — the parameter is required, its sentinel default only exists
     /// because python rejects a required parameter after a defaulted one
     Required { name: String, function: String },
 }
 
 impl Guard {
-    fn write(&self, text: &mut String, base: &str) {
+    fn push(&self, frags: &mut Vec<Fragment>, base: &str) {
         match self {
             Guard::Reevaluate { name, default } => {
-                let _ = write!(text, "if {name} is _MISSING:\n{base}    {name} = {default}");
+                frags.push(Fragment::Lit(format!(
+                    "if {name} is _MISSING:\n{base}    {name} = "
+                )));
+                frags.push(Fragment::Src(*default));
             }
             Guard::Required { name, function } => {
-                let _ = write!(
-                    text,
+                frags.push(Fragment::Lit(format!(
                     "if {name} is _MISSING:\n{base}    raise TypeError(\"{function}() missing required argument: '{name}'\")"
-                );
+                )));
             }
         }
     }
@@ -79,13 +67,18 @@ impl Guard {
 
 struct MutableDefaults<'src> {
     source: &'src str,
-    edits: Vec<(TextRange, String)>,
+    edits: Vec<(TextRange, Vec<Fragment>)>,
     used: bool,
 }
 
 impl MutableDefaults<'_> {
-    fn src(&self, range: TextRange) -> &str {
-        &self.source[usize::from(range.start())..usize::from(range.end())]
+    /// replace a default with the sentinel. a template rather than plain text so
+    /// it *absorbs* the zero-width insertions a lowering anchored to the
+    /// default's first token left behind (`_force_unwrap(`), which a plain-text
+    /// replacement leaves stranded in the signature. the guard re-emits them
+    fn push_sentinel(&mut self, default: TextRange) {
+        self.edits
+            .push((default, vec![Fragment::Lit("_MISSING".to_owned())]));
     }
 
     fn process_function(&mut self, f: &StmtFunctionDef) {
@@ -100,11 +93,11 @@ impl MutableDefaults<'_> {
             match pw.default.as_deref() {
                 Some(d) => {
                     seen_default = true;
-                    if !is_immutable_scalar(d) {
-                        self.edits.push((d.range(), "_MISSING".to_owned()));
+                    if !is_immutable_scalar_default(d) {
+                        self.push_sentinel(d.range());
                         guards.push(Guard::Reevaluate {
                             name: pw.parameter.name.id.to_string(),
-                            default: self.src(d.range()).to_owned(),
+                            default: d.range(),
                         });
                     }
                 }
@@ -117,7 +110,7 @@ impl MutableDefaults<'_> {
                     };
                     self.edits.push((
                         TextRange::empty(pw.parameter.range().end()),
-                        sentinel.to_owned(),
+                        vec![Fragment::Lit(sentinel.to_owned())],
                     ));
                     guards.push(Guard::Required {
                         name: pw.parameter.name.id.to_string(),
@@ -129,12 +122,12 @@ impl MutableDefaults<'_> {
         }
         for pw in &params.kwonlyargs {
             if let Some(d) = pw.default.as_deref()
-                && !is_immutable_scalar(d)
+                && !is_immutable_scalar_default(d)
             {
-                self.edits.push((d.range(), "_MISSING".to_owned()));
+                self.push_sentinel(d.range());
                 guards.push(Guard::Reevaluate {
                     name: pw.parameter.name.id.to_string(),
-                    default: self.src(d.range()).to_owned(),
+                    default: d.range(),
                 });
             }
         }
@@ -150,7 +143,7 @@ impl MutableDefaults<'_> {
         } else {
             0
         };
-        let mut text = String::new();
+        let mut frags: Vec<Fragment> = Vec::new();
         if let Some(stmt) = f.body.get(docstring_count) {
             let insert_at = stmt.range().start();
             let prefix = &self.source
@@ -160,29 +153,29 @@ impl MutableDefaults<'_> {
                 // each guard re-establishes it for the following line
                 let base = prefix.to_owned();
                 for guard in &guards {
-                    guard.write(&mut text, &base);
-                    let _ = write!(text, "\n{base}");
+                    guard.push(&mut frags, &base);
+                    frags.push(Fragment::Lit(format!("\n{base}")));
                 }
             } else {
                 // single-line body (`def f(x=[]): ...`) — break it onto its own
                 // indented line after the guards
                 let base = format!("{}    ", line_indent(self.source, f.range().start()));
                 for guard in &guards {
-                    let _ = write!(text, "\n{base}");
-                    guard.write(&mut text, &base);
+                    frags.push(Fragment::Lit(format!("\n{base}")));
+                    guard.push(&mut frags, &base);
                 }
-                let _ = write!(text, "\n{base}");
+                frags.push(Fragment::Lit(format!("\n{base}")));
             }
-            self.edits.push((TextRange::empty(insert_at), text));
+            self.edits.push((TextRange::empty(insert_at), frags));
         } else {
             // docstring-only body: append the guards after it
             let doc_end = f.body[docstring_count - 1].range().end();
             let base = format!("{}    ", line_indent(self.source, f.range().start()));
             for guard in &guards {
-                let _ = write!(text, "\n{base}");
-                guard.write(&mut text, &base);
+                frags.push(Fragment::Lit(format!("\n{base}")));
+                guard.push(&mut frags, &base);
             }
-            self.edits.push((TextRange::empty(doc_end), text));
+            self.edits.push((TextRange::empty(doc_end), frags));
         }
     }
 }
@@ -219,7 +212,7 @@ impl TypeAwarePass for MutableDefaultsPass<'_> {
         if inner.used {
             ctx.required_imports.push("_MISSING = object()".to_owned());
         }
-        ctx.text_edits.extend(inner.edits);
+        ctx.template_edits.extend(inner.edits);
     }
 }
 
@@ -539,6 +532,70 @@ mod tests {
         check(
             "def f(x=[]): ...",
             "_MISSING = object()\ndef f(x=_MISSING): \n    if x is _MISSING:\n        x = []\n    ...",
+        );
+    }
+
+    #[test]
+    fn default_lowerings_survive() {
+        // the default is re-emitted in the body through a `Src` passthrough, so
+        // the lowerings written inside it land in the guard rather than being
+        // dropped with the signature they came from
+        check(
+            indoc! {"
+                def f(x = [1 is int]):
+                    return x
+            "},
+            indoc! {"
+                _MISSING = object()
+                def f(x = _MISSING):
+                    if x is _MISSING:
+                        x = [isinstance(1, int)]
+                    return x
+            "},
+        );
+    }
+
+    #[test]
+    fn default_lowering_spanning_the_whole_default_survives() {
+        // the sentinel and the `is` lowering claim the *same* span. the sentinel
+        // substitutes it and the lowering rewrites it, so the substitution
+        // decides the signature and the rewrite materializes in the guard
+        check(
+            indoc! {"
+                def f(x = 1 is int):
+                    return x
+            "},
+            indoc! {"
+                _MISSING = object()
+                def f(x = _MISSING):
+                    if x is _MISSING:
+                        x = isinstance(1, int)
+                    return x
+            "},
+        );
+    }
+
+    #[test]
+    fn default_lowering_anchored_to_the_first_token_survives() {
+        // `!` lowers to a wrap: an insertion at the default's first token and a
+        // replacement at its last. the insertion has to move into the guard with
+        // the rest — left in the signature it would open a call that never closes
+        let out = transpile(
+            indoc! {"
+                def f(a: int?, x = a!):
+                    return x
+            "},
+            &crate::Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.ends_with(indoc! {"
+                def f(a: int | None, x = _MISSING):
+                    if x is _MISSING:
+                        x = _force_unwrap(a)
+                    return x
+            "}),
+            "{out}"
         );
     }
 

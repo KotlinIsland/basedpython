@@ -43,7 +43,7 @@
 //! is written, not at the end of the iteration), and a `while` loop has no
 //! target to bind.
 
-use ruff_python_ast::helpers::has_written_def_header;
+use ruff_python_ast::helpers::{has_written_def_header, is_immutable_scalar_default};
 use ruff_python_ast::visitor::{Visitor, walk_expr, walk_pattern, walk_stmt};
 use ruff_python_ast::{
     AnyParameterRef, Comprehension, Expr, ExprName, Pattern, Stmt, StmtFunctionDef,
@@ -51,7 +51,6 @@ use ruff_python_ast::{
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
-use super::mutable_defaults::is_immutable_scalar;
 use super::source_util::{line_indent, line_start};
 use crate::type_info::{CaptureKind, TypeInfo};
 
@@ -267,7 +266,7 @@ impl<'a, 'ast> UniqueLoopBindings<'a, 'ast> {
             .parameters
             .iter()
             .filter_map(AnyParameterRef::default)
-            .filter(|default| !is_immutable_scalar(default))
+            .filter(|default| !is_immutable_scalar_default(default))
         {
             references.visit_expr(default);
         }
