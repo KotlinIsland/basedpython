@@ -198,6 +198,41 @@ def f(n: final int):
         reveal_type(n)  # revealed: final int
 ```
 
+## `final` asks about the class, not the type arguments
+
+`final` is about a value's runtime class, and whether the type *arguments* fit is the ordinary
+relation's question. asking it twice would reject a gradual argument that every other relation in
+the system admits.
+
+```by
+from typing import Any
+
+
+def f(x: list[Any], y: list[int], z: set[int], w) -> None:
+    a: final list[int] = x
+    b: final list[int] = y
+    c: final list[int] = w
+
+    # error: [invalid-assignment] "Object of type `set[int]` is not assignable to `final list[int]`"
+    d: final list[int] = z
+
+    # error: [invalid-assignment] "Object of type `list[int]` is not assignable to `final list[str]`"
+    e: final list[str] = y
+```
+
+a subclass is still rejected, which is what the modifier is for:
+
+```by
+class A[T]: ...
+
+class B[T](A[T]): ...
+
+
+def f(x: B[int]) -> None:
+    # error: [invalid-assignment] "Object of type `B[int]` is not assignable to `final A[int]`"
+    a: final A[int] = x
+```
+
 ## `final` on an already-`@final` class adds nothing
 
 ```by
