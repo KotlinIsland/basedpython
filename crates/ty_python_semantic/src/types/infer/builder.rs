@@ -1359,7 +1359,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 );
             }
             DefinitionKind::StatementExpressionValue(value) => {
-                let ty = self.infer_expression(value.node(self.module()), TypeContext::default());
+                // a branch's value is an arbitrary expression, so it may be one
+                // the index registered as standalone — a call, a comprehension.
+                // inferring those through `infer_expression` double-infers
+                let ty = self.infer_maybe_standalone_expression(
+                    value.node(self.module()),
+                    TypeContext::default(),
+                );
                 self.bindings.insert(definition, ty);
             }
             DefinitionKind::Comprehension(comprehension) => {

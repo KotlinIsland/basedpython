@@ -211,9 +211,12 @@ impl Lower<'_> {
         let values = statement_expression_values(stmt);
         for &value in &values {
             match value {
-                StatementExpressionValue::Tail(expr) => {
+                StatementExpressionValue::Tail(tail, _) => {
+                    // anchored to the statement, not the expression: an
+                    // expression's range stops inside any parentheses around it,
+                    // and `(temp = value)` reads as an anonymous named tuple
                     self.text_edits
-                        .push((TextRange::empty(expr.range().start()), format!("{temp} = ")));
+                        .push((TextRange::empty(tail.range().start()), format!("{temp} = ")));
                 }
                 StatementExpressionValue::Break(break_stmt, _) => {
                     self.claimed_breaks.insert(break_stmt.range);
@@ -408,6 +411,33 @@ mod tests {
                     direction = _by_stmt_expr_0
                     return direction
             "#}),
+            "got:\n{out}"
+        );
+    }
+
+    #[test]
+    fn parenthesized_branch_value() {
+        // the assignment goes ahead of the parentheses. inside them
+        // `(_by_stmt_expr_0 = ...)` is the anonymous named tuple value form, and
+        // the branch silently lowered to a `NamedTuple` constructor instead
+        let out = check(indoc! {"
+            def f(c: bool) -> int:
+                a = if c:
+                    (1 + 2)
+                else:
+                    0
+                return a
+        "});
+        assert!(
+            out.contains(indoc! {"
+                def f(c: bool) -> int:
+                    if c:
+                        _by_stmt_expr_0 = (1 + 2)
+                    else:
+                        _by_stmt_expr_0 = 0
+                    a = _by_stmt_expr_0
+                    return a
+            "}),
             "got:\n{out}"
         );
     }
