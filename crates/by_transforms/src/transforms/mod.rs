@@ -18,6 +18,7 @@ pub(crate) mod destructure;
 pub(crate) mod dynamic_keyword;
 pub(crate) mod empty_declarations;
 pub(crate) mod enums;
+pub(crate) mod erased_union;
 pub(crate) mod export_import;
 pub(crate) mod extension;
 pub(crate) mod float_const;

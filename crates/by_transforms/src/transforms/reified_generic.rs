@@ -162,6 +162,14 @@ class generic:
         for param in fn.__type_params__:
             name = param.__name__
             if name not in values and name in code.co_freevars:
+                # a synthesized parameter stands for an erased union the user
+                # never spelled, so naming it would leak the lowering
+                if name.startswith(\"__by_erased\"):
+                    raise TypeError(
+                        f\"{fn.__name__}() cannot tell which specialization it was \"
+                        f\"given: the argument's type arguments are erased at \"
+                        f\"runtime, and the call site did not record them\"
+                    )
                 raise TypeError(f\"{fn.__name__}() missing a type argument for {name!r}\")
         closure = tuple(
             CellType(values[name]) if name in values else cell
@@ -457,6 +465,14 @@ mod tests {
                         for param in fn.__type_params__:
                             name = param.__name__
                             if name not in values and name in code.co_freevars:
+                                # a synthesized parameter stands for an erased union the user
+                                # never spelled, so naming it would leak the lowering
+                                if name.startswith(\"__by_erased\"):
+                                    raise TypeError(
+                                        f\"{fn.__name__}() cannot tell which specialization it was \"
+                                        f\"given: the argument's type arguments are erased at \"
+                                        f\"runtime, and the call site did not record them\"
+                                    )
                                 raise TypeError(f\"{fn.__name__}() missing a type argument for {name!r}\")
                         closure = tuple(
                             CellType(values[name]) if name in values else cell
@@ -893,6 +909,56 @@ mod tests {
         assert!(
             !out.contains("basedpython: reified"),
             "should not add the marker to a hand-written decorator: {out}"
+        );
+    }
+
+    #[test]
+    fn reified_cell_forwards_to_a_reified_call() {
+        // a caller that reifies `T` holds it in a runtime cell, so a bare call
+        // that solves the callee's parameter to that same `T` is answerable:
+        // the cell forwards as `f[T](…)`. without this the call is an
+        // `unspecialized-reified-generic` error and the chain breaks at the
+        // first hop that only passes a value along
+        let out = transpile(
+            indoc! {"
+                def f[reified T](data: list[T]): ...
+
+                def middle[reified T](data: list[T]):
+                    f(data)
+            "},
+            &Config {
+                min_version: PythonVersion::PY313,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("f[T](data)"),
+            "the caller's reified cell forwards as the type argument: {out}"
+        );
+    }
+
+    #[test]
+    fn erased_typevar_does_not_forward() {
+        // the mirror of the above: an *erased* type parameter has no runtime
+        // cell, so there is nothing to forward and the call must stay bare
+        // rather than spelling a name that holds no type at runtime
+        let out = transpile(
+            indoc! {"
+                def f[T](data: list[T]): ...
+
+                def middle[T](data: list[T]):
+                    f(data)
+            "},
+            &Config {
+                min_version: PythonVersion::PY313,
+                ..Config::test_default()
+            },
+        )
+        .unwrap();
+        assert!(
+            out.contains("f(data)") && !out.contains("f[T](data)"),
+            "an erased type parameter has no cell to forward: {out}"
         );
     }
 }

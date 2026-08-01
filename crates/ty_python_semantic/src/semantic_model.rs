@@ -536,6 +536,22 @@ impl<'db> SemanticModel<'db> {
         ))
     }
 
+    /// basedpython: when `annotation` is a type expression denoting a union of
+    /// specializations of one erased origin (`list[int] | list[str]`), how the
+    /// arms differ. the transpiler uses this to give the parameter a reified
+    /// type parameter, so the specialization travels with the call instead of
+    /// being asked of a value that cannot answer
+    pub fn erased_union(
+        &self,
+        annotation: &ast::Expr,
+    ) -> Option<crate::types::reified_infer::ErasedUnion> {
+        crate::types::reified_infer::erased_union(
+            self.db,
+            self.file,
+            annotation.inferred_type(self)?,
+        )
+    }
+
     pub fn line_index(&self) -> LineIndex {
         line_index(self.db, self.file)
     }

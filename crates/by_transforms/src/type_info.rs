@@ -99,6 +99,12 @@ pub(crate) trait TypeInfo {
     /// missing spelling is never an error
     fn constructor_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String>;
 
+    /// when the parameter annotation `annotation` denotes a union of
+    /// specializations of one erased origin (`list[int] | list[str]`), how the
+    /// arms differ. `None` for every other annotation — the parameter then
+    /// needs no reified type parameter to stand for the difference
+    fn erased_union(&self, annotation: &Expr) -> Option<ty_python_semantic::ErasedUnion>;
+
     /// how the keyword-form parametric type test `lhs is rhs` resolves
     /// (rust-style: statically folded, reified-cell token equality, witness
     /// probe, or an unchecked runtime probe). `rhs` may spell the target
@@ -503,6 +509,10 @@ impl TypeInfo for SemanticModel<'_> {
 
     fn constructor_specialization(&self, call: &ruff_python_ast::ExprCall) -> Option<String> {
         self.reified_constructor_type_arguments(call)
+    }
+
+    fn erased_union(&self, annotation: &Expr) -> Option<ty_python_semantic::ErasedUnion> {
+        SemanticModel::erased_union(self, annotation)
     }
 
     fn parametric_is_plan(

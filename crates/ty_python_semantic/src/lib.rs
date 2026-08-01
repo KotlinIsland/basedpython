@@ -50,7 +50,7 @@ pub use types::ide_support::{
     type_hierarchy_supertypes,
 };
 pub use types::reified_infer::{
-    ArgVariance, ErasedTargetReason, ParametricIsPlan, ProtocolMemberCheck,
+    ArgVariance, ErasedTargetReason, ErasedUnion, ParametricIsPlan, ProtocolMemberCheck,
 };
 pub use types::visibility::private_symbols;
 pub use types::{DisplaySettings, TypeQualifiers};

@@ -1669,14 +1669,17 @@ con(Con[object]())
 }
 
 #[test]
-fn parametric_is_bare_builtin_answers_false_soundly() {
-    // a bare `list` (here an empty `list[int]`) records no arguments in its
-    // mro, so the probe answers `False`. that is sound, not a lie: the `is`
-    // test narrows only its positive branch, so a `False` never asserts the
-    // value is *not* a `list[int]`
-    let dir = tempfile::tempdir().expect("tempdir");
-    fs::write(
-        dir.path().join("main.by"),
+fn parametric_is_erased_union_answers_from_the_call_site() {
+    // an empty `list[int]` records nothing in its mro, so no amount of looking
+    // at the value can answer this — a probe used to say `False`, which was
+    // sound (the positive branch is the only one that narrows) but useless.
+    // the parameter's union is erased, so it carries a reified type parameter
+    // and the answer comes from where the argument was written instead.
+    //
+    // asserted on the lowered output rather than by running it: reification
+    // needs a 3.12+ *interpreter*, which the ambient `python3` may not be. the
+    // runtime behaviour is covered by the mdtest divergence harness
+    let out = transpile_at_313(
         "\
 def x(a: list[int] | list[str]):
     print(a is list[int])
@@ -1684,25 +1687,15 @@ def x(a: list[int] | list[str]):
 a: list[int] = []
 x(a)
 ",
-    )
-    .unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_by"))
-        .args(["run", "main"])
-        .current_dir(dir.path())
-        .output()
-        .expect("failed to spawn by");
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        output.status.success(),
-        "a bare builtin now probes rather than erroring:\n{stderr}"
     );
     assert!(
-        !stderr.contains("erased-type-check"),
-        "no erased-type-check for a builtin target:\n{stderr}"
+        out.contains("print((__by_erased_0 == int))"),
+        "the test reads the reified cell rather than probing the value:\n{out}"
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "False");
+    assert!(
+        out.contains("x[int](a)"),
+        "the call site supplies the specialization the value cannot carry:\n{out}"
+    );
 }
 
 /// the headline case: a concrete subclass fixes its type arguments in

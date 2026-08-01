@@ -54,6 +54,28 @@ fn run_context_sensitive_phase<'a>(
     transforms::context_sensitive::qualify(source, parsed.suite(), &model)
 }
 
+/// Give every erased-union parameter (`list[int] | list[str]`) a reified type
+/// parameter, so the specialization travels with the call instead of being
+/// asked of a value that erased it.
+///
+/// Runs *before* the phase-0 AST passes, like the qualification phase above and
+/// for the same reason: phase 0 re-parses and re-infers its input, so the
+/// passes that act on the rewrite see it as ordinary source. Edits stay within
+/// the def header and the annotations, so line numbering is unaffected.
+fn run_erased_union_phase<'a>(
+    source: &'a str,
+    db: &dyn ty_python_semantic::Db,
+    file: File,
+    config: &Config,
+) -> std::borrow::Cow<'a, str> {
+    let parsed = ruff_db::parsed::parsed_module(db, file).load(db);
+    if !parsed.errors().is_empty() {
+        return std::borrow::Cow::Borrowed(source);
+    }
+    let model = ty_python_semantic::SemanticModel::new(db, file);
+    transforms::erased_union::reify(source, parsed.suite(), &model, config.min_version)
+}
+
 /// Transpile `.by` source text to python without a project db (single-file:
 /// type-aware passes see only this file). Used for stdin input and tests; the
 /// file-backed [`transpile_typed`] resolves cross-module types.
@@ -67,10 +89,24 @@ pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
     // passes, which would otherwise build an identical one of their own
     let (local_db, local_file) = make_in_memory_db(source);
 
+    // --- Erased-union reification: give a `list[int] | list[str]` parameter a
+    // reified type parameter, while the source is still the one ty checks ---
+    let reified = run_erased_union_phase(source, &local_db, local_file, config);
+    let reified_changed = matches!(reified, std::borrow::Cow::Owned(_));
+    let source = reified.as_ref();
+
+    // that rewrite edits signatures, so the qualification phase below needs a
+    // db over what it is actually editing rather than the pre-rewrite source
+    let rebuilt = reified_changed.then(|| make_in_memory_db(source));
+    let (qualify_db, qualify_file) = match &rebuilt {
+        Some((db, file)) => (db as &dyn ty_python_semantic::Db, *file),
+        None => (&local_db as &dyn ty_python_semantic::Db, local_file),
+    };
+
     // --- Context-sensitive resolution: qualify names resolved against their
     // expected type (`a: Color = Red` → `Color.Red`) while the source is still
     // the one ty checks ---
-    let qualified = run_context_sensitive_phase(source, &local_db, local_file);
+    let qualified = run_context_sensitive_phase(source, qualify_db, qualify_file);
     let qualified_changed = matches!(qualified, std::borrow::Cow::Owned(_));
     let source = qualified.as_ref();
 
@@ -83,8 +119,9 @@ pub fn transpile(source: &str, config: &Config) -> Result<String, String> {
     let source = enum_lowered.output.as_ref();
 
     // --- Phase 0: AST rewrite passes ---
-    let unchanged =
-        !qualified_changed && matches!(enum_lowered.output, std::borrow::Cow::Borrowed(_));
+    let unchanged = !reified_changed
+        && !qualified_changed
+        && matches!(enum_lowered.output, std::borrow::Cow::Borrowed(_));
     let (source, ast_errors, _phase0_map) = transforms::ast_driver::run_against_source(
         source,
         config,
@@ -159,11 +196,27 @@ pub fn transpile_typed_with_map(
         return Ok((out, source_map::line_table(original_source, &[])));
     }
 
+    // erased-union reification: give a `list[int] | list[str]` parameter a
+    // reified type parameter, against the source ty checks. edits stay inside
+    // the def header and the annotations, so line correspondence is unaffected
+    let reified = run_erased_union_phase(original_source, db, file, config);
+    let reified_changed = matches!(reified, std::borrow::Cow::Owned(_));
+
+    // that rewrite edits signatures, so qualification needs a db over what it
+    // is actually editing rather than the project file
+    let rebuilt = reified_changed.then(|| make_in_memory_db(reified.as_ref()));
+    let (qualify_db, qualify_file) = match &rebuilt {
+        Some((rebuilt_db, rebuilt_file)) => {
+            (rebuilt_db as &dyn ty_python_semantic::Db, *rebuilt_file)
+        }
+        None => (db, file),
+    };
+
     // context-sensitive resolution: qualify names resolved against their expected
     // type (`a: Color = Red` → `Color.Red`) against the source ty checks, before
     // the enum lowering rewrites it. a within-line rewrite, so line
     // correspondence is unaffected
-    let qualified = run_context_sensitive_phase(original_source, db, file);
+    let qualified = run_context_sensitive_phase(reified.as_ref(), qualify_db, qualify_file);
     let qualified_changed = matches!(qualified, std::borrow::Cow::Owned(_));
 
     // enum lowering: rewrite `enum` sum types to Python first. when it fires,
@@ -181,7 +234,7 @@ pub fn transpile_typed_with_map(
     // project file, so a single-file db is needed. qualification changes the
     // second without changing the first — it only ever edits within a line
     let enum_changed = matches!(enum_lowered.output, std::borrow::Cow::Owned(_));
-    let source_changed = qualified_changed || enum_changed;
+    let source_changed = reified_changed || qualified_changed || enum_changed;
 
     // phase 0: AST passes. with the project db (no enums) type-aware passes
     // resolve cross-module imports; `phase0_map` maps spliced lines → working
