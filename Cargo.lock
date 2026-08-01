@@ -364,6 +364,7 @@ dependencies = [
  "ruff_python_trivia",
  "ruff_source_file",
  "ruff_text_size",
+ "tempfile",
  "thin-vec",
  "ty_project",
  "ty_python_core",
