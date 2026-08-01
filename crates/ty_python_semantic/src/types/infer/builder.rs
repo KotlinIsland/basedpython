@@ -1255,6 +1255,21 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                             &|expr| self.file_expression_type(expr),
                         );
                     }
+                    DefinitionKind::TypeAlias(type_alias) => {
+                        // an alias's variance comes from what it expands to, which is not
+                        // known while the alias is being defined — so a declared variance
+                        // is checked against it here, as a class's is
+                        if let Type::KnownInstance(KnownInstanceType::TypeAliasType(alias)) = ty
+                            && let Some(type_params) =
+                                type_alias.node(self.module()).type_params.as_deref()
+                        {
+                            post_inference::type_param_validation::check_declared_alias_variance(
+                                &self.context,
+                                alias,
+                                type_params,
+                            );
+                        }
+                    }
                     DefinitionKind::AnnotatedAssignment(assignment) => {
                         if let Some(diagnostics) =
                             post_inference::pep_613_alias::check_pep_613_alias(

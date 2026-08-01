@@ -3,8 +3,10 @@ use ruff_text_size::Ranged;
 
 use crate::diagnostic::format_enumeration;
 use crate::types::{
+    TypeAliasType, TypeVarVariance,
     context::InferContext,
-    diagnostic::{INVALID_TYPE_FORM, INVALID_TYPE_VARIABLE_DEFAULT},
+    diagnostic::{INVALID_TYPE_FORM, INVALID_TYPE_VARIABLE_DEFAULT, INVALID_VARIANCE_DECLARATION},
+    variance::VarianceInferable,
 };
 
 #[derive(Clone, Copy)]
@@ -62,6 +64,61 @@ pub(crate) fn check_single_typevar_tuple_pep695(
         );
 
         return;
+    }
+}
+
+/// basedpython: check that a variance a type alias declares is the variance the type it
+/// expands to actually has.
+///
+/// An alias does not get a variance of its own — `Alias[int]` and `Alias[object]` relate
+/// exactly as the expansion's do — so `type Alias[out T] = list[T]` is a claim about
+/// `list`, and `list` is invariant. The keyword is kept rather than rejected precisely
+/// because it says something; this is what checks that what it says is true, mirroring
+/// `check_declared_variance_usage` for a class.
+pub(crate) fn check_declared_alias_variance<'db>(
+    context: &InferContext<'db, '_>,
+    alias: TypeAliasType<'db>,
+    type_params: &ast::TypeParams,
+) {
+    let db = context.db();
+    let Some(generic_context) = alias.generic_context(db) else {
+        return;
+    };
+
+    for bound_typevar in generic_context.variables(db) {
+        let typevar = bound_typevar.typevar(db);
+        // Invariance accepts every expansion, and an undeclared parameter takes whatever
+        // variance the expansion has.
+        let Some(declared @ (TypeVarVariance::Covariant | TypeVarVariance::Contravariant)) =
+            typevar.explicit_variance(db)
+        else {
+            continue;
+        };
+
+        let required = alias.variance_of(db, bound_typevar.identity(db));
+        if declared.join(required) == declared {
+            continue;
+        }
+
+        let name = typevar.name(db);
+        let Some(type_param) = type_params
+            .iter()
+            .find(|type_param| type_param.name().id == *name)
+        else {
+            continue;
+        };
+        let Some(builder) = context.report_lint(&INVALID_VARIANCE_DECLARATION, type_param) else {
+            continue;
+        };
+        let mut diagnostic = builder.into_diagnostic(format_args!(
+            "Variance of type parameter `{name}` is incompatible with what `{}` expands to",
+            alias.name(db),
+        ));
+        diagnostic.info(format_args!(
+            "`{name}` is declared as {}, but the expansion is {}",
+            declared.as_str(),
+            required.as_str(),
+        ));
     }
 }
 

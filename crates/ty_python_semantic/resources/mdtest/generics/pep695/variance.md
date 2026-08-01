@@ -1417,6 +1417,31 @@ static_assert(not is_subtype_of(ContravariantAlias[B], ContravariantAlias[A]))
 static_assert(is_subtype_of(ContravariantAlias[A], ContravariantAlias[B]))
 ```
 
+### an alias keyword is checked against the expansion
+
+recording the expansion's variance is a claim, so it has to be true. an alias that names a variance
+its expansion does not have is reported at the declaration — the assignment the keyword promises
+would be rejected anyway, since the alias relates exactly as the expansion does.
+
+```by
+from typing import Callable
+
+# error: [invalid-variance-declaration] "Variance of type parameter `T` is incompatible with what `Covered` expands to"
+type Covered[out T] = list[T]
+
+# error: [invalid-variance-declaration] "Variance of type parameter `T` is incompatible with what `Consumed` expands to"
+type Consumed[in T] = tuple[T]
+```
+
+`in out` is invariance, which every expansion satisfies, and a parameter the expansion never
+mentions is bivariant, which every keyword covers:
+
+```by
+type Pinned[in out T] = list[T]
+type Unmentioned[out T] = int
+type Inferred[T] = list[T]
+```
+
 ### a type parameter that never specializes
 
 variance relates two specializations, so a keyword on a type parameter that has none decides
