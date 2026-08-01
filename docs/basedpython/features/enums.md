@@ -232,16 +232,23 @@ class Shape:
 class _Shape_Circle(Shape):
     radius: float
 _Shape_Circle.__name__ = "Circle"
-_Shape_Circle.__qualname__ = "Shape.Circle"
+_Shape_Circle.__qualname__ = Shape.__qualname__ + ".Circle"
 Shape.Circle = _Shape_Circle
 
 class _Shape_Point(Shape):
     __slots__ = ()
     def __repr__(self): return "Point"
+    def __reduce__(self): return type(self).__qualname__
 _Shape_Point.__name__ = "Point"
-_Shape_Point.__qualname__ = "Shape.Point"
+_Shape_Point.__qualname__ = Shape.__qualname__ + ".Point"
 Shape.Point = _Shape_Point()  # the variant is the singleton value, not the class
 ```
+
+`Enum.Variant` is the only name a variant is reachable by, so `__qualname__` is
+built from the enum's own — a `private enum class` is renamed to `_Enum` and a
+spelled-out path would resolve to nothing. that path is what `copy` and `pickle`
+look a variant up through, and a unit variant's `__reduce__` returns it so both
+hand back the singleton rather than a second instance
 
 `__match_args__` comes from dataclass for payload variants. generic enums lower
 to a `class Shape[T]:` (PEP 695) with the variant subclasses parametrised the
