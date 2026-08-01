@@ -114,6 +114,46 @@ def f(a: Named[1], b: Named[2], c: Named[7], d: Named[1, 2]):
     reveal_type(d)  # revealed: int
 ```
 
+## a literal pattern reads the type, not how it was written
+
+`1` and `Literal[1]` name the same type. a literal also carries whether it may widen, so the two are
+not the same value held in memory — the comparison is by type, not by that.
+
+```by
+from typing import Literal
+
+
+type Plain[T] = match T:
+    case 1:
+        str
+    case "s":
+        bytes
+    case True:
+        float
+    case None:
+        complex
+    case _:
+        int
+
+
+def f(
+    a: Plain[1],
+    b: Plain[Literal[1]],
+    c: Plain[Literal["s"]],
+    d: Plain[Literal[True]],
+    e: Plain[None],
+    g: Plain[Literal[9]],
+    h: Plain[int],
+):
+    reveal_type(a)  # revealed: str
+    reveal_type(b)  # revealed: str
+    reveal_type(c)  # revealed: bytes
+    reveal_type(d)  # revealed: float
+    reveal_type(e)  # revealed: complex
+    reveal_type(g)  # revealed: int
+    reveal_type(h)  # revealed: int
+```
+
 ## or-patterns and a bare capture
 
 a bare name is a *capture*, exactly as in python's `match` statement — `case X:` matches anything
