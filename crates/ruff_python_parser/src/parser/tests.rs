@@ -1201,6 +1201,152 @@ class C:
     }
 }
 
+/// `frozen` qualifies `data`, so it consumes a second keyword only when that
+/// keyword is `data`. consuming whatever followed swallowed a neighbouring
+/// modifier — `frozen final class` silently lost its `final` — and asserted on a
+/// chain that had no second keyword at all
+#[test]
+fn basedpython_frozen_needs_its_data() {
+    for source in [
+        "frozen def f(): ...\n",
+        "frozen class A: ...\n",
+        "frozen async def f(): ...\n",
+        "frozen final class A: ...\n",
+        "frozen protocol P: ...\n",
+        "class A:\n    frozen def m(self): ...\n",
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert!(
+            parsed.errors().iter().any(|error| error
+                .to_string()
+                .contains("`frozen` qualifies `data class`")),
+            "expected the `frozen` error for `{source}`, got {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+/// `frozen data`, and the chains around it, still parse cleanly
+#[test]
+fn basedpython_frozen_data_still_parses() {
+    for source in [
+        "frozen data class A:\n    x: int\n",
+        "final frozen data class A:\n    x: int\n",
+        "open frozen data class A:\n    x: int\n",
+        "private frozen data class A:\n    x: int\n",
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert!(
+            parsed.errors().is_empty(),
+            "unexpected parse errors for `{source}`: {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+/// a modifier that reads on one definition kind decides nothing on the other.
+/// it used to parse clean and be carried into a lowering with no arm for it,
+/// which left the keyword in the emitted python
+#[test]
+fn basedpython_a_modifier_names_its_definition_kind() {
+    for (source, expected) in [
+        (
+            "sealed def f(): ...\n",
+            "`sealed` is not a modifier on a `def`",
+        ),
+        (
+            "class A:\n    sealed def m(self): ...\n",
+            "`sealed` is not a modifier on a `def`",
+        ),
+        ("data def f(): ...\n", "`data` is not a modifier on a `def`"),
+        (
+            "frozen data def f(): ...\n",
+            "`frozen data` is not a modifier on a `def`",
+        ),
+        (
+            "override class A: ...\n",
+            "`override` is not a modifier on a `class`",
+        ),
+        (
+            "static class A: ...\n",
+            "`static` is not a modifier on a `class`",
+        ),
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert!(
+            parsed
+                .errors()
+                .iter()
+                .any(|error| error.to_string().contains(expected)),
+            "expected `{expected}` for `{source}`, got {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+/// each modifier on the definition kind it is documented for stays clean,
+/// including the ones that read on both
+#[test]
+fn basedpython_a_modifier_on_its_own_definition_kind_parses() {
+    for source in [
+        "sealed class A: ...\n",
+        "data class A:\n    x: int\n",
+        "class A:\n    override def m(self): ...\n",
+        "class A:\n    static def m(): ...\n",
+        "class A:\n    class def m(cls): ...\n",
+        "final class A: ...\n",
+        "class A:\n    final def m(self): ...\n",
+        "abstract class A: ...\n",
+        "class A:\n    abstract def m(self): ...\n",
+        "private class A: ...\n",
+        "private def f(): ...\n",
+        "export def f(): ...\n",
+        "private protocol P: ...\n",
+        "private enum class E:\n    case A\n",
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert!(
+            parsed.errors().is_empty(),
+            "unexpected parse errors for `{source}`: {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+/// `late` prefixes a property's `var`; on a `def` or a `class` it modifies
+/// nothing, and used to reach an `unreachable!` in the modifier chain
+#[test]
+fn basedpython_late_is_not_a_definition_modifier() {
+    for source in [
+        "late def f(): ...\n",
+        "late class A: ...\n",
+        "late async def f(): ...\n",
+        "class A:\n    late def m(self): ...\n",
+    ] {
+        let parsed = parse_basedpython_module_with_errors(source);
+        assert!(
+            parsed.errors().iter().any(|error| {
+                error
+                    .to_string()
+                    .contains("`late` is not a modifier on a `def` or a `class`")
+            }),
+            "expected the `late` error for `{source}`, got {:?}",
+            parsed.errors()
+        );
+    }
+}
+
+/// `late var x: T` is the shape the keyword exists for, and stays valid
+#[test]
+fn basedpython_late_var_still_parses() {
+    let parsed = parse_basedpython_module_with_errors("class C:\n    late var x: int\n");
+    assert!(
+        parsed.errors().is_empty(),
+        "unexpected parse errors: {:?}",
+        parsed.errors()
+    );
+}
+
 #[test]
 fn test_modifier_async_def() {
     // a modifier keyword on an `async def` — e.g. `contextlib`'s

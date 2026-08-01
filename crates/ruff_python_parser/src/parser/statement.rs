@@ -102,6 +102,47 @@ fn is_modifier_kw(text: &str) -> bool {
     )
 }
 
+/// The marker a modifier keyword contributes to the `def` or `class` it
+/// precedes, as the id of the synthetic decorator the `modifiers` transform
+/// reads. `None` for a keyword [`is_modifier_kw`] admits that modifies no
+/// definition on its own — `frozen`, which is a modifier only in the two-word
+/// `frozen data`, and `late`, which only prefixes a property's `var`.
+fn definition_modifier_marker(kw: &str) -> Option<&'static str> {
+    Some(match kw {
+        "data" => "data_class",
+        "final" => "final",
+        "abstract" => "abstract",
+        "override" => "override",
+        "open" => "open",
+        "sealed" => "sealed",
+        "static" => "static",
+        "export" | "public" => "export",
+        "private" => "private",
+        _ => return None,
+    })
+}
+
+/// What a modifier keyword modifies. `final`, `abstract`, `open` and the
+/// visibility keywords read on both a `def` and a `class`; the rest pick one,
+/// and writing them on the other decides nothing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ModifierTarget {
+    Function,
+    Class,
+    Either,
+}
+
+/// The definition kind a modifier marker applies to. Keyed by the marker rather
+/// than the surface keyword so it stays in step with
+/// [`definition_modifier_marker`], whose output it consumes.
+fn definition_modifier_target(marker: &str) -> ModifierTarget {
+    match marker {
+        "override" | "static" | "classmethod" => ModifierTarget::Function,
+        "sealed" | "data_class" | "frozen_data_class" => ModifierTarget::Class,
+        _ => ModifierTarget::Either,
+    }
+}
+
 /// basedpython modifier keywords that may prefix a parameter name — the
 /// [`is_modifier_kw`] set plus the binding keywords `let` / `var`. inside an
 /// `init(...)` shorthand these mark the parameter for auto-attribute assignment
@@ -999,50 +1040,37 @@ impl<'src> Parser<'src> {
                 "classmethod"
             } else {
                 let kw = self.src_text(self.current_token_range()).to_owned();
-                match kw.as_str() {
-                    "frozen" => {
-                        self.bump(TokenKind::Name); // consume "frozen"
-                        // consume "data"
+                self.bump(TokenKind::Name);
+                if kw == "frozen" {
+                    // the one two-word modifier. `frozen` qualifies `data`, so it
+                    // only consumes a second keyword when that keyword is there —
+                    // consuming whatever follows swallowed a neighbouring modifier
+                    // and ran off the end of a chain that had none
+                    if self.at(TokenKind::Name)
+                        && self.src_text(self.current_token_range()) == "data"
+                    {
                         self.bump(TokenKind::Name);
                         "frozen_data_class"
+                    } else {
+                        self.add_error(
+                            ParseErrorType::OtherError(
+                                "`frozen` qualifies `data class`; write `frozen data class`"
+                                    .to_string(),
+                            ),
+                            TextRange::new(modifier_start, self.current_token_range().start()),
+                        );
+                        ruff_python_ast::helpers::INVALID_MODIFIER_MARKER
                     }
-                    "data" => {
-                        self.bump(TokenKind::Name);
-                        "data_class"
-                    }
-                    "final" => {
-                        self.bump(TokenKind::Name);
-                        "final"
-                    }
-                    "abstract" => {
-                        self.bump(TokenKind::Name);
-                        "abstract"
-                    }
-                    "override" => {
-                        self.bump(TokenKind::Name);
-                        "override"
-                    }
-                    "open" => {
-                        self.bump(TokenKind::Name);
-                        "open"
-                    }
-                    "sealed" => {
-                        self.bump(TokenKind::Name);
-                        "sealed"
-                    }
-                    "static" => {
-                        self.bump(TokenKind::Name);
-                        "static"
-                    }
-                    "export" | "public" => {
-                        self.bump(TokenKind::Name);
-                        "export"
-                    }
-                    "private" => {
-                        self.bump(TokenKind::Name);
-                        "private"
-                    }
-                    _ => unreachable!("unexpected modifier keyword"),
+                } else if let Some(marker) = definition_modifier_marker(&kw) {
+                    marker
+                } else {
+                    self.add_error(
+                        ParseErrorType::OtherError(format!(
+                            "`{kw}` is not a modifier on a `def` or a `class`"
+                        )),
+                        TextRange::new(modifier_start, self.current_token_range().start()),
+                    );
+                    ruff_python_ast::helpers::INVALID_MODIFIER_MARKER
                 }
             };
 
@@ -1089,6 +1117,39 @@ impl<'src> Parser<'src> {
                 }
             }
             break;
+        }
+
+        // the chain is complete, so the definition it modifies is now known: a
+        // modifier that reads on the other kind decides nothing here, and was
+        // being carried into a lowering that had no arm for it and left the
+        // keyword in the emitted python
+        let target = if self.at(TokenKind::Async) || self.at(TokenKind::Def) {
+            ModifierTarget::Function
+        } else {
+            ModifierTarget::Class
+        };
+        let misplaced: Vec<TextRange> = decorators
+            .iter()
+            .filter(|dec| match &dec.expression {
+                Expr::Name(name) => {
+                    name.ctx == ExprContext::Invalid
+                        && definition_modifier_target(name.id.as_str()) != ModifierTarget::Either
+                        && definition_modifier_target(name.id.as_str()) != target
+                }
+                _ => false,
+            })
+            .map(Ranged::range)
+            .collect();
+        for range in misplaced {
+            let kw = self.src_text(range).trim_end().to_owned();
+            let modified = match target {
+                ModifierTarget::Function => "a `def`",
+                _ => "a `class`",
+            };
+            self.add_error(
+                ParseErrorType::OtherError(format!("`{kw}` is not a modifier on {modified}")),
+                range,
+            );
         }
 
         if self.at(TokenKind::Async) {
