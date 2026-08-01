@@ -24,6 +24,7 @@ mod tests {
     use super::settings::Settings;
 
     #[test_case(Rule::AmbiguousClassName, Path::new("E742.py"))]
+    #[test_case(Rule::AmbiguousClassName, Path::new("E742_basedpython.by"))]
     #[test_case(Rule::AmbiguousFunctionName, Path::new("E743.py"))]
     #[test_case(Rule::AmbiguousVariableName, Path::new("E741.py"))]
     // E741 is disapplied for `.pyi` files (see #13119 for rationale);

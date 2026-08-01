@@ -64,6 +64,11 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
                 node_index: _,
             },
         ) => {
+            // basedpython: a trailing lambda block (`f(2):` + suite) has no written
+            // header — the parser synthesizes the `def` and its name — so the rules
+            // that judge a declared name would be judging machinery
+            let declares_name = !function_def.is_trailing_lambda;
+
             if checker.is_rule_enabled(Rule::DjangoNonLeadingReceiverDecorator) {
                 flake8_django::rules::non_leading_receiver_decorator(checker, decorator_list);
             }
@@ -79,7 +84,7 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
             if checker.is_rule_enabled(Rule::FastApiUnusedPathParameter) {
                 fastapi::rules::fastapi_unused_path_parameter(checker, function_def);
             }
-            if checker.is_rule_enabled(Rule::AmbiguousFunctionName) {
+            if checker.is_rule_enabled(Rule::AmbiguousFunctionName) && declares_name {
                 pycodestyle::rules::ambiguous_function_name(checker, name);
             }
             if checker.is_rule_enabled(Rule::InvalidBoolReturnType) {
@@ -100,7 +105,7 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
             if checker.is_rule_enabled(Rule::InvalidStrReturnType) {
                 pylint::rules::invalid_str_return(checker, function_def);
             }
-            if checker.is_rule_enabled(Rule::InvalidFunctionName) {
+            if checker.is_rule_enabled(Rule::InvalidFunctionName) && declares_name {
                 pep8_naming::rules::invalid_function_name(
                     checker,
                     stmt,
@@ -160,7 +165,7 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
             if checker.is_rule_enabled(Rule::Pep484StylePositionalOnlyParameter) {
                 flake8_pyi::rules::pep_484_positional_parameter(checker, function_def);
             }
-            if checker.is_rule_enabled(Rule::DunderFunctionName) {
+            if checker.is_rule_enabled(Rule::DunderFunctionName) && declares_name {
                 pep8_naming::rules::dunder_function_name(
                     checker,
                     checker.semantic.current_scope(),
@@ -393,6 +398,11 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
                 implementation: _,
             },
         ) => {
+            // basedpython: an `extension T:` / `implementation I for T:` header names a
+            // type that is declared elsewhere, so `name` is a reference rather than a
+            // declaration and the rules that judge a declared name have nothing to judge
+            let declares_name = !(class_def.is_extension() || class_def.is_implementation());
+
             if checker.is_rule_enabled(Rule::NoClassmethodDecorator) {
                 pylint::rules::no_classmethod_decorator(checker, stmt);
             }
@@ -449,10 +459,10 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
             if checker.is_rule_enabled(Rule::UnnecessaryClassParentheses) {
                 pyupgrade::rules::unnecessary_class_parentheses(checker, class_def);
             }
-            if checker.is_rule_enabled(Rule::AmbiguousClassName) {
+            if checker.is_rule_enabled(Rule::AmbiguousClassName) && declares_name {
                 pycodestyle::rules::ambiguous_class_name(checker, name);
             }
-            if checker.is_rule_enabled(Rule::InvalidClassName) {
+            if checker.is_rule_enabled(Rule::InvalidClassName) && declares_name {
                 pep8_naming::rules::invalid_class_name(
                     checker,
                     stmt,
@@ -509,7 +519,7 @@ pub(crate) fn statement(stmt: &Stmt, checker: &mut Checker) {
             if checker.is_rule_enabled(Rule::FStringDocstring) {
                 flake8_bugbear::rules::f_string_docstring(checker, body);
             }
-            if checker.is_rule_enabled(Rule::BuiltinVariableShadowing) {
+            if checker.is_rule_enabled(Rule::BuiltinVariableShadowing) && declares_name {
                 flake8_builtins::rules::builtin_variable_shadowing(checker, name, name.range());
             }
             if checker.is_rule_enabled(Rule::DuplicateBases) {

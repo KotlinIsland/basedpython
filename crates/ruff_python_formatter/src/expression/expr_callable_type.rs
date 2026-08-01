@@ -1,7 +1,7 @@
 use ruff_python_ast::ExprCallableType;
 
-use crate::prelude::*;
 use crate::expression::format_verbatim_expr;
+use crate::prelude::*;
 
 #[derive(Default)]
 pub struct FormatExprCallableType;
