@@ -176,6 +176,18 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         .then_some(receiver_scope_id)
     }
 
+    /// basedpython: whether this attribute is reached through the enclosing method's implicit
+    /// receiver, from its own body or a function nested in it.
+    ///
+    /// `self` is bound to whatever receiver the call site had, so the class's type parameters are
+    /// that receiver's however `self` is annotated — see [`crate::types::safe_variance`].
+    pub(super) fn is_own_receiver_attribute(&self, target: &ast::ExprAttribute) -> bool {
+        target
+            .value
+            .as_name_expr()
+            .is_some_and(|receiver| self.receiver_method_scope(receiver).is_some())
+    }
+
     pub(super) fn invalid_assignment_to_final_attribute(
         &self,
         object_ty: Type<'db>,

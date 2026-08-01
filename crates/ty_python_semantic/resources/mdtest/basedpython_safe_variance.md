@@ -3,9 +3,10 @@
 Privacy is what makes variance safe. A private member is invisible outside its class, so it cannot
 be used to tell two specializations apart — which is what lets a covariant class hold a mutable
 field of its type parameter. The flip side is that a widened view of the class learns nothing about
-that member: through any receiver but the class's own it keeps its declared type instead of picking
-up the receiver's arguments, so a write must supply a real `T` and a read gets back only `T`'s
-bound.
+that member: it keeps its declared type instead of picking up the receiver's arguments, and through
+any receiver but the class's own — anything that is not the `self` the body was handed — that type
+is erased to what such a view knows. A read gets back `T`'s bound, and a write is accepted from
+nothing at all.
 
 ```toml
 [environment]
@@ -68,9 +69,12 @@ class A[out T]:
         self.t = other.t
 ```
 
-## a write through a widened view must supply a real `T`
+## a write through a widened view is accepted from nothing
 
-Privacy is what exempts `t` from constraining variance; the public `f` below still consumes a `T`,
+Storage is invariant in its own type, so a write has to be valid for every type the erased member
+could really have. Nothing is, which is why the write type is `Never`.
+
+Privacy is what exempts `t` from constraining variance; the public `g` below still consumes a `T`,
 so the class is separately reported for not honouring its own `out`.
 
 ```by
@@ -78,16 +82,54 @@ so the class is separately reported for not honouring its own `out`.
 class A[out T]:
     private t: T
 
-    def f(self: A[object], t: T):
-        self.t = t
+    def f(self, other: A[object]):
+        # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` of type `Never`"
+        other.t = 1
 
-    def g(self: A[object]):
+    def g(self, other: A[object], t: T):
+        # a real `T` gets no further: it is `self`'s parameter, and says nothing about the one
+        # `other` is hiding
+        # error: [invalid-assignment] "Object of type `T@A` is not assignable to attribute `t` of type `Never`"
+        other.t = t
+```
+
+## …including through a receiver the body constructed itself
+
+`a` below is an `A[object]` and its storage has nothing to do with `self`'s `T`.
+
+```by
+# error: [invalid-generic-class] "Variance of type variable `T` is incompatible with its usage in `A`"
+class A[out T]:
+    private t: T
+
+    def f(self, t: T):
+        a = A[object]()
+        # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` of type `Never`"
+        a.t = 1
+        # error: [invalid-assignment] "Object of type `T@A` is not assignable to attribute `t` of type `Never`"
+        a.t = t
+```
+
+## the class's own receiver is `self`, however it is annotated
+
+An explicitly widened `self` is still the receiver the call site had, and the class's type
+parameters are that receiver's — so the member keeps its declared type, un-erased, and a real `T`
+can be written to it. This holds through a capture in a nested function too.
+
+```by
+# error: [invalid-generic-class] "Variance of type variable `T` is incompatible with its usage in `A`"
+class A[out T]:
+    private t: T
+
+    def f(self: A[object], t: T):
+        reveal_type(self.t)  # revealed: T@A
+        self.t = t
         # error: [invalid-assignment] "Object of type `"asdf"` is not assignable to attribute `t` of type `T@A`"
         self.t = "asdf"
 
-    def h(self, other: A[object]):
-        # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` of type `T@A`"
-        other.t = 1
+    def g(self: A[object], t: T):
+        def inner():
+            self.t = t
 ```
 
 ## an unspecialized construction is a widened view too
@@ -99,7 +141,7 @@ class A[T]:
     private t: T
 
     def f(self):
-        # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` of type `T@A`"
+        # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` of type `Never`"
         A().t = 1
 ```
 
@@ -272,14 +314,15 @@ class A[T]:
 
 class C[U](A[U]):
     def f(self, other: C[object]):
-        # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` of type `U@C`"
+        # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` of type `Never`"
         other.t = 1
 ```
 
 ## a nested occurrence is erased soundly
 
-`list` is invariant, so the erasure has to be the top materialization rather than a naive
-substitution of the bound.
+`list` is invariant, so the erasure has to be a materialization rather than a naive substitution of
+the bound. Neither materialization can say more than "some list" about an invariant occurrence, so
+the erased element stays gradual and a write is neither precise nor rejected.
 
 ```by
 class A[T]:
@@ -287,4 +330,23 @@ class A[T]:
 
 def f(a: A[int]):
     reveal_type(a.items)  # revealed: list[*]
+    a.items = [1]
+```
+
+## a union of two specializations is a widened view of each
+
+A write to a union has to be valid for every element, and no element accepts anything. The public
+`produce` is what keeps the two specializations from collapsing into each other: without it `T` is
+bivariant and `A[int] | A[str]` is just `A[int]`.
+
+```by
+class A[out T]:
+    private t: T
+
+    def produce(self) -> T:
+        raise NotImplementedError
+
+def f(a: A[int] | A[str]):
+    # error: [invalid-assignment] "Object of type `1` is not assignable to attribute `t` on type `A[int] | A[str]`"
+    a.t = 1
 ```
