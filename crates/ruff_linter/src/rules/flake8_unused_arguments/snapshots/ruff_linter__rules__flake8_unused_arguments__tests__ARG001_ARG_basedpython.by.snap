@@ -1,0 +1,11 @@
+---
+source: crates/ruff_linter/src/rules/flake8_unused_arguments/mod.rs
+---
+ARG001 Unused function argument: `spare`
+  --> ARG_basedpython.by:22:12
+   |
+21 | # a parameter the author wrote and never read still fires
+22 | def unused(spare: int) -> int:  # ARG001
+   |            ^^^^^
+23 |     return 1
+   |

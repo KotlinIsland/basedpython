@@ -11,7 +11,7 @@ use types::CompiledPerFileTargetVersionList;
 
 use crate::codes::RuleCodePrefix;
 use ruff_macros::CacheKey;
-use ruff_python_ast::PythonVersion;
+use ruff_python_ast::{PythonVersion, is_destructure_binder};
 
 use crate::line_width::LineLength;
 use crate::registry::{Linter, Rule};
@@ -788,6 +788,17 @@ pub static DUMMY_VARIABLE_RGX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$").unwrap());
 
 impl LinterSettings {
+    /// Whether a "this binding is never read" rule should pass `name` over.
+    ///
+    /// The configured [`dummy_variable_rgx`](Self::dummy_variable_rgx) answers
+    /// for a name the author wrote. A basedpython [destructuring
+    /// binder](ruff_python_ast::is_destructure_binder) is not one: it stands for
+    /// the value a pattern takes apart, the source refers to the pattern's
+    /// captures instead, and no rename could make it read better.
+    pub fn ignores_unused_binding(&self, name: &str) -> bool {
+        self.dummy_variable_rgx.is_match(name) || is_destructure_binder(name)
+    }
+
     pub fn for_rule(rule_code: Rule) -> Self {
         Self {
             rules: RuleTable::from_iter([rule_code]),

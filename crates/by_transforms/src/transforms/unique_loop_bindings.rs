@@ -44,11 +44,14 @@
 //! target to bind.
 
 use ruff_python_ast::helpers::has_written_def_header;
-use ruff_python_ast::visitor::{Visitor, walk_expr, walk_stmt};
-use ruff_python_ast::{AnyParameterRef, Comprehension, Expr, ExprName, Stmt, StmtFunctionDef};
+use ruff_python_ast::visitor::{Visitor, walk_expr, walk_pattern, walk_stmt};
+use ruff_python_ast::{
+    AnyParameterRef, Comprehension, Expr, ExprName, Pattern, Stmt, StmtFunctionDef,
+};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use super::mutable_defaults::is_immutable_scalar;
 use super::source_util::{line_indent, line_start};
 use crate::type_info::{CaptureKind, TypeInfo};
 
@@ -130,6 +133,36 @@ fn publishes_a_binding(generator: &Expr) -> bool {
     walrus.0
 }
 
+/// one binding a loop makes per iteration
+#[derive(Clone, Copy)]
+struct LoopTarget<'ast> {
+    /// the name the iteration binds
+    name: &'ast str,
+    /// an expression evaluated in the scope the binding lives in, which is how
+    /// that scope is resolved. a [destructuring](super::destructure) loop binds
+    /// pattern captures, which are `Identifier`s with no expression of their
+    /// own, so every target of one loop shares its iterable's node
+    scope_anchor: &'ast Expr,
+}
+
+/// the names a pattern binds. a destructuring `for` target binds these rather
+/// than the binder the parser synthesized for it
+#[derive(Default)]
+struct PatternCaptures<'ast>(Vec<&'ast str>);
+
+impl<'ast> Visitor<'ast> for PatternCaptures<'ast> {
+    fn visit_pattern(&mut self, pattern: &'ast Pattern) {
+        let bound = match pattern {
+            Pattern::MatchAs(as_pattern) => as_pattern.name.as_ref(),
+            Pattern::MatchStar(star) => star.name.as_ref(),
+            Pattern::MatchMapping(mapping) => mapping.rest.as_ref(),
+            _ => None,
+        };
+        self.0.extend(bound.map(|name| name.id.as_str()));
+        walk_pattern(self, pattern);
+    }
+}
+
 /// every name a subtree reads, and the names it declares `global` / `nonlocal`
 /// anywhere inside it
 #[derive(Default)]
@@ -167,7 +200,7 @@ struct UniqueLoopBindings<'a, 'ast> {
     types: &'a dyn TypeInfo,
     /// loop and comprehension targets whose bindings the statements currently
     /// being walked run inside, in binding order
-    active: Vec<&'ast ExprName>,
+    active: Vec<LoopTarget<'ast>>,
     /// wrapper applications around expression closures
     wraps: Vec<(TextRange, Vec<Fragment>)>,
     /// `@_by_loop_bind(…)` insertions above `def` headers
@@ -192,26 +225,70 @@ impl<'a, 'ast> UniqueLoopBindings<'a, 'ast> {
     /// bound by two nested loops resolves to the inner one, so only the
     /// innermost target of each name is asked
     fn captured(&self, references: &References<'ast>, reach: Reach) -> Vec<String> {
-        let mut innermost: Vec<&ExprName> = Vec::new();
-        for target in &self.active {
-            match innermost.iter_mut().find(|held| held.id == target.id) {
-                Some(held) => *held = target,
-                None => innermost.push(target),
-            }
-        }
-        innermost
+        self.innermost()
             .into_iter()
-            .filter(|target| !references.declared.contains(&target.id.as_str()))
+            .filter(|target| !references.declared.contains(&target.name))
             .filter(|target| {
                 references.reads.iter().any(|read| {
-                    read.id == target.id
+                    read.id == target.name
                         && self
                             .types
-                            .reads_binding_of(read, target)
+                            .reads_binding_of(read, target.scope_anchor)
                             .is_some_and(|kind| reach.covers(kind))
                 })
             })
-            .map(|target| target.id.to_string())
+            .map(|target| target.name.to_owned())
+            .collect()
+    }
+
+    /// the active bindings, one per name: a name bound by two nested loops
+    /// resolves to the inner one, so only the innermost target is asked
+    fn innermost(&self) -> Vec<LoopTarget<'ast>> {
+        let mut innermost: Vec<LoopTarget<'ast>> = Vec::new();
+        for target in &self.active {
+            match innermost.iter_mut().find(|held| held.name == target.name) {
+                Some(held) => *held = *target,
+                None => innermost.push(*target),
+            }
+        }
+        innermost
+    }
+
+    /// the loop bindings a parameter *default* reads directly.
+    ///
+    /// a default is written in the loop's own scope, so it is not a capture as
+    /// written — but [`mutable_defaults`](super::mutable_defaults) moves every
+    /// non-scalar one into the body, where it is re-evaluated per call and the
+    /// read closes over the loop's binding like any other body read. a name the
+    /// function's own parameters bind is shadowed once relocated, and left alone
+    fn captured_in_defaults(&self, function: &'ast StmtFunctionDef) -> Vec<String> {
+        let mut references = References::default();
+        for default in function
+            .parameters
+            .iter()
+            .filter_map(AnyParameterRef::default)
+            .filter(|default| !is_immutable_scalar(default))
+        {
+            references.visit_expr(default);
+        }
+        if references.reads.is_empty() {
+            return Vec::new();
+        }
+        let shadowed: Vec<&str> = function
+            .parameters
+            .iter()
+            .map(|parameter| parameter.name().id.as_str())
+            .collect();
+        self.innermost()
+            .into_iter()
+            .filter(|target| !shadowed.contains(&target.name))
+            .filter(|target| {
+                references.reads.iter().any(|read| {
+                    read.id == target.name
+                        && self.types.shares_a_cell_scope(read, target.scope_anchor)
+                })
+            })
+            .map(|target| target.name.to_owned())
             .collect()
     }
 
@@ -281,7 +358,12 @@ impl<'a, 'ast> UniqueLoopBindings<'a, 'ast> {
 
     fn push_targets(&mut self, target: &'ast Expr) {
         match target {
-            Expr::Name(name) => self.active.push(name),
+            Expr::Name(name) => self.active.push(LoopTarget {
+                name: name.id.as_str(),
+                // a written target is its own anchor: it is bound in the scope
+                // it is written in
+                scope_anchor: target,
+            }),
             Expr::Tuple(tuple) => {
                 for element in &tuple.elts {
                     self.push_targets(element);
@@ -299,6 +381,24 @@ impl<'a, 'ast> UniqueLoopBindings<'a, 'ast> {
         }
     }
 
+    /// a [destructuring](super::destructure) loop binds its pattern's captures.
+    /// the target the parser put beside them is the binder the lowering matches
+    /// against, which no closure reads.
+    ///
+    /// the captures are `Identifier`s with no expression of their own, so they
+    /// borrow the iterable as their scope anchor — a `for` statement has no
+    /// scope of its own, so the two are bound in the same one
+    fn push_pattern_captures(&mut self, pattern: &'ast Pattern, scope_anchor: &'ast Expr) {
+        let mut captures = PatternCaptures::default();
+        captures.visit_pattern(pattern);
+        self.active.extend(
+            captures
+                .0
+                .into_iter()
+                .map(|name| LoopTarget { name, scope_anchor }),
+        );
+    }
+
     /// walk a closure's children with the bindings it just captured retired:
     /// they now name the wrapper's parameters (or the rebuilt cells), so a
     /// closure nested inside reads the frozen value already
@@ -312,7 +412,7 @@ impl<'a, 'ast> UniqueLoopBindings<'a, 'ast> {
         }
         let saved = self.active.clone();
         self.active
-            .retain(|target| !captured.iter().any(|name| name == target.id.as_str()));
+            .retain(|target| !captured.iter().any(|name| name == target.name));
         walk(self);
         self.active = saved;
     }
@@ -370,7 +470,10 @@ impl<'ast> Visitor<'ast> for UniqueLoopBindings<'_, 'ast> {
             Stmt::For(for_stmt) => {
                 self.visit_expr(&for_stmt.iter);
                 let depth = self.active.len();
-                self.push_targets(&for_stmt.target);
+                match for_stmt.pattern.as_deref() {
+                    Some(pattern) => self.push_pattern_captures(pattern, &for_stmt.iter),
+                    None => self.push_targets(&for_stmt.target),
+                }
                 for body_stmt in &for_stmt.body {
                     self.visit_stmt(body_stmt);
                 }
@@ -382,14 +485,19 @@ impl<'ast> Visitor<'ast> for UniqueLoopBindings<'_, 'ast> {
                 }
             }
             Stmt::FunctionDef(function) if !self.active.is_empty() => {
-                let rebound = self.captured_in_stmt(stmt, Reach::ClosureCell);
+                let mut rebound = self.captured_in_stmt(stmt, Reach::ClosureCell);
+                for name in self.captured_in_defaults(function) {
+                    if !rebound.contains(&name) {
+                        rebound.push(name);
+                    }
+                }
                 let bound = !rebound.is_empty() && self.decorate(function, &rebound);
                 // decorators and annotations are evaluated where the `def`
                 // runs — once per iteration, in the loop's own scope — so the
                 // bindings stay live for a closure written in one of them. a
-                // *default* is not: [`mutable_defaults`](super::mutable_defaults)
-                // moves every non-scalar default into the body, where it is
-                // re-evaluated per call against the binding rebound below
+                // *default* is not: `mutable_defaults` moves every non-scalar
+                // default into the body, where it is re-evaluated per call
+                // against the binding the rebind above froze
                 for decorator in &function.decorator_list {
                     self.visit_decorator(decorator);
                 }
@@ -535,6 +643,79 @@ mod tests {
                     fns.append((lambda left, right: lambda: (left, right))(left, right))
             "},
         );
+    }
+
+    /// the target is the binder the destructuring lowering matches against; the
+    /// names the *pattern* binds are what a closure reads
+    #[test]
+    fn a_destructuring_target_binds_its_pattern_captures() {
+        let out = transpile(
+            indoc! {"
+                class Point:
+                    __match_args__ = ('x', 'y')
+
+                def collect(points: list[Point]):
+                    for Point(x, y) in points:
+                        fns.append(lambda: (x, y))
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(
+            out.contains("fns.append((lambda x, y: lambda: (x, y))(x, y))"),
+            "got:\n{out}"
+        );
+    }
+
+    /// `mutable_defaults` moves a non-scalar default into the body, so the read
+    /// of a loop binding there is a closure read and has to be rebound with it
+    #[test]
+    fn a_default_reading_the_target_is_rebound() {
+        check_body(
+            indoc! {"
+                def build():
+                    for i in items:
+                        def handler(value=i):
+                            return value
+            "},
+            indoc! {"
+                def build():
+                    for i in items:
+                        @_by_loop_bind(i=i)
+                        def handler(value=_MISSING):
+                            if value is _MISSING:
+                                value = i
+                            return value
+            "},
+        );
+    }
+
+    /// a scalar default is left as a plain python default, so there is no read
+    /// to move into the body and nothing to bind
+    #[test]
+    fn a_scalar_default_binds_nothing() {
+        unchanged(indoc! {"
+            for i in items:
+                def handler(value=1):
+                    return value
+        "});
+    }
+
+    /// the function's own parameter shadows the name once the default is
+    /// relocated, so the hand-written idiom is not rebound
+    #[test]
+    fn a_default_shadowed_by_its_own_parameter_is_left_alone() {
+        let out = transpile(
+            indoc! {"
+                def build():
+                    for i in items:
+                        def handler(i=i):
+                            return i
+            "},
+            &Config::test_default(),
+        )
+        .unwrap();
+        assert!(!out.contains("_by_loop_bind"), "got:\n{out}");
     }
 
     #[test]

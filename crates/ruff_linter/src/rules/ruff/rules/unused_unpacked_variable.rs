@@ -77,7 +77,7 @@ fn remove_unused_variable(binding: &Binding, checker: &Checker) -> Option<Fix> {
         return None;
     }
 
-    if checker.settings().dummy_variable_rgx.is_match(&renamed) {
+    if checker.settings().ignores_unused_binding(&renamed) {
         let edit = Edit::range_replacement(renamed, binding.range());
 
         return Some(Fix::unsafe_edit(edit).isolate(isolation));

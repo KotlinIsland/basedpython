@@ -197,15 +197,20 @@ del _by_let_0
 ```
 
 a binding position binds the value to a binder and destructures it at the top of
-the body:
+the body, then drops the binder — left behind it would become a member of the
+namespace around it, and nothing after the destructure reads it:
 
 ```py
-for _by_destructure_0 in points:
-    match _by_destructure_0:
+for __by_destructure_0__ in points:
+    match __by_destructure_0__:
         case Point(x, y):
             pass
+    del __by_destructure_0__
     print(x, y)
 ```
+
+the binder is a dunder because a binding position may be written in a class body,
+and an `enum class` body turns every ordinary name assigned in it into a member
 
 python has no `and` pattern, so a conjunction becomes a `match` per conjunct,
 nested inside the previous one. a conjunction nested inside another pattern is
