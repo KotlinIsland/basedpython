@@ -348,6 +348,22 @@ reveal_type(bad)  # revealed: W[str]
 n = takes_int(bad)
 ```
 
+## a unit variant is still a value through the enum's subscript
+
+`Tree[int].Leaf` is the same singleton as `Tree.Leaf` — subscripting the enum names the same class,
+so a member lookup on it must not fall back to the variant's class object:
+
+```by
+enum class Tree[T]:
+    case Leaf
+    case Node(value: T, left: Tree[T], right: Tree[T])
+
+reveal_type(Tree.Leaf)  # revealed: Tree.Leaf
+reveal_type(Tree[int].Leaf)  # revealed: Tree.Leaf
+
+x: Tree[int] = Tree[int].Leaf
+```
+
 ## the same variant name may appear in different enums
 
 variants are qualified, so there is no collision:
