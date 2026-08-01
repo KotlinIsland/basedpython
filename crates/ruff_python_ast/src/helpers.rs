@@ -2779,6 +2779,18 @@ pub fn is_type_def(function: &crate::StmtFunctionDef) -> bool {
     })
 }
 
+/// The synthetic marker decorator the parser attaches in place of a modifier
+/// keyword it reported as meaningless on the `def` or `class` that followed —
+/// `frozen` without its `data`, or `late`, which only prefixes a property's
+/// `var`.
+///
+/// It stands for no modifier at all, so it deliberately matches none of the
+/// `modifiers` transform's arms: the file carries a parse error, which stops
+/// lowering before that transform runs. What still reads it is the IDE, which
+/// works on broken source and highlights a synthetic decorator by its range
+/// rather than by this id.
+pub const INVALID_MODIFIER_MARKER: &str = "invalid_modifier";
+
 /// The synthetic marker decorator the parser attaches to an `enum class`.
 ///
 /// Spelled the same way as [`TYPE_FN_MARKER`] — a zero-binding `Name` with
