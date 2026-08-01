@@ -420,10 +420,8 @@ pub(crate) fn function_uses_loop_variable(checker: &Checker, node: &Node) {
     // Identify any "suspicious" variables. These are defined as variables that are
     // referenced in a function or lambda body, but aren't bound as arguments.
     let suspicious_variables = {
-        let mut visitor = SuspiciousVariablesVisitor::new(
-            checker.source(),
-            checker.source_type.is_basedpython(),
-        );
+        let mut visitor =
+            SuspiciousVariablesVisitor::new(checker.source(), checker.source_type.is_basedpython());
         match node {
             Node::Stmt(stmt) => visitor.visit_stmt(stmt),
             Node::Expr(expr) => visitor.visit_expr(expr),

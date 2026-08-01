@@ -833,8 +833,14 @@ where
 /// [statement expression](crate::ExprStatement).
 #[derive(Debug, Clone, Copy)]
 pub enum StatementExpressionValue<'a> {
-    /// The tail expression of a branch, reached by falling off its end.
-    Tail(&'a Expr),
+    /// The tail expression of a branch, reached by falling off its end, with the
+    /// statement holding it. Both are needed for the same reason as [`Break`]:
+    /// the expression is the value, and the statement is what a lowering has to
+    /// rewrite — an expression's own range stops inside any parentheses around
+    /// it, so anchoring to it would place an assignment *within* them
+    ///
+    /// [`Break`]: StatementExpressionValue::Break
+    Tail(&'a ast::StmtExpr, &'a Expr),
     /// A `break <value>` targeting the statement's own loop, with the operand it
     /// carries. Both are needed: the operand is the value, and the statement is
     /// what a lowering has to rewrite.
@@ -845,7 +851,9 @@ impl<'a> StatementExpressionValue<'a> {
     /// The expression whose type the statement expression takes on.
     pub fn expr(self) -> &'a Expr {
         match self {
-            StatementExpressionValue::Tail(expr) | StatementExpressionValue::Break(_, expr) => expr,
+            StatementExpressionValue::Tail(_, expr) | StatementExpressionValue::Break(_, expr) => {
+                expr
+            }
         }
     }
 }
@@ -900,8 +908,8 @@ fn collect_statement_expression_values<'a>(
 /// Collects the value produced by falling off the end of `body`.
 fn collect_tail_value<'a>(body: &'a [Stmt], values: &mut Vec<StatementExpressionValue<'a>>) {
     match body.last() {
-        Some(Stmt::Expr(ast::StmtExpr { value, .. })) => {
-            values.push(StatementExpressionValue::Tail(value));
+        Some(Stmt::Expr(tail @ ast::StmtExpr { value, .. })) => {
+            values.push(StatementExpressionValue::Tail(tail, value));
         }
         // a trailing compound statement is itself the branch's value, so its own
         // branches are recursed into. this is what lets a nested `match` in tail
