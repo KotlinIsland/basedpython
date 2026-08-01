@@ -317,11 +317,17 @@ impl TypeAwarePass for ExtensionBlockPass<'_> {
 /// position — a plain top-level call resolves left-to-right, so the `def` must
 /// precede every use. this runs on the finished output text: it re-parses,
 /// finds the top-level `_by_ext…` functions, and moves their line blocks to
-/// just after the leading imports, permuting the line table identically so
-/// source maps stay aligned
+/// just after the preamble and the leading imports, permuting the line table
+/// identically so source maps stay aligned
+///
+/// `preamble_end` is one past the last byte of the generated preamble. the
+/// defs have to stay below it: the preamble carries the runtime helpers a
+/// lowered body — or a parameter default, which runs at `def` time — reaches
+/// for, and a `def` above them raises `NameError` at import
 pub(crate) fn hoist_backing_functions(
     out: String,
     table: Vec<Option<u32>>,
+    preamble_end: usize,
 ) -> (String, Vec<Option<u32>>) {
     // cheap early-out: no backing functions were emitted
     if !out.contains(EXTENSION_MARKER) {
@@ -336,10 +342,14 @@ pub(crate) fn hoist_backing_functions(
     }
     let module = parsed.suite();
 
-    // the byte offset after the leading run of imports (and a module docstring)
-    // — where the backing functions belong, before any other statement
-    let mut insert_offset = 0usize;
-    for (index, stmt) in module.iter().enumerate() {
+    // the byte offset of the last byte that stays above the backing functions:
+    // the end of the preamble, then of the leading run of the file's own
+    // imports (and its docstring)
+    let mut insert_offset = preamble_end.saturating_sub(1);
+    let own = module
+        .iter()
+        .skip_while(|stmt| usize::from(stmt.range().end()) <= preamble_end);
+    for (index, stmt) in own.enumerate() {
         let is_docstring =
             index == 0 && matches!(stmt, Stmt::Expr(expr) if expr.value.is_string_literal_expr());
         if matches!(stmt, Stmt::Import(_) | Stmt::ImportFrom(_)) || is_docstring {

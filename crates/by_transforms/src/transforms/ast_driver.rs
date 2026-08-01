@@ -1110,6 +1110,7 @@ pub(crate) fn run_against_source<'a>(
     let mut table: Vec<Option<u32>> = Vec::with_capacity(prefix_lines + body_table.len());
     table.extend(std::iter::repeat_n(None, prefix_lines));
     table.extend(body_table);
+    let mut preamble_end = 0usize;
     if !ctx.required_imports.is_empty() {
         let mut prefix = String::new();
         for imp in &ctx.required_imports {
@@ -1127,6 +1128,7 @@ pub(crate) fn run_against_source<'a>(
             0
         };
         out.insert_str(at, &prefix);
+        preamble_end = at + prefix.len();
     }
     if !ctx.epilogue.is_empty() {
         if !out.ends_with('\n') {
@@ -1153,7 +1155,7 @@ pub(crate) fn run_against_source<'a>(
     // their source ranges for sibling-pass composition); hoist them to the
     // module top now that lowering is done, so a member called before its
     // block's position still resolves
-    let (out, table) = extension::hoist_backing_functions(out, table);
+    let (out, table) = extension::hoist_backing_functions(out, table, preamble_end);
     (Cow::Owned(out), ctx.errors, table)
 }
 
