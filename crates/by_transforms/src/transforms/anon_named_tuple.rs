@@ -146,6 +146,12 @@ pub(crate) struct AnonNamedTuple<'src> {
     /// Skipped on Python 3.12+: PEP 695 native syntax doesn't rename, so the
     /// stack stays empty.
     typevar_rename_stack: Vec<HashMap<String, String>>,
+    /// Names bound to an anonymous named tuple by an alias — `P = (a: int)` or
+    /// `type P = (a: int)`. Coercion asks what the annotation *means*, not how
+    /// it is spelled, so a plain tuple literal under `x: P` is wrapped exactly
+    /// as one under `x: (a: int)` is. Populated in source order, so an alias
+    /// only applies below its own declaration.
+    aliases: HashMap<String, Shape>,
     /// Hard transpile errors — each one aborts the whole transpilation so we
     /// never emit syntactically invalid Python. The transform aborts on the
     /// *first* failure during the visit pass; subsequent visits are no-ops.
@@ -166,6 +172,7 @@ impl<'src> AnonNamedTuple<'src> {
             needs_import: false,
             return_shape_stack: Vec::new(),
             typevar_rename_stack: Vec::new(),
+            aliases: HashMap::new(),
             errors: Vec::new(),
         }
     }
@@ -516,12 +523,10 @@ impl<'src> AnonNamedTuple<'src> {
     }
 
     fn return_shape_for(&mut self, func: &StmtFunctionDef) -> Option<Shape> {
-        let returns = func.returns.as_deref()?;
-        let Expr::Tuple(t) = returns else { return None };
         // Errors in shape extraction surface through the visitor's own pass
         // over this annotation tuple — silently treat them as "no coercion"
         // here so we don't double-report.
-        self.extract_type_shape(t).ok().flatten()
+        self.annotated_shape(func.returns.as_deref()?)
     }
 
     /// Extract a coercion target from an annotation expression. Returns the
@@ -529,16 +534,12 @@ impl<'src> AnonNamedTuple<'src> {
     /// whether to wrap the value directly or to wrap each element of an
     /// outer collection literal.
     fn coercion_target(&mut self, annotation: &Expr) -> Option<CoercionTarget> {
-        // Direct: `x: (name: T, ...)`
-        if let Expr::Tuple(t) = annotation {
-            return self
-                .extract_type_shape(t)
-                .ok()
-                .flatten()
-                .map(|s| CoercionTarget {
-                    shape: s,
-                    container: ContainerKind::Direct,
-                });
+        // Direct: `x: (name: T, ...)` or `x: Alias`
+        if let Some(shape) = self.annotated_shape(annotation) {
+            return Some(CoercionTarget {
+                shape,
+                container: ContainerKind::Direct,
+            });
         }
         // Containers: `x: list[(name: T, ...)]` and friends. The annotation
         // is `Subscript(value=Name("list"), slice=Tuple{is_anon_named_tuple=true})`.
@@ -551,16 +552,38 @@ impl<'src> AnonNamedTuple<'src> {
                 "set" | "Set" | "frozenset" | "FrozenSet" => ContainerKind::SetLike,
                 _ => return None,
             };
-            let Expr::Tuple(t) = sub.slice.as_ref() else {
-                return None;
-            };
-            let shape = self.extract_type_shape(t).ok().flatten()?;
+            let shape = self.annotated_shape(sub.slice.as_ref())?;
             return Some(CoercionTarget {
                 shape,
                 container: kind,
             });
         }
         None
+    }
+
+    /// The anonymous-named-tuple shape an annotation denotes — written out, or
+    /// reached through an alias declared above it.
+    fn annotated_shape(&mut self, annotation: &Expr) -> Option<Shape> {
+        match annotation {
+            Expr::Tuple(t) => self.extract_type_shape(t).ok().flatten(),
+            Expr::Name(name) => self.aliases.get(name.id.as_str()).cloned(),
+            _ => None,
+        }
+    }
+
+    /// Record `P = (name: T, ...)` / `type P = (name: T, ...)` so a later
+    /// annotation spelling `P` coerces the same way the written-out form does.
+    fn record_alias(&mut self, name: &Expr, value: &Expr) {
+        let (Expr::Name(target), Expr::Tuple(t)) = (name, value) else {
+            return;
+        };
+        if !t.is_anon_named_tuple {
+            return;
+        }
+        // the tuple has already been visited, so a shape error is reported there
+        if let Ok(Some(shape)) = self.extract_type_shape(t) {
+            self.aliases.insert(target.id.to_string(), shape);
+        }
     }
 
     /// Wrap a plain tuple literal `(v1, v2, ...)` as a constructor call to the
@@ -787,6 +810,16 @@ impl<'ast> Visitor<'ast> for AnonNamedTuple<'_> {
                 }
                 self.rewrite_ann_assign_coercion(ann);
             }
+            Stmt::Assign(assign) => {
+                walk_stmt(self, stmt);
+                if let [target] = assign.targets.as_slice() {
+                    self.record_alias(target, &assign.value);
+                }
+            }
+            Stmt::TypeAlias(alias) => {
+                walk_stmt(self, stmt);
+                self.record_alias(&alias.name, &alias.value);
+            }
             _ => walk_stmt(self, stmt),
         }
     }
@@ -929,6 +962,65 @@ mod tests {
                     age: int
 
                 a = _AnonNamedTuple_7bfb4772
+            "},
+        );
+    }
+
+    #[test]
+    fn coercion_follows_an_alias() {
+        // coercion asks what the annotation means, not how it is spelled: ty
+        // accepts a plain tuple against an alias to an anonymous named tuple, so
+        // leaving it uncoerced makes `v.name` an `AttributeError` on a file the
+        // checker passed. both alias spellings and all three coercion sites
+        check(
+            indoc! {"
+                P = (name: str, age: int)
+                type Q = (name: str, age: int)
+
+                v: P = (\"a\", 1)
+                w: Q = (\"b\", 2)
+                xs: list[P] = [(\"c\", 3)]
+
+                def f() -> P:
+                    return (\"d\", 4)
+            "},
+            indoc! {"
+                from typing import NamedTuple
+                from typing_extensions import TypeAliasType
+                class _AnonNamedTuple_7bfb4772(NamedTuple):
+                    name: str
+                    age: int
+
+                P = _AnonNamedTuple_7bfb4772
+                Q = TypeAliasType(\"Q\", _AnonNamedTuple_7bfb4772)
+
+                v: P = _AnonNamedTuple_7bfb4772(\"a\", 1)
+                w: Q = _AnonNamedTuple_7bfb4772(\"b\", 2)
+                xs: list[P] = [_AnonNamedTuple_7bfb4772(\"c\", 3)]
+
+                def f() -> P:
+                    return _AnonNamedTuple_7bfb4772(\"d\", 4)
+            "},
+        );
+    }
+
+    #[test]
+    fn an_alias_below_its_use_does_not_coerce() {
+        // the table is built in source order, so a name is only an anon-NT alias
+        // from its declaration down — the same rule the binding itself follows
+        check(
+            indoc! {"
+                v: P = (\"a\", 1)
+                P = (name: str, age: int)
+            "},
+            indoc! {"
+                from typing import NamedTuple
+                class _AnonNamedTuple_7bfb4772(NamedTuple):
+                    name: str
+                    age: int
+
+                v: P = (\"a\", 1)
+                P = _AnonNamedTuple_7bfb4772
             "},
         );
     }

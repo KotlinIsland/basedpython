@@ -91,6 +91,16 @@ if a tuple literal's arity doesn't match the annotation it's left alone, so
 ty diagnoses the mismatch rather than the transpiler silently constructing
 the wrong shape
 
+coercion reads what the annotation *means*, not how it is spelled, so all three
+positions fire through an alias declared above them — both `P = (name: str)` and
+`type P = (name: str)`:
+
+```by
+P = (name: str, age: int)
+
+a: P = ("asdf", 1)  # transpiled to: a: P = _AnonNamedTuple_xxx("asdf", 1)
+```
+
 ## semantics
 
 an anonymous named tuple is a sugar for a `typing.NamedTuple` subclass:

@@ -7667,9 +7667,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         // returned value is wrapped as `_AnonNamedTuple_xxx("a", 1)`.
         // Find an anon-NT instance candidate in the expected type. Accept the
         // direct case (`x: anon-NT`) and any union member (`x: anon-NT | None`,
-        // `x: anon-NT | Other`, …). The first matching union member wins.
+        // `x: anon-NT | Other`, …). The first matching union member wins. A
+        // `type P = (name: str)` alias is resolved through, so the coercion
+        // follows what the annotation means rather than how it is spelled —
+        // which is also what the transpiler wraps on.
         #[expect(clippy::items_after_statements, reason = "helper colocated with use")]
         fn find_anon_nt_target<'db>(db: &'db dyn crate::Db, ty: Type<'db>) -> Option<Type<'db>> {
+            let ty = ty.resolve_type_alias(db);
             if let Type::NominalInstance(instance) = ty
                 && let crate::types::class::ClassLiteral::DynamicNamedTuple(nt) =
                     instance.class(db).class_literal(db)
