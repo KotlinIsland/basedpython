@@ -16,6 +16,9 @@
 //!   asymmetry the type checker models
 //! - `__implemented__` hands back the real object, and its `type()` is unchanged
 //! - an interface's own `__repr__` wins over the delegating one
+//! - `copy` and `pickle` rebuild the witness around the object it wraps, rather
+//!   than setting attributes on a half-built one and forwarding them into an
+//!   unfilled slot
 //! - every conversion site really converts: a `return`, an attribute assignment,
 //!   an annotated assignment, and element-wise in a literal and a comprehension
 
@@ -124,6 +127,23 @@ assert areas(comprehended) == 14, areas(comprehended)
 
 mapping: dict[str, Shape] = {"a": Rect(2, 5)}
 assert mapping["a"].area() == 10
+
+# a witness reaches user code as an `A`, so anything that copies one has to get
+# a witness back — `copy` and `pickle` both go through `__reduce__`
+import copy
+import pickle
+
+copied = copy.copy(w)
+assert copied.area() == 20
+assert copied.__implemented__ === r
+
+deep = copy.deepcopy(w)
+assert deep.area() == 20
+assert not (deep.__implemented__ === r)
+
+unpickled = pickle.loads(pickle.dumps(RectAsShape(Rect(2, 6))))
+assert unpickled.area() == 12
+assert isinstance(unpickled, Shape)
 
 print("ok")
 "#;

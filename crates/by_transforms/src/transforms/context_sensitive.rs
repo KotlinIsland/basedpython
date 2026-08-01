@@ -202,14 +202,15 @@ mod tests {
                 class _Shape_Circle(Shape):
                     radius: int
                 _Shape_Circle.__name__ = \"Circle\"
-                _Shape_Circle.__qualname__ = \"Shape.Circle\"
+                _Shape_Circle.__qualname__ = Shape.__qualname__ + \".Circle\"
                 Shape.Circle = _Shape_Circle
 
                 class _Shape_Empty(Shape):
                     __slots__ = ()
                     def __repr__(self): return \"Empty\"
+                    def __reduce__(self): return type(self).__qualname__
                 _Shape_Empty.__name__ = \"Empty\"
-                _Shape_Empty.__qualname__ = \"Shape.Empty\"
+                _Shape_Empty.__qualname__ = Shape.__qualname__ + \".Empty\"
                 Shape.Empty = _Shape_Empty()
 
                 s: Shape = Shape.Circle(2)
