@@ -11,23 +11,33 @@ B023 Function definition does not bind loop variable `x`
 33 |     defs.append(handler)
    |
 
-B023 Function definition does not bind loop variable `doubled`
-  --> B023_basedpython.by:55:28
+B023 Function definition does not bind loop variable `x`
+  --> B023_basedpython.by:54:33
    |
-53 |     for x in [1, 2, 3]:
-54 |         doubled = x * 2
-55 |         fns.append(lambda: doubled)
+52 | for x in [1, 2, 3]:
+53 |
+54 |     def defaulted_handler(value=x):
+   |                                 ^
+55 |         return value
+   |
+
+B023 Function definition does not bind loop variable `doubled`
+  --> B023_basedpython.by:90:28
+   |
+88 |     for x in [1, 2, 3]:
+89 |         doubled = x * 2
+90 |         fns.append(lambda: doubled)
    |                            ^^^^^^^
-56 |     return fns
+91 |     return fns
    |
 
 B023 Function definition does not bind loop variable `x`
-  --> B023_basedpython.by:67:33
-   |
-65 |         class Holder:
-66 |             var scale: int = 0
-67 |                 get() = field * x
-   |                                 ^
-68 |
-69 |         holders.append(Holder())
-   |
+   --> B023_basedpython.by:102:33
+    |
+100 |         class Holder:
+101 |             var scale: int = 0
+102 |                 get() = field * x
+    |                                 ^
+103 |
+104 |         holders.append(Holder())
+    |

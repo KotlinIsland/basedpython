@@ -56,6 +56,12 @@ the body, where it runs once per call and reads the loop binding like the body's
 own code does. so `def handler(value=i)` names this iteration's `i`, the same as
 the `lambda value=i:` spelling beside it
 
+because the default is read from the body, it is bound wherever a body read
+would be — so a `def` in a *module-level* loop does not bind it, exactly as the
+[next section](#what-stays-pythons) describes for the body, and `B023` reports
+it. a *scalar* default is left in the signature and keeps python's eager
+binding, so it captures in every position
+
 a name a nested function writes through with `nonlocal` or `global` is never
 captured — the write has to reach the binding the loop itself holds:
 
