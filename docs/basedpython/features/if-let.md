@@ -81,15 +81,15 @@ guard that records which clause was taken, followed by a plain `if` that runs
 the original body
 
 ```py
-_by_if_let_0 = 0
+__by_if_let_0__ = 0
 match shape:
     case Shape.Circle(r):
-        _by_if_let_0 = 1
-if _by_if_let_0 == 1:
+        __by_if_let_0__ = 1
+if __by_if_let_0__ == 1:
     print(r * 2)
-if _by_if_let_0 == 0:
+if __by_if_let_0__ == 0:
     print("not a circle")
-del _by_if_let_0
+del __by_if_let_0__
 ```
 
 only the headers are rewritten, so every body keeps its own source. `match` is

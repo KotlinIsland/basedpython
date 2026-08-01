@@ -129,7 +129,7 @@ mod tests {
         // clobbered by it
         check(
             "x = t.0 ?? 9\n",
-            "x = _t if (_t := t[0]) is not None else 9\n",
+            "x = __by_t_0__ if (__by_t_0__ := t[0]) is not None else 9\n",
         );
     }
 

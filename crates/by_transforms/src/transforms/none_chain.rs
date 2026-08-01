@@ -5,10 +5,11 @@ use ruff_python_ast::{Expr, Stmt};
 use ruff_text_size::{Ranged, TextRange};
 
 use crate::transforms::ast_driver::{Fragment, PassContext, TypeAwarePass};
+use crate::transforms::source_util::temporary_name;
 use crate::type_info::TypeInfo;
 
-/// rewrites `a?.b` to `(None if a is None else a.b)`
-/// and chains like `a?.b?.c` to `(None if a is None else None if (_t := a.b) is None else _t.c)`
+/// rewrites `a?.b` to `(None if a is None else a.b)` and chains like `a?.b?.c`
+/// to `(None if a is None else None if (__by_t_0__ := a.b) is None else __by_t_0__.c)`
 pub(crate) struct NoneChain<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
@@ -25,15 +26,21 @@ impl<'src> NoneChain<'src> {
     }
 }
 
-fn pick_temp_var(types: &dyn TypeInfo, anchor: &Expr) -> &'static str {
-    for name in [
-        "_t", "_t0", "_t1", "_t2", "_t3", "_t4", "_t5", "_t6", "_t7", "_t8", "_t9",
-    ] {
-        if types.is_unbound_at(name, anchor) {
-            return name;
-        }
-    }
-    "_t9"
+/// How many temporaries a single expansion may need before it starts reusing
+/// the last one — a chain nests one guard per `?.`, and ten is well past any
+/// chain anyone writes
+const TEMP_VARS: usize = 10;
+
+/// The name a `?.` or `??` expansion walruses its receiver into.
+pub(super) fn temp_var(index: usize) -> String {
+    temporary_name("t", index)
+}
+
+fn pick_temp_var(types: &dyn TypeInfo, anchor: &Expr) -> String {
+    (0..TEMP_VARS)
+        .map(temp_var)
+        .find(|name| types.is_unbound_at(name, anchor))
+        .unwrap_or_else(|| temp_var(TEMP_VARS))
 }
 
 /// walks an attribute-access chain and returns `Some((python_form, guards, base))`
@@ -225,7 +232,7 @@ impl<'ast> Visitor<'ast> for NoneChain<'_> {
             let temp = pick_temp_var(self.types, expr);
             let trailers = TextRange::new(head.range().end(), expr.range().end());
             let mut fragments = vec![Fragment::Lit("(".to_owned())];
-            fragments.extend(build_expansion(&guards, &form, temp, base));
+            fragments.extend(build_expansion(&guards, &form, &temp, base));
             fragments.push(Fragment::Src(trailers));
             fragments.push(Fragment::Lit(")".to_owned()));
             self.template_edits.push((expr.range(), fragments));
@@ -273,15 +280,15 @@ mod tests {
     fn double_chain() {
         check(
             "x = a?.a?.b\n",
-            "x = (None if a is None else None if (_t := a.a) is None else _t.b)\n",
+            "x = (None if a is None else None if (__by_t_0__ := a.a) is None else __by_t_0__.b)\n",
         );
     }
 
     #[test]
     fn double_chain_t_taken() {
         check(
-            "_t = 1\nx = a?.a?.b\n",
-            "_t = 1\nx = (None if a is None else None if (_t0 := a.a) is None else _t0.b)\n",
+            "__by_t_0__ = 1\nx = a?.a?.b\n",
+            "__by_t_0__ = 1\nx = (None if a is None else None if (__by_t_1__ := a.a) is None else __by_t_1__.b)\n",
         );
     }
 
@@ -289,7 +296,7 @@ mod tests {
     fn triple_chain() {
         check(
             "x = a?.b?.c?.d\n",
-            "x = (None if a is None else None if (_t := a.b) is None else None if (_t := _t.c) is None else _t.d)\n",
+            "x = (None if a is None else None if (__by_t_0__ := a.b) is None else None if (__by_t_0__ := __by_t_0__.c) is None else __by_t_0__.d)\n",
         );
     }
 
@@ -302,7 +309,7 @@ mod tests {
     fn optional_after_plain_attr() {
         check(
             "x = a.b?.c\n",
-            "x = (None if (_t := a.b) is None else _t.c)\n",
+            "x = (None if (__by_t_0__ := a.b) is None else __by_t_0__.c)\n",
         );
     }
 
@@ -319,7 +326,7 @@ mod tests {
     fn call_on_double_chain() {
         check(
             "x = a?.b?.c()\n",
-            "x = (None if a is None else None if (_t := a.b) is None else _t.c())\n",
+            "x = (None if a is None else None if (__by_t_0__ := a.b) is None else __by_t_0__.c())\n",
         );
     }
 
@@ -358,7 +365,7 @@ mod tests {
     fn call_on_chain_with_coalesce() {
         check(
             "x = a?.b() ?? c\n",
-            "x = _t if (_t := (None if a is None else a.b())) is not None else c\n",
+            "x = __by_t_0__ if (__by_t_0__ := (None if a is None else a.b())) is not None else c\n",
         );
     }
 

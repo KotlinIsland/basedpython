@@ -8,20 +8,20 @@
 //! that runs the original body.
 //!
 //! ```text
-//! if let int(x) := v:           _by_if_let_0 = 0
+//! if let int(x) := v:           __by_if_let_0__ = 0
 //!     use(x)                    match v:
 //! elif fallback:                    case int(x):
-//!     other()                           _by_if_let_0 = 1
-//! else:                    ⇒    if _by_if_let_0 == 1:
+//!     other()                           __by_if_let_0__ = 1
+//! else:                    ⇒    if __by_if_let_0__ == 1:
 //!     last()                        use(x)
-//!                               if _by_if_let_0 == 0:
+//!                               if __by_if_let_0__ == 0:
 //!                                   if fallback:
-//!                                       _by_if_let_0 = 2
-//!                               if _by_if_let_0 == 2:
+//!                                       __by_if_let_0__ = 2
+//!                               if __by_if_let_0__ == 2:
 //!                                   other()
-//!                               if _by_if_let_0 == 0:
+//!                               if __by_if_let_0__ == 0:
 //!                                   last()
-//!                               del _by_if_let_0
+//!                               del __by_if_let_0__
 //! ```
 //!
 //! Only the header spans (clause keyword through its colon) are replaced, so
@@ -41,7 +41,7 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{Fragment, PassContext, TypeAwarePass};
 use super::destructure::{NameGen, push_destructure};
-use super::source_util::line_indent;
+use super::source_util::{line_indent, temporary_name};
 use crate::type_info::TypeInfo;
 
 /// `match` statements — which the lowering emits — are python 3.10 syntax.
@@ -114,7 +114,7 @@ impl IfLetLower<'_, '_> {
     /// generated assignments can't shadow anything the source binds
     fn fresh_selector(&mut self, anchor: &Expr) -> String {
         loop {
-            let name = format!("_by_if_let_{}", self.counter);
+            let name = temporary_name("if_let", self.counter);
             self.counter += 1;
             if self.types.is_unbound_at(&name, anchor) {
                 return name;
@@ -321,11 +321,11 @@ mod tests {
         "});
         assert!(
             out.contains(indoc! {"
-                _by_if_let_0 = 0
+                __by_if_let_0__ = 0
                 match opt:
                     case int(x):
-                        _by_if_let_0 = 1
-                if _by_if_let_0 == 1:
+                        __by_if_let_0__ = 1
+                if __by_if_let_0__ == 1:
                     print(x)
             "}),
             "got:\n{out}"
@@ -343,7 +343,7 @@ mod tests {
         "});
         assert!(
             out.contains(indoc! {"
-                if _by_if_let_0 == 0:
+                if __by_if_let_0__ == 0:
                     print('nope')
             "}),
             "got:\n{out}"
@@ -365,11 +365,11 @@ mod tests {
         "});
         assert!(
             out.contains(indoc! {"
-                if _by_if_let_0 == 0:
+                if __by_if_let_0__ == 0:
                     match side_effect():
                         case int(x):
-                            _by_if_let_0 = 2
-                if _by_if_let_0 == 2:
+                            __by_if_let_0__ = 2
+                if __by_if_let_0__ == 2:
                     print(x)
             "}),
             "got:\n{out}"
@@ -411,7 +411,7 @@ mod tests {
             if let int(x) := opt: print(x)
         "});
         assert!(
-            out.contains("if _by_if_let_0 == 1: print(x)"),
+            out.contains("if __by_if_let_0__ == 1: print(x)"),
             "got:\n{out}"
         );
     }
@@ -424,8 +424,8 @@ mod tests {
                 if let int(y) := opt:
                     print(x + y)
         "});
-        assert!(out.contains("_by_if_let_0 = 0"), "got:\n{out}");
-        assert!(out.contains("    _by_if_let_1 = 0"), "got:\n{out}");
+        assert!(out.contains("__by_if_let_0__ = 0"), "got:\n{out}");
+        assert!(out.contains("    __by_if_let_1__ = 0"), "got:\n{out}");
     }
 
     #[test]
@@ -456,10 +456,10 @@ mod tests {
         "});
         assert!(
             out.contains(indoc! {"
-                _by_if_let_0 = 0
+                __by_if_let_0__ = 0
                 if flag:
-                    _by_if_let_0 = 1
-                if _by_if_let_0 == 1:
+                    __by_if_let_0__ = 1
+                if __by_if_let_0__ == 1:
                     print('flag')
             "}),
             "got:\n{out}"
@@ -478,7 +478,7 @@ mod tests {
                     w = k
         "});
         assert!(
-            out.contains("    if _by_if_let_0 == 1:\n        w = k\n    del _by_if_let_0\n"),
+            out.contains("    if __by_if_let_0__ == 1:\n        w = k\n    del __by_if_let_0__\n"),
             "got:\n{out}"
         );
     }
@@ -496,8 +496,8 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                         print(x + y)
-                    del _by_if_let_1
-                del _by_if_let_0
+                    del __by_if_let_1__
+                del __by_if_let_0__
             "}),
             "got:\n{out}"
         );
@@ -520,13 +520,13 @@ mod tests {
         assert!(
             out.contains(indoc! {"
                 def _trailing_lambda_0(it=None):
-                    _by_if_let_0 = 0
+                    __by_if_let_0__ = 0
                     match v:
                         case int(n):
-                            _by_if_let_0 = 1
-                    if _by_if_let_0 == 1:
+                            __by_if_let_0__ = 1
+                    if __by_if_let_0__ == 1:
                         print(n)
-                    del _by_if_let_0
+                    del __by_if_let_0__
                 with_resource(fn=_trailing_lambda_0)
             "}),
             "got:\n{out}"
