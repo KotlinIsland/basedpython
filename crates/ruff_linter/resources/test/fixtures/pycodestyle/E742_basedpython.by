@@ -1,0 +1,16 @@
+"""an `extension` header names a type declared elsewhere, so the ambiguous-name
+rule has no declaration to judge"""
+
+
+class l:  # noqa: E742
+    pass
+
+
+extension l:
+    def twice(self) -> int:
+        return 2
+
+
+# a real declaration is still judged
+class O:
+    pass

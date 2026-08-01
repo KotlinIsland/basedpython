@@ -18,6 +18,7 @@ mod tests {
     use crate::{assert_diagnostics, settings};
 
     #[test_case(Rule::InvalidClassName, Path::new("N801.py"))]
+    #[test_case(Rule::InvalidClassName, Path::new("N801_basedpython.by"))]
     #[test_case(Rule::InvalidFunctionName, Path::new("N802.py"))]
     #[test_case(Rule::InvalidArgumentName, Path::new("N803.py"))]
     #[test_case(Rule::InvalidArgumentName, Path::new("N804.py"))]
@@ -25,6 +26,7 @@ mod tests {
     #[test_case(Rule::InvalidFirstArgumentNameForMethod, Path::new("N805.py"))]
     #[test_case(Rule::NonLowercaseVariableInFunction, Path::new("N806.py"))]
     #[test_case(Rule::DunderFunctionName, Path::new("N807.py"))]
+    #[test_case(Rule::DunderFunctionName, Path::new("N807_basedpython.by"))]
     #[test_case(Rule::ConstantImportedAsNonConstant, Path::new("N811.py"))]
     #[test_case(Rule::LowercaseImportedAsNonLowercase, Path::new("N812.py"))]
     #[test_case(Rule::CamelcaseImportedAsLowercase, Path::new("N813.py"))]

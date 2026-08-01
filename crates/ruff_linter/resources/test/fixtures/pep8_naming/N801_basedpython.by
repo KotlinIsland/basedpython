@@ -1,0 +1,21 @@
+"""an `extension` / `implementation` header names a type declared elsewhere, so
+there is no declared name for the naming rule to judge"""
+
+
+protocol Greeter:
+    def greet(self) -> str: ...
+
+
+extension list:
+    def second(self) -> int:
+        return 1
+
+
+implementation Greeter for list:
+    override def greet(self) -> str:
+        return "hi"
+
+
+# a real declaration is still judged
+class lowercase_name:
+    pass

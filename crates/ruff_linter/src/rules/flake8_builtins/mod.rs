@@ -18,6 +18,7 @@ mod tests {
     use ruff_python_ast::PythonVersion;
 
     #[test_case(Rule::BuiltinVariableShadowing, Path::new("A001.py"))]
+    #[test_case(Rule::BuiltinVariableShadowing, Path::new("A001_basedpython.by"))]
     #[test_case(Rule::BuiltinArgumentShadowing, Path::new("A002.py"))]
     #[test_case(Rule::BuiltinAttributeShadowing, Path::new("A003.py"))]
     #[test_case(Rule::BuiltinImportShadowing, Path::new("A004.py"))]
