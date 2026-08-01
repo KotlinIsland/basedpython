@@ -338,3 +338,20 @@ def f(c: bool) -> int:
     reveal_type(a)  # revealed: Never
     return a
 ```
+
+## a statement expression inside a trailing-lambda block
+
+the block's suite becomes a synthesized function, and each of its statements owns its own value
+position — the call the block trails is not it.
+
+```by
+def run(n: int = 1, cb: (int) -> None) -> None:
+    cb(n)
+
+run(1):
+    v = if it > 0:
+        1
+    else:
+        2
+    reveal_type(v)  # revealed: 1 | 2
+```
