@@ -1207,6 +1207,29 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
             }
         }
 
+        // basedpython: a symbolic value has to meet a union target arm by arm. the generic union
+        // arm is reached only after the arms that reduce a deferral — and after a typevar source
+        // has widened to its own bound — so by then the symbolic question would be asked of `int`
+        // rather than of the value that was written, and `-> (I + 1) | None` would reject `i + 1`.
+        // proving one arm is a positive proof only: anything short of that falls through to the
+        // ordinary handling, so this can never turn an accepted pair into a rejected one
+        if !matches!(self.relation, TypeRelation::Redundancy { .. })
+            && let Type::Union(union) = target
+            && (source.is_deferred() || union.elements(db).iter().copied().any(Type::is_deferred))
+        {
+            let distributed = self.without_context_collection(|| {
+                union
+                    .elements(db)
+                    .iter()
+                    .when_any(db, self.constraints, |&element| {
+                        self.check_type_pair(db, source, element)
+                    })
+            });
+            if distributed.is_always_satisfied(db) {
+                return distributed;
+            }
+        }
+
         let should_expand_intersection = |intersection: IntersectionType<'db>| {
             intersection
                 .positive(db)

@@ -279,6 +279,29 @@ def spelled_out[I: int](i: I) -> ~I:
     return -i - 1
 ```
 
+## a union arm is met by the arm, not by the reduced type
+
+a symbolic value has to meet a union target arm by arm. reducing it to `int` first would ask the
+question of a value nobody wrote, and `(I + 1) | None` would then reject `i + 1`.
+
+```by
+def deferred_arm[I: int](i: I) -> (I + 1) | None:
+    return i + 1
+
+def other_arm[I: int](i: I) -> (I + 1) | None:
+    return None
+
+def cancelling_arm[I: int](i: I) -> I | None:
+    return i + 1 - 1
+
+def annotated_arm[I: int](i: I) -> (I + 0) | None:
+    return i
+
+def not_that_value[I: int](i: I) -> (I + 1) | None:
+    # error: [invalid-return-type] "Return type does not match returned value: expected `I@not_that_value + 1 | None`, found `I@not_that_value`"
+    return i
+```
+
 ## a gradual value still satisfies a symbolic return type
 
 `Unknown` stands for anything, including the value the annotation names — rejecting it would make an

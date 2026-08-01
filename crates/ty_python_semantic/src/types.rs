@@ -1915,6 +1915,12 @@ impl<'db> Type<'db> {
         matches!(self, Type::Union(_))
     }
 
+    /// basedpython: whether this is a symbolic type whose value is only known once its type
+    /// parameters are, so reducing it before a comparison would lose what it names
+    pub(crate) const fn is_deferred(self) -> bool {
+        matches!(self, Type::Deferred(_))
+    }
+
     pub const fn as_union(self) -> Option<UnionType<'db>> {
         match self {
             Type::Union(union_type) => Some(union_type),
