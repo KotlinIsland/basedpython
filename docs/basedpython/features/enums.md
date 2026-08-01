@@ -203,6 +203,12 @@ transform recognises. because the lowering is a real `Enum`, the type checker
 models the class with the `Enum` base too: members expose `name` / `value` and
 the class iterates like any python enum
 
+a top-level **assignment** in the body disqualifies that form, even when every
+variant is unit: python's `Enum` would turn `MAX = 10` into a member, so
+`E.MAX + 5` would fail at runtime while the checker types `MAX` as a constant.
+such an enum takes the sealed hierarchy below instead, which keeps a constant a
+constant — and is not iterable, because it is not an `Enum`
+
 any other enum (one or more payload-carrying variants) lowers to a sealed
 hierarchy: the enum class holds the shared members, and each variant becomes a
 module-level **subclass** of the enum attached back as `Shape.Circle` — payload
