@@ -85,6 +85,44 @@ def make() -> (name: str, age: int):
     return ("asdf", 1)
 ```
 
+### Plain tuple literal assigns through an alias
+
+The coercion follows what the annotation means, not how it is spelled, so an alias to an anonymous
+named tuple accepts a plain tuple exactly as the written-out shape does — and the transpiler wraps
+the literal at the same three sites either way.
+
+```by
+P = (name: str, age: int)
+
+a: P = ("asdf", 1)
+reveal_type(a)  # revealed: (name: str, age: int)
+reveal_type(a.name)  # revealed: str
+```
+
+### Plain tuple literal assigns through a PEP 695 alias
+
+```by
+type P = (name: str, age: int)
+
+
+def make() -> P:
+    return ("asdf", 1)
+
+
+a: P = ("asdf", 1)
+b: P | None = ("asdf", 1)
+reveal_type(a.age)  # revealed: int
+```
+
+### An alias still rejects a mismatched literal
+
+```by
+type P = (name: str, age: int)
+
+# error: [invalid-assignment]
+a: P = ("asdf", "not an int")
+```
+
 ### Positional target field accepts named source field of compatible type
 
 ```by

@@ -29,12 +29,35 @@ use(v)
 print("ok")
 "#;
 
-#[test]
+/// the checker types a name bound to an anonymous named tuple as that tuple, so
+/// a plain literal under it passes `by check` — but only the written-out
+/// spelling used to be coerced, leaving an alias's value a bare tuple and every
+/// field access an `AttributeError`. all three coercion sites, both spellings
+const ALIAS_PROGRAM: &str = r#"
+P = (name: str, age: int)
+type Q = (name: str, age: int)
+
+
+def make() -> P:
+    return ("ada", 36)
+
+
+v: P = ("bob", 1)
+w: Q = ("cy", 2)
+xs: list[P] = [("dee", 3)]
+
+assert v.name == "bob", "assignment"
+assert w.age == 2, "pep695 alias"
+assert make().name == "ada", "return"
+assert [x.name for x in xs] == ["dee"], "list"
+print("ok")
+"#;
+
 #[expect(
     clippy::print_stderr,
     reason = "a skipped test must say why it skipped, or it reads as a pass"
 )]
-fn anon_named_tuple_field_types_run() {
+fn run(program: &str) {
     let Some(python) = common::python() else {
         eprintln!("skipping anon named tuple runtime test: no interpreter found");
         return;
@@ -44,7 +67,7 @@ fn anon_named_tuple_field_types_run() {
         min_version: PythonVersion::PY313,
         ..Config::default()
     };
-    let transpiled = transpile(PROGRAM, &config).expect("transpile should succeed");
+    let transpiled = transpile(program, &config).expect("transpile should succeed");
 
     let output = Command::new(&python)
         .arg("-c")
@@ -59,4 +82,14 @@ fn anon_named_tuple_field_types_run() {
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "ok");
+}
+
+#[test]
+fn anon_named_tuple_field_types_run() {
+    run(PROGRAM);
+}
+
+#[test]
+fn a_plain_tuple_under_an_alias_is_coerced() {
+    run(ALIAS_PROGRAM);
 }
