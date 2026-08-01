@@ -108,6 +108,9 @@ pub(crate) fn repair_conversion<'db>(
     if source.is_assignable_to(db, target) {
         return None;
     }
+    // the value being converted is an ordinary value of the type it was
+    // restricted from — `final Celsius` converts exactly as `Celsius` does
+    let source = source.erase_restriction(db);
 
     let mut routes: Vec<Route<'db>> = Vec::new();
     if let Some(repair) = implementations::repair_with_implementation(db, file, source, target) {

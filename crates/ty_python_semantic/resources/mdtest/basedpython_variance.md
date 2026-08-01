@@ -264,8 +264,8 @@ class Bare[T]:
 class Marked[in out T]:
     init(t: T)
 
-reveal_type(Bare(1))  # revealed: Bare[1]
-reveal_type(Marked(1))  # revealed: Marked[1]
+reveal_type(Bare(1))  # revealed: final Bare[1]
+reveal_type(Marked(1))  # revealed: final Marked[1]
 
 def bare() -> Bare[1]:
     result = Bare(1)
@@ -290,8 +290,8 @@ class MarkedRW[in out T]:
 
     init(t: T)
 
-reveal_type(BareRW(1))  # revealed: BareRW[int]
-reveal_type(MarkedRW(1))  # revealed: MarkedRW[int]
+reveal_type(BareRW(1))  # revealed: final BareRW[int]
+reveal_type(MarkedRW(1))  # revealed: final MarkedRW[int]
 ```
 
 Only the literal is unaffected — see below for what the declaration does do.

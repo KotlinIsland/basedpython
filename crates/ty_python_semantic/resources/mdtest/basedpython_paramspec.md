@@ -57,7 +57,7 @@ class A[P: (*: *, **: *)]:
         raise NotImplementedError
 
 a = A[(int, foo: str)]()
-reveal_type(a)  # revealed: A[(int, /, foo: str)]
+reveal_type(a)  # revealed: final A[(int, /, foo: str)]
 
 def use(a: A[(int, foo: str)]):
     reveal_type(a.get())  # revealed: (int, /, foo: str) -> None

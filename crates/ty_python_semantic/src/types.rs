@@ -17,6 +17,7 @@ use ruff_db::diagnostic::{Annotation, Diagnostic, Span};
 use ruff_db::files::File;
 use ruff_db::parsed::parsed_module;
 use ruff_python_ast as ast;
+use ruff_python_ast::helpers::TypeModifier;
 use ruff_python_ast::name::Name;
 use ruff_text_size::Ranged;
 use smallvec::smallvec_inline;
@@ -7373,13 +7374,22 @@ impl<'db> Type<'db> {
                 )
             }),
             Type::Restricted(restricted) => visitor.visit(db, self, type_mapping, || {
-                RestrictedType::from_type_expression(
-                    db,
-                    restricted.modifier(db),
-                    restricted
-                        .type_argument(db)
-                        .apply_type_mapping_impl(db, type_mapping, tcx, visitor),
-                )
+                let inner = restricted
+                    .type_argument(db)
+                    .apply_type_mapping_impl(db, type_mapping, tcx, visitor);
+                // basedpython: `final A` inferred for a constructor call is extra
+                // precision about one value, exactly like `Literal[1]` for `1`.
+                // Promotion is where such precision is traded for a type a
+                // declaration can be widened to, so the restriction drops here too
+                if restricted.modifier(db) == TypeModifier::Final
+                    && matches!(
+                        type_mapping,
+                        TypeMapping::Promote(PromotionMode::On, PromotionKind::Regular)
+                    )
+                {
+                    return inner;
+                }
+                RestrictedType::from_type_expression(db, restricted.modifier(db), inner)
             }),
 
             Type::TypeForm(typeform) => visitor.visit(db, self, type_mapping, || {

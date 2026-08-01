@@ -21,7 +21,7 @@ def f(s: str):
         reveal_type(c)  # revealed: str
 
     reveal_type([c for c in s])  # revealed: list[str]
-    reveal_type(list(s))  # revealed: list[str]
+    reveal_type(list(s))  # revealed: final list[str]
 ```
 
 A `str` is therefore not assignable to `Character` — a general string element is a code point, not a
@@ -65,7 +65,7 @@ from ty_extensions import Character
 
 def f(s: str):
     c = Character(s[0])
-    reveal_type(c)  # revealed: Character
+    reveal_type(c)  # revealed: final Character
     x: Character = c
 ```
 

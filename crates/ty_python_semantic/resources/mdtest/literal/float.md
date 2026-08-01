@@ -93,14 +93,15 @@ reveal_type(float(1.5))  # revealed: 1.5
 
 ### non-literal arguments
 
-a call the checker cannot evaluate constructs an ordinary `float`:
+a call the checker cannot evaluate constructs an ordinary `float` — spelled
+[`final float`](../basedpython_type_modifiers.md), as every constructor call is:
 
 ```by
 def f(x: str, y: list[str]) -> None:
-    reveal_type(float(x))  # revealed: float
+    reveal_type(float(x))  # revealed: final float
     # python accepts underscores and surrounding whitespace, which we don't parse
-    reveal_type(float("1_000.5"))  # revealed: float
-    reveal_type(float(*y))  # revealed: float
+    reveal_type(float("1_000.5"))  # revealed: final float
+    reveal_type(float(*y))  # revealed: final float
 ```
 
 ### python files are unaffected

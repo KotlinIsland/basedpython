@@ -56,7 +56,7 @@ from shapes import Shape
 
 class Circle(Shape): ...
 
-reveal_type(Circle())  # revealed: Circle
+reveal_type(Circle())  # revealed: final Circle
 ```
 
 ## subclassing a sealed class from a dependency is forbidden

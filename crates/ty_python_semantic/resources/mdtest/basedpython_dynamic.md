@@ -63,7 +63,7 @@ Subclassing `dynamic` is the basedpython spelling of subclassing `Any`, and reso
 ```by
 class C(dynamic): ...
 
-reveal_type(C())  # revealed: C
+reveal_type(C())  # revealed: final C
 ```
 
 ## value-position `dynamic` is an ordinary identifier

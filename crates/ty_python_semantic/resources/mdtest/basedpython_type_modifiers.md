@@ -113,8 +113,89 @@ class B(A): ...
 
 a: final A = A()
 
-# error: [invalid-assignment] "Object of type `B` is not assignable to `final A`"
+# error: [invalid-assignment] "Object of type `final B` is not assignable to `final A`"
 b: final A = B()
+```
+
+## a constructor call is inferred `final`
+
+A call that names the class it builds produces a value whose runtime class is exactly that class.
+Like `Literal[1]` for `1`, the extra precision is dropped wherever a declaration is inferred from
+the value.
+
+```by
+class A: ...
+
+class B(A): ...
+
+def f(make: type[A]):
+    reveal_type(A())  # revealed: final A
+    a = A()
+    reveal_type(a)  # revealed: final A
+    # a `type[A]` variable may hold a subclass, so its call is only an `A`
+    reveal_type(make())  # revealed: A
+    # a list display widens its elements, so the modifier does not leak into a
+    # type argument
+    reveal_type([A()])  # revealed: list[A]
+```
+
+## a generic solve reads through the modifier
+
+The restriction constrains which values fit, not what shape they have, so a constructed value still
+matches a structural formal.
+
+```by
+def head[T](xs: list[T]) -> T:
+    raise NotImplementedError
+
+def f():
+    reveal_type(head(list[int]()))  # revealed: int
+    xs = list[int]()
+    reveal_type(head(xs))  # revealed: int
+```
+
+## an inferred declaration widens the modifier away
+
+```by
+class A: ...
+
+class B(A): ...
+
+class C:
+    x = A()
+
+def g(c: C):
+    reveal_type(c.x)  # revealed: A
+    c.x = B()
+```
+
+## `final T` is disjoint from a type no exactly-`T` value can have
+
+A proper subclass of `A` is never exactly an `A`, and neither is an unrelated class, so both narrow
+away entirely.
+
+```by
+class A: ...
+
+class B(A): ...
+
+def f(a: final A):
+    if isinstance(a, B):
+        reveal_type(a)  # revealed: Never
+    if isinstance(a, str):
+        reveal_type(a)  # revealed: Never
+```
+
+## a value `final T` admits keeps overlapping it
+
+`1` is exactly an `int`, so `final int` still meets `Literal[1]`.
+
+```by
+def f(n: final int):
+    if isinstance(n, bool):
+        reveal_type(n)  # revealed: Never
+    if n == 1:
+        reveal_type(n)  # revealed: final int
 ```
 
 ## `final` on an already-`@final` class adds nothing
