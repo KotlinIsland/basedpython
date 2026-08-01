@@ -11,6 +11,7 @@ use ty_module_resolver::KnownModule;
 
 use super::call::CallArguments;
 use super::callable::CallableTypeKind;
+use super::safe_variance::private_member_write_type;
 use super::{KnownClass, KnownInstanceType, MemberLookupPolicy, Type, TypeQualifiers};
 use crate::Db;
 use crate::place::{DefinedPlace, Definedness, Place, PlaceAndQualifiers, builtins_symbol};
@@ -485,6 +486,13 @@ fn explicit_attribute_write_requirement<'db>(
     attr_ty: Type<'db>,
     qualifiers: TypeQualifiers,
 ) -> ExplicitAttributeWriteRequirement<'db> {
+    // basedpython safe variance: a private member does not specialize, so a widened view of the
+    // class knows nothing about it — not even whether it is a descriptor whose `__set__` would
+    // govern the write. There is nothing such a view can supply
+    if let Some(ty) = private_member_write_type(db, object_ty, attribute) {
+        return ExplicitAttributeWriteRequirement::AssignableTo { ty, qualifiers };
+    }
+
     if let Place::Defined(DefinedPlace { ty: setter_ty, .. }) = attr_ty
         .class_member_with_policy(db, "__set__", MemberLookupPolicy::REQUIRE_CONCRETE)
         .place
@@ -521,9 +529,14 @@ fn instance_fallback_write_requirement<'db>(
     else {
         return FallbackAttributeWriteRequirement::PossiblyMissing;
     };
-    let ty = ty.bind_self_typevars(db, object_ty);
+    // basedpython safe variance: a private member does not specialize, and a widened view of the
+    // class has nothing to write to it — see `explicit_attribute_write_requirement`
+    let ty = private_member_write_type(db, object_ty, attribute).unwrap_or_else(|| {
+        let ty = ty.bind_self_typevars(db, object_ty);
+        effective_write_type(db, object_ty, attribute, ty)
+    });
     FallbackAttributeWriteRequirement::AssignableTo {
-        ty: effective_write_type(db, object_ty, attribute, ty),
+        ty,
         qualifiers,
         possibly_missing: definedness == Definedness::PossiblyUndefined,
     }
