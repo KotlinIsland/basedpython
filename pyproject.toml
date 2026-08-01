@@ -65,14 +65,20 @@ dev = [
     "prek==0.4.9",
 ]
 docs = [
+    "basedpython-pygments",
     "zensical",
 ]
 release = [
     "rooster==0.1.1",
 ]
 
+[tool.uv.sources]
+# the pygments lexer that highlights `by` code blocks in the docs
+basedpython-pygments = { path = "python/basedpython-pygments" }
+
 [tool.uv.dependency-groups]
 dev = { requires-python = ">=3.12" }
+docs = { requires-python = ">=3.12" }
 release = { requires-python = ">=3.12" }
 
 [tool.ruff]
@@ -111,6 +117,12 @@ ignore = [
     # the judgement of all of us.
     "E501"
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# a pygments lexer declares its public api as plain class attributes, and the
+# framework reads `tokens` at class-creation time. `ClassVar` annotations would
+# be correct at runtime but unique to this lexer among every lexer pygments has
+"python/basedpython-pygments/**" = ["RUF012"]
 
 [tool.ruff.lint.isort]
 required-imports = ["from __future__ import annotations"]

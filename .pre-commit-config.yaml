@@ -61,6 +61,18 @@ repos:
         files: '^(docs/basedpython/.*\.md|zensical\.toml|scripts/check_docs_nav\.py)$'
         pass_filenames: false
         priority: 0
+
+      - id: check-by-lexer
+        name: check the basedpython pygments lexer
+        # `--no-project` avoids building ruff from source. the lexer goes in
+        # editable, because a plain `--with <path>` is served from uv's build
+        # cache and would check a stale copy of the very thing being edited
+        entry: uv run --no-project --python 3.13 --with pygments --with-editable
+          ./python/basedpython-pygments python scripts/check_by_lexer.py
+        language: system
+        files: '^(docs/basedpython/.*\.md|python/basedpython-pygments/.*|scripts/check_by_lexer\.py)$'
+        pass_filenames: false
+        priority: 0
   # Prettier
   - repo: https://github.com/rbubley/mirrors-prettier
     rev: 9337a74165b178ae2c766f60bee7252a0f06f3e8 # frozen: v3.9.5

@@ -1,7 +1,18 @@
 [project]
 name = "scripts"
 version = "0.0.1"
-dependencies = ["stdlibs", "tqdm", "mdformat", "pyyaml", "mypy-primer", "httpx"]
+dependencies = [
+    "stdlibs",
+    "tqdm",
+    "mdformat",
+    "pyyaml",
+    "mypy-primer",
+    "httpx",
+    # `check_by_lexer.py` exercises the lexer in `python/basedpython-pygments`.
+    # only `pygments` is imported — the lexer itself is resolved through its
+    # entry point at runtime, so it is not a dependency of this project
+    "pygments",
+]
 requires-python = ">=3.12"
 
 [tool.black]

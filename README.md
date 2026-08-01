@@ -2,15 +2,25 @@
 
 a python type checker and a python-like language that transpiles to pure python
 
+- **a python type checker with framework support** — pydantic, sqlalchemy,
+    pytest and django are modelled directly, so the magic they do at runtime
+    checks like ordinary code
+- **basedpython, a python-like language that builds into python wheels**
+- **compiles into high performance python extension modules**
+- **a language server, formatter and linter** — `by server` drives the editor,
+    and `buff` is the basedpython build of ruff
+
 ```by
 enum class Shape:
     case Circle(radius: int)
     case Rect(width: int, height: int)
 
     def area(self) -> int:
-        match self:
-            case Shape.Circle(r): return 3 * r * r
-            case Shape.Rect(w, h): return w * h
+        return match self:
+            case Shape.Circle(r):
+                3 * r * r
+            case Shape.Rect(w, h):
+                w * h
 
 extension list[Element: Shape]:
     def first_circle(self) -> Shape.Circle?:
@@ -33,6 +43,7 @@ def main():
 
 ```sh
 uv add --dev basedpython
+echo 'print("hello")' > main.by
 by run main
 ```
 
@@ -42,7 +53,5 @@ by run main
 
 ## acknowledgements
 
-basedpython is a fork of [astral-sh/ruff](https://github.com/astral-sh/ruff) —
-it reuses ruff's parser, AST, and fix-application machinery, and the type
-checker is built on [ty](https://github.com/astral-sh/ty). none of this would
+basedpython is built on top of [astral-sh/ruff](https://github.com/astral-sh/ruff). none of this would
 exist without the work of the astral team and the wider ruff community

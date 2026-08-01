@@ -20,7 +20,11 @@ ROOT = Path(__file__).parent.parent
 FEATURES = Path("docs/basedpython/features")
 
 # reachable through in-page links rather than the nav, deliberately
-NAV_EXEMPT = {"acknowledgements.md", "frameworks/index.md"}
+NAV_EXEMPT: set[str] = set()
+
+# a link in `index.md` that leaves the features directory is prose, not an entry
+# in the reference index, so it takes no part in the three-way comparison
+SIBLING_LINK = re.compile(r"^[\w.-]+\.md$")
 
 
 def nav_paths(nav: object) -> list[str]:
@@ -56,9 +60,13 @@ def main() -> int:
         p.name for p in (ROOT / FEATURES).glob("*.md") if p.name != "index.md"
     )
 
-    index_order = re.findall(
-        r"\]\(([^)\s]+\.md)\)", (ROOT / FEATURES / "index.md").read_text()
-    )
+    index_order = [
+        link
+        for link in re.findall(
+            r"\]\(([^)\s]+\.md)\)", (ROOT / FEATURES / "index.md").read_text()
+        )
+        if SIBLING_LINK.match(link)
+    ]
     indexed = set(index_order)
 
     all_nav = nav_paths(nav)

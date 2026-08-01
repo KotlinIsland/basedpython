@@ -1,0 +1,19 @@
+[project]
+name = "basedpython-pygments"
+version = "0.0.0"
+description = "a pygments lexer for basedpython, used to highlight `by` code in the docs"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["pygments>=2.19"]
+
+# pygments discovers third-party lexers through this entry point group, so
+# installing the package is all it takes for ```by``` fences to highlight
+[project.entry-points."pygments.lexers"]
+basedpython = "basedpython_pygments:BasedPythonLexer"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["basedpython_pygments"]

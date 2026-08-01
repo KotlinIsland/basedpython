@@ -59,7 +59,7 @@ rather than silently miscounting — `len`-style code-point splitting would give
 `5` for the facepalm above, not `1`
 
 `regex` is Matthew Barnett's work, licensed `Apache-2.0 AND CNRI-Python` — see
-[acknowledgements](../acknowledgements.md)
+[credits](../credits.md#regex)
 
 the rewrites are type-directed: they fire only when the receiver is a string
 (`str`, `Character`, `LiteralString`, a literal, or a `str` subclass).

@@ -1,19 +1,66 @@
 [project]
 site_name = "basedpython"
+site_description = "a python-like language that transpiles to pure python"
+site_author = "KotlinIsland"
 site_url = "https://kotlinisland.github.io/basedpython/"
 docs_dir = "docs/basedpython"
+repo_url = "https://github.com/KotlinIsland/basedpython"
+repo_name = "KotlinIsland/basedpython"
+edit_uri = "edit/main/docs/basedpython"
+
+extra_css = ["stylesheets/extra.css"]
+
+[project.theme]
+features = [
+  # a click swaps the page in place instead of reloading the whole document,
+  # and a hovered link is fetched before the click lands
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.instant.progress",
+  "navigation.tracking",
+  # the reference is deep, so say where you are and how to leave
+  "navigation.path",
+  "navigation.indexes",
+  "navigation.footer",
+  "navigation.top",
+  "toc.follow",
+  # every page is mostly code, so make it easy to take
+  "content.code.copy",
+  "content.code.annotate",
+  "content.tabs.link",
+  "content.action.edit",
+  "search.highlight",
+]
+
+[project.theme.icon]
+logo = "lucide/binary"
+repo = "fontawesome/brands/github"
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme: light)"
 scheme = "default"
+primary = "black"
+accent = "indigo"
 toggle.icon = "lucide/sun"
 toggle.name = "Switch to dark mode"
 
 [[project.theme.palette]]
 media = "(prefers-color-scheme: dark)"
 scheme = "slate"
+primary = "black"
+accent = "indigo"
 toggle.icon = "lucide/moon"
 toggle.name = "Switch to light mode"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/KotlinIsland/basedpython"
+name = "basedpython on GitHub"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/python"
+link = "https://pypi.org/project/basedpython/"
+name = "basedpython on PyPI"
 
 [[project.nav]]
 basedpython = "index.md"
@@ -29,99 +76,122 @@ configuration = "configuration.md"
 
 [[project.nav]]
 features = [
-  { features = "features/index.md" },
-  { "polyfills" = "features/polyfills.md" },
-  { "runtime type-soundness checks" = "features/soundness.md" },
-  { "api lockfile" = "features/api-lock.md" },
-  { "fluid specializations" = "features/fluid-specializations.md" },
-  { "sound types" = "features/sound-types.md" },
-  { "precise unsolved type variables" = "features/precise-unsolved-typevars.md" },
-  { "regex group types" = "features/regex-groups.md" },
-  { "boolean conditions" = "features/conditions.md" },
-  { "tuple type literals" = "features/tuple-types.md" },
-  { "callable arrow syntax" = "features/callable.md" },
-  { "implicit receivers" = "features/implicit-receivers.md" },
-  { "intersection types" = "features/intersection.md" },
-  { "`or` / `and` type operators" = "features/or-and-types.md" },
-  { "negation types" = "features/not-type.md" },
-  { "unsafe unions" = "features/unsafe-union.md" },
-  { "`dynamic` type" = "features/dynamic.md" },
-  { "`typeof` keyword" = "features/typeof.md" },
-  { "star projections" = "features/star-projection.md" },
-  { "strict `float` and `complex`" = "features/no-number-promotions.md" },
-  { "infinity and nan float literals" = "features/float-literals.md" },
-  { "literal type promotion" = "features/literal-types.md" },
-  { "use-site type modifiers" = "features/type-modifiers.md" },
-  { "symbolic operations in types" = "features/symbolic-type-ops.md" },
-  { "match types" = "features/match-types.md" },
-  { "`type def` type functions" = "features/type-def.md" },
-  { "typed dict literals" = "features/typed-dict-literal.md" },
-  { "anonymous named tuple types" = "features/anonymous-named-tuple.md" },
-  { "inline protocol types" = "features/inline-protocol.md" },
-  { "wrapped optional and result types" = "features/wrapped-results.md" },
-  { "automatic forward references" = "features/forward-references.md" },
-  { "implicit typing imports" = "features/implicit-typing.md" },
-  { "typed lambda" = "features/typed-lambda.md" },
-  { "implicit overload stubs" = "features/overloads.md" },
-  { "type narrowing predicates" = "features/type-is.md" },
-  { "generics" = "features/generics.md" },
-  { "explicit typevar constraints" = "features/constraints.md" },
-  { "type parameter bound ranges" = "features/bound-ranges.md" },
-  { "bounds on a variadic pack" = "features/pack-bounds.md" },
-  { "attribute types" = "features/attribute-types.md" },
-  { "`TypedDict` and `Self` in type parameters" = "features/typeddict-self-bounds.md" },
-  { "keyword-variadic packs" = "features/keyword-variadic.md" },
-  { "type parameter separators" = "features/type-param-separators.md" },
-  { "typevar variance keywords" = "features/variance.md" },
-  { "safe variance" = "features/safe-variance.md" },
-  { "overlapping" = "features/overlapping.md" },
-  { "explicit generic call sites" = "features/generic-calls.md" },
-  { "reified type parameters" = "features/reified-generics.md" },
-  { "type reification" = "features/type-reification.md" },
-  { "parametric type tests" = "features/parametric-type-tests.md" },
-  { "modifiers and visibility" = "features/modifiers.md" },
-  { "based enums" = "features/enums.md" },
-  { "sealed classes" = "features/sealed-classes.md" },
-  { "init method shorthand" = "features/init-method.md" },
-  { "properties" = "features/properties.md" },
-  { "empty declarations" = "features/empty-declarations.md" },
-  { "main function" = "features/main-function.md" },
-  { "`sentinel` declarations" = "features/sentinel.md" },
-  { "decorator keyword" = "features/decorator-keyword.md" },
-  { "context-sensitive resolution" = "features/context-sensitive-resolution.md" },
-  { "identity and isinstance" = "features/identity-swap.md" },
-  { "optional chaining (`?.`)" = "features/optional-chaining.md" },
-  { "none-coalesce operator (`??`)" = "features/none-coalesce.md" },
-  { "postfix await (`.await`)" = "features/await-attribute.md" },
-  { "`cast` keyword" = "features/cast.md" },
-  { "checked & safe casts (`cast` / `cast?`)" = "features/checked-cast.md" },
-  { "`super` keyword" = "features/super.md" },
-  { "tuple member access" = "features/tuple-index.md" },
-  { "keyword arguments in subscripts" = "features/kw-subscript.md" },
-  { "destructuring" = "features/destructuring.md" },
-  { "destructuring with `if let`" = "features/if-let.md" },
-  { "statement expressions" = "features/statement-expressions.md" },
-  { "trailing lambda blocks" = "features/trailing-lambdas.md" },
-  { "unpack syntax" = "features/unpack-syntax.md" },
-  { "mutable default arguments" = "features/mutable-defaults.md" },
-  { "unique loop bindings" = "features/unique-loop-bindings.md" },
-  { "dedented triple-quoted strings" = "features/dedent-strings.md" },
-  { "custom string tags" = "features/string-tags.md" },
-  { "strings and characters" = "features/character.md" },
-  { "repeated `_` parameters" = "features/repeated-underscore.md" },
-  { "lazy imports" = "features/lazy-imports.md" },
-  { "export imports" = "features/export-imports.md" },
-  { "extensions" = "features/extensions.md" },
-  { "conversions (`__from__` / `__into__` / `__of__`)" = "features/conversions.md" },
-  { "context parameters" = "features/context-parameters.md" },
-  { "local lifetimes (`local` / `once`)" = "features/local-lifetimes.md" },
-  { "exception tracking (`raises`)" = "features/exceptions.md" },
-  { "assignment alignment" = "features/assignment-alignment.md" },
-  { "implementations" = "features/implementations.md" },
+  "features/index.md",
+  { "python compatibility" = [
+    { "differences from python" = "features/differences-from-python.md" },
+  ] },
+  { "runtime compatibility" = [
+    { "polyfills" = "features/polyfills.md" },
+    { "runtime type-soundness checks" = "features/soundness.md" },
+  ] },
+  { "project-level" = [
+    { "api lockfile" = "features/api-lock.md" },
+  ] },
+  { "standard library" = [
+    { "typeshed improvements" = "features/typeshed.md" },
+  ] },
+  { "enhancements that also apply to python" = [
+    { "fluid specializations" = "features/fluid-specializations.md" },
+    { "sound types" = "features/sound-types.md" },
+    { "precise unsolved type variables" = "features/precise-unsolved-typevars.md" },
+    { "regex group types" = "features/regex-groups.md" },
+    { "boolean conditions" = "features/conditions.md" },
+  ] },
+  { "type system" = [
+    { "tuple type literals" = "features/tuple-types.md" },
+    { "callable arrow syntax" = "features/callable.md" },
+    { "implicit receivers" = "features/implicit-receivers.md" },
+    { "intersection types" = "features/intersection.md" },
+    { "or / and type operators" = "features/or-and-types.md" },
+    { "negation types" = "features/not-type.md" },
+    { "unsafe unions" = "features/unsafe-union.md" },
+    { "dynamic type" = "features/dynamic.md" },
+    { "typeof keyword" = "features/typeof.md" },
+    { "star projections" = "features/star-projection.md" },
+    { "strict float and complex" = "features/no-number-promotions.md" },
+    { "infinity and nan float literals" = "features/float-literals.md" },
+    { "literal type promotion" = "features/literal-types.md" },
+    { "use-site type modifiers" = "features/type-modifiers.md" },
+    { "symbolic operations in types" = "features/symbolic-type-ops.md" },
+    { "match types" = "features/match-types.md" },
+    { "type def type functions" = "features/type-def.md" },
+    { "typed dict literals" = "features/typed-dict-literal.md" },
+    { "anonymous named tuple types" = "features/anonymous-named-tuple.md" },
+    { "inline protocol types" = "features/inline-protocol.md" },
+    { "wrapped optional and result types" = "features/wrapped-results.md" },
+    { "automatic forward references" = "features/forward-references.md" },
+    { "implicit typing imports" = "features/implicit-typing.md" },
+    { "typed lambda" = "features/typed-lambda.md" },
+    { "implicit overload stubs" = "features/overloads.md" },
+    { "type narrowing predicates" = "features/type-is.md" },
+  ] },
+  { "generics" = [
+    { "generics" = "features/generics.md" },
+    { "explicit typevar constraints" = "features/constraints.md" },
+    { "type parameter bound ranges" = "features/bound-ranges.md" },
+    { "bounds on a variadic pack" = "features/pack-bounds.md" },
+    { "attribute types" = "features/attribute-types.md" },
+    { "TypedDict and Self in type parameters" = "features/typeddict-self-bounds.md" },
+    { "keyword-variadic packs" = "features/keyword-variadic.md" },
+    { "type parameter separators" = "features/type-param-separators.md" },
+    { "typevar variance keywords" = "features/variance.md" },
+    { "safe variance" = "features/safe-variance.md" },
+    { "overlapping" = "features/overlapping.md" },
+    { "explicit generic call sites" = "features/generic-calls.md" },
+    { "reified type parameters" = "features/reified-generics.md" },
+    { "type reification" = "features/type-reification.md" },
+    { "parametric type tests" = "features/parametric-type-tests.md" },
+  ] },
+  { "declarations" = [
+    { "modifiers and visibility" = "features/modifiers.md" },
+    { "based enums" = "features/enums.md" },
+    { "sealed classes" = "features/sealed-classes.md" },
+    { "init method shorthand" = "features/init-method.md" },
+    { "properties" = "features/properties.md" },
+    { "empty declarations" = "features/empty-declarations.md" },
+    { "main function" = "features/main-function.md" },
+    { "sentinel declarations" = "features/sentinel.md" },
+    { "decorator keyword" = "features/decorator-keyword.md" },
+  ] },
+  { "expressions and statements" = [
+    { "context-sensitive resolution" = "features/context-sensitive-resolution.md" },
+    { "identity and isinstance" = "features/identity-swap.md" },
+    { "optional chaining (?.)" = "features/optional-chaining.md" },
+    { "none-coalesce operator (??)" = "features/none-coalesce.md" },
+    { "postfix await (.await)" = "features/await-attribute.md" },
+    { "cast keyword" = "features/cast.md" },
+    { "checked & safe casts (cast / cast?)" = "features/checked-cast.md" },
+    { "super keyword" = "features/super.md" },
+    { "tuple member access" = "features/tuple-index.md" },
+    { "keyword arguments in subscripts" = "features/kw-subscript.md" },
+    { "destructuring" = "features/destructuring.md" },
+    { "destructuring with if let" = "features/if-let.md" },
+    { "statement expressions" = "features/statement-expressions.md" },
+    { "trailing lambda blocks" = "features/trailing-lambdas.md" },
+    { "unpack syntax" = "features/unpack-syntax.md" },
+    { "mutable default arguments" = "features/mutable-defaults.md" },
+    { "unique loop bindings" = "features/unique-loop-bindings.md" },
+    { "dedented triple-quoted strings" = "features/dedent-strings.md" },
+    { "custom string tags" = "features/string-tags.md" },
+    { "strings and characters" = "features/character.md" },
+    { "repeated _ parameters" = "features/repeated-underscore.md" },
+    { "lazy imports" = "features/lazy-imports.md" },
+    { "export imports" = "features/export-imports.md" },
+    { "extensions" = "features/extensions.md" },
+    { "implementations" = "features/implementations.md" },
+    { "conversions (__from__ / __into__ / __of__)" = "features/conversions.md" },
+    { "context parameters" = "features/context-parameters.md" },
+    { "local lifetimes (local / once)" = "features/local-lifetimes.md" },
+    { "exception tracking (raises)" = "features/exceptions.md" },
+  ] },
+  { "formatting" = [
+    { "assignment alignment" = "features/assignment-alignment.md" },
+  ] },
 ]
 
 [[project.nav]]
 "framework support" = [
+  "frameworks/index.md",
   { "Pydantic" = "frameworks/pydantic.md" },
   { "SQLAlchemy" = "frameworks/sqlalchemy.md" },
   { "pytest" = "frameworks/pytest.md" },
@@ -136,3 +206,6 @@ development = [
   { "type functions" = "development/type-def-design.md" },
   { "typeshed patches" = "development/typeshed-patches.md" },
 ]
+
+[[project.nav]]
+credits = "credits.md"

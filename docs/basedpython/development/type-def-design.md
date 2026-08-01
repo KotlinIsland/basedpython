@@ -1,8 +1,5 @@
 # `type def` — user-defined type functions
 
-status: design. a **proof of concept** of the shaded parts exists — see
-[what is implemented](#what-is-implemented) — but this document is the proposal,
-not a description of existing behaviour
 
 ## summary
 
@@ -660,7 +657,7 @@ would delete outright
 - third-party ones do not, until listed:
 
     ```toml
-    [tool.by.type-functions]
+    [tool.basedpython.type-functions]
     trust = ["some_package"]
     ```
 
@@ -679,7 +676,7 @@ functions in cheap-to-import modules is a documented recommendation, and
 ## configuration
 
 ```toml
-[tool.by.type-functions]
+[tool.basedpython.type-functions]
 enabled = true
 trust = []
 workers = 4
