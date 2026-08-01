@@ -6719,6 +6719,19 @@ def f(x: object) -> None:
         reveal_type(x)  # revealed: HasLen
 ```
 
+### `Protocol` written out as well as injected
+
+the injected base is appended after the written ones, so writing `Protocol` again is a duplicate
+base — reported against the declaration, since the second occurrence has no base node of its own.
+
+```by
+from typing import Protocol
+
+# error: [duplicate-base] "Duplicate base class `Protocol`"
+protocol Reader(Protocol):
+    def read(self) -> str: ...
+```
+
 [mypy_protocol_docs]: https://mypy.readthedocs.io/en/stable/protocols.html#protocols-and-structural-subtyping
 [mypy_protocol_tests]: https://github.com/python/mypy/blob/master/test-data/unit/check-protocols.test
 [protocol conformance tests]: https://github.com/python/typing/tree/main/conformance/tests

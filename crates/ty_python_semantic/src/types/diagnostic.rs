@@ -4502,17 +4502,39 @@ pub(crate) fn report_duplicate_bases(
         class.name(db)
     ));
 
-    let first_base = bases_list[*first_index].source_node();
-    diagnostic.annotate(context.secondary(first_base).message(format_args!(
-        "Class `{duplicate_name}` first included in bases list here"
-    )));
+    // a basedpython declaration form (`protocol Foo(Protocol)`) injects a base the
+    // header does not spell, and the injected ones are appended after the written
+    // ones — so an index past the written list is the declaration itself, which has
+    // no base node to point at
+    let mut injected_occurrence = false;
+    if let Some(first_base) = bases_list.get(*first_index) {
+        diagnostic.annotate(
+            context
+                .secondary(first_base.source_node())
+                .message(format_args!(
+                    "Class `{duplicate_name}` first included in bases list here"
+                )),
+        );
+    } else {
+        injected_occurrence = true;
+    }
 
     for index in later_indices {
-        let repeated_base = bases_list[*index].source_node();
+        let Some(repeated_base) = bases_list.get(*index) else {
+            injected_occurrence = true;
+            continue;
+        };
         diagnostic.annotate(
-            Annotation::primary(context.span(repeated_base))
+            Annotation::primary(context.span(repeated_base.source_node()))
                 .message(format_args!("Class `{duplicate_name}` later repeated here")),
         );
+    }
+
+    if injected_occurrence {
+        diagnostic.info(format_args!(
+            "The declaration of `{}` adds `{duplicate_name}` as a base already",
+            class.name(db)
+        ));
     }
 }
 
