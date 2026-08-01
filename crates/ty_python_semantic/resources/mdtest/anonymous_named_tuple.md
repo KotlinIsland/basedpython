@@ -68,6 +68,31 @@ reveal_type(a.arg0)  # revealed: 1
 reveal_type(a.name)  # revealed: "a"
 ```
 
+### An expected shape wins over the literal one
+
+Both spellings construct the one class the transpiler emits, whose fields carry the *declared* types
+— so both take those types, and a `_replace` call the runtime accepts checks.
+
+```by
+type P = (name: str, age: int)
+
+a: P = ("asdf", 1)
+b: P = (name="asdf", age=1)
+
+reveal_type(a)  # revealed: (name: str, age: int)
+reveal_type(b)  # revealed: (name: str, age: int)
+reveal_type(a._replace(name="x"))  # revealed: (name: str, age: int)
+reveal_type(b._replace(name="x"))  # revealed: (name: str, age: int)
+```
+
+A value that does not fit the expected shape keeps its literal one, so the mismatch is still
+reported against what was written:
+
+```by
+# error: [invalid-assignment] "Object of type `(name: 1, age: 1)` is not assignable to `(name: str, age: int)`"
+c: (name: str, age: int) = (name=1, age=1)
+```
+
 ## Assignability
 
 ### Plain tuple literal assigns to anonymous named tuple parameter

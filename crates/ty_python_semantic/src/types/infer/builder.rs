@@ -7656,9 +7656,22 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         if tuple.is_anon_named_tuple_value {
             let class_lit =
                 self.synthesize_anon_named_tuple_class(tuple, /* is_type_form = */ false);
-            return class_lit
+            let literal_instance = class_lit
                 .to_instance_approximation(self.db())
                 .unwrap_or(class_lit);
+            // an expected anonymous-named-tuple shape wins over the literal one, the
+            // same coercion the plain-tuple spelling gets below: `b: P = (name="a")`
+            // and `b: P = ("a",)` construct the one class the transpiler emits, whose
+            // fields carry the *declared* types — so `b._replace(name="x")` is a call
+            // the runtime accepts
+            if let Some(target) = tcx
+                .annotation()
+                .and_then(|annotation| find_anon_nt_target(self.db(), annotation))
+                && literal_instance.is_assignable_to(self.db(), target)
+            {
+                return target;
+            }
+            return literal_instance;
         }
         // basedpython parameter-shape tuple literal in value position is not
         // a runtime type itself — infer each contained field for diagnostics

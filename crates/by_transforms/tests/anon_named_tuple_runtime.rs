@@ -53,6 +53,23 @@ assert [x.name for x in xs] == ["dee"], "list"
 print("ok")
 "#;
 
+/// both spellings of a construction against the same annotation build the one
+/// class the transpiler emits, and that class's fields carry the *declared*
+/// types — which is why the checker gives the named spelling the declared shape
+/// rather than the literal one it is written with
+const SPELLING_PROGRAM: &str = r#"
+type P = (name: str, age: int)
+
+a: P = ("ada", 36)
+b: P = (name="ada", age=36)
+
+assert type(a).__name__ == type(b).__name__, "one class"
+assert a == b, "equal"
+assert a._replace(name="bob").name == "bob", "positional spelling"
+assert b._replace(name="bob").name == "bob", "named spelling"
+print("ok")
+"#;
+
 #[expect(
     clippy::print_stderr,
     reason = "a skipped test must say why it skipped, or it reads as a pass"
@@ -92,4 +109,9 @@ fn anon_named_tuple_field_types_run() {
 #[test]
 fn a_plain_tuple_under_an_alias_is_coerced() {
     run(ALIAS_PROGRAM);
+}
+
+#[test]
+fn both_construction_spellings_build_one_class() {
+    run(SPELLING_PROGRAM);
 }
