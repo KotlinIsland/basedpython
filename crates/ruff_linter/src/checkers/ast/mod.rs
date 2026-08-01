@@ -1456,6 +1456,15 @@ impl<'a> Visitor<'a> for Checker<'a> {
                     self.semantic.flags -= SemanticModelFlags::CLASS_BASE;
                 }
 
+                // basedpython: an implementation's witness class derives the interface,
+                // so the interface is a base — spelled in the header rather than in an
+                // argument list, which is the only reason it is visited separately
+                if let Some(header) = class_def.implementation.as_deref() {
+                    self.semantic.flags |= SemanticModelFlags::CLASS_BASE;
+                    self.visit_expr(&header.interface);
+                    self.semantic.flags -= SemanticModelFlags::CLASS_BASE;
+                }
+
                 let definition = docstrings::extraction::extract_definition(
                     ExtractionTarget::Class(class_def),
                     self.semantic.definition_id,
@@ -1479,12 +1488,39 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 self.semantic.pop_scope(); // Class scope
                 self.semantic.pop_definition();
                 self.semantic.pop_scope(); // Type parameter scope
-                self.add_binding(
-                    name,
-                    stmt.identifier(),
-                    BindingKind::ClassDefinition(scope_id),
-                    BindingFlags::empty(),
-                );
+                // basedpython: an `extension T:` / `implementation I for T:` header
+                // *references* the type it names instead of declaring it, and the
+                // binding an implementation introduces is its `as` witness. binding
+                // the header name would read as a redefinition of the real
+                // declaration and leave the witness undefined everywhere it is used
+                if class_def.is_extension() || class_def.is_implementation() {
+                    if let Some(binding_id) = self.semantic.lookup_binding(name.as_str()) {
+                        self.semantic.add_local_reference(
+                            binding_id,
+                            ExprContext::Load,
+                            name.range(),
+                        );
+                    }
+                    if let Some(witness) = class_def
+                        .implementation
+                        .as_deref()
+                        .and_then(|header| header.witness.as_ref())
+                    {
+                        self.add_binding(
+                            witness.as_str(),
+                            witness.range(),
+                            BindingKind::ClassDefinition(scope_id),
+                            BindingFlags::empty(),
+                        );
+                    }
+                } else {
+                    self.add_binding(
+                        name,
+                        stmt.identifier(),
+                        BindingKind::ClassDefinition(scope_id),
+                        BindingFlags::empty(),
+                    );
+                }
             }
             Stmt::TypeAlias(ast::StmtTypeAlias {
                 range: _,

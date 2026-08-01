@@ -167,3 +167,28 @@ def destructured_binders(points: list[Point], ctx: object) -> None:
 def undefined_in_pattern(value: object) -> None:
     if let UndefinedPattern(captured) := value:  # F821
         print(captured)
+
+
+# an implementation's binding is its `as` witness, not the type it names — the
+# header's own name is a reference to an existing declaration
+class Implemented:
+    pass
+
+
+class Interface:
+    pass
+
+
+implementation Interface for Implemented as ImplementedAsInterface:
+    def m(self) -> int:
+        return 1
+
+
+print(ImplementedAsInterface(Implemented()))
+
+# an anonymous implementation introduces no binding at all. the interface is an
+# ordinary reference and is reported when undefined; the implemented type is
+# looked up rather than resolved, so an undefined one is a known gap here — `by
+# check` reports it as an unresolved type
+implementation UndefinedInterface for UndefinedImplemented:  # F821
+    pass
