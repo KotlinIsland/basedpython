@@ -30,7 +30,7 @@ use ruff_python_ast::visitor::transformer::Transformer;
 use ruff_python_ast::{Expr, ModModule, PySourceType, Stmt};
 use ruff_python_codegen::{Generator, Indentation, Mode};
 use ruff_python_parser::parse_unchecked_source;
-use ruff_source_file::LineEnding;
+use ruff_source_file::{LineEnding, LineRanges};
 use ruff_text_size::{Ranged, TextRange};
 
 use super::{
@@ -1117,15 +1117,17 @@ pub(crate) fn run_against_source<'a>(
             prefix.push_str(imp);
             prefix.push('\n');
         }
-        // a `from __future__ import …` line must stay first (it's a syntax error
-        // anywhere else), so splice required imports in after it when present.
+        // a BOM and a `from __future__ import …` line both have to stay first —
+        // the BOM is only a BOM at offset 0, and the future import is a syntax
+        // error anywhere else — so splice required imports in after them.
         // every leading line here maps to `None`, so the order among them
         // doesn't affect the line table built above
         let future = "from __future__ import annotations\n";
-        let at = if out.starts_with(future) {
-            future.len()
+        let bom = usize::from(out.bom_start_offset());
+        let at = if out[bom..].starts_with(future) {
+            bom + future.len()
         } else {
-            0
+            bom
         };
         out.insert_str(at, &prefix);
         preamble_end = at + prefix.len();
