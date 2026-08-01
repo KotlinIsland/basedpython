@@ -68,7 +68,8 @@ pub(crate) enum Command {
     /// Transpile and run a module with `python -m <module>`.
     Run {
         /// module to run (e.g. `by run main` looks for main.by)
-        module: String,
+        /// [default: the `run.main` entry point configured for the project]
+        module: Option<String>,
         /// arguments forwarded to the program, as `sys.argv[1:]`
         #[arg(
             trailing_var_arg = true,

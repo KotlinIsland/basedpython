@@ -46,6 +46,17 @@
         }
       ]
     },
+    "run": {
+      "description": "Configures how `by run` executes the project.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RunOptions"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "src": {
       "anyOf": [
         {
@@ -2046,6 +2057,23 @@
       "additionalProperties": {
         "$ref": "#/definitions/Level"
       }
+    },
+    "RunOptions": {
+      "type": "object",
+      "properties": {
+        "main": {
+          "description": "The module `by run` executes when no module is given on the command line.\n\nThis is the project's entry point: with it set, `by run` alone transpiles the project and\nruns `python -m <main>`, exactly as if the module had been named on the command line. A\nmodule named explicitly always wins.\n\nThe value is a module path, not a file path — `app.cli`, not `app/cli.by`.\n\nDefaults to `null`, in which case `by run` requires a module argument.",
+          "anyOf": [
+            {
+              "$ref": "#/definitions/string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
     },
     "SrcOptions": {
       "type": "object",

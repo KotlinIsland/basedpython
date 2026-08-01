@@ -22,11 +22,23 @@ in addition to the cli provided by `ty`, `by` includes:
 
 ```sh
 by run MODULE [ARGS...]             # transpile + run with `python -m MODULE`
+by run                              # run the configured entry point
 by run MODULE --min-version 3.12    # target a specific runtime python version
 ```
 
 equivalent to `by build && python -m MODULE`, but only transpiles the
 modules required to import `MODULE`
+
+the module can be left out when the project configures an entry point:
+
+```toml
+[tool.ty.run]
+main = "app.cli"
+```
+
+`by run` then runs `app.cli`. a module named on the command line always wins,
+so `by run other` still runs `other`. the first positional argument is always
+the module — to reach the entry point's own arguments, name it: `by run app.cli --name asdf`
 
 everything after `MODULE` is forwarded to the program as `sys.argv[1:]`,
 including options — `by run main --name asdf` passes `--name asdf` on. the one

@@ -29,6 +29,13 @@ by run main
 
 `by run main` finds `main.by` in the current directory, transpiles it (and all other `.by` files in the project) to a temporary directory, then executes `python -m main` from there
 
+naming the module every time gets old once a project has an entry point. configure one and `by run` alone is enough:
+
+```toml
+[tool.ty.run]
+main = "main"
+```
+
 ## project layout
 
 a typical basedpython project looks like:
