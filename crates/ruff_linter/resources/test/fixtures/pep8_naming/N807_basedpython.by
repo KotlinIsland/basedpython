@@ -1,0 +1,15 @@
+"""a trailing lambda block has no written header — the parser synthesizes the
+`def` and its dunder name, so the naming rule has nothing to judge"""
+
+
+def each(n: int, body: (int) -> None) -> None:
+    body(n)
+
+
+each(2):
+    print(it)
+
+
+# a real declaration is still judged
+def __my_function__() -> int:
+    return 1

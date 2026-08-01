@@ -1,0 +1,12 @@
+"""`extension list:` extends the builtin rather than shadowing it: the header
+names a type declared elsewhere"""
+
+
+extension list:
+    def second(self) -> int:
+        return 1
+
+
+# a real declaration does shadow the builtin
+class list:
+    pass
