@@ -353,8 +353,32 @@ fn run_anon_named_tuple_cleanup(mut source: String, config: &Config) -> Result<S
         }
         let mut preamble = String::new();
         if anon.needs_import {
-            preamble.push_str("from typing import NamedTuple\n");
-            preamble.push_str(&anon.class_defs());
+            // an earlier run over the pre-splice source already emitted a class
+            // (and its imports) for an anon-NT whose edit an AST pass then
+            // re-rendered away, so only what the spliced output is actually
+            // missing gets prepended. matched as a run of whole lines, the way
+            // the inline-protocol cleanup does
+            let source_lines: Vec<&str> = source.lines().collect();
+            let push_missing = |preamble: &mut String, entry: &str| {
+                let entry_lines: Vec<&str> = entry.lines().collect();
+                let present = !entry_lines.is_empty()
+                    && source_lines
+                        .windows(entry_lines.len())
+                        .any(|window| window == entry_lines.as_slice());
+                if !present {
+                    preamble.push_str(entry);
+                    preamble.push('\n');
+                }
+            };
+            push_missing(&mut preamble, "from typing import NamedTuple");
+            for line in anon.callable.take_import_lines() {
+                push_missing(&mut preamble, &line);
+            }
+            for defs in [anon.callable.class_defs().to_owned(), anon.class_defs()] {
+                for class_def in defs.split_inclusive("\n\n") {
+                    push_missing(&mut preamble, class_def.trim_end_matches('\n'));
+                }
+            }
         }
         let mut edits = anon.edits;
         if let Some((protocol_edits, protocol_preamble)) = protocol {
