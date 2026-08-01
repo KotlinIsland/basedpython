@@ -348,6 +348,27 @@ reveal_type(bad)  # revealed: W[str]
 n = takes_int(bad)
 ```
 
+## a unit variant's class is its own, not the enum's
+
+Only the all-unit `Enum` shape makes a member's class the enum itself. Every other based enum lowers
+to a sealed hierarchy where each unit variant is its own subclass and the member is a singleton
+instance of it, so `type(Shape.Point)` is `Point`:
+
+```by
+enum class Shape:
+    case Circle(radius: float)
+    case Point
+
+enum class Colour:
+    case Red, Green
+
+reveal_type(type(Shape.Point))  # revealed: <class 'Point'>
+reveal_type(Shape.Point.__class__)  # revealed: <class 'Point'>
+
+reveal_type(type(Colour.Red))  # revealed: <class 'Colour'>
+reveal_type(Colour.Red.__class__)  # revealed: <class 'Colour'>
+```
+
 ## a unit variant is still a value through the enum's subscript
 
 `Tree[int].Leaf` is the same singleton as `Tree.Leaf` — subscripting the enum names the same class,
