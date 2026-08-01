@@ -652,13 +652,19 @@ impl AstPass for ModifiersPass<'_> {
             }
         }
 
-        if !exports.is_empty() {
-            let entries = exports
-                .iter()
-                .map(|n| format!("\"{n}\""))
-                .collect::<Vec<_>>()
-                .join(", ");
-            ctx.epilogue.push(format!("__all__ = [{entries}]"));
+        // `private` renames the symbol, so a name it claims is not the name the
+        // module ends up with — exporting it would put a name in `__all__` that
+        // the module has no attribute for, and `import *` would raise. `private`
+        // takes a symbol off the public surface, which is what `__all__` lists,
+        // so it wins over an `export` written alongside it
+        let entries = exports
+            .iter()
+            .filter(|name| !private_renames.contains(name))
+            .map(|name| format!("\"{name}\""))
+            .collect::<Vec<_>>();
+        if !entries.is_empty() {
+            ctx.epilogue
+                .push(format!("__all__ = [{}]", entries.join(", ")));
         }
 
         for sealed in &sealed_classes {
@@ -1175,6 +1181,27 @@ mod tests {
                 __all__ = [\"foo\"]
             "},
         );
+    }
+
+    #[test]
+    fn private_beats_export_in_all() {
+        // `private` renames the symbol, so exporting it too listed a name the
+        // module has no attribute for and `import *` raised `AttributeError`
+        check(
+            indoc! {"
+                export private def helper(): ...
+                export def api(): ...
+            "},
+            indoc! {"
+                def _helper(): ...
+                def api(): ...
+                __all__ = [\"api\"]
+            "},
+        );
+        // nothing left to export means no `__all__` at all, as when nothing was
+        // ever marked
+        check("export private def helper(): ...\n", "def _helper(): ...\n");
+        check("private export class Foo: ...\n", "class _Foo: ...\n");
     }
 
     #[test]
