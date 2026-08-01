@@ -81,7 +81,7 @@ impl LoweringArgs {
 
 #[allow(clippy::exit, clippy::print_stderr)]
 pub(crate) fn cmd_run(
-    module: &str,
+    module: Option<&str>,
     args: &[String],
     min_version: Option<&str>,
     lowering: &LoweringArgs,
@@ -124,6 +124,21 @@ pub(crate) fn cmd_run(
     }
 
     let (db, handles) = build_project_db(&cwd, &files)?;
+
+    // an explicit module always wins; otherwise the project's configured entry
+    // point stands in for it. resolving before the (much slower) check means a
+    // project with neither fails immediately rather than after transpiling
+    let module = match module {
+        Some(module) => module.to_owned(),
+        None => match configured_main(&db) {
+            Some(main) => main,
+            None => anyhow::bail!(
+                "no module given and no entry point configured — \
+                 name a module (`by run main`) or set `run.main` in the project configuration"
+            ),
+        },
+    };
+
     // each generated `.py` paired with its source `.by` and the line table that
     // lifts generated line numbers back to `.by` lines (for traceback rewriting)
     let mut traceback_entries: Vec<TracebackEntry> = Vec::new();
@@ -153,7 +168,7 @@ pub(crate) fn cmd_run(
 
     let status = Command::new(&python)
         .arg(BY_RUNNER_FILENAME)
-        .arg(module)
+        .arg(&module)
         .args(args)
         .current_dir(tmp.path())
         .status()
@@ -164,6 +179,13 @@ pub(crate) fn cmd_run(
     // exiting while it's still in scope would leak the directory
     drop(tmp);
     std::process::exit(code);
+}
+
+/// The project's `run.main` entry point, if one is configured.
+fn configured_main(db: &ProjectDatabase) -> Option<String> {
+    let options = db.project().metadata(db).options();
+    let main = options.run.as_ref()?.main.as_ref()?;
+    Some((**main).clone())
 }
 
 /// Probe `python`'s `major.minor` version (e.g. `3.9`) so `run` can target the
