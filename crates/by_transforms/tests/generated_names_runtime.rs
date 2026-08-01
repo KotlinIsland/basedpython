@@ -67,7 +67,7 @@ class Holder:
     let Point(hx, hy) := origin() else:
         raise TypeError
 
-    if let Point(ix, iy) := origin():
+    if let Point(iax, iay) := origin():
         pass
 
     match origin():
@@ -92,7 +92,7 @@ class Holder:
             2
 
 assert (Holder.hx, Holder.hy) == (0, 0), "a class-body `let` binds its captures"
-assert (Holder.ix, Holder.iy) == (0, 0), "so does an `if let`"
+assert (Holder.iax, Holder.iay) == (0, 0), "so does an `if let`"
 assert (Holder.mx, Holder.my) == (0, 0), "so does a `match` with a conjunction"
 assert Holder.ay == 0, "so does a hoisted conjunction"
 assert (Holder.fx, Holder.fy) == (1, 2), "so does a `for` pattern"

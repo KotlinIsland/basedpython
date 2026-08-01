@@ -8392,8 +8392,9 @@ fn collect_tail_positions<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
 /// basedpython: collects every statement expression directly in `stmt`, paired
 /// with the [`Expr`] node wrapping it.
 ///
-/// A statement expression's own suite is not descended into: the statements in
-/// it are validated when they are parsed.
+/// No suite is descended into — neither a statement expression's own, nor the
+/// one a trailing-lambda block hands its synthesized function: the statements
+/// in it are validated when they are parsed, against *their* value position.
 fn collect_statement_expressions<'a>(
     stmt: &'a Stmt,
     out: &mut Vec<(&'a Expr, &'a ast::ExprStatement)>,
@@ -8403,6 +8404,8 @@ fn collect_statement_expressions<'a>(
     }
 
     impl<'a> ruff_python_ast::visitor::Visitor<'a> for Finder<'a, '_> {
+        fn visit_stmt(&mut self, _stmt: &'a Stmt) {}
+
         fn visit_expr(&mut self, expr: &'a Expr) {
             if let Expr::Statement(statement) = expr {
                 self.out.push((expr, statement));
