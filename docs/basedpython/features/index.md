@@ -1,19 +1,61 @@
 # features
 
-the basedpython language reference
+the basedpython language reference — one page per feature, each with the
+surface syntax, what it checks, and the python it lowers to
+
+!!! tip "new here?"
+
+    [getting started](../getting-started.md) installs `by` and walks a `.by`
+    file through to running python. this page is the reference you come back to
+
+## python compatibility
+
+`.by` is not a superset of `.py`
+
+<div class="by-index" markdown>
+
+- [differences from python](differences-from-python.md) — every place the same
+    source reads differently
+
+</div>
 
 ## runtime compatibility
+
+what the transpiled python does at runtime, beyond what you wrote
+
+<div class="by-index" markdown>
 
 - [polyfills](polyfills.md) — write modern python, run it on older interpreters
 - [runtime type-soundness checks](soundness.md)
 
+</div>
+
 ## project-level
 
+features that apply to a project rather than to a file
+
+<div class="by-index" markdown>
+
 - [api lockfile (`api.lock`)](api-lock.md)
+
+</div>
+
+## standard library
+
+what basedpython's vendored typeshed says that upstream's does not
+
+<div class="by-index" markdown>
+
+- [typeshed improvements](typeshed.md) — covariant mapping keys, honest `re`
+    groups, precise `functools.cache`, and the rest
+
+</div>
 
 ## enhancements that also apply to python
 
 type-checking improvements with no new syntax — they work in `.by` and `.py` files alike
+
+<div class="by-index" markdown>
 
 - [fluid specializations](fluid-specializations.md)
 - [sound types](sound-types.md) — infer precise types instead of gradual ones
@@ -22,7 +64,13 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [regex group types](regex-groups.md) — type a match from the pattern it came from
 - [boolean conditions](conditions.md) — catch a test that conflates two members, or asks nothing
 
+</div>
+
 ## type system
+
+what a type is allowed to say
+
+<div class="by-index" markdown>
 
 - [tuple type literals](tuple-types.md)
 - [callable arrow syntax](callable.md)
@@ -51,7 +99,13 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [implicit overload stubs](overloads.md)
 - [type narrowing predicates](type-is.md)
 
+</div>
+
 ## generics
+
+type parameters — their bounds, their variance, and what survives to runtime
+
+<div class="by-index" markdown>
 
 - [generics](generics.md)
 - [explicit typevar constraints](constraints.md)
@@ -69,7 +123,13 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [type reification](type-reification.md)
 - [parametric type tests](parametric-type-tests.md)
 
+</div>
+
 ## declarations
+
+the forms a class, function or binding can take
+
+<div class="by-index" markdown>
 
 - [modifiers and visibility](modifiers.md)
 - [based enums (`enum class`)](enums.md)
@@ -81,7 +141,13 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [`sentinel` declarations](sentinel.md)
 - [decorator keyword](decorator-keyword.md)
 
+</div>
+
 ## expressions and statements
+
+syntax inside a function body
+
+<div class="by-index" markdown>
 
 - [context-sensitive resolution](context-sensitive-resolution.md) — `a: Color = Red`
 - [identity and isinstance (`===` / `!==` / `is`)](identity-swap.md)
@@ -107,15 +173,21 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
 - [lazy imports](lazy-imports.md)
 - [export imports](export-imports.md) — `from x export y`
 - [extensions](extensions.md)
+- [implementations (`implementation A for B`)](implementations.md) — declare that
+    an existing type satisfies an existing interface
 - [conversions (`__from__` / `__into__` / `__of__`)](conversions.md)
 - [context parameters](context-parameters.md)
 - [local lifetimes (`local` / `once`)](local-lifetimes.md)
 - [exception tracking (`raises`)](exceptions.md)
 
+</div>
+
 ## formatting
+
+how the formatter lays basedpython out
+
+<div class="by-index" markdown>
 
 - [assignment alignment](assignment-alignment.md) — line up the `=` of consecutive assignments
 
-## planned
-
-- [implementations (`implementation A for B`)](implementations.md)
+</div>

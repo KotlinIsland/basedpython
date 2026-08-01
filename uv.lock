@@ -61,8 +61,8 @@ dev = [
     { name = "prek", marker = "python_full_version >= '3.12'" },
 ]
 docs = [
-    { name = "zensical", version = "0.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "zensical", version = "0.0.51", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "basedpython-pygments", marker = "python_full_version >= '3.12'" },
+    { name = "zensical", marker = "python_full_version >= '3.12'" },
 ]
 release = [
     { name = "rooster", marker = "python_full_version >= '3.12'" },
@@ -72,8 +72,22 @@ release = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "prek", marker = "python_full_version >= '3.12'", specifier = "==0.4.9" }]
-docs = [{ name = "zensical" }]
+docs = [
+    { name = "basedpython-pygments", marker = "python_full_version >= '3.12'", directory = "python/basedpython-pygments" },
+    { name = "zensical", marker = "python_full_version >= '3.12'" },
+]
 release = [{ name = "rooster", marker = "python_full_version >= '3.12'", specifier = "==0.1.1" }]
+
+[[package]]
+name = "basedpython-pygments"
+version = "0.0.0"
+source = { directory = "python/basedpython-pygments" }
+dependencies = [
+    { name = "pygments" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pygments", specifier = ">=2.19" }]
 
 [[package]]
 name = "certifi"
@@ -990,25 +1004,8 @@ wheels = [
 
 [[package]]
 name = "zensical"
-version = "0.0.2"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.8' and python_full_version < '3.10'",
-    "python_full_version < '3.8'",
-]
-sdist = { url = "https://files.pythonhosted.org/packages/f9/95/402f98707f23f6f55f64c89d6b3f33429fa7905df0a448a48498d5669b32/zensical-0.0.2.tar.gz", hash = "sha256:0b74994de625bdc1526748db47aa5104ee3f9127314dd5d930984b64d8278e7a", size = 487, upload-time = "2025-05-17T08:41:41.767Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/0e/2c/07c07e99d3566a75a937a6fdee290046c0eee756b56f080fac6e897807fd/zensical-0.0.2-py2.py3-none-any.whl", hash = "sha256:a0d8185441eceff831fba020759842066b99c16faa91259462f7e77b80d10bf2", size = 1029, upload-time = "2025-05-17T08:41:43.143Z" },
-]
-
-[[package]]
-name = "zensical"
 version = "0.0.51"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.12'",
-    "python_full_version >= '3.10' and python_full_version < '3.12'",
-]
 dependencies = [
     { name = "click" },
     { name = "deepmerge" },
