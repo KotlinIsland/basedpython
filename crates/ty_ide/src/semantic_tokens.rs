@@ -208,6 +208,13 @@ const LIFETIME_MODIFIERS: &[&str] = &["local", "once"];
 /// it makes that parameter's type an anonymous type parameter over.
 const SOME_BINDER: &[&str] = &["some"];
 
+/// The keyword introducing a basedpython match type, written where an ordinary type
+/// alias's value would start.
+const MATCH_TYPE: &[&str] = &["match"];
+
+/// The keyword introducing one case of a basedpython match type.
+const MATCH_TYPE_CASE: &[&str] = &["case"];
+
 /// The keyword introducing a basedpython narrowing return annotation, written
 /// between the `->` and the places it asserts.
 const ASSERTS_RETURN: &[&str] = &["asserts"];
@@ -376,6 +383,9 @@ struct SemanticTokenVisitor<'db> {
     tokens: Vec<SemanticToken>,
     in_class_scope: bool,
     in_type_form: bool,
+    /// basedpython: whether the pattern being visited belongs to a match type, whose
+    /// captures bind type variables rather than values.
+    in_match_type: bool,
     in_target_creating_definition: bool,
     in_docstring: bool,
     expecting_docstring: bool,
@@ -398,6 +408,7 @@ impl<'db> SemanticTokenVisitor<'db> {
             is_basedpython: model.file().source_type(model.db()).is_basedpython(),
             tokens: Vec::new(),
             in_class_scope: false,
+            in_match_type: false,
             in_target_creating_definition: false,
             in_type_form: false,
             in_docstring: false,
@@ -458,6 +469,20 @@ impl<'db> SemanticTokenVisitor<'db> {
                 SemanticTokenModifier::empty(),
             );
         }
+    }
+
+    /// A name a pattern binds. basedpython's match types match on *types*, so a capture
+    /// there declares a type variable the case body is written in terms of.
+    fn add_capture_token(&mut self, range: TextRange) {
+        let (token_type, modifiers) = if self.in_match_type {
+            (
+                SemanticTokenType::TypeParameter,
+                SemanticTokenModifier::DEFINITION,
+            )
+        } else {
+            (SemanticTokenType::Variable, SemanticTokenModifier::empty())
+        };
+        self.add_token(range, token_type, modifiers);
     }
 
     /// basedpython: highlight the `let` of an `if let <pattern> := <subject>:`
@@ -570,7 +595,12 @@ impl<'db> SemanticTokenVisitor<'db> {
                 }
             }
             DefinitionKind::Class(_) => Some((SemanticTokenType::Class, modifiers)),
-            DefinitionKind::TypeVar(_) | DefinitionKind::ParamSpec(_) => {
+            // basedpython: a match type's captures are type variables too — the case body
+            // is written in terms of them
+            DefinitionKind::TypeVar(_)
+            | DefinitionKind::ParamSpec(_)
+            | DefinitionKind::TypeVarTuple(_)
+            | DefinitionKind::TypeMatchCapture(_) => {
                 Some((SemanticTokenType::TypeParameter, modifiers))
             }
             DefinitionKind::Parameter(ParameterDefinitionNodeKind::Parameter(parameter)) => {
@@ -1479,7 +1509,47 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     }
                 }
 
+                // basedpython `type X = match S: case ...` — the subject stands where an
+                // ordinary alias's value does, and both `match` and `case` are consumed by
+                // the parser, so each is recovered from the source ahead of what it
+                // introduces
+                if !type_alias.cases.is_empty() {
+                    let match_start = type_alias
+                        .type_params
+                        .as_deref()
+                        .map_or_else(|| type_alias.name.end(), Ranged::end);
+                    self.add_consumed_keywords(
+                        match_start,
+                        type_alias.value.range().start(),
+                        MATCH_TYPE,
+                    );
+                }
+
                 self.visit_annotation(&type_alias.value);
+
+                let prev_in_match_type = self.in_match_type;
+                self.in_match_type = true;
+                for case in &type_alias.cases {
+                    self.add_consumed_keywords(
+                        case.range().start(),
+                        case.pattern.range().start(),
+                        MATCH_TYPE_CASE,
+                    );
+                    self.visit_pattern(&case.pattern);
+                    if let Some(guard) = &case.guard {
+                        self.visit_expr(guard);
+                    }
+                    // a case body is a single type expression, not a suite of statements
+                    for statement in &case.body {
+                        match statement {
+                            ast::Stmt::Expr(ast::StmtExpr { value, .. }) => {
+                                self.visit_annotation(value);
+                            }
+                            _ => self.visit_stmt(statement),
+                        }
+                    }
+                }
+                self.in_match_type = prev_in_match_type;
             }
             ast::Stmt::Import(import) => {
                 for alias in &import.names {
@@ -2058,12 +2128,20 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     self.visit_annotation(default);
                 }
             }
+            // basedpython is the only dialect that bounds a pack (`*Ts: int`,
+            // `**Kwargs: **{"a": int}`); python's grammar has no such position
             TypeParam::ParamSpec(param_spec) => {
+                if let Some(bound) = &param_spec.bound {
+                    self.visit_annotation(bound);
+                }
                 if let Some(default) = &param_spec.default {
                     self.visit_annotation(default);
                 }
             }
             TypeParam::TypeVarTuple(type_var_tuple) => {
+                if let Some(bound) = &type_var_tuple.bound {
+                    self.visit_annotation(bound);
+                }
                 if let Some(default) = &type_var_tuple.default {
                     self.visit_annotation(default);
                 }
@@ -2104,11 +2182,7 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
 
                 // Now add the "as" variable name token
                 if let Some(name) = &pattern_as.name {
-                    self.add_token(
-                        name.range(),
-                        SemanticTokenType::Variable,
-                        SemanticTokenModifier::empty(),
-                    );
+                    self.add_capture_token(name.range());
                 }
             }
             ast::Pattern::MatchMapping(pattern_mapping) => {
@@ -2129,11 +2203,7 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 });
 
                 if let Some(rest_name) = rest_before_keys {
-                    self.add_token(
-                        rest_name.range(),
-                        SemanticTokenType::Variable,
-                        SemanticTokenModifier::empty(),
-                    );
+                    self.add_capture_token(rest_name.range());
                 }
 
                 for (key, nested_pattern) in
@@ -2144,21 +2214,13 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 }
 
                 if let Some(rest_name) = rest_after_keys {
-                    self.add_token(
-                        rest_name.range(),
-                        SemanticTokenType::Variable,
-                        SemanticTokenModifier::empty(),
-                    );
+                    self.add_capture_token(rest_name.range());
                 }
             }
             ast::Pattern::MatchStar(pattern_star) => {
                 // Just the one ident here
                 if let Some(rest_name) = &pattern_star.name {
-                    self.add_token(
-                        rest_name.range(),
-                        SemanticTokenType::Variable,
-                        SemanticTokenModifier::empty(),
-                    );
+                    self.add_capture_token(rest_name.range());
                 }
             }
             _ => {
@@ -4769,9 +4831,9 @@ class BoundedContainer[T: int, U = str]:
         "Ts" @ 174..176: TypeParameter [definition]
         "args" @ 178..182: Parameter [definition]
         "tuple" @ 184..189: Class
-        "Ts" @ 191..193: Variable
+        "Ts" @ 191..193: TypeParameter
         "tuple" @ 199..204: Class
-        "Ts" @ 206..208: Variable
+        "Ts" @ 206..208: TypeParameter
         "args" @ 222..226: Parameter
         "func_paramspec" @ 266..280: Function [definition]
         "P" @ 283..284: TypeParameter [definition]
@@ -6368,6 +6430,47 @@ def plain(s: str) -> str: ...
         "s" @ 93..94: Parameter [definition]
         "str" @ 96..99: Class
         "str" @ 104..107: Class
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_match_type() {
+        // a match type's `match` and `case` sit in an expression position, where nothing
+        // outside basedpython spells a keyword, and its case bodies are type expressions
+        let test = SemanticTokenTest::new_by(
+            "
+type NDTuple[T, *Shape: int] = match *Shape:
+    case ():
+        T
+    case (Dim, *Rest):
+        (NDTuple[T, *Rest],) * Dim
+
+type Plain[T] = list[T]
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "NDTuple" @ 6..13: Class [definition]
+        "T" @ 14..15: TypeParameter [definition]
+        "Shape" @ 18..23: TypeParameter [definition]
+        "int" @ 25..28: Class
+        "match" @ 32..37: Keyword
+        "Shape" @ 39..44: TypeParameter
+        "case" @ 50..54: Keyword
+        "T" @ 67..68: TypeParameter
+        "case" @ 73..77: Keyword
+        "Dim" @ 79..82: TypeParameter [definition]
+        "Rest" @ 85..89: TypeParameter [definition]
+        "NDTuple" @ 101..108: Class
+        "T" @ 109..110: TypeParameter
+        "Rest" @ 113..117: TypeParameter
+        "Dim" @ 123..126: TypeParameter
+        "Plain" @ 133..138: Class [definition]
+        "T" @ 139..140: TypeParameter [definition]
+        "list" @ 144..148: Class
+        "T" @ 149..150: TypeParameter
         "#);
     }
 
