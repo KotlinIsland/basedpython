@@ -1,0 +1,139 @@
+---
+source: crates/ruff_python_parser/tests/fixtures.rs
+input_file: crates/ruff_python_parser/resources/inline/err/param_some_annotation_py.py
+---
+## AST
+
+```
+Module(
+    ModModule {
+        node_index: NodeIndex(None),
+        range: 0..31,
+        body: [
+            FunctionDef(
+                StmtFunctionDef {
+                    node_index: NodeIndex(None),
+                    range: 0..30,
+                    is_async: false,
+                    decorator_list: [],
+                    name: Identifier {
+                        id: Name("f"),
+                        range: 4..5,
+                        node_index: NodeIndex(None),
+                    },
+                    type_params: Some(
+                        TypeParams {
+                            range: 5..18,
+                            node_index: NodeIndex(None),
+                            type_params: [
+                                TypeVar(
+                                    TypeParamTypeVar {
+                                        node_index: NodeIndex(None),
+                                        range: 6..17,
+                                        name: Identifier {
+                                            id: Name("s"),
+                                            range: 6..7,
+                                            node_index: NodeIndex(None),
+                                        },
+                                        lower_bound: None,
+                                        bound: Some(
+                                            Name(
+                                                ExprName {
+                                                    node_index: NodeIndex(None),
+                                                    range: 14..17,
+                                                    id: Name("str"),
+                                                    ctx: Load,
+                                                },
+                                            ),
+                                        ),
+                                        default: None,
+                                        variance: None,
+                                        is_reified: false,
+                                        is_some_hole: true,
+                                    },
+                                ),
+                            ],
+                            separators: TypeParamSeparators {
+                                positional_only_count: None,
+                                keyword_only_start: None,
+                                slash_range: None,
+                                star_range: None,
+                            },
+                        },
+                    ),
+                    parameters: Parameters {
+                        range: 5..18,
+                        node_index: NodeIndex(None),
+                        posonlyargs: [],
+                        args: [
+                            ParameterWithDefault {
+                                range: 6..17,
+                                node_index: NodeIndex(None),
+                                parameter: Parameter {
+                                    range: 6..17,
+                                    node_index: NodeIndex(None),
+                                    name: Identifier {
+                                        id: Name("s"),
+                                        range: 6..7,
+                                        node_index: NodeIndex(None),
+                                    },
+                                    pattern: None,
+                                    annotation: Some(
+                                        Name(
+                                            ExprName {
+                                                node_index: NodeIndex(None),
+                                                range: 14..17,
+                                                id: Name("s"),
+                                                ctx: Load,
+                                            },
+                                        ),
+                                    ),
+                                    is_context: false,
+                                    is_some: true,
+                                },
+                                default: None,
+                            },
+                        ],
+                        vararg: None,
+                        kwonlyargs: [],
+                        kwarg: None,
+                    },
+                    returns: Some(
+                        Name(
+                            ExprName {
+                                node_index: NodeIndex(None),
+                                range: 22..25,
+                                id: Name("str"),
+                                ctx: Load,
+                            },
+                        ),
+                    ),
+                    raises: None,
+                    body: [
+                        Expr(
+                            StmtExpr {
+                                node_index: NodeIndex(None),
+                                range: 27..30,
+                                value: EllipsisLiteral(
+                                    ExprEllipsisLiteral {
+                                        node_index: NodeIndex(None),
+                                        range: 27..30,
+                                    },
+                                ),
+                            },
+                        ),
+                    ],
+                    is_trailing_lambda: false,
+                    is_asserts_return: false,
+                },
+            ),
+        ],
+    },
+)
+```
+## Errors
+
+  |
+1 | def f(s: some str) -> str: ...
+  |          ^^^^ Syntax Error: `some` parameter annotations are not valid in .py files
+  |

@@ -41,6 +41,7 @@ Module(
                                     pattern: None,
                                     annotation: None,
                                     is_context: false,
+                                    is_some: false,
                                 },
                                 default: Some(
                                     Lambda(
@@ -67,6 +68,7 @@ Module(
                                                                 pattern: None,
                                                                 annotation: None,
                                                                 is_context: false,
+                                                                is_some: false,
                                                             },
                                                             default: None,
                                                         },
@@ -145,6 +147,7 @@ Module(
                                     pattern: None,
                                     annotation: None,
                                     is_context: false,
+                                    is_some: false,
                                 },
                                 default: Some(
                                     If(
@@ -236,6 +239,7 @@ Module(
                                     pattern: None,
                                     annotation: None,
                                     is_context: false,
+                                    is_some: false,
                                 },
                                 default: Some(
                                     Await(
@@ -311,6 +315,7 @@ Module(
                                     pattern: None,
                                     annotation: None,
                                     is_context: false,
+                                    is_some: false,
                                 },
                                 default: Some(
                                     Yield(

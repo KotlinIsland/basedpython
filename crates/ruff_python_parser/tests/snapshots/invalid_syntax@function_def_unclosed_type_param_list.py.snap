@@ -40,6 +40,7 @@ Module(
                                         default: None,
                                         variance: None,
                                         is_reified: false,
+                                        is_some_hole: false,
                                     },
                                 ),
                                 TypeVarTuple(
@@ -84,6 +85,7 @@ Module(
                                     pattern: None,
                                     annotation: None,
                                     is_context: false,
+                                    is_some: false,
                                 },
                                 default: None,
                             },
@@ -101,6 +103,7 @@ Module(
                                     pattern: None,
                                     annotation: None,
                                     is_context: false,
+                                    is_some: false,
                                 },
                                 default: None,
                             },

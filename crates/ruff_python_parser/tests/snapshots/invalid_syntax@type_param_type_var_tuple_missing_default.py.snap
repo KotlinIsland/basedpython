@@ -107,6 +107,7 @@ Module(
                                         default: None,
                                         variance: None,
                                         is_reified: false,
+                                        is_some_hole: false,
                                     },
                                 ),
                             ],

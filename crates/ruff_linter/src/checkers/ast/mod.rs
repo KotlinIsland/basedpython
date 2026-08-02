@@ -2565,6 +2565,7 @@ impl<'a> Visitor<'a> for Checker<'a> {
                 node_index: _,
                 variance: _,
                 is_reified: _,
+                is_some_hole: _,
             }) => {
                 if let Some(expr) = lower_bound {
                     self.visit

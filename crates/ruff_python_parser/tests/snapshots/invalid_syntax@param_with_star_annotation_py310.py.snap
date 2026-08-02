@@ -55,6 +55,7 @@ Module(
                                     ),
                                 ),
                                 is_context: false,
+                                is_some: false,
                             },
                         ),
                         kwonlyargs: [],

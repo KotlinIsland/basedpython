@@ -1290,6 +1290,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             pattern: _,
             annotation,
             is_context: _,
+            is_some: _,
         } = parameter;
 
         if let Some(annotation) = annotation.as_deref() {

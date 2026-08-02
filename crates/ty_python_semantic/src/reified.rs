@@ -43,7 +43,12 @@ pub fn reified_type_param_names(
         .type_params
         .iter()
         .filter_map(|param| match param {
-            ast::TypeParam::TypeVar(tv) => Some((&tv.name.id, tv.is_reified)),
+            // basedpython: a `some T` hole shares its parameter's name, so every use of the
+            // parameter in the body would otherwise read as a value-position use of the hole.
+            // a hole is type-only and never reified
+            ast::TypeParam::TypeVar(tv) => {
+                (!tv.is_some_hole).then_some((&tv.name.id, tv.is_reified))
+            }
             ast::TypeParam::TypeVarTuple(tvt) => Some((&tvt.name.id, tvt.is_reified)),
             ast::TypeParam::ParamSpec(ps) => matches!(source_type, PySourceType::BasedPython)
                 .then_some((&ps.name.id, ps.is_reified)),

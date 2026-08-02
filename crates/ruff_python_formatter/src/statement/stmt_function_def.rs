@@ -158,7 +158,15 @@ fn format_function_header(f: &mut PyFormatter, item: &StmtFunctionDef) -> Format
 
     write!(f, [token("def"), space(), name.format()])?;
 
-    if let Some(type_params) = type_params.as_ref() {
+    // basedpython: a list made only of `some T` holes was never written, so emitting it would
+    // invent an empty `[]`
+    if let Some(type_params) = type_params.as_ref()
+        && !type_params.iter().all(|type_param| {
+            type_param
+                .as_type_var()
+                .is_some_and(|type_var| type_var.is_some_hole)
+        })
+    {
         type_params.format().fmt(f)?;
     }
 

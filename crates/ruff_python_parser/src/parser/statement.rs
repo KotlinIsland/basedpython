@@ -186,6 +186,7 @@ fn synth_self_parameter(at: TextSize) -> ast::ParameterWithDefault {
             annotation: None,
             node_index: AtomicNodeIndex::NONE,
             is_context: false,
+            is_some: false,
         },
         default: None,
         node_index: AtomicNodeIndex::NONE,
@@ -343,6 +344,7 @@ fn synth_property_param(
             annotation: annotation.map(Box::new),
             node_index: AtomicNodeIndex::NONE,
             is_context: false,
+            is_some: false,
         },
         default: None,
         node_index: AtomicNodeIndex::NONE,
@@ -4674,7 +4676,11 @@ impl<'src> Parser<'src> {
         //     return 42
         // def foo(a: int, b: str
         // x = 10
-        let parameters = self.parse_parameters(FunctionKind::FunctionDef);
+        let mut parameters = self.parse_parameters(FunctionKind::FunctionDef);
+        // basedpython: each `some T` parameter contributes an anonymous type parameter named after
+        // it. synthesizing a real `TypeParamTypeVar` here means the hole is scoped, resolved,
+        // solved, and lowered by the machinery a written `[...]` entry already goes through
+        let type_params = Self::with_some_holes(type_params, &mut parameters);
 
         let mut is_asserts_return = false;
         let returns = if self.eat(TokenKind::Rarrow) {
@@ -5733,6 +5739,7 @@ impl<'src> Parser<'src> {
                 pattern: None,
                 annotation: None,
                 is_context: false,
+                is_some: false,
                 range: synthetic,
                 node_index: AtomicNodeIndex::NONE,
             },
@@ -7031,8 +7038,24 @@ impl<'src> Parser<'src> {
 
         // Annotations are only allowed for function definition. For lambda expression,
         // the `:` token would indicate its body.
+        // basedpython: `some T` makes the parameter's type an anonymous type parameter bounded by
+        // `T`. the annotation keeps the bound so the surface form round-trips; the matching type
+        // parameter is synthesized once the whole list is parsed
+        let mut is_some = false;
         let annotation = match function_kind {
             FunctionKind::FunctionDef if self.eat(TokenKind::Colon) => {
+                if self.at(TokenKind::Name)
+                    && self.src_text(self.current_token_range()) == "some"
+                    && (EXPR_SET.contains(self.peek()) || self.peek().is_soft_keyword())
+                {
+                    // test_err param_some_annotation_py
+                    // def f(s: some str) -> str: ...
+                    self.error_if_not_basedpython(
+                        "`some` parameter annotations are not valid in .py files".to_string(),
+                    );
+                    self.bump(TokenKind::Name);
+                    is_some = true;
+                }
                 if self.at_expr() {
                     let parsed_expr = match allow_star_annotation {
                         AllowStarAnnotation::Yes => {
@@ -7145,6 +7168,7 @@ impl<'src> Parser<'src> {
             annotation,
             node_index: AtomicNodeIndex::NONE,
             is_context,
+            is_some,
         }
     }
 
@@ -7989,6 +8013,7 @@ impl<'src> Parser<'src> {
                 default,
                 variance,
                 is_reified,
+                is_some_hole: false,
                 node_index: AtomicNodeIndex::NONE,
             })
         }
@@ -8021,6 +8046,79 @@ impl<'src> Parser<'src> {
         );
         self.bump(TokenKind::Name);
         true
+    }
+
+    /// basedpython: append one synthesized type parameter per `some T` parameter.
+    ///
+    /// The hole takes the parameter's name, so a later annotation can refer to it, and is marked
+    /// `is_some_hole` so the formatter hides it again and re-emits `some` on the parameter. The
+    /// range is the annotation's, which keeps every synthesized node inside the signature it came
+    /// from.
+    fn with_some_holes(
+        type_params: Option<ast::TypeParams>,
+        parameters: &mut ast::Parameters,
+    ) -> Option<ast::TypeParams> {
+        let ast::Parameters {
+            posonlyargs,
+            args,
+            vararg,
+            kwonlyargs,
+            kwarg,
+            ..
+        } = parameters;
+        let holes: Vec<ast::TypeParam> = posonlyargs
+            .iter_mut()
+            .chain(args.iter_mut())
+            .chain(kwonlyargs.iter_mut())
+            .map(|parameter| &mut parameter.parameter)
+            .chain(vararg.iter_mut().map(Box::as_mut))
+            .chain(kwarg.iter_mut().map(Box::as_mut))
+            .filter(|parameter| parameter.is_some)
+            .filter_map(|parameter| {
+                // the annotation becomes a reference to the hole, which is what makes the
+                // parameter's declared type the hole rather than its bound. the name keeps the
+                // bound's range so the formatter can read the written text back out of the source
+                let bound =
+                    parameter
+                        .annotation
+                        .replace(Box::new(ast::Expr::Name(ast::ExprName {
+                            range: parameter.annotation.as_ref()?.range(),
+                            node_index: AtomicNodeIndex::NONE,
+                            id: parameter.name.id.clone(),
+                            ctx: ast::ExprContext::Load,
+                        })))?;
+                Some(ast::TypeParam::TypeVar(ast::TypeParamTypeVar {
+                    // must enclose both children: the name lives in the parameter list and the
+                    // bound after the colon
+                    range: TextRange::new(parameter.name.range().start(), bound.range().end()),
+                    node_index: AtomicNodeIndex::NONE,
+                    name: parameter.name.clone(),
+                    lower_bound: None,
+                    bound: Some(bound),
+                    default: None,
+                    variance: None,
+                    // a hole is a type-level construct with no runtime form to reify
+                    is_reified: false,
+                    is_some_hole: true,
+                }))
+            })
+            .collect();
+
+        if holes.is_empty() {
+            return type_params;
+        }
+        match type_params {
+            Some(mut type_params) => {
+                type_params.type_params.extend(holes);
+                Some(type_params)
+            }
+            None => Some(ast::TypeParams {
+                range: parameters.range(),
+                node_index: AtomicNodeIndex::NONE,
+                type_params: holes,
+                separators: ast::TypeParamSeparators::default(),
+            }),
+        }
     }
 
     /// Parses the upper half of a basedpython bound range, with the parser sitting on the `..`

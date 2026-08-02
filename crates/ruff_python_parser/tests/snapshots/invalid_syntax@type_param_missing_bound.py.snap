@@ -41,6 +41,7 @@ Module(
                                         default: None,
                                         variance: None,
                                         is_reified: false,
+                                        is_some_hole: false,
                                     },
                                 ),
                             ],
@@ -95,6 +96,7 @@ Module(
                                         default: None,
                                         variance: None,
                                         is_reified: false,
+                                        is_some_hole: false,
                                     },
                                 ),
                                 TypeVar(
@@ -111,6 +113,7 @@ Module(
                                         default: None,
                                         variance: None,
                                         is_reified: false,
+                                        is_some_hole: false,
                                     },
                                 ),
                             ],

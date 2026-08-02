@@ -84,6 +84,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             default,
             variance,
             is_reified: _,
+            is_some_hole: _,
         } = node;
 
         let db = self.db();
@@ -193,6 +194,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             default,
             variance: _,
             is_reified: _,
+            is_some_hole: _,
         } = node;
         // basedpython: skip type-expression inference for a top-parameters bound — it denotes a
         // parameter list, not a type
@@ -217,6 +219,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             default,
             variance: _,
             is_reified: _,
+            is_some_hole: _,
         } = node;
 
         let db = self.db();

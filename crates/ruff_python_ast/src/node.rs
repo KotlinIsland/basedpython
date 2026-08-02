@@ -381,6 +381,7 @@ impl ast::Parameter {
             pattern,
             annotation,
             is_context: _,
+            is_some: _,
         } = self;
 
         visitor.visit_identifier(name);
