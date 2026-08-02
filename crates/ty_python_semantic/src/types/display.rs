@@ -1028,9 +1028,11 @@ fn fmt_type_guard_like<'db, T: TypeGuardLike<'db>>(
     f.write_str("]")
 }
 
-/// basedpython: how tightly a symbolic arithmetic operation binds, so that a nested operand
-/// is parenthesised exactly when the expression would otherwise read as a different one.
-/// Anything that is not such an operation is a leaf and never needs parentheses.
+/// basedpython: how tightly a symbolic operation binds, so that a nested operand is
+/// parenthesised exactly when the expression would otherwise read as a different one.
+/// Anything that is not such an operation is a leaf and never needs parentheses; so are
+/// the postfix operations — an attribute access and a call — which bind tighter than any
+/// operator and so are never parenthesised themselves.
 fn deferred_binding_power(db: &dyn Db, ty: Type<'_>) -> u8 {
     let Type::Deferred(deferred) = ty else {
         return u8::MAX;
@@ -1043,10 +1045,11 @@ fn deferred_binding_power(db: &dyn Db, ty: Type<'_>) -> u8 {
     }
 }
 
-/// basedpython: write a symbolic arithmetic operation back out as the expression it stands
-/// for, e.g. `I@succ + 1`. `minimum_binding_power` is what the surrounding operator requires
-/// of this position; a weaker-binding operation there is parenthesised.
-fn fmt_deferred_arithmetic<'db>(
+/// basedpython: write a symbolic operation back out as the expression it stands for, e.g.
+/// `I@succ + 1` or `s@starts.startswith("foo")`. `minimum_binding_power` is what the
+/// surrounding operator requires of this position; a weaker-binding operation there is
+/// parenthesised.
+fn fmt_deferred_operation<'db>(
     db: &'db dyn Db,
     deferred: DeferredType<'db>,
     settings: &DisplaySettings<'db>,
@@ -1060,11 +1063,15 @@ fn fmt_deferred_arithmetic<'db>(
     }
 
     let operand = |f: &mut TypeWriter<'_, '_, 'db>, ty: Type<'db>, minimum: u8| match ty {
-        Type::Deferred(nested) if nested.is_checked_arithmetic(db) => {
-            fmt_deferred_arithmetic(db, nested, settings, minimum, f)
+        Type::Deferred(nested) if nested.is_checked(db) => {
+            fmt_deferred_operation(db, nested, settings, minimum, f)
         }
         _ => ty.display_with(db, settings.clone()).fmt_detailed(f),
     };
+
+    // a receiver has to bind tighter than every operator, so an arithmetic one is
+    // parenthesised while a nested access or call is not
+    let receiver = u8::MAX;
 
     match (deferred.operation(db), deferred.operands(db)) {
         (DeferredOperation::Binary(op), [left, right]) => {
@@ -1080,8 +1087,24 @@ fn fmt_deferred_arithmetic<'db>(
             f.write_str(op.as_str())?;
             operand(f, *inner, binding_power)?;
         }
-        // `is_checked_arithmetic` admits no other shape; a deferral built with the wrong
-        // operand count is still better shown reduced than not at all
+        // the callee carries the receiver it was bound to, which is what the annotation
+        // was written against — `s.startswith` reads back as `s@f.startswith`
+        (DeferredOperation::Call, [Type::BoundMethod(method), args @ ..]) => {
+            operand(f, method.self_instance(db), receiver)?;
+            f.write_char('.')?;
+            f.write_str(method.function(db).name(db))?;
+            f.write_char('(')?;
+            for (index, arg) in args.iter().enumerate() {
+                if index > 0 {
+                    f.write_str(", ")?;
+                }
+                operand(f, *arg, 0)?;
+            }
+            f.write_char(')')?;
+        }
+        // `is_checked` admits no other shape; a deferral built with the wrong operand
+        // count, or a call through something other than a bound method, is still better
+        // shown reduced than not at all
         _ => Type::Deferred(deferred)
             .reduce_deferred(db)
             .display_with(db, settings.clone())
@@ -1623,14 +1646,13 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                     .fmt_detailed(f)?;
                 f.write_char(']')
             }
-            // an arithmetic operation is written back out as the expression it stands for:
-            // a body checked against `I + 1` is rejected by naming a *different* value, and
+            // a checked operation is written back out as the expression it stands for: a
+            // body checked against `I + 1` is rejected by naming a *different* value, and
             // the reduced form would report that as `int` against `int`
             Type::Deferred(deferred)
-                if deferred.is_checked_arithmetic(self.db)
-                    && !self.settings.reduce_symbolic_operations =>
+                if deferred.is_checked(self.db) && !self.settings.reduce_symbolic_operations =>
             {
-                fmt_deferred_arithmetic(self.db, deferred, &self.settings, 0, f)
+                fmt_deferred_operation(self.db, deferred, &self.settings, 0, f)
             }
             // every other unspecialized operation displays as its reduced form (`T.a` shows
             // as the bound's `a`); once specialized it has folded to a concrete type and

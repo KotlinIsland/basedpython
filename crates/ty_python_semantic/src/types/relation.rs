@@ -1317,17 +1317,18 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                 self.check_type_pair(db, source_restricted.value_type(db), target)
             }
 
-            // basedpython: in *target* position an arithmetic deferral names one specific
-            // value per specialization, so reducing it the way the source arm below does
-            // would let any `int` stand in for `I + 1` — including `I` itself. the source has
-            // to name the same value, which [`LinearForm`] decides. a gradual source keeps
-            // its licence to stand for anything, and an undecidable comparison falls back to
-            // the reduced relation rather than reporting a disagreement it did not establish.
+            // basedpython: in *target* position a checked deferral names one specific value
+            // per specialization, so reducing it the way the source arm below does would let
+            // any `int` stand in for `I + 1` — including `I` itself, and any `bool` stand in
+            // for `s.startswith("a")`. the source has to name the same value, which
+            // [`LinearForm`] decides. a gradual source keeps its licence to stand for
+            // anything, and an undecidable comparison falls back to the reduced relation
+            // rather than reporting a disagreement it did not establish.
             //
-            // this has to precede the source arm: a source that is itself an arithmetic
-            // deferral is exactly the interesting case, and reducing it first would compare
-            // `int` against `int` and always agree
-            (_, Type::Deferred(target_deferred)) if target_deferred.is_checked_arithmetic(db) => {
+            // this has to precede the source arm: a source that is itself a deferral is
+            // exactly the interesting case, and reducing it first would compare `int`
+            // against `int` and always agree
+            (_, Type::Deferred(target_deferred)) if target_deferred.is_checked(db) => {
                 let names_another_value = !any_over_type(db, source, false, |ty| ty.is_dynamic())
                     && LinearForm::same_value(db, source, target) == Some(false);
                 if names_another_value {

@@ -315,18 +315,58 @@ def gradual[I: int](i: I) -> I + 1:
     return unannotated(i)
 ```
 
-## only operations with a decision procedure are checked
+## a method call agrees only with the same call
 
 `+`, `-`, `*` and the unary operators flatten to a form that decides whether two expressions name
-the same value. a comparison, a method call or an attribute type has no such form, so a body
-annotated with one is still checked only against the reduced type.
+the same value. a method call has no such form, but it does not need one: it stands for itself, so
+the only body that names its value is the one that makes the same call.
 
 ```by
+def starts[S: str](s: S) -> S.startswith("foo"):
+    return s.startswith("foo")
+
+reveal_type(starts("foobar"))  # revealed: True
+reveal_type(starts("bar"))  # revealed: False
+
+def wrong[S: str](s: S) -> S.startswith("foo"):
+    # error: [invalid-return-type]
+    return False
+
+def other_prefix[S: str](s: S) -> S.startswith("foo"):
+    # error: [invalid-return-type]
+    return s.startswith("bar")
+```
+
+## a call on a `some` parameter
+
+a `some` annotation opens an ordinary type parameter, so a call on it is checked the same way.
+
+```by
+def starts(s: some str) -> s.startswith("foo"):
+    return s.startswith("foo")
+
+reveal_type(starts("foobar"))  # revealed: True
+
+def wrong(s: some str) -> s.startswith("foo"):
+    # error: [invalid-return-type]
+    return True
+```
+
+## a comparison and an attribute type are checked only against their reduced form
+
+neither has a decision procedure: a comparison has no value-level counterpart to compare against,
+and an attribute type is *defined* to read as the bound's member before specialization. a body
+annotated with either is checked only against the reduced type.
+
+```by
+class A:
+    a: int
+
 def compares[I: int](i: I) -> I < 10:
     return True
 
-def starts[S: str](s: S) -> S.startswith("foo"):
-    return False
+def member[T: A](t: T) -> T.a:
+    return 1
 ```
 
 ## a product of two parameters is not linear
