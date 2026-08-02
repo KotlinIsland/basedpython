@@ -9922,8 +9922,77 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             self.basedpython_chain_receiver(&call_expression.func, callable_type);
 
         let return_type = self.infer_call_expression_impl(call_expression, callable_type, tcx);
+        let return_type =
+            self.basedpython_symbolic_call(call_expression, callable_type, return_type);
 
         self.basedpython_chain_result(call_expression, return_type, in_chain)
+    }
+
+    /// basedpython: keep a method call on a symbolic receiver symbolic.
+    ///
+    /// This is the value-level counterpart of the [`DeferredOperation::Call`] a type
+    /// expression builds, the way `-i` is the counterpart of `-> -I` and `x.a` of `T.a`.
+    /// Without it a body could never satisfy `-> s.startswith("foo")`: the annotation names
+    /// the operation while the body would name its reduced form, so `True` and
+    /// `s.startswith("foo")` would be equally acceptable — which is to say neither would be
+    /// checked.
+    ///
+    /// The call itself has already been inferred, so its arguments are checked and its
+    /// diagnostics reported exactly as they would be; only the *result* becomes the pending
+    /// operation, which re-folds against the receiver a specialization supplies.
+    fn basedpython_symbolic_call(
+        &mut self,
+        call_expression: &ast::ExprCall,
+        callable_type: Type<'db>,
+        return_type: Type<'db>,
+    ) -> Type<'db> {
+        if !self.is_basedpython_file()
+            || !call_expression.arguments.keywords.is_empty()
+            || call_expression
+                .arguments
+                .args
+                .iter()
+                .any(ast::Expr::is_starred_expr)
+        {
+            return return_type;
+        }
+        let ast::Expr::Attribute(method) = &*call_expression.func else {
+            return return_type;
+        };
+        let Some(receiver) = self.try_expression_type(&method.value) else {
+            return return_type;
+        };
+        // the receiver has to be symbolic on its own, not merely to mention a type
+        // parameter: every method of a generic class binds one, and deferring those would
+        // buy nothing but a symbolic form of the answer already computed. `Self` is that
+        // same case — the receiver binding substitutes it at every call site, so a call on
+        // it is already answered in terms of the class's own type parameters
+        if !is_symbolic_operand(receiver)
+            || receiver
+                .as_typevar()
+                .is_some_and(|typevar| typevar.typevar(self.db()).is_self(self.db()))
+        {
+            return return_type;
+        }
+
+        let mut operands = Vec::with_capacity(call_expression.arguments.args.len() + 1);
+        operands.push(callable_type);
+        for arg in &call_expression.arguments.args {
+            operands.push(self.expression_type(arg));
+        }
+        let deferred = DeferredType::build(
+            self.db(),
+            &DeferredOperation::Call,
+            operands.into_boxed_slice(),
+        );
+        // a call that turned out not to defer was already answered by the inference above,
+        // which saw the arguments in context; re-deriving it from the operands could only
+        // lose information
+        if deferred.is_deferred() {
+            deferred
+        } else {
+            return_type
+        }
     }
 
     /// basedpython: a constructor call names the class it builds, so the value it

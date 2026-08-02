@@ -87,12 +87,11 @@ pub enum DeferredOperation {
 }
 
 impl DeferredOperation {
-    /// basedpython: whether a body written against this operation can be checked.
+    /// basedpython: whether [`LinearForm`] takes this operation apart rather than treating
+    /// it as an atom — which is also what makes it worth building at the value level.
     ///
-    /// [`LinearForm`] decides when two integer expressions name the same value, which
-    /// covers `+`, `-`, `*` and the unary operators. Every other kind — a call, a
-    /// `type def`, a match type, an attribute type — has no such decision procedure, so
-    /// annotating with one leaves the body checked only against the reduced form.
+    /// Flattening decides when two integer expressions name the same value, which covers
+    /// `+`, `-`, `*` and the unary operators.
     pub(crate) const fn is_checked_arithmetic(&self) -> bool {
         matches!(
             self,
@@ -102,6 +101,19 @@ impl DeferredOperation {
                 ast::UnaryOp::USub | ast::UnaryOp::UAdd | ast::UnaryOp::Invert
             )
         )
+    }
+
+    /// basedpython: whether a body written against this operation is checked against the
+    /// operation itself rather than against its reduced form.
+    ///
+    /// An arithmetic operation is decided by flattening; a call is decided by standing for
+    /// itself, so the only source that names the same value is the very same call. The
+    /// remaining kinds are deliberately weaker: an attribute type is *defined* to read as
+    /// the bound's member before specialization, a `type def` reduces to its declared return
+    /// type — the annotation its author wrote to make it checkable — and a match type
+    /// reduces to a gradual type because which case applies is the whole question.
+    pub(crate) const fn is_checked(&self) -> bool {
+        self.is_checked_arithmetic() || matches!(self, DeferredOperation::Call)
     }
 
     /// The operands that decide whether the operation can be evaluated yet.
@@ -215,6 +227,11 @@ impl<'db> DeferredType<'db> {
     /// basedpython: see [`DeferredOperation::is_checked_arithmetic`].
     pub(crate) fn is_checked_arithmetic(self, db: &'db dyn Db) -> bool {
         self.operation(db).is_checked_arithmetic()
+    }
+
+    /// basedpython: see [`DeferredOperation::is_checked`].
+    pub(crate) fn is_checked(self, db: &'db dyn Db) -> bool {
+        self.operation(db).is_checked()
     }
 }
 
