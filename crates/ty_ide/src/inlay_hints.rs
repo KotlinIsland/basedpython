@@ -10013,6 +10013,30 @@ Source with applied edits:
         }));
     }
 
+    /// A `some` parameter opens an anonymous hole, which is not a position a call
+    /// site can supply, so there is no specialization to offer for it.
+    #[test]
+    fn basedpython_some_holes_are_not_hinted() {
+        let mut test = basedpython_inlay_hint_test(
+            "
+            def echo(s: some str) -> s:
+                return s
+
+            def pair[Element](s: some str, e: Element) -> Element:
+                return e
+
+            a = echo('lit')
+            b = pair('lit', 1)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            call_type_arguments: true,
+            type_argument_names: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
     /// A `.py` file has no keyword subscript to spell a named type argument, so
     /// a rendered specialization stays positional there.
     #[test]

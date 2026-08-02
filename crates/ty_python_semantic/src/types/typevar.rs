@@ -699,6 +699,24 @@ impl<'db> TypeVarInstance<'db> {
             .is_some_and(|bound| matches!(bound, ast::Expr::Starred(_)))
     }
 
+    /// basedpython: whether this parameter is the anonymous hole a `some T` annotation
+    /// declares, rather than an entry someone wrote in a `[...]` list.
+    ///
+    /// A hole is not a supplyable position — it takes the name of the parameter whose
+    /// annotation opened it — so anything that offers or reads back a type parameter list has
+    /// to leave it out.
+    #[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
+    pub(crate) fn is_some_hole(self, db: &'db dyn Db) -> bool {
+        let Some(definition) = self.definition(db) else {
+            return false;
+        };
+        let module = parsed_module(db, definition.file(db)).load(db);
+        match definition.kind(db) {
+            DefinitionKind::TypeVar(typevar) => typevar.node(&module).is_some_hole,
+            _ => false,
+        }
+    }
+
     fn lazy_bound(self, db: &'db dyn Db) -> Option<Type<'db>> {
         let bound = self.lazy_bound_unchecked(db)?;
 

@@ -638,15 +638,17 @@ impl<'db> CallSignatureDetails<'db> {
 
         // only the callee's *own* type parameters are spellable at the call
         // site; a method's specialization also carries its class's typevars,
-        // which the receiver already fixed
+        // which the receiver already fixed, and basedpython's `some` holes were
+        // never written as parameters at all
         let type_arguments = specialization
             .filter(|_| signature.generic_context.is_some())
             .map(|specialization| {
                 specialization
                     .generic_context(db)
                     .variables(db)
-                    .map(|variable| variable.name(db).clone())
                     .zip(specialization.types(db).iter().copied())
+                    .filter(|(variable, _)| !variable.typevar(db).is_some_hole(db))
+                    .map(|(variable, ty)| (variable.name(db).clone(), ty))
                     .collect()
             })
             .unwrap_or_default();
