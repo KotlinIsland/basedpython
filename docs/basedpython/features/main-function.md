@@ -103,7 +103,7 @@ positional slot.
 project as a whole:
 
 ```toml
-[tool.ty.run]
+[tool.basedpython.run]
 main = "app.cli"
 ```
 

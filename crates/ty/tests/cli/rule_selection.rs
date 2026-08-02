@@ -66,6 +66,59 @@ fn configuration_rule_severity() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `[tool.basedpython]` configures the same options as `[tool.ty]`, and wins where both set one
+#[test]
+fn basedpython_configuration_section() -> anyhow::Result<()> {
+    let case = CliTest::with_file(
+        "test.py",
+        r#"
+            y = 4 / 0
+
+            for a in range(0, int(y)):
+                x = a
+
+            prin(x)  # unresolved-reference
+            "#,
+    )?;
+
+    case.write_file(
+        "pyproject.toml",
+        r#"
+        [tool.ty.rules]
+        division-by-zero = "error"
+        unresolved-reference = "error"
+
+        [tool.basedpython.rules]
+        division-by-zero = "warn"
+    "#,
+    )?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[division-by-zero]: Cannot divide object of type `Literal[4]` by zero
+     --> test.py:2:5
+      |
+    2 | y = 4 / 0
+      |     ^^^^^
+      |
+
+    error[unresolved-reference]: Name `prin` used when not defined
+     --> test.py:7:1
+      |
+    7 | prin(x)  # unresolved-reference
+      | ^^^^
+      |
+
+    Found 2 diagnostics
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
 /// The rule severity can be changed using `--ignore`, `--warn`, and `--error`
 #[test]
 fn cli_rule_severity() -> anyhow::Result<()> {

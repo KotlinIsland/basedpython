@@ -458,6 +458,79 @@ fn user_configuration() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// A `basedpython.toml` is read like a `ty.toml`, at the project level and the user level,
+/// and takes precedence over a `ty.toml` sitting beside it
+#[test]
+fn basedpython_configuration_file() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "project/basedpython.toml",
+            r#"
+            [rules]
+            division-by-zero = "warn"
+            "#,
+        ),
+        (
+            "project/ty.toml",
+            r#"
+            [rules]
+            division-by-zero = "error"
+            "#,
+        ),
+        (
+            "project/main.py",
+            r#"
+            y = 4 / 0
+
+            for a in range(0, int(y)):
+                x = a
+
+            prin(x)
+            "#,
+        ),
+    ])?;
+
+    let config_directory = case.user_config_directory();
+    let config_env_var = user_config_directory_env_var();
+
+    case.write_file(
+        config_directory.join("basedpython/basedpython.toml"),
+        r#"
+        [rules]
+        unresolved-reference = "warn"
+        "#,
+    )?;
+
+    assert_cmd_snapshot!(
+        case.command().current_dir(case.root().join("project")).env(config_env_var, config_directory.as_os_str()),
+        @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[division-by-zero]: Cannot divide object of type `Literal[4]` by zero
+     --> main.py:2:5
+      |
+    2 | y = 4 / 0
+      |     ^^^^^
+      |
+
+    warning[unresolved-reference]: Name `prin` used when not defined
+     --> main.py:7:1
+      |
+    7 | prin(x)
+      | ^^^^
+      |
+
+    Found 2 diagnostics
+
+    ----- stderr -----
+    WARN Ignoring `<temp_dir>/project/ty.toml` because `<temp_dir>/project/basedpython.toml` takes precedence.
+    "
+    );
+
+    Ok(())
+}
+
 #[test]
 fn check_specific_paths() -> anyhow::Result<()> {
     let case = CliTest::with_files([

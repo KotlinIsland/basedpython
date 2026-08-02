@@ -8,6 +8,7 @@ use std::collections::Bound;
 use std::ops::Deref;
 use strum::IntoEnumIterator;
 use thiserror::Error;
+use ty_combine::Combine;
 
 /// A `pyproject.toml` as specified in PEP 517.
 #[derive(Deserialize, Serialize, Debug, Default, Clone, PartialEq, Eq)]
@@ -20,8 +21,33 @@ pub struct PyProject {
 }
 
 impl PyProject {
-    pub(crate) fn ty(&self) -> Option<&Options> {
-        self.tool.as_ref().and_then(|tool| tool.ty.as_ref())
+    /// The options configured in `[tool.basedpython]` and `[tool.ty]`.
+    ///
+    /// Both sections are honored; where they set the same option, `[tool.basedpython]` wins.
+    pub(crate) fn options(&self) -> Option<Options> {
+        let tool = self.tool.as_ref()?;
+        tool.basedpython.clone().combine(tool.ty.clone())
+    }
+
+    /// Whether the file configures ty at all, through either of its sections.
+    pub(crate) fn has_options(&self) -> bool {
+        self.tool
+            .as_ref()
+            .is_some_and(|tool| tool.basedpython.is_some() || tool.ty.is_some())
+    }
+
+    /// The names of the configured sections, for diagnostics. Empty if there are none.
+    pub(crate) fn section_names(&self) -> String {
+        let Some(tool) = self.tool.as_ref() else {
+            return String::new();
+        };
+
+        match (&tool.basedpython, &tool.ty) {
+            (Some(_), Some(_)) => "`tool.basedpython` and `tool.ty` sections".to_string(),
+            (Some(_), None) => "`tool.basedpython` section".to_string(),
+            (None, Some(_)) => "`tool.ty` section".to_string(),
+            (None, None) => String::new(),
+        }
     }
 }
 
@@ -54,8 +80,11 @@ impl PyProject {
         // lexicographically. Normalize rule order so that the `all` selector
         // is applied before per-rule selectors.
         if let Some(tool) = &mut pyproject.tool {
-            if let Some(ty) = &mut tool.ty {
-                ty.prioritize_all_selectors();
+            for options in [tool.basedpython.as_mut(), tool.ty.as_mut()]
+                .into_iter()
+                .flatten()
+            {
+                options.prioritize_all_selectors();
             }
         }
         Ok(pyproject)
@@ -164,6 +193,7 @@ pub enum ResolveRequiresPythonError {
 #[serde(rename_all = "kebab-case")]
 pub struct Tool {
     pub ty: Option<Options>,
+    pub basedpython: Option<Options>,
 }
 
 /// The normalized name of a package.

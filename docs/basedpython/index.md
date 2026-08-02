@@ -32,6 +32,7 @@ def main():
 ## contents
 
 - [getting started](getting-started.md) — install, your first file, project layout
+- [configuration](configuration.md) — where settings live and how they resolve
 - [features](features/index.md) — the full language reference
 - [framework support](frameworks/index.md) — popular python library support
 - [`by` cli reference](cli-reference.md) — commands and flags
