@@ -172,7 +172,7 @@ method's set part of its contract — adding a `raise` to a base method is then 
 breaking change for every subclass. enable it per project:
 
 ```toml
-[tool.ty.rules]
+[tool.basedpython.rules]
 override-raise = "error"
 ```
 

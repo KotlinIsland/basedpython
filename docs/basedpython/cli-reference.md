@@ -32,7 +32,7 @@ modules required to import `MODULE`
 the module can be left out when the project configures an entry point:
 
 ```toml
-[tool.ty.run]
+[tool.basedpython.run]
 main = "app.cli"
 ```
 
