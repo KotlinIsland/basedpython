@@ -823,6 +823,7 @@ pub fn walk_type_param<V: Transformer + ?Sized>(visitor: &V, type_param: &mut Ty
             range: _,
             node_index: _,
             variance: _,
+            is_some_hole: _,
         }) => {
             if let Some(expr) = lower_bound {
                 visitor.visit_expr(expr);

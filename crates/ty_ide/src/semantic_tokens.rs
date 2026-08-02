@@ -204,6 +204,10 @@ pub fn semantic_tokens(db: &dyn Db, file: File, range: Option<TextRange>) -> Sem
 /// they borrow.
 const LIFETIME_MODIFIERS: &[&str] = &["local", "once"];
 
+/// basedpython's `some`, written after a parameter's colon and ahead of the bound
+/// it makes that parameter's type an anonymous type parameter over.
+const SOME_BINDER: &[&str] = &["some"];
+
 /// The keyword introducing a basedpython narrowing return annotation, written
 /// between the `->` and the places it asserts.
 const ASSERTS_RETURN: &[&str] = &["asserts"];
@@ -994,7 +998,33 @@ impl<'db> SemanticTokenVisitor<'db> {
 
             // Handle parameter type annotations
             if let Some(annotation) = &parameter.annotation {
-                self.visit_annotation(annotation);
+                // basedpython `some T` — the binder sits between the parameter's name and the
+                // bound, and the annotation now points at the synthesized hole rather than at
+                // the written text, so the keyword has to be recovered from the source
+                if parameter.is_some {
+                    self.add_consumed_keywords(
+                        parameter.name.range().end(),
+                        annotation.range().start(),
+                        SOME_BINDER,
+                    );
+                }
+                // the repointed annotation is a reference to the hole, so highlighting it
+                // would classify the written bound as a type parameter. the hole still
+                // carries the bound expression, at the same range
+                match parameter
+                    .is_some
+                    .then(|| func?.type_params.as_ref())
+                    .flatten()
+                    .and_then(|type_params| {
+                        type_params.iter().find_map(|type_param| {
+                            let type_var = type_param.as_type_var()?;
+                            (type_var.is_some_hole && type_var.name.id == parameter.name.id)
+                                .then_some(type_var.bound.as_deref()?)
+                        })
+                    }) {
+                    Some(bound) => self.visit_annotation(bound),
+                    None => self.visit_annotation(annotation),
+                }
             }
 
             if let Some(default) = any_param.default() {
@@ -1312,6 +1342,16 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                 // Type parameters (Python 3.12+ syntax)
                 if let Some(type_params) = &func.type_params {
                     for type_param in &type_params.type_params {
+                        // basedpython: a `some` hole was never written in a `[...]` list — it
+                        // was synthesized from a parameter annotation, and its name is that
+                        // parameter's. highlighting it would emit a token over the parameter,
+                        // out of file order
+                        if type_param
+                            .as_type_var()
+                            .is_some_and(|type_var| type_var.is_some_hole)
+                        {
+                            continue;
+                        }
                         self.visit_type_param(type_param);
                     }
                 }
@@ -6290,6 +6330,44 @@ def read(data: list[out int], sink: Both[in str]) -> None: ...
         "in" @ 95..97: Keyword
         "str" @ 98..101: Class
         "None" @ 107..111: BuiltinConstant
+        "#);
+    }
+
+    #[test]
+    fn semantic_tokens_some_parameter() {
+        // `some` is consumed by the parser: the annotation it prefixes is repointed at the
+        // synthesized hole, so the keyword survives only in the source between the parameter's
+        // name and the bound
+        let test = SemanticTokenTest::new_by(
+            "
+def echo(s: some str) -> s: ...
+
+def several(a: some int, b: some str) -> a: ...
+
+def plain(s: str) -> str: ...
+",
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "echo" @ 5..9: Function [definition]
+        "s" @ 10..11: Parameter [definition]
+        "some" @ 13..17: Keyword
+        "str" @ 18..21: Class
+        "s" @ 26..27: TypeParameter
+        "several" @ 38..45: Function [definition]
+        "a" @ 46..47: Parameter [definition]
+        "some" @ 49..53: Keyword
+        "int" @ 54..57: Class
+        "b" @ 59..60: Parameter [definition]
+        "some" @ 62..66: Keyword
+        "str" @ 67..70: Class
+        "a" @ 75..76: TypeParameter
+        "plain" @ 87..92: Function [definition]
+        "s" @ 93..94: Parameter [definition]
+        "str" @ 96..99: Class
+        "str" @ 104..107: Class
         "#);
     }
 

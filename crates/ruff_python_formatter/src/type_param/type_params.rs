@@ -46,6 +46,14 @@ impl FormatNodeRule<TypeParams> for FormatTypeParams {
 
             let mut joiner = f.join_comma_separated(item.end());
             for (index, type_param) in item.type_params.iter().enumerate() {
+                // basedpython: a `some T` hole was never written in the list — the parameter it
+                // came from re-emits it
+                if type_param
+                    .as_type_var()
+                    .is_some_and(|type_var| type_var.is_some_hole)
+                {
+                    continue;
+                }
                 for sep in separators_at(index) {
                     joiner.entry(&sep, &sep);
                 }

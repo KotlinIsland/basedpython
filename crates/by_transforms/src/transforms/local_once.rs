@@ -16,7 +16,7 @@
 use ruff_python_ast::helpers::parameter_modifiers;
 use ruff_python_ast::visitor::{Visitor, walk_parameter};
 use ruff_python_ast::{ModModule, Parameter};
-use ruff_text_size::TextRange;
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use super::ast_driver::{AstPass, PassContext};
 
@@ -29,6 +29,29 @@ impl<'ast> Visitor<'ast> for LocalOnceStrip<'_> {
     fn visit_parameter(&mut self, parameter: &'ast Parameter) {
         for range in parameter_modifiers(self.source, parameter).strip_ranges {
             self.edits.push((range, String::new()));
+        }
+        // basedpython `some T`: the binder is a type-level construct with no runtime form. the
+        // annotation node points at the synthesized hole, so the keyword survives only in the
+        // source between the parameter name and the bound
+        if parameter.is_some
+            && let Some(annotation) = parameter.annotation.as_deref()
+        {
+            let gap = TextRange::new(parameter.name.range().end(), annotation.range().start());
+            if let Some(offset) = self.source[gap].find("some") {
+                let start = gap.start() + TextSize::try_from(offset).unwrap_or_default();
+                let end = start + TextSize::new(4);
+                let trailing = self.source[TextRange::new(end, gap.end())].len()
+                    - self.source[TextRange::new(end, gap.end())]
+                        .trim_start()
+                        .len();
+                self.edits.push((
+                    TextRange::new(
+                        start,
+                        end + TextSize::try_from(trailing).unwrap_or_default(),
+                    ),
+                    String::new(),
+                ));
+            }
         }
         walk_parameter(self, parameter);
     }

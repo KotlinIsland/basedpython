@@ -148,6 +148,7 @@ impl<'a> From<&'a TypeVar<'a>> for TypeParam {
                 node_index: ruff_python_ast::AtomicNodeIndex::NONE,
                 name: Identifier::new(*name, TextRange::default()),
                 lower_bound: None,
+                is_some_hole: false,
                 bound: match restriction {
                     Some(TypeVarRestriction::Bound(bound)) => Some(Box::new((*bound).clone())),
                     Some(TypeVarRestriction::Constraint(constraints)) => {

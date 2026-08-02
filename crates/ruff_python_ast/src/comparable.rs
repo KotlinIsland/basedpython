@@ -1545,6 +1545,7 @@ impl<'a> From<&'a ast::TypeParam> for ComparableTypeParam<'a> {
                 range: _,
                 node_index: _,
                 variance: _,
+                is_some_hole: _,
             }) => Self::TypeVar(TypeParamTypeVar {
                 name: name.as_str(),
                 lower_bound: lower_bound.as_ref().map(Into::into),

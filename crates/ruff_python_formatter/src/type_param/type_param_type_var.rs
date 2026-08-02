@@ -17,6 +17,7 @@ impl FormatNodeRule<TypeParamTypeVar> for FormatTypeParamTypeVar {
             default,
             variance,
             is_reified,
+            is_some_hole: _,
         } = item;
         // basedpython writes `reified` and the variance keywords ahead of the
         // typevar name. plain python output ignores them — they're only

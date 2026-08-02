@@ -96,6 +96,7 @@ ModModule {
                                     ),
                                 ),
                                 is_context: false,
+                                is_some: false,
                             },
                             default: None,
                         },
