@@ -50,6 +50,49 @@ fn project_settings_and_overrides_do_not_apply() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// script metadata configures the file through `[tool.basedpython]` as well
+#[test]
+fn basedpython_metadata_applies() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "pyproject.toml",
+            r#"
+            [tool.basedpython.rules]
+            division-by-zero = "error"
+            "#,
+        ),
+        (
+            "script.py",
+            r#"
+            # /// script
+            # [tool.basedpython.rules]
+            # division-by-zero = "warn"
+            # ///
+
+            print(4 / 0)
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[division-by-zero]: Cannot divide object of type `Literal[4]` by zero
+     --> script.py:7:7
+      |
+    7 | print(4 / 0)
+      |       ^^^^^
+      |
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
+
 #[test]
 fn metadata_without_tool_ty_uses_default_settings() -> anyhow::Result<()> {
     let case = CliTest::with_files([

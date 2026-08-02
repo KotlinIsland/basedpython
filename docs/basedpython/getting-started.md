@@ -32,9 +32,19 @@ by run main
 naming the module every time gets old once a project has an entry point. configure one and `by run` alone is enough:
 
 ```toml
-[tool.ty.run]
+[tool.basedpython.run]
 main = "main"
 ```
+
+that goes in the `[tool.basedpython]` section of `pyproject.toml`, or in a
+`basedpython.toml` beside it, which holds the same options at the top level:
+
+```toml
+[run]
+main = "main"
+```
+
+see [configuration](configuration.md) for everything that can go in there
 
 ## project layout
 

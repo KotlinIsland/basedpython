@@ -1,4 +1,5 @@
 use compact_str::CompactString;
+pub(crate) use configuration_file::CONFIG_FILE_NAMES;
 use configuration_file::{ConfigurationFile, ConfigurationFileError};
 use ruff_db::files::FileRootKind;
 use ruff_db::system::{System, SystemPath, SystemPathBuf};
@@ -37,7 +38,7 @@ pub struct ProjectMetadata {
 
     /// The raw (unmerged, unresolved) options from the project's configuration.
     /// When [`Self::config_file_override`] is `None`, then these are the options from the
-    /// project's `ty.toml` or `pyproject.toml`. The options come from
+    /// project's `basedpython.toml`, `ty.toml`, or `pyproject.toml`. The options come from
     /// the file specified by [`Self::config_file_override`] if it is `Some` (e.g. when using `--config-file <path>`).
     pub(super) options: Options,
 
@@ -55,7 +56,7 @@ pub struct ProjectMetadata {
     /// The explicit configuration file that replaces normal project discovery.
     ///
     /// Can be specified using `--config-file <path>`. When `Some`, [`Self::options`] were loaded from this file
-    /// instead of from the project's `pyproject.toml` or `ty.toml` file.
+    /// instead of from the project's `pyproject.toml`, `basedpython.toml`, or `ty.toml` file.
     #[cfg_attr(test, serde(skip_serializing_if = "Option::is_none"))]
     config_file_override: Option<SystemPathBuf>,
 }
@@ -103,11 +104,11 @@ impl ProjectMetadata {
 
     /// Loads a project from a `pyproject.toml` file.
     pub(crate) fn from_pyproject(
-        pyproject: PyProject,
+        pyproject: &PyProject,
         root: SystemPathBuf,
     ) -> Result<Self, ResolveRequiresPythonError> {
         Self::from_options(
-            pyproject.tool.and_then(|tool| tool.ty).unwrap_or_default(),
+            pyproject.options().unwrap_or_default(),
             root,
             pyproject.project.as_ref(),
             &FallibleStrategy,
@@ -164,7 +165,8 @@ impl ProjectMetadata {
     /// The algorithm traverses upwards in the `path`'s ancestor chain and uses the following precedence
     /// the resolve the project's root.
     ///
-    /// 1. The closest `pyproject.toml` with a `tool.ty` section or `ty.toml`.
+    /// 1. The closest `basedpython.toml` or `ty.toml`, or `pyproject.toml` with a
+    ///    `tool.basedpython` or `tool.ty` section.
     /// 1. The closest `pyproject.toml`.
     /// 1. Fallback to use `path` as the root and use the default settings.
     pub fn discover(
@@ -199,29 +201,45 @@ impl ProjectMetadata {
                 None
             };
 
-            // A `ty.toml` takes precedence over a `pyproject.toml`.
-            let ty_toml_path = project_root.join("ty.toml");
-            if let Ok(ty_str) = system.read_to_string(&ty_toml_path) {
+            // A configuration file takes precedence over a `pyproject.toml`.
+            let config_file = CONFIG_FILE_NAMES.iter().find_map(|name| {
+                let path = project_root.join(name);
+                let content = system.read_to_string(&path).ok()?;
+                Some((path, content))
+            });
+
+            if let Some((config_path, config_str)) = config_file {
                 let options = match Options::from_toml_str(
-                    &ty_str,
-                    ValueSource::File(Arc::new(ty_toml_path.clone())),
+                    &config_str,
+                    ValueSource::File(Arc::new(config_path.clone())),
                 ) {
                     Ok(options) => options,
                     Err(error) => {
-                        return Err(ProjectMetadataError::InvalidTyToml {
-                            path: ty_toml_path,
+                        return Err(ProjectMetadataError::InvalidConfigFile {
+                            path: config_path,
                             source: Box::new(error),
                         });
                     }
                 };
 
-                if pyproject
-                    .as_ref()
-                    .is_some_and(|project| project.ty().is_some())
+                // TODO: Consider using diagnostics for the two warnings below
+                for ignored in CONFIG_FILE_NAMES
+                    .iter()
+                    .map(|name| project_root.join(name))
+                    .filter(|path| *path != config_path && system.path_exists(path))
                 {
-                    // TODO: Consider using a diagnostic here
                     tracing::warn!(
-                        "Ignoring the `tool.ty` section in `{pyproject_path}` because `{ty_toml_path}` takes precedence."
+                        "Ignoring `{ignored}` because `{config_path}` takes precedence."
+                    );
+                }
+
+                if let Some(sections) = pyproject
+                    .as_ref()
+                    .filter(|pyproject| pyproject.has_options())
+                    .map(PyProject::section_names)
+                {
+                    tracing::warn!(
+                        "Ignoring the {sections} in `{pyproject_path}` because `{config_path}` takes precedence."
                     );
                 }
 
@@ -246,9 +264,9 @@ impl ProjectMetadata {
             }
 
             if let Some(pyproject) = pyproject {
-                let has_ty_section = pyproject.ty().is_some();
+                let has_options = pyproject.has_options();
                 let metadata =
-                    ProjectMetadata::from_pyproject(pyproject, project_root.to_path_buf())
+                    ProjectMetadata::from_pyproject(&pyproject, project_root.to_path_buf())
                         .map_err(
                             |err| ProjectMetadataError::InvalidRequiresPythonConstraint {
                                 source: err,
@@ -256,7 +274,7 @@ impl ProjectMetadata {
                             },
                         )?;
 
-                if has_ty_section {
+                if has_options {
                     tracing::debug!("Found project at '{}'", project_root);
 
                     return Ok(metadata);
@@ -272,7 +290,7 @@ impl ProjectMetadata {
         // No project found, but maybe a pyproject.toml was found.
         let metadata = if let Some(closest_project) = closest_project {
             tracing::debug!(
-                "Project without `tool.ty` section: '{}'",
+                "Project without a `tool.basedpython` or `tool.ty` section: '{}'",
                 closest_project.root()
             );
 
@@ -496,8 +514,8 @@ pub enum ProjectMetadataError {
         path: SystemPathBuf,
     },
 
-    #[error("{path} is not a valid `ty.toml`")]
-    InvalidTyToml {
+    #[error("{path} is not a valid configuration file")]
+    InvalidConfigFile {
         source: Box<TyTomlError>,
         path: SystemPathBuf,
     },
@@ -594,6 +612,98 @@ mod tests {
             .context("Failed to discover project from src sub-directory")?;
 
         assert_eq!(from_src, project);
+
+        Ok(())
+    }
+
+    #[test]
+    fn project_with_basedpython_section() -> anyhow::Result<()> {
+        let system = TestSystem::default();
+        let root = SystemPathBuf::from("/app");
+
+        system
+            .memory_file_system()
+            .write_files_all([
+                (
+                    root.join("pyproject.toml"),
+                    r#"
+                    [project]
+                    name = "backend"
+
+                    [tool.basedpython.src]
+                    root = "src"
+                    "#,
+                ),
+                (root.join("packages/a/pyproject.toml"), ""),
+            ])
+            .context("Failed to write files")?;
+
+        // the section marks `/app` as a project, so the sub-directory resolves to it
+        let project = ProjectMetadata::discover(&root.join("packages/a"), &system)
+            .context("Failed to discover project")?;
+
+        with_escaped_paths(|| {
+            assert_ron_snapshot!(&project, @r#"
+            ProjectMetadata(
+              name: ProjectName("backend"),
+              root: "/app",
+              options: Options(
+                src: Some(SrcOptions(
+                  root: Some("src"),
+                )),
+              ),
+            )
+            "#);
+        });
+
+        Ok(())
+    }
+
+    #[test]
+    fn basedpython_section_takes_precedence_over_ty_section() -> anyhow::Result<()> {
+        let system = TestSystem::default();
+        let root = SystemPathBuf::from("/app");
+
+        system
+            .memory_file_system()
+            .write_files_all([(
+                root.join("pyproject.toml"),
+                r#"
+                    [project]
+                    name = "backend"
+
+                    [tool.ty.src]
+                    root = "ty_src"
+
+                    [tool.ty.environment]
+                    python-version = "3.10"
+
+                    [tool.basedpython.src]
+                    root = "by_src"
+                    "#,
+            )])
+            .context("Failed to write files")?;
+
+        let project =
+            ProjectMetadata::discover(&root, &system).context("Failed to discover project")?;
+
+        // `src.root` comes from `tool.basedpython`, `environment` from the unopposed `tool.ty`
+        with_escaped_paths(|| {
+            assert_ron_snapshot!(&project, @r#"
+            ProjectMetadata(
+              name: ProjectName("backend"),
+              root: "/app",
+              options: Options(
+                environment: Some(EnvironmentOptions(
+                  r#python-version: Some(r#3.10),
+                )),
+                src: Some(SrcOptions(
+                  root: Some("by_src"),
+                )),
+              ),
+            )
+            "#);
+        });
 
         Ok(())
     }
@@ -879,6 +989,67 @@ unclosed table, expected `]`
 
         Ok(())
     }
+
+    /// A `basedpython.toml` holds the same options as a `ty.toml`, and takes precedence over both
+    /// a `ty.toml` and the `pyproject.toml` sections.
+    #[test]
+    fn project_with_basedpython_toml() -> anyhow::Result<()> {
+        let system = TestSystem::default();
+        let root = SystemPathBuf::from("/app");
+
+        system
+            .memory_file_system()
+            .write_files_all([
+                (
+                    root.join("pyproject.toml"),
+                    r#"
+                    [project]
+                    name = "super-app"
+                    requires-python = ">=3.12"
+
+                    [tool.basedpython.src]
+                    root = "this_option_is_ignored"
+                    "#,
+                ),
+                (
+                    root.join("ty.toml"),
+                    r#"
+                    [src]
+                    root = "this_option_is_ignored_too"
+                    "#,
+                ),
+                (
+                    root.join("basedpython.toml"),
+                    r#"
+                    [src]
+                    root = "src"
+                    "#,
+                ),
+            ])
+            .context("Failed to write files")?;
+
+        let root = ProjectMetadata::discover(&root, &system)?;
+
+        with_escaped_paths(|| {
+            assert_ron_snapshot!(root, @r#"
+            ProjectMetadata(
+              name: ProjectName("super-app"),
+              root: "/app",
+              options: Options(
+                environment: Some(EnvironmentOptions(
+                  r#python-version: Some(r#3.12),
+                )),
+                src: Some(SrcOptions(
+                  root: Some("src"),
+                )),
+              ),
+            )
+            "#);
+        });
+
+        Ok(())
+    }
+
     #[test]
     fn requires_python_major_minor() -> anyhow::Result<()> {
         let system = TestSystem::default();

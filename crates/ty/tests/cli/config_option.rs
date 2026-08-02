@@ -203,7 +203,7 @@ fn invalid_configuration_file() -> anyhow::Result<()> {
     ----- stderr -----
     by failed
       Cause: Error loading configuration file at <temp_dir>/ty.toml
-      Cause: <temp_dir>/ty.toml is not a valid `ty.toml`
+      Cause: <temp_dir>/ty.toml is not a valid configuration file
       Cause: TOML parse error at line 1, column 2
       |
     1 | x

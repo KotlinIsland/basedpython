@@ -1,4 +1,5 @@
 use crate::db::{Db, ProjectDatabase};
+use crate::metadata::CONFIG_FILE_NAMES;
 use crate::watch::{ChangeEvent, CreatedKind, DeletedKind};
 use crate::{ProjectMetadata, ProjectReloadResult};
 use std::collections::BTreeSet;
@@ -399,7 +400,9 @@ impl ConfigurationPaths {
             && path
                 .parent()
                 .is_some_and(|parent| project_root.starts_with(parent))
-            && matches!(path.file_name(), Some("ty.toml" | "pyproject.toml"))
+            && path
+                .file_name()
+                .is_some_and(|name| CONFIG_FILE_NAMES.contains(&name) || name == "pyproject.toml")
     }
 
     fn may_contain_configuration(&self, directory: &SystemPath, project_root: &SystemPath) -> bool {

@@ -250,7 +250,7 @@ pub(crate) struct CheckCommand {
     #[clap(flatten)]
     pub(crate) config: ConfigsArg,
 
-    /// The path to a `ty.toml` file to use for configuration.
+    /// The path to a `basedpython.toml` or `ty.toml` file to use for configuration.
     ///
     /// While ty configuration can be included in a `pyproject.toml` file, it is not allowed in this context.
     #[arg(long, env = EnvVars::TY_CONFIG_FILE, value_name = "PATH")]

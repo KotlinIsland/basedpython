@@ -130,7 +130,7 @@ pub(crate) fn file_settings(db: &dyn Db, file: File) -> FileSettings {
     if let Some(script) = script_metadata(db, file)
         && crate::should_check_file(db, file)
     {
-        let inline = script.ty().cloned().unwrap_or_default();
+        let inline = script.options().unwrap_or_default();
         let metadata = project.metadata(db);
         let primary = if metadata.config_file_override().is_some() {
             metadata.options()

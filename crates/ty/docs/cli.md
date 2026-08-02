@@ -53,7 +53,7 @@ by check [OPTIONS] [PATH]...
 overriding a specific configuration option.</p>
 <p>Overrides of individual settings using this option always take precedence
 over all configuration files.</p>
-</dd><dt id="by-check--config-file"><a href="#by-check--config-file"><code>--config-file</code></a> <i>path</i></dt><dd><p>The path to a <code>ty.toml</code> file to use for configuration.</p>
+</dd><dt id="by-check--config-file"><a href="#by-check--config-file"><code>--config-file</code></a> <i>path</i></dt><dd><p>The path to a <code>basedpython.toml</code> or <code>ty.toml</code> file to use for configuration.</p>
 <p>While ty configuration can be included in a <code>pyproject.toml</code> file, it is not allowed in this context.</p>
 <p>May also be set with the <code>TY_CONFIG_FILE</code> environment variable.</p></dd><dt id="by-check--error"><a href="#by-check--error"><code>--error</code></a> <i>rule</i></dt><dd><p>Treat the given rule as having severity 'error'. Can be specified multiple times. Use 'all' to apply to all rules.</p>
 </dd><dt id="by-check--error-on-warning"><a href="#by-check--error-on-warning"><code>--error-on-warning</code></a></dt><dd><p>Use exit code 1 if there are any warning-level diagnostics.</p>

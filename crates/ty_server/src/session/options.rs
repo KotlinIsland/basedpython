@@ -194,7 +194,7 @@ pub struct WorkspaceOptions {
     /// Inline configuration, overrides settings from the configuration file.
     pub configuration: Option<ConfigurationMap>,
 
-    /// Path to a `ty.toml` file, similar to `--config-file` on the CLI
+    /// Path to a `basedpython.toml` or `ty.toml` file, similar to `--config-file` on the CLI
     pub configuration_file: Option<String>,
 
     /// Whether to disable language services like code completions, hover, etc.
