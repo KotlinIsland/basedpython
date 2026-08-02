@@ -113,11 +113,25 @@ def annotated[I: int](i: I) -> I + 0:
     return i
 ```
 
-`+`, `-`, `*` and the unary operators are decided this way. a comparison, a
-method call or an [attribute type](attribute-types.md) has no such decision
-procedure, so a body annotated with one is checked only against the type the
-operation reduces to. a body that is correct for a reason the checker cannot see
-takes the escape hatch every other unprovable assignment takes:
+`+`, `-`, `*` and the unary operators are decided this way. a method call is
+decided too, by a simpler rule: it stands for itself, so the only body that names
+its value is the one that makes the same call.
+
+```by
+def starts[S: str](s: S) -> S.startswith("foo"):
+    return s.startswith("foo")      # ok
+
+def wrong[S: str](s: S) -> S.startswith("foo"):
+    return True                     # error: expected `S.startswith("foo")`, found `True`
+```
+
+a comparison and an [attribute type](attribute-types.md) have no such decision
+procedure — an attribute type reads as the bound's member until it is
+specialized, which is a weaker promise than naming one value — so a body
+annotated with either is checked only against the type the operation reduces to.
+
+a body that is correct for a reason the checker cannot see takes the escape hatch
+every other unprovable assignment takes:
 
 ```by
 def from_len[I: int](i: I, xs: list[int]) -> I + 1:
