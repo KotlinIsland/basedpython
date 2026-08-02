@@ -2,7 +2,7 @@ use crate::pattern::maybe_parenthesize_pattern;
 use crate::prelude::*;
 use ruff_python_ast::Parameter;
 use ruff_python_ast::helpers::parameter_modifiers;
-use ruff_text_size::{TextRange, TextSize};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 #[derive(Default)]
 pub struct FormatParameter;
@@ -16,6 +16,7 @@ impl FormatNodeRule<Parameter> for FormatParameter {
             pattern,
             annotation,
             is_context,
+            is_some,
         } = item;
 
         if *is_context {
@@ -53,7 +54,16 @@ impl FormatNodeRule<Parameter> for FormatParameter {
                 space().fmt(f)?;
             }
 
-            annotation.format().fmt(f)?;
+            // basedpython `some T`: the parser repoints the annotation at the synthesized hole,
+            // so the written bound survives only as that node's range — read it back rather than
+            // formatting the reference, which would print the parameter's own name
+            if *is_some {
+                token("some").fmt(f)?;
+                space().fmt(f)?;
+                source_text_slice(annotation.range()).fmt(f)?;
+            } else {
+                annotation.format().fmt(f)?;
+            }
         }
 
         Ok(())

@@ -801,6 +801,10 @@ fields = [
   { name = "is_reified", type = "bool", doc = """basedpython: when true, the parameter is
 declared `reified T`, which makes it a runtime value whether or not the body ever reads it as
 one. Reification is otherwise inferred from a value-position use in the body""" },
+  { name = "is_some_hole", type = "bool", doc = """basedpython: when true, this type parameter was not written in a `[...]` list — it is
+the anonymous type parameter a `some T` parameter annotation introduces, synthesized by the parser
+so the hole is an ordinary type parameter everywhere downstream. the formatter hides it and
+re-emits `some` on the parameter instead""" },
 ]
 
 [TypeParam.nodes.TypeParamTypeVarTuple]

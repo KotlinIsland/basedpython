@@ -10863,6 +10863,11 @@ pub struct TypeParamTypeVar {
     /// declared `reified T`, which makes it a runtime value whether or not the body ever reads it as
     /// one. Reification is otherwise inferred from a value-position use in the body
     pub is_reified: bool,
+    /// basedpython: when true, this type parameter was not written in a `[...]` list — it is
+    /// the anonymous type parameter a `some T` parameter annotation introduces, synthesized by the parser
+    /// so the hole is an ordinary type parameter everywhere downstream. the formatter hides it and
+    /// re-emits `some` on the parameter instead
+    pub is_some_hole: bool,
 }
 
 /// See also [TypeVarTuple](https://docs.python.org/3/library/ast.html#ast.TypeVarTuple)
@@ -12130,6 +12135,7 @@ impl TypeParamTypeVar {
             default,
             variance: _,
             is_reified: _,
+            is_some_hole: _,
             range: _,
             node_index: _,
         } = self;

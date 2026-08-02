@@ -2835,6 +2835,7 @@ mod tests {
         });
         let type_var_one = TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound: None,
+            is_some_hole: false,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
             bound: Some(Box::new(constant_one.clone())),
@@ -2845,6 +2846,7 @@ mod tests {
         });
         let type_var_two = TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound: None,
+            is_some_hole: false,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
             bound: None,
@@ -2881,6 +2883,7 @@ mod tests {
     fn any_over_type_param_type_var() {
         let type_var_no_bound = TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound: None,
+            is_some_hole: false,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
             bound: None,
@@ -2899,6 +2902,7 @@ mod tests {
 
         let type_var_with_bound = TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound: None,
+            is_some_hole: false,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
             bound: Some(Box::new(constant.clone())),
@@ -2920,6 +2924,7 @@ mod tests {
 
         let type_var_with_default = TypeParam::TypeVar(TypeParamTypeVar {
             lower_bound: None,
+            is_some_hole: false,
             range: TextRange::default(),
             node_index: AtomicNodeIndex::NONE,
             default: Some(Box::new(constant.clone())),

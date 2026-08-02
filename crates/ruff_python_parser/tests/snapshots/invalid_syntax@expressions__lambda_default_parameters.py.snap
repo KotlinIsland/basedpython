@@ -38,6 +38,7 @@ Module(
                                                 pattern: None,
                                                 annotation: None,
                                                 is_context: false,
+                                                is_some: false,
                                             },
                                             default: None,
                                         },
@@ -55,6 +56,7 @@ Module(
                                                 pattern: None,
                                                 annotation: None,
                                                 is_context: false,
+                                                is_some: false,
                                             },
                                             default: Some(
                                                 NumberLiteral(
@@ -82,6 +84,7 @@ Module(
                                                 pattern: None,
                                                 annotation: None,
                                                 is_context: false,
+                                                is_some: false,
                                             },
                                             default: None,
                                         },

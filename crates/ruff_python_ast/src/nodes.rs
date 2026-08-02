@@ -3034,6 +3034,10 @@ pub struct Parameter {
     /// (`def f(context b: str)`). when unmatched at a call site, the argument
     /// is resolved implicitly from `context` declarations in scope
     pub is_context: bool,
+    /// basedpython: `true` when the annotation was written `some T`. the annotation holds the
+    /// bound; the parser synthesizes a matching type parameter marked `is_some_hole`, and this
+    /// flag is what lets the formatter print the surface form back
+    pub is_some: bool,
 }
 
 impl Parameter {
