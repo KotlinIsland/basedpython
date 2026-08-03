@@ -53,8 +53,8 @@ framework support is graceful: if a pattern is too dynamic to type-check, the
 checker falls back to ordinary inference rather than guessing. this means:
 
 - a framework not installed → no special checking activates for it
-- a pattern the checker can't resolve → you'll see an `unknown attribute` error,
-    which you can annotate around if needed
+- a pattern the checker can't resolve → you'll see an `unresolved-attribute`
+    error, which you can annotate around if needed
 - a limitation → documented in the framework's page with a workaround
 
 framework support is also **not exhaustive**. each framework has a conformance

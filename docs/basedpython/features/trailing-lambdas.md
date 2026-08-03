@@ -100,22 +100,25 @@ with a fresh block local. the lowering inserts the `global` / `nonlocal`
 declaration the closure needs, so no manual `nonlocal` is required:
 
 ```by
-a: int = 1
+n: int = 1
 f:
-    a = 2
-print(a)  # 2
+    n = 2
+print(n)  # 2
 ```
 
 →
 
 ```python
-a: int = 1
+n: int = 1
 def _trailing_lambda_0(it=None):
-    global a
-    a = 2
+    global n
+    n = 2
 f(a=_trailing_lambda_0)
-print(a)
+print(n)
 ```
+
+(`a` is `f`'s last parameter, from the definition at the top of the page — the
+keyword names the callback slot, not anything the block assigns)
 
 a module-level binding is captured with `global`, an enclosing function's local
 with `nonlocal`. a name bound in no enclosing scope stays a plain block local,

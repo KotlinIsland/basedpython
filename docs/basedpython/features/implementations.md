@@ -331,7 +331,7 @@ implementation A for B:
 →
 
 ```python
-class __by_impl__A__B(_by_Implementation, A):  # basedpython: implementation A for B
+class _by_impl__A__B(_by_Implementation, A):  # basedpython: implementation A for B
     __slots__ = ()
 
     def f(self):
@@ -387,8 +387,8 @@ xs: list[A] = [b1, b2]
 →
 
 ```python
-f(__by_impl__A__B(b))
-xs: list[A] = [__by_impl__A__B(b1), __by_impl__A__B(b2)]
+f(_by_impl__A__B(b))
+xs: list[A] = [_by_impl__A__B(b1), _by_impl__A__B(b2)]
 ```
 
 when the implementation lives in another module, the lowering emits the precise
@@ -396,7 +396,7 @@ import of the witness class, keyed off the checker's resolution — the same
 implicit-import treatment extension members get:
 
 ```python
-from adapters import __by_impl__A__B
+from adapters import _by_impl__A__B
 ```
 
 ## round-tripping
@@ -497,7 +497,7 @@ settling separately. adding inherent members is what extensions are for
         (`project_db` + `transpile_typed`), beside
         `imported_extension_rewrites_call_and_adds_import`: a conversion site
         whose witness class lives in another module must wrap the expression *and*
-        emit `from impl_mod import __by_impl__A__B`, and the anonymous mangled
+        emit `from impl_mod import _by_impl__A__B`, and the anonymous mangled
         name must agree between the two files
     - **runtime** — an `implementation_runtime.rs` beside the other `*_runtime.rs`
         integration tests, for shared mutation through a witness, `==` / `hash`

@@ -48,11 +48,10 @@ variable in an input position. upstream gives up and types the parameter
 value is accepted if it is not disjoint from the element type:
 
 ```by
-xs: list[int] = [1]
-
-1 in xs           # ok
-object() in xs    # ok — `object` overlaps `int`
-"a" in xs         # error — `str` and `int` are disjoint
+def f(xs: list[int], o: object):
+    1 in xs     # ok
+    o in xs     # ok — `object` overlaps `int`
+    "a" in xs   # error — `str` and `int` are disjoint
 ```
 
 `Mapping` and `dict` apply the same treatment to `__getitem__` and `get`, which

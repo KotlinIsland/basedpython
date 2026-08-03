@@ -54,7 +54,7 @@ class A[**Kwargs]:
     init(**kwargs: **Kwargs)
 
 a = A(x=1, y="s")
-reveal_type(a)  # A[x=int, y=str]
+reveal_type(a)  # final A[x=int, y=str]
 ```
 
 the pack is solved as a whole rather than per-argument, so `A()` gives the empty pack `A[()]`. field

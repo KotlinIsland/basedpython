@@ -43,6 +43,7 @@ reveal_type(build(None))   # dict[Unknown, int]  — a `dict[Never, int]` could 
 ```
 
 ```python
+def sink(x) -> None: ...
 def pipe[A, B](f: Callable[[A], B]) -> Callable[[A], B]: ...
 
 reveal_type(pipe(sink))    # (Unknown, /) -> None  — a `(Never, /)` could never be called

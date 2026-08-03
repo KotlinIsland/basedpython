@@ -9,8 +9,12 @@ name = user.display_name ?? "anonymous"
 transpiles to:
 
 ```python
-name = user.display_name if user.display_name is not None else "anonymous"
+name = __by_t_0__ if (__by_t_0__ := user.display_name) is not None else "anonymous"
 ```
+
+a compound left operand is bound to a temp by the walrus so it is evaluated
+exactly once. a bare name needs no temp and is repeated directly — `a ?? b` is
+`a if a is not None else b`
 
 ## semantics
 

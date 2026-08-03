@@ -105,6 +105,6 @@ surrounding whitespace) — constructs an ordinary `float`
 
 ```by
 def f(x: str) -> None:
-    reveal_type(float(x))  # revealed: float
-    reveal_type(float("1_000.5"))  # revealed: float
+    reveal_type(float(x))  # revealed: final float
+    reveal_type(float("1_000.5"))  # revealed: final float
 ```

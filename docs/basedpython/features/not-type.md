@@ -6,7 +6,7 @@
 def f(x: not int) -> None: ...
 
 f("a")  # ok
-f()1)   # error
+f(1)    # error
 ```
 
 transpiles to:
