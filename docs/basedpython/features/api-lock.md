@@ -21,9 +21,11 @@ by generate-api-file -o public.lock
 
 ## record grammar
 
-each non-header line is one record. fields are colon-separated. the first
-line is the format-version header (`#api-lock:v=1`); the remaining lines
-are sorted lexicographically
+the file opens with four `#`-prefixed header lines: the format version
+(`#api-lock:v=1`), the generating `by` version (`#tool:by=0.0.5`), the target
+(`#python:3.13`, or `#python:default` when no `--python-version` was given) and
+the number of modules walked (`#modules:12`). every line after them is one
+record. fields are colon-separated, and the records are sorted lexicographically
 
 ```text
 <qualified>:c[<bases>]                       # class

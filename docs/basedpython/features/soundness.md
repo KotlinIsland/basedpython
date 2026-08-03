@@ -64,7 +64,7 @@ def f(a: A[int]): ...
 with `parameters` enabled, `f` transpiles to:
 
 ```python
-def f(a):
+def f(a: A[int]):
     _soundness_parametric(a, A[int], (0,))
     ...
 ```

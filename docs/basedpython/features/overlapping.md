@@ -5,10 +5,10 @@ it lets a [covariant](variance.md) (`out T`) class declare a
 method that *consumes* `T` without giving up covariance:
 
 ```by
-def f(xs: list[int]):
-    1 in xs         # ok - 1 overlaps with int
-    object() in xs  # ok - object overlaps with int
-    "a" in xs       # error - str does not overlap with int
+def f(xs: list[int], o: object):
+    1 in xs     # ok - 1 overlaps with int
+    o in xs     # ok - object overlaps with int
+    "a" in xs   # error - str does not overlap with int
 ```
 
 it is the loose sibling of [`SafeVariance`](safe-variance.md): both are asymmetric
@@ -23,17 +23,17 @@ class Mapping[out Key, out Value]:
         reveal_type(key)  # object — the upper bound of Key
         return True
 
-def f(m: Mapping[int, object]):
-    1 in m         # ok — int overlaps int
-    object() in m  # ok — object overlaps int (it could be an int)
-    "a" in m       # error — str is disjoint from int
+def f(m: Mapping[int, object], o: object):
+    1 in m     # ok — int overlaps int
+    o in m     # ok — object overlaps int (it could be an int)
+    "a" in m   # error — str is disjoint from int
 ```
 
 - **at the call site**, an argument is accepted iff it is *not disjoint from* the
     specialized `Key` — i.e. their types overlap (`Overlapping[T]` means exactly
     "not disjoint from `T`"). so a provably-unrelated argument like `"a"` is
-    rejected, but a could-be-a-`Key` argument like `object()` is allowed. this is
-    looser than a plain `Key` parameter (which would reject `object()`) and
+    rejected, but a could-be-a-`Key` argument like `o` is allowed. this is
+    looser than a plain `Key` parameter (which would reject `o`) and
     stricter than `object` (which would accept `"a"`)
 - **inside the body**, the parameter is seen as the upper bound of `Key`, so the
     consumed value can never be written back into `Key`-typed covariant storage.
@@ -81,6 +81,11 @@ def f(b: list[bool], keys: dict[int | str, object]):
 a union is accepted whenever *any* member overlaps, matching the whole-operand
 behaviour of a membership test — `x: str | None` may be tested against a
 `dict[str, int]` because its `str` part overlaps the key
+
+precision cuts the other way for a bare constructor call: `object()` is inferred
+[`final object`](type-modifiers.md#a-constructor-call-is-inferred-final), meaning
+exactly `object` and never a subclass, which is *disjoint* from `int`. so
+`object() in xs` is rejected where a value declared `o: object` is accepted
 
 ## `Overlapping[T]` is a parameter annotation
 

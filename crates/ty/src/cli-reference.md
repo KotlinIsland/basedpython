@@ -50,7 +50,7 @@ transpiled output to stdout:
 
 ```sh
 by transpile hello.by
-echo 'x[(a, b)]' | by transpile
+echo 'a = b ?? 1' | by transpile
 ```
 
 ### `--reverse`

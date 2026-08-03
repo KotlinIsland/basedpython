@@ -178,8 +178,8 @@ file (or stdin) and writes the transpiled python to stdout:
 
 ```sh
 by transpile hello.by
-echo 'x[(a, b)]' | by transpile
-# → x[(a, b),]
+echo 'a = b ?? 1' | by transpile
+# → a = b if b is not None else 1
 ```
 
 output goes to stdout - redirect it to a file if you want to keep it

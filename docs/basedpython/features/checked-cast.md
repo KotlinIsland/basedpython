@@ -28,7 +28,7 @@ def _checked_cast(_v, _t):
         )
     return _v
 
-def f(a):
+def f(a: object):
     b = _checked_cast(a, int)
     print(b)
 ```

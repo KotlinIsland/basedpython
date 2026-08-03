@@ -5,8 +5,9 @@
 //! the lockfile is meant to be diffed, not parsed back into types. any
 //! type-level change in a public symbol surfaces as a line-level diff
 //!
-//! the first line is `#api-lock:v=1` (grammar version). subsequent lines are
-//! sorted lexicographically. one record per line:
+//! four `#`-prefixed header lines come first: `#api-lock:v=1` (grammar
+//! version), `#tool:by=<version>`, `#python:<target>` and `#modules:<count>`.
+//! the records follow, sorted lexicographically, one per line:
 //!
 //! ```text
 //! <qualified>:c[<bases>]                              # class

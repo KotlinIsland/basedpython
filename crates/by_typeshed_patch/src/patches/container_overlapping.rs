@@ -3,8 +3,10 @@
 //! `Container` is covariant in its element (`out Element`), so a membership test
 //! consumes that covariant typevar in an input position. basedpython types the
 //! parameter as `Overlapping[Element]`: a value is accepted iff it is not
-//! disjoint from `Element`, so `1 in xs` and `object() in xs` are allowed for an
-//! `xs: Container[int]`, while `"a" in xs` is rejected
+//! disjoint from `Element`, so for an `xs: Container[int]` both `1 in xs` and
+//! `o in xs` (an `o: object`) are allowed, while `"a" in xs` is rejected. a bare
+//! `object()` is inferred `final object` — exactly `object`, so disjoint from
+//! `int` — and is rejected like any other disjoint operand
 //!
 //! `Container.__contains__` is the abstract membership requirement. every other
 //! container that already declares `__contains__` keeps its own declaration
