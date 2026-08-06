@@ -16,6 +16,8 @@ n: (...) -> (int) -> str
 o: (*Ts) -> int
 p: (int, *Ts) -> int
 q: (*args: *Ts) -> int
+r: (Unpack[Ts]) -> int
+s: (int, Unpack[tuple[str, bytes]]) -> int
 
 
 def takes(cb: (int) -> str) -> str:
@@ -57,6 +59,8 @@ n: (...) -> (int) -> str
 o: (*Ts) -> int
 p: (int, *Ts) -> int
 q: (*args: *Ts) -> int
+r: (Unpack[Ts]) -> int
+s: (int, Unpack[tuple[str, bytes]]) -> int
 
 
 def takes(cb: (int) -> str) -> str:
