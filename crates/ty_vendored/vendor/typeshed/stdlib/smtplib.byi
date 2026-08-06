@@ -59,7 +59,7 @@ __all__ = [
     "SMTPNotSupportedError",
 ]
 
-private type Reply = tuple[int, bytes]
+private type Reply = (int, bytes)
 private type SendErrs = dict[str, Reply]
 
 SMTP_PORT: Final = 25

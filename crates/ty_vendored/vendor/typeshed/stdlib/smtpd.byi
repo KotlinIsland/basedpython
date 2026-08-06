@@ -56,7 +56,7 @@ if sys.version_info >= (3, 11):
 else:
     __all__ = ["SMTPChannel", "SMTPServer", "DebuggingServer", "PureProxy", "MailmanProxy"]
 
-type _Address = tuple[str, int]  # (host, port)
+type _Address = (str, int)  # (host, port)
 
 class SMTPChannel(asynchat.async_chat):
     COMMAND: int

@@ -220,7 +220,7 @@ if sys.version_info < (3, 13):
 # alias we use for return types. Really, these two aliases should be the
 # same, but as per the "no union returns" typeshed policy, we'll return
 # Any instead.
-private type Color = str | tuple[float, float, float]
+private type Color = str | (float, float, float)
 private type AnyColor = dynamic
 
 @type_check_only
@@ -238,7 +238,7 @@ class _PenState(TypedDict):
     tilt: float
 
 private type Speed = str | float
-private type PolygonCoords = Sequence[tuple[float, float]]
+private type PolygonCoords = Sequence[(float, float)]
 
 if sys.version_info >= (3, 12):
     class Vec2D(tuple[float, float]):

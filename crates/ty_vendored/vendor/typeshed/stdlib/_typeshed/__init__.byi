@@ -237,8 +237,8 @@ protocol SupportsGetItemBuffer(SliceableBuffer, IndexableBuffer):
 
 protocol SizedBuffer(Sized, Buffer)
 
-type ExcInfo = tuple[type[BaseException], BaseException, TracebackType]
-type OptExcInfo = ExcInfo | tuple[None, None, None]
+type ExcInfo = (type[BaseException], BaseException, TracebackType)
+type OptExcInfo = ExcInfo | (None, None, None)
 
 # This is an internal CPython type that is like, but subtly different from, a NamedTuple
 # Subclasses of this type are found in multiple modules.

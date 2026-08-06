@@ -11,7 +11,7 @@ final class _EncodingMap:
     def size(self) -> int
 
 type _CharMap = dict[int, int] | _EncodingMap
-private type Handler = (UnicodeError) -> tuple[str | bytes, int]
+private type Handler = (UnicodeError) -> (str | bytes, int)
 private type SearchFunction = (str) -> (codecs.CodecInfo | None)
 
 def register(search_function: SearchFunction, /) -> None:

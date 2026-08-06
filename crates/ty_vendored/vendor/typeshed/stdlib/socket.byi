@@ -1772,8 +1772,8 @@ def create_server(
 
 # The 5th tuple item is the socket address, for IP4, IP6, or IP6 if Python is compiled with --disable-ipv6, respectively.
 type _GetAddrInfoResult = list[
-    tuple[AddressFamily.AF_INET, SocketKind, int, str, tuple[str, int]]
-    | tuple[AddressFamily.AF_INET6, SocketKind, int, str, tuple[str, int, int, int] | tuple[int, bytes]]
+    (AddressFamily.AF_INET, SocketKind, int, str, (str, int))
+    | (AddressFamily.AF_INET6, SocketKind, int, str, (str, int, int, int) | (int, bytes))
 ]
 
 def getaddrinfo(

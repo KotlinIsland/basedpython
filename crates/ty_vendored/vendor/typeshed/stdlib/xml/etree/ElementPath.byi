@@ -5,7 +5,7 @@ from xml.etree.ElementTree import Element
 
 final xpath_tokenizer_re: Pattern[str]
 
-private type Token = tuple[str, str]
+private type Token = (str, str)
 private type Next = () -> Token
 _Callback: TypeAlias = (_SelectorContext, Iterable[Element]) -> Generator[Element]
 

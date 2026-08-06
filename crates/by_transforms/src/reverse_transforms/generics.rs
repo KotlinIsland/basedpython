@@ -63,10 +63,12 @@ impl<'ast> Visitor<'ast> for GenericsReverse<'_> {
                 && let Expr::Name(target) = a.target.as_ref()
             {
                 let name = target.id.as_str();
-                let value_src = self.src(value.range());
+                // only the `X: TypeAlias = ` head is rewritten. the value is a
+                // type expression another reverse transform may have edited, and
+                // re-rendering it from raw source would silently undo that
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    format!("type {name} = {value_src}"),
-                    stmt.range(),
+                    format!("type {name} = "),
+                    TextRange::new(stmt.range().start(), value.range().start()),
                 )));
                 return;
             }

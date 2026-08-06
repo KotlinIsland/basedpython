@@ -408,8 +408,8 @@ private type QueryType = (
     | Mapping[str, Sequence[object]]
     | Mapping[bytes, Sequence[object]]
     | Mapping[str | bytes, Sequence[object]]
-    | Sequence[tuple[str | bytes, object]]
-    | Sequence[tuple[str | bytes, Sequence[object]]]
+    | Sequence[(str | bytes, object)]
+    | Sequence[(str | bytes, Sequence[object])]
 )
 
 @type_check_only

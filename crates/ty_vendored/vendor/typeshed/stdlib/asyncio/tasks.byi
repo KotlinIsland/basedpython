@@ -279,7 +279,16 @@ def gather[T1, T2, T3, T4, T5, T6](
     /,
     *,
     return_exceptions: bool,
-) -> Future[(T1 | BaseException, T2 | BaseException, T3 | BaseException, T4 | BaseException, T5 | BaseException, T6 | BaseException)]
+) -> Future[
+    (
+        T1 | BaseException,
+        T2 | BaseException,
+        T3 | BaseException,
+        T4 | BaseException,
+        T5 | BaseException,
+        T6 | BaseException,
+    )
+]
 def gather[Element](*coros_or_futures: _FutureLike[Element], return_exceptions: bool) -> Future[list[Element | BaseException]]
 
 # unlike some asyncio apis, This does strict runtime checking of actually being a coroutine, not of any future-like.

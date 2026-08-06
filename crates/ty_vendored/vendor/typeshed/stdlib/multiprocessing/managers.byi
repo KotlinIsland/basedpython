@@ -246,7 +246,7 @@ class ListProxy[in out Element](BaseListProxy[Element]):
 
 # Send is (kind, result)
 # Receive is (id, methodname, args, kwds)
-private type ServerConnection = Connection[tuple[str, dynamic], tuple[str, str, Iterable[dynamic], Mapping[str, dynamic]]]
+private type ServerConnection = Connection[(str, dynamic), (str, str, Iterable[dynamic], Mapping[str, dynamic])]
 
 # Returned by BaseManager.get_server()
 class Server:
@@ -261,7 +261,7 @@ class Server:
     # Registry values are (callable, exposed, method_to_typeid, proxytype)
     init(
         self,
-        registry: dict[str, tuple[(...) -> dynamic, Iterable[str], dict[str, str], dynamic]],
+        registry: dict[str, ((...) -> dynamic, Iterable[str], dict[str, str], dynamic)],
         address: _Address | None,
         authkey: bytes,
         serializer: str,

@@ -3285,7 +3285,7 @@ def breakpoint(*args: dynamic, **kws: dynamic) -> None:
     By default, this drops you into the pdb debugger.
     """
 
-def callable(obj: object, /) -> TypeIs[(...) -> object]:
+def callable(obj: object, /) -> obj is (...) -> object:
     """Return whether the object is callable (i.e., some kind of function).
 
     Note that classes are callable, as are instances of classes with a

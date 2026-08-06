@@ -10,7 +10,7 @@ from distutils.file_util import _BytesPathT, _StrPathT
 from typing import Literal, TypeAlias
 from typing_extensions import TypeVarTuple, Unpack
 
-private type Macro = tuple[str] | tuple[str, str | None]
+private type Macro = (str,) | (str, str | None)
 
 def gen_lib_options(
     compiler: CCompiler, library_dirs: list[str], runtime_library_dirs: list[str], libraries: list[str]

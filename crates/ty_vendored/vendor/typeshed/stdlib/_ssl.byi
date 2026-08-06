@@ -20,7 +20,7 @@ from typing import ClassVar, Final, Literal, TypeAlias, TypedDict, final, type_c
 from typing_extensions import NotRequired, Self, deprecated, disjoint_base
 
 type _PasswordType = (() -> (str | bytes | bytearray)) | str | bytes | bytearray
-private type PCTRTT = (*: tuple[str, str])
+private type PCTRTT = (*: (str, str))
 private type PCTRTTT = (*: PCTRTT)
 private type PeerCertRetDictType = dict[str, str | PCTRTTT | PCTRTT]
 
@@ -87,7 +87,7 @@ if sys.version_info >= (3, 15):
     def get_sigalgs() -> list[str]
 
 if sys.platform == "win32":
-    type _EnumRetType = list[tuple[bytes, str, set[str] | bool]]
+    type _EnumRetType = list[(bytes, str, set[str] | bool)]
     def enum_certificates(store_name: str) -> _EnumRetType:
         """Retrieve certificates from Windows' cert store.
 

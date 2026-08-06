@@ -135,9 +135,23 @@ def lru_cache[Fn: (...) -> object](maxsize: int | None = 128, typed: bool = Fals
 def lru_cache[Fn: (...) -> object](maxsize: Fn, typed: bool = False) -> _lru_cache_wrapper[Fn]
 
 if sys.version_info >= (3, 14):
-    final WRAPPER_ASSIGNMENTS: ("__module__", "__name__", "__qualname__", "__doc__", "__annotate__", "__type_params__")
+    final WRAPPER_ASSIGNMENTS: (
+            "__module__",
+            "__name__",
+            "__qualname__",
+            "__doc__",
+            "__annotate__",
+            "__type_params__",
+        )
 elif sys.version_info >= (3, 12):
-    final WRAPPER_ASSIGNMENTS: ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__", "__type_params__")
+    final WRAPPER_ASSIGNMENTS: (
+            "__module__",
+            "__name__",
+            "__qualname__",
+            "__doc__",
+            "__annotations__",
+            "__type_params__",
+        )
 else:
     final WRAPPER_ASSIGNMENTS: ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__")
 

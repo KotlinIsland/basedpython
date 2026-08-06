@@ -69,7 +69,7 @@ if sys.version_info >= (3, 11):
 if sys.version_info >= (3, 12):
     __all__ += ["getHandlerByName", "getHandlerNames"]
 
-private type SysExcInfoType = tuple[type[BaseException], BaseException, TracebackType | None] | tuple[None, None, None]
+private type SysExcInfoType = (type[BaseException], BaseException, TracebackType | None) | (None, None, None)
 type _ExcInfoType = None | bool | SysExcInfoType | BaseException
 private type ArgsType = (*: object) | Mapping[str, object]
 type _Level = int | str

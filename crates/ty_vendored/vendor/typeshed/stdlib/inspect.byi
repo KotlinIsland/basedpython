@@ -211,7 +211,7 @@ modulesbyfile: dict[str, dynamic]
 _GetMembersPredicateTypeGuard: TypeAlias = (dynamic) -> TypeGuard[_T]
 _GetMembersPredicateTypeIs: TypeAlias = (dynamic) -> TypeIs[_T]
 private type GetMembersPredicate = (dynamic) -> bool
-_GetMembersReturn: TypeAlias = list[tuple[str, _T]]
+_GetMembersReturn: TypeAlias = list[(str, _T)]
 
 def getmembers[Element](object: object, predicate: _GetMembersPredicateTypeGuard[Element]) -> _GetMembersReturn[Element]:
     """Return all members of an object as (name, value) pairs sorted by name.
@@ -414,14 +414,16 @@ if sys.version_info >= (3, 11):
 
 def isroutine(
     object: object,
-) -> object is (FunctionType
+) -> object is (
+    FunctionType
     | LambdaType
     | MethodType
     | BuiltinFunctionType
     | BuiltinMethodType
     | WrapperDescriptorType
     | MethodDescriptorType
-    | ClassMethodDescriptorType):
+    | ClassMethodDescriptorType
+):
     """Return true if the object is any kind of function or method."""
 
 def ismethoddescriptor(object: object) -> object is MethodDescriptorType:
@@ -472,7 +474,7 @@ def isdatadescriptor(object: object) -> object is SupportsSet[Never, Never] | Su
 # Retrieving source code
 #
 private type SourceObjectType = (
-    ModuleType | type[dynamic] | MethodType | FunctionType | TracebackType | FrameType | CodeType | ((...) -> dynamic)
+    ModuleType | type[dynamic] | MethodType | FunctionType | TracebackType | FrameType | CodeType | (...) -> dynamic
 )
 
 def findsource(object: SourceObjectType) -> (list[str], int):

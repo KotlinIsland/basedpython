@@ -1920,7 +1920,7 @@ type ByteString = bytes | bytearray | memoryview
 
 private type get_type_hints_obj_allowed_types = (  # noqa: Y042
     object
-    | ((...) -> dynamic)
+    | (...) -> dynamic
     | FunctionType
     | BuiltinFunctionType
     | MethodType

@@ -206,7 +206,7 @@ EXCEPTION: Final = _tkinter.EXCEPTION
 # You can also read the manual pages online: https://www.tcl.tk/doc/
 
 # manual page: Tk_GetCursor
-type _Cursor = str | tuple[str] | tuple[str, str] | tuple[str, str, str] | tuple[str, str, str, str]
+type _Cursor = str | (str,) | (str, str) | (str, str, str) | (str, str, str, str)
 
 if sys.version_info >= (3, 11):
     @type_check_only
@@ -3105,7 +3105,12 @@ class Canvas(Widget, XView, YView):
     def create_line(
         self,
         coords: (
-            (float, float, float, float) | ((float, float), (float, float)) | list[int] | list[float] | list[(int, int)] | list[(float, float)]
+            (float, float, float, float)
+            | ((float, float), (float, float))
+            | list[int]
+            | list[float]
+            | list[(int, int)]
+            | list[(float, float)]
         ),
         /,
         *,
@@ -3199,7 +3204,12 @@ class Canvas(Widget, XView, YView):
     def create_oval(
         self,
         coords: (
-            (float, float, float, float) | ((float, float), (float, float)) | list[int] | list[float] | list[(int, int)] | list[(float, float)]
+            (float, float, float, float)
+            | ((float, float), (float, float))
+            | list[int]
+            | list[float]
+            | list[(int, int)]
+            | list[(float, float)]
         ),
         /,
         *,
@@ -3300,7 +3310,12 @@ class Canvas(Widget, XView, YView):
     def create_polygon(
         self,
         coords: (
-            (*: float) | (*: (float, float)) | list[int] | list[float] | list[(int, int)] | list[(float, float)]
+            (*: float)
+            | (*: (float, float))
+            | list[int]
+            | list[float]
+            | list[(int, int)]
+            | list[(float, float)]
         ),
         /,
         *,
@@ -3398,7 +3413,12 @@ class Canvas(Widget, XView, YView):
     def create_rectangle(
         self,
         coords: (
-            (float, float, float, float) | ((float, float), (float, float)) | list[int] | list[float] | list[(int, int)] | list[(float, float)]
+            (float, float, float, float)
+            | ((float, float), (float, float))
+            | list[int]
+            | list[float]
+            | list[(int, int)]
+            | list[(float, float)]
         ),
         /,
         *,
@@ -5109,7 +5129,7 @@ class Scrollbar(Widget):
         # 'SCROLLING COMMANDS' in scrollbar man page. There doesn't seem to
         # be any way to specify an overloaded callback function, so we say
         # that it can take any args while it can't in reality.
-        command: (...) -> tuple[float, float] | None | str = "",
+        command: (...) -> (float, float) | None | str = "",
         cursor: _Cursor = "",
         elementborderwidth: float | str = -1,
         highlightbackground: str = ...,
@@ -5146,7 +5166,7 @@ class Scrollbar(Widget):
         bg: str = ...,
         border: float | str = ...,
         borderwidth: float | str = ...,
-        command: (...) -> tuple[float, float] | None | str = ...,
+        command: (...) -> (float, float) | None | str = ...,
         cursor: _Cursor = ...,
         elementborderwidth: float | str = ...,
         highlightbackground: str = ...,
@@ -6285,7 +6305,11 @@ class PhotoImage(Image, _PhotoImageLike):
             str
             | bytes
             | list[str]
-            | list[list[str]] | list[(*: str)] | (*: str) | (*: list[str]) | (*: (*: str))
+            | list[list[str]]
+            | list[(*: str)]
+            | (*: str)
+            | (*: list[str])
+            | (*: (*: str))
         ),
         to: (int, int) | (int, int, int, int) | None = None,
     ) -> None:

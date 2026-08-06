@@ -68,7 +68,7 @@ class StatisticDiff:
     override def __eq__(self, other: object) -> bool
     override def __hash__(self) -> int
 
-type _FrameTuple = tuple[str, int]
+type _FrameTuple = (str, int)
 
 class Frame:
     """
@@ -102,7 +102,7 @@ class Frame:
         def __le__(self, other: Frame, NotImplemented: dynamic = ...) -> bool:
             """Return a <= b.  Computed by @total_ordering from (a < b) or (a == b)."""
 
-type _TraceTuple = tuple[int, int, Sequence[_FrameTuple], int | None] | tuple[int, int, Sequence[_FrameTuple]]
+type _TraceTuple = (int, int, Sequence[_FrameTuple], int | None) | (int, int, Sequence[_FrameTuple])
 
 class Trace:
     """

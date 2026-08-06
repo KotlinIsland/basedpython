@@ -27,7 +27,7 @@ __all__ = [
     "unquote",
 ]
 
-private type PDTZ = tuple[int, int, int, int, int, int, int, int, int, int | None]
+private type PDTZ = (int, int, int, int, int, int, int, int, int, int | None)
 
 def quote(str: str) -> str:
     """Prepare string to be used in a quoted string.

@@ -10,7 +10,7 @@ from xml.dom.minidom import Document, DocumentFragment, DOMImplementation, Eleme
 from xml.dom.xmlbuilder import DOMBuilderFilter, Options
 from xml.parsers.expat import XMLParserType
 
-private type Model = tuple[int, int, str | None, (*: dynamic)]  # same as in pyexpat
+private type Model = (int, int, str | None, (*: dynamic))  # same as in pyexpat
 
 TEXT_NODE: Final = Node.TEXT_NODE
 CDATA_SECTION_NODE: Final = Node.CDATA_SECTION_NODE

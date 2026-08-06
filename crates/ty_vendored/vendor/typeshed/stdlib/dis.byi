@@ -2,7 +2,7 @@
 
 import sys
 import types
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from opcode import *  # `dis` re-exports it as a part of public API
 from typing import Final, NamedTuple, TypeAlias
 from typing_extensions import Self, deprecated, disjoint_base
@@ -43,7 +43,7 @@ else:
 
 # Strictly this should not have to include Callable, but mypy doesn't use FunctionType
 # for functions (python/mypy#3171)
-private type HaveCodeType = types.MethodType | types.FunctionType | types.CodeType | type | ((...) -> dynamic)
+private type HaveCodeType = types.MethodType | types.FunctionType | types.CodeType | type | (...) -> dynamic
 
 if sys.version_info >= (3, 11):
     class Positions(NamedTuple):

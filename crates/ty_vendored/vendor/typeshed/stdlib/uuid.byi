@@ -63,7 +63,7 @@ from enum import Enum
 from typing import Final, TypeAlias
 from typing_extensions import LiteralString
 
-private type FieldsType = tuple[int, int, int, int, int, int]
+private type FieldsType = (int, int, int, int, int, int)
 
 class SafeUUID(Enum):
     """An enumeration."""

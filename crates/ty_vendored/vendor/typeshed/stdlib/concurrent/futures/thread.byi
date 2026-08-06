@@ -19,7 +19,7 @@ _global_shutdown_lock: Lock
 def _python_exit() -> None
 
 
-private type Task = tuple[(...) -> dynamic, (*: dynamic), dict[str, dynamic]]
+private type Task = ((...) -> dynamic, (*: dynamic), dict[str, dynamic])
 
 
 @type_check_only

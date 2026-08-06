@@ -32,7 +32,7 @@ final class Tcl_Obj:
 
 class TclError(Exception)
 
-private type TkinterTraceFunc = (tuple[str, ...]) -> object
+private type TkinterTraceFunc = ((*: str)) -> object
 
 # This class allows running Tcl code. Tkinter uses it internally a lot, and
 # it's often handy to drop a piece of Tcl code into a tkinter program. Example:

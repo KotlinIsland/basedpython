@@ -100,9 +100,9 @@ __all__ = [
     "COLONEQUAL",
 ]
 
-private type Coord = tuple[int, int]
+private type Coord = (int, int)
 private type TokenEater = (int, str, Coord, Coord, str) -> object
-type _TokenInfo = tuple[int, str, Coord, Coord, str]
+type _TokenInfo = (int, str, Coord, Coord, str)
 
 class TokenError(Exception)
 class StopTokenizing(Exception)

@@ -90,6 +90,15 @@ struct AnnotationWalker<'f, F: FnMut(&Expr)> {
     on_ann: &'f mut F,
 }
 
+/// `TypeAlias`, bare or qualified (`typing_extensions.TypeAlias`)
+fn is_type_alias_annotation(annotation: &Expr) -> bool {
+    match annotation {
+        Expr::Name(name) => name.id.as_str() == "TypeAlias",
+        Expr::Attribute(attr) => attr.attr.as_str() == "TypeAlias",
+        _ => false,
+    }
+}
+
 impl<F: FnMut(&Expr)> AnnotationWalker<'_, F> {
     fn walk_parameters(&mut self, params: &Parameters) {
         for p in params.iter_non_variadic_params() {
@@ -113,7 +122,16 @@ impl<F: FnMut(&Expr)> AnnotationWalker<'_, F> {
 impl<'ast, F: FnMut(&Expr)> Visitor<'ast> for AnnotationWalker<'_, F> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         match stmt {
-            Stmt::AnnAssign(a) => (self.on_ann)(&a.annotation),
+            Stmt::AnnAssign(a) => {
+                (self.on_ann)(&a.annotation);
+                // the value of an `X: TypeAlias = <type>` is itself a type
+                // expression — the legacy spelling of `type X = <type>`
+                if is_type_alias_annotation(&a.annotation)
+                    && let Some(value) = &a.value
+                {
+                    (self.on_ann)(value);
+                }
+            }
             Stmt::TypeAlias(a) => (self.on_ann)(&a.value),
             Stmt::FunctionDef(f) => {
                 self.walk_parameters(&f.parameters);

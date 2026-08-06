@@ -16,9 +16,9 @@ from .fixer_base import BaseFix
 from .pgen2.grammar import Grammar
 
 type _NL = Node | Leaf
-private type Context = tuple[str, int, int]
+private type Context = (str, int, int)
 private type Results = dict[str, _NL]
-type _RawNode = tuple[int, str, Context, list[_NL] | None]
+type _RawNode = (int, str, Context, list[_NL] | None)
 
 HUGE: Final = 0x7FFFFFFF
 

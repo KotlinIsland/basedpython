@@ -255,7 +255,7 @@ private type AdaptedInputData = SqliteData | dynamic
 type _Parameters = SupportsLenAndGetItem[AdaptedInputData] | Mapping[str, AdaptedInputData]
 # Controls the legacy transaction handling mode of sqlite3.
 type _IsolationLevel = "DEFERRED" | "EXCLUSIVE" | "IMMEDIATE" | None
-private type RowFactoryOptions = type[Row] | ((Cursor, tuple[dynamic, ...]) -> object) | None
+private type RowFactoryOptions = type[Row] | ((Cursor, (*: dynamic)) -> object) | None
 
 @type_check_only
 private protocol AnyParamWindowAggregateClass:

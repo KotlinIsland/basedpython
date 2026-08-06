@@ -15,7 +15,7 @@ class BaseSubprocessTransport(transports.SubprocessTransport):
     _pid: int | None  # undocumented
     _returncode: int | None  # undocumented
     _exit_waiters: list[futures.Future[dynamic]]  # undocumented
-    _pending_calls: deque[tuple[(...) -> dynamic, (*: dynamic)]]  # undocumented
+    _pending_calls: deque[((...) -> dynamic, (*: dynamic))]  # undocumented
     _pipes: dict[int, _File]  # undocumented
     _finished: bool  # undocumented
     init(

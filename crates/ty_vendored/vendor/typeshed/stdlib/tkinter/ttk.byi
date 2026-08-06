@@ -66,18 +66,18 @@ def setup_master(master: tkinter.Misc | None = None):
 private type Padding = (
     float
     | str
-    | tuple[float | str]
-    | tuple[float | str, float | str]
-    | tuple[float | str, float | str, float | str]
-    | tuple[float | str, float | str, float | str, float | str]
+    | (float | str,)
+    | (float | str, float | str)
+    | (float | str, float | str, float | str)
+    | (float | str, float | str, float | str, float | str)
 )
 
 # Last item (option value to apply) varies between different options so use Any.
 # It could also be any iterable with items matching the tuple, but that case
 # hasn't been added here for consistency with Padding above.
-private type Statespec = tuple[Unpack[(*: str)], dynamic]
-private type ImageStatespec = tuple[Unpack[(*: str)], tkinter._Image | str]
-private type VsapiStatespec = tuple[Unpack[(*: str)], int]
+private type Statespec = (Unpack[(*: str)], dynamic)
+private type ImageStatespec = (Unpack[(*: str)], tkinter._Image | str)
+private type VsapiStatespec = (Unpack[(*: str)], int)
 
 
 @type_check_only
@@ -89,7 +89,7 @@ class _Layout(TypedDict, total=False):
     # Note: there seem to be some other undocumented keys sometimes
 
 # This could be any sequence when passed as a parameter but will always be a list when returned.
-private type LayoutSpec = list[tuple[str, _Layout | None]]
+private type LayoutSpec = list[(str, _Layout | None)]
 
 # Keep these in sync with the appropriate methods in Style
 @type_check_only
@@ -102,9 +102,9 @@ class _ElementCreateImageKwargs(TypedDict, total=False):
 
 private type ElementCreateArgsCrossPlatform = (
     # Could be any sequence here but types are not homogenous so just type it as tuple
-    tuple["image", tkinter._Image | str, Unpack[(*: ImageStatespec)], _ElementCreateImageKwargs]
-    | tuple["from", str, str]
-    | tuple["from", str]  # (fromelement is optional)
+    ("image", tkinter._Image | str, Unpack[(*: ImageStatespec)], _ElementCreateImageKwargs)
+    | ("from", str, str)
+    | ("from", str)  # (fromelement is optional)
 )
 if sys.platform == "win32" and sys.version_info >= (3, 13):
     @type_check_only
@@ -125,8 +125,8 @@ if sys.platform == "win32" and sys.version_info >= (3, 13):
     )
     type _ElementCreateArgs = (  # noqa: Y047  # It doesn't recognise the usage below for whatever reason
         ElementCreateArgsCrossPlatform
-        | tuple["vsapi", str, int, _ElementCreateVsapiKwargsDict]
-        | tuple["vsapi", str, int, VsapiStatespec, _ElementCreateVsapiKwargsDict]
+        | ("vsapi", str, int, _ElementCreateVsapiKwargsDict)
+        | ("vsapi", str, int, VsapiStatespec, _ElementCreateVsapiKwargsDict)
     )
 else:
     type _ElementCreateArgs = ElementCreateArgsCrossPlatform
@@ -1628,7 +1628,7 @@ class Scrollbar(Widget, tkinter.Scrollbar):
         master: tkinter.Misc | None = None,
         *,
         class_: str = "",
-        command: (...) -> tuple[float, float] | None | str = "",
+        command: (...) -> (float, float) | None | str = "",
         cursor: tkinter._Cursor = "",
         name: str = ...,
         orient: "horizontal" | "vertical" = "vertical",
@@ -1650,7 +1650,7 @@ class Scrollbar(Widget, tkinter.Scrollbar):
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        command: (...) -> tuple[float, float] | None | str = ...,
+        command: (...) -> (float, float) | None | str = ...,
         cursor: tkinter._Cursor = ...,
         orient: "horizontal" | "vertical" = ...,
         style: str = ...,
@@ -1675,7 +1675,7 @@ class Scrollbar(Widget, tkinter.Scrollbar):
         self,
         cnf: dict[str, dynamic] | None = None,
         *,
-        command: (...) -> tuple[float, float] | None | str = ...,
+        command: (...) -> (float, float) | None | str = ...,
         cursor: tkinter._Cursor = ...,
         orient: "horizontal" | "vertical" = ...,
         style: str = ...,

@@ -6,7 +6,7 @@ from _typeshed import OptExcInfo
 from collections.abc import Callable
 from typing import Final, TypeAlias, TypeVar
 
-type _DurationsType = list[tuple[str, float]]
+type _DurationsType = list[(str, float)]
 
 final STDOUT_LINE: str
 final STDERR_LINE: str

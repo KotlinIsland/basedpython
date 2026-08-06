@@ -135,7 +135,7 @@ if sys.version_info >= (3, 15):
     from _decimal import SPEC_VERSION as SPEC_VERSION
 
 type _Decimal = Decimal | int
-private type DecimalNew = Decimal | float | str | tuple[int, Sequence[int], int]
+private type DecimalNew = Decimal | float | str | (int, Sequence[int], int)
 private type ComparableNum = Decimal | float | numbers.Rational
 private type TrapType = type[DecimalException]
 

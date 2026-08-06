@@ -9,7 +9,7 @@ from typing_extensions import Self
 __all__ = ["Client", "Listener", "Pipe", "wait"]
 
 # https://docs.python.org/3/library/multiprocessing.html#address-formats
-type _Address = str | tuple[str, int]
+type _Address = str | (str, int)
 
 # Defaulting to Any to avoid forcing generics on a lot of pre-existing code
 

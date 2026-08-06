@@ -124,7 +124,7 @@ if sys.version_info >= (3, 14):
 final cookie_re: Pattern[str]
 final blank_re: Pattern[bytes]
 
-private type Position = tuple[int, int]
+private type Position = (int, int)
 
 # This class is not exposed. It calls itself tokenize.TokenInfo.
 @type_check_only

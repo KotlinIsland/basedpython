@@ -20,7 +20,7 @@ private protocol SupportsDunderGE:
     def __ge__(self, other: dynamic, /) -> bool
 
 _T = TypeVar("_T")
-_Mismatch: TypeAlias = tuple[_T, _T, int]
+_Mismatch: TypeAlias = (_T, _T, int)
 private type SupportsComparison = SupportsDunderLE | SupportsDunderGE | SupportsDunderGT | SupportsDunderLT
 
 _MAX_LENGTH: Final = 80

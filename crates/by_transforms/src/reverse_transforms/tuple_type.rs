@@ -2,12 +2,19 @@
 //!   `tuple[int, str]` → `(int, str)` in annotation positions
 //!   `tuple[int]`      → `(int,)`
 //!
-//! only fires on the builtin `tuple` subscript in annotation positions
+//! only fires on the builtin `tuple` subscript in annotation positions.
+//!
+//! the rewrite is emitted as two edits over the brackets — `tuple[` becomes `(`
+//! and `]` becomes `)` — rather than one replacement rendered over the whole
+//! expression. the element text is then never re-rendered, so another
+//! transform's edit inside it survives (a whole-expression replacement built
+//! from raw source would silently undo it) and the source's line breaks are
+//! kept
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::Visitor;
 use ruff_python_ast::{Expr, Stmt};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::type_info::TypeInfo;
 
@@ -26,8 +33,27 @@ impl<'src> TupleTypeReverse<'src> {
         }
     }
 
-    fn src(&self, range: TextRange) -> &str {
-        &self.source[usize::from(range.start())..usize::from(range.end())]
+    /// offset just past the `[` opening a subscript's slice
+    fn open_bracket_end(&self, value_end: TextSize) -> TextSize {
+        let from = usize::from(value_end);
+        let offset = self.source[from..].find('[').map_or(0, |i| i + 1);
+        value_end + TextSize::try_from(offset).unwrap_or_default()
+    }
+
+    /// whether a `,` already sits between `after` and the subscript's `]`
+    fn has_trailing_comma(&self, after: TextSize, close: TextSize) -> bool {
+        self.source[usize::from(after)..usize::from(close)]
+            .trim_end()
+            .ends_with(',')
+    }
+
+    fn replace(&mut self, range: TextRange, text: &str) {
+        let edit = if text.is_empty() {
+            Edit::range_deletion(range)
+        } else {
+            Edit::range_replacement(text.to_owned(), range)
+        };
+        self.edits.push(Fix::safe_edit(edit));
     }
 
     fn is_tuple_name(&self, expr: &Expr) -> bool {
@@ -37,123 +63,136 @@ impl<'src> TupleTypeReverse<'src> {
         }
     }
 
-    fn rewrite(&mut self, expr: &Expr) -> Option<String> {
-        match expr {
-            Expr::Subscript(s) if self.is_tuple_name(&s.value) => {
-                // homogeneous variadic `tuple[T, ...]` → `(*: T)` so the
-                // basedpython parameter-shape syntax round-trips
-                if let Expr::Tuple(t) = s.slice.as_ref()
-                    && !t.parenthesized
-                    && t.elts.len() == 2
-                    && matches!(t.elts.get(1), Some(Expr::EllipsisLiteral(_)))
-                {
-                    let elem = self
-                        .rewrite(&t.elts[0])
-                        .unwrap_or_else(|| self.src(t.elts[0].range()).to_owned());
-                    return Some(format!("(*: {elem})"));
-                }
-                let elts: Vec<&Expr> = match s.slice.as_ref() {
-                    Expr::Tuple(t) if !t.parenthesized => t.elts.iter().collect(),
-                    // parenthesized tuple slice is handled by the subscript reverse; skip
-                    Expr::Tuple(_) => return None,
-                    other => vec![other],
-                };
-                let parts: Vec<String> = elts
-                    .iter()
-                    .map(|e| {
-                        // `*tuple[T, ...]` inside a tuple type round-trips
-                        // back to the variadic tuple syntax `*: T`
-                        if let Expr::Starred(starred) = e
-                            && let Expr::Subscript(inner_sub) = starred.value.as_ref()
-                            && self.is_tuple_name(&inner_sub.value)
-                            && let Expr::Tuple(inner_t) = inner_sub.slice.as_ref()
-                            && !inner_t.parenthesized
-                            && inner_t.elts.len() == 2
-                            && matches!(inner_t.elts.get(1), Some(Expr::EllipsisLiteral(_)))
-                        {
-                            let elem_src = self
-                                .rewrite(&inner_t.elts[0])
-                                .unwrap_or_else(|| self.src(inner_t.elts[0].range()).to_owned());
-                            return format!("*: {elem_src}");
-                        }
-                        self.rewrite(e)
-                            .unwrap_or_else(|| self.src(e.range()).to_owned())
-                    })
-                    .collect();
-                let inner = if parts.len() == 1 && !parts[0].starts_with('*') {
-                    // `tuple[int]` → `(int,)` — single positional needs the
-                    // trailing comma to disambiguate from a parenthesized
-                    // expression. variadic spelling `(*: int)` doesn't, since
-                    // it isn't a valid single-expression group anyway
-                    format!("{},", parts[0])
-                } else {
-                    parts.join(", ")
-                };
-                Some(format!("({inner})"))
+    fn is_type_context_subscript(&self, value: &Expr) -> bool {
+        match value {
+            Expr::Name(n) => self.types.subscript_is_type_context(n),
+            Expr::Attribute(a) => {
+                matches!(a.value.as_ref(), Expr::Name(n) if self.types.attr_base_is_type_context(n))
             }
-
-            Expr::BinOp(b) => {
-                let l = self.rewrite(&b.left);
-                let r = self.rewrite(&b.right);
-                if l.is_some() || r.is_some() {
-                    let ls = l.unwrap_or_else(|| self.src(b.left.range()).to_owned());
-                    let rs = r.unwrap_or_else(|| self.src(b.right.range()).to_owned());
-                    Some(format!("{ls} | {rs}"))
-                } else {
-                    None
-                }
-            }
-
-            Expr::Subscript(s) => {
-                // only propagate into slices of known type-context subscripts
-                let is_type_ctx = match s.value.as_ref() {
-                    Expr::Name(n) => self.types.subscript_is_type_context(n),
-                    Expr::Attribute(a) => {
-                        matches!(a.value.as_ref(), Expr::Name(n) if self.types.attr_base_is_type_context(n))
-                    }
-                    _ => false,
-                };
-                if !is_type_ctx {
-                    return None;
-                }
-                let slice_rewrite = match s.slice.as_ref() {
-                    Expr::Tuple(t) if !t.parenthesized => {
-                        let rewrites: Vec<Option<String>> =
-                            t.elts.iter().map(|e| self.rewrite(e)).collect();
-                        if rewrites.iter().any(Option::is_some) {
-                            let parts: Vec<String> = rewrites
-                                .into_iter()
-                                .zip(t.elts.iter())
-                                .map(|(r, e)| r.unwrap_or_else(|| self.src(e.range()).to_owned()))
-                                .collect();
-                            Some(parts.join(", "))
-                        } else {
-                            None
-                        }
-                    }
-                    slice => self.rewrite(slice),
-                };
-                slice_rewrite.map(|s_text| format!("{}[{s_text}]", self.src(s.value.range())))
-            }
-
-            _ => None,
+            _ => false,
         }
     }
 
-    fn visit_annotation(&mut self, ann: &Expr) {
-        if let Some(rewrite) = self.rewrite(ann) {
-            self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                rewrite,
-                ann.range(),
-            )));
+    /// `*tuple[T, ...]` as a tuple element round-trips to the basedpython
+    /// variadic spelling `*: T`. returns the inner element type when `elt` has
+    /// that shape
+    fn variadic_element<'a>(&self, elt: &'a Expr) -> Option<&'a Expr> {
+        let Expr::Starred(starred) = elt else {
+            return None;
+        };
+        let Expr::Subscript(sub) = starred.value.as_ref() else {
+            return None;
+        };
+        if !self.is_tuple_name(&sub.value) {
+            return None;
         }
+        homogeneous_element(&sub.slice)
+    }
+
+    /// walk a type expression, emitting bracket edits for every `tuple[...]`
+    /// within it
+    fn visit_type_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Subscript(s) if self.is_tuple_name(&s.value) => {
+                // homogeneous variadic `tuple[T, ...]` → `(*: T)`
+                if let Some(element) = homogeneous_element(&s.slice) {
+                    self.replace(TextRange::new(s.start(), element.start()), "(*: ");
+                    self.replace(TextRange::new(element.end(), s.end()), ")");
+                    self.visit_type_expr(element);
+                    return;
+                }
+                let Some(elements) = tuple_elements(&s.slice) else {
+                    return;
+                };
+                let (Some(first), Some(last)) = (elements.first(), elements.last()) else {
+                    return;
+                };
+                // only the `tuple[` and the closing `]` are rewritten, so a
+                // newline after the bracket and a trailing comma both survive —
+                // a multi-line tuple type keeps its layout
+                let open_end = self.open_bracket_end(s.value.end());
+                let close_start = s.end() - TextSize::from(1);
+                self.replace(TextRange::new(s.start(), open_end), "(");
+                // `tuple[int]` → `(int,)` — a single positional needs the
+                // trailing comma to disambiguate from a parenthesized
+                // expression. an unpacked element (`tuple[*A]` → `(*A)`) is
+                // already unambiguous, so it needs none
+                let needs_comma = elements.len() == 1
+                    && !first.is_starred_expr()
+                    && !self.has_trailing_comma(last.end(), close_start);
+                self.replace(
+                    TextRange::new(close_start, s.end()),
+                    if needs_comma { ",)" } else { ")" },
+                );
+                for element in elements {
+                    if let Some(inner) = self.variadic_element(element) {
+                        self.replace(TextRange::new(element.start(), inner.start()), "*: ");
+                        self.replace(TextRange::new(inner.end(), element.end()), "");
+                        self.visit_type_expr(inner);
+                    } else {
+                        self.visit_type_expr(element);
+                    }
+                }
+            }
+
+            // propagate into the slice of any other type-context subscript
+            Expr::Subscript(s) if self.is_type_context_subscript(&s.value) => {
+                self.visit_type_expr(&s.slice);
+            }
+
+            Expr::BinOp(b) => {
+                self.visit_type_expr(&b.left);
+                self.visit_type_expr(&b.right);
+            }
+
+            // an unparenthesized tuple is a subscript slice; a parenthesized one
+            // is a basedpython tuple type that may nest more
+            Expr::Tuple(t) => {
+                for element in &t.elts {
+                    self.visit_type_expr(element);
+                }
+            }
+
+            // a `Callable[[A, B], R]` parameter list
+            Expr::List(l) => {
+                for element in &l.elts {
+                    self.visit_type_expr(element);
+                }
+            }
+
+            Expr::Starred(s) => self.visit_type_expr(&s.value),
+
+            _ => {}
+        }
+    }
+}
+
+/// the elements of a `tuple[...]` slice, or `None` when the slice has no
+/// denotable basedpython form: `tuple[()]` (the empty tuple) and a
+/// parenthesized slice, which the subscript reverse owns
+fn tuple_elements(slice: &Expr) -> Option<Vec<&Expr>> {
+    match slice {
+        Expr::Tuple(t) if !t.parenthesized => Some(t.elts.iter().collect()),
+        Expr::Tuple(_) => None,
+        other => Some(vec![other]),
+    }
+}
+
+/// the element type of a homogeneous `tuple[T, ...]` slice
+fn homogeneous_element(slice: &Expr) -> Option<&Expr> {
+    let Expr::Tuple(t) = slice else {
+        return None;
+    };
+    match t.elts.as_slice() {
+        [element, Expr::EllipsisLiteral(_)] if !t.parenthesized => Some(element),
+        _ => None,
     }
 }
 
 impl<'ast> Visitor<'ast> for TupleTypeReverse<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         crate::transforms::source_util::for_each_annotation_in_stmt(stmt, |ann| {
-            self.visit_annotation(ann);
+            self.visit_type_expr(ann);
         });
     }
 }
@@ -236,6 +275,43 @@ mod tests {
         // tuple[int, ...] round-trips to the basedpython variadic spelling
         // `(*: int)` so `(*args: T)` ↔ `tuple[T, ...]` is symmetric
         check("a: tuple[int, ...]\n", "a: (*: int)\n");
+    }
+
+    /// the elements keep an edit another reverse transform made inside them —
+    /// a whole-expression replacement rendered from raw source would undo it
+    #[test]
+    fn keeps_a_nested_rewrite() {
+        check(
+            "from typing import Callable
+a: tuple[Callable[[int], str], int]
+",
+            "from typing import Callable
+a: ((int) -> str, int)
+",
+        );
+    }
+
+    /// a multi-line tuple type keeps its line breaks and trailing comma: only
+    /// the brackets are rewritten
+    #[test]
+    fn multiline_layout_is_kept() {
+        check(
+            "a: tuple[\n    int,\n    str,\n]\n",
+            "a: (\n    int,\n    str,\n)\n",
+        );
+    }
+
+    /// an alias declared the legacy way is a type expression too
+    #[test]
+    fn type_alias_value() {
+        check(
+            "from typing import TypeAlias
+Alias: TypeAlias = tuple[int, str]
+",
+            "from typing import TypeAlias
+type Alias = (int, str)
+",
+        );
     }
 
     #[test]
