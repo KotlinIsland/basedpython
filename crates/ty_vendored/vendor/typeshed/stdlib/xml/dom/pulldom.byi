@@ -17,18 +17,18 @@ PROCESSING_INSTRUCTION: Final = "PROCESSING_INSTRUCTION"
 IGNORABLE_WHITESPACE: Final = "IGNORABLE_WHITESPACE"
 CHARACTERS: Final = "CHARACTERS"
 
-private type NSName = tuple[str | None, str]
+private type NSName = (str | None, str)
 private type DocumentFactory = DOMImplementation | None
 
 private type Event = (
-    tuple["START_ELEMENT", Element]
-    | tuple["END_ELEMENT", Element]
-    | tuple["COMMENT", Comment]
-    | tuple["START_DOCUMENT", Document]
-    | tuple["END_DOCUMENT", Document]
-    | tuple["PROCESSING_INSTRUCTION", ProcessingInstruction]
-    | tuple["IGNORABLE_WHITESPACE", Text]
-    | tuple["CHARACTERS", Text]
+    ("START_ELEMENT", Element)
+    | ("END_ELEMENT", Element)
+    | ("COMMENT", Comment)
+    | ("START_DOCUMENT", Document)
+    | ("END_DOCUMENT", Document)
+    | ("PROCESSING_INSTRUCTION", ProcessingInstruction)
+    | ("IGNORABLE_WHITESPACE", Text)
+    | ("CHARACTERS", Text)
 )
 
 class PullDOM(ContentHandler):

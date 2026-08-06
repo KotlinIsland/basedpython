@@ -77,7 +77,7 @@ def asdict(obj: DataclassInstance) -> dict[str, dynamic]:
     tuples, lists, dicts, and frozendicts. Other objects are copied
     with 'copy.deepcopy()'.
     """
-def asdict[Element](obj: DataclassInstance, *, dict_factory: (list[tuple[str, dynamic]]) -> Element) -> Element
+def asdict[Element](obj: DataclassInstance, *, dict_factory: (list[(str, dynamic)]) -> Element) -> Element
 
 def astuple(obj: DataclassInstance) -> (*: dynamic):
     """Return the fields of a dataclass instance as a new tuple of field values.

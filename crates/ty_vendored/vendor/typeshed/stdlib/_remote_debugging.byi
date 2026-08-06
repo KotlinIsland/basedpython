@@ -3,8 +3,8 @@ from collections.abc import Callable
 from typing import Final, TypeAlias, final
 from typing_extensions import Self
 
-private type Location = tuple[int, int, int, int] | LocationInfo | None
-type _Frame = tuple[str, Location, str, int | None] | FrameInfo
+private type Location = (int, int, int, int) | LocationInfo | None
+type _Frame = (str, Location, str, int | None) | FrameInfo
 private type Stats = dict[str, int | float]
 
 final PROCESS_VM_READV_SUPPORTED: int

@@ -15,10 +15,10 @@ type _BufferCallback = ((PickleBuffer) -> dynamic) | None
 
 type _ReducedType = (
     str
-    | tuple[(...) -> dynamic, (*: dynamic)]
-    | tuple[(...) -> dynamic, (*: dynamic), dynamic]
-    | tuple[(...) -> dynamic, (*: dynamic), dynamic, Iterator[dynamic] | None]
-    | tuple[(...) -> dynamic, (*: dynamic), dynamic, Iterator[dynamic] | None, Iterator[dynamic] | None]
+    | ((...) -> dynamic, (*: dynamic))
+    | ((...) -> dynamic, (*: dynamic), dynamic)
+    | ((...) -> dynamic, (*: dynamic), dynamic, Iterator[dynamic] | None)
+    | ((...) -> dynamic, (*: dynamic), dynamic, Iterator[dynamic] | None, Iterator[dynamic] | None)
 )
 
 def dump(

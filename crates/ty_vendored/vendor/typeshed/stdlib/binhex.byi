@@ -21,7 +21,7 @@ class FInfo:
     Creator: str
     Flags: int
 
-private type FileInfoTuple = tuple[str, FInfo, int, int]
+private type FileInfoTuple = (str, FInfo, int, int)
 private type FileHandleUnion = str | IO[bytes]
 
 def getfileinfo(name: str) -> FileInfoTuple

@@ -32,7 +32,7 @@ from typing import ClassVar, Literal, TypeAlias, TypeVar
 
 command_re: Pattern[str]
 
-private type OptionsList = list[tuple[str, str | None, str, int] | tuple[str, str | None, str]]
+private type OptionsList = list[(str, str | None, str, int) | (str, str | None, str)]
 
 class DistributionMetadata:
     """Dummy class to hold the distribution meta-data: name, version,

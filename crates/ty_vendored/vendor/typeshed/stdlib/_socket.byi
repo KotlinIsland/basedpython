@@ -10,8 +10,8 @@ from socket import error as error, gaierror as gaierror, herror as herror, timeo
 from typing import Final, TypeAlias
 from typing_extensions import CapsuleType, disjoint_base
 
-private type CMSG = tuple[int, int, bytes]
-private type CMSGArg = tuple[int, int, ReadableBuffer]
+private type CMSG = (int, int, bytes)
+private type CMSGArg = (int, int, ReadableBuffer)
 
 # Addresses can be either tuples of varying lengths (AF_INET, AF_INET6,
 # AF_NETLINK, AF_TIPC) or strings/buffers (AF_UNIX).

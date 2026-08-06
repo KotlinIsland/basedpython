@@ -325,7 +325,7 @@ class ExtensionFileLoader(FileLoader, _LoaderBasics, importlib.abc.ExecutionLoad
 if sys.version_info >= (3, 11):
     class NamespaceLoader(importlib.abc.InspectLoader):
         init(
-            self, name: str, path: MutableSequence[str], path_finder: (str, tuple[str, ...]) -> ModuleSpec
+            self, name: str, path: MutableSequence[str], path_finder: (str, (*: str)) -> ModuleSpec
         )
         def is_package(self, fullname: str) -> True
         def get_source(self, fullname: str) -> ""
@@ -360,7 +360,7 @@ if sys.version_info >= (3, 11):
 else:
     class _NamespaceLoader:
         init(
-            self, name: str, path: MutableSequence[str], path_finder: (str, tuple[str, ...]) -> ModuleSpec
+            self, name: str, path: MutableSequence[str], path_finder: (str, (*: str)) -> ModuleSpec
         )
         def is_package(self, fullname: str) -> True
         def get_source(self, fullname: str) -> ""

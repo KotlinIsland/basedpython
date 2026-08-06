@@ -60,7 +60,7 @@ class JSONDecoder:
     parse_int: (str) -> dynamic
     parse_constant: (str) -> dynamic
     strict: bool
-    object_pairs_hook: (list[tuple[str, dynamic]]) -> dynamic
+    object_pairs_hook: (list[(str, dynamic)]) -> dynamic
     if sys.version_info >= (3, 15):
         def __init__(
             self,
@@ -70,7 +70,7 @@ class JSONDecoder:
             parse_int: ((str) -> dynamic) | None = None,
             parse_constant: ((str) -> dynamic) | None = None,
             strict: bool = True,
-            object_pairs_hook: ((list[tuple[str, dynamic]]) -> dynamic) | None = None,
+            object_pairs_hook: ((list[(str, dynamic)]) -> dynamic) | None = None,
             array_hook: ((list[dynamic]) -> dynamic) | None = None,
         ) -> None:
             """``object_hook``, if specified, will be called with the result
@@ -123,7 +123,7 @@ class JSONDecoder:
             parse_int: ((str) -> dynamic) | None = None,
             parse_constant: ((str) -> dynamic) | None = None,
             strict: bool = True,
-            object_pairs_hook: ((list[tuple[str, dynamic]]) -> dynamic) | None = None,
+            object_pairs_hook: ((list[(str, dynamic)]) -> dynamic) | None = None,
         ) -> None:
             """``object_hook``, if specified, will be called with the result
             of every JSON object decoded and its return value will be used in

@@ -62,8 +62,8 @@ class _Sentinel:
 sentinel: _Sentinel
 DEFAULT: dynamic
 
-private type ArgsKwargs = tuple[(*: dynamic), Mapping[str, dynamic]]
-private type NameArgsKwargs = tuple[str, (*: dynamic), Mapping[str, dynamic]]
+private type ArgsKwargs = ((*: dynamic), Mapping[str, dynamic])
+private type NameArgsKwargs = (str, (*: dynamic), Mapping[str, dynamic])
 private type CallValue = str | (*: dynamic) | Mapping[str, dynamic] | ArgsKwargs | NameArgsKwargs
 
 if sys.version_info >= (3, 12):

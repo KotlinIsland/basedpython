@@ -7,7 +7,7 @@ from typing import Protocol, TypeAlias
 type DBAPITypeCode = dynamic | None
 # Strictly speaking, this should be a Sequence, but the type system does
 # not support fixed-length sequences.
-type DBAPIColumnDescription = tuple[str, DBAPITypeCode, int | None, int | None, int | None, int | None, bool | None]
+type DBAPIColumnDescription = (str, DBAPITypeCode, int | None, int | None, int | None, int | None, bool | None)
 
 protocol DBAPIConnection:
     def close(self) -> object

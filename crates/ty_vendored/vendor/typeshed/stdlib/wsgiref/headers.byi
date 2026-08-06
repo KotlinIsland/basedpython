@@ -8,7 +8,7 @@ written by Barry Warsaw.
 from re import Pattern
 from typing import Final, TypeAlias
 
-private type HeaderList = list[tuple[str, str]]
+private type HeaderList = list[(str, str)]
 
 final tspecials: Pattern[str]  # undocumented
 

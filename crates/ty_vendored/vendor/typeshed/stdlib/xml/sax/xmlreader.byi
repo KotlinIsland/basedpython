@@ -251,7 +251,7 @@ class AttributesImpl[in out AttrKey = str]:
     def items(self) -> list[(AttrKey, str)]
     def values(self) -> list[str]
 
-private type NSName = tuple[str | None, str]
+private type NSName = (str | None, str)
 
 class AttributesNSImpl(AttributesImpl[NSName]):
     init(self, attrs: Mapping[NSName, str], qnames: Mapping[NSName, str]):

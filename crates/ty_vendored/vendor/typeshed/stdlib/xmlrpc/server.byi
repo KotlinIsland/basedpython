@@ -228,7 +228,7 @@ class SimpleXMLRPCDispatcher:  # undocumented
     def _marshaled_dispatch(
         self,
         data: str | ReadableBuffer,
-        dispatch_method: ((str, tuple[_Marshallable, ...]) -> (Fault | (*: _Marshallable))) | None = None,
+        dispatch_method: ((str, (*: _Marshallable)) -> (Fault | (*: _Marshallable))) | None = None,
         path: dynamic | None = None,
     ) -> str:  # undocumented
         """Dispatches an XML-RPC method from marshalled (XML) data.

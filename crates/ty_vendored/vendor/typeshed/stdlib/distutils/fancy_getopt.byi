@@ -13,7 +13,7 @@ from getopt import _SliceableT, _StrSequenceT_co
 from re import Pattern
 from typing import Final, TypeAlias
 
-private type Option = tuple[str, str | None, str]
+private type Option = (str, str | None, str)
 
 longopt_pat: Final = r"[a-zA-Z](?:[a-zA-Z0-9-]*)"
 final longopt_re: Pattern[str]

@@ -73,7 +73,7 @@ type _Marshallable = (
     | Binary
 )
 private type XMLDate = int | datetime | (*: int) | time.struct_time
-private type HostType = tuple[str, dict[str, str]] | str
+private type HostType = (str, dict[str, str]) | str
 
 def escape(s: str) -> str  # undocumented
 
@@ -353,9 +353,9 @@ class GzipDecodedResponse(gzip.GzipFile):  # undocumented
     init(self, response: SupportsRead[ReadableBuffer])
 
 class _Method:  # undocumented
-    __send: (str, tuple[_Marshallable, ...]) -> _Marshallable
+    __send: (str, (*: _Marshallable)) -> _Marshallable
     __name: str
-    init(self, send: (str, tuple[_Marshallable, ...]) -> _Marshallable, name: str)
+    init(self, send: (str, (*: _Marshallable)) -> _Marshallable, name: str)
     def __getattr__(self, name: str) -> _Method
     def __call__(self, *args: _Marshallable) -> _Marshallable
 

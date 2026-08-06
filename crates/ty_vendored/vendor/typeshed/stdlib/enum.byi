@@ -714,4 +714,4 @@ class auto:
 
 if sys.version_info >= (3, 11):
     def pickle_by_global_name(self: Enum, proto: int) -> str
-    def pickle_by_enum_name[EnumMemberT](self: EnumMemberT, proto: int) -> tuple[(...) -> dynamic, tuple[type[EnumMemberT], str]]
+    def pickle_by_enum_name[EnumMemberT](self: EnumMemberT, proto: int) -> ((...) -> dynamic, (type[EnumMemberT], str))

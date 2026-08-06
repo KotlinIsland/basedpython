@@ -26,12 +26,12 @@ if sys.version_info >= (3, 11):
 if sys.version_info < (3, 11):
     class Verbose(Exception)
 
-private type OpSubpatternType = tuple[int | None, int, int, SubPattern]
-private type OpGroupRefExistsType = tuple[int, SubPattern, SubPattern]
-private type OpInType = list[tuple[_NIC, int]]
-private type OpBranchType = tuple[None, list[SubPattern]]
+private type OpSubpatternType = (int | None, int, int, SubPattern)
+private type OpGroupRefExistsType = (int, SubPattern, SubPattern)
+private type OpInType = list[(_NIC, int)]
+private type OpBranchType = (None, list[SubPattern])
 private type AvType = OpInType | OpBranchType | Iterable[SubPattern] | OpGroupRefExistsType | OpSubpatternType
-private type CodeType = tuple[_NIC, AvType]
+private type CodeType = (_NIC, AvType)
 
 class State:
     flags: int
@@ -82,8 +82,8 @@ class Tokenizer:
 
 def fix_flags(src: str | bytes, flags: int) -> int
 
-private type TemplateType = tuple[list[tuple[int, int]], list[str | None]]
-private type TemplateByteType = tuple[list[tuple[int, int]], list[bytes | None]]
+private type TemplateType = (list[(int, int)], list[str | None])
+private type TemplateByteType = (list[(int, int)], list[bytes | None])
 
 if sys.version_info >= (3, 12):
     def parse_template(source: str, pattern: _Pattern[dynamic]) -> TemplateType

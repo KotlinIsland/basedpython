@@ -32,7 +32,7 @@ __all__ = [
 if sys.version_info >= (3, 14):
     __all__ += ["print_list"]
 
-private type FrameSummaryTuple = tuple[str, int, str, str | None]
+private type FrameSummaryTuple = (str, int, str, str | None)
 
 def print_tb(tb: TracebackType | None, limit: int | None = None, file: SupportsWrite[str] | None = None) -> None:
     """Print up to 'limit' stack trace entries from the traceback 'tb'.

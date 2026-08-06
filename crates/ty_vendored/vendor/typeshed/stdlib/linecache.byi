@@ -11,9 +11,9 @@ from typing import TypeAlias
 __all__ = ["getline", "clearcache", "checkcache", "lazycache"]
 
 type _ModuleGlobals = dict[str, dynamic]
-private type ModuleMetadata = tuple[int, float | None, list[str], str]
+private type ModuleMetadata = (int, float | None, list[str], str)
 
-private type SourceLoader = tuple[() -> (str | None)]
+private type SourceLoader = (() -> (str | None),)
 
 cache: dict[str, SourceLoader | ModuleMetadata]  # undocumented
 

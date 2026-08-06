@@ -27,7 +27,9 @@ if sys.version_info >= (3, 14):
     type _ActionKind = "default" | "error" | "ignore" | "always" | "module" | "once"
 else:
     type _ActionKind = "default" | "error" | "ignore" | "always" | "all" | "module" | "once"
-filters: Sequence[(str, re.Pattern[str] | None, type[Warning] | (*: type[Warning]), re.Pattern[str] | None, int)]  # undocumented, do not mutate
+filters: Sequence[
+    (str, re.Pattern[str] | None, type[Warning] | (*: type[Warning]), re.Pattern[str] | None, int)
+]  # undocumented, do not mutate
 
 def showwarning(
     message: Warning | str,

@@ -1,8 +1,8 @@
 from typing import TypeAlias
 from typing_extensions import Buffer
 
-private type AdpcmState = tuple[int, int]
-private type RatecvState = tuple[int, (*: tuple[int, int])]
+private type AdpcmState = (int, int)
+private type RatecvState = (int, (*: (int, int)))
 
 class error(Exception)
 

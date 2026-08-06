@@ -28,9 +28,9 @@ __all__ = ["IMAP4", "IMAP4_stream", "Internaldate2tuple", "Int2AP", "ParseFlags"
 
 # TODO: Commands should use their actual return types, not this type alias.
 #       E.g. Tuple[Literal["OK"], List[bytes]]
-private type CommandResults = tuple[str, list[dynamic]]
+private type CommandResults = (str, list[dynamic])
 
-private type AnyResponseData = list[None] | list[bytes | tuple[bytes, bytes]]
+private type AnyResponseData = list[None] | list[bytes | (bytes, bytes)]
 
 Commands: dict[str, (*: str)]
 

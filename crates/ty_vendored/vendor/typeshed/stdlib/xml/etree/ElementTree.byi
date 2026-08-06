@@ -542,7 +542,7 @@ def iterparse(source: FileRead, events: None = None) -> IterParseIterator[Elemen
 @deprecated("The `parser` parameter is deprecated since Python 3.4.")
 def iterparse(source: FileRead, events: Iterable[EventType], parser: XMLParser | None = None) -> IterParseIterator[dynamic]
 
-private type EventQueue = tuple[str] | tuple[str, tuple[str, str]] | tuple[str, None]
+private type EventQueue = (str,) | (str, (str, str)) | (str, None)
 
 class XMLPullParser[out EventT: Element[str] | Element[ElementCallable] | tuple[str, str] | None]:
     init(self, events: Iterable[EventType] | None = None, *, _parser: XMLParser[EventT] | None = None)

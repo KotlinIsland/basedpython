@@ -231,7 +231,7 @@ if sys.version_info >= (3, 15):
         parse_float: ((str) -> dynamic) | None = None,
         parse_int: ((str) -> dynamic) | None = None,
         parse_constant: ((str) -> dynamic) | None = None,
-        object_pairs_hook: ((list[tuple[dynamic, dynamic]]) -> dynamic) | None = None,
+        object_pairs_hook: ((list[(dynamic, dynamic)]) -> dynamic) | None = None,
         array_hook: ((list[dynamic]) -> dynamic) | None = None,
         **kwds: dynamic,
     ) -> dynamic:
@@ -285,7 +285,7 @@ if sys.version_info >= (3, 15):
         parse_float: ((str) -> dynamic) | None = None,
         parse_int: ((str) -> dynamic) | None = None,
         parse_constant: ((str) -> dynamic) | None = None,
-        object_pairs_hook: ((list[tuple[dynamic, dynamic]]) -> dynamic) | None = None,
+        object_pairs_hook: ((list[(dynamic, dynamic)]) -> dynamic) | None = None,
         array_hook: ((list[dynamic]) -> dynamic) | None = None,
         **kwds: dynamic,
     ) -> dynamic:
@@ -325,7 +325,7 @@ else:
         parse_float: ((str) -> dynamic) | None = None,
         parse_int: ((str) -> dynamic) | None = None,
         parse_constant: ((str) -> dynamic) | None = None,
-        object_pairs_hook: ((list[tuple[dynamic, dynamic]]) -> dynamic) | None = None,
+        object_pairs_hook: ((list[(dynamic, dynamic)]) -> dynamic) | None = None,
         **kwds: dynamic,
     ) -> dynamic:
         """Deserialize ``s`` (a ``str``, ``bytes`` or ``bytearray`` instance
@@ -370,7 +370,7 @@ else:
         parse_float: ((str) -> dynamic) | None = None,
         parse_int: ((str) -> dynamic) | None = None,
         parse_constant: ((str) -> dynamic) | None = None,
-        object_pairs_hook: ((list[tuple[dynamic, dynamic]]) -> dynamic) | None = None,
+        object_pairs_hook: ((list[(dynamic, dynamic)]) -> dynamic) | None = None,
         **kwds: dynamic,
     ) -> dynamic:
         """Deserialize ``fp`` (a ``.read()``-supporting file-like object containing

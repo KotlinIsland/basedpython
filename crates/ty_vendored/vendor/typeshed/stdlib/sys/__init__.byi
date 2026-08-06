@@ -82,7 +82,7 @@ from typing import Final, Literal, Protocol, TypeAlias, TypeVar, final, type_che
 from typing_extensions import LiteralString, deprecated
 
 private type LazyImportMode = "normal" | "all" | "none"
-private type LazyImportFilter = (str | None, str, tuple[str, ...] | None) -> bool
+private type LazyImportFilter = (str | None, str, (*: str) | None) -> bool
 
 # see https://github.com/python/typeshed/issues/8513#issue-1333671093 for the rationale behind this alias
 type _ExitCode = str | int | None
@@ -793,7 +793,7 @@ def __unraisablehook__(unraisable: UnraisableHookArgs, /) -> dynamic:
     * object: Object causing the exception, can be None.
     """
 
-def addaudithook(hook: (str, tuple[dynamic, ...]) -> dynamic) -> None:
+def addaudithook(hook: (str, (*: dynamic)) -> dynamic) -> None:
     """Adds a new audit hook callback."""
 
 def audit(event: str, /, *args: dynamic) -> None:

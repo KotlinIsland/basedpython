@@ -68,7 +68,7 @@ if sys.version_info >= (3, 12):
 if sys.version_info >= (3, 15):
     __all__ += ["standalone_month_name", "standalone_month_abbr"]
 
-private type LocaleType = tuple[str | None, str | None]
+private type LocaleType = (str | None, str | None)
 
 class IllegalMonthError(ValueError, IndexError):
     month: int

@@ -8,7 +8,7 @@ from collections.abc import Callable, Hashable
 from typing import TypeAlias, TypeVar
 
 _T = TypeVar("_T")
-_Reduce: TypeAlias = tuple[(...) -> _T, (*: dynamic)] | tuple[(...) -> _T, (*: dynamic), dynamic | None]
+_Reduce: TypeAlias = ((...) -> _T, (*: dynamic)) | ((...) -> _T, (*: dynamic), dynamic | None)
 
 __all__ = ["pickle", "constructor", "add_extension", "remove_extension", "clear_extension_cache"]
 

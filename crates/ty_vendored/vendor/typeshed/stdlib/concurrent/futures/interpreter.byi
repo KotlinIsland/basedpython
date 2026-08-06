@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Literal, ParamSpec, Protocol, TypeAlias, type_check_only
 from typing_extensions import Self, TypeVar, TypeVarTuple, Unpack
 
-private type Task = tuple[bytes, "function" | "script"]
+private type Task = (bytes, "function" | "script")
 
 @type_check_only
 private protocol TaskFunc:

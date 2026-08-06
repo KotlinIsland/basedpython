@@ -152,10 +152,10 @@ if sys.platform != "win32":
     if sys.version_info >= (3, 12):
         __all__ += ["ForkingUnixStreamServer", "ForkingUnixDatagramServer"]
 
-type _RequestType = _socket | tuple[bytes, _socket]
+type _RequestType = _socket | (bytes, _socket)
 private type AfUnixAddress = str | ReadableBuffer  # address acceptable for an AF_UNIX socket
-type _AfInetAddress = tuple[str | bytes | bytearray, int]  # address acceptable for an AF_INET socket
-private type AfInet6Address = tuple[str | bytes | bytearray, int, int, int]  # address acceptable for an AF_INET6 socket
+type _AfInetAddress = (str | bytes | bytearray, int)  # address acceptable for an AF_INET socket
+private type AfInet6Address = (str | bytes | bytearray, int, int, int)  # address acceptable for an AF_INET6 socket
 
 # This can possibly be generic at some point:
 class BaseServer:

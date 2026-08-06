@@ -49,7 +49,7 @@ No feature line is ever to be deleted from this file.
 
 from typing import TypeAlias
 
-private type VersionInfo = tuple[int, int, int, str, int]
+private type VersionInfo = (int, int, int, str, int)
 
 class _Feature:
     init(self, optionalRelease: VersionInfo, mandatoryRelease: VersionInfo | None, compiler_flag: int)

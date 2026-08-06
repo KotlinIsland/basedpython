@@ -30,8 +30,8 @@ __all__ = [  # noqa: F822  # Undefined names in __all__
 ]
 
 # Definitions imported by multiple submodules in typeshed
-type _ParamType = str | tuple[str | None, str | None, str]  # noqa: Y047
-type _ParamsType = str | None | tuple[str, str | None, str]  # noqa: Y047
+type _ParamType = str | (str | None, str | None, str)  # noqa: Y047
+type _ParamsType = str | None | (str, str | None, str)  # noqa: Y047
 
 def message_from_string(s: str) -> Message:
     """Parse a string into a Message object model.

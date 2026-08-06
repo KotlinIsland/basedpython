@@ -35,7 +35,7 @@ def runctx(
     statement and filename have the same semantics as profile.run
     """
 
-private type Label = tuple[str, int, str]
+private type Label = (str, int, str)
 
 class Profile(_lsprof.Profiler):
     """Profile(timer=None, timeunit=None, subcalls=True, builtins=True)

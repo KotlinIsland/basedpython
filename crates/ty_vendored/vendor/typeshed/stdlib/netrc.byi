@@ -16,9 +16,9 @@ class NetrcParseError(Exception):
 
 # (login, account, password) tuple
 if sys.version_info >= (3, 11):
-    type _NetrcTuple = tuple[str, str, str]
+    type _NetrcTuple = (str, str, str)
 else:
-    type _NetrcTuple = tuple[str, str | None, str | None]
+    type _NetrcTuple = (str, str | None, str | None)
 
 class netrc:
     hosts: dict[str, _NetrcTuple]

@@ -14,7 +14,7 @@ from typing_extensions import deprecated
 
 __all__ = ["POP3", "error_proto", "POP3_SSL"]
 
-private type LongResp = tuple[bytes, list[bytes], int]
+private type LongResp = (bytes, list[bytes], int)
 
 class error_proto(Exception)
 

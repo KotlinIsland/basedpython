@@ -3,17 +3,23 @@
 //!   `Callable[[int, str], bool]` → `(int, str) -> bool`
 //!   `Callable[[], None]`         → `() -> None`
 //!
-//! only fires in annotation positions when `Callable` resolves to the typing import
+//! only fires in annotation positions when `Callable` resolves to the typing import.
+//!
+//! the rewrite is emitted as edits over the punctuation — `Callable[[` becomes
+//! `(`, the `],` between the parameters and the return becomes `) -> `, and the
+//! closing `]` goes — rather than one replacement rendered over the whole
+//! expression. the operand text is then never re-rendered, so another
+//! transform's edit inside it survives (a whole-expression replacement built
+//! from raw source would silently undo it) and the source's line breaks are kept
 
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::Visitor;
-use ruff_python_ast::{Expr, ExprSubscript, Stmt};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_python_ast::{Expr, Stmt};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::type_info::TypeInfo;
 
 pub(crate) struct CallableReverse<'src> {
-    source: &'src str,
     types: &'src dyn TypeInfo,
     /// in stub mode the `Callable[[A, B], R]` list form is left intact for
     /// `by_typeshed_patch`'s `arrow-callable`, which converts the same shapes
@@ -26,9 +32,8 @@ pub(crate) struct CallableReverse<'src> {
 }
 
 impl<'src> CallableReverse<'src> {
-    pub(crate) fn new(source: &'src str, types: &'src dyn TypeInfo) -> Self {
+    pub(crate) fn new(_source: &'src str, types: &'src dyn TypeInfo) -> Self {
         Self {
-            source,
             types,
             stub: false,
             edits: Vec::new(),
@@ -40,8 +45,13 @@ impl<'src> CallableReverse<'src> {
         self
     }
 
-    fn src(&self, range: TextRange) -> &str {
-        &self.source[usize::from(range.start())..usize::from(range.end())]
+    fn replace(&mut self, range: TextRange, text: &str) {
+        let edit = if text.is_empty() {
+            Edit::range_deletion(range)
+        } else {
+            Edit::range_replacement(text.to_owned(), range)
+        };
+        self.edits.push(Fix::safe_edit(edit));
     }
 
     fn is_callable_name(&self, expr: &Expr) -> bool {
@@ -55,113 +65,99 @@ impl<'src> CallableReverse<'src> {
         }
     }
 
-    fn rewrite(&mut self, expr: &Expr) -> Option<String> {
-        match expr {
-            Expr::Subscript(s) if self.is_callable_name(&s.value) => {
-                let Expr::Tuple(t) = s.slice.as_ref() else {
-                    return None;
-                };
-                if t.parenthesized || t.elts.len() != 2 {
-                    return None;
-                }
-                let ret = &t.elts[1];
-                // `Callable[..., R]` — "any arguments" — reverses to `(...) -> R`.
-                // safe in stub mode: there is no parameter list to lose
-                if matches!(&t.elts[0], Expr::EllipsisLiteral(_)) {
-                    let ret_str = self
-                        .rewrite(ret)
-                        .unwrap_or_else(|| self.src(ret.range()).to_owned());
-                    return Some(format!("(...) -> {ret_str}"));
-                }
-                // list form: leave the `Callable[...]` wrapper intact in stub
-                // mode but still recurse so any nested `Callable[..., R]` is
-                // converted
-                if self.stub {
-                    return self.rewrite_subscript_children(s);
-                }
-                let Expr::List(args_list) = &t.elts[0] else {
-                    return None;
-                };
-                let ret_str = self
-                    .rewrite(ret)
-                    .unwrap_or_else(|| self.src(ret.range()).to_owned());
-                let args_str = args_list
-                    .elts
-                    .iter()
-                    .map(|a| {
-                        self.rewrite(a)
-                            .unwrap_or_else(|| self.src(a.range()).to_owned())
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                Some(format!("({args_str}) -> {ret_str}"))
+    fn is_type_context_subscript(&self, value: &Expr) -> bool {
+        match value {
+            Expr::Name(n) => self.types.subscript_is_type_context(n),
+            Expr::Attribute(a) => {
+                matches!(a.value.as_ref(), Expr::Name(n) if self.types.attr_base_is_type_context(n))
             }
-
-            Expr::BinOp(b) => {
-                let l = self.rewrite(&b.left);
-                let r = self.rewrite(&b.right);
-                if l.is_some() || r.is_some() {
-                    let ls = l.unwrap_or_else(|| self.src(b.left.range()).to_owned());
-                    let rs = r.unwrap_or_else(|| self.src(b.right.range()).to_owned());
-                    Some(format!("{ls} | {rs}"))
-                } else {
-                    None
-                }
-            }
-
-            Expr::Subscript(s) => self.rewrite_subscript_children(s),
-
-            // descend into list literals (e.g. a `Callable[[A, B], R]` left
-            // intact in stub mode) so nested callable forms are still rewritten
-            Expr::List(l) => {
-                let rewrites: Vec<Option<String>> =
-                    l.elts.iter().map(|e| self.rewrite(e)).collect();
-                if rewrites.iter().any(Option::is_some) {
-                    let parts: Vec<String> = rewrites
-                        .into_iter()
-                        .zip(l.elts.iter())
-                        .map(|(r, e)| r.unwrap_or_else(|| self.src(e.range()).to_owned()))
-                        .collect();
-                    Some(format!("[{}]", parts.join(", ")))
-                } else {
-                    None
-                }
-            }
-
-            _ => None,
+            _ => false,
         }
     }
 
-    /// recurse into a subscript's slice, rewriting any nested callable forms
-    /// while keeping the `value[...]` wrapper. returns `None` if nothing in
-    /// the slice changed
-    fn rewrite_subscript_children(&mut self, s: &ExprSubscript) -> Option<String> {
-        let slice_rewrite = match s.slice.as_ref() {
-            Expr::Tuple(t) if !t.parenthesized => {
-                let rewrites: Vec<Option<String>> =
-                    t.elts.iter().map(|e| self.rewrite(e)).collect();
-                if rewrites.iter().any(Option::is_some) {
-                    let parts: Vec<String> = rewrites
-                        .into_iter()
-                        .zip(t.elts.iter())
-                        .map(|(r, e)| r.unwrap_or_else(|| self.src(e.range()).to_owned()))
-                        .collect();
-                    Some(parts.join(", "))
-                } else {
-                    None
-                }
-            }
-            slice => self.rewrite(slice),
-        };
-        slice_rewrite.map(|s_text| format!("{}[{s_text}]", self.src(s.value.range())))
+    /// rewrite the punctuation of `Callable[<params>, <ret>]` into the arrow
+    /// form. `params_open` and `params_close` bound the text the parameters sit
+    /// inside — the list brackets for `[A, B]`, the `...` itself for the gradual
+    /// form — so the emitted parentheses land where they belong
+    fn arrow_punctuation(
+        &mut self,
+        sub_range: TextRange,
+        params_open: TextRange,
+        params_close: TextRange,
+        ret: &Expr,
+    ) {
+        self.replace(TextRange::new(sub_range.start(), params_open.end()), "(");
+        self.replace(TextRange::new(params_close.start(), ret.start()), ") -> ");
+        self.replace(TextRange::new(ret.end(), sub_range.end()), "");
     }
 
-    fn visit_annotation(&mut self, ann: &Expr) {
-        if let Some(rewrite) = self.rewrite(ann) {
-            self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                rewrite,
-                ann.range(),
-            )));
+    /// walk a type expression, emitting arrow edits for every convertible
+    /// `Callable[...]` within it
+    fn visit_type_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Subscript(s) if self.is_callable_name(&s.value) => {
+                let Some((params, ret)) = callable_parts(&s.slice) else {
+                    return;
+                };
+                match params {
+                    // `Callable[..., R]` — "any arguments" — reverses to
+                    // `(...) -> R`. safe in stub mode: there is no parameter
+                    // list to lose
+                    Expr::EllipsisLiteral(ellipsis) => {
+                        let dots = ellipsis.range();
+                        self.replace(TextRange::new(s.start(), dots.start()), "(");
+                        self.replace(TextRange::new(dots.end(), ret.start()), ") -> ");
+                        self.replace(TextRange::new(ret.end(), s.end()), "");
+                    }
+                    // the list form: in stub mode leave the `Callable[...]`
+                    // wrapper intact but still descend, so a nested
+                    // `Callable[..., R]` is converted
+                    Expr::List(args) if !self.stub => {
+                        let brackets = args.range();
+                        let open =
+                            TextRange::new(brackets.start(), brackets.start() + TextSize::from(1));
+                        let close =
+                            TextRange::new(brackets.end() - TextSize::from(1), brackets.end());
+                        self.arrow_punctuation(s.range(), open, close, ret);
+                        for arg in &args.elts {
+                            self.visit_type_expr(arg);
+                        }
+                        self.visit_type_expr(ret);
+                        return;
+                    }
+                    _ => {
+                        self.visit_type_expr(params);
+                        self.visit_type_expr(ret);
+                        return;
+                    }
+                }
+                self.visit_type_expr(ret);
+            }
+
+            Expr::Subscript(s) if self.is_type_context_subscript(&s.value) => {
+                self.visit_type_expr(&s.slice);
+            }
+
+            Expr::BinOp(b) => {
+                self.visit_type_expr(&b.left);
+                self.visit_type_expr(&b.right);
+            }
+
+            Expr::Tuple(t) => {
+                for element in &t.elts {
+                    self.visit_type_expr(element);
+                }
+            }
+
+            Expr::List(l) => {
+                for element in &l.elts {
+                    self.visit_type_expr(element);
+                }
+            }
+
+            Expr::Starred(s) => self.visit_type_expr(&s.value),
+
+            _ => {}
         }
     }
 }
@@ -169,8 +165,19 @@ impl<'src> CallableReverse<'src> {
 impl<'ast> Visitor<'ast> for CallableReverse<'_> {
     fn visit_stmt(&mut self, stmt: &'ast Stmt) {
         crate::transforms::source_util::for_each_annotation_in_stmt(stmt, |ann| {
-            self.visit_annotation(ann);
+            self.visit_type_expr(ann);
         });
+    }
+}
+
+/// the `(parameters, return)` of a `Callable[P, R]` slice
+fn callable_parts(slice: &Expr) -> Option<(&Expr, &Expr)> {
+    let Expr::Tuple(t) = slice else {
+        return None;
+    };
+    match t.elts.as_slice() {
+        [params, ret] if !t.parenthesized => Some((params, ret)),
+        _ => None,
     }
 }
 
@@ -290,6 +297,33 @@ mod tests {
         check(
             "from typing import Callable\na: list[Callable[[int], int]]\n",
             "from typing import Callable\na: list[(int) -> int]\n",
+        );
+    }
+
+    /// the operands keep an edit another reverse transform made inside them —
+    /// a whole-expression replacement rendered from raw source would undo it
+    #[test]
+    fn keeps_a_nested_rewrite() {
+        check(
+            "from typing import Callable
+a: Callable[[tuple[int, str]], tuple[bool]]
+",
+            "from typing import Callable
+a: ((int, str)) -> (bool,)
+",
+        );
+    }
+
+    /// an alias declared the legacy way is a type expression too
+    #[test]
+    fn type_alias_value() {
+        check(
+            "from typing import Callable, TypeAlias
+Alias: TypeAlias = Callable[[int], str]
+",
+            "from typing import Callable, TypeAlias
+type Alias = (int) -> str
+",
         );
     }
 

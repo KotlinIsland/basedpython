@@ -27,7 +27,7 @@ from typing import ParamSpec, TypeAlias, TypeVar
 
 __all__ = ["Trace", "CoverageResults"]
 
-private type FileModuleFunction = tuple[str, str | None, str]
+private type FileModuleFunction = (str, str | None, str)
 
 class CoverageResults:
     counts: dict[(str, int), int]

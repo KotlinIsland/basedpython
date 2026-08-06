@@ -18,7 +18,7 @@ XML_PARAM_ENTITY_PARSING_NEVER: Final = 0
 XML_PARAM_ENTITY_PARSING_UNLESS_STANDALONE: Final = 1
 XML_PARAM_ENTITY_PARSING_ALWAYS: Final = 2
 
-private type Model = tuple[int, int, str | None, (*: dynamic)]
+private type Model = (int, int, str | None, (*: dynamic))
 
 final class XMLParserType:
     """XML parser"""

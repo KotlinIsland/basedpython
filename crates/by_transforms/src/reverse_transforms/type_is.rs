@@ -8,7 +8,7 @@
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Expr, Stmt};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::type_info::TypeInfo;
 
@@ -67,15 +67,31 @@ impl<'ast> Visitor<'ast> for TypeIsReverse<'_> {
                 // continuation; once the brackets are gone the bare `name is ...`
                 // form must parenthesize it to stay a single valid expression
                 // (e.g. `inspect.isroutine`). single-line types need no parens.
-                let replacement = if inner.contains('\n') {
-                    format!("{first_name} is ({inner})")
-                } else {
-                    format!("{first_name} is {inner}")
-                };
+                let wrap = inner.contains('\n');
+                // only the brackets are rewritten, so the inner type keeps both
+                // its layout and any edit another transform emitted inside it —
+                // rendering the whole return annotation from raw source would
+                // silently undo those
+                let value_end = usize::from(s.value.end());
+                let open_end = TextSize::try_from(
+                    value_end + self.source[value_end..].find('[').map_or(0, |i| i + 1),
+                )
+                .unwrap_or_else(|_| s.slice.range().start());
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    replacement,
-                    ret.range(),
+                    if wrap {
+                        format!("{first_name} is (")
+                    } else {
+                        format!("{first_name} is ")
+                    },
+                    TextRange::new(ret.range().start(), open_end),
                 )));
+                let close =
+                    TextRange::new(ret.range().end() - TextSize::from(1), ret.range().end());
+                self.edits.push(Fix::safe_edit(if wrap {
+                    Edit::range_replacement(")".to_owned(), close)
+                } else {
+                    Edit::range_deletion(close)
+                }));
             }
             for s in &f.body {
                 self.visit_stmt(s);
@@ -137,7 +153,8 @@ mod tests {
     fn typeis_multiline_union_parenthesized() {
         // a multi-line union inside `TypeIs[...]` relied on the brackets for line
         // continuation; the bare `name is ...` form must parenthesize it (e.g.
-        // `inspect.isroutine`), otherwise the continuation lines don't parse
+        // `inspect.isroutine`), otherwise the continuation lines don't parse.
+        // only the brackets are rewritten, so the union keeps its layout
         check(
             indoc! {"
                 from typing import TypeIs
@@ -153,9 +170,27 @@ mod tests {
                 from typing import TypeIs
                 def f(
                     x: object,
-                ) -> x is (int
+                ) -> x is (
+                    int
                     | str
-                    | bytes)
+                    | bytes
+                )
+            "},
+        );
+    }
+
+    /// the inner type keeps an edit another reverse transform made inside it —
+    /// a whole-expression replacement rendered from raw source would undo it
+    #[test]
+    fn typeis_keeps_a_nested_rewrite() {
+        check(
+            indoc! {"
+                from typing import Callable, TypeIs
+                def f(x) -> TypeIs[Callable[[int], str]]: ...
+            "},
+            indoc! {"
+                from typing import Callable, TypeIs
+                def f(x) -> x is (int) -> str
             "},
         );
     }

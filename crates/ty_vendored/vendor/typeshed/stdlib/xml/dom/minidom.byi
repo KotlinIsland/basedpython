@@ -26,7 +26,7 @@ from xml.dom.minicompat import EmptyNodeList, NodeList
 from xml.dom.xmlbuilder import DocumentLS, DOMImplementationLS
 from xml.sax.xmlreader import XMLReader
 
-private type NSName = tuple[str | None, str]
+private type NSName = (str | None, str)
 
 # Entity can also have children, but it's not implemented the same way as the
 # others, so is deliberately omitted here.

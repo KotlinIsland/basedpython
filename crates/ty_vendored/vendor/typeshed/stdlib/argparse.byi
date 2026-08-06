@@ -196,7 +196,7 @@ class _ActionsContainer:
     def _get_positional_kwargs(self, dest: str, **kwargs: dynamic) -> dict[str, dynamic]
     def _get_optional_kwargs(self, *args: dynamic, **kwargs: dynamic) -> dict[str, dynamic]
     def _pop_action_class(self, kwargs: dynamic, default: type[Action] | None = None) -> type[Action]
-    def _get_handler(self) -> (Action, Iterable[tuple[str, Action]]) -> dynamic
+    def _get_handler(self) -> (Action, Iterable[(str, Action)]) -> dynamic
     def _check_conflict(self, action: Action) -> None
     def _handle_conflict_error(self, action: Action, conflicting_actions: Iterable[(str, Action)]) -> NoReturn
     def _handle_conflict_resolve(self, action: Action, conflicting_actions: Iterable[(str, Action)]) -> None
@@ -430,7 +430,7 @@ class HelpFormatter:
         formatter: HelpFormatter
         heading: str | None
         parent: Self | None
-        items: list[tuple[(...) -> str, Iterable[dynamic]]]
+        items: list[((...) -> str, Iterable[dynamic])]
         init(self, formatter: HelpFormatter, parent: Self | None, heading: str | None = None)
         def format_help(self) -> str
 

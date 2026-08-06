@@ -13,9 +13,9 @@ from _typeshed import StrPath
 from typing import TypeAlias
 from typing_extensions import Self
 
-private type Label = tuple[int, str | None]
-type _DFA = list[list[tuple[int, int]]]
-type _DFAS = tuple[_DFA, dict[int, int]]
+private type Label = (int, str | None)
+type _DFA = list[list[(int, int)]]
+type _DFAS = (_DFA, dict[int, int])
 
 class Grammar:
     """Pgen parsing tables conversion class.

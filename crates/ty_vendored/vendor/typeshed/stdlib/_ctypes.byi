@@ -26,7 +26,7 @@ if sys.version_info >= (3, 12):
 
 if sys.platform == "win32":
     # Description, Source, HelpFile, HelpContext, scode
-    type _COMError_Details = tuple[str | None, str | None, str | None, int | None, int | None]
+    type _COMError_Details = (str | None, str | None, str | None, int | None, int | None)
 
     class COMError(Exception):
         """Raised when a COM method call failed."""
@@ -205,8 +205,8 @@ else:
         as function argument
         """
 
-private type ECT = (_CData | _CDataType | None, CFuncPtr, tuple[_CData | _CDataType, ...]) -> _CDataType
-private type PF = tuple[int] | tuple[int, str | None] | tuple[int, str | None, dynamic]
+private type ECT = (_CData | _CDataType | None, CFuncPtr, (*: _CData | _CDataType)) -> _CDataType
+private type PF = (int,) | (int, str | None) | (int, str | None, dynamic)
 
 # This class is not exposed. It calls itself _ctypes.PyCFuncPtrType.
 @type_check_only
