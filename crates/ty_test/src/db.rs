@@ -263,6 +263,8 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
         overlapping_condition_exempt_types: overlapping_condition_exempt_types_default,
         overlapping_condition_assume_truthy_instances:
             overlapping_condition_assume_truthy_instances_default,
+        implicit_object_repr_exempt_types: implicit_object_repr_exempt_types_default,
+        implicit_object_repr_report_types: implicit_object_repr_report_types_default,
     } = AnalysisSettings::default();
 
     let allowed_unresolved_imports =
@@ -318,6 +320,16 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
         overlapping_condition_assume_truthy_instances: options
             .overlapping_condition_assume_truthy_instances
             .unwrap_or(overlapping_condition_assume_truthy_instances_default),
+        implicit_object_repr_exempt_types: options
+            .implicit_object_repr_exempt_types
+            .as_deref()
+            .map(|types| types.iter().map(|name| Box::from(&**name)).collect())
+            .unwrap_or(implicit_object_repr_exempt_types_default),
+        implicit_object_repr_report_types: options
+            .implicit_object_repr_report_types
+            .as_deref()
+            .map(|types| types.iter().map(|name| Box::from(&**name)).collect())
+            .unwrap_or(implicit_object_repr_report_types_default),
     }
 }
 

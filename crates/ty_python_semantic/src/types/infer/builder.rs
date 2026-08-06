@@ -11099,6 +11099,15 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             }
         };
 
+        // basedpython: `str`, `repr`, `format` and `print` put a value's
+        // rendering in front of someone, so a value with no rendering of its
+        // own is worth mentioning here as much as in an f-string
+        if let Some(stringifying) = format::Stringifying::of(self.db(), callable_type) {
+            format::check_stringifying_call(&self.context, stringifying, arguments, |expr| {
+                self.try_expression_type(expr)
+            });
+        }
+
         // A call whose return type mentions the typevars solved from a fluid argument
         // hands the caller a new observer of that argument's specialization.
         self.record_fluid_return_observers(arguments, &mut bindings);

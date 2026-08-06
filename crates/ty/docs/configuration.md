@@ -165,6 +165,81 @@ Defaults to `false`.
 
 ---
 
+### `implicit-object-repr-exempt-types`
+
+A list of classes never reported as an
+[`implicit-object-repr`](rules.md#implicit-object-repr).
+
+A class deriving from one of these is exempt too, so listing a base opts out a whole
+hierarchy.
+
+Entries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be
+spelled bare (`int`).
+
+**Default value**: `[]`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Never report a bare `Thread` or `Lock`
+    implicit-object-repr-exempt-types = ["threading.Thread", "threading.Lock"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Never report a bare `Thread` or `Lock`
+    implicit-object-repr-exempt-types = ["threading.Thread", "threading.Lock"]
+    ```
+
+---
+
+### `implicit-object-repr-report-types`
+
+A list of classes whose stub is taken at its word when looking for an
+[`implicit-object-repr`](rules.md#implicit-object-repr).
+
+A stub normally settles nothing, because it omits `__str__` and `__repr__` whether or not
+the runtime class has them — `int` declares neither and still prints as a number. For a
+class listed here the omission counts as real, the same way it would for a class written
+in source, so a value of that class is reported unless the stub does declare one.
+
+Defaults to the two whose bare repr is seen most often: `types.FunctionType`, which prints
+`<function f at 0x...>`, and `builtins.type`, which prints `<class 'C'>`.
+
+Entries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be
+spelled bare (`int`).
+
+**Default value**: `["types.FunctionType", "builtins.type"]`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.analysis]
+    # Also report a bare module object
+    implicit-object-repr-report-types = ["types.FunctionType", "type", "types.ModuleType"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [analysis]
+    # Also report a bare module object
+    implicit-object-repr-report-types = ["types.FunctionType", "type", "types.ModuleType"]
+    ```
+
+---
+
 ### `overlapping-condition-assume-truthy-instances`
 
 Whether an instance with no `__bool__` and no `__len__` counts as always truthy when
@@ -1017,6 +1092,81 @@ Defaults to `false`.
     [overrides.analysis]
     # Turn off fluid specializations
     disable-fluid-specializations = true
+    ```
+
+---
+
+#### `implicit-object-repr-exempt-types`
+
+A list of classes never reported as an
+[`implicit-object-repr`](rules.md#implicit-object-repr).
+
+A class deriving from one of these is exempt too, so listing a base opts out a whole
+hierarchy.
+
+Entries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be
+spelled bare (`int`).
+
+**Default value**: `[]`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # Never report a bare `Thread` or `Lock`
+    implicit-object-repr-exempt-types = ["threading.Thread", "threading.Lock"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # Never report a bare `Thread` or `Lock`
+    implicit-object-repr-exempt-types = ["threading.Thread", "threading.Lock"]
+    ```
+
+---
+
+#### `implicit-object-repr-report-types`
+
+A list of classes whose stub is taken at its word when looking for an
+[`implicit-object-repr`](rules.md#implicit-object-repr).
+
+A stub normally settles nothing, because it omits `__str__` and `__repr__` whether or not
+the runtime class has them — `int` declares neither and still prints as a number. For a
+class listed here the omission counts as real, the same way it would for a class written
+in source, so a value of that class is reported unless the stub does declare one.
+
+Defaults to the two whose bare repr is seen most often: `types.FunctionType`, which prints
+`<function f at 0x...>`, and `builtins.type`, which prints `<class 'C'>`.
+
+Entries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be
+spelled bare (`int`).
+
+**Default value**: `["types.FunctionType", "builtins.type"]`
+
+**Type**: `list[str]`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty.overrides.analysis]
+    # Also report a bare module object
+    implicit-object-repr-report-types = ["types.FunctionType", "type", "types.ModuleType"]
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    [overrides.analysis]
+    # Also report a bare module object
+    implicit-object-repr-report-types = ["types.FunctionType", "type", "types.ModuleType"]
     ```
 
 ---

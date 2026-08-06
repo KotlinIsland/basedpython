@@ -115,6 +115,16 @@ f"{Point()!r:>10}"  # ok
 f"{Point()!r:d}"  # error: [invalid-format-spec]
 ```
 
+## a conversion does not excuse a value with no rendering
+
+```py
+class Point:
+    pass
+
+# `!r` asks for the very repr that has nothing to say
+f"{Point()!r}"  # error: [implicit-object-repr]
+```
+
 ## an exactly-constructed value is checked as its class
 
 `A()` is inferred as `final A`, and it is `A` whose `__format__` reads the spec.

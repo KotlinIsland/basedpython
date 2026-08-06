@@ -220,6 +220,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&REDUNDANT_CONDITION);
     registry.register_lint(&REDUNDANT_BOOLEAN_COMPARISON);
     registry.register_lint(&INVALID_FORMAT_SPEC);
+    registry.register_lint(&IMPLICIT_OBJECT_REPR);
 
     // String annotations
     registry.register_lint(&ESCAPE_CHARACTER_IN_FORWARD_ANNOTATION);
@@ -2725,6 +2726,74 @@ declare_lint! {
         summary: "detects a format spec the value's `__format__` does not accept",
         status: LintStatus::stable("0.0.68"),
         default_level: Level::Error,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks for a value rendered as text when its class says nothing about
+    /// how it should look.
+    ///
+    /// ## Why is this bad?
+    /// A class that defines nothing the site can use falls back to the
+    /// interpreter's own default, which prints the class name and the address
+    /// the object happens to sit at — `<__main__.A object at 0x102bcc6a0>`.
+    /// That is never what the message was meant to say, and the address makes
+    /// the output differ on every run.
+    ///
+    /// Which dunders count depends on what the site asks for, because the
+    /// fallbacks run one way only: `object.__str__` calls `__repr__`, and
+    /// `object.__format__` calls `str`, but nothing falls back to `__str__`.
+    ///
+    /// - `repr(x)`, `ascii(x)`, `f"{x!r}"` — only `__repr__`
+    /// - `str(x)`, `print(x)`, `f"{x!s}"` — `__str__` or `__repr__`
+    /// - `format(x)`, `f"{x}"` — `__format__`, `__str__` or `__repr__`
+    ///
+    /// Only a class written in source is judged. A stub leaves these dunders
+    /// out whether or not the runtime class has them — `int` declares none of
+    /// the three and still prints as a number — so a class that comes from a
+    /// stub, or that inherits from one, is not reported. The exception is a
+    /// stub named in `analysis.implicit-object-repr-report-types`, which
+    /// defaults to `types.FunctionType` and `builtins.type`: printing a bare
+    /// function or class object is the same mistake, and neither stub is
+    /// hiding a rendering.
+    ///
+    /// ## Options
+    /// - `analysis.implicit-object-repr-exempt-types`
+    /// - `analysis.implicit-object-repr-report-types`
+    ///
+    /// ## Examples
+    /// ```python
+    /// class Point:
+    ///     def __init__(self, x: int):
+    ///         self.x = x
+    ///
+    /// print(Point(1))    # warning: prints `<__main__.Point object at 0x...>`
+    /// f"at {Point(1)}"   # warning
+    ///
+    /// class Spoken:
+    ///     def __str__(self) -> str:
+    ///         return "Spoken()"
+    ///
+    /// print(Spoken())    # ok
+    /// repr(Spoken())     # warning: `__str__` is not what `repr` asks for
+    ///
+    /// class Labelled:
+    ///     def __repr__(self) -> str:
+    ///         return "Labelled()"
+    ///
+    /// print(Labelled())  # ok — `str` falls back to `__repr__`
+    /// repr(Labelled())   # ok
+    ///
+    /// def helper() -> None: ...
+    ///
+    /// print(helper)      # warning: prints `<function helper at 0x...>`
+    /// print(Labelled)    # warning: prints `<class '__main__.Labelled'>`
+    /// ```
+    pub(crate) static IMPLICIT_OBJECT_REPR = {
+        summary: "detects a value printed through `object.__repr__`",
+        status: LintStatus::stable("0.0.68"),
+        default_level: Level::Warn,
     }
 }
 

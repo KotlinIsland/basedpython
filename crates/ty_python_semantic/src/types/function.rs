@@ -2489,6 +2489,12 @@ pub enum KnownFunction {
     Len,
     /// `builtins.repr`
     Repr,
+    /// `builtins.print`
+    Print,
+    /// `builtins.format`
+    Format,
+    /// `builtins.ascii`
+    Ascii,
     /// `builtins.__import__`, which returns the top-level module.
     #[strum(serialize = "__import__")]
     DunderImport,
@@ -2641,6 +2647,9 @@ impl KnownFunction {
             | Self::HasAttr
             | Self::Len
             | Self::Repr
+            | Self::Print
+            | Self::Format
+            | Self::Ascii
             | Self::DunderImport => module.is_builtins(),
             Self::AssertType
             | Self::AssertNever
@@ -3203,6 +3212,9 @@ pub(crate) mod tests {
                 | KnownFunction::IsInstance
                 | KnownFunction::HasAttr
                 | KnownFunction::IsSubclass
+                | KnownFunction::Print
+                | KnownFunction::Format
+                | KnownFunction::Ascii
                 | KnownFunction::DunderImport => KnownModule::Builtins,
 
                 KnownFunction::AbstractMethod => KnownModule::Abc,
