@@ -400,11 +400,11 @@ final class CellType:
     cell_contents: dynamic
 
 
-final class GeneratorType[out Element, in Sent = None, out Return = None](Generator[Element, Sent, Return]):
+final class GeneratorType[out Yield, in Send = None, out Return = None](Generator[Yield, Send, Return]):
     let gi_code: CodeType
     let gi_frame: FrameType | None
     let gi_running: bool
-    let gi_yieldfrom: Iterator[Element] | None
+    let gi_yieldfrom: Iterator[Yield] | None
 
     if sys.version_info >= (3, 11):
         @property
@@ -423,15 +423,15 @@ final class GeneratorType[out Element, in Sent = None, out Return = None](Genera
     override def __iter__(self) -> Self:
         """Implement iter(self)."""
 
-    override def __next__(self) -> Element:
+    override def __next__(self) -> Yield:
         """Implement next(self)."""
 
-    override def send(self, arg: Sent, /) -> Element:
+    override def send(self, arg: Send, /) -> Yield:
         """send(value) -> send 'value' into generator,
         return next yielded value or raise StopIteration.
         """
 
-    override def throw(self, typ: type[BaseException], val: BaseException | object = ..., tb: TracebackType | None = ..., /) -> Element:
+    override def throw(self, typ: type[BaseException], val: BaseException | object = ..., tb: TracebackType | None = ..., /) -> Yield:
         """throw(value)
         throw(type[,value[,tb]])
 
@@ -440,13 +440,13 @@ final class GeneratorType[out Element, in Sent = None, out Return = None](Genera
         the (type, val, tb) signature is deprecated,
         and may be removed in a future version of Python.
         """
-    def throw(self, typ: BaseException, val: None = None, tb: TracebackType | None = ..., /) -> Element
+    def throw(self, typ: BaseException, val: None = None, tb: TracebackType | None = ..., /) -> Yield
 
     if sys.version_info >= (3, 13):
         def __class_getitem__(cls, item: dynamic, /) -> dynamic:
             """generators are generic over the types of their yield, send, and return values"""
 
-final class AsyncGeneratorType[out Element, in Sent = None](AsyncGenerator[Element, Sent]):
+final class AsyncGeneratorType[out Yield, in Send = None](AsyncGenerator[Yield, Send]):
     let ag_await: Awaitable[dynamic] | None
 
     let ag_code: CodeType
@@ -469,15 +469,15 @@ final class AsyncGeneratorType[out Element, in Sent = None](AsyncGenerator[Eleme
     override def __aiter__(self) -> Self:
         """Return an awaitable, that resolves in asynchronous iterator."""
 
-    override def __anext__(self) -> Coroutine[dynamic, dynamic, Element]:
+    override def __anext__(self) -> Coroutine[dynamic, dynamic, Yield]:
         """Return a value or raise StopAsyncIteration."""
 
-    override def asend(self, val: Sent, /) -> Coroutine[dynamic, dynamic, Element]:
+    override def asend(self, val: Send, /) -> Coroutine[dynamic, dynamic, Yield]:
         """asend(v) -> send 'v' in generator."""
 
     override async def athrow(
         self, typ: type[BaseException], val: BaseException | object = ..., tb: TracebackType | None = ..., /
-    ) -> Element:
+    ) -> Yield:
         """athrow(value)
         athrow(type[,value[,tb]])
 
@@ -485,7 +485,7 @@ final class AsyncGeneratorType[out Element, in Sent = None](AsyncGenerator[Eleme
         the (type, val, tb) signature is deprecated,
         and may be removed in a future version of Python.
         """
-    async def athrow(self, typ: BaseException, val: None = None, tb: TracebackType | None = ..., /) -> Element
+    async def athrow(self, typ: BaseException, val: None = None, tb: TracebackType | None = ..., /) -> Yield
 
     override def aclose(self) -> Coroutine[dynamic, dynamic, None]:
         """aclose() -> raise GeneratorExit inside generator."""
@@ -495,7 +495,7 @@ final class AsyncGeneratorType[out Element, in Sent = None](AsyncGenerator[Eleme
 
 # Non-default variations to accommodate coroutines
 
-final class CoroutineType[out Element, in SendT_nd, out ReturnT_nd](Coroutine[Element, SendT_nd, ReturnT_nd]):
+final class CoroutineType[out Yield, in Send, out Return](Coroutine[Yield, Send, Return]):
     __name__: str
     """name of the coroutine"""
 
@@ -519,15 +519,15 @@ final class CoroutineType[out Element, in SendT_nd, out ReturnT_nd](Coroutine[El
     override def close(self) -> None:
         """close() -> raise GeneratorExit inside coroutine."""
 
-    override def __await__(self) -> Generator[dynamic, None, ReturnT_nd]:
+    override def __await__(self) -> Generator[dynamic, None, Return]:
         """Return an iterator to be used in await expression."""
 
-    override def send(self, arg: SendT_nd, /) -> Element:
+    override def send(self, arg: Send, /) -> Yield:
         """send(arg) -> send 'arg' into coroutine,
         return next iterated value or raise StopIteration.
         """
 
-    override def throw(self, typ: type[BaseException], val: BaseException | object = ..., tb: TracebackType | None = ..., /) -> Element:
+    override def throw(self, typ: type[BaseException], val: BaseException | object = ..., tb: TracebackType | None = ..., /) -> Yield:
         """throw(value)
         throw(type[,value[,traceback]])
 
@@ -536,7 +536,7 @@ final class CoroutineType[out Element, in SendT_nd, out ReturnT_nd](Coroutine[El
         the (type, val, tb) signature is deprecated,
         and may be removed in a future version of Python.
         """
-    def throw(self, typ: BaseException, val: None = None, tb: TracebackType | None = ..., /) -> Element
+    def throw(self, typ: BaseException, val: None = None, tb: TracebackType | None = ..., /) -> Yield
 
     if sys.version_info >= (3, 13):
         def __class_getitem__(cls, item: dynamic, /) -> dynamic:

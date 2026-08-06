@@ -1,6 +1,5 @@
 # `type def` — user-defined type functions
 
-
 ## summary
 
 a `type def` is an ordinary function whose arguments are types, whose result is a
