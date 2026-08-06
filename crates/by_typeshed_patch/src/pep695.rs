@@ -723,15 +723,19 @@ fn pick_name(legacy: &str, kind: TvKind, used: &mut HashSet<String>) -> String {
 /// curated names for the core container and protocol typevars. keyed by kind as
 /// well as legacy name: `_P` is `Parameters` only when it really is a
 /// `ParamSpec`, never when a module happens to call a plain `TypeVar` that
+///
+/// the keys are the names upstream declares, variance suffix included — a
+/// generator yields `_YieldT_co`, not `_YieldT`
 fn nice_name(legacy: &str, kind: TvKind) -> Option<&'static str> {
     Some(match (kind, legacy) {
-        (TvKind::TypeVar, "_T" | "_T_co" | "_YieldT_co") => "Element",
+        (TvKind::TypeVar, "_T" | "_T_co") => "Element",
         (TvKind::TypeVar, "_T_contra") => "Input",
         (TvKind::TypeVar, "_KT" | "_KT_co") => "Key",
         (TvKind::TypeVar, "_VT" | "_VT_co") => "Value",
         (TvKind::TypeVar, "_S") => "Other",
-        (TvKind::TypeVar, "_SendT_contra") => "Sent",
-        (TvKind::TypeVar, "_ReturnT_co") => "Return",
+        (TvKind::TypeVar, "_YieldT_co") => "Yield",
+        (TvKind::TypeVar, "_SendT_contra" | "_SendT_and_contra") => "Send",
+        (TvKind::TypeVar, "_ReturnT_co" | "_ReturnT_and_co") => "Return",
         (TvKind::TypeVarTuple, "_Ts") => "Args",
         (TvKind::ParamSpec, "_P") => "Parameters",
         _ => return None,

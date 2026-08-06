@@ -1424,24 +1424,24 @@ protocol Reversible[out Element](Iterable[Element]):
 
 
 @runtime_checkable
-protocol Generator[out Element, in Sent = None, out Return = None](Iterator[Element]):
-    override def __next__(self) -> Element:
+protocol Generator[out Yield, in Send = None, out Return = None](Iterator[Yield]):
+    override def __next__(self) -> Yield:
         """Return the next item from the generator.
         When exhausted, raise StopIteration.
         """
 
-    abstract def send(self, value: Sent, /) -> Element:
+    abstract def send(self, value: Send, /) -> Yield:
         """Send a value into the generator.
         Return next yielded value or raise StopIteration.
         """
 
     abstract def throw(
         self, typ: type[BaseException], val: BaseException | object = None, tb: TracebackType | None = None, /
-    ) -> Element:
+    ) -> Yield:
         """Raise an exception in the generator.
         Return next yielded value or raise StopIteration.
         """
-    abstract def throw(self, typ: BaseException, val: None = None, tb: TracebackType | None = None, /) -> Element
+    abstract def throw(self, typ: BaseException, val: None = None, tb: TracebackType | None = None, /) -> Yield
 
     if sys.version_info >= (3, 13):
         def close(self) -> Return | None:
@@ -1451,7 +1451,7 @@ protocol Generator[out Element, in Sent = None, out Return = None](Iterator[Elem
         def close(self) -> None:
             """Raise GeneratorExit inside generator."""
 
-    override def __iter__(self) -> Generator[Element, Sent, Return]
+    override def __iter__(self) -> Generator[Yield, Send, Return]
 
 # NOTE: Prior to Python 3.13 these aliases are lacking the second _ExitT_co parameter
 if sys.version_info >= (3, 13):
@@ -1473,22 +1473,22 @@ protocol Awaitable[out Element]:
 
 # Non-default variations to accommodate coroutines, and `AwaitableGenerator` having a 4th type parameter.
 
-class Coroutine[out Element, in SendT_nd, out ReturnT_nd](Awaitable[ReturnT_nd]):
+class Coroutine[out Yield, in Send, out Return](Awaitable[Return]):
     __name__: str
     __qualname__: str
 
-    abstract def send(self, value: SendT_nd, /) -> Element:
+    abstract def send(self, value: Send, /) -> Yield:
         """Send a value into the coroutine.
         Return next yielded value or raise StopIteration.
         """
 
     abstract def throw(
         self, typ: type[BaseException], val: BaseException | object = None, tb: TracebackType | None = None, /
-    ) -> Element:
+    ) -> Yield:
         """Raise an exception in the coroutine.
         Return next yielded value or raise StopIteration.
         """
-    abstract def throw(self, typ: BaseException, val: None = None, tb: TracebackType | None = None, /) -> Element
+    abstract def throw(self, typ: BaseException, val: None = None, tb: TracebackType | None = None, /) -> Yield
 
     abstract def close(self) -> None:
         """Raise GeneratorExit inside coroutine."""
@@ -1506,26 +1506,26 @@ protocol AsyncIterator[out Element](AsyncIterable[Element]):
     override def __aiter__(self) -> AsyncIterator[Element]
 
 @runtime_checkable
-protocol AsyncGenerator[out Element, in Sent = None](AsyncIterator[Element]):
-    override def __anext__(self) -> Coroutine[dynamic, dynamic, Element]:
+protocol AsyncGenerator[out Yield, in Send = None](AsyncIterator[Yield]):
+    override def __anext__(self) -> Coroutine[dynamic, dynamic, Yield]:
         """Return the next item from the asynchronous generator.
         When exhausted, raise StopAsyncIteration.
         """
 
-    abstract def asend(self, value: Sent, /) -> Coroutine[dynamic, dynamic, Element]:
+    abstract def asend(self, value: Send, /) -> Coroutine[dynamic, dynamic, Yield]:
         """Send a value into the asynchronous generator.
         Return next yielded value or raise StopAsyncIteration.
         """
 
     abstract def athrow(
         self, typ: type[BaseException], val: BaseException | object = None, tb: TracebackType | None = None, /
-    ) -> Coroutine[dynamic, dynamic, Element]:
+    ) -> Coroutine[dynamic, dynamic, Yield]:
         """Raise an exception in the asynchronous generator.
         Return next yielded value or raise StopAsyncIteration.
         """
     abstract def athrow(
         self, typ: BaseException, val: None = None, tb: TracebackType | None = None, /
-    ) -> Coroutine[dynamic, dynamic, Element]
+    ) -> Coroutine[dynamic, dynamic, Yield]
 
     def aclose(self) -> Coroutine[dynamic, dynamic, None]:
         """Raise GeneratorExit inside coroutine."""

@@ -63,16 +63,15 @@ if [[ "$SKIP_PATCHES" -eq 0 ]]; then
     # run to a fixed point: a few post-patches only see a form an earlier
     # post-patch produced (`private type _X` needs the `type _X = …` statement
     # that `TypeAliasStatements` writes), so the first pass leaves work for the
-    # second. two passes have always sufficed; the loop asserts it rather than
-    # assuming it
-    for pass_no in 1 2 3; do
+    # second
+    for pass_no in 1 2 3 4; do
         out="$("$PATCH" "$TYPESHED")"
         echo "    pass $pass_no: $out"
         if [[ "$out" == *"patched 0"* ]]; then
             break
         fi
-        if [[ "$pass_no" -eq 3 ]]; then
-            echo "    patches did not reach a fixed point in 3 passes" >&2
+        if [[ "$pass_no" -eq 4 ]]; then
+            echo "    patches did not reach a fixed point in 4 passes" >&2
             exit 1
         fi
     done

@@ -90,7 +90,7 @@ class _GeneratorContextManagerBase[out G: Generator[dynamic, dynamic, dynamic] |
     args: (*: dynamic)
     kwds: dict[str, dynamic]
 
-class _GeneratorContextManager[out Element, in Sent = None, out Return = None](_GeneratorContextManagerBase[Generator[Element, Sent, Return]], AbstractContextManager[Element, bool | None], ContextDecorator):
+class _GeneratorContextManager[out Element, in Send = None, out Return = None](_GeneratorContextManagerBase[Generator[Element, Send, Return]], AbstractContextManager[Element, bool | None], ContextDecorator):
     """Helper for @contextmanager decorator."""
 
     override def __enter__(self) -> Element
@@ -139,7 +139,7 @@ class AsyncContextDecorator:
 
     def __call__[AF: (...) -> Awaitable[dynamic]](self, func: AF) -> AF
 
-class _AsyncGeneratorContextManager[out Element, in Sent = None](_GeneratorContextManagerBase[AsyncGenerator[Element, Sent]], AbstractAsyncContextManager[Element, bool | None], AsyncContextDecorator):
+class _AsyncGeneratorContextManager[out Element, in Send = None](_GeneratorContextManagerBase[AsyncGenerator[Element, Send]], AbstractAsyncContextManager[Element, bool | None], AsyncContextDecorator):
     """Helper for @asynccontextmanager decorator."""
 
     override async def __aenter__(self) -> Element

@@ -13,7 +13,7 @@ type _Address = str | (str, int)
 
 # Defaulting to Any to avoid forcing generics on a lot of pre-existing code
 
-class _ConnectionBase[in Sent = dynamic, out RecvT = dynamic]:
+class _ConnectionBase[in Send = dynamic, out RecvT = dynamic]:
     init(self, handle: SupportsIndex, readable: bool = True, writable: bool = True)
     let closed: bool
 
@@ -30,7 +30,7 @@ class _ConnectionBase[in Sent = dynamic, out RecvT = dynamic]:
     def send_bytes(self, buf: ReadableBuffer, offset: int = 0, size: int | None = None) -> None:
         """Send the bytes data from a bytes-like object"""
 
-    def send(self, obj: Sent) -> None:
+    def send(self, obj: Send) -> None:
         """Send a (picklable) object"""
 
     def recv_bytes(self, maxlength: int | None = None) -> bytes:
@@ -56,14 +56,14 @@ class _ConnectionBase[in Sent = dynamic, out RecvT = dynamic]:
     ) -> None
     def __del__(self) -> None
 
-class Connection[in Sent = dynamic, out RecvT = dynamic](_ConnectionBase[Sent, RecvT]):
+class Connection[in Send = dynamic, out RecvT = dynamic](_ConnectionBase[Send, RecvT]):
     """
     Connection class based on an arbitrary file descriptor (Unix only), or
     a socket handle (Windows).
     """
 
 if sys.platform == "win32":
-    class PipeConnection[in Sent = dynamic, out RecvT = dynamic](_ConnectionBase[Sent, RecvT]):
+    class PipeConnection[in Send = dynamic, out RecvT = dynamic](_ConnectionBase[Send, RecvT]):
         """
         Connection class based on a Windows named pipe.
         Overlapped I/O is used, so the handles must have been created
@@ -117,9 +117,9 @@ else:
     def deliver_challenge(connection: _ConnectionBase[dynamic, dynamic], authkey: bytes) -> None
 
 def answer_challenge(connection: _ConnectionBase[dynamic, dynamic], authkey: bytes) -> None
-def wait[Sent = dynamic, RecvT = dynamic](
-    object_list: Iterable[_ConnectionBase[Sent, RecvT] | socket.socket | int], timeout: float | None = None
-) -> list[_ConnectionBase[Sent, RecvT] | socket.socket | int]:
+def wait[Send = dynamic, RecvT = dynamic](
+    object_list: Iterable[_ConnectionBase[Send, RecvT] | socket.socket | int], timeout: float | None = None
+) -> list[_ConnectionBase[Send, RecvT] | socket.socket | int]:
     """
     Wait till an object in object_list is ready/readable.
 
