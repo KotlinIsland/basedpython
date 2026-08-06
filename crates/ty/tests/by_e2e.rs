@@ -1186,7 +1186,7 @@ def deeper(n: int) -> int:
     return x
 
 def compute(n: int) -> int:
-    return n // 0
+    return n // 0  # ty: ignore[division-by-zero]
 
 def main() -> None:
     deeper(5)
@@ -2651,8 +2651,8 @@ fn parametric_is_concrete_subclass_confirms_across_origins() {
 from collections.abc import Sequence
 
 class A(Sequence[int]):
-    def __getitem__(self, i): ...
-    def __len__(self): ...
+    override def __getitem__(self, i): ...
+    override def __len__(self): ...
 
 class B(list[int]): ...
 
@@ -2780,12 +2780,13 @@ def main():
     );
 }
 
-/// The `override-raise` strictness option is off unless asked for.
+/// The `override-raise` strictness option is on under the default preset, and off under
+/// `ty-compatible`.
 ///
-/// mdtest force-enables every rule, including default-ignored ones, so the
-/// default posture can only be pinned from outside it.
+/// mdtest force-enables every rule, including default-ignored ones, so the default posture can
+/// only be pinned from outside it.
 #[test]
-fn override_raise_is_off_by_default() {
+fn override_raise_follows_the_preset() {
     let dir = tempfile::tempdir().expect("tempdir");
     let source = "\
 def a() -> A:
@@ -2813,24 +2814,24 @@ def main():
     };
 
     let output = check();
-    assert!(
-        output.status.success(),
-        "expected no diagnostic by default:\n{}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-
-    fs::write(
-        dir.path().join("pyproject.toml"),
-        "[tool.ty.rules]\noverride-raise = \"error\"\n",
-    )
-    .unwrap();
-
-    let output = check();
     let rendered = String::from_utf8_lossy(&output.stdout);
     assert!(
         rendered.contains("override-raise")
             && rendered.contains("which the method it overrides cannot"),
-        "expected the override to be reported once enabled:\n{rendered}"
+        "expected the override to be reported by default:\n{rendered}"
+    );
+
+    fs::write(
+        dir.path().join("pyproject.toml"),
+        "[tool.ty]\ntype-checking-preset = \"ty-compatible\"\n",
+    )
+    .unwrap();
+
+    let output = check();
+    assert!(
+        output.status.success(),
+        "expected no diagnostic under `ty-compatible`:\n{}",
+        String::from_utf8_lossy(&output.stdout)
     );
 }
 

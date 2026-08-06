@@ -9,6 +9,7 @@ mod python_environment;
 mod rule;
 mod rule_selection;
 mod scripts;
+mod type_checking_preset;
 mod uv_workspace;
 
 use anyhow::Context as _;
@@ -400,7 +401,14 @@ fn user_configuration() -> anyhow::Result<()> {
       | ^^^^
     info: rule `unresolved-reference` is enabled by default
 
-    Found 2 diagnostics
+    error[possibly-unresolved-reference]: Name `x` used when possibly not defined
+     --> main.py:7:6
+      |
+    7 | prin(x)
+      |      ^
+    info: rule `possibly-unresolved-reference` is enabled by default
+
+    Found 3 diagnostics
 
     ----- stderr -----
     INFO Indexed 1 file(s) in 0.000s
@@ -439,7 +447,14 @@ fn user_configuration() -> anyhow::Result<()> {
       | ^^^^
     info: rule `unresolved-reference` was selected in the configuration file
 
-    Found 2 diagnostics
+    error[possibly-unresolved-reference]: Name `x` used when possibly not defined
+     --> main.py:7:6
+      |
+    7 | prin(x)
+      |      ^
+    info: rule `possibly-unresolved-reference` is enabled by default
+
+    Found 3 diagnostics
 
     ----- stderr -----
     INFO Indexed 1 file(s) in 0.000s
@@ -510,7 +525,13 @@ fn basedpython_configuration_file() -> anyhow::Result<()> {
     7 | prin(x)
       | ^^^^
 
-    Found 2 diagnostics
+    error[possibly-unresolved-reference]: Name `x` used when possibly not defined
+     --> main.py:7:6
+      |
+    7 | prin(x)
+      |      ^
+
+    Found 3 diagnostics
 
     ----- stderr -----
     WARN Ignoring `<temp_dir>/project/ty.toml` because `<temp_dir>/project/basedpython.toml` takes precedence.
@@ -551,6 +572,12 @@ fn check_specific_paths() -> anyhow::Result<()> {
     success: false
     exit_code: 1
     ----- stdout -----
+    error[division-by-zero]: Cannot divide object of type `Literal[4]` by zero
+     --> project/main.py:2:5
+      |
+    2 | y = 4 / 0  # error: division-by-zero
+      |     ^^^^^
+
     error[unresolved-import]: Cannot resolve imported module `main2`
      --> project/other.py:2:6
       |
@@ -571,7 +598,7 @@ fn check_specific_paths() -> anyhow::Result<()> {
     info:   2. vendored://stdlib (stdlib typeshed stubs vendored by ty)
     info: make sure your Python environment is properly configured: https://docs.astral.sh/ty/modules/#python-environment
 
-    Found 2 diagnostics
+    Found 3 diagnostics
 
     ----- stderr -----
     "

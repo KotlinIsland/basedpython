@@ -123,7 +123,7 @@ fn cli_config_args_invalid_option() -> anyhow::Result<()> {
       |
     1 | bad-option=true
       | ^^^^^^^^^^
-    unknown field `bad-option`, expected one of `environment`, `src`, `rules`, `terminal`, `analysis`, `run`, `build`, `editor`, `overrides`
+    unknown field `bad-option`, expected one of `type-checking-preset`, `environment`, `src`, `rules`, `terminal`, `analysis`, `run`, `build`, `editor`, `overrides`
 
 
     Usage: by <COMMAND>

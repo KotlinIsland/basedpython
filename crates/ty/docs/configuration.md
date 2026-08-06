@@ -41,6 +41,44 @@ Set `terminal.error-on-warning` to `false` to exit with code 0 if all diagnostic
 
 ---
 
+## `type-checking-preset`
+
+The defaults that `rules` and `analysis` start from.
+
+A preset decides which diagnostics exist and which of them are enabled, and it supplies
+the default for every `analysis` option. Both tables are still read, and both still win
+over the preset, so a preset is a starting point rather than a straitjacket.
+
+* `strict`: every diagnostic is enabled, and every analysis option that buys soundness
+  is on. This is the default.
+* `ty-compatible`: the defaults of [ty](https://github.com/astral-sh/ty), which
+  basedpython is built on. basedpython's own diagnostics and analysis options are off,
+  so that a project reports what ty itself would report. A diagnostic that doesn't exist
+  in ty can't be enabled under this preset, not even with `rules = { all = "error" }`.
+
+Defaults to `strict`.
+
+**Default value**: `strict`
+
+**Type**: `"strict" | "ty-compatible"`
+
+**Example usage**:
+
+=== "pyproject.toml"
+
+    ```toml
+    [tool.ty]
+    type-checking-preset = "ty-compatible"
+    ```
+
+=== "ty.toml"
+
+    ```toml
+    type-checking-preset = "ty-compatible"
+    ```
+
+---
+
 ## `analysis`
 
 ### `allowed-unresolved-imports`
@@ -104,7 +142,7 @@ member mentions `T`, that member drives the inference as usual.
 When set to `false`, a private attribute is instead treated as immutable-but-readable,
 which constrains the type parameter to covariance.
 
-Defaults to `true`.
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
 
 **Default value**: `true`
 
@@ -181,7 +219,7 @@ its later uses in the same scope.
 When set to `true`, each unannotated binding keeps the specialization it was inferred
 with at its creation site; later uses no longer widen or lock it.
 
-Defaults to `false`.
+Defaults to `false`, and to `true` under the `ty-compatible` type checking preset.
 
 **Default value**: `false`
 
@@ -344,7 +382,7 @@ Nothing is invented from a use this analysis cannot read, so such a parameter st
 and its body keeps type-checking exactly as it did. An explicit annotation always wins, and
 so does anything an overload group or an overridden base method already supplies.
 
-Defaults to `true`.
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
 
 **Default value**: `true`
 
@@ -469,7 +507,7 @@ A PEP 696 default (`def f[T = str]()`) always takes priority, and a `ParamSpec`,
 `TypeVarTuple` or keyword-variadic pack is unaffected because `Never` is not a valid
 solution for one.
 
-Defaults to `true`.
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
 
 **Default value**: `true`
 
@@ -632,9 +670,9 @@ guarantee and uses the precise type instead. It affects:
 
 An explicit annotation always takes priority over any of the above.
 
-Defaults to `false`.
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
 
-**Default value**: `false`
+**Default value**: `true`
 
 **Type**: `bool`
 
@@ -644,16 +682,16 @@ Defaults to `false`.
 
     ```toml
     [tool.ty.analysis]
-    # Infer sound (non-gradual) types wherever a precise type is available
-    sound-types = true
+    # Fall back to a gradual type wherever an annotation is missing
+    sound-types = false
     ```
 
 === "ty.toml"
 
     ```toml
     [analysis]
-    # Infer sound (non-gradual) types wherever a precise type is available
-    sound-types = true
+    # Fall back to a gradual type wherever an annotation is missing
+    sound-types = false
     ```
 
 ---
@@ -661,19 +699,20 @@ Defaults to `false`.
 ### `strict-equality-semantics`
 
 Configure ty's behavior regarding type inference and narrowing of equality
-checks. Defaults to `false`.
+checks.
 
-By default, ty makes various assumptions about equality checks that match the
-intuitions of most Python programmers, but may not be fully sound in all situations.
-Enabling this option makes ty more conservative about these assumptions, making it
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
+
+With this option disabled, ty makes various assumptions about equality checks that
+match the intuitions of most Python programmers, but may not be fully sound in all
+situations. Leaving it enabled makes ty conservative about those assumptions, making it
 less likely to infer `Literal[True]` or `Literal[False]` as the result of an
 equality check. This has various effects on type checking, including fewer type
 narrowing opportunities and more conservative assumptions regarding control flow.
 
-One way in which ty will by default make unsound assumptions is by narrowing an
-object `x` of type `str` to `Literal["a"]` after an `if x == "a"` check. This is
-unsound because a subclass of `str` with value `"a"` will (by default) compare equal
-to `"a"`, but will not be of type `Literal["a"]`:
+One such unsound assumption is narrowing an object `x` of type `str` to `Literal["a"]`
+after an `if x == "a"` check. This is unsound because a subclass of `str` with value
+`"a"` will (by default) compare equal to `"a"`, but will not be of type `Literal["a"]`:
 
 ```pycon
 >>> # `Literal["a"]` can only be inhabited by instances of exactly `str`, not
@@ -692,14 +731,14 @@ True
 True
 ```
 
-Enabling this option prevents the unsound narrowing of `x` to `Literal["a"]`,
-and instead keeps it as `str`:
+This option prevents the unsound narrowing of `x` to `Literal["a"]`, and instead keeps
+it as `str`:
 
 ```python
 from typing import Literal
 
 def parse(value: str) -> Literal["a"] | None:
-    # with `strict-equality-semantics = true`, no narrowing will occur here,
+    # with `strict-equality-semantics` enabled, no narrowing will occur here,
     # and an error will be emitted on the `return` statement.
     if value == "a":
         return value
@@ -714,19 +753,19 @@ perfectly valid to pass an instance of a subclass into the `x` parameter of this
 ```python
 def narrow(x: Foo | None, other: Foo) -> None:
     if x == other:
-        # with this option enabled, `x` will still have type `Foo | None` here,
+        # with this option enabled, `x` still has type `Foo | None` here,
         # since it is legal to subclass `Foo` and override its `__eq__` method.
         reveal_type(x)
 ```
 
-Many operations in Python implicitly call `__eq__` under the hood; enabling this option
-will also impact those operations. For example, this option will also impact narrowing from
-`in` checks, and narrowing in `match` statements that use value patterns:
+Many operations in Python implicitly call `__eq__` under the hood, and this option
+impacts those too. For example, it also impacts narrowing from `in` checks, and narrowing
+in `match` statements that use value patterns:
 
 ```python
 def narrow_in(x: Foo | None, other: list[Foo]) -> None:
     if x in other:
-        # with this option enabled, `x` will still have type `Foo | None` here,
+        # with this option enabled, `x` still has type `Foo | None` here,
         # since the `in` operator implicitly calls `__eq__` on each element of `other`.
         reveal_type(x)
 
@@ -734,7 +773,7 @@ def narrow_in(x: Foo | None, other: list[Foo]) -> None:
 def narrow_match(x: str) -> None:
     match x:
         case "a":
-            # with this option enabled, `x` will still have type `str` here,
+            # with this option enabled, `x` still has type `str` here,
             # since this `case` branch will be taken by any object that compares
             # equal to `"a"`, including subclasses of `str`.
             reveal_type(x)
@@ -1507,7 +1546,7 @@ member mentions `T`, that member drives the inference as usual.
 When set to `false`, a private attribute is instead treated as immutable-but-readable,
 which constrains the type parameter to covariance.
 
-Defaults to `true`.
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
 
 **Default value**: `true`
 
@@ -1584,7 +1623,7 @@ its later uses in the same scope.
 When set to `true`, each unannotated binding keeps the specialization it was inferred
 with at its creation site; later uses no longer widen or lock it.
 
-Defaults to `false`.
+Defaults to `false`, and to `true` under the `ty-compatible` type checking preset.
 
 **Default value**: `false`
 
@@ -1747,7 +1786,7 @@ Nothing is invented from a use this analysis cannot read, so such a parameter st
 and its body keeps type-checking exactly as it did. An explicit annotation always wins, and
 so does anything an overload group or an overridden base method already supplies.
 
-Defaults to `true`.
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
 
 **Default value**: `true`
 
@@ -1872,7 +1911,7 @@ A PEP 696 default (`def f[T = str]()`) always takes priority, and a `ParamSpec`,
 `TypeVarTuple` or keyword-variadic pack is unaffected because `Never` is not a valid
 solution for one.
 
-Defaults to `true`.
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
 
 **Default value**: `true`
 
@@ -2035,9 +2074,9 @@ guarantee and uses the precise type instead. It affects:
 
 An explicit annotation always takes priority over any of the above.
 
-Defaults to `false`.
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
 
-**Default value**: `false`
+**Default value**: `true`
 
 **Type**: `bool`
 
@@ -2047,16 +2086,16 @@ Defaults to `false`.
 
     ```toml
     [tool.ty.overrides.analysis]
-    # Infer sound (non-gradual) types wherever a precise type is available
-    sound-types = true
+    # Fall back to a gradual type wherever an annotation is missing
+    sound-types = false
     ```
 
 === "ty.toml"
 
     ```toml
     [overrides.analysis]
-    # Infer sound (non-gradual) types wherever a precise type is available
-    sound-types = true
+    # Fall back to a gradual type wherever an annotation is missing
+    sound-types = false
     ```
 
 ---
@@ -2064,19 +2103,20 @@ Defaults to `false`.
 #### `strict-equality-semantics`
 
 Configure ty's behavior regarding type inference and narrowing of equality
-checks. Defaults to `false`.
+checks.
 
-By default, ty makes various assumptions about equality checks that match the
-intuitions of most Python programmers, but may not be fully sound in all situations.
-Enabling this option makes ty more conservative about these assumptions, making it
+Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
+
+With this option disabled, ty makes various assumptions about equality checks that
+match the intuitions of most Python programmers, but may not be fully sound in all
+situations. Leaving it enabled makes ty conservative about those assumptions, making it
 less likely to infer `Literal[True]` or `Literal[False]` as the result of an
 equality check. This has various effects on type checking, including fewer type
 narrowing opportunities and more conservative assumptions regarding control flow.
 
-One way in which ty will by default make unsound assumptions is by narrowing an
-object `x` of type `str` to `Literal["a"]` after an `if x == "a"` check. This is
-unsound because a subclass of `str` with value `"a"` will (by default) compare equal
-to `"a"`, but will not be of type `Literal["a"]`:
+One such unsound assumption is narrowing an object `x` of type `str` to `Literal["a"]`
+after an `if x == "a"` check. This is unsound because a subclass of `str` with value
+`"a"` will (by default) compare equal to `"a"`, but will not be of type `Literal["a"]`:
 
 ```pycon
 >>> # `Literal["a"]` can only be inhabited by instances of exactly `str`, not
@@ -2095,14 +2135,14 @@ True
 True
 ```
 
-Enabling this option prevents the unsound narrowing of `x` to `Literal["a"]`,
-and instead keeps it as `str`:
+This option prevents the unsound narrowing of `x` to `Literal["a"]`, and instead keeps
+it as `str`:
 
 ```python
 from typing import Literal
 
 def parse(value: str) -> Literal["a"] | None:
-    # with `strict-equality-semantics = true`, no narrowing will occur here,
+    # with `strict-equality-semantics` enabled, no narrowing will occur here,
     # and an error will be emitted on the `return` statement.
     if value == "a":
         return value
@@ -2117,19 +2157,19 @@ perfectly valid to pass an instance of a subclass into the `x` parameter of this
 ```python
 def narrow(x: Foo | None, other: Foo) -> None:
     if x == other:
-        # with this option enabled, `x` will still have type `Foo | None` here,
+        # with this option enabled, `x` still has type `Foo | None` here,
         # since it is legal to subclass `Foo` and override its `__eq__` method.
         reveal_type(x)
 ```
 
-Many operations in Python implicitly call `__eq__` under the hood; enabling this option
-will also impact those operations. For example, this option will also impact narrowing from
-`in` checks, and narrowing in `match` statements that use value patterns:
+Many operations in Python implicitly call `__eq__` under the hood, and this option
+impacts those too. For example, it also impacts narrowing from `in` checks, and narrowing
+in `match` statements that use value patterns:
 
 ```python
 def narrow_in(x: Foo | None, other: list[Foo]) -> None:
     if x in other:
-        # with this option enabled, `x` will still have type `Foo | None` here,
+        # with this option enabled, `x` still has type `Foo | None` here,
         # since the `in` operator implicitly calls `__eq__` on each element of `other`.
         reveal_type(x)
 
@@ -2137,7 +2177,7 @@ def narrow_in(x: Foo | None, other: list[Foo]) -> None:
 def narrow_match(x: str) -> None:
     match x:
         case "a":
-            # with this option enabled, `x` will still have type `str` here,
+            # with this option enabled, `x` still has type `str` here,
             # since this `case` branch will be taken by any object that compares
             # equal to `"a"`, including subclasses of `str`.
             reveal_type(x)

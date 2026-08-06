@@ -112,7 +112,13 @@ over all configuration files.</p>
 <li><code>3.15</code></li>
 </ul></dd><dt id="by-check--quiet"><a href="#by-check--quiet"><code>--quiet</code></a>, <code>-q</code></dt><dd><p>Use quiet output (or <code>-qq</code> for silent output)</p>
 </dd><dt id="by-check--respect-ignore-files"><a href="#by-check--respect-ignore-files"><code>--respect-ignore-files</code></a></dt><dd><p>Respect file exclusions via <code>.gitignore</code> and other standard ignore files. Use <code>--no-respect-ignore-files</code> to disable</p>
-</dd><dt id="by-check--typeshed"><a href="#by-check--typeshed"><code>--typeshed</code></a>, <code>--custom-typeshed-dir</code> <i>path</i></dt><dd><p>Custom directory to use for stdlib typeshed stubs</p>
+</dd><dt id="by-check--type-checking-preset"><a href="#by-check--type-checking-preset"><code>--type-checking-preset</code></a> <i>preset</i></dt><dd><p>The defaults that rules and analysis settings start from.</p>
+<p><code>strict</code> enables every diagnostic and every analysis option that buys soundness. <code>ty-compatible</code> uses ty's own defaults instead, leaving basedpython's diagnostics and analysis options off, so that a project reports what ty itself would report.</p>
+<p>Possible values:</p>
+<ul>
+<li><code>strict</code>:  Enable every diagnostic, and every analysis option that buys soundness (default)</li>
+<li><code>ty-compatible</code>:  Use ty's own defaults, leaving basedpython's diagnostics and analysis options off</li>
+</ul></dd><dt id="by-check--typeshed"><a href="#by-check--typeshed"><code>--typeshed</code></a>, <code>--custom-typeshed-dir</code> <i>path</i></dt><dd><p>Custom directory to use for stdlib typeshed stubs</p>
 </dd><dt id="by-check--verbose"><a href="#by-check--verbose"><code>--verbose</code></a>, <code>-v</code></dt><dd><p>Use verbose output (or <code>-vv</code> and <code>-vvv</code> for more verbose output)</p>
 </dd><dt id="by-check--warn"><a href="#by-check--warn"><code>--warn</code></a> <i>rule</i></dt><dd><p>Treat the given rule as having severity 'warn'. Can be specified multiple times. Use 'all' to apply to all rules.</p>
 </dd><dt id="by-check--watch"><a href="#by-check--watch"><code>--watch</code></a>, <code>-W</code></dt><dd><p>Watch files for changes and recheck files related to the changed files</p>

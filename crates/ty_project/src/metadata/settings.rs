@@ -265,7 +265,13 @@ pub(crate) fn file_settings(db: &dyn Db, file: File) -> FileSettings {
         script
             .options()
             .map(|options| {
-                let FileOptions { rules, analysis } = options.file_options();
+                // a script layer varies `rules` and `analysis`; the preset those start from is
+                // a project-level decision, resolved in `merge_overrides`
+                let FileOptions {
+                    rules,
+                    analysis,
+                    type_checking_preset: _,
+                } = options.file_options();
                 Arc::new(InnerOverrideOptions { rules, analysis })
             })
             .filter(|layer| layer.rules.is_some() || layer.analysis.is_some())
@@ -368,6 +374,12 @@ fn merge_overrides(
         ..Options::default()
     });
 
+    // An override varies `rules` and `analysis`, never the preset those start from.
+    let preset = metadata
+        .options_in_precedence_order(metadata.options())
+        .find_map(Options::configured_type_checking_preset)
+        .unwrap_or_default();
+
     // Merge with the project level options by replaying the individual options
     // in the correct precedence order.
     for options in
@@ -386,8 +398,8 @@ fn merge_overrides(
 
     // It's okay to ignore the errors here because the rules are eagerly validated
     // during `overrides.to_settings()`.
-    let rules = rules.to_rule_selection(db, &mut Vec::new());
-    let analysis = analysis.to_settings(db, &mut Vec::new());
+    let rules = rules.to_rule_selection(db, preset, &mut Vec::new());
+    let analysis = analysis.to_settings(db, preset, &mut Vec::new());
 
     FileSettings::File(Arc::new(OverrideSettings { rules, analysis }))
 }

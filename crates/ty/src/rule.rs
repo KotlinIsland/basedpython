@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde::{Serialize, Serializer, ser::SerializeSeq};
 
 use ty_python_semantic::default_lint_registry;
-use ty_python_semantic::lint::{Level, LintId, LintStatus};
+use ty_python_semantic::lint::{Level, LintId, LintStatus, TyCompat};
 
 use crate::args::HelpFormat;
 
@@ -14,6 +14,7 @@ struct Explanation<'a> {
     summary: &'a str,
     documentation: String,
     default_level: Level,
+    ty_compat: TyCompat,
     status: LintStatus,
     /// The rendered form, so a client reading the json gets the same prose the terminal shows.
     markdown: String,
@@ -26,6 +27,7 @@ impl<'a> Explanation<'a> {
             summary: lint.summary(),
             documentation: lint.documentation(),
             default_level: lint.default_level(),
+            ty_compat: lint.ty_compat(),
             status: *lint.status(),
             markdown: lint.documentation_markdown(),
         }

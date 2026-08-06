@@ -92,7 +92,7 @@ a synthesized signature that no module declares follows the default
 
 ## related
 
-- [sound types](sound-types.md) — the same trade for a missing annotation, opt-in
+- [sound types](sound-types.md) — the same trade for a missing annotation
 - [fluid specializations](fluid-specializations.md) — how an inferred specialization widens on use
 
 [gradual guarantee]: https://typing.python.org/en/latest/spec/concepts.html#the-gradual-guarantee

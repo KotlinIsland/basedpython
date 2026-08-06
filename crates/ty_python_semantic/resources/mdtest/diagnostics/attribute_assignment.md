@@ -224,7 +224,7 @@ def _(flag: bool) -> None:
 ```
 
 ```snapshot
-info[possibly-missing-attribute]: Attribute `attr` may be missing on class `C`
+error[possibly-missing-attribute]: Attribute `attr` may be missing on class `C`
  --> src/mdtest_snippet.py:6:5
   |
 6 |     C.attr = 1  # snapshot: possibly-missing-attribute
@@ -239,7 +239,7 @@ And on instances:
 ```
 
 ```snapshot
-info[possibly-missing-attribute]: Attribute `attr` may be missing on object of type `C`
+error[possibly-missing-attribute]: Attribute `attr` may be missing on object of type `C`
  --> src/mdtest_snippet.py:8:5
   |
 8 |     instance.attr = 1  # snapshot: possibly-missing-attribute

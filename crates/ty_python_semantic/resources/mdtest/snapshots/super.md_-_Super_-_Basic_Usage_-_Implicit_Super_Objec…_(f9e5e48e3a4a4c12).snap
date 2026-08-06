@@ -161,7 +161,7 @@ mdtest path: crates/ty_python_semantic/resources/mdtest/class/super.md
 # Diagnostics
 
 ```
-info[missing-type-argument]: Missing type argument for generic class `Foo` (expected 1 type argument)
+error[missing-type-argument]: Missing type argument for generic class `Foo` (expected 1 type argument)
   --> src/mdtest_snippet.py:61:23
    |
 61 |     def method3(self: Foo):  # error: [missing-type-argument]

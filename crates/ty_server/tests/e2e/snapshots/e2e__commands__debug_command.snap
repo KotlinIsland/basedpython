@@ -214,7 +214,7 @@ Settings: Settings {
         exported_dependencies: None,
         strict_float: false,
         disable_fluid_specializations: false,
-        sound_types: false,
+        sound_types: true,
         infer_unannotated_signatures: true,
         bivariant_private_attributes: true,
         precise_unsolved_typevars: true,
