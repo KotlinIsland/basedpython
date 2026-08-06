@@ -2,19 +2,31 @@ use crate::docstring::{Docstring, DocstringFragment};
 use crate::goto::{Definitions, GotoTarget, docstring_for_call_definition, find_goto_target};
 use crate::{Db, MarkupKind, RangedValue};
 use ruff_db::files::{File, FileRange};
-use ruff_db::parsed::parsed_module;
-use ruff_python_ast as ast;
-use ruff_text_size::{Ranged, TextSize};
+use ruff_db::parsed::{ParsedModuleRef, parsed_module};
+use ruff_db::source::source_text;
+use ruff_python_ast::find_node::covering_node;
+use ruff_python_ast::{self as ast, AnyNodeRef};
+use ruff_python_literal::format::FormatSpec;
+use ruff_python_literal::strftime;
+use ruff_text_size::{Ranged, TextRange, TextSize};
 use std::fmt;
 use std::fmt::Formatter;
 use ty_python_semantic::types::ide_support::{resolved_call_signature, typed_dict_key_hover};
 use ty_python_semantic::types::{KnownInstanceType, Type, TypeAliasType, TypeVarVariance};
 
-use ty_python_semantic::{DisplaySettings, SemanticModel, TypeQualifiers};
+use ty_python_semantic::types::format::{SpecLanguage, spec_language};
+use ty_python_semantic::{DisplaySettings, HasType, SemanticModel, TypeQualifiers};
 
 pub fn hover(db: &dyn Db, file: File, offset: TextSize) -> Option<RangedValue<Hover<'_>>> {
     let parsed = parsed_module(db, file).load(db);
     let model = SemanticModel::new(db, file);
+
+    // a format spec is text rather than code, so it has no goto target of its
+    // own and has to be recognised before one is looked for
+    if let Some(hover) = format_spec_hover(db, &model, &parsed, file, offset) {
+        return Some(hover);
+    }
+
     let goto_target = find_goto_target(&model, &parsed, offset)?;
 
     if let GotoTarget::Expression(expr) = goto_target {
@@ -213,6 +225,115 @@ fn documentation_for_parameter(docstring: &Docstring, name: &str) -> Option<Docs
         .map(|documentation| DocstringFragment::new(documentation))
 }
 
+/// hover for an f-string format spec: what each clause does, and what the spec
+/// makes of a sample value
+fn format_spec_hover<'db>(
+    db: &'db dyn Db,
+    model: &SemanticModel<'db>,
+    parsed: &ParsedModuleRef,
+    file: File,
+    offset: TextSize,
+) -> Option<RangedValue<Hover<'db>>> {
+    let covering = covering_node(parsed.syntax().into(), TextRange::empty(offset));
+    // the innermost replacement field: one nested inside a spec has no spec of
+    // its own, so hovering in it falls through to ordinary hover
+    let field = covering.ancestors().find_map(|node| match node {
+        AnyNodeRef::InterpolatedElement(field) => Some(field),
+        _ => None,
+    })?;
+    let spec = field.format_spec.as_deref()?;
+    if !spec.range().contains_inclusive(offset) || spec.range().is_empty() {
+        return None;
+    }
+
+    let source = source_text(db, file);
+    let written = source.get(spec.range().start().to_usize()..spec.range().end().to_usize())?;
+
+    let language = field
+        .expression
+        .inferred_type(model)
+        .and_then(|ty| spec_language(db, ty));
+    let (sample, clauses) = match language {
+        // `date`, `time` and `datetime` read strftime directives, a language
+        // the mini-language's clauses say nothing about
+        Some(SpecLanguage::Strftime) => (
+            Some((strftime::SAMPLE.to_string(), strftime::preview(written))),
+            strftime::directives(written)
+                .into_iter()
+                .map(|directive| {
+                    (
+                        written[directive.span.clone()].to_string(),
+                        directive.documentation().to_string(),
+                    )
+                })
+                .collect(),
+        ),
+        target => {
+            let (FormatSpec::Static(parsed), spans) = FormatSpec::parse_spanned(written).ok()?
+            else {
+                // a spec assembled at runtime says nothing about its own shape
+                return None;
+            };
+            let target = match target {
+                Some(SpecLanguage::MiniLanguage(target)) => Some(target),
+                _ => None,
+            };
+            (
+                target.map(|target| (target.sample_source().to_string(), parsed.preview(target))),
+                spans
+                    .iter()
+                    .filter_map(|(component, span)| {
+                        let text = written.get(span)?;
+                        Some((text.to_string(), component.describe(text, target)))
+                    })
+                    .collect(),
+            )
+        }
+    };
+
+    let contents = vec![HoverContent::FormatSpec(Box::new(FormatSpecHover {
+        written: written.to_string(),
+        sample,
+        clauses,
+    }))];
+    Some(RangedValue {
+        range: FileRange::new(file, spec.range()),
+        value: Hover { contents },
+    })
+}
+
+/// what a format spec does, and what it does to a sample value
+#[derive(Debug, Clone)]
+pub struct FormatSpecHover {
+    /// the spec as written
+    written: String,
+    /// the sample value this spec was applied to, and the result — `None` when
+    /// the spec is one the value's `__format__` rejects
+    sample: Option<(String, Option<String>)>,
+    /// each written clause, as written, with what it does
+    clauses: Vec<(String, String)>,
+}
+
+impl fmt::Display for FormatSpecHover {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(f, "format spec `{}`", self.written)?;
+        if let Some((sample, rendered)) = &self.sample {
+            match rendered {
+                Some(rendered) => writeln!(f, "\n`{sample}` formats as `{rendered}`")?,
+                None => writeln!(f, "\nthis spec is not one the value accepts")?,
+            }
+        }
+        if !self.clauses.is_empty() {
+            // a list, so each clause gets its own line in both markup kinds
+            f.write_str("\n")?;
+            for (written, description) in &self.clauses {
+                writeln!(f, "- `{written}` {description}")?;
+            }
+        }
+        Ok(())
+    }
+}
+
 pub struct Hover<'db> {
     contents: Vec<HoverContent<'db>>,
 }
@@ -297,6 +418,7 @@ pub enum HoverContent<'db> {
     },
     Docstring(Docstring),
     DocstringFragment(DocstringFragment),
+    FormatSpec(Box<FormatSpecHover>),
 }
 
 impl<'db> HoverContent<'db> {
@@ -389,6 +511,7 @@ impl fmt::Display for DisplayHoverContent<'_, '_> {
             }
             HoverContent::Docstring(docstring) => docstring.render(self.kind).fmt(f),
             HoverContent::DocstringFragment(fragment) => fragment.render(self.kind).fmt(f),
+            HoverContent::FormatSpec(spec) => spec.fmt(f),
         }
     }
 }
@@ -414,6 +537,263 @@ mod tests {
             .snapshot_filter("  \n", "<HB>\n")
             .source("main.py", source)
             .build()
+    }
+
+    #[test]
+    fn hover_format_spec_previews_the_output() {
+        let test = hover_test(
+            r#"
+        value = 1234.5678
+        print(f"{value:>12<CURSOR>,.2f}")
+        "#,
+        );
+
+        assert_snapshot!(test.hover(), @r#"
+        format spec `>12,.2f`
+
+        `1234.5678` formats as `    1,234.57`
+
+        - `>` align — right
+        - `12` width — the minimum number of characters
+        - `,` grouping — every 3 digits
+        - `.2` precision — digits after the point, significant digits, or the length a string is truncated to
+        - `f` presentation type — fixed point
+
+        ---------------------------------------------
+        format spec `>12,.2f`
+
+        `1234.5678` formats as `    1,234.57`
+
+        - `>` align — right
+        - `12` width — the minimum number of characters
+        - `,` grouping — every 3 digits
+        - `.2` precision — digits after the point, significant digits, or the length a string is truncated to
+        - `f` presentation type — fixed point
+
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:3:16
+          |
+        3 | print(f"{value:>12,.2f}")
+          |                ^^^-^^^
+          |                |  |
+          |                |  Cursor offset
+          |                source
+          |
+        "#);
+    }
+
+    #[test]
+    fn hover_format_spec_on_a_string() {
+        let test = hover_test(
+            r#"
+        name = "spam"
+        print(f"{name:*^1<CURSOR>0}")
+        "#,
+        );
+
+        assert_snapshot!(test.hover(), @r#"
+        format spec `*^10`
+
+        `"spam"` formats as `***spam***`
+
+        - `*` fill — the character the padding is made of
+        - `^` align — centred
+        - `10` width — the minimum number of characters
+
+        ---------------------------------------------
+        format spec `*^10`
+
+        `"spam"` formats as `***spam***`
+
+        - `*` fill — the character the padding is made of
+        - `^` align — centred
+        - `10` width — the minimum number of characters
+
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:3:15
+          |
+        3 | print(f"{name:*^10}")
+          |               ^^^-
+          |               |  |
+          |               |  Cursor offset
+          |               source
+          |
+        "#);
+    }
+
+    #[test]
+    fn hover_format_spec_the_value_rejects() {
+        let test = hover_test(
+            r#"
+        name = "spam"
+        print(f"{name:<CURSOR>+}")
+        "#,
+        );
+
+        assert_snapshot!(test.hover(), @r#"
+        format spec `+`
+
+        this spec is not one the value accepts
+
+        - `+` sign — always signed
+
+        ---------------------------------------------
+        format spec `+`
+
+        this spec is not one the value accepts
+
+        - `+` sign — always signed
+
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:3:15
+          |
+        3 | print(f"{name:+}")
+          |               -
+          |               |
+          |               source
+          |               Cursor offset
+          |
+        "#);
+    }
+
+    #[test]
+    fn hover_strftime_spec_of_literal_text() {
+        let test = hover_test(
+            r#"
+        import datetime
+        print(f"{datetime.date.today():>1<CURSOR>0}")
+        "#,
+        );
+
+        assert_snapshot!(test.hover(), @r#"
+        format spec `>10`
+
+        `datetime(2001, 2, 3, 4, 5, 6, 7)` formats as `>10`
+
+        ---------------------------------------------
+        format spec `>10`
+
+        `datetime(2001, 2, 3, 4, 5, 6, 7)` formats as `>10`
+
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:3:32
+          |
+        3 | print(f"{datetime.date.today():>10}")
+          |                                ^^-
+          |                                | |
+          |                                | Cursor offset
+          |                                source
+          |
+        "#);
+    }
+
+    #[test]
+    fn hover_format_spec_of_an_unknown_target() {
+        let test = hover_test(
+            r#"
+        class Opaque:
+            def __format__(self, spec: str, /) -> str: ...
+
+        print(f"{Opaque():>1<CURSOR>0}")
+        "#,
+        );
+
+        assert_snapshot!(test.hover(), @r#"
+        format spec `>10`
+
+        - `>` align — right
+        - `10` width — the minimum number of characters
+
+        ---------------------------------------------
+        format spec `>10`
+
+        - `>` align — right
+        - `10` width — the minimum number of characters
+
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:5:19
+          |
+        5 | print(f"{Opaque():>10}")
+          |                   ^^-
+          |                   | |
+          |                   | Cursor offset
+          |                   source
+          |
+        "#);
+    }
+
+    #[test]
+    fn hover_strftime_spec_previews_the_output() {
+        let test = hover_test(
+            r#"
+        import datetime
+        print(f"{datetime.date.today():%Y-<CURSOR>%m-%d}")
+        "#,
+        );
+
+        assert_snapshot!(test.hover(), @r#"
+        format spec `%Y-%m-%d`
+
+        `datetime(2001, 2, 3, 4, 5, 6, 7)` formats as `2001-02-03`
+
+        - `%Y` year with the century
+        - `%m` month as a number, zero padded
+        - `%d` day of the month, zero padded
+
+        ---------------------------------------------
+        format spec `%Y-%m-%d`
+
+        `datetime(2001, 2, 3, 4, 5, 6, 7)` formats as `2001-02-03`
+
+        - `%Y` year with the century
+        - `%m` month as a number, zero padded
+        - `%d` day of the month, zero padded
+
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:3:32
+          |
+        3 | print(f"{datetime.date.today():%Y-%m-%d}")
+          |                                ^^^-^^^^
+          |                                |  |
+          |                                |  Cursor offset
+          |                                source
+          |
+        "#);
+    }
+
+    #[test]
+    fn hover_inside_a_nested_field_is_the_expression() {
+        let test = hover_test(
+            r#"
+        value = 1234.5678
+        width = 12
+        print(f"{value:>{wid<CURSOR>th}.2f}")
+        "#,
+        );
+
+        assert_snapshot!(test.hover(), @r#"
+        Literal[12]
+        ---------------------------------------------
+        ```python
+        Literal[12]
+        ```
+        ---------------------------------------------
+        info[hover]: Hovered content is
+         --> main.py:4:18
+          |
+        4 | print(f"{value:>{width}.2f}")
+          |                  ^^^-^
+          |                  |  |
+          |                  |  Cursor offset
+          |                  source
+          |
+        "#);
     }
 
     #[test]

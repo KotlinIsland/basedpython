@@ -197,4 +197,23 @@ implicit-object-repr-exempt-types = ["builtins.property"]
 entries are qualified class names; a class in `builtins` may also be spelled bare (`type`).
 setting `report-types` replaces the default list rather than adding to it
 
+## in the editor
+
+a format spec is highlighted clause by clause rather than as one run of text, completions
+inside a spec offer what can still be written at that point — filtered to the presentation
+types the value actually has, or to the strftime directives when it is a date — and hovering a
+spec shows what each clause does along with a sample of what the spec makes of a value:
+
+```py
+value = 1234.5678
+f"{value:>12,.2f}"
+```
+
+hovering `>12,.2f` reports what each clause does, and the sample it renders — right-aligned in
+twelve columns, grouped, to two decimal places:
+
+```text
+1234.5678 formats as `    1,234.57`
+```
+
 [format specification mini-language]: https://docs.python.org/3/library/string.html#format-specification-mini-language
