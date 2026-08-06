@@ -6,7 +6,7 @@
 use ruff_diagnostics::{Edit, Fix};
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Expr, Stmt};
-use ruff_text_size::{Ranged, TextRange};
+use ruff_text_size::{Ranged, TextRange, TextSize};
 
 use crate::type_info::TypeInfo;
 
@@ -23,10 +23,6 @@ impl<'src> UnpackReverse<'src> {
             types,
             edits: Vec::new(),
         }
-    }
-
-    fn src(&self, range: TextRange) -> &str {
-        &self.source[usize::from(range.start())..usize::from(range.end())]
     }
 
     fn is_unpack_name(&self, expr: &Expr) -> bool {
@@ -47,11 +43,22 @@ impl<'src> UnpackReverse<'src> {
         if !self.is_unpack_name(&s.value) {
             return;
         }
-        let inner = self.src(s.slice.range()).to_owned();
+        // only the `Unpack[` and its `]` are rewritten. the inner type is a type
+        // expression another reverse transform may have edited, and re-rendering
+        // it from raw source would silently undo that
+        let value_end = usize::from(s.value.end());
+        let open_end =
+            TextSize::try_from(value_end + self.source[value_end..].find('[').map_or(0, |i| i + 1))
+                .unwrap_or_else(|_| s.slice.range().start());
         self.edits.push(Fix::safe_edit(Edit::range_replacement(
-            format!("*{inner}"),
-            ann.range(),
+            "*".to_owned(),
+            TextRange::new(ann.range().start(), open_end),
         )));
+        self.edits
+            .push(Fix::safe_edit(Edit::range_deletion(TextRange::new(
+                ann.range().end() - TextSize::from(1),
+                ann.range().end(),
+            ))));
     }
 }
 
@@ -114,6 +121,22 @@ mod tests {
     fn regular_arg_unchanged_by_unpack() {
         // unpack reverse leaves it alone; empty-declarations strips `: ...`
         check("def f(x: int): ...\n", "def f(x: int)\n");
+    }
+
+    /// the inner type keeps an edit another reverse transform made inside it —
+    /// a whole-expression replacement rendered from raw source would undo it
+    #[test]
+    fn keeps_a_nested_rewrite() {
+        check(
+            indoc! {"
+                from typing import Unpack
+                def f(*args: Unpack[tuple[int, tuple[str, bytes]]]): ...
+            "},
+            indoc! {"
+                from typing import Unpack
+                def f(*args: *(int, (str, bytes)))
+            "},
+        );
     }
 
     #[test]

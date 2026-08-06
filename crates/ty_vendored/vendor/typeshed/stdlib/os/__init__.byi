@@ -2365,14 +2365,14 @@ def abort() -> NoReturn:
     """
 
 # These are defined as execl(file, *args) but the first *arg is mandatory.
-def execl(file: StrOrBytesPath, *args: *tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]]]) -> NoReturn:
+def execl(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]])) -> NoReturn:
     """execl(file, *args)
 
     Execute the executable file with argument list args, replacing the
     current process.
     """
 
-def execlp(file: StrOrBytesPath, *args: *tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]]]) -> NoReturn:
+def execlp(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]])) -> NoReturn:
     """execlp(file, *args)
 
     Execute the executable file (which is searched for along $PATH)
@@ -2380,14 +2380,14 @@ def execlp(file: StrOrBytesPath, *args: *tuple[StrOrBytesPath, Unpack[tuple[StrO
     """
 
 # These are: execle(file, *args, env) but env is pulled from the last element of the args.
-def execle(file: StrOrBytesPath, *args: *tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], ExecEnv]) -> NoReturn:
+def execle(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], ExecEnv)) -> NoReturn:
     """execle(file, *args, env)
 
     Execute the executable file with argument list args and
     environment env, replacing the current process.
     """
 
-def execlpe(file: StrOrBytesPath, *args: *tuple[StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], ExecEnv]) -> NoReturn:
+def execlpe(file: StrOrBytesPath, *args: *(StrOrBytesPath, Unpack[tuple[StrOrBytesPath, ...]], ExecEnv)) -> NoReturn:
     """execlpe(file, *args, env)
 
     Execute the executable file (which is searched for along $PATH)

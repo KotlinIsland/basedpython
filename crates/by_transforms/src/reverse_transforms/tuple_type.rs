@@ -89,6 +89,21 @@ impl<'src> TupleTypeReverse<'src> {
         homogeneous_element(&sub.slice)
     }
 
+    /// the operand of an unpack (`*T` or `Unpack[T]`).
+    ///
+    /// a homogeneous `tuple[T, ...]` is left subscripted here: `*tuple[T, ...]`
+    /// already spells exactly that type, and `*(*: T)` only says it twice
+    fn visit_unpack_operand(&mut self, operand: &Expr) {
+        if let Expr::Subscript(s) = operand
+            && self.is_tuple_name(&s.value)
+            && let Some(element) = homogeneous_element(&s.slice)
+        {
+            self.visit_type_expr(element);
+            return;
+        }
+        self.visit_type_expr(operand);
+    }
+
     /// walk a type expression, emitting bracket edits for every `tuple[...]`
     /// within it
     fn visit_type_expr(&mut self, expr: &Expr) {
@@ -137,7 +152,11 @@ impl<'src> TupleTypeReverse<'src> {
 
             // propagate into the slice of any other type-context subscript
             Expr::Subscript(s) if self.is_type_context_subscript(&s.value) => {
-                self.visit_type_expr(&s.slice);
+                if subscript_head(&s.value) == Some("Unpack") {
+                    self.visit_unpack_operand(&s.slice);
+                } else {
+                    self.visit_type_expr(&s.slice);
+                }
             }
 
             Expr::BinOp(b) => {
@@ -160,10 +179,19 @@ impl<'src> TupleTypeReverse<'src> {
                 }
             }
 
-            Expr::Starred(s) => self.visit_type_expr(&s.value),
+            Expr::Starred(s) => self.visit_unpack_operand(&s.value),
 
             _ => {}
         }
+    }
+}
+
+/// the name a subscript is applied to, for the heads that matter here
+fn subscript_head(value: &Expr) -> Option<&str> {
+    match value {
+        Expr::Name(name) => Some(name.id.as_str()),
+        Expr::Attribute(attr) => Some(attr.attr.as_str()),
+        _ => None,
     }
 }
 
@@ -298,6 +326,35 @@ a: ((int) -> str, int)
         check(
             "a: tuple[\n    int,\n    str,\n]\n",
             "a: (\n    int,\n    str,\n)\n",
+        );
+    }
+
+    /// a pep 695 bound is a type expression. in a basedpython file `T: (int, str)`
+    /// is a tuple upper bound — constraints take the `constraints` keyword — so
+    /// the conversion means what `tuple[int, str]` meant
+    #[test]
+    fn type_param_bound() {
+        check(
+            "class A[T: tuple[int, str]]: ...\n",
+            "class A[T: (int, str)]\n",
+        );
+    }
+
+    #[test]
+    fn type_param_default() {
+        check(
+            "class A[T = tuple[int, str]]: ...\n",
+            "class A[T = (int, str)]\n",
+        );
+    }
+
+    /// a class base is a runtime value position: `class C((str, int))` is an
+    /// invalid base that raises `TypeError`, so the tuple type stays subscripted
+    #[test]
+    fn class_base_left_alone() {
+        check(
+            "class A(tuple[str, int]): ...\n",
+            "class A(tuple[str, int])\n",
         );
     }
 
