@@ -174,6 +174,7 @@ pub(crate) mod enums;
 mod equality;
 pub mod exceptions;
 pub(crate) mod extensions;
+pub mod format;
 pub(crate) mod function;
 mod generics;
 pub mod ide_support;

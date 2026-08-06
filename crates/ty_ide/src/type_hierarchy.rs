@@ -435,7 +435,7 @@ mod tests {
         let item = test.prepare().unwrap();
         insta::assert_snapshot!(
             snapshot(&test.db, &[item]),
-            @"vendored://stdlib/builtins.byi:6863:6867 type :: builtins",
+            @"vendored://stdlib/builtins.byi:7042:7046 type :: builtins",
         );
         let supertypes = test.supertypes();
         insta::assert_snapshot!(
@@ -492,7 +492,7 @@ mod tests {
         let supertypes = test.supertypes();
         insta::assert_snapshot!(
             snapshot(&test.db, &supertypes),
-            @"vendored://stdlib/builtins.byi:97413:97418 tuple :: builtins",
+            @"vendored://stdlib/builtins.byi:97592:97597 tuple :: builtins",
         );
     }
 

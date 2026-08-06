@@ -4636,7 +4636,7 @@ quux.<CURSOR>
         );
 
         assert_snapshot!(
-            builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @"
+            builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
         bar :: int
         baz :: int
         foo :: int
@@ -4647,7 +4647,7 @@ quux.<CURSOR>
         __dir__ :: bound method Quux.__dir__() -> Iterable[str]
         __doc__ :: str | None
         __eq__ :: bound method Quux.__eq__(value: object, /) -> bool
-        __format__ :: bound method Quux.__format__(format_spec: str, /) -> str
+        __format__ :: bound method Quux.__format__(format_spec: Literal[""], /) -> str
         __getattribute__ :: bound method Quux.__getattribute__(name: str, /) -> Any
         __getstate__ :: bound method Quux.__getstate__() -> object
         __hash__ :: bound method Quux.__hash__() -> int
@@ -4663,7 +4663,7 @@ quux.<CURSOR>
         __sizeof__ :: bound method Quux.__sizeof__() -> int
         __str__ :: bound method Quux.__str__() -> str
         __subclasshook__ :: bound method type[Quux].__subclasshook__(subclass: type, /) -> bool
-        ");
+        "#);
     }
 
     #[test]
@@ -4707,7 +4707,7 @@ C.<CURSOR>
         );
 
         assert_snapshot!(
-            builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @"
+            builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
         meta_attr :: int
         mro :: bound method <class 'C'>.mro() -> list[type]
         __annotate__ :: (() -> dict[str, AnnotationForm]) | None
@@ -4724,7 +4724,7 @@ C.<CURSOR>
         __doc__ :: str | None
         __eq__ :: def __eq__(self, value: object, /) -> bool
         __flags__ :: int
-        __format__ :: def __format__(self, format_spec: str, /) -> str
+        __format__ :: def __format__(self, format_spec: Literal[""], /) -> str
         __getattribute__ :: def __getattribute__(self, name: str, /) -> Any
         __getstate__ :: def __getstate__(self) -> object
         __hash__ :: def __hash__(self) -> int
@@ -4753,7 +4753,7 @@ C.<CURSOR>
         __text_signature__ :: str | None
         __type_params__ :: tuple[TypeVar | ParamSpec | TypeVarTuple, ...]
         __weakrefoffset__ :: int
-        ");
+        "#);
     }
 
     #[test]
@@ -4779,7 +4779,7 @@ Meta.<CURSOR>
             filters => [(r"(?m)\s*__(annotations|new|annotate)__.+$", "")]},
             {
                 assert_snapshot!(
-                    builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @"
+                    builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
                 meta_attr :: property
                 mro :: def mro(self) -> list[type]
                 __base__ :: type | None
@@ -4794,7 +4794,7 @@ Meta.<CURSOR>
                 __doc__ :: str | None
                 __eq__ :: def __eq__(self, value: object, /) -> bool
                 __flags__ :: int
-                __format__ :: def __format__(self, format_spec: str, /) -> str
+                __format__ :: def __format__(self, format_spec: Literal[""], /) -> str
                 __getattribute__ :: def __getattribute__(self, name: str, /) -> Any
                 __getstate__ :: def __getstate__(self) -> object
                 __hash__ :: def __hash__(self) -> int
@@ -4822,7 +4822,7 @@ Meta.<CURSOR>
                 __text_signature__ :: str | None
                 __type_params__ :: tuple[TypeVar | ParamSpec | TypeVarTuple, ...]
                 __weakrefoffset__ :: int
-                ");
+                "#);
             }
         );
     }
@@ -4902,7 +4902,7 @@ Quux.<CURSOR>
         );
 
         assert_snapshot!(
-            builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @"
+            builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
         mro :: bound method <class 'Quux'>.mro() -> list[type]
         some_attribute :: int
         some_class_method :: bound method <class 'Quux'>.some_class_method() -> int
@@ -4923,7 +4923,7 @@ Quux.<CURSOR>
         __doc__ :: str | None
         __eq__ :: def __eq__(self, value: object, /) -> bool
         __flags__ :: int
-        __format__ :: def __format__(self, format_spec: str, /) -> str
+        __format__ :: def __format__(self, format_spec: Literal[""], /) -> str
         __getattribute__ :: def __getattribute__(self, name: str, /) -> Any
         __getstate__ :: def __getstate__(self) -> object
         __hash__ :: def __hash__(self) -> int
@@ -4952,7 +4952,7 @@ Quux.<CURSOR>
         __text_signature__ :: str | None
         __type_params__ :: tuple[TypeVar | ParamSpec | TypeVarTuple, ...]
         __weakrefoffset__ :: int
-        ");
+        "#);
     }
 
     #[test]
@@ -5063,7 +5063,7 @@ quux.<CURSOR>
         );
 
         assert_snapshot!(
-            builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @"
+            builder.skip_keywords().skip_builtins().type_signatures().build().snapshot(), @r#"
         count :: bound method Quux.count(value: Any, /) -> int
         index :: bound method Quux.index(value: Any, start: SupportsIndex = 0, stop: SupportsIndex = ..., /) -> int
         x :: int
@@ -5078,7 +5078,7 @@ quux.<CURSOR>
         __dir__ :: bound method Quux.__dir__() -> Iterable[str]
         __doc__ :: str | None
         __eq__ :: bound method Quux.__eq__(value: object, /) -> bool
-        __format__ :: bound method Quux.__format__(format_spec: str, /) -> str
+        __format__ :: bound method Quux.__format__(format_spec: Literal[""], /) -> str
         __ge__ :: bound method Quux.__ge__(value: tuple[int | str, ...], /) -> bool
         __getattribute__ :: bound method Quux.__getattribute__(name: str, /) -> Any
         __getitem__ :: Overload[(index: Literal[-2, 0], /) -> int, (index: Literal[-1, 1], /) -> str, (index: SupportsIndex, /) -> int | str, (index: slice[SupportsIndex | None, SupportsIndex | None, SupportsIndex | None], /) -> tuple[int | str, ...]]
@@ -5112,7 +5112,7 @@ quux.<CURSOR>
         _fields :: tuple[str, ...]
         _make :: bound method type[NamedTupleFallback]._make(iterable: Iterable[Any]) -> NamedTupleFallback
         _replace :: bound method NamedTupleFallback._replace(**kwargs: Any) -> NamedTupleFallback
-        ");
+        "#);
     }
 
     #[test]

@@ -94,6 +94,7 @@ use crate::types::diagnostic::{
 };
 use crate::types::enums::{enum_ignored_names, is_enum_class_by_inheritance};
 use crate::types::extensions;
+use crate::types::format;
 use crate::types::function::{
     FunctionDecorators, FunctionType, KnownFunction, report_revealed_type,
     same_module_uncached_raw_signature,
@@ -7186,7 +7187,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ast::FStringPart::FString(fstring) => {
                     for element in &fstring.elements {
                         match element {
-                            ast::InterpolatedStringElement::Interpolation(expression) => {
+                            ast::InterpolatedStringElement::Interpolation(element) => {
                                 let ast::InterpolatedElement {
                                     range: _,
                                     node_index: _,
@@ -7194,7 +7195,7 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                     debug_text,
                                     conversion,
                                     format_spec,
-                                } = expression;
+                                } = element;
                                 let ty = self.infer_expression(expression, TypeContext::default());
 
                                 if let Some(format_spec) = format_spec {
@@ -7206,10 +7207,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                                     }
                                 }
 
-                                // TODO: handle format specifiers by calling a method
-                                // (`Type::format`?) that handles the `__format__` method.
-                                // Conversion flags should be handled before calling `__format__`.
-                                // https://docs.python.org/3/library/string.html#format-string-syntax
+                                format::check_interpolation(&self.context, element, ty);
+
+                                // TODO: the *type* of a field with a conversion or
+                                // a format spec is still just `str`; the checked
+                                // `__format__` call could give back the literal
                                 if debug_text.is_some()
                                     || !conversion.is_none()
                                     || format_spec.is_some()

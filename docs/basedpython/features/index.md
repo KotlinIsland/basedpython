@@ -63,6 +63,8 @@ type-checking improvements with no new syntax — they work in `.by` and `.py` f
     `Never`, not `Unknown`
 - [regex group types](regex-groups.md) — type a match from the pattern it came from
 - [boolean conditions](conditions.md) — catch a test that conflates two members, or asks nothing
+- [string formatting](string-formatting.md) — check the format spec, and the value that has no
+    rendering of its own
 
 </div>
 

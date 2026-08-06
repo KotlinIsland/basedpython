@@ -168,6 +168,7 @@ pub struct AnalysisSettings {
     /// class means what it looks like it means, which drops the reports for the very common
     /// `if not x` over an optional instance.
     pub overlapping_condition_assume_truthy_instances: bool,
+
 }
 
 impl Default for AnalysisSettings {
