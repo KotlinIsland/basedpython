@@ -5,7 +5,7 @@ use ruff_python_ast::helpers::{
 };
 use ruff_python_ast::name::Name;
 use ruff_python_ast::{self as ast, ParameterBorrow, PythonVersion};
-use ruff_text_size::Ranged;
+use ruff_text_size::{Ranged, TextRange};
 
 use super::{DeferredExpressionState, TypeInferenceBuilder};
 use crate::types::ClassType;
@@ -22,7 +22,7 @@ use crate::types::infer::{InferenceFlags, TypeExpressionFlags};
 use crate::types::signatures::{ConcatenateTail, Signature};
 use crate::types::special_form::{AliasSpec, LegacyStdlibAlias};
 use crate::types::string_annotation::parse_string_annotation;
-use crate::types::tuple::{TupleSpecBuilder, TupleType};
+use crate::types::tuple::{TupleSpec, TupleSpecBuilder, TupleType};
 use crate::types::type_fn::{
     TypeFnArguments, TypeFnOutcome, arity_mismatch, declared_return_type, evaluate_type_fn,
     first_bound_violation,
@@ -910,15 +910,16 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                 }
 
                 // basedpython: parenthesized tuples are valid type
-                // expressions equivalent to `tuple[...]`. lower each
-                // element and return a heterogeneous tuple type
+                // expressions equivalent to `tuple[...]`, unpacked elements
+                // included — `(int, *A)` splices `A` in exactly as
+                // `tuple[int, *A]` does
                 if tuple.parenthesized && self.is_basedpython_file() {
-                    let elt_tys: Vec<Type<'db>> = tuple
-                        .elts
-                        .iter()
-                        .map(|e| self.infer_type_expression(e))
-                        .collect();
-                    return Type::heterogeneous_tuple(self.db(), elt_tys);
+                    let spec = self.infer_fixed_tuple_elements(
+                        tuple,
+                        tuple.range(),
+                        /* specialization = */ false,
+                    );
+                    return Type::tuple(TupleType::new(self.db(), &spec));
                 }
 
                 if tuple.parenthesized {
@@ -2036,13 +2037,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
             previously_in_unpack_type_argument,
         );
 
-        if starred_type.exact_tuple_instance_spec(self.db()).is_some()
-            || matches!(
-                starred_type,
-                Type::TypeVar(typevar) if typevar.is_typevartuple(self.db())
-            )
-        {
-            starred_type
+        if let Some(target) = unpack_target(self.db(), starred_type) {
+            target
         } else {
             self.store_type_expression_flags(
                 ast::ExprRef::from(starred),
@@ -2280,6 +2276,103 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
         }
     }
 
+    /// Infer the element types of a fixed-length tuple type, splicing each unpacked
+    /// element (`*T` or `Unpack[T]`) into the result rather than nesting it as a
+    /// single field.
+    ///
+    /// `specialization` says the elements came from a `tuple[...]` subscript, whose
+    /// `...` element has its own misuse message. A basedpython parenthesized tuple
+    /// type passes `false`: there `...` is rejected by the element's own inference,
+    /// and the `tuple`-specific wording would be wrong. `report_at` anchors the
+    /// diagnostics that apply to both forms.
+    fn infer_fixed_tuple_elements<'a>(
+        &mut self,
+        elements: impl IntoIterator<Item = &'a ast::Expr>,
+        report_at: TextRange,
+        specialization: bool,
+    ) -> TupleSpec<'db> {
+        let mut element_types = TupleSpecBuilder::with_capacity(0);
+        let mut first_unpacked_variadic_tuple = None;
+
+        for element in elements {
+            if specialization && element.is_ellipsis_literal_expr() {
+                if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, report_at) {
+                    let mut diagnostic = builder.into_diagnostic("Invalid `tuple` specialization");
+                    diagnostic.set_primary_message(
+                        "`...` can only be used as the second element \
+                                in a two-element `tuple` specialization",
+                    );
+                }
+                self.store_expression_type(element, Type::unknown());
+                element_types.push(Type::unknown());
+                continue;
+            }
+            let previously_in_valid_unpack_context = self
+                .context
+                .inference_flags
+                .replace(InferenceFlags::IN_VALID_UNPACK_CONTEXT, true);
+            let element_ty = self.infer_type_expression(element);
+            self.context.inference_flags.set(
+                InferenceFlags::IN_VALID_UNPACK_CONTEXT,
+                previously_in_valid_unpack_context,
+            );
+            // Determine if this element unpacks a tuple: either `*expr` or `Unpack[expr]`
+            let is_unpack = matches!(element, ast::Expr::Starred(_))
+                || matches!(
+                    element,
+                    ast::Expr::Subscript(ast::ExprSubscript { value, .. })
+                        if self.expression_type(value)
+                            == Type::SpecialForm(SpecialFormType::Unpack)
+                );
+
+            if is_unpack {
+                let mut report_too_many_unpacked_tuples = || {
+                    if let Some(first_unpacked_variadic_tuple) = first_unpacked_variadic_tuple {
+                        if let Some(builder) =
+                            self.context.report_lint(&INVALID_TYPE_FORM, report_at)
+                        {
+                            let mut diagnostic = builder.into_diagnostic(
+                                "Multiple unpacked variadic tuples \
+                                            are not allowed in a `tuple` specialization",
+                            );
+                            diagnostic.annotate(
+                                self.context
+                                    .secondary(first_unpacked_variadic_tuple)
+                                    .message("First unpacked variadic tuple"),
+                            );
+                            diagnostic.annotate(
+                                self.context
+                                    .secondary(element)
+                                    .message("Later unpacked variadic tuple"),
+                            );
+                        }
+                    } else {
+                        first_unpacked_variadic_tuple = Some(element);
+                    }
+                };
+
+                if let Some(inner_tuple) = element_ty.exact_tuple_instance_spec(self.db()) {
+                    element_types = element_types.concat(self.db(), &inner_tuple);
+
+                    if inner_tuple.is_variadic() {
+                        report_too_many_unpacked_tuples();
+                    }
+                } else if let Type::TypeVar(typevar) = element_ty
+                    && typevar.is_typevartuple(self.db())
+                {
+                    report_too_many_unpacked_tuples();
+                    element_types = element_types.concat_variadic_typevar(self.db(), typevar);
+                } else {
+                    // TODO: emit a diagnostic
+                }
+            } else {
+                element_types.push(element_ty);
+            }
+        }
+
+        element_types.build()
+    }
+
     /// Return the type represented by a `tuple[]` expression in a type annotation.
     ///
     /// This method assumes that a type has already been inferred and stored for the `value`
@@ -2316,91 +2409,13 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
                     return Some(result);
                 }
 
-                let mut element_types = TupleSpecBuilder::with_capacity(elements.len());
+                let element_types = self.infer_fixed_tuple_elements(
+                    elements,
+                    tuple.range(),
+                    /* specialization = */ true,
+                );
 
-                let mut first_unpacked_variadic_tuple = None;
-
-                for element in elements {
-                    if element.is_ellipsis_literal_expr() {
-                        if let Some(builder) = self.context.report_lint(&INVALID_TYPE_FORM, tuple) {
-                            let mut diagnostic =
-                                builder.into_diagnostic("Invalid `tuple` specialization");
-                            diagnostic.set_primary_message(
-                                "`...` can only be used as the second element \
-                                in a two-element `tuple` specialization",
-                            );
-                        }
-                        self.store_expression_type(element, Type::unknown());
-                        element_types.push(Type::unknown());
-                        continue;
-                    }
-                    let previously_in_valid_unpack_context = self
-                        .context
-                        .inference_flags
-                        .replace(InferenceFlags::IN_VALID_UNPACK_CONTEXT, true);
-                    let element_ty = self.infer_type_expression(element);
-                    self.context.inference_flags.set(
-                        InferenceFlags::IN_VALID_UNPACK_CONTEXT,
-                        previously_in_valid_unpack_context,
-                    );
-                    // Determine if this element unpacks a tuple: either `*expr` or `Unpack[expr]`
-                    let is_unpack = matches!(element, ast::Expr::Starred(_))
-                        || matches!(
-                            element,
-                            ast::Expr::Subscript(ast::ExprSubscript { value, .. })
-                                if self.expression_type(value)
-                                    == Type::SpecialForm(SpecialFormType::Unpack)
-                        );
-
-                    if is_unpack {
-                        let mut report_too_many_unpacked_tuples = || {
-                            if let Some(first_unpacked_variadic_tuple) =
-                                first_unpacked_variadic_tuple
-                            {
-                                if let Some(builder) =
-                                    self.context.report_lint(&INVALID_TYPE_FORM, tuple)
-                                {
-                                    let mut diagnostic = builder.into_diagnostic(
-                                        "Multiple unpacked variadic tuples \
-                                            are not allowed in a `tuple` specialization",
-                                    );
-                                    diagnostic.annotate(
-                                        self.context
-                                            .secondary(first_unpacked_variadic_tuple)
-                                            .message("First unpacked variadic tuple"),
-                                    );
-                                    diagnostic.annotate(
-                                        self.context
-                                            .secondary(element)
-                                            .message("Later unpacked variadic tuple"),
-                                    );
-                                }
-                            } else {
-                                first_unpacked_variadic_tuple = Some(element);
-                            }
-                        };
-
-                        if let Some(inner_tuple) = element_ty.exact_tuple_instance_spec(self.db()) {
-                            element_types = element_types.concat(self.db(), &inner_tuple);
-
-                            if inner_tuple.is_variadic() {
-                                report_too_many_unpacked_tuples();
-                            }
-                        } else if let Type::TypeVar(typevar) = element_ty
-                            && typevar.is_typevartuple(self.db())
-                        {
-                            report_too_many_unpacked_tuples();
-                            element_types =
-                                element_types.concat_variadic_typevar(self.db(), typevar);
-                        } else {
-                            // TODO: emit a diagnostic
-                        }
-                    } else {
-                        element_types.push(element_ty);
-                    }
-                }
-
-                let ty = TupleType::new(self.db(), &element_types.build());
+                let ty = TupleType::new(self.db(), &element_types);
 
                 // Here, we store the type for the inner `int, str` tuple-expression,
                 // while the type for the outer `tuple[int, str]` slice-expression is
@@ -3832,13 +3847,8 @@ impl<'db> TypeInferenceBuilder<'db, '_> {
 
                 // Preserve valid unpack targets so that `Unpack[...]` follows the same
                 // argument-binding path as an equivalent starred annotation.
-                if inner_ty.exact_tuple_instance_spec(self.db()).is_some()
-                    || matches!(
-                        inner_ty,
-                        Type::TypeVar(typevar) if typevar.is_typevartuple(self.db())
-                    )
-                {
-                    inner_ty
+                if let Some(target) = unpack_target(self.db(), inner_ty) {
+                    target
                 } else {
                     self.store_type_expression_flags(
                         ast::ExprRef::from(subscript),
@@ -4515,6 +4525,19 @@ pub(super) struct VarianceSliceElement<'ast> {
     /// expression inside the marker; for non-marker elements the element
     /// itself.
     inner: &'ast ast::Expr,
+}
+
+/// The type an unpack target (`*T` or `Unpack[T]`) splices in, or `None` if `ty`
+/// is not a valid target.
+///
+/// A type alias is resolved first, so `type A = tuple[int, str]` unpacks exactly
+/// as the tuple it names does. The resolved type is what gets returned, since it
+/// is the spliced elements the caller needs.
+fn unpack_target<'db>(db: &'db dyn crate::Db, ty: Type<'db>) -> Option<Type<'db>> {
+    let resolved = ty.resolve_type_alias(db);
+    let is_target = resolved.exact_tuple_instance_spec(db).is_some()
+        || matches!(resolved, Type::TypeVar(typevar) if typevar.is_typevartuple(db));
+    is_target.then_some(resolved)
 }
 
 /// basedpython: map the attribute name of `float.inf` / `float.nan` to its

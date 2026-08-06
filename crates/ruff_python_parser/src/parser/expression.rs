@@ -3748,6 +3748,29 @@ impl<'src> Parser<'src> {
                 let is_callable_parameter_list =
                     self.at(TokenKind::Rpar) && self.peek() == TokenKind::Rarrow;
                 if parsed_expr.expr.is_starred_expr() && !is_callable_parameter_list {
+                    // basedpython: `(*A)` in a type expression is the tuple type
+                    // `(*A,)` — the star already says the element splices in, so
+                    // the trailing comma python needs to make a tuple is pure
+                    // noise. desugar to the tuple that comma would have built, so
+                    // nothing downstream has to know the difference
+                    if self.options.is_basedpython && outer.is_in_type_expression() {
+                        self.expect(TokenKind::Rpar);
+                        return ParsedExpr {
+                            expr: Expr::Tuple(ast::ExprTuple {
+                                elts: vec![parsed_expr.expr],
+                                ctx: ExprContext::Load,
+                                range: self.node_range(start),
+                                node_index: AtomicNodeIndex::NONE,
+                                parenthesized: true,
+                                is_anon_named_tuple: false,
+                                is_anon_named_tuple_value: false,
+                                callable_shape: None,
+                                is_parameter_shape: false,
+                            }),
+                            is_parenthesized: true,
+                            parameter_borrow: first_borrow,
+                        };
+                    }
                     self.add_error(ParseErrorType::InvalidStarredExpressionUsage, &parsed_expr);
                 }
 

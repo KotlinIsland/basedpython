@@ -58,10 +58,14 @@ impl<'src> TupleLiteralType<'src> {
                 if t.elts.is_empty() {
                     return Some("tuple[()]".to_owned());
                 }
+                // `*: T` and a bare unpack `*A` share one AST shape, so which
+                // one a `Starred` element is comes from the enclosing tuple:
+                // only the parameter-shape parser produces `*: T`
+                let parameter_shape = t.has_parameter_shape();
                 let lowered: Vec<String> = t
                     .elts
                     .iter()
-                    .map(|e| self.lower_tuple_element(e))
+                    .map(|e| self.lower_tuple_element(e, parameter_shape))
                     .filter(|s| !s.is_empty())
                     .collect();
                 if lowered.is_empty() {
@@ -69,7 +73,8 @@ impl<'src> TupleLiteralType<'src> {
                 }
                 // pure variadic `(*: T)` → `tuple[T, ...]` directly
                 // rather than the wrapped `tuple[*tuple[T, ...]]` form
-                if lowered.len() == 1
+                if parameter_shape
+                    && lowered.len() == 1
                     && let Some(rest) = lowered[0].strip_prefix("*")
                 {
                     return Some(rest.to_owned());
@@ -197,7 +202,12 @@ impl<'src> TupleLiteralType<'src> {
     /// - `name: T`         → `T` (names dropped in tuple type)
     /// - `*: T` / `*name: T` → `*tuple[T, ...]`
     /// - `**: T` / `**name: T` → dropped (kwargs catch-all has no tuple equivalent)
-    fn lower_tuple_element(&self, elt: &Expr) -> String {
+    ///
+    /// `parameter_shape` says the enclosing tuple came from the parameter-shape
+    /// parser, which is the only thing that tells a `*: T` variadic apart from a
+    /// bare `*A` unpack — they parse to the same `Starred`. An unpack lowers to
+    /// itself, since python spells it the same way.
+    fn lower_tuple_element(&self, elt: &Expr, parameter_shape: bool) -> String {
         match elt {
             // `*name: T` or `**name: T` → Named wrapping a Starred target
             Expr::Named(named) => {
@@ -222,7 +232,11 @@ impl<'src> TupleLiteralType<'src> {
                 let value_src = self
                     .transform_annotation(&s.value)
                     .unwrap_or_else(|| self.src(s.value.range()).to_owned());
-                format!("*tuple[{value_src}, ...]")
+                if parameter_shape {
+                    format!("*tuple[{value_src}, ...]")
+                } else {
+                    format!("*{value_src}")
+                }
             }
             // a plain element type — also lower a nested `?` (`(int, str?)`),
             // which `transform_annotation` doesn't handle. element-scoped, so the
@@ -315,6 +329,23 @@ mod tests {
     #[test]
     fn single_element_tuple() {
         check("a: (int,)\n", "a: tuple[int]\n");
+    }
+
+    /// a bare `*A` splices `A` in — python spells that the same way, unlike the
+    /// `*: T` variadic it shares an AST shape with
+    #[test]
+    fn unpacked_element() {
+        check("a: (int, *A)\n", "a: tuple[int, *A]\n");
+    }
+
+    #[test]
+    fn lone_unpacked_element_without_a_comma() {
+        check("a: (*A)\n", "a: tuple[*A]\n");
+    }
+
+    #[test]
+    fn lone_unpacked_element_with_a_comma() {
+        check("a: (*A,)\n", "a: tuple[*A]\n");
     }
 
     #[test]

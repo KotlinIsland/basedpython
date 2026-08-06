@@ -187,6 +187,18 @@ mod tests {
         check("a: tuple[int]\n", "a: (int,)\n");
     }
 
+    /// an unpacked element keeps its star; the lone-element form needs no
+    /// trailing comma, since the star already makes it a tuple
+    #[test]
+    fn unpacked_element() {
+        check("a: tuple[*A]\n", "a: (*A)\n");
+    }
+
+    #[test]
+    fn unpacked_element_after_a_prefix() {
+        check("a: tuple[int, *A]\n", "a: (int, *A)\n");
+    }
+
     #[test]
     fn nested_tuple() {
         check(

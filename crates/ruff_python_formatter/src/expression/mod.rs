@@ -120,6 +120,11 @@ impl FormatRule<Expr, PyFormatContext<'_>> for FormatExpr {
             Expr::Statement(expr) => expr.format().fmt(f),
         });
         let parenthesize = match parentheses {
+            // A starred expression never owns its parentheses — `(*x)` is not valid
+            // python, so parens found around one always belong to an enclosing node
+            // (the tuple in `(*x,)`, the basedpython tuple type in `(*A)`).
+            // Preserving them here would emit `((*x),)`, which does not parse.
+            Parentheses::Preserve if expression.is_starred_expr() => false,
             Parentheses::Preserve => f.context().is_expression_parenthesized(expression.into()),
             Parentheses::Always => true,
             // Fluent style means we already have parentheses
