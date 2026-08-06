@@ -28,7 +28,10 @@ expression: initialization_result
       "triggerCharacters": [
         ".",
         "\"",
-        "'"
+        "'",
+        "{",
+        "%",
+        "|"
       ]
     },
     "hoverProvider": true,
@@ -82,13 +85,16 @@ expression: initialization_result
           "number",
           "decorator",
           "builtinConstant",
-          "typeParameter"
+          "typeParameter",
+          "comment",
+          "operator"
         ],
         "tokenModifiers": [
           "definition",
           "readonly",
           "async",
-          "documentation"
+          "documentation",
+          "defaultLibrary"
         ]
       },
       "range": true,

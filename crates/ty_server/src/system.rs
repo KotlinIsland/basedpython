@@ -138,7 +138,9 @@ impl LSPSystem {
                         source_type => source_type,
                     })
                 }
-                LanguageId::Other => None,
+                // a django template is served to the ide like any other document,
+                // but it is not python and must never be parsed as such
+                LanguageId::DjangoTemplate | LanguageId::Other => None,
             },
             Document::Notebook(_) => Some(PySourceType::Ipynb),
         }

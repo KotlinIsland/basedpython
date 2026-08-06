@@ -392,6 +392,14 @@ pub(super) fn compute_diagnostics(
     document: &DocumentHandle,
     encoding: PositionEncoding,
 ) -> Option<Diagnostics> {
+    // A django template is not python. Nothing here would report anything for
+    // one — the type checker never has it in its file set — but going through
+    // the motions would still parse an html file as python for the hints, so it
+    // is turned away up front.
+    if document.is_django_template() {
+        return None;
+    }
+
     let Some(file) = document.notebook_or_file(db) else {
         tracing::info!(
             "No file found for snapshot for `{}`",

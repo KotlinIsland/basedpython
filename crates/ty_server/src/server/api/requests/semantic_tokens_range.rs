@@ -56,6 +56,7 @@ impl BackgroundDocumentRequestHandler for SemanticTokensRangeRequestHandler {
             snapshot
                 .resolved_client_capabilities()
                 .supports_multiline_semantic_tokens(),
+            snapshot.is_django_template(),
         );
 
         Ok(Some(SemanticTokens {

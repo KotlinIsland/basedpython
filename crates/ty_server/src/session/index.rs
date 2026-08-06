@@ -126,7 +126,7 @@ impl Index {
                         opened_cell.uri,
                         opened_cell.text,
                         opened_cell.version,
-                        opened_cell.language_id,
+                        &opened_cell.language_id,
                     )
                     .with_notebook(notebook_path.clone())
                     .into(),

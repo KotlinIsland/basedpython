@@ -32,6 +32,7 @@ mod code_actions;
 mod commands;
 mod completions;
 mod configuration;
+mod django_templates;
 mod folding_range;
 mod hover;
 mod initialize;
@@ -797,10 +798,21 @@ impl TestServer {
         content: impl AsRef<str>,
         version: i32,
     ) {
+        self.open_text_document_as(path, content, version, LanguageKind::Python);
+    }
+
+    /// Send a `textDocument/didOpen` for a document in the given language.
+    pub(crate) fn open_text_document_as(
+        &mut self,
+        path: impl AsRef<SystemPath>,
+        content: impl AsRef<str>,
+        version: i32,
+        language_id: LanguageKind,
+    ) {
         let params = DidOpenTextDocumentParams {
             text_document: TextDocumentItem {
                 uri: self.file_uri(path),
-                language_id: LanguageKind::Python,
+                language_id,
                 version,
                 text: content.as_ref().to_string(),
             },

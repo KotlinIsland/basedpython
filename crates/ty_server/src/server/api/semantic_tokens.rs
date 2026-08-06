@@ -2,23 +2,33 @@ use lsp_types::SemanticToken;
 use ruff_db::source::{line_index, source_text};
 use ruff_source_file::OneIndexed;
 use ruff_text_size::{Ranged, TextRange};
-use ty_ide::{SemanticTokenModifier, SemanticTokenType, semantic_tokens};
+use ty_ide::{
+    SemanticTokenModifier, SemanticTokenType, django_template_semantic_tokens, semantic_tokens,
+};
 use ty_project::ProjectDatabase;
 
 use crate::document::{PositionEncoding, ToRangeExt};
 
 /// Common logic for generating semantic tokens, either for full document or a specific range.
 /// If no range is provided, the entire file is processed.
+///
+/// The two languages produce their tokens differently but encode them
+/// identically, because they share one legend.
 pub(crate) fn generate_semantic_tokens(
     db: &ProjectDatabase,
     file: ruff_db::files::File,
     range: Option<TextRange>,
     encoding: PositionEncoding,
     multiline_token_support: bool,
+    django_template: bool,
 ) -> Vec<SemanticToken> {
     let source = source_text(db, file);
     let line_index = line_index(db, file);
-    let semantic_token_data = semantic_tokens(db, file, range);
+    let semantic_token_data = if django_template {
+        django_template_semantic_tokens(db, file, range)
+    } else {
+        semantic_tokens(db, file, range)
+    };
 
     let mut encoder = Encoder {
         tokens: Vec::with_capacity(semantic_token_data.len()),

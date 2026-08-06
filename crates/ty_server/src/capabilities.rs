@@ -472,7 +472,21 @@ pub(crate) fn server_capabilities(
             .into(),
         ),
         completion_provider: Some(CompletionOptions {
-            trigger_characters: Some(vec!['.'.to_string(), '"'.to_string(), '\''.to_string()]),
+            // `%`, `|` and `{` are here for django templates: the interesting
+            // positions in a template are right after `{%`, `{{` and `|`, and
+            // none of them is a word character the client would trigger on by
+            // itself. LSP has no way to vary these per language, so python
+            // documents see them too — harmlessly, since a completion request
+            // there is answered from the cursor's position rather than from
+            // whichever character triggered it.
+            trigger_characters: Some(vec![
+                '.'.to_string(),
+                '"'.to_string(),
+                '\''.to_string(),
+                '{'.to_string(),
+                '%'.to_string(),
+                '|'.to_string(),
+            ]),
             ..Default::default()
         }),
         selection_range_provider: Some(true.into()),

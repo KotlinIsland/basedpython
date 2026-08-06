@@ -138,8 +138,13 @@ def get_author_email(book_id: int) -> str | None:
     return book.author?.email  # checks correctly
 ```
 
+## templates
+
+django template files get their own language support in the editor — completions, go-to-definition and semantic highlighting, all joined up with the models, views and urls described here. see [django templates](django-templates.md).
+
 ## see also
 
+- [django templates](django-templates.md) — editor support for template files
 - [django documentation](https://docs.djangoproject.com/)
 - [django-stubs](https://github.com/typeddjango/django-stubs)
 - framework compatibility matrix in the [frameworks overview](index.md#basedpython-features-and-framework-compatibility)

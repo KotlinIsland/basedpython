@@ -5,6 +5,7 @@ use lsp_types::{
 use ruff_source_file::LineIndex;
 
 use crate::PositionEncoding;
+use crate::document::DocumentKey;
 use crate::document::range::lsp_range_to_text_range;
 use crate::system::AnySystemPath;
 
@@ -36,15 +37,35 @@ pub struct TextDocument {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LanguageId {
     Python,
+    /// A django template. Not python, but the server still has language services
+    /// for it — see [`ty_ide::django_template_completions`].
+    DjangoTemplate,
     Other,
 }
 
-impl From<LanguageKind> for LanguageId {
-    fn from(language_id: LanguageKind) -> Self {
+impl LanguageId {
+    /// The language of a document the client has opened at `path`.
+    ///
+    /// Editors disagree about what to call a django template: the vs code django
+    /// extensions use `django-html`, vim uses `htmldjango`, and a great many
+    /// setups just call it `html`. That last case is why the path is consulted
+    /// at all — a `.html` file inside a `templates` directory is a django
+    /// template whatever the client chose to call it.
+    pub(crate) fn new(language_id: &LanguageKind, path: &AnySystemPath) -> Self {
         match language_id.as_str() {
             "python" | "by" => Self::Python,
-            _ => Self::Other,
+            "django-html" | "django-txt" | "htmldjango" | "jinja-html" | "django" => {
+                Self::DjangoTemplate
+            }
+            _ => match path.as_system() {
+                Some(path) if ty_ide::is_django_template_path(path) => Self::DjangoTemplate,
+                _ => Self::Other,
+            },
         }
+    }
+
+    pub(crate) const fn is_django_template(self) -> bool {
+        matches!(self, Self::DjangoTemplate)
     }
 }
 
@@ -53,13 +74,16 @@ impl TextDocument {
         uri: Uri,
         contents: String,
         version: DocumentVersion,
-        language_id: LanguageKind,
+        language_id: &LanguageKind,
     ) -> Self {
+        let language_id =
+            LanguageId::new(language_id, &DocumentKey::from_uri(&uri).into_file_path());
+
         Self {
             uri,
             contents,
             version,
-            language_id: LanguageId::from(language_id),
+            language_id,
             notebook: None,
         }
     }
@@ -183,7 +207,7 @@ def interface():
 "#
             .to_string(),
             0,
-            LanguageKind::Python,
+            &LanguageKind::Python,
         );
 
         // Add an `s`, remove it again (back to the original code), and then re-add the `s`

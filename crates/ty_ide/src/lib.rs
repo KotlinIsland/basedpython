@@ -6,6 +6,7 @@ mod all_symbols;
 mod call_hierarchy;
 mod code_action;
 mod completion;
+mod django_template;
 mod doc_highlights;
 mod docstring;
 mod document_symbols;
@@ -38,6 +39,10 @@ pub use code_action::{QuickFix, code_actions};
 pub use completion::{
     Completion, CompletionCapabilities, CompletionInsertTextFormat, CompletionKind,
     CompletionSettings, completion,
+};
+pub use django_template::{
+    TemplateCompletion, TemplateEdit, django_template_completions, django_template_goto_definition,
+    django_template_semantic_tokens, is_django_template_path,
 };
 pub use doc_highlights::document_highlights;
 pub use document_symbols::document_symbols;
@@ -240,8 +245,7 @@ impl NavigationTargets {
         self.0.iter()
     }
 
-    #[cfg(test)]
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
