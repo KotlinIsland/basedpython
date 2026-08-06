@@ -79,9 +79,9 @@ def split_quoted(s: str) -> list[str]:
     words.
     """
 
-def execute[*Ts](
-    func: Callable[[Unpack[Ts]], Unused],
-    args: (Unpack[Ts],),
+def execute[*Args](
+    func: (*Args) -> Unused,
+    args: (Unpack[Args],),
     msg: str | None = None,
     verbose: bool | 0 | 1 = 0,
     dry_run: bool | 0 | 1 = 0,

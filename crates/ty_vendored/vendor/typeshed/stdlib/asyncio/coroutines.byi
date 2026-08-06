@@ -27,9 +27,9 @@ if sys.version_info >= (3, 11):
     def iscoroutinefunction(func: (...) -> Coroutine[dynamic, dynamic, dynamic]) -> bool:
         """Return True if func is a decorated coroutine function."""
     @deprecated("Deprecated since Python 3.14. Use `inspect.iscoroutinefunction()` instead.")
-    def iscoroutinefunction[**P, Element](func: (**P) -> Awaitable[Element]) -> TypeGuard[(**P) -> Coroutine[dynamic, dynamic, Element]]
+    def iscoroutinefunction[Parameters: (*: *, **: *), Element](func: (**Parameters) -> Awaitable[Element]) -> TypeGuard[(**Parameters) -> Coroutine[dynamic, dynamic, Element]]
     @deprecated("Deprecated since Python 3.14. Use `inspect.iscoroutinefunction()` instead.")
-    def iscoroutinefunction[**P](func: (**P) -> object) -> TypeGuard[(**P) -> Coroutine[dynamic, dynamic, dynamic]]
+    def iscoroutinefunction[Parameters: (*: *, **: *)](func: (**Parameters) -> object) -> TypeGuard[(**Parameters) -> Coroutine[dynamic, dynamic, dynamic]]
     @deprecated("Deprecated since Python 3.14. Use `inspect.iscoroutinefunction()` instead.")
     def iscoroutinefunction(func: object) -> TypeGuard[(...) -> Coroutine[dynamic, dynamic, dynamic]]
 else:
@@ -37,6 +37,6 @@ else:
     # which was removed in 3.11 which the inspect version doesn't support.
     def iscoroutinefunction(func: (...) -> Coroutine[dynamic, dynamic, dynamic]) -> bool:
         """Return True if func is a decorated coroutine function."""
-    def iscoroutinefunction[**P, Element](func: (**P) -> Awaitable[Element]) -> TypeGuard[(**P) -> Coroutine[dynamic, dynamic, Element]]
-    def iscoroutinefunction[**P](func: (**P) -> object) -> TypeGuard[(**P) -> Coroutine[dynamic, dynamic, dynamic]]
+    def iscoroutinefunction[Parameters: (*: *, **: *), Element](func: (**Parameters) -> Awaitable[Element]) -> TypeGuard[(**Parameters) -> Coroutine[dynamic, dynamic, Element]]
+    def iscoroutinefunction[Parameters: (*: *, **: *)](func: (**Parameters) -> object) -> TypeGuard[(**Parameters) -> Coroutine[dynamic, dynamic, dynamic]]
     def iscoroutinefunction(func: object) -> TypeGuard[(...) -> Coroutine[dynamic, dynamic, dynamic]]

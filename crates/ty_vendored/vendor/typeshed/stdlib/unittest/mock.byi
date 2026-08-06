@@ -466,7 +466,7 @@ class _patch[in out Element]:
     def __call__[TT: type[dynamic]](self, func: TT) -> TT
     # If new==DEFAULT, this should add a MagicMock parameter to the function
     # arguments. See the _patch_default_new class below for this functionality.
-    def __call__[**P, R](self, func: (**P) -> R) -> (**P) -> R
+    def __call__[Parameters: (*: *, **: *), R](self, func: (**Parameters) -> R) -> (**Parameters) -> R
 
     def decoration_helper(
         self, patched: _patch[dynamic], args: Sequence[dynamic], keywargs: dynamic

@@ -92,11 +92,11 @@ final class _lru_cache_wrapper[Fn: (...) -> object]:
     """
 
     __wrapped__: Fn
-    def __call__[**P, R](self: _lru_cache_wrapper[(**P) -> R], *args: P.args, **kwargs: P.kwargs) -> R:
+    def __call__[Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(**Parameters) -> R], *args: Parameters.args, **kwargs: Parameters.kwargs) -> R:
         """Call self as a function."""
 
     def __get__(self, instance: None, owner: type | None = None) -> Self
-    def __get__[S, **P, R](self: _lru_cache_wrapper[(S, **P) -> R], instance: S, owner: type | None = None) -> _lru_cache_wrapper[(**P) -> R]
+    def __get__[S, Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(S, **Parameters) -> R], instance: S, owner: type | None = None) -> _lru_cache_wrapper[(**Parameters) -> R]
 
     def cache_info(self) -> _CacheInfo:
         """Report cache statistics"""
@@ -144,7 +144,7 @@ else:
 final WRAPPER_UPDATES: ("__dict__",)
 
 @type_check_only
-class _Wrapped[**PWrapped, in out RWrapped, **PWrapper, in out RWrapper]:
+class _Wrapped[PWrapped: (*: *, **: *), in out RWrapped, PWrapper: (*: *, **: *), in out RWrapper]:
     __wrapped__: (**PWrapped) -> RWrapped
     def __call__(self, *args: PWrapper.args, **kwargs: PWrapper.kwargs) -> RWrapper
     # as with ``Callable``, we'll assume that these attributes exist
@@ -152,11 +152,11 @@ class _Wrapped[**PWrapped, in out RWrapped, **PWrapper, in out RWrapper]:
     __qualname__: str
 
 @type_check_only
-class _Wrapper[**PWrapped, in out RWrapped]:
-    def __call__[**PWrapper, RWrapper](self, f: (**PWrapper) -> RWrapper) -> _Wrapped[PWrapped, RWrapped, PWrapper, RWrapper]
+class _Wrapper[PWrapped: (*: *, **: *), in out RWrapped]:
+    def __call__[PWrapper: (*: *, **: *), RWrapper](self, f: (**PWrapper) -> RWrapper) -> _Wrapped[PWrapped, RWrapped, PWrapper, RWrapper]
 
 if sys.version_info >= (3, 14):
-    def update_wrapper[**PWrapper, RWrapper, **PWrapped, RWrapped](
+    def update_wrapper[PWrapper: (*: *, **: *), RWrapper, PWrapped: (*: *, **: *), RWrapped](
         wrapper: (**PWrapper) -> RWrapper,
         wrapped: (**PWrapped) -> RWrapped,
         assigned: Iterable[str] = ("__module__", "__name__", "__qualname__", "__doc__", "__annotate__", "__type_params__"),
@@ -174,7 +174,7 @@ if sys.version_info >= (3, 14):
         function (defaults to functools.WRAPPER_UPDATES)
         """
 
-    def wraps[**PWrapped, RWrapped](
+    def wraps[PWrapped: (*: *, **: *), RWrapped](
         wrapped: (**PWrapped) -> RWrapped,
         assigned: Iterable[str] = ("__module__", "__name__", "__qualname__", "__doc__", "__annotate__", "__type_params__"),
         updated: Iterable[str] = ("__dict__",),
@@ -189,7 +189,7 @@ if sys.version_info >= (3, 14):
         """
 
 elif sys.version_info >= (3, 12):
-    def update_wrapper[**PWrapper, RWrapper, **PWrapped, RWrapped](
+    def update_wrapper[PWrapper: (*: *, **: *), RWrapper, PWrapped: (*: *, **: *), RWrapped](
         wrapper: (**PWrapper) -> RWrapper,
         wrapped: (**PWrapped) -> RWrapped,
         assigned: Iterable[str] = ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__", "__type_params__"),
@@ -207,7 +207,7 @@ elif sys.version_info >= (3, 12):
         function (defaults to functools.WRAPPER_UPDATES)
         """
 
-    def wraps[**PWrapped, RWrapped](
+    def wraps[PWrapped: (*: *, **: *), RWrapped](
         wrapped: (**PWrapped) -> RWrapped,
         assigned: Iterable[str] = ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__", "__type_params__"),
         updated: Iterable[str] = ("__dict__",),
@@ -222,7 +222,7 @@ elif sys.version_info >= (3, 12):
         """
 
 else:
-    def update_wrapper[**PWrapper, RWrapper, **PWrapped, RWrapped](
+    def update_wrapper[PWrapper: (*: *, **: *), RWrapper, PWrapped: (*: *, **: *), RWrapped](
         wrapper: (**PWrapper) -> RWrapper,
         wrapped: (**PWrapped) -> RWrapped,
         assigned: Iterable[str] = ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__"),
@@ -240,7 +240,7 @@ else:
         function (defaults to functools.WRAPPER_UPDATES)
         """
 
-    def wraps[**PWrapped, RWrapped](
+    def wraps[PWrapped: (*: *, **: *), RWrapped](
         wrapped: (**PWrapped) -> RWrapped,
         assigned: Iterable[str] = ("__module__", "__name__", "__qualname__", "__doc__", "__annotations__"),
         updated: Iterable[str] = ("__dict__",),

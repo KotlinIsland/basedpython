@@ -239,7 +239,7 @@ else:
             but it needn't be locked by the same thread that unlocks it.
             """
 
-def start_new_thread[*Ts](function: Callable[[Unpack[Ts]], object], args: (Unpack[Ts],), /) -> int:
+def start_new_thread[*Args](function: (*Args) -> object, args: (Unpack[Args],), /) -> int:
     """Start a new thread and return its identifier.
 
     The thread will call the function with positional arguments from the
@@ -252,7 +252,7 @@ def start_new_thread[*Ts](function: Callable[[Unpack[Ts]], object], args: (Unpac
 def start_new_thread(function: (...) -> object, args: (*: dynamic), kwargs: dict[str, dynamic], /) -> int
 
 @deprecated("Obsolete synonym. Use `start_new_thread()` instead.")
-def start_new[*Ts](function: Callable[[Unpack[Ts]], object], args: (Unpack[Ts],), /) -> int:  # undocumented
+def start_new[*Args](function: (*Args) -> object, args: (Unpack[Args],), /) -> int:  # undocumented
     """An obsolete synonym of start_new_thread()."""
 @deprecated("Obsolete synonym. Use `start_new_thread()` instead.")
 def start_new(function: (...) -> object, args: (*: dynamic), kwargs: dict[str, dynamic], /) -> int  # undocumented

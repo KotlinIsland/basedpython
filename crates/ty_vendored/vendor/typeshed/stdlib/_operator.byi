@@ -229,7 +229,7 @@ def ixor(a, b, /):
     """Same as a ^= b."""
 
 if sys.version_info >= (3, 11):
-    def call[**P, R](obj: (**P) -> R, /, *args: P.args, **kwargs: P.kwargs) -> R:
+    def call[Parameters: (*: *, **: *), R](obj: (**Parameters) -> R, /, *args: Parameters.args, **kwargs: Parameters.kwargs) -> R:
         """Same as obj(*args, **kwargs)."""
 
 def _compare_digest(a: AnyStr, b: AnyStr, /) -> bool:

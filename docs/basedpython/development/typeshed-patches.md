@@ -48,7 +48,13 @@ and the `_co`/`_contra` suffix) for everything else; within one class colliding
 names get a numeric suffix. a candidate is also rejected when the module already
 binds it — an import, a class/function definition, an assignment — so a type
 parameter never shadows a name the stub's own annotations refer to
-(`xml.etree.ElementPath` imports `Element`, so its `_T` becomes `T`)
+(`xml.etree.ElementPath` imports `Element`, so its `_T` becomes `T`). the
+curated table is keyed by kind as well as name, so `_P` is `Parameters` only
+when it really is a `ParamSpec`
+
+a `ParamSpec` becomes a type variable bound by the *top parameters* form —
+`_P = ParamSpec("_P")` gives `[Parameters: (*: *, **: *)]`, not `[**Parameters]`,
+which in basedpython declares a keyword-variadic pack instead
 
 it is deliberately conservative. a class is only rewritten when every type
 parameter resolves to a known module-level typevar — anything it can't fully

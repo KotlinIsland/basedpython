@@ -344,8 +344,8 @@ class Widget(tkinter.Widget):
         then it will be invoked with *args, **kw if the widget state
         matches statespec. statespec is expected to be a sequence.
         """
-    def instate[**P, Element](
-        self, statespec: Sequence[str], callback: (**P) -> Element, *args: P.args, **kw: P.kwargs
+    def instate[Parameters: (*: *, **: *), Element](
+        self, statespec: Sequence[str], callback: (**Parameters) -> Element, *args: Parameters.args, **kw: Parameters.kwargs
     ) -> False | Element
 
     def state(self, statespec: Sequence[str] | None = None) -> (*: str):

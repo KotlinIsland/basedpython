@@ -237,6 +237,24 @@ def f(fn: (Unpack[tuple[int, str]]) -> object): ...
 reveal_type(f)  # revealed: def f(fn: (*(int, str)) -> object) -> Unknown
 ```
 
+## an unpacked `TypeVarTuple` in a stub
+
+this is the form the vendored typeshed uses for `Callable[[Unpack[Ts]], R]`
+
+`stub.byi`:
+
+```byi
+def apply[*Args](fn: (*Args) -> object) -> None: ...
+```
+
+`main.by`:
+
+```by
+from stub import apply
+
+apply[int, str](lambda a, b: reveal_type((a, b)))  # revealed: (int, str)
+```
+
 ## a non-`TypeVarTuple` after `*` stays an anonymous variadic
 
 `(*: T)` annotates each individual argument, so it must not be read as an unpack even when `T` is a

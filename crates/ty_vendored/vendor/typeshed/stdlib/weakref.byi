@@ -235,7 +235,7 @@ class WeakKeyDictionary[in out Key, in out Value](MutableMapping[Key, Value]):
     def __ior__(self, other: SupportsKeysAndGetItem[Key, Value]) -> Self
     def __ior__(self, other: Iterable[(Key, Value)]) -> Self
 
-class finalize[**P, in out Element]:
+class finalize[Parameters: (*: *, **: *), in out Element]:
     """Class for finalization of weakrefable objects
 
     finalize(obj, func, *args, **kwargs) returns a callable finalizer
@@ -250,18 +250,18 @@ class finalize[**P, in out Element]:
     """
 
     __slots__ = ()
-    init(self, obj: Element, func: (**P) -> dynamic, /, *args: P.args, **kwargs: P.kwargs)
+    init(self, obj: Element, func: (**Parameters) -> dynamic, /, *args: Parameters.args, **kwargs: Parameters.kwargs)
     def __call__(self, _: dynamic = None) -> dynamic | None:
         """If alive then mark as dead and return func(*args, **kwargs);
         otherwise return None
         """
 
-    def detach(self) -> (Element, (**P) -> dynamic, (*: dynamic), dict[str, dynamic]) | None:
+    def detach(self) -> (Element, (**Parameters) -> dynamic, (*: dynamic), dict[str, dynamic]) | None:
         """If alive then mark as dead and return (obj, func, args, kwargs);
         otherwise return None
         """
 
-    def peek(self) -> (Element, (**P) -> dynamic, (*: dynamic), dict[str, dynamic]) | None:
+    def peek(self) -> (Element, (**Parameters) -> dynamic, (*: dynamic), dict[str, dynamic]) | None:
         """If alive then return (obj, func, args, kwargs);
         otherwise return None
         """

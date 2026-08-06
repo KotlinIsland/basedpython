@@ -106,7 +106,7 @@ class object:
     class def __subclasshook__(cls, subclass: type, /) -> bool
 
 @disjoint_base
-class staticmethod[**P, out R]:
+class staticmethod[Parameters: (*: *, **: *), out R]:
     """Convert a function to be a static method.
 
     A static method does not receive an implicit first argument.
@@ -127,16 +127,16 @@ class staticmethod[**P, out R]:
 
     __name__: str
     __qualname__: str
-    let __func__: (**P) -> R
+    let __func__: (**Parameters) -> R
     let __isabstractmethod__: bool
-    init(self, f: (**P) -> R, /)
+    init(self, f: (**Parameters) -> R, /)
 
-    def __get__(self, instance: None, owner: type, /) -> (**P) -> R:
+    def __get__(self, instance: None, owner: type, /) -> (**Parameters) -> R:
         """Return an attribute of instance, which is of type owner."""
-    def __get__[Element](self, instance: Element, owner: type[Element] | None = None, /) -> (**P) -> R
+    def __get__[Element](self, instance: Element, owner: type[Element] | None = None, /) -> (**Parameters) -> R
 
-    let __wrapped__: (**P) -> R
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R:
+    let __wrapped__: (**Parameters) -> R
+    def __call__(self, *args: Parameters.args, **kwargs: Parameters.kwargs) -> R:
         """Call self as a function."""
 
     if sys.version_info >= (3, 14):
@@ -144,7 +144,7 @@ class staticmethod[**P, out R]:
         __annotate__: AnnotateFunc | None
 
 @disjoint_base
-class classmethod[in out Element, **P, out R]:
+class classmethod[in out Element, Parameters: (*: *, **: *), out R]:
     """Convert a function to be a class method.
 
     A class method receives the class as implicit first argument,
@@ -167,15 +167,15 @@ class classmethod[in out Element, **P, out R]:
 
     __name__: str
     __qualname__: str
-    let __func__: (type[Element], **P) -> R
+    let __func__: (type[Element], **Parameters) -> R
     let __isabstractmethod__: bool
-    init(self, f: (type[Element], **P) -> R, /)
+    init(self, f: (type[Element], **Parameters) -> R, /)
 
-    def __get__(self, instance: Element, owner: type[Element] | None = None, /) -> (**P) -> R:
+    def __get__(self, instance: Element, owner: type[Element] | None = None, /) -> (**Parameters) -> R:
         """Return an attribute of instance, which is of type owner."""
-    def __get__(self, instance: None, owner: type[Element], /) -> (**P) -> R
+    def __get__(self, instance: None, owner: type[Element], /) -> (**Parameters) -> R
 
-    let __wrapped__: (type[Element], **P) -> R
+    let __wrapped__: (type[Element], **Parameters) -> R
     if sys.version_info >= (3, 14):
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias
         __annotate__: AnnotateFunc | None

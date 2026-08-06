@@ -208,7 +208,7 @@ final class itemgetter[out Element]:
     """
 
     def __new__[T](cls, item: T, /) -> itemgetter[T]
-    def __new__[T1, T2, *Ts](cls, item1: T1, item2: T2, /, *items: *Ts) -> itemgetter[(T1, T2, Unpack[Ts])]
+    def __new__[T1, T2, *Args](cls, item1: T1, item2: T2, /, *items: *Args) -> itemgetter[(T1, T2, Unpack[Args])]
 
     # __key: _KT_contra in SupportsGetItem seems to be causing variance issues, ie:
     # TypeVar "_KT_contra@SupportsGetItem" is contravariant

@@ -169,11 +169,11 @@ else:
         """Safely send back the given result or exception"""
 
 if sys.version_info >= (3, 11):
-    def _process_worker[*Ts](
+    def _process_worker[*Args](
         call_queue: Queue[_CallItem],
         result_queue: SimpleQueue[_ResultItem],
-        initializer: Callable[[Unpack[Ts]], object] | None,
-        initargs: (Unpack[Ts],),
+        initializer: ((*Args) -> object) | None,
+        initargs: (Unpack[Args],),
         max_tasks: int | None = None,
     ) -> None:
         """Evaluates calls from call_queue and places the results in result_queue.
@@ -190,11 +190,11 @@ if sys.version_info >= (3, 11):
         """
 
 else:
-    def _process_worker[*Ts](
+    def _process_worker[*Args](
         call_queue: Queue[_CallItem],
         result_queue: SimpleQueue[_ResultItem],
-        initializer: Callable[[Unpack[Ts]], object] | None,
-        initargs: (Unpack[Ts],),
+        initializer: ((*Args) -> object) | None,
+        initargs: (Unpack[Args],),
     ) -> None:
         """Evaluates calls from call_queue and places the results in result_queue.
 
@@ -304,21 +304,21 @@ class ProcessPoolExecutor(Executor):
                     a non-'fork' mp_context start method.  When given, we
                     default to using 'spawn' if no mp_context is supplied.
             """
-        def __init__[*Ts](
+        def __init__[*Args](
             self,
             max_workers: int | None = None,
             mp_context: BaseContext | None = None,
             *,
-            initializer: Callable[[Unpack[Ts]], object],
-            initargs: (Unpack[Ts],),
+            initializer: (*Args) -> object,
+            initargs: (Unpack[Args],),
             max_tasks_per_child: int | None = None,
         ) -> None
-        def __init__[*Ts](
+        def __init__[*Args](
             self,
             max_workers: int | None,
             mp_context: BaseContext | None,
-            initializer: Callable[[Unpack[Ts]], object],
-            initargs: (Unpack[Ts],),
+            initializer: (*Args) -> object,
+            initargs: (Unpack[Args],),
             *,
             max_tasks_per_child: int | None = None,
         ) -> None
@@ -341,20 +341,20 @@ class ProcessPoolExecutor(Executor):
                 initializer: A callable used to initialize worker processes.
                 initargs: A tuple of arguments to pass to the initializer.
             """
-        def __init__[*Ts](
+        def __init__[*Args](
             self,
             max_workers: int | None = None,
             mp_context: BaseContext | None = None,
             *,
-            initializer: Callable[[Unpack[Ts]], object],
-            initargs: (Unpack[Ts],),
+            initializer: (*Args) -> object,
+            initargs: (Unpack[Args],),
         ) -> None
-        def __init__[*Ts](
+        def __init__[*Args](
             self,
             max_workers: int | None,
             mp_context: BaseContext | None,
-            initializer: Callable[[Unpack[Ts]], object],
-            initargs: (Unpack[Ts],),
+            initializer: (*Args) -> object,
+            initargs: (Unpack[Args],),
         ) -> None
 
     def _start_executor_manager_thread(self) -> None

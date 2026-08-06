@@ -67,7 +67,7 @@ def abstractmethod[FuncT: (...) -> dynamic](funcobj: FuncT) -> FuncT:
     """
 
 @deprecated("Deprecated since Python 3.3. Use `@classmethod` stacked on top of `@abstractmethod` instead.")
-class abstractclassmethod[in out Element, **P, out R](classmethod[Element, P, R]):
+class abstractclassmethod[in out Element, Parameters: (*: *, **: *), out R](classmethod[Element, Parameters, R]):
     """A decorator indicating abstract classmethods.
 
     Deprecated, use 'classmethod' with 'abstractmethod' instead:
@@ -81,10 +81,10 @@ class abstractclassmethod[in out Element, **P, out R](classmethod[Element, P, R]
     """
 
     __isabstractmethod__: True
-    init(self, callable: (type[Element], **P) -> R)
+    init(self, callable: (type[Element], **Parameters) -> R)
 
 @deprecated("Deprecated since Python 3.3. Use `@staticmethod` stacked on top of `@abstractmethod` instead.")
-class abstractstaticmethod[**P, out R](staticmethod[P, R]):
+class abstractstaticmethod[Parameters: (*: *, **: *), out R](staticmethod[Parameters, R]):
     """A decorator indicating abstract staticmethods.
 
     Deprecated, use 'staticmethod' with 'abstractmethod' instead:
@@ -98,7 +98,7 @@ class abstractstaticmethod[**P, out R](staticmethod[P, R]):
     """
 
     __isabstractmethod__: True
-    init(self, callable: (**P) -> R)
+    init(self, callable: (**Parameters) -> R)
 
 @deprecated("Deprecated since Python 3.3. Use `@property` stacked on top of `@abstractmethod` instead.")
 class abstractproperty(property):

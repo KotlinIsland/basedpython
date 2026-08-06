@@ -1145,7 +1145,7 @@ def no_type_check[F: (...) -> dynamic](arg: F) -> F:
 
 if sys.version_info < (3, 15):
     @deprecated("Deprecated since Python 3.13; removed in Python 3.15.")
-    def no_type_check_decorator[**P, Element](decorator: (**P) -> Element) -> (**P) -> Element:
+    def no_type_check_decorator[Parameters: (*: *, **: *), Element](decorator: (**Parameters) -> Element) -> (**Parameters) -> Element:
         """Decorator to give another decorator the @no_type_check effect.
 
         This wraps the decorator with something that wraps the decorated

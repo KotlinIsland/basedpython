@@ -73,8 +73,8 @@ if sys.version_info < (3, 14):
                 waitpid(-1), there should be only one active object per process.
             """
 
-            abstract def add_child_handler[*Ts](
-                self, pid: int, callback: Callable[[int, int, Unpack[Ts]], object], *args: *Ts
+            abstract def add_child_handler[*Args](
+                self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
             ) -> None:
                 """Register a new child handler.
 
@@ -150,8 +150,8 @@ if sys.version_info < (3, 14):
                 waitpid(-1), there should be only one active object per process.
             """
 
-            abstract def add_child_handler[*Ts](
-                self, pid: int, callback: Callable[[int, int, Unpack[Ts]], object], *args: *Ts
+            abstract def add_child_handler[*Args](
+                self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
             ) -> None:
                 """Register a new child handler.
 
@@ -230,8 +230,8 @@ if sys.platform != "win32":
                 def __exit__(
                     self, a: type[BaseException] | None, b: BaseException | None, c: types.TracebackType | None
                 ) -> None
-                def add_child_handler[*Ts](
-                    self, pid: int, callback: Callable[[int, int, Unpack[Ts]], object], *args: *Ts
+                def add_child_handler[*Args](
+                    self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 ) -> None
                 def remove_child_handler(self, pid: int) -> bool
 
@@ -251,8 +251,8 @@ if sys.platform != "win32":
                 def __exit__(
                     self, a: type[BaseException] | None, b: BaseException | None, c: types.TracebackType | None
                 ) -> None
-                def add_child_handler[*Ts](
-                    self, pid: int, callback: Callable[[int, int, Unpack[Ts]], object], *args: *Ts
+                def add_child_handler[*Args](
+                    self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 ) -> None
                 def remove_child_handler(self, pid: int) -> bool
 
@@ -279,8 +279,8 @@ if sys.platform != "win32":
                 override def __exit__(
                     self, a: type[BaseException] | None, b: BaseException | None, c: types.TracebackType | None
                 ) -> None
-                override def add_child_handler[*Ts](
-                    self, pid: int, callback: Callable[[int, int, Unpack[Ts]], object], *args: *Ts
+                override def add_child_handler[*Args](
+                    self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 ) -> None
                 override def remove_child_handler(self, pid: int) -> bool
 
@@ -299,8 +299,8 @@ if sys.platform != "win32":
                 override def __exit__(
                     self, a: type[BaseException] | None, b: BaseException | None, c: types.TracebackType | None
                 ) -> None
-                override def add_child_handler[*Ts](
-                    self, pid: int, callback: Callable[[int, int, Unpack[Ts]], object], *args: *Ts
+                override def add_child_handler[*Args](
+                    self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 ) -> None
                 override def remove_child_handler(self, pid: int) -> bool
 
@@ -387,8 +387,8 @@ if sys.platform != "win32":
                 def __exit__(
                     self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: types.TracebackType | None
                 ) -> None
-                def add_child_handler[*Ts](
-                    self, pid: int, callback: Callable[[int, int, Unpack[Ts]], object], *args: *Ts
+                def add_child_handler[*Args](
+                    self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 ) -> None
                 def remove_child_handler(self, pid: int) -> bool
                 def attach_loop(self, loop: events.AbstractEventLoop | None) -> None
@@ -414,8 +414,8 @@ if sys.platform != "win32":
                     self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: types.TracebackType | None
                 ) -> None
                 def __del__(self) -> None
-                def add_child_handler[*Ts](
-                    self, pid: int, callback: Callable[[int, int, Unpack[Ts]], object], *args: *Ts
+                def add_child_handler[*Args](
+                    self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 ) -> None
                 def remove_child_handler(self, pid: int) -> bool
                 def attach_loop(self, loop: events.AbstractEventLoop | None) -> None
@@ -440,8 +440,8 @@ if sys.platform != "win32":
                 def is_active(self) -> bool
                 def close(self) -> None
                 def attach_loop(self, loop: events.AbstractEventLoop | None) -> None
-                def add_child_handler[*Ts](
-                    self, pid: int, callback: Callable[[int, int, Unpack[Ts]], object], *args: *Ts
+                def add_child_handler[*Args](
+                    self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 ) -> None
                 def remove_child_handler(self, pid: int) -> bool
 
@@ -464,8 +464,8 @@ if sys.platform != "win32":
                 override def __exit__(
                     self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: types.TracebackType | None
                 ) -> None
-                override def add_child_handler[*Ts](
-                    self, pid: int, callback: Callable[[int, int, Unpack[Ts]], object], *args: *Ts
+                override def add_child_handler[*Args](
+                    self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 ) -> None
                 override def remove_child_handler(self, pid: int) -> bool
                 override def attach_loop(self, loop: events.AbstractEventLoop | None) -> None
@@ -490,8 +490,8 @@ if sys.platform != "win32":
                     self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: types.TracebackType | None
                 ) -> None
                 def __del__(self) -> None
-                override def add_child_handler[*Ts](
-                    self, pid: int, callback: Callable[[int, int, Unpack[Ts]], object], *args: *Ts
+                override def add_child_handler[*Args](
+                    self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 ) -> None
                 override def remove_child_handler(self, pid: int) -> bool
                 override def attach_loop(self, loop: events.AbstractEventLoop | None) -> None
@@ -515,7 +515,7 @@ if sys.platform != "win32":
                 override def is_active(self) -> bool
                 override def close(self) -> None
                 override def attach_loop(self, loop: events.AbstractEventLoop | None) -> None
-                override def add_child_handler[*Ts](
-                    self, pid: int, callback: Callable[[int, int, Unpack[Ts]], object], *args: *Ts
+                override def add_child_handler[*Args](
+                    self, pid: int, callback: (int, int, *Args) -> object, *args: *Args
                 ) -> None
                 override def remove_child_handler(self, pid: int) -> bool

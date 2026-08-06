@@ -7,7 +7,7 @@
 //! self-binding:
 //!
 //! - `__call__` becomes a generic method whose `self` decomposes `Fn` into a
-//!   `**P` / `R` and forwards the arguments, so calls are checked against the
+//!   `**Parameters` / `R` and forwards the arguments, so calls are checked against the
 //!   real signature
 //! - a `__get__` overload strips the leading `self` when the wrapper decorates a
 //!   method, so `a.m(...)` is checked too
@@ -31,7 +31,8 @@ pub struct FunctoolsCache;
 /// tree) is skipped rather than erroring
 /// our own `__get__` overload marker (distinct from functools' other `__get__`s),
 /// used to skip re-inserting on an already-converted tree
-const GET_MARKER: &str = "def __get__[S, **P, R](self: _lru_cache_wrapper[(S, **P) -> R]";
+const GET_MARKER: &str =
+    "def __get__[S, Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(S, **Parameters) -> R]";
 
 /// the member the `__get__` overloads are inserted before (unique to `_lru_cache_wrapper`)
 const GET_ANCHOR: &str = "    def cache_info(self) -> _CacheInfo:";
@@ -46,7 +47,7 @@ const REPLACEMENTS: &[(&str, &str)] = &[
     // decompose `Fn` back into params + return via a generic `self`
     (
         "def __call__(self, *args: Hashable, **kwargs: Hashable) -> Element:",
-        "def __call__[**P, R](self: _lru_cache_wrapper[(**P) -> R], *args: P.args, **kwargs: P.kwargs) -> R:",
+        "def __call__[Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(**Parameters) -> R], *args: Parameters.args, **kwargs: Parameters.kwargs) -> R:",
     ),
     (
         "    def __copy__(self) -> _lru_cache_wrapper[Element]",
@@ -108,7 +109,7 @@ impl Patch for FunctoolsCache {
                     start,
                     end: start,
                     replacement: "    def __get__(self, instance: None, owner: type | None = None) -> Self\n    \
-def __get__[S, **P, R](self: _lru_cache_wrapper[(S, **P) -> R], instance: S, owner: type | None = None) -> _lru_cache_wrapper[(**P) -> R]\n\n"
+def __get__[S, Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(S, **Parameters) -> R], instance: S, owner: type | None = None) -> _lru_cache_wrapper[(**Parameters) -> R]\n\n"
                         .to_string(),
                 });
             }
@@ -158,11 +159,11 @@ def cache[Element](user_function: (...) -> Element, /) -> _lru_cache_wrapper[Ele
         let expected = "\
 final class _lru_cache_wrapper[Fn: (...) -> object]:
     __wrapped__: Fn
-    def __call__[**P, R](self: _lru_cache_wrapper[(**P) -> R], *args: P.args, **kwargs: P.kwargs) -> R:
+    def __call__[Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(**Parameters) -> R], *args: Parameters.args, **kwargs: Parameters.kwargs) -> R:
         \"\"\"Call self as a function.\"\"\"
 
     def __get__(self, instance: None, owner: type | None = None) -> Self
-    def __get__[S, **P, R](self: _lru_cache_wrapper[(S, **P) -> R], instance: S, owner: type | None = None) -> _lru_cache_wrapper[(**P) -> R]
+    def __get__[S, Parameters: (*: *, **: *), R](self: _lru_cache_wrapper[(S, **Parameters) -> R], instance: S, owner: type | None = None) -> _lru_cache_wrapper[(**Parameters) -> R]
 
     def cache_info(self) -> _CacheInfo:
         \"\"\"Report cache statistics\"\"\"

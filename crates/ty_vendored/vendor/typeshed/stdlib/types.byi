@@ -824,7 +824,7 @@ class DynamicClassAttribute(property):
 
 
 # it's not really an Awaitable, but can be used in an await expression. Real type: Generator & Awaitable
-def coroutine[**P, R](func: (**P) -> Generator[dynamic, dynamic, R]) -> (**P) -> Awaitable[R]:
+def coroutine[Parameters: (*: *, **: *), R](func: (**Parameters) -> Generator[dynamic, dynamic, R]) -> (**Parameters) -> Awaitable[R]:
     """Convert regular generator function to a coroutine."""
 def coroutine[Fn: (...) -> object](func: Fn) -> Fn
 

@@ -190,14 +190,14 @@ class AbstractEventLoop:
 
     # Methods scheduling callbacks.  All these return Handles.
     # "context" added in 3.9.10/3.10.2 for call_*
-    abstract def call_soon[*Ts](
-        self, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None
+    abstract def call_soon[*Args](
+        self, callback: (*Args) -> object, *args: *Args, context: Context | None = None
     ) -> Handle
-    abstract def call_later[*Ts](
-        self, delay: float, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None
+    abstract def call_later[*Args](
+        self, delay: float, callback: (*Args) -> object, *args: *Args, context: Context | None = None
     ) -> TimerHandle
-    abstract def call_at[*Ts](
-        self, when: float, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None
+    abstract def call_at[*Args](
+        self, when: float, callback: (*Args) -> object, *args: *Args, context: Context | None = None
     ) -> TimerHandle
     abstract def time(self) -> float
     # Future methods
@@ -223,10 +223,10 @@ class AbstractEventLoop:
     abstract def get_task_factory(self) -> _TaskFactory | None
     # Methods for interacting with threads
     # "context" added in 3.9.10/3.10.2
-    abstract def call_soon_threadsafe[*Ts](
-        self, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None
+    abstract def call_soon_threadsafe[*Args](
+        self, callback: (*Args) -> object, *args: *Args, context: Context | None = None
     ) -> Handle
-    abstract def run_in_executor[*Ts, Element](self, executor: Executor | None, func: Callable[[Unpack[Ts]], Element], *args: *Ts) -> Future[Element]
+    abstract def run_in_executor[*Args, Element](self, executor: Executor | None, func: (*Args) -> Element, *args: *Args) -> Future[Element]
     abstract def set_default_executor(self, executor: Executor) -> None
     # Network I/O methods returning Futures.
     abstract async def getaddrinfo(
@@ -846,9 +846,9 @@ class AbstractEventLoop:
         errors: None = None,
         **kwargs: dynamic,
     ) -> (SubprocessTransport, ProtocolT)
-    abstract def add_reader[*Ts](self, fd: FileDescriptorLike, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
+    abstract def add_reader[*Args](self, fd: FileDescriptorLike, callback: (*Args) -> dynamic, *args: *Args) -> None
     abstract def remove_reader(self, fd: FileDescriptorLike) -> bool
-    abstract def add_writer[*Ts](self, fd: FileDescriptorLike, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
+    abstract def add_writer[*Args](self, fd: FileDescriptorLike, callback: (*Args) -> dynamic, *args: *Args) -> None
     abstract def remove_writer(self, fd: FileDescriptorLike) -> bool
     abstract async def sock_recv(self, sock: socket, nbytes: int) -> bytes
     abstract async def sock_recv_into(self, sock: socket, buf: WriteableBuffer) -> int
@@ -860,7 +860,7 @@ class AbstractEventLoop:
         abstract async def sock_recvfrom_into(self, sock: socket, buf: WriteableBuffer, nbytes: int = 0) -> (int, _RetAddress)
         abstract async def sock_sendto(self, sock: socket, data: ReadableBuffer, address: _Address) -> int
     # Signal handling.
-    abstract def add_signal_handler[*Ts](self, sig: int, callback: Callable[[Unpack[Ts]], object], *args: *Ts) -> None
+    abstract def add_signal_handler[*Args](self, sig: int, callback: (*Args) -> object, *args: *Args) -> None
     abstract def remove_signal_handler(self, sig: int) -> bool
     # Error handlers.
     abstract def set_exception_handler(self, handler: ExceptionHandler | None) -> None

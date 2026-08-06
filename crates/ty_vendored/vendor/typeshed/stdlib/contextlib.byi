@@ -98,7 +98,7 @@ class _GeneratorContextManager[out Element, in Sent = None, out Return = None](_
         self, typ: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
     ) -> bool | None
 
-def contextmanager[**P, Element](func: (**P) -> Generator[Element, None, object]) -> (**P) -> _GeneratorContextManager[Element]:
+def contextmanager[Parameters: (*: *, **: *), Element](func: (**Parameters) -> Generator[Element, None, object]) -> (**Parameters) -> _GeneratorContextManager[Element]:
     """@contextmanager decorator.
 
     Typical usage:
@@ -128,7 +128,7 @@ def contextmanager[**P, Element](func: (**P) -> Generator[Element, None, object]
 @deprecated(
     "Annotating the return type as `-> Iterator[Foo]` with `@contextmanager` is deprecated. Use `-> Generator[Foo]` instead."
 )
-def contextmanager[**P, Element](func: (**P) -> Iterator[Element]) -> (**P) -> _GeneratorContextManager[Element]
+def contextmanager[Parameters: (*: *, **: *), Element](func: (**Parameters) -> Iterator[Element]) -> (**Parameters) -> _GeneratorContextManager[Element]
 
 
 class AsyncContextDecorator:
@@ -147,7 +147,7 @@ class _AsyncGeneratorContextManager[out Element, in Sent = None](_GeneratorConte
         self, typ: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
     ) -> bool | None
 
-def asynccontextmanager[**P, Element](func: (**P) -> AsyncGenerator[Element]) -> (**P) -> _AsyncGeneratorContextManager[Element]:
+def asynccontextmanager[Parameters: (*: *, **: *), Element](func: (**Parameters) -> AsyncGenerator[Element]) -> (**Parameters) -> _AsyncGeneratorContextManager[Element]:
     """@asynccontextmanager decorator.
 
     Typical usage:
@@ -178,7 +178,7 @@ def asynccontextmanager[**P, Element](func: (**P) -> AsyncGenerator[Element]) ->
     "Annotating the return type as `-> AsyncIterator[Foo]` with `@asynccontextmanager` is deprecated. "
     "Use `-> AsyncGenerator[Foo]` instead."
 )
-def asynccontextmanager[**P, Element](func: (**P) -> AsyncIterator[Element]) -> (**P) -> _AsyncGeneratorContextManager[Element]
+def asynccontextmanager[Parameters: (*: *, **: *), Element](func: (**Parameters) -> AsyncIterator[Element]) -> (**Parameters) -> _AsyncGeneratorContextManager[Element]
 
 @type_check_only
 private protocol SupportsClose:
@@ -302,7 +302,7 @@ class _BaseExitStack[out ExitT: bool | None = bool | None]:
         to the method instead of the object itself).
         """
 
-    def callback[**P, Element](self, callback: (**P) -> Element, /, *args: P.args, **kwds: P.kwargs) -> (**P) -> Element:
+    def callback[Parameters: (*: *, **: *), Element](self, callback: (**Parameters) -> Element, /, *args: Parameters.args, **kwds: Parameters.kwargs) -> (**Parameters) -> Element:
         """Registers an arbitrary callback and arguments.
 
         Cannot suppress exceptions.
@@ -371,9 +371,9 @@ class AsyncExitStack[out ExitT: bool | None = bool | None](_BaseExitStackAbstrac
         to the method instead of the object itself).
         """
 
-    def push_async_callback[**P, Element](
-        self, callback: (**P) -> Awaitable[Element], /, *args: P.args, **kwds: P.kwargs
-    ) -> (**P) -> Awaitable[Element]:
+    def push_async_callback[Parameters: (*: *, **: *), Element](
+        self, callback: (**Parameters) -> Awaitable[Element], /, *args: Parameters.args, **kwds: Parameters.kwargs
+    ) -> (**Parameters) -> Awaitable[Element]:
         """Registers an arbitrary coroutine function and arguments.
 
         Cannot suppress exceptions.

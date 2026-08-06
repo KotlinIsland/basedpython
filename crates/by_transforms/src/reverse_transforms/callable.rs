@@ -15,10 +15,11 @@ use crate::type_info::TypeInfo;
 pub(crate) struct CallableReverse<'src> {
     source: &'src str,
     types: &'src dyn TypeInfo,
-    /// in stub mode, the `Callable[[A, B], R]` list form is left intact —
-    /// ty's basedpython parser can't carry `Unpack[Ts]`/`*Ts` through the
-    /// arrow form, so stubs would lose generic callable info. the gradual
-    /// `Callable[..., R]` form has no parameter list to lose and is always
+    /// in stub mode the `Callable[[A, B], R]` list form is left intact for
+    /// `by_typeshed_patch`'s `arrow-callable`, which converts the same shapes
+    /// but also parenthesises by precedence and handles `ParamSpec`,
+    /// `Concatenate` and variadic parameter lists. the gradual
+    /// `Callable[..., R]` form has no parameter list to get wrong and is always
     /// rewritten to `(...) -> R`
     stub: bool,
     pub(crate) edits: Vec<Fix>,

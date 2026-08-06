@@ -1540,6 +1540,11 @@ pub fn is_top_star_marker(expr: &Expr) -> bool {
     name.id.is_empty() && matches!(name.ctx, ExprContext::Invalid)
 }
 
+/// basedpython: the source spelling of the *top parameters* form, for code that emits it.
+///
+/// See [`is_top_parameters_form`] for what it means.
+pub const TOP_PARAMETERS_FORM: &str = "(*: *, **: *)";
+
 /// basedpython: returns `true` if `expr` is the *top parameters* form `(*: *, **: *)` — an
 /// anonymous variadic and an anonymous keyword-variadic, both admitting anything.
 ///
