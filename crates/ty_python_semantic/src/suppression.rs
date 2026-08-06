@@ -16,7 +16,7 @@ use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 use rustc_hash::FxHasher;
 
 use crate::diagnostic::DiagnosticGuard;
-use crate::lint::{GetLintError, Level, LintMetadata, LintRegistry, LintStatus};
+use crate::lint::{GetLintError, Level, LintMetadata, LintRegistry, LintStatus, TyCompat};
 pub use crate::suppression::add_ignore::suppress_single;
 pub(crate) use crate::suppression::add_ignore::{SuppressFix, suppress_all};
 use crate::suppression::parser::{
@@ -67,7 +67,8 @@ declare_lint! {
     pub(crate) static BLANKET_IGNORE_COMMENT = {
         summary: "detects blanket `ty: ignore` comments",
         status: LintStatus::stable("0.0.57"),
-        default_level: Level::Ignore,
+        default_level: Level::Warn,
+        ty_compat: TyCompat::Level(Level::Ignore),
     }
 }
 

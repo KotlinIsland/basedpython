@@ -13,6 +13,7 @@ pub(crate) use diagnostic::add_inferred_python_version_hint_to_diagnostic;
 pub use diagnostic::inferred_python_version_source_annotation;
 pub use fixes::{fix_all_diagnostics, suppress_all_diagnostics};
 pub use place::{basedpython_typing_added_in, basedpython_warnings_added_in};
+pub use preset::TypeCheckingPreset;
 use ruff_db::PythonFile;
 use ruff_db::diagnostic::{Annotation, Diagnostic, DiagnosticId, Severity, Span};
 use ruff_db::files::File;
@@ -77,6 +78,7 @@ mod fixes;
 pub mod lint;
 pub(crate) mod place;
 pub(crate) mod place_load;
+mod preset;
 mod reachability;
 pub mod reified;
 mod semantic_model;
@@ -295,8 +297,11 @@ const OPAQUE_REPR_CLASSES: &[&str] = &[
     "builtins.classmethod",
 ];
 
-impl Default for AnalysisSettings {
-    fn default() -> Self {
+impl AnalysisSettings {
+    /// the settings a project starts from under `preset`, before its own `analysis` table
+    pub fn from_preset(preset: TypeCheckingPreset) -> Self {
+        let basedpython = preset.is_strict();
+
         Self {
             strict_generic_narrowing: false,
             strict_equality_semantics: false,
@@ -307,11 +312,11 @@ impl Default for AnalysisSettings {
             shipped_modules: None,
             exported_dependencies: None,
             strict_float: false,
-            disable_fluid_specializations: false,
-            sound_types: false,
-            infer_unannotated_signatures: true,
-            bivariant_private_attributes: true,
-            precise_unsolved_typevars: true,
+            disable_fluid_specializations: !basedpython,
+            sound_types: basedpython,
+            infer_unannotated_signatures: basedpython,
+            bivariant_private_attributes: basedpython,
+            precise_unsolved_typevars: basedpython,
             overlapping_condition_exempt_types: Box::default(),
             overlapping_condition_assume_truthy_instances: false,
             implicit_object_repr_exempt_types: Box::default(),
@@ -320,6 +325,12 @@ impl Default for AnalysisSettings {
                 .map(|name| Box::from(*name))
                 .collect(),
         }
+    }
+}
+
+impl Default for AnalysisSettings {
+    fn default() -> Self {
+        Self::from_preset(TypeCheckingPreset::default())
     }
 }
 

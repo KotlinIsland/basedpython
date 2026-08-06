@@ -308,9 +308,14 @@ fn run_test(
     };
 
     db.update_program(settings);
-    db.update_analysis_options(configuration.analysis.as_ref());
+    let preset = configuration.type_checking_preset();
+    db.update_analysis_options(preset, configuration.analysis.as_ref());
     db.update_dependency_manifest(configuration.dependency_manifest());
-    db.update_mdtest_rule_selection(configuration.rules.as_ref(), options.default_error_rule);
+    db.update_mdtest_rule_selection(
+        preset,
+        configuration.rules.as_ref(),
+        options.default_error_rule,
+    );
     db.set_verbosity(test.configuration().verbose());
 
     let mut all_diagnostics = vec![];

@@ -11,25 +11,30 @@ written for something the checker already knows, and it silently swallows real m
 ```python
 def f(a=1):
     ...
-f("nonsense")  # no error: `a` is gradual, so anything goes
+f("nonsense")  # error: `a` is declared `int`
 ```
 
-the `analysis.sound-types` option deliberately breaks the gradual guarantee and uses the precise
-type instead
+basedpython deliberately breaks the gradual guarantee and uses the precise type instead. this is
+`analysis.sound-types`, which is on under the default [type checking
+preset](../configuration.md#the-preset) and off under `ty-compatible`
 
 ```toml
 [analysis]
-sound-types = true
+# fall back to a gradual type wherever an annotation is missing
+sound-types = false
 ```
 
 an explicit annotation always wins over anything inferred by this option
 
 ## per-module configuration
 
-the option is resolved per module, so it can be adopted incrementally. use an override to enable it
-for part of a project
+the option is resolved per module, so a project migrating from a gradual checker can turn it off
+and adopt it a directory at a time
 
 ```toml
+[analysis]
+sound-types = false
+
 [[overrides]]
 include = ["src/core/**"]
 

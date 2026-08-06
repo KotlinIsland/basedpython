@@ -6,7 +6,7 @@ use super::{
     StaticClassLiteral, add_inferred_python_version_hint_to_diagnostic,
 };
 use crate::diagnostic::{did_you_mean, format_enumeration};
-use crate::lint::{Level, LintRegistryBuilder, LintStatus};
+use crate::lint::{Level, LintRegistryBuilder, LintStatus, TyCompat};
 use crate::place::{DefinedPlace, Place, place_from_bindings};
 use crate::suppression::FileSuppressionId;
 use crate::types::call::{CallDiagnosticOverride, CallError};
@@ -318,7 +318,8 @@ declare_lint! {
     pub(crate) static DIVISION_BY_ZERO = {
         summary: "detects division by zero",
         status: LintStatus::stable("0.0.1-alpha.1"),
-        default_level: Level::Ignore,
+        default_level: Level::Error,
+        ty_compat: TyCompat::Level(Level::Ignore),
     }
 }
 
@@ -530,6 +531,7 @@ declare_lint! {
         summary: "detects a destructuring binder whose pattern may not match, with nothing to handle the failure",
         status: LintStatus::stable("0.0.62"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -583,7 +585,8 @@ declare_lint! {
     pub(crate) static UNSUPPORTED_DYNAMIC_BASE = {
         summary: "detects dynamic class bases that are unsupported as ty could not feasibly calculate the class's MRO",
         status: LintStatus::stable("0.0.12"),
-        default_level: Level::Ignore,
+        default_level: Level::Warn,
+        ty_compat: TyCompat::Level(Level::Ignore),
     }
 }
 
@@ -847,7 +850,8 @@ declare_lint! {
     pub(crate) static MISSING_TYPE_ARGUMENT = {
         summary: "detects generic types used without explicit type parameters in type expressions",
         status: LintStatus::stable("0.0.45"),
-        default_level: Level::Ignore,
+        default_level: Level::Error,
+        ty_compat: TyCompat::Level(Level::Ignore),
     }
 }
 
@@ -965,7 +969,8 @@ declare_lint! {
     pub(crate) static POSSIBLY_MISSING_ATTRIBUTE = {
         summary: "detects references to possibly missing attributes",
         status: LintStatus::stable("0.0.1-alpha.22"),
-        default_level: Level::Ignore,
+        default_level: Level::Error,
+        ty_compat: TyCompat::Level(Level::Ignore),
     }
 }
 
@@ -983,7 +988,8 @@ declare_lint! {
     pub(crate) static POSSIBLY_MISSING_IMPORT = {
         summary: "detects possibly missing imports",
         status: LintStatus::stable("0.0.1-alpha.22"),
-        default_level: Level::Ignore,
+        default_level: Level::Error,
+        ty_compat: TyCompat::Level(Level::Ignore),
     }
 }
 
@@ -992,7 +998,8 @@ declare_lint! {
     pub(crate) static POSSIBLY_UNRESOLVED_REFERENCE = {
         summary: "detects references to possibly undefined names",
         status: LintStatus::stable("0.0.1-alpha.1"),
-        default_level: Level::Ignore,
+        default_level: Level::Error,
+        ty_compat: TyCompat::Level(Level::Ignore),
     }
 }
 
@@ -1028,6 +1035,7 @@ declare_lint! {
         summary: "detects subclasses of sealed classes from outside their workspace",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1054,6 +1062,7 @@ declare_lint! {
         summary: "detects imports of another module's `private` symbols",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1081,6 +1090,7 @@ declare_lint! {
         summary: "detects invalid basedpython extension declarations",
         status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1103,6 +1113,7 @@ declare_lint! {
         summary: "detects framework imports whose external stubs package is not installed",
         status: LintStatus::stable("0.0.1-alpha.4"),
         default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1132,6 +1143,7 @@ declare_lint! {
         summary: "detects attribute accesses supplied by more than one extension",
         status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1163,6 +1175,7 @@ declare_lint! {
         summary: "detects invalid basedpython conformance declarations",
         status: LintStatus::stable("0.0.1-alpha.5"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1190,6 +1203,7 @@ declare_lint! {
         summary: "detects malformed basedpython conversion dunders",
         status: LintStatus::stable("0.0.1-alpha.39"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1220,6 +1234,7 @@ declare_lint! {
         summary: "detects conversion sites served by more than one conversion",
         status: LintStatus::stable("0.0.1-alpha.39"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1243,6 +1258,7 @@ declare_lint! {
         summary: "detects invalid django model field lookups and field-name arguments",
         status: LintStatus::stable("0.0.1-alpha.4"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1276,6 +1292,7 @@ declare_lint! {
         summary: "detects a `local` parameter whose value escapes its call",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1301,6 +1318,7 @@ declare_lint! {
         summary: "detects a pydantic model field specifier without a type annotation",
         status: LintStatus::stable("0.0.1-alpha.4"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1337,7 +1355,8 @@ declare_lint! {
     pub(crate) static OVERRIDE_RAISE = {
         summary: "detects an override that raises more than the method it overrides",
         status: LintStatus::stable("0.0.1-alpha.38"),
-        default_level: Level::Ignore,
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1361,6 +1380,7 @@ declare_lint! {
         summary: "detects an exception a `raises` clause does not include",
         status: LintStatus::stable("0.0.1-alpha.37"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1386,6 +1406,7 @@ declare_lint! {
         summary: "detects a statement expression that can complete without a value",
         status: LintStatus::stable("0.0.1-alpha.39"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1410,6 +1431,7 @@ declare_lint! {
         summary: "detects an exception escaping the `main` entry point",
         status: LintStatus::stable("0.0.1-alpha.37"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1432,6 +1454,7 @@ declare_lint! {
         summary: "detects a `raises` clause that is not a set of exceptions",
         status: LintStatus::stable("0.0.1-alpha.37"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1454,6 +1477,7 @@ declare_lint! {
         summary: "detects a `once` callback that is never called",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1484,6 +1508,7 @@ declare_lint! {
         summary: "detects a pytest parameter annotation incompatible with its fixture",
         status: LintStatus::stable("0.0.1-alpha.36"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1511,6 +1536,7 @@ declare_lint! {
         summary: "detects an invalid regular expression or a reference to a group it has not got",
         status: LintStatus::stable("0.0.1-alpha.36"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1539,7 +1565,8 @@ declare_lint! {
     pub(crate) static UNKNOWN_FIXTURE = {
         summary: "detects a pytest parameter that resolves to no known fixture",
         status: LintStatus::stable("0.0.1-alpha.36"),
-        default_level: Level::Ignore,
+        default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1567,6 +1594,7 @@ declare_lint! {
         summary: "detects a pytest parametrize name or arity mismatch",
         status: LintStatus::stable("0.0.1-alpha.36"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1590,6 +1618,7 @@ declare_lint! {
         summary: "detects a `once` callback that may be called more than once",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1623,6 +1652,7 @@ declare_lint! {
         summary: "detects non-local control flow in a non-`once` trailing-lambda block",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1647,6 +1677,7 @@ declare_lint! {
         summary: "detects a narrowing return annotation that names no place",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1675,6 +1706,7 @@ declare_lint! {
         summary: "detects an assertion guard whose result is used as a value",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1704,6 +1736,7 @@ declare_lint! {
         summary: "detects a trailing-lambda callback whose return type does not accept `None`",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1732,6 +1765,7 @@ declare_lint! {
         summary: "detects a trailing-lambda callback taking arguments the block cannot bind",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1767,6 +1801,7 @@ declare_lint! {
         summary: "detects a trailing-lambda block capturing a loop variable with a non-borrow callee",
         status: LintStatus::stable("0.0.1-alpha.1"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1822,6 +1857,7 @@ declare_lint! {
         summary: "detects casts whose type arguments cannot be checked at runtime",
         status: LintStatus::stable("0.0.61"),
         default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1880,6 +1916,7 @@ declare_lint! {
         summary: "detects casts between non-overlapping types",
         status: LintStatus::stable("0.0.61"),
         default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1918,6 +1955,7 @@ declare_lint! {
         summary: "detects `is` type tests between non-overlapping types",
         status: LintStatus::stable("0.0.62"),
         default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1950,6 +1988,7 @@ declare_lint! {
         summary: "detects an optional value implicitly widened to `object`",
         status: LintStatus::stable("0.0.61"),
         default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -1987,6 +2026,7 @@ declare_lint! {
         summary: "detects a `bool` implicitly used as an `int`",
         status: LintStatus::stable("0.0.61"),
         default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2012,6 +2052,7 @@ declare_lint! {
         summary: "detects calls whose `context` parameter has no matching context value",
         status: LintStatus::stable("0.0.61"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2039,6 +2080,7 @@ declare_lint! {
         summary: "detects calls whose `context` parameter matches several context values",
         status: LintStatus::stable("0.0.61"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2075,6 +2117,7 @@ declare_lint! {
         summary: "detects calls to reified generic functions without explicit specialization",
         status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2100,6 +2143,7 @@ declare_lint! {
         summary: "detects `reified` type parameters that cannot be reified",
         status: LintStatus::stable("0.0.62"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2135,6 +2179,7 @@ declare_lint! {
         summary: "detects a variance keyword the program does not honour",
         status: LintStatus::stable("0.0.62"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2162,6 +2207,7 @@ declare_lint! {
         summary: "detects classmethods with reified type parameters",
         status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2231,6 +2277,7 @@ declare_lint! {
         summary: "detects parametric type tests with no runtime residue",
         status: LintStatus::stable("0.0.1-alpha.3"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2256,6 +2303,7 @@ declare_lint! {
         summary: "detects iteration over a single-character string (`Character`)",
         status: LintStatus::stable("0.0.1-alpha.36"),
         default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2330,6 +2378,7 @@ declare_lint! {
         summary: "detects the `final` modifier on a bare variable assignment",
         status: LintStatus::stable("0.0.40"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2383,7 +2432,8 @@ declare_lint! {
     pub(crate) static MISSING_OVERRIDE_DECORATOR = {
         summary: "detects methods that override a superclass member without an `@override` annotation",
         status: LintStatus::stable("0.0.41"),
-        default_level: Level::Ignore,
+        default_level: Level::Error,
+        ty_compat: TyCompat::Level(Level::Ignore),
     }
 }
 
@@ -2827,6 +2877,7 @@ declare_lint! {
         summary: "detects a condition that several members of the tested type answer the same way",
         status: LintStatus::stable("0.0.62"),
         default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2875,6 +2926,7 @@ declare_lint! {
         summary: "detects a condition whose outcome is fixed by the tested type",
         status: LintStatus::stable("0.0.62"),
         default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2911,6 +2963,7 @@ declare_lint! {
         summary: "detects a comparison of a `bool` against `True` or `False`",
         status: LintStatus::stable("0.0.62"),
         default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -2953,6 +3006,7 @@ declare_lint! {
         summary: "detects a format spec the value's `__format__` does not accept",
         status: LintStatus::stable("0.0.68"),
         default_level: Level::Error,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -3021,6 +3075,7 @@ declare_lint! {
         summary: "detects a value printed through `object.__repr__`",
         status: LintStatus::stable("0.0.68"),
         default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 
@@ -3069,6 +3124,7 @@ declare_lint! {
         summary: "detects an explicit `-> None` that is already the default",
         status: LintStatus::stable("0.0.62"),
         default_level: Level::Warn,
+        ty_compat: TyCompat::BasedPython,
     }
 }
 

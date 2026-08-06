@@ -43,7 +43,7 @@ use ty_python_core::program::{MisconfigurationStrategy, ProgramSettings};
 use ty_python_semantic::lint::{Level, LintSource, RuleSelection};
 use ty_python_semantic::{
     AnalysisSettings, PythonEnvironment, PythonVersionFileSource, PythonVersionSource,
-    PythonVersionWithSource, SitePackagesPaths, SysPrefixPathOrigin,
+    PythonVersionWithSource, SitePackagesPaths, SysPrefixPathOrigin, TypeCheckingPreset,
     inferred_python_version_source_annotation,
 };
 use ty_static::EnvVars;
@@ -63,6 +63,30 @@ use ty_static::EnvVars;
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct Options {
+    /// The defaults that `rules` and `analysis` start from.
+    ///
+    /// A preset decides which diagnostics exist and which of them are enabled, and it supplies
+    /// the default for every `analysis` option. Both tables are still read, and both still win
+    /// over the preset, so a preset is a starting point rather than a straitjacket.
+    ///
+    /// * `strict`: every diagnostic is enabled, and every analysis option that buys soundness
+    ///   is on. This is the default.
+    /// * `ty-compatible`: the defaults of [ty](https://github.com/astral-sh/ty), which
+    ///   basedpython is built on. basedpython's own diagnostics and analysis options are off,
+    ///   so that a project reports what ty itself would report. A diagnostic that doesn't exist
+    ///   in ty can't be enabled under this preset, not even with `rules = { all = "error" }`.
+    ///
+    /// Defaults to `strict`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"strict"#,
+        value_type = r#""strict" | "ty-compatible""#,
+        example = r#"
+            type-checking-preset = "ty-compatible"
+        "#
+    )]
+    pub type_checking_preset: Option<RangedValue<TypeCheckingPreset>>,
+
     /// Configures the type checking environment.
     #[option_group]
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,6 +157,7 @@ pub struct Options {
 impl Options {
     pub(super) fn file_options(&self) -> FileOptions {
         FileOptions {
+            type_checking_preset: self.type_checking_preset.clone(),
             rules: self.rules.clone(),
             analysis: self.analysis.clone(),
         }
@@ -458,7 +483,8 @@ impl Options {
         strategy: &Strategy,
     ) -> Result<(Settings, Vec<OptionDiagnostic>), Strategy::Error<ToSettingsError>> {
         let mut diagnostics = Vec::new();
-        let rules = self.to_rule_selection(db, &mut diagnostics);
+        let preset = self.type_checking_preset();
+        let rules = self.to_rule_selection(db, preset, &mut diagnostics);
 
         let terminal_options = self.terminal.or_default();
         let terminal = TerminalSettings {
@@ -493,10 +519,10 @@ impl Options {
         let build = strategy.fallback(build, |_| BuildSettings::default())?;
 
         let mut analysis_diagnostics = Vec::new();
-        let analysis = self
-            .analysis
-            .or_default()
-            .to_settings(db, &mut analysis_diagnostics);
+        let analysis =
+            self.analysis
+                .or_default()
+                .to_settings(db, preset, &mut analysis_diagnostics);
 
         let analysis_result: Result<_, ToSettingsError> =
             if let Some(diagnostic) = analysis_diagnostics.into_iter().next() {
@@ -508,10 +534,11 @@ impl Options {
             } else {
                 Ok(analysis)
             };
-        let analysis = strategy.fallback(analysis_result, |_| AnalysisSettings::default())?;
+        let analysis =
+            strategy.fallback(analysis_result, |_| AnalysisSettings::from_preset(preset))?;
 
         let overrides = self
-            .to_overrides_settings(db, project_root, &mut diagnostics)
+            .to_overrides_settings(db, project_root, preset, &mut diagnostics)
             .map_err(|err| ToSettingsError {
                 diagnostic: err,
                 output_format: terminal.output_format,
@@ -540,19 +567,33 @@ impl Options {
         Ok((settings, diagnostics))
     }
 
+    /// The preset the project's other settings start from.
+    pub fn type_checking_preset(&self) -> TypeCheckingPreset {
+        self.configured_type_checking_preset().unwrap_or_default()
+    }
+
+    /// The preset this layer of configuration sets, if it sets one.
+    pub(crate) fn configured_type_checking_preset(&self) -> Option<TypeCheckingPreset> {
+        self.type_checking_preset.as_deref().copied()
+    }
+
     #[must_use]
     fn to_rule_selection(
         &self,
         db: &dyn Db,
+        preset: TypeCheckingPreset,
         diagnostics: &mut Vec<OptionDiagnostic>,
     ) -> RuleSelection {
-        self.rules.or_default().to_rule_selection(db, diagnostics)
+        self.rules
+            .or_default()
+            .to_rule_selection(db, preset, diagnostics)
     }
 
     fn to_overrides_settings(
         &self,
         db: &dyn Db,
         project_root: &SystemPath,
+        preset: TypeCheckingPreset,
         diagnostics: &mut Vec<OptionDiagnostic>,
     ) -> Result<Vec<Override>, Box<OptionDiagnostic>> {
         let override_options = &**self.overrides.or_default();
@@ -563,6 +604,7 @@ impl Options {
             let override_instance = override_option.to_override(
                 db,
                 project_root,
+                preset,
                 self.rules.as_ref(),
                 self.analysis.as_ref(),
                 diagnostics,
@@ -1118,12 +1160,13 @@ impl Rules {
     pub(crate) fn to_rule_selection(
         &self,
         db: &dyn Db,
+        preset: TypeCheckingPreset,
         diagnostics: &mut Vec<OptionDiagnostic>,
     ) -> RuleSelection {
         let registry = db.lint_registry();
 
-        // Initialize the selection with the defaults
-        let mut selection = RuleSelection::from_registry(registry);
+        // Initialize the selection with the preset's defaults
+        let mut selection = RuleSelection::from_preset(registry, preset);
 
         for (rule_name, level) in &self.inner {
             let source = rule_name.source();
@@ -1144,36 +1187,41 @@ impl Rules {
 
             // Handle "all" as a special case - apply the level to all rules
             if rule_name.as_str() == "all" {
-                for lint in registry.lints() {
+                for lint in registry.lints().iter().filter(|lint| preset.includes(lint)) {
                     set_lint_level(*lint);
                 }
                 continue;
             }
 
-            match registry.get(rule_name) {
+            let unknown = match registry.get(rule_name) {
+                // a rule the preset leaves out doesn't exist as far as the project is concerned,
+                // so naming it is the same mistake as naming one that was never declared
+                Ok(lint) if !preset.includes(&lint) => Some(format!(
+                    "Rule `{rule_name}` is a basedpython rule, which the `{preset}` type checking preset does not include"
+                )),
                 Ok(lint) => {
                     set_lint_level(lint);
+                    None
                 }
-                Err(error) => {
-                    // `system_path_to_file` can return `Err` if the file was deleted since the configuration
-                    // was read. This should be rare and it should be okay to default to not showing a configuration
-                    // file in that case.
-                    let file = source
-                        .file()
-                        .and_then(|path| system_path_to_file(db, path).ok());
+                Err(error) => Some(error.to_string()),
+            };
 
-                    // TODO: Add a note if the value was configured on the CLI
-                    let diagnostic = OptionDiagnostic::new(
-                        DiagnosticId::UnknownRule,
-                        error.to_string(),
-                        Severity::Warning,
-                    );
+            if let Some(message) = unknown {
+                // `system_path_to_file` can return `Err` if the file was deleted since the configuration
+                // was read. This should be rare and it should be okay to default to not showing a configuration
+                // file in that case.
+                let file = source
+                    .file()
+                    .and_then(|path| system_path_to_file(db, path).ok());
 
-                    let annotation = file.map(Span::from).map(|span| {
-                        Annotation::primary(span.with_optional_range(rule_name.range()))
-                    });
-                    diagnostics.push(diagnostic.with_annotation(annotation));
-                }
+                // TODO: Add a note if the value was configured on the CLI
+                let diagnostic =
+                    OptionDiagnostic::new(DiagnosticId::UnknownRule, message, Severity::Warning);
+
+                let annotation = file
+                    .map(Span::from)
+                    .map(|span| Annotation::primary(span.with_optional_range(rule_name.range())));
+                diagnostics.push(diagnostic.with_annotation(annotation));
             }
         }
 
@@ -1874,19 +1922,20 @@ pub struct AnalysisOptions {
     pub strict_generic_narrowing: Option<bool>,
 
     /// Configure ty's behavior regarding type inference and narrowing of equality
-    /// checks. Defaults to `false`.
+    /// checks.
     ///
-    /// By default, ty makes various assumptions about equality checks that match the
-    /// intuitions of most Python programmers, but may not be fully sound in all situations.
-    /// Enabling this option makes ty more conservative about these assumptions, making it
+    /// Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
+    ///
+    /// With this option disabled, ty makes various assumptions about equality checks that
+    /// match the intuitions of most Python programmers, but may not be fully sound in all
+    /// situations. Leaving it enabled makes ty conservative about those assumptions, making it
     /// less likely to infer `Literal[True]` or `Literal[False]` as the result of an
     /// equality check. This has various effects on type checking, including fewer type
     /// narrowing opportunities and more conservative assumptions regarding control flow.
     ///
-    /// One way in which ty will by default make unsound assumptions is by narrowing an
-    /// object `x` of type `str` to `Literal["a"]` after an `if x == "a"` check. This is
-    /// unsound because a subclass of `str` with value `"a"` will (by default) compare equal
-    /// to `"a"`, but will not be of type `Literal["a"]`:
+    /// One such unsound assumption is narrowing an object `x` of type `str` to `Literal["a"]`
+    /// after an `if x == "a"` check. This is unsound because a subclass of `str` with value
+    /// `"a"` will (by default) compare equal to `"a"`, but will not be of type `Literal["a"]`:
     ///
     /// ```pycon
     /// >>> # `Literal["a"]` can only be inhabited by instances of exactly `str`, not
@@ -1905,14 +1954,14 @@ pub struct AnalysisOptions {
     /// True
     /// ```
     ///
-    /// Enabling this option prevents the unsound narrowing of `x` to `Literal["a"]`,
-    /// and instead keeps it as `str`:
+    /// This option prevents the unsound narrowing of `x` to `Literal["a"]`, and instead keeps
+    /// it as `str`:
     ///
     /// ```python
     /// from typing import Literal
     ///
     /// def parse(value: str) -> Literal["a"] | None:
-    ///     # with `strict-equality-semantics = true`, no narrowing will occur here,
+    ///     # with `strict-equality-semantics` enabled, no narrowing will occur here,
     ///     # and an error will be emitted on the `return` statement.
     ///     if value == "a":
     ///         return value
@@ -1927,19 +1976,19 @@ pub struct AnalysisOptions {
     /// ```python
     /// def narrow(x: Foo | None, other: Foo) -> None:
     ///     if x == other:
-    ///         # with this option enabled, `x` will still have type `Foo | None` here,
+    ///         # with this option enabled, `x` still has type `Foo | None` here,
     ///         # since it is legal to subclass `Foo` and override its `__eq__` method.
     ///         reveal_type(x)
     /// ```
     ///
-    /// Many operations in Python implicitly call `__eq__` under the hood; enabling this option
-    /// will also impact those operations. For example, this option will also impact narrowing from
-    /// `in` checks, and narrowing in `match` statements that use value patterns:
+    /// Many operations in Python implicitly call `__eq__` under the hood, and this option
+    /// impacts those too. For example, it also impacts narrowing from `in` checks, and narrowing
+    /// in `match` statements that use value patterns:
     ///
     /// ```python
     /// def narrow_in(x: Foo | None, other: list[Foo]) -> None:
     ///     if x in other:
-    ///         # with this option enabled, `x` will still have type `Foo | None` here,
+    ///         # with this option enabled, `x` still has type `Foo | None` here,
     ///         # since the `in` operator implicitly calls `__eq__` on each element of `other`.
     ///         reveal_type(x)
     ///
@@ -1947,7 +1996,7 @@ pub struct AnalysisOptions {
     /// def narrow_match(x: str) -> None:
     ///     match x:
     ///         case "a":
-    ///             # with this option enabled, `x` will still have type `str` here,
+    ///             # with this option enabled, `x` still has type `str` here,
     ///             # since this `case` branch will be taken by any object that compares
     ///             # equal to `"a"`, including subclasses of `str`.
     ///             reveal_type(x)
@@ -1989,7 +2038,7 @@ pub struct AnalysisOptions {
     /// When set to `true`, each unannotated binding keeps the specialization it was inferred
     /// with at its creation site; later uses no longer widen or lock it.
     ///
-    /// Defaults to `false`.
+    /// Defaults to `false`, and to `true` under the `ty-compatible` type checking preset.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[option(
         default = r#"false"#,
@@ -2052,14 +2101,14 @@ pub struct AnalysisOptions {
     ///
     /// An explicit annotation always takes priority over any of the above.
     ///
-    /// Defaults to `false`.
+    /// Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[option(
-        default = r#"false"#,
+        default = r#"true"#,
         value_type = "bool",
         example = r#"
-        # Infer sound (non-gradual) types wherever a precise type is available
-        sound-types = true
+        # Fall back to a gradual type wherever an annotation is missing
+        sound-types = false
         "#
     )]
     pub sound_types: Option<bool>,
@@ -2086,7 +2135,7 @@ pub struct AnalysisOptions {
     /// and its body keeps type-checking exactly as it did. An explicit annotation always wins, and
     /// so does anything an overload group or an overridden base method already supplies.
     ///
-    /// Defaults to `true`.
+    /// Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[option(
         default = r#"true"#,
@@ -2117,7 +2166,7 @@ pub struct AnalysisOptions {
     /// When set to `false`, a private attribute is instead treated as immutable-but-readable,
     /// which constrains the type parameter to covariance.
     ///
-    /// Defaults to `true`.
+    /// Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[option(
         default = r#"true"#,
@@ -2154,7 +2203,7 @@ pub struct AnalysisOptions {
     /// `TypeVarTuple` or keyword-variadic pack is unaffected because `Never` is not a valid
     /// solution for one.
     ///
-    /// Defaults to `true`.
+    /// Defaults to `true`, and to `false` under the `ty-compatible` type checking preset.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[option(
         default = r#"true"#,
@@ -2364,6 +2413,7 @@ impl AnalysisOptions {
     pub(super) fn to_settings(
         &self,
         db: &dyn Db,
+        preset: TypeCheckingPreset,
         diagnostics: &mut Vec<OptionDiagnostic>,
     ) -> AnalysisSettings {
         let Self {
@@ -2407,7 +2457,7 @@ impl AnalysisOptions {
             dependency_groups: dependency_groups_default,
             shipped_modules: shipped_modules_default,
             exported_dependencies: exported_dependencies_default,
-        } = AnalysisSettings::default();
+        } = AnalysisSettings::from_preset(preset);
 
         let allowed_unresolved_imports =
             if let Some(allowed_unresolved_imports) = allowed_unresolved_imports {
@@ -2742,6 +2792,7 @@ trait ToOverride {
         &self,
         db: &dyn Db,
         project_root: &SystemPath,
+        preset: TypeCheckingPreset,
         global_rules: Option<&Rules>,
         global_analysis: Option<&AnalysisOptions>,
         diagnostics: &mut Vec<OptionDiagnostic>,
@@ -2753,6 +2804,7 @@ impl ToOverride for RangedValue<OverrideOptions> {
         &self,
         db: &dyn Db,
         project_root: &SystemPath,
+        preset: TypeCheckingPreset,
         global_rules: Option<&Rules>,
         global_analysis: Option<&AnalysisOptions>,
         diagnostics: &mut Vec<OptionDiagnostic>,
@@ -2899,7 +2951,7 @@ impl ToOverride for RangedValue<OverrideOptions> {
         }
 
         // Convert merged rules to rule selection
-        let rule_selection = merged_rules.to_rule_selection(db, diagnostics);
+        let rule_selection = merged_rules.to_rule_selection(db, preset, diagnostics);
 
         let mut merged_analysis = analysis.into_owned();
 
@@ -2907,7 +2959,7 @@ impl ToOverride for RangedValue<OverrideOptions> {
             merged_analysis = merged_analysis.combine(global_analysis.clone());
         }
 
-        let analysis = merged_analysis.to_settings(db, diagnostics);
+        let analysis = merged_analysis.to_settings(db, preset, diagnostics);
 
         let override_instance = Override {
             files,
@@ -2938,6 +2990,8 @@ pub(super) struct InnerOverrideOptions {
 /// The settings that can vary between individual files.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Hash, Combine, get_size2::GetSize)]
 pub(super) struct FileOptions {
+    pub(super) type_checking_preset: Option<RangedValue<TypeCheckingPreset>>,
+
     /// Raw rule options, preserved so multiple configuration layers can be merged.
     pub(super) rules: Option<Rules>,
 

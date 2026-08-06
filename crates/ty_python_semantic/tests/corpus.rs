@@ -9,7 +9,8 @@ use ty_python_core::program::ProgramSettings;
 use ty_python_semantic::lint::{LintRegistry, RuleSelection};
 use ty_python_semantic::pull_types::pull_types;
 use ty_python_semantic::{
-    AnalysisSettings, Db as _, PythonVersionWithSource, check_file_unwrap, default_lint_registry,
+    AnalysisSettings, Db as _, PythonVersionWithSource, TypeCheckingPreset, check_file_unwrap,
+    default_lint_registry,
 };
 
 use ruff_db::diagnostic::Diagnostic;
@@ -158,7 +159,10 @@ impl CorpusDb {
             storage: salsa::Storage::new(None),
             system: TestSystem::default(),
             vendored,
-            rule_selection: RuleSelection::from_registry(default_lint_registry()),
+            rule_selection: RuleSelection::from_preset(
+                default_lint_registry(),
+                TypeCheckingPreset::default(),
+            ),
             files: Files::default(),
             analysis_settings: Arc::new(AnalysisSettings::default()),
             program_settings,

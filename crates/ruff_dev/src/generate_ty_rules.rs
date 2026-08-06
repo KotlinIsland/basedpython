@@ -122,10 +122,20 @@ fn generate_markdown() -> String {
             }
         };
 
+        let preset_text = match lint.ty_compat() {
+            ty_python_semantic::lint::TyCompat::Same => String::new(),
+            ty_python_semantic::lint::TyCompat::Level(level) => {
+                format!(" · Level under <code>ty-compatible</code>: <code>{level}</code>")
+            }
+            ty_python_semantic::lint::TyCompat::BasedPython => {
+                " · basedpython only, so absent under <code>ty-compatible</code>".to_string()
+            }
+        };
+
         let _ = writeln!(
             &mut output,
             r#"<small>
-Default level: <a href="../../rules#rule-levels" title="This lint has a default level of '{level}'."><code>{level}</code></a> ·
+Default level: <a href="../../rules#rule-levels" title="This lint has a default level of '{level}'."><code>{level}</code></a>{preset_text} ·
 {status_text} ·
 <a href="https://github.com/astral-sh/ty/issues?q=sort%3Aupdated-desc%20is%3Aissue%20is%3Aopen%20%22{encoded_name}%22" target="_blank">Related issues</a> ·
 <a href="https://github.com/astral-sh/ruff/blob/main/{file}#L{line}" target="_blank">View source</a>

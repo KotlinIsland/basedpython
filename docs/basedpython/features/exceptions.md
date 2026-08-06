@@ -166,17 +166,18 @@ def main():
 ```
 
 `override-raise` closes that hole by bounding
-every override with the exception set of the method it overrides. it is a
-**strictness option and off by default**, because honouring it makes a base
-method's set part of its contract — adding a `raise` to a base method is then a
-breaking change for every subclass. enable it per project:
+every override with the exception set of the method it overrides. it is on under
+the default [type checking preset](../configuration.md#the-preset), and it comes
+at a price: honouring it makes a base method's set part of its contract, so
+adding a `raise` to a base method is a breaking change for every subclass. turn
+it off per project if that is the wrong trade:
 
 ```toml
 [tool.basedpython.rules]
-override-raise = "error"
+override-raise = "ignore"
 ```
 
-with it on, `B.foo` above is reported, and the fixes are the ordinary ones:
+`B.foo` above is reported, and the fixes are the ordinary ones:
 declare the base as raising (`def foo(self) raises TypeError`), handle the
 exception inside the override, or opt that method out with `raises ...`
 

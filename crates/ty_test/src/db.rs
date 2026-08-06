@@ -20,8 +20,8 @@ use ty_python_core::{Db as _, ProgramFile, TestProgramDb};
 use ty_python_semantic::dependencies::DependencyManifest;
 use ty_python_semantic::lint::{LintRegistry, RuleSelection};
 use ty_python_semantic::{
-    AnalysisSettings, Db as SemanticDb, PythonVersionWithSource, check_file_unwrap,
-    default_lint_registry, django_settings,
+    AnalysisSettings, Db as SemanticDb, PythonVersionWithSource, TypeCheckingPreset,
+    check_file_unwrap, default_lint_registry, django_settings,
 };
 
 #[salsa::db]
@@ -83,8 +83,12 @@ impl Db {
         self.settings().set_verbose(self).to(verbose);
     }
 
-    pub(crate) fn update_analysis_options(&mut self, options: Option<&Analysis>) {
-        let analysis = mdtest_analysis_settings(options);
+    pub(crate) fn update_analysis_options(
+        &mut self,
+        preset: TypeCheckingPreset,
+        options: Option<&Analysis>,
+    ) {
+        let analysis = mdtest_analysis_settings(preset, options);
 
         let settings = self.settings();
         if settings.analysis(self) != &analysis {
@@ -101,10 +105,11 @@ impl Db {
 
     pub(crate) fn update_mdtest_rule_selection(
         &mut self,
+        preset: TypeCheckingPreset,
         rules: Option<&Rules>,
         required_rule: Option<&str>,
     ) {
-        let rule_selection = mdtest_rule_selection(rules, required_rule);
+        let rule_selection = mdtest_rule_selection(preset, rules, required_rule);
 
         let settings = self.settings();
         if settings.rule_selection(self) != &rule_selection {
@@ -236,9 +241,11 @@ fn file_settings(db: &dyn SemanticDb, file: File) -> FileSettings {
         return FileSettings::Global;
     };
 
+    let preset = options.type_checking_preset.unwrap_or_default();
+
     FileSettings::File(Box::new(InlineSettings {
-        rules: MdtestRuleSelection(mdtest_rule_selection(options.rules.as_ref(), None)),
-        analysis: mdtest_analysis_settings(options.analysis.as_ref()),
+        rules: MdtestRuleSelection(mdtest_rule_selection(preset, options.rules.as_ref(), None)),
+        analysis: mdtest_analysis_settings(preset, options.analysis.as_ref()),
     }))
 }
 
@@ -300,7 +307,11 @@ struct MdtestRuleSelection(RuleSelection);
 
 impl Default for MdtestRuleSelection {
     fn default() -> Self {
-        Self(mdtest_rule_selection(None, None))
+        Self(mdtest_rule_selection(
+            TypeCheckingPreset::default(),
+            None,
+            None,
+        ))
     }
 }
 
@@ -312,9 +323,25 @@ impl std::ops::Deref for MdtestRuleSelection {
     }
 }
 
-fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
+/// The settings an mdtest starts from, before its own `[analysis]` table.
+///
+/// `sound-types` is on under the default preset, but mdtest leaves it off. It changes the answer
+/// in a large number of files inherited from ty whose subject is something else entirely, and
+/// carrying those edits would conflict on every upstream sync. It has its own mdtest that turns it
+/// on, and the shipped default is covered end to end by the CLI tests.
+fn mdtest_defaults(preset: TypeCheckingPreset) -> AnalysisSettings {
+    AnalysisSettings {
+        sound_types: false,
+        ..AnalysisSettings::from_preset(preset)
+    }
+}
+
+fn mdtest_analysis_settings(
+    preset: TypeCheckingPreset,
+    options: Option<&Analysis>,
+) -> AnalysisSettings {
     let Some(options) = options else {
-        return AnalysisSettings::default();
+        return mdtest_defaults(preset);
     };
 
     let AnalysisSettings {
@@ -337,7 +364,7 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
         dependency_groups: dependency_groups_default,
         shipped_modules: shipped_modules_default,
         exported_dependencies: exported_dependencies_default,
-    } = AnalysisSettings::default();
+    } = mdtest_defaults(preset);
 
     let allowed_unresolved_imports =
         if let Some(allowed_unresolved_imports) = options.allowed_unresolved_imports.as_deref() {
@@ -431,7 +458,11 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
     }
 }
 
-fn mdtest_rule_selection(rules: Option<&Rules>, required_rule: Option<&str>) -> RuleSelection {
+fn mdtest_rule_selection(
+    preset: TypeCheckingPreset,
+    rules: Option<&Rules>,
+    required_rule: Option<&str>,
+) -> RuleSelection {
     // In general (as shown by the initialization of `selection` below), we enable even rules that
     // are ignored by default in mdtests so that their behaviour is covered alongside the default
     // rules. There are a few small exceptions to this, however:
@@ -450,7 +481,7 @@ fn mdtest_rule_selection(rules: Option<&Rules>, required_rule: Option<&str>) -> 
     ];
 
     let registry = default_lint_registry();
-    let mut selection = RuleSelection::all(registry, Severity::Info);
+    let mut selection = RuleSelection::all(registry, preset, Severity::Info);
 
     for rule in DISABLED_IN_MDTESTS {
         let lint = registry

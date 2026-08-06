@@ -98,6 +98,17 @@
           "type": "null"
         }
       ]
+    },
+    "type-checking-preset": {
+      "description": "The defaults that `rules` and `analysis` start from.\n\nA preset decides which diagnostics exist and which of them are enabled, and it supplies\nthe default for every `analysis` option. Both tables are still read, and both still win\nover the preset, so a preset is a starting point rather than a straitjacket.\n\n* `strict`: every diagnostic is enabled, and every analysis option that buys soundness\n  is on. This is the default.\n* `ty-compatible`: the defaults of [ty](https://github.com/astral-sh/ty), which\n  basedpython is built on. basedpython's own diagnostics and analysis options are off,\n  so that a project reports what ty itself would report. A diagnostic that doesn't exist\n  in ty can't be enabled under this preset, not even with `rules = { all = \"error\" }`.\n\nDefaults to `strict`.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TypeCheckingPreset"
+        },
+        {
+          "type": "null"
+        }
+      ]
     }
   },
   "additionalProperties": false,
@@ -116,7 +127,7 @@
           }
         },
         "bivariant-private-attributes": {
-          "description": "Whether a private attribute leaves an inferred type parameter bivariant. This is a\nbasedpython feature.\n\nA private (single-underscore or name-mangled) member is invisible to external observers, so\nit cannot be used to distinguish two specializations of its class, and therefore cannot\nconstrain the class's variance:\n\n```python\nclass A[T]:\n    _t: T\n```\n\nWith this option enabled, `T` is inferred bivariant: nothing on `A`'s public surface\nmentions `T`, so `A[int]` and `A[object]` are mutually assignable. As soon as a public\nmember mentions `T`, that member drives the inference as usual.\n\nWhen set to `false`, a private attribute is instead treated as immutable-but-readable,\nwhich constrains the type parameter to covariance.\n\nDefaults to `true`.",
+          "description": "Whether a private attribute leaves an inferred type parameter bivariant. This is a\nbasedpython feature.\n\nA private (single-underscore or name-mangled) member is invisible to external observers, so\nit cannot be used to distinguish two specializations of its class, and therefore cannot\nconstrain the class's variance:\n\n```python\nclass A[T]:\n    _t: T\n```\n\nWith this option enabled, `T` is inferred bivariant: nothing on `A`'s public surface\nmentions `T`, so `A[int]` and `A[object]` are mutually assignable. As soon as a public\nmember mentions `T`, that member drives the inference as usual.\n\nWhen set to `false`, a private attribute is instead treated as immutable-but-readable,\nwhich constrains the type parameter to covariance.\n\nDefaults to `true`, and to `false` under the `ty-compatible` type checking preset.",
           "type": [
             "boolean",
             "null"
@@ -133,7 +144,7 @@
           }
         },
         "disable-fluid-specializations": {
-          "description": "Whether to disable \"fluid specializations\", a basedpython feature that widens the\ninferred generic specialization of an unannotated binding flow-sensitively based on\nits later uses in the same scope.\n\nWhen set to `true`, each unannotated binding keeps the specialization it was inferred\nwith at its creation site; later uses no longer widen or lock it.\n\nDefaults to `false`.",
+          "description": "Whether to disable \"fluid specializations\", a basedpython feature that widens the\ninferred generic specialization of an unannotated binding flow-sensitively based on\nits later uses in the same scope.\n\nWhen set to `true`, each unannotated binding keeps the specialization it was inferred\nwith at its creation site; later uses no longer widen or lock it.\n\nDefaults to `false`, and to `true` under the `ty-compatible` type checking preset.",
           "type": [
             "boolean",
             "null"
@@ -170,7 +181,7 @@
           }
         },
         "infer-unannotated-signatures": {
-          "description": "Whether a function with no annotations is given the signature its body determines. This is\na basedpython feature.\n\nPython's gradual guarantee makes an unannotated `def` say nothing: its parameters accept\nanything and it returns `Unknown`. That is the largest remaining source of `Unknown` in an\notherwise typed project, and it silently swallows real mistakes. With this enabled, the\nmissing half of the signature is recovered from what the function itself already determines:\n\n- **Each unannotated parameter** opens an anonymous type parameter named after it — the same\n  hole `some` spells by hand — bounded by everything the function requires of it: the\n  promoted type of its default, the members its body reads and calls, the parameters it is\n  forwarded into, and any `assert` at the top of the body. Naming the hole is what keeps\n  what a call passes in connected to what it gets back, so `def ident(x): return x` is\n  inferred as the identity function.\n- **A missing return type** is the union of what the body returns, plus `None` when control\n  can also fall off the end. An empty body returns `None`, a body that always raises returns\n  `Never`, and a generator returns a generator.\n\nNothing is invented from a use this analysis cannot read, so such a parameter stays gradual\nand its body keeps type-checking exactly as it did. An explicit annotation always wins, and\nso does anything an overload group or an overridden base method already supplies.\n\nDefaults to `true`.",
+          "description": "Whether a function with no annotations is given the signature its body determines. This is\na basedpython feature.\n\nPython's gradual guarantee makes an unannotated `def` say nothing: its parameters accept\nanything and it returns `Unknown`. That is the largest remaining source of `Unknown` in an\notherwise typed project, and it silently swallows real mistakes. With this enabled, the\nmissing half of the signature is recovered from what the function itself already determines:\n\n- **Each unannotated parameter** opens an anonymous type parameter named after it — the same\n  hole `some` spells by hand — bounded by everything the function requires of it: the\n  promoted type of its default, the members its body reads and calls, the parameters it is\n  forwarded into, and any `assert` at the top of the body. Naming the hole is what keeps\n  what a call passes in connected to what it gets back, so `def ident(x): return x` is\n  inferred as the identity function.\n- **A missing return type** is the union of what the body returns, plus `None` when control\n  can also fall off the end. An empty body returns `None`, a body that always raises returns\n  `Never`, and a generator returns a generator.\n\nNothing is invented from a use this analysis cannot read, so such a parameter stays gradual\nand its body keeps type-checking exactly as it did. An explicit annotation always wins, and\nso does anything an overload group or an overridden base method already supplies.\n\nDefaults to `true`, and to `false` under the `ty-compatible` type checking preset.",
           "type": [
             "boolean",
             "null"
@@ -194,7 +205,7 @@
           }
         },
         "precise-unsolved-typevars": {
-          "description": "Whether a type variable that a call leaves unsolved is solved to `Never`. This is a\nbasedpython feature.\n\nA call can leave a type variable entirely unsolved, because no argument mentions it:\n\n```python\ndef f[T]() -> T: ...\n\na = f()\n```\n\n`Never` is the precise answer here: no value ever reaches that position, so nothing the\ncall returns can be observed at type `T`. When set to `false`, the type variable falls back\nto the gradual `Unknown` instead, which silences any error that would follow from the call\nsite.\n\nThis applies where the type variable is an output. Where it is instead written through or\npassed back in — the element of an invariant `list[T]`, the parameter of a returned\n`Callable[[T], R]` — `Never` would say that nothing can ever be put there, so an invariant\nor contravariant occurrence keeps the gradual `Unknown`.\n\nA PEP 696 default (`def f[T = str]()`) always takes priority, and a `ParamSpec`,\n`TypeVarTuple` or keyword-variadic pack is unaffected because `Never` is not a valid\nsolution for one.\n\nDefaults to `true`.",
+          "description": "Whether a type variable that a call leaves unsolved is solved to `Never`. This is a\nbasedpython feature.\n\nA call can leave a type variable entirely unsolved, because no argument mentions it:\n\n```python\ndef f[T]() -> T: ...\n\na = f()\n```\n\n`Never` is the precise answer here: no value ever reaches that position, so nothing the\ncall returns can be observed at type `T`. When set to `false`, the type variable falls back\nto the gradual `Unknown` instead, which silences any error that would follow from the call\nsite.\n\nThis applies where the type variable is an output. Where it is instead written through or\npassed back in — the element of an invariant `list[T]`, the parameter of a returned\n`Callable[[T], R]` — `Never` would say that nothing can ever be put there, so an invariant\nor contravariant occurrence keeps the gradual `Unknown`.\n\nA PEP 696 default (`def f[T = str]()`) always takes priority, and a `ParamSpec`,\n`TypeVarTuple` or keyword-variadic pack is unaffected because `Never` is not a valid\nsolution for one.\n\nDefaults to `true`, and to `false` under the `ty-compatible` type checking preset.",
           "type": [
             "boolean",
             "null"
@@ -228,14 +239,14 @@
           }
         },
         "sound-types": {
-          "description": "Whether to infer sound (non-gradual) types wherever a precise type is available. This is a\nbasedpython feature.\n\nPython's gradual guarantee requires a type checker to fall back to a gradual type whenever\nan annotation is missing, even when a precise type could be inferred. In a fully typed\nproject that is pure boilerplate: it forces an annotation to be written for something the\nchecker already knows. When set to `true`, this option deliberately breaks the gradual\nguarantee and uses the precise type instead. It affects:\n\n- **Unannotated parameters**: each one opens an anonymous type parameter named after it,\n  bounded by everything the function requires of it — the promoted type of its default, the\n  members its body reads and calls, the parameters it is forwarded into, and any `assert` at\n  the top of the body. So `def f(a=1)` rejects a `str` at a call site, and\n  `def ident(x): return x` is inferred as the identity function. A lambda parameter with a\n  default takes that default's promoted type directly.\n- **Unannotated return types**: the union of what the body returns, plus `None` when control\n  can fall off the end. An empty body returns `None` and a body that always raises returns\n  `Never`; a generator returns a generator.\n- **Unannotated methods that override a base method**: the parameter and return types are\n  inherited from the overridden method, including from `Protocol` members and\n  `abstractmethod` declarations.\n- **Bare `ClassVar` annotations**: `x: ClassVar = 1` declares `int` rather than the union of\n  `Unknown` and the inferred type.\n- **Empty collection literals**: `[]` has element type `Never`, so passing one to a generic\n  call solves from it precisely instead of leaking `Unknown`.\n\nAn explicit annotation always takes priority over any of the above.\n\nDefaults to `false`.",
+          "description": "Whether to infer sound (non-gradual) types wherever a precise type is available. This is a\nbasedpython feature.\n\nPython's gradual guarantee requires a type checker to fall back to a gradual type whenever\nan annotation is missing, even when a precise type could be inferred. In a fully typed\nproject that is pure boilerplate: it forces an annotation to be written for something the\nchecker already knows. When set to `true`, this option deliberately breaks the gradual\nguarantee and uses the precise type instead. It affects:\n\n- **Unannotated parameters**: each one opens an anonymous type parameter named after it,\n  bounded by everything the function requires of it — the promoted type of its default, the\n  members its body reads and calls, the parameters it is forwarded into, and any `assert` at\n  the top of the body. So `def f(a=1)` rejects a `str` at a call site, and\n  `def ident(x): return x` is inferred as the identity function. A lambda parameter with a\n  default takes that default's promoted type directly.\n- **Unannotated return types**: the union of what the body returns, plus `None` when control\n  can fall off the end. An empty body returns `None` and a body that always raises returns\n  `Never`; a generator returns a generator.\n- **Unannotated methods that override a base method**: the parameter and return types are\n  inherited from the overridden method, including from `Protocol` members and\n  `abstractmethod` declarations.\n- **Bare `ClassVar` annotations**: `x: ClassVar = 1` declares `int` rather than the union of\n  `Unknown` and the inferred type.\n- **Empty collection literals**: `[]` has element type `Never`, so passing one to a generic\n  call solves from it precisely instead of leaking `Unknown`.\n\nAn explicit annotation always takes priority over any of the above.\n\nDefaults to `true`, and to `false` under the `ty-compatible` type checking preset.",
           "type": [
             "boolean",
             "null"
           ]
         },
         "strict-equality-semantics": {
-          "description": "Configure ty's behavior regarding type inference and narrowing of equality\nchecks. Defaults to `false`.\n\nBy default, ty makes various assumptions about equality checks that match the\nintuitions of most Python programmers, but may not be fully sound in all situations.\nEnabling this option makes ty more conservative about these assumptions, making it\nless likely to infer `Literal[True]` or `Literal[False]` as the result of an\nequality check. This has various effects on type checking, including fewer type\nnarrowing opportunities and more conservative assumptions regarding control flow.\n\nOne way in which ty will by default make unsound assumptions is by narrowing an\nobject `x` of type `str` to `Literal[\"a\"]` after an `if x == \"a\"` check. This is\nunsound because a subclass of `str` with value `\"a\"` will (by default) compare equal\nto `\"a\"`, but will not be of type `Literal[\"a\"]`:\n\n```pycon\n>>> # `Literal[\"a\"]` can only be inhabited by instances of exactly `str`, not\n>>> # subclasses, but str subclasses compare equal by default:\n>>> class StringSubclass(str): ...\n...\n>>> StringSubclass(\"a\") == \"a\"\nTrue\n>>>\n>>> # This also applies to `StrEnum`s:\n>>> from enum import StrEnum\n>>> class MyEnum(StrEnum):\n...     A = \"a\"\n...\n>>> MyEnum.A == \"a\"\nTrue\n```\n\nEnabling this option prevents the unsound narrowing of `x` to `Literal[\"a\"]`,\nand instead keeps it as `str`:\n\n```python\nfrom typing import Literal\n\ndef parse(value: str) -> Literal[\"a\"] | None:\n    # with `strict-equality-semantics = true`, no narrowing will occur here,\n    # and an error will be emitted on the `return` statement.\n    if value == \"a\":\n        return value\n    return None\n```\n\nAnother assumption ty makes by default is that subclasses will never override `__eq__` or\n`__ne__`. This allows ty to narrow the following union based on an equality check, despite\nthe fact that an instance of a subclass of `Foo` could compare equal to `None`, and it's\nperfectly valid to pass an instance of a subclass into the `x` parameter of this function:\n\n```python\ndef narrow(x: Foo | None, other: Foo) -> None:\n    if x == other:\n        # with this option enabled, `x` will still have type `Foo | None` here,\n        # since it is legal to subclass `Foo` and override its `__eq__` method.\n        reveal_type(x)\n```\n\nMany operations in Python implicitly call `__eq__` under the hood; enabling this option\nwill also impact those operations. For example, this option will also impact narrowing from\n`in` checks, and narrowing in `match` statements that use value patterns:\n\n```python\ndef narrow_in(x: Foo | None, other: list[Foo]) -> None:\n    if x in other:\n        # with this option enabled, `x` will still have type `Foo | None` here,\n        # since the `in` operator implicitly calls `__eq__` on each element of `other`.\n        reveal_type(x)\n\n\ndef narrow_match(x: str) -> None:\n    match x:\n        case \"a\":\n            # with this option enabled, `x` will still have type `str` here,\n            # since this `case` branch will be taken by any object that compares\n            # equal to `\"a\"`, including subclasses of `str`.\n            reveal_type(x)\n```",
+          "description": "Configure ty's behavior regarding type inference and narrowing of equality\nchecks.\n\nDefaults to `true`, and to `false` under the `ty-compatible` type checking preset.\n\nWith this option disabled, ty makes various assumptions about equality checks that\nmatch the intuitions of most Python programmers, but may not be fully sound in all\nsituations. Leaving it enabled makes ty conservative about those assumptions, making it\nless likely to infer `Literal[True]` or `Literal[False]` as the result of an\nequality check. This has various effects on type checking, including fewer type\nnarrowing opportunities and more conservative assumptions regarding control flow.\n\nOne such unsound assumption is narrowing an object `x` of type `str` to `Literal[\"a\"]`\nafter an `if x == \"a\"` check. This is unsound because a subclass of `str` with value\n`\"a\"` will (by default) compare equal to `\"a\"`, but will not be of type `Literal[\"a\"]`:\n\n```pycon\n>>> # `Literal[\"a\"]` can only be inhabited by instances of exactly `str`, not\n>>> # subclasses, but str subclasses compare equal by default:\n>>> class StringSubclass(str): ...\n...\n>>> StringSubclass(\"a\") == \"a\"\nTrue\n>>>\n>>> # This also applies to `StrEnum`s:\n>>> from enum import StrEnum\n>>> class MyEnum(StrEnum):\n...     A = \"a\"\n...\n>>> MyEnum.A == \"a\"\nTrue\n```\n\nThis option prevents the unsound narrowing of `x` to `Literal[\"a\"]`, and instead keeps\nit as `str`:\n\n```python\nfrom typing import Literal\n\ndef parse(value: str) -> Literal[\"a\"] | None:\n    # with `strict-equality-semantics` enabled, no narrowing will occur here,\n    # and an error will be emitted on the `return` statement.\n    if value == \"a\":\n        return value\n    return None\n```\n\nAnother assumption ty makes by default is that subclasses will never override `__eq__` or\n`__ne__`. This allows ty to narrow the following union based on an equality check, despite\nthe fact that an instance of a subclass of `Foo` could compare equal to `None`, and it's\nperfectly valid to pass an instance of a subclass into the `x` parameter of this function:\n\n```python\ndef narrow(x: Foo | None, other: Foo) -> None:\n    if x == other:\n        # with this option enabled, `x` still has type `Foo | None` here,\n        # since it is legal to subclass `Foo` and override its `__eq__` method.\n        reveal_type(x)\n```\n\nMany operations in Python implicitly call `__eq__` under the hood, and this option\nimpacts those too. For example, it also impacts narrowing from `in` checks, and narrowing\nin `match` statements that use value patterns:\n\n```python\ndef narrow_in(x: Foo | None, other: list[Foo]) -> None:\n    if x in other:\n        # with this option enabled, `x` still has type `Foo | None` here,\n        # since the `in` operator implicitly calls `__eq__` on each element of `other`.\n        reveal_type(x)\n\n\ndef narrow_match(x: str) -> None:\n    match x:\n        case \"a\":\n            # with this option enabled, `x` still has type `str` here,\n            # since this `case` branch will be taken by any object that compares\n            # equal to `\"a\"`, including subclasses of `str`.\n            reveal_type(x)\n```",
           "type": [
             "boolean",
             "null"
@@ -639,7 +650,7 @@
         "blanket-ignore-comment": {
           "title": "detects blanket `ty: ignore` comments",
           "description": "## What it does\n\nChecks for `ty: ignore` comments that don't specify which rules to ignore.\n\n## Why is this bad?\n\nA blanket `ty: ignore` comment suppresses every type-checking diagnostic on the\napplicable line or file. Specifying rule codes documents which diagnostics are\nexpected and prevents the comment from silencing unrelated errors.\n\n## Examples\n\n```py\n# error\nvalue = unknown  # ty: ignore\n```\n\nUse instead:\n\n```py\nvalue = unknown  # ty: ignore[unresolved-reference]\n```",
-          "default": "ignore",
+          "default": "warn",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
@@ -749,7 +760,7 @@
         "division-by-zero": {
           "title": "detects division by zero",
           "description": "## What it does\n\nIt detects division by zero.\n\n## Why is this bad?\n\nDividing by zero raises a `ZeroDivisionError` at runtime.\n\n## Rule status\n\nThis rule is currently disabled by default because of the number of\nfalse positives it can produce.\n\n## Examples\n\n```python\n5 / 0  # error\n```",
-          "default": "ignore",
+          "default": "error",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
@@ -1639,7 +1650,7 @@
         "missing-override-decorator": {
           "title": "detects methods that override a superclass member without an `@override` annotation",
           "description": "## What it does\n\nChecks for methods that override a method or attribute in a superclass but are not decorated with `@override`.\n\nThis rule is disabled by default. Enable it to opt in to strict `@override` enforcement for a project.\n\n## Exemptions\n\nOverriding `__init__`, `__new__`, `__init_subclass__`, or `__post_init__` does not require\n`@override`, even if the method is explicitly declared by a superclass.\n\n## Why is this bad?\n\nWithout an `@override` annotation, refactors can silently change whether a method is an override.\nRequiring `@override` on every override lets ty report when an intended override stops overriding\nanything, and when a method unexpectedly starts overriding a superclass member.\n\n## Example\n\n```toml\n[environment]\npython-version = \"3.12\"\n```\n\n```python\nfrom typing import override\n\n\nclass Parent:\n    def method(self) -> int:\n        return 1\n\n\nclass Child(Parent):\n    # when the rule is enabled\n    def method(self) -> int:  # error\n        return 2\n\n\nclass ExplicitChild(Parent):\n    @override\n    def method(self) -> int:  # fine\n        return 2\n```",
-          "default": "ignore",
+          "default": "error",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
@@ -1649,7 +1660,7 @@
         "missing-type-argument": {
           "title": "detects generic types used without explicit type parameters in type expressions",
           "description": "## What it does\n\nChecks for generic types used without type parameters in type expressions.\n\n## Why is this bad?\n\nUsing a generic type without specifying its type parameters results in the\ntype parameters being implicitly filled with `Unknown`, reducing the\nprecision of type checking. Explicit type parameters make the intended types\nclear and enable the type checker to catch more errors.\n\n## Examples\n\n```python\nimport re\n\n\ndef handle(m: re.Match) -> str:  # error: [missing-type-argument]\n    return m.string\n\n\n# Use explicit type parameters instead:\ndef handle(m: re.Match[str]) -> str:\n    return m.string\n```",
-          "default": "ignore",
+          "default": "error",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
@@ -1809,7 +1820,7 @@
         "override-raise": {
           "title": "detects an override that raises more than the method it overrides",
           "description": "## What it does\nChecks for a method that can raise an exception the method it overrides\ncannot.\n\n## Why is this bad?\nA call is checked against the type it can see. When a base-class method\ncannot raise, its callers are told nothing escapes — but a subclass\nsubstituted for the base can still raise from that call, and no caller\non the base type has any reason to handle it.\n\nThis is off by default: it is a strictness option, and honouring it means\na base method's exception set bounds every override of it.\n\n## Example\n\n```by\nclass A:\n    def foo(self): ...\n\nclass B(A):\n    override def foo(self):\n        raise TypeError  # error: `A.foo` cannot raise\n\ndef get() -> A:\n    return B()\n\ndef main():\n    get().foo()  # nothing here says this can raise\n```",
-          "default": "ignore",
+          "default": "error",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
@@ -1839,7 +1850,7 @@
         "possibly-missing-attribute": {
           "title": "detects references to possibly missing attributes",
           "description": "## What it does\n\nChecks for possibly missing attributes.\n\n## Why is this bad?\n\nAttempting to access a missing attribute will raise an `AttributeError` at runtime.\n\n## Rule status\n\nThis rule is currently disabled by default because of the number of\nfalse positives it can produce.\n\n## Examples\n\n```python\nclass A:\n    if __name__ == \"__main__\":\n        c = 0\n\n\n# AttributeError: type object 'A' has no attribute 'c'\nA.c  # error\n```",
-          "default": "ignore",
+          "default": "error",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
@@ -1859,7 +1870,7 @@
         "possibly-missing-import": {
           "title": "detects possibly missing imports",
           "description": "## What it does\n\nChecks for imports of symbols that may be missing.\n\n## Why is this bad?\n\nImporting a missing module or name will raise a `ModuleNotFoundError`\nor `ImportError` at runtime.\n\n## Rule status\n\nThis rule is currently disabled by default because of the number of\nfalse positives it can produce.\n\n## Examples\n\n`module.py`:\n\n```python\nimport datetime\n\nif datetime.date.today().weekday() != 6:\n    a = 1\n```\n\n`main.py`:\n\n```python\n# ImportError: cannot import name 'a' from 'module'\nfrom module import a  # error\n```",
-          "default": "ignore",
+          "default": "error",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
@@ -1879,7 +1890,7 @@
         "possibly-unresolved-reference": {
           "title": "detects references to possibly undefined names",
           "description": "## What it does\n\nChecks for references to names that are possibly not defined.\n\n## Why is this bad?\n\nUsing an undefined variable will raise a `NameError` at runtime.\n\n## Rule status\n\nThis rule is currently disabled by default because of the number of\nfalse positives it can produce.\n\n## Example\n\n```python\nfor i in range(int(input())):\n    x = i\n\n# NameError: name 'x' is not defined\nprint(x)  # error\n```",
-          "default": "ignore",
+          "default": "error",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
@@ -2229,7 +2240,7 @@
         "unknown-fixture": {
           "title": "detects a pytest parameter that resolves to no known fixture",
           "description": "## What it does\nChecks a pytest test or fixture parameter that resolves to no known\nfixture.\n\n## Why is this bad?\npytest fails such a request at collection time with a \"fixture not\nfound\" error. A renamed or misspelled fixture leaves a parameter that\nno provider satisfies.\n\n## Off by default\nThird-party plugins inject fixtures through `pytest11` entry points,\nwhich this check does not yet discover, so it would false-positive on\nany plugin-provided fixture. It ships as an opt-in lint until plugin\ndiscovery lands.\n\n## Example\n\n```py\ndef test_thing(no_such_fixture) -> None:  # requests an unknown fixture\n    ...\n```",
-          "default": "ignore",
+          "default": "error",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
@@ -2439,7 +2450,7 @@
         "unsupported-dynamic-base": {
           "title": "detects dynamic class bases that are unsupported as ty could not feasibly calculate the class's MRO",
           "description": "## What it does\n\nChecks for dynamic class definitions (using `type()`) that have bases\nwhich are unsupported by ty.\n\nThis is equivalent to `unsupported-base` but applies to classes created\nvia `type()` rather than `class` statements.\n\n## Why is this bad?\n\nIf a dynamically created class has a base that is an unsupported type\nsuch as `type[T]`, ty will not be able to resolve the\n[method resolution order] (MRO) for the class. This may lead to an inferior\nunderstanding of your codebase and unpredictable type-checking behavior.\n\n## Default level\n\nThis rule is disabled by default because it will not cause a runtime error,\nand may be noisy on codebases that use `type()` in highly dynamic ways.\n\n## Examples\n\n```python\nclass Base: ...\n\n\ndef factory(base: type[Base]) -> type:\n    # `base` has type `type[Base]`, not `type[Base]` itself\n    return type(\"Dynamic\", (base,), {})  # error: [unsupported-dynamic-base]\n```\n\n[method resolution order]: https://docs.python.org/3/glossary.html#term-method-resolution-order",
-          "default": "ignore",
+          "default": "warn",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"
@@ -2647,6 +2658,23 @@
         }
       },
       "additionalProperties": false
+    },
+    "TypeCheckingPreset": {
+      "description": "the set of defaults a project's rules and analysis settings start from",
+      "oneOf": [
+        {
+          "title": "Strict",
+          "description": "Every diagnostic is enabled, and every analysis option that buys soundness is on.",
+          "type": "string",
+          "const": "strict"
+        },
+        {
+          "title": "Ty compatible",
+          "description": "The defaults of [ty](https://github.com/astral-sh/ty), which basedpython is built on.\nbasedpython's own diagnostics and analysis options are off, so that a project reports\nwhat ty itself would report.",
+          "type": "string",
+          "const": "ty-compatible"
+        }
+      ]
     },
     "string": {
       "type": "string"

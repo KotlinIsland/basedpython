@@ -3,6 +3,7 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow};
+use ruff_db::diagnostic::Severity;
 use ruff_db::files::{File, FileError, system_path_to_file};
 use ruff_db::source::source_text;
 use ruff_db::system::{
@@ -2151,11 +2152,12 @@ fn changes_to_user_configuration() -> anyhow::Result<()> {
     let diagnostics = case.db().check_file(foo);
 
     assert!(
-        diagnostics.len() == 1,
-        "Expected exactly one diagnostic but got: {diagnostics:#?}"
+        diagnostics.len() == 1 && diagnostics[0].severity() == Severity::Warning,
+        "Expected exactly one warning but got: {diagnostics:#?}"
     );
 
-    // Removing the option from the user configuration must not retain the old warning level.
+    // Removing the option from the user configuration must not retain the old warning level: the
+    // rule goes back to the error severity the default preset gives it.
     update_file(case.root_path().join("home/.config/ty/ty.toml"), "")?;
 
     let changes = case.stop_watch(event_for_file("ty.toml"));
@@ -2163,8 +2165,8 @@ fn changes_to_user_configuration() -> anyhow::Result<()> {
 
     let diagnostics = case.db().check_file(foo);
     assert!(
-        diagnostics.is_empty(),
-        "Expected no diagnostics but got: {diagnostics:#?}"
+        diagnostics.len() == 1 && diagnostics[0].severity() == Severity::Error,
+        "Expected exactly one error but got: {diagnostics:#?}"
     );
 
     Ok(())

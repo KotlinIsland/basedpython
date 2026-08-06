@@ -354,6 +354,14 @@ pub(crate) struct CheckCommand {
     #[arg(long, value_name = "PLATFORM", alias = "platform")]
     python_platform: Option<String>,
 
+    /// The defaults that rules and analysis settings start from.
+    ///
+    /// `strict` enables every diagnostic and every analysis option that buys soundness.
+    /// `ty-compatible` uses ty's own defaults instead, leaving basedpython's diagnostics and
+    /// analysis options off, so that a project reports what ty itself would report.
+    #[arg(long, value_name = "PRESET", value_enum)]
+    pub(crate) type_checking_preset: Option<TypeCheckingPreset>,
+
     #[clap(flatten)]
     pub(crate) verbosity: Verbosity,
 
@@ -488,6 +496,9 @@ impl CheckCommand {
             .then_some(false)
             .or(self.error_on_warning);
         let options = Options {
+            type_checking_preset: self
+                .type_checking_preset
+                .map(|preset| RangedValue::cli(preset.into())),
             environment: Some(EnvironmentOptions {
                 python_version: self.python_version.map(Into::into).map(RangedValue::cli),
                 python_platform: self
@@ -621,6 +632,28 @@ impl clap::Args for RulesArg {
 
     fn augment_args_for_update(cmd: clap::Command) -> clap::Command {
         Self::augment_args(cmd)
+    }
+}
+
+/// The defaults that `rules` and `analysis` start from.
+#[derive(Copy, Clone, Hash, Debug, PartialEq, Eq, PartialOrd, Ord, Default, clap::ValueEnum)]
+pub enum TypeCheckingPreset {
+    /// Enable every diagnostic, and every analysis option that buys soundness (default).
+    #[default]
+    #[value(name = "strict")]
+    Strict,
+
+    /// Use ty's own defaults, leaving basedpython's diagnostics and analysis options off.
+    #[value(name = "ty-compatible")]
+    TyCompatible,
+}
+
+impl From<TypeCheckingPreset> for ty_python_semantic::TypeCheckingPreset {
+    fn from(preset: TypeCheckingPreset) -> ty_python_semantic::TypeCheckingPreset {
+        match preset {
+            TypeCheckingPreset::Strict => Self::Strict,
+            TypeCheckingPreset::TyCompatible => Self::TyCompatible,
+        }
     }
 }
 

@@ -23,12 +23,15 @@ use ruff_python_ast::script::ScriptTag;
 use serde::{Deserialize, Serialize};
 use ty_module_resolver::DistributionName;
 use ty_python_core::platform::PythonPlatform;
+use ty_python_semantic::TypeCheckingPreset;
 use ty_python_semantic::dependencies::{DependencyGroup, DependencyManifest, GroupName};
 use ty_python_semantic::lint::Level;
 
 #[derive(Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) struct MarkdownTestConfig {
+    pub(crate) type_checking_preset: Option<TypeCheckingPreset>,
+
     pub(crate) environment: Option<Environment>,
 
     pub(crate) log: Option<Log>,
@@ -58,6 +61,10 @@ pub(crate) struct MarkdownTestConfig {
 }
 
 impl MarkdownTestConfig {
+    pub(crate) fn type_checking_preset(&self) -> TypeCheckingPreset {
+        self.type_checking_preset.unwrap_or_default()
+    }
+
     pub(crate) fn python_version(&self) -> Option<PythonVersion> {
         self.environment.as_ref()?.python_version
     }
@@ -144,6 +151,7 @@ pub(crate) struct Dependencies {
 #[derive(Deserialize, Debug, Default)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(crate) struct ScriptOptions {
+    pub(crate) type_checking_preset: Option<TypeCheckingPreset>,
     pub(crate) rules: Option<Rules>,
     pub(crate) analysis: Option<Analysis>,
 }

@@ -22,6 +22,13 @@ fn configuration_rule_severity() -> anyhow::Result<()> {
     success: false
     exit_code: 1
     ----- stdout -----
+    error[division-by-zero]: Cannot divide object of type `Literal[4]` by zero
+     --> test.py:2:5
+      |
+    2 | y = 4 / 0
+      |     ^^^^^
+    info: rule `division-by-zero` is enabled by default
+
     error[unresolved-reference]: Name `prin` used when not defined
      --> test.py:7:1
       |
@@ -29,7 +36,14 @@ fn configuration_rule_severity() -> anyhow::Result<()> {
       | ^^^^
     info: rule `unresolved-reference` is enabled by default
 
-    Found 1 diagnostic
+    error[possibly-unresolved-reference]: Name `x` used when possibly not defined
+     --> test.py:7:6
+      |
+    7 | prin(x)  # unresolved-reference
+      |      ^
+    info: rule `possibly-unresolved-reference` is enabled by default
+
+    Found 3 diagnostics
 
     ----- stderr -----
     INFO Indexed 1 file(s) in 0.000s
@@ -55,7 +69,14 @@ fn configuration_rule_severity() -> anyhow::Result<()> {
       |     ^^^^^
     info: rule `division-by-zero` was selected in the configuration file
 
-    Found 1 diagnostic
+    error[possibly-unresolved-reference]: Name `x` used when possibly not defined
+     --> test.py:7:6
+      |
+    7 | prin(x)  # unresolved-reference
+      |      ^
+    info: rule `possibly-unresolved-reference` is enabled by default
+
+    Found 2 diagnostics
 
     ----- stderr -----
     INFO Indexed 1 file(s) in 0.000s
@@ -107,7 +128,13 @@ fn basedpython_configuration_section() -> anyhow::Result<()> {
     7 | prin(x)  # unresolved-reference
       | ^^^^
 
-    Found 2 diagnostics
+    error[possibly-unresolved-reference]: Name `x` used when possibly not defined
+     --> test.py:7:6
+      |
+    7 | prin(x)  # unresolved-reference
+      |      ^
+
+    Found 3 diagnostics
 
     ----- stderr -----
     ");
@@ -149,6 +176,13 @@ fn cli_rule_severity() -> anyhow::Result<()> {
     info: make sure your Python environment is properly configured: https://docs.astral.sh/ty/modules/#python-environment
     info: rule `unresolved-import` is enabled by default
 
+    error[division-by-zero]: Cannot divide object of type `Literal[4]` by zero
+     --> test.py:4:5
+      |
+    4 | y = 4 / 0
+      |     ^^^^^
+    info: rule `division-by-zero` is enabled by default
+
     error[unresolved-reference]: Name `prin` used when not defined
      --> test.py:9:1
       |
@@ -156,7 +190,14 @@ fn cli_rule_severity() -> anyhow::Result<()> {
       | ^^^^
     info: rule `unresolved-reference` is enabled by default
 
-    Found 2 diagnostics
+    error[possibly-unresolved-reference]: Name `x` used when possibly not defined
+     --> test.py:9:6
+      |
+    9 | prin(x)  # unresolved-reference
+      |      ^
+    info: rule `possibly-unresolved-reference` is enabled by default
+
+    Found 4 diagnostics
 
     ----- stderr -----
     INFO Indexed 1 file(s) in 0.000s
@@ -194,7 +235,14 @@ fn cli_rule_severity() -> anyhow::Result<()> {
       |     ^^^^^
     info: rule `division-by-zero` was selected on the command line
 
-    Found 2 diagnostics
+    error[possibly-unresolved-reference]: Name `x` used when possibly not defined
+     --> test.py:9:6
+      |
+    9 | prin(x)  # unresolved-reference
+      |      ^
+    info: rule `possibly-unresolved-reference` is enabled by default
+
+    Found 3 diagnostics
 
     ----- stderr -----
     INFO Indexed 1 file(s) in 0.000s
@@ -225,6 +273,13 @@ fn cli_rule_severity_precedence() -> anyhow::Result<()> {
     success: false
     exit_code: 1
     ----- stdout -----
+    error[division-by-zero]: Cannot divide object of type `Literal[4]` by zero
+     --> test.py:2:5
+      |
+    2 | y = 4 / 0
+      |     ^^^^^
+    info: rule `division-by-zero` is enabled by default
+
     error[unresolved-reference]: Name `prin` used when not defined
      --> test.py:7:1
       |
@@ -232,7 +287,14 @@ fn cli_rule_severity_precedence() -> anyhow::Result<()> {
       | ^^^^
     info: rule `unresolved-reference` is enabled by default
 
-    Found 1 diagnostic
+    error[possibly-unresolved-reference]: Name `x` used when possibly not defined
+     --> test.py:7:6
+      |
+    7 | prin(x)  # unresolved-reference
+      |      ^
+    info: rule `possibly-unresolved-reference` is enabled by default
+
+    Found 3 diagnostics
 
     ----- stderr -----
     INFO Indexed 1 file(s) in 0.000s
@@ -259,7 +321,14 @@ fn cli_rule_severity_precedence() -> anyhow::Result<()> {
       |     ^^^^^
     info: rule `division-by-zero` was selected on the command line
 
-    Found 1 diagnostic
+    error[possibly-unresolved-reference]: Name `x` used when possibly not defined
+     --> test.py:7:6
+      |
+    7 | prin(x)  # unresolved-reference
+      |      ^
+    info: rule `possibly-unresolved-reference` is enabled by default
+
+    Found 2 diagnostics
 
     ----- stderr -----
     INFO Indexed 1 file(s) in 0.000s

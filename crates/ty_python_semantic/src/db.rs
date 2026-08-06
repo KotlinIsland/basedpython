@@ -94,7 +94,7 @@ pub(crate) mod tests {
     use anyhow::Context;
     use ty_python_core::platform::PythonPlatform;
 
-    use crate::{ProgramEnvironment, check_file_unwrap, default_lint_registry};
+    use crate::{ProgramEnvironment, TypeCheckingPreset, check_file_unwrap, default_lint_registry};
     use ruff_db::Db as SourceDb;
     use ruff_db::files::Files;
     use ruff_db::system::{
@@ -141,7 +141,10 @@ pub(crate) mod tests {
                 vendored,
                 events,
                 files: Files::default(),
-                rule_selection: Arc::new(RuleSelection::from_registry(default_lint_registry())),
+                rule_selection: Arc::new(RuleSelection::from_preset(
+                    default_lint_registry(),
+                    TypeCheckingPreset::default(),
+                )),
                 analysis_settings: AnalysisSettings::default().into(),
                 open_files: rustc_hash::FxHashSet::default(),
                 program_settings,
@@ -167,10 +170,15 @@ pub(crate) mod tests {
         ///
         /// For a test about the *shape* a signature is parsed into rather than about what is
         /// recovered for the parts nobody wrote.
+        /// The gradual baseline: nothing is recovered that an annotation did not write down.
+        ///
+        /// `sound-types` reaches the same positions from the other side, so a test that wants a
+        /// signature to say only what the source says has to start from the preset that leaves
+        /// both off rather than from the default one.
         pub(crate) fn without_inferred_signatures(mut self) -> Self {
             self.analysis_settings = AnalysisSettings {
                 infer_unannotated_signatures: false,
-                ..AnalysisSettings::default()
+                ..AnalysisSettings::from_preset(TypeCheckingPreset::TyCompatible)
             }
             .into();
             self

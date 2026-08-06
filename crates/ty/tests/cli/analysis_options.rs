@@ -215,6 +215,7 @@ fn sound_types_is_per_module() -> anyhow::Result<()> {
             # a gradual module has to opt out of signature recovery too, or its own unannotated
             # parameters would be precise whatever `sound-types` says
             [tool.ty.analysis]
+            sound-types = false
             infer-unannotated-signatures = false
 
             [[tool.ty.overrides]]
@@ -611,9 +612,11 @@ fn redundant_return_annotation_is_gated_on_infer_unannotated_signatures() -> any
             [tool.ty.environment]
             python-version = "3.13"
 
-            # recovery is on by default, so the gradual half has to say it is off
+            # recovery is on by default, so the gradual half has to say it is off. `sound-types`
+            # recovers the same return type from the other side, so it has to be off too
             [tool.ty.analysis]
             infer-unannotated-signatures = false
+            sound-types = false
 
             [[tool.ty.overrides]]
             include = ["inferred/**"]

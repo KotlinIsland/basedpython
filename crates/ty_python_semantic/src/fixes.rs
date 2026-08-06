@@ -1089,7 +1089,7 @@ class B(A):
         pass"#
         ),
          @r#"
-        Added 2 suppressions
+        Added 3 suppressions
 
         ## Fixed source
 
@@ -1100,7 +1100,7 @@ class B(A):
 
 
         class B(A):
-            def test(
+            def test(  # ty: ignore[missing-override-decorator]
                 self,
                 b: str
             ) -> A.b:  # ty: ignore[invalid-method-override, unresolved-attribute]
@@ -1125,7 +1125,7 @@ class B(A):
         pass"#
         ),
          @r#"
-        Added 2 suppressions
+        Added 3 suppressions
 
         ## Fixed source
 
@@ -1136,7 +1136,7 @@ class B(A):
 
 
         class B(A):
-            def test(  # ty:ignore[unresolved-reference, invalid-method-override]
+            def test(  # ty:ignore[unresolved-reference, invalid-method-override, missing-override-decorator]
                 self,
                 b: str
             ) -> A.b:  # ty: ignore[unresolved-attribute]
@@ -1149,7 +1149,7 @@ class B(A):
          --> test.py:7:28
           |
         6 | class B(A):
-        7 |     def test(  # ty:ignore[unresolved-reference, invalid-method-override]
+        7 |     def test(  # ty:ignore[unresolved-reference, invalid-method-override, missing-override-decorator]
           |                            ^^^^^^^^^^^^^^^^^^^^
         8 |         self,
         9 |         b: str
@@ -1157,8 +1157,8 @@ class B(A):
         help: Remove the unused suppression code
           |
         6 | class B(A):
-          -     def test(  # ty:ignore[unresolved-reference, invalid-method-override]
-        7 +     def test(  # ty:ignore[invalid-method-override]
+          -     def test(  # ty:ignore[unresolved-reference, invalid-method-override, missing-override-decorator]
+        7 +     def test(  # ty:ignore[invalid-method-override, missing-override-decorator]
         8 |         self,
           |
         "#);
@@ -1280,24 +1280,6 @@ class B(A):
         # ty: ignore[ignore-comment-unknown-rule] # ty: ignore[not-a-rule] # ty: ignore[division-by-zero]
         value = 1 / 0
         ```
-
-        ## Diagnostics after applying fixes
-
-        warning[unused-ignore-comment]: Unused `ty: ignore` directive
-         --> test.py:2:68
-          |
-        1 | seen_code = True
-        2 | # ty: ignore[ignore-comment-unknown-rule] # ty: ignore[not-a-rule] # ty: ignore[division-by-zero]
-          |                                                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-        3 | value = 1 / 0
-          |
-        help: Remove the unused suppression comment
-          |
-        1 | seen_code = True
-          - # ty: ignore[ignore-comment-unknown-rule] # ty: ignore[not-a-rule] # ty: ignore[division-by-zero]
-        2 + # ty: ignore[ignore-comment-unknown-rule] # ty: ignore[not-a-rule]
-        3 | value = 1 / 0
-          |
         "
         );
     }
@@ -1624,7 +1606,7 @@ class B(A):
                 ]
                 "#),
             @r#"
-        Added 1 suppressions
+        Added 2 suppressions
 
         ## Fixed source
 
@@ -1632,7 +1614,7 @@ class B(A):
         def f(value: int) -> int: return value
 
         seen_code = True
-        # ty: ignore[invalid-assignment, unresolved-reference]
+        # ty: ignore[invalid-assignment, blanket-ignore-comment, unresolved-reference]
         values: tuple[int] = [
             # ty: ignore
             f("bad"),
@@ -1656,13 +1638,13 @@ class B(A):
                 ]
                 "#),
             @"
-        Added 1 suppressions
+        Added 2 suppressions
 
         ## Fixed source
 
         ```py
         seen_code = True
-        # ty: ignore[unresolved-reference]
+        # ty: ignore[blanket-ignore-comment, unresolved-reference]
         values = [
             # ty: ignore
             missing,

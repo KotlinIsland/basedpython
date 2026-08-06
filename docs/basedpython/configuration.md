@@ -9,7 +9,7 @@ a project is configured by a `basedpython.toml` at its root, or by the
 main = "app.cli"
 
 [rules]
-override-raise = "error"
+override-raise = "ignore"
 ```
 
 the same settings in `pyproject.toml`, where every table is prefixed:
@@ -19,11 +19,40 @@ the same settings in `pyproject.toml`, where every table is prefixed:
 main = "app.cli"
 
 [tool.basedpython.rules]
-override-raise = "error"
+override-raise = "ignore"
 ```
 
 a project has one configuration, not one per command: `by check`, `by run` and
 `by build` all read the same options
+
+## the preset
+
+`type-checking-preset` supplies the defaults that `rules` and `analysis` start from:
+
+```toml
+type-checking-preset = "ty-compatible"
+```
+
+| preset          | what it means                                                                                                |
+| --------------- | ------------------------------------------------------------------------------------------------------------ |
+| `strict`        | every diagnostic is enabled, and every analysis option that buys soundness is on. this is the default        |
+| `ty-compatible` | [ty](https://github.com/astral-sh/ty)'s own defaults: basedpython's diagnostics and analysis options are off |
+
+a preset is a starting point, not a straitjacket — `rules` and `analysis` are still
+read, and both still win over it:
+
+```toml
+type-checking-preset = "ty-compatible"
+
+[analysis]
+# but keep this one basedpython feature
+precise-unsolved-typevars = true
+```
+
+the one thing a preset does that no other option can undo is decide which diagnostics
+exist at all. a basedpython-only rule is absent under `ty-compatible`, so naming it in
+`rules` is reported the same way a misspelled rule is, and `rules = { all = "error" }`
+does not resurrect it
 
 ## option groups
 
@@ -97,15 +126,21 @@ directory is read as a fallback. any project setting beats it
 ## per-path overrides
 
 an override applies `rules` and `analysis` settings to the files it matches,
-which is how a strictness option is adopted one directory at a time:
+which is how a strictness option is relaxed for the part of a project that is
+not ready for it yet:
 
 ```toml
+[analysis]
+sound-types = false
+
 [[overrides]]
 include = ["src/core/**"]
 
 [overrides.analysis]
 sound-types = true
 ```
+
+an override varies `rules` and `analysis`, never the preset those start from
 
 `include` defaults to everything and `exclude` to nothing; within one override
 `exclude` wins. later overrides beat earlier ones, and all of them beat the

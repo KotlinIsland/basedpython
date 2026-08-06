@@ -1,4 +1,5 @@
 use crate::diagnostic::did_you_mean;
+use crate::preset::TypeCheckingPreset;
 use core::fmt;
 use itertools::Itertools;
 use ruff_db::diagnostic::{DiagnosticId, LintName, Severity};
@@ -19,7 +20,13 @@ pub struct LintMetadata {
     pub raw_documentation: &'static str,
 
     /// The default level of the lint if the user doesn't specify one.
+    ///
+    /// This is the level under the default [`TypeCheckingPreset`]; use
+    /// [`TypeCheckingPreset::level`] to resolve the level under any other preset.
     pub default_level: Level,
+
+    /// How the lint behaves under the `ty-compatible` [`TypeCheckingPreset`].
+    pub ty_compat: TyCompat,
 
     pub status: LintStatus,
 
@@ -52,6 +59,27 @@ pub enum Level {
     ///
     /// The lint is enabled and diagnostics have an error severity.
     Error,
+}
+
+/// how a lint behaves under the `ty-compatible` [`TypeCheckingPreset`]
+///
+/// basedpython adds diagnostics that ty doesn't have, and enables shared ones that ty leaves
+/// off. this records which, so that the `ty-compatible` preset can reproduce ty's own selection.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
+#[cfg_attr(
+    feature = "serde",
+    derive(serde::Serialize),
+    serde(rename_all = "kebab-case")
+)]
+pub enum TyCompat {
+    /// ty has the lint, at the same level as [`LintMetadata::default_level`]
+    Same,
+
+    /// ty has the lint, but at a different level
+    Level(Level),
+
+    /// the lint is a basedpython addition, so under `ty-compatible` it doesn't exist
+    BasedPython,
 }
 
 impl Level {
@@ -127,8 +155,13 @@ impl LintMetadata {
         lint_documentation_url(self.name())
     }
 
+    /// the level under the default [`TypeCheckingPreset`]
     pub fn default_level(&self) -> Level {
         self.default_level
+    }
+
+    pub fn ty_compat(&self) -> TyCompat {
+        self.ty_compat
     }
 
     pub fn status(&self) -> &LintStatus {
@@ -149,8 +182,16 @@ impl LintMetadata {
             LintStatus::Removed { since, reason } => format!("Removed (since {since}): {reason}"),
         };
 
+        let preset = match self.ty_compat() {
+            TyCompat::Same => String::new(),
+            TyCompat::Level(level) => format!(" | Level under `ty-compatible`: {level}"),
+            TyCompat::BasedPython => {
+                " | basedpython only, so absent under `ty-compatible`".to_string()
+            }
+        };
+
         format!(
-            "# {name}\n\nDefault level: {level} | {status}\n\n{documentation}",
+            "# {name}\n\nDefault level: {level} | {status}{preset}\n\n{documentation}",
             name = self.name(),
             level = self.default_level(),
             documentation = self.documentation().trim(),
@@ -177,6 +218,7 @@ pub const fn lint_metadata_defaults(status: LintStatus) -> LintMetadata {
         summary: "",
         raw_documentation: "",
         default_level: Level::Error,
+        ty_compat: TyCompat::Same,
         status,
         file: "",
         line: 1,
@@ -572,27 +614,33 @@ pub struct RuleSelection {
 }
 
 impl RuleSelection {
-    /// Creates a new rule selection from all known lints in the registry that are enabled
-    /// according to their default severity.
-    pub fn from_registry(registry: &LintRegistry) -> Self {
-        Self::from_registry_with_default(registry, None)
+    /// Creates a new rule selection from all lints the `preset` enables, at the level it gives
+    /// them.
+    pub fn from_preset(registry: &LintRegistry, preset: TypeCheckingPreset) -> Self {
+        Self::from_preset_with_default(registry, preset, None)
     }
 
-    /// Creates a new rule selection from all known lints in the registry, including lints that are default by default.
-    /// Lints that are disabled by default use the `default_severity`.
-    pub fn all(registry: &LintRegistry, default_severity: Severity) -> Self {
-        Self::from_registry_with_default(registry, Some(default_severity))
-    }
-
-    fn from_registry_with_default(
+    /// Creates a new rule selection from every lint the `preset` includes, including the ones it
+    /// leaves disabled. Those use the `default_severity`.
+    pub fn all(
         registry: &LintRegistry,
+        preset: TypeCheckingPreset,
+        default_severity: Severity,
+    ) -> Self {
+        Self::from_preset_with_default(registry, preset, Some(default_severity))
+    }
+
+    fn from_preset_with_default(
+        registry: &LintRegistry,
+        preset: TypeCheckingPreset,
         default_severity: Option<Severity>,
     ) -> Self {
         let lints = registry
             .lints()
             .iter()
+            .filter(|lint| preset.includes(lint))
             .filter_map(|lint| {
-                Severity::try_from(lint.default_level())
+                Severity::try_from(preset.level(lint))
                     .ok()
                     .or(default_severity)
                     .map(|severity| (*lint, (severity, LintSource::Default)))

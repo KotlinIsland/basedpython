@@ -113,7 +113,7 @@ error[invalid-generic-class]: Inconsistent type arguments for `Grandparent` amon
 ```
 
 ```
-info[missing-type-argument]: Missing type arguments for generic class `Parent` (expected 2 type arguments)
+error[missing-type-argument]: Missing type arguments for generic class `Parent` (expected 2 type arguments)
   --> src/mdtest_snippet.py:29:12
    |
 29 | class Fine(Parent, Grandparent[T1, T2]): ...  # error: [missing-type-argument]
@@ -122,7 +122,7 @@ info[missing-type-argument]: Missing type arguments for generic class `Parent` (
 ```
 
 ```
-info[missing-type-argument]: Missing type arguments for generic class `Parent3` (expected 2 type arguments)
+error[missing-type-argument]: Missing type arguments for generic class `Parent3` (expected 2 type arguments)
   --> src/mdtest_snippet.py:30:16
    |
 30 | class AlsoFine(Parent3, Parent4[T1, T2]): ...  # error: [missing-type-argument]
@@ -131,7 +131,7 @@ info[missing-type-argument]: Missing type arguments for generic class `Parent3` 
 ```
 
 ```
-info[missing-type-argument]: Missing type arguments for generic class `Parent` (expected 2 type arguments)
+error[missing-type-argument]: Missing type arguments for generic class `Parent` (expected 2 type arguments)
   --> src/mdtest_snippet.py:35:13
    |
 35 | class Dandy(Parent, Parent3, Parent4): ...
@@ -140,7 +140,7 @@ info[missing-type-argument]: Missing type arguments for generic class `Parent` (
 ```
 
 ```
-info[missing-type-argument]: Missing type arguments for generic class `Parent3` (expected 2 type arguments)
+error[missing-type-argument]: Missing type arguments for generic class `Parent3` (expected 2 type arguments)
   --> src/mdtest_snippet.py:35:21
    |
 35 | class Dandy(Parent, Parent3, Parent4): ...
@@ -149,7 +149,7 @@ info[missing-type-argument]: Missing type arguments for generic class `Parent3` 
 ```
 
 ```
-info[missing-type-argument]: Missing type arguments for generic class `Parent4` (expected 2 type arguments)
+error[missing-type-argument]: Missing type arguments for generic class `Parent4` (expected 2 type arguments)
   --> src/mdtest_snippet.py:35:30
    |
 35 | class Dandy(Parent, Parent3, Parent4): ...
@@ -170,7 +170,7 @@ error[invalid-generic-class]: Inconsistent type arguments for `Grandparent` amon
 ```
 
 ```
-info[missing-type-argument]: Missing type arguments for generic class `Parent` (expected 2 type arguments)
+error[missing-type-argument]: Missing type arguments for generic class `Parent` (expected 2 type arguments)
   --> src/mdtest_snippet.py:42:17
    |
 42 | class BadChild4(Parent, Parent3[T1, T2], Parent4[T2, T1]): ...
@@ -203,7 +203,7 @@ error[invalid-generic-class]: Inconsistent type arguments for `Grandparent` amon
 ```
 
 ```
-info[missing-type-argument]: Missing type arguments for generic class `Parent3` (expected 2 type arguments)
+error[missing-type-argument]: Missing type arguments for generic class `Parent3` (expected 2 type arguments)
   --> src/mdtest_snippet.py:49:33
    |
 49 | class BadChild6(Parent[T1, T2], Parent3, Parent4[T2, T1]): ...
@@ -236,7 +236,7 @@ error[invalid-generic-class]: Inconsistent type arguments for `Grandparent` amon
 ```
 
 ```
-info[missing-type-argument]: Missing type arguments for generic class `Parent4` (expected 2 type arguments)
+error[missing-type-argument]: Missing type arguments for generic class `Parent4` (expected 2 type arguments)
   --> src/mdtest_snippet.py:56:50
    |
 56 | class BadChild8(Parent[T1, T2], Parent3[T2, T1], Parent4): ...
