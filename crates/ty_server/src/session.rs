@@ -1217,10 +1217,15 @@ impl Session {
                 .is_none_or(|file| !file.exists(db))
         });
 
-        // When we know the document isn't a Python source file
-        // then we'll avoid adding it to the project. (But we
-        // still track it as part of the index.)
-        let is_not_python = matches!(language_id, Some(LanguageId::Other));
+        // A document in a language the server has no services at all for is
+        // tracked by the index but never enters the project.
+        let is_unsupported = matches!(language_id, Some(LanguageId::Other));
+
+        // A django template does have language services, so its `File` has to be
+        // interned for its source to be readable — but it is not python, so it is
+        // never added to the project's open-file set. That is what keeps the type
+        // checker from ever being handed a `.html` file.
+        let is_template = language_id.is_some_and(LanguageId::is_django_template);
 
         match path {
             AnySystemPath::System(system_path) => {
@@ -1234,7 +1239,7 @@ impl Session {
                 };
                 self.apply_changes(path, &[event]);
 
-                if is_not_python {
+                if is_unsupported {
                     return;
                 }
 
@@ -1245,7 +1250,7 @@ impl Session {
 
                         // Only mark this file as open if it's part of the project.
                         // This ensures that we don't show diagnostics for files outside the project.
-                        if project.is_file_included(db, system_path).is_included() {
+                        if !is_template && project.is_file_included(db, system_path).is_included() {
                             project.open_file(db, file);
                         }
                     }
@@ -1253,13 +1258,15 @@ impl Session {
                 }
             }
             AnySystemPath::SystemVirtual(virtual_path) => {
-                if is_not_python {
+                if is_unsupported {
                     return;
                 }
 
                 let db = self.project_db_mut(path);
                 let virtual_file = db.files().virtual_file(db, virtual_path);
-                db.project().open_file(db, virtual_file.file());
+                if !is_template {
+                    db.project().open_file(db, virtual_file.file());
+                }
             }
         }
 
@@ -1417,6 +1424,11 @@ impl DocumentSnapshot {
 
     pub(crate) fn client_name(&self) -> ClientName {
         self.client_name
+    }
+
+    /// Whether this document is a django template rather than python.
+    pub(crate) fn is_django_template(&self) -> bool {
+        self.document.is_django_template()
     }
 }
 
@@ -1688,6 +1700,9 @@ pub(crate) enum DocumentHandle {
         uri: lsp_types::Uri,
         path: AnySystemPath,
         version: DocumentVersion,
+        /// What the document is written in, which decides whether a request for
+        /// it is answered by the python services or the django template ones.
+        language_id: LanguageId,
     },
     Notebook {
         uri: lsp_types::Uri,
@@ -1708,6 +1723,7 @@ impl DocumentHandle {
                 version: document.version(),
                 uri: document.uri().clone(),
                 path: DocumentKey::from_uri(document.uri()).into_file_path(),
+                language_id: document.language_id(),
             },
             Some(notebook) => Self::Cell {
                 notebook_path: notebook.clone(),
@@ -1792,6 +1808,21 @@ impl DocumentHandle {
                 .try_virtual_file(virtual_path)
                 .map(|virtual_file| virtual_file.file()),
         }
+    }
+
+    /// What this document is written in.
+    ///
+    /// A notebook and its cells are always python; only a plain text document
+    /// can be anything else.
+    pub(crate) fn language_id(&self) -> LanguageId {
+        match self {
+            Self::Text { language_id, .. } => *language_id,
+            Self::Notebook { .. } | Self::Cell { .. } => LanguageId::Python,
+        }
+    }
+
+    pub(crate) fn is_django_template(&self) -> bool {
+        self.language_id().is_django_template()
     }
 
     pub(crate) fn is_cell(&self) -> bool {

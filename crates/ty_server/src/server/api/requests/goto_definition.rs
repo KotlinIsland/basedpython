@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use lsp_types::DefinitionRequest;
 use lsp_types::{DefinitionParams, DefinitionResponse, Uri};
-use ty_ide::goto_definition;
+use ty_ide::{django_template_goto_definition, goto_definition};
 use ty_project::ProjectDatabase;
 
 use crate::document::{PositionExt, ToLink};
@@ -49,7 +49,13 @@ impl BackgroundDocumentRequestHandler for GotoDefinitionRequestHandler {
             return Ok(None);
         };
 
-        let Some(ranged) = goto_definition(db, file, offset) else {
+        let definition = if snapshot.is_django_template() {
+            django_template_goto_definition(db, file, offset)
+        } else {
+            goto_definition(db, file, offset)
+        };
+
+        let Some(ranged) = definition else {
             return Ok(None);
         };
 

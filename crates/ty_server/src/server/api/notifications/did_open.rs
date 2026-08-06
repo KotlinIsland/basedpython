@@ -29,7 +29,7 @@ impl SyncNotificationHandler for DidOpenTextDocumentHandler {
                 },
         } = params;
 
-        let text_doc = TextDocument::new(uri, text, version, language_id);
+        let text_doc = TextDocument::new(uri, text, version, &language_id);
         let document = session.open_text_document(text_doc);
         publish_diagnostics_if_needed(&document, session, client);
 

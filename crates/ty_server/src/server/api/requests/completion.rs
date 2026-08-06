@@ -56,6 +56,10 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
         ) else {
             return Ok(None);
         };
+        if snapshot.is_django_template() {
+            return Ok(django_template_completions(db, snapshot, file, offset));
+        }
+
         let client_capabilities = snapshot.resolved_client_capabilities();
         let completions = completion(
             db,
@@ -165,6 +169,92 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
 
 impl RetriableRequestHandler for CompletionRequestHandler {
     const RETRY_ON_CANCELLATION: bool = true;
+}
+
+/// The completion response for a django template document.
+///
+/// Unlike the python ones, every template completion carries the range it
+/// replaces: a template path or a namespaced url name is not a word by any
+/// client's definition of one, so leaving the replacement to the client would
+/// mangle them.
+fn django_template_completions(
+    db: &ProjectDatabase,
+    snapshot: &DocumentSnapshot,
+    file: ruff_db::files::File,
+    offset: ruff_text_size::TextSize,
+) -> Option<CompletionResponse> {
+    let completions = ty_ide::django_template_completions(db, file, offset);
+    if completions.is_empty() {
+        return None;
+    }
+
+    // Safety: we just checked that completions is not empty.
+    let max_index_len = OneIndexed::new(completions.len()).unwrap().digits().get();
+    let to_edit = |edit: &ty_ide::TemplateEdit| {
+        Some(TextEdit {
+            range: edit
+                .range
+                .to_lsp_range(db, file, snapshot.encoding())?
+                .local_range(),
+            new_text: edit.text.clone(),
+        })
+    };
+
+    let items: Vec<CompletionItem> = completions
+        .into_iter()
+        .enumerate()
+        .map(|(index, completion)| {
+            let text_edit = completion
+                .range
+                .to_lsp_range(db, file, snapshot.encoding())
+                .map(|range| {
+                    lsp_types::CompletionItemTextEdit::TextEdit(TextEdit {
+                        range: range.local_range(),
+                        new_text: completion
+                            .insert
+                            .clone()
+                            .unwrap_or_else(|| completion.label.clone()),
+                    })
+                });
+
+            let documentation = completion.documentation.map(|value| {
+                let kind = if snapshot
+                    .resolved_client_capabilities()
+                    .prefers_markdown_in_completion()
+                {
+                    lsp_types::MarkupKind::Markdown
+                } else {
+                    lsp_types::MarkupKind::PlainText
+                };
+
+                Documentation::MarkupContent(lsp_types::MarkupContent { kind, value })
+            });
+
+            CompletionItem {
+                label: completion.label,
+                kind: Some(ty_kind_to_lsp_kind(completion.kind)),
+                // the order the suggestions arrive in is the order they are
+                // meant to be shown in
+                sort_text: Some(format!("{index:-max_index_len$}")),
+                detail: completion.detail,
+                documentation,
+                text_edit,
+                additional_text_edits: completion
+                    .additional_edit
+                    .as_ref()
+                    .and_then(to_edit)
+                    .map(|edit| vec![edit]),
+                ..Default::default()
+            }
+        })
+        .collect();
+
+    Some(CompletionResponse::CompletionList(CompletionList {
+        is_incomplete: true,
+        items,
+        item_defaults: None,
+        apply_kind: None,
+    }))
 }
 
 fn ty_kind_to_lsp_kind(kind: CompletionKind) -> CompletionItemKind {

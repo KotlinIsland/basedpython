@@ -39,7 +39,7 @@ impl SyncNotificationHandler for DidOpenNotebookHandler {
 
         for cell in params.cell_text_documents {
             let cell_document =
-                TextDocument::new(cell.uri, cell.text, cell.version, cell.language_id)
+                TextDocument::new(cell.uri, cell.text, cell.version, &cell.language_id)
                     .with_notebook(notebook_path.clone());
             session.open_text_document(cell_document);
         }

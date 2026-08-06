@@ -79,11 +79,19 @@ pub enum SemanticTokenType {
     Decorator,
     BuiltinConstant,
     TypeParameter,
+    // New variants must be appended, never inserted: a token type's position in
+    // this enum is the index the LSP wire format sends for it, and the client
+    // resolves that index against the legend `all` produces.
+    /// Only produced for django templates, which have comments of their own.
+    Comment,
+    /// Only produced for django templates, whose `|`, `:` and delimiters have no
+    /// python counterpart worth colouring.
+    Operator,
 }
 
 impl SemanticTokenType {
     /// Returns all supported semantic token types as enum variants.
-    pub const fn all() -> [SemanticTokenType; 15] {
+    pub const fn all() -> [SemanticTokenType; 17] {
         [
             SemanticTokenType::Namespace,
             SemanticTokenType::Class,
@@ -100,6 +108,8 @@ impl SemanticTokenType {
             SemanticTokenType::Decorator,
             SemanticTokenType::BuiltinConstant,
             SemanticTokenType::TypeParameter,
+            SemanticTokenType::Comment,
+            SemanticTokenType::Operator,
         ]
     }
 
@@ -127,6 +137,8 @@ impl SemanticTokenType {
             SemanticTokenType::Decorator => "decorator",
             SemanticTokenType::BuiltinConstant => "builtinConstant",
             SemanticTokenType::TypeParameter => "typeParameter",
+            SemanticTokenType::Comment => "comment",
+            SemanticTokenType::Operator => "operator",
         }
     }
 }
@@ -139,6 +151,10 @@ bitflags! {
         const READONLY = 1 << 1;
         const ASYNC = 1 << 2;
         const DOCUMENTATION = 1 << 3;
+        /// The name is the language's own rather than the project's. Only
+        /// produced for django templates, where it separates a builtin tag or
+        /// filter from one the project registered.
+        const DEFAULT_LIBRARY = 1 << 4;
     }
 }
 
@@ -150,8 +166,16 @@ impl SemanticTokenModifier {
     /// clients can use these for standardized color coding and syntax
     /// highlighting. For details, refer to this LSP specification:
     /// <https://microsoft.github.io/language-server-protocol/specifications/lsp/3.17/specification/#semanticTokenModifiers>
+    /// New modifiers must be appended, never inserted: a modifier's bit position
+    /// is the index the LSP wire format sends for it.
     pub fn all_names() -> Vec<&'static str> {
-        vec!["definition", "readonly", "async", "documentation"]
+        vec![
+            "definition",
+            "readonly",
+            "async",
+            "documentation",
+            "defaultLibrary",
+        ]
     }
 }
 

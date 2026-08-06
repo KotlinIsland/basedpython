@@ -46,7 +46,8 @@ impl BackgroundDocumentRequestHandler for SemanticTokensRequestHandler {
         // because all ranges in the response must be within this **this document**.
         let mut cell_range = None;
 
-        if snapshot.document().is_cell()
+        if !snapshot.is_django_template()
+            && snapshot.document().is_cell()
             && let Some(notebook_document) = db.notebook_document(file)
             && let Some(notebook) = source_text(db, file).as_notebook()
         {
@@ -63,6 +64,7 @@ impl BackgroundDocumentRequestHandler for SemanticTokensRequestHandler {
             snapshot
                 .resolved_client_capabilities()
                 .supports_multiline_semantic_tokens(),
+            snapshot.is_django_template(),
         );
 
         Ok(Some(SemanticTokens {

@@ -2438,6 +2438,16 @@ pub fn type_parameter_names<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Vec<N
     )
 }
 
+/// The type a `for` loop over a value of type `ty` binds, or `None` when `ty`
+/// isn't iterable at all.
+///
+/// Written for django templates, whose `{% for %}` has no python expression an
+/// IDE could ask the inference engine about: the loop lives in a template file,
+/// so the element type has to be derived from the iterable's type directly.
+pub fn iterable_element_type<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<Type<'db>> {
+    Some(ty.try_iterate(db).ok()?.homogeneous_element_type(db))
+}
+
 /// The extra arms the typing spec's numeric promotion adds to a type expression
 /// that already evaluated to `ty`, rendered as they would be spelled.
 ///
