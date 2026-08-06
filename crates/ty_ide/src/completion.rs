@@ -13,10 +13,14 @@ use ruff_python_ast::token::{Token, TokenKind, Tokens};
 use ruff_python_ast::{self as ast, AnyNodeRef};
 use ruff_python_codegen::Stylist;
 use ruff_python_literal::escape::{Escape, UnicodeEscape};
+use ruff_python_literal::format::FormatSpec;
+use ruff_python_literal::mini_language::FormatSpecComponent;
+use ruff_python_literal::strftime;
 use ruff_text_size::{Ranged, TextRange, TextSize};
 use rustc_hash::FxHashSet;
 use ty_module_resolver::{KnownModule, Module, ModuleName};
 use ty_python_semantic::HasType;
+use ty_python_semantic::types::format::{SpecLanguage, spec_language};
 use ty_python_semantic::types::{SpecialFormType, UnionType};
 use ty_python_semantic::{
     Completion as SemanticCompletion, NameKind, SemanticModel,
@@ -43,6 +47,12 @@ pub fn completion<'db>(
         return vec![];
     };
     let model = SemanticModel::new(db, file);
+
+    // a format spec is inside an f-string's literal text, so this has to come
+    // before the string branch below, which has nothing to offer there
+    if let Some(completions) = format_spec_completions(db, &model, &source, &context.cursor) {
+        return completions.into_completions();
+    }
 
     if !matches!(context.kind, ContextKind::Keywords(_)) && context.cursor.is_in_string() {
         let Some(string_expr) = context.cursor.enclosing_string_literal_expr() else {
@@ -345,6 +355,13 @@ pub struct Completion<'db> {
     /// that should always be valid and can be preferred when
     /// ordering completions.
     pub is_context_specific: bool,
+    /// A few words describing this item, shown beside the label in the
+    /// completion list.
+    ///
+    /// Only set when there is no type to render there instead — a format spec
+    /// clause is punctuation, and a list of bare `<`, `%`, `,` says nothing
+    /// without it.
+    pub detail: Option<CompactString>,
     /// The documentation associated with this item, if
     /// available.
     pub documentation: Option<Docstring>,
@@ -381,6 +398,7 @@ struct CompletionBuilder<'db> {
     builtin: bool,
     is_context_specific: bool,
     is_type_check_only: bool,
+    detail: Option<CompactString>,
     documentation: Option<Docstring>,
     module_dependency_kind: Option<ModuleDependencyKind>,
     deprecated: bool,
@@ -404,6 +422,7 @@ impl<'db> CompletionBuilder<'db> {
             builtin: false,
             is_context_specific: false,
             is_type_check_only: false,
+            detail: None,
             documentation: None,
             module_dependency_kind: None,
             deprecated: false,
@@ -522,6 +541,7 @@ impl<'db> CompletionBuilder<'db> {
             builtin: self.builtin,
             is_type_check_only: self.is_type_check_only,
             is_context_specific: self.is_context_specific,
+            detail: self.detail,
             documentation: self.documentation,
             relevance,
         }
@@ -574,6 +594,13 @@ impl<'db> CompletionBuilder<'db> {
 
     fn documentation(self, docs: impl Into<String>) -> CompletionBuilder<'db> {
         self.docstring(Docstring::new(docs.into()))
+    }
+
+    /// A few words shown beside the label, where a typed completion would show
+    /// its type.
+    fn detail(mut self, detail: impl Into<CompactString>) -> CompletionBuilder<'db> {
+        self.detail = Some(detail.into());
+        self
     }
 
     fn docstring(mut self, docs: impl Into<Option<Docstring>>) -> CompletionBuilder<'db> {
@@ -2134,6 +2161,119 @@ fn add_keyword_completions<'db>(db: &'db dyn Db, completions: &mut Completions<'
     for name in keywords {
         completions.add(CompletionBuilder::keyword(name));
     }
+}
+
+/// completions for the clauses of an f-string format spec
+///
+/// returns `None` when the cursor is not in a spec — including when it is in a
+/// replacement field *inside* one, where ordinary expression completions are
+/// what is wanted
+fn format_spec_completions<'db>(
+    db: &'db dyn Db,
+    model: &SemanticModel<'db>,
+    source: &str,
+    cursor: &ContextCursor<'_>,
+) -> Option<Completions<'db>> {
+    // the innermost replacement field around the cursor. a cursor inside a
+    // field *nested in* a spec finds that inner field, which has no spec of
+    // its own, so ordinary expression completions are what it gets
+    let field = cursor
+        .covering_node
+        .ancestors()
+        .find_map(|node| match node {
+            AnyNodeRef::InterpolatedElement(field) => Some(field),
+            _ => None,
+        })?;
+    let spec = field.format_spec.as_deref()?;
+    // everything before the spec is the field's expression
+    if !spec.range().contains_inclusive(cursor.offset) {
+        return None;
+    }
+
+    let text = source.get(spec.range().start().to_usize()..spec.range().end().to_usize())?;
+    let written = cursor.offset.checked_sub(spec.range().start())?.to_usize();
+    let language = field
+        .expression
+        .inferred_type(model)
+        .and_then(|ty| spec_language(db, ty));
+
+    let mut completions = Completions::new(db, CollectionContext::none(), UserQuery::fuzzy(None));
+    let mut offer = |insert: String, summary: &str, documentation: String| {
+        completions.add_skip_query(
+            Completion::builder(insert)
+                // every clause is one of a fixed set of spellings, so they all
+                // get the same icon — a list where only some entries carry one
+                // reads as though the rest were a different kind of thing
+                .kind(CompletionKind::EnumMember)
+                // punctuation on its own says nothing, so the list carries the
+                // summary where a typed completion would show its type
+                .detail(summary)
+                .documentation(documentation)
+                .context_specific(true),
+        );
+    };
+    // a strftime directive can appear anywhere in the spec, so unlike the
+    // mini-language there is no ordering to narrow the offer by
+    if language == Some(SpecLanguage::Strftime) {
+        for (code, documentation) in strftime::completions() {
+            offer(format!("%{code}"), documentation, documentation.to_string());
+        }
+        return Some(completions);
+    }
+    let target = match language {
+        Some(SpecLanguage::MiniLanguage(target)) => Some(target),
+        _ => None,
+    };
+    for component in remaining_spec_components(text.get(..written).unwrap_or(text)) {
+        for choice in component.choices(target) {
+            let documentation = choice.documentation();
+            offer(choice.insert, choice.summary, documentation);
+        }
+    }
+    Some(completions)
+}
+
+/// the clauses that may still be written, given the text before the cursor
+///
+/// the mini-language is strictly ordered, so a spec that already has a width
+/// can only take a grouping, a precision or a presentation type
+fn remaining_spec_components(before: &str) -> Vec<FormatSpecComponent> {
+    let last_written = |text: &str| match FormatSpec::parse_spanned(text) {
+        Ok((FormatSpec::Static(_), spans)) => {
+            Some(spans.iter().map(|(component, _)| component).last())
+        }
+        // a nested replacement field, which says nothing statically
+        Ok(_) => Some(None),
+        Err(_) => None,
+    };
+    // a precision that has its point but not yet its digits does not parse, so
+    // it is completed before being read; anything else that fails to parse
+    // says nothing about what is still to come, and rules nothing out
+    let written = last_written(before)
+        .or_else(|| last_written(&format!("{before}0")))
+        .flatten();
+    FormatSpecComponent::ALL
+        .into_iter()
+        // the fill is only recognised by the align that follows it, so there is
+        // nothing to suggest for it, and the conversion is not part of the spec
+        .filter(|component| {
+            !matches!(
+                component,
+                FormatSpecComponent::Fill | FormatSpecComponent::Conversion
+            )
+        })
+        .filter(|component| match written {
+            Some(written) => position_of(*component) > position_of(written),
+            None => true,
+        })
+        .collect()
+}
+
+fn position_of(component: FormatSpecComponent) -> usize {
+    FormatSpecComponent::ALL
+        .into_iter()
+        .position(|candidate| candidate == component)
+        .unwrap_or(0)
 }
 
 fn add_string_literal_completions<'db>(
@@ -7142,6 +7282,193 @@ print(f\"{Foo} and Foo.zqzq<CURSOR>\")
     }
 
     #[test]
+    fn format_spec_clauses_carry_a_summary() {
+        let test = completion_test_builder(
+            "\
+value = 1
+print(f\"{value:<CURSOR>}\")
+",
+        );
+        assert_snapshot!(test.type_signatures().build().snapshot(), @"
+          :: space for a sign
+        # :: base prefix
+        % :: percentage
+        + :: always signed
+        , :: every 3 digits
+        - :: negative only
+        . :: precision
+        0 :: zero padded
+        < :: left
+        = :: after the sign
+        > :: right
+        E :: scientific
+        F :: fixed point
+        G :: general
+        X :: hexadecimal
+        ^ :: centred
+        b :: binary
+        c :: character
+        d :: decimal
+        e :: scientific
+        f :: fixed point
+        g :: general
+        n :: decimal
+        o :: octal
+        x :: hexadecimal
+        _ :: every 3 or 4 digits
+        ");
+    }
+
+    #[test]
+    fn format_spec_offers_every_clause_when_empty() {
+        let test = completion_test_builder(
+            "\
+value = 1.5
+print(f\"{value:<CURSOR>}\")
+",
+        );
+        assert_snapshot!(test.build().snapshot(), @"
+         
+        #
+        %
+        +
+        ,
+        -
+        .
+        0
+        <
+        =
+        >
+        E
+        F
+        G
+        ^
+        e
+        f
+        g
+        n
+        _
+        ");
+    }
+
+    #[test]
+    fn format_spec_offers_only_what_can_still_be_written() {
+        let test = completion_test_builder(
+            "\
+value = 1.5
+print(f\"{value:>10<CURSOR>}\")
+",
+        );
+        assert_snapshot!(test.build().snapshot(), @"
+        %
+        ,
+        .
+        E
+        F
+        G
+        e
+        f
+        g
+        n
+        _
+        ");
+    }
+
+    #[test]
+    fn format_spec_presentation_types_follow_the_value() {
+        let test = completion_test_builder(
+            "\
+value = 1
+print(f\"{value:.<CURSOR>}\")
+",
+        );
+        assert_snapshot!(test.build().snapshot(), @"
+        %
+        E
+        F
+        G
+        X
+        b
+        c
+        d
+        e
+        f
+        g
+        n
+        o
+        x
+        ");
+    }
+
+    #[test]
+    fn format_spec_of_a_datetime_offers_strftime_directives() {
+        let test = completion_test_builder(
+            "\
+import datetime
+print(f\"{datetime.date.today():<CURSOR>}\")
+",
+        );
+        assert_snapshot!(test.build().snapshot(), @"
+        %%
+        %A
+        %B
+        %C
+        %D
+        %F
+        %G
+        %H
+        %I
+        %M
+        %R
+        %S
+        %T
+        %U
+        %V
+        %W
+        %X
+        %Y
+        %Z
+        %a
+        %b
+        %c
+        %d
+        %e
+        %f
+        %g
+        %h
+        %j
+        %k
+        %l
+        %m
+        %n
+        %p
+        %r
+        %s
+        %t
+        %u
+        %w
+        %x
+        %y
+        %z
+        ");
+    }
+
+    #[test]
+    fn a_field_nested_in_a_format_spec_completes_as_an_expression() {
+        let test = completion_test_builder(
+            "\
+zqzqzq = 8
+value = 1.5
+print(f\"{value:>{zqzq<CURSOR>}}\")
+",
+        );
+        assert_snapshot!(
+            test.skip_keywords().skip_builtins().build().snapshot(),
+            @"zqzqzq",
+        );
+    }
+
+    #[test]
     fn no_completions_in_fstring_incomplete_double_quote() {
         let test = completion_test_builder(
             "\
@@ -11021,6 +11348,7 @@ raise <CURSOR>
                     if self.type_signatures {
                         let ty =
                             c.ty.map(|ty| ty.display(self.db).to_string())
+                                .or_else(|| c.detail.as_ref().map(ToString::to_string))
                                 .unwrap_or_else(|| "Unavailable".to_string());
                         snapshot = format!("{snapshot} :: {ty}");
                     }

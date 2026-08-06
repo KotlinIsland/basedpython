@@ -76,7 +76,12 @@ impl BackgroundDocumentRequestHandler for CompletionRequestHandler {
             .enumerate()
             .map(|(i, comp)| {
                 let kind = comp.kind.map(ty_kind_to_lsp_kind);
-                let type_display = comp.ty.map(|ty| ty.display(db).to_string());
+                // a format spec clause has no type to show, so it carries its
+                // own few words instead
+                let type_display = comp
+                    .ty
+                    .map(|ty| ty.display(db).to_string())
+                    .or_else(|| comp.detail.as_ref().map(ToString::to_string));
                 let import_edit = comp.import.as_ref().and_then(|edit| {
                     let range = edit
                         .range()

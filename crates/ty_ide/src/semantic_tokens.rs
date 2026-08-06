@@ -37,18 +37,22 @@ use ruff_python_ast::helpers::{
 };
 use ruff_python_ast::visitor::source_order::{
     SourceOrderVisitor, TraversalSignal, walk_arguments, walk_elif_else_clause, walk_expr,
-    walk_interpolated_string_element, walk_stmt,
+    walk_stmt,
 };
 use ruff_python_ast::{
     self as ast, AnyNodeRef, ArgOrKeyword, BytesLiteral, Expr, InterpolatedStringElement, Stmt,
     StringLiteral, TypeParam,
 };
+use ruff_python_literal::format::FormatSpec;
+use ruff_python_literal::mini_language::FormatSpecComponent;
+use ruff_python_literal::strftime;
 use ruff_text_size::{Ranged, TextLen, TextRange, TextSize};
 use std::ops::Deref;
 use ty_python_core::definition::{Definition, DefinitionKind, ParameterDefinitionNodeKind};
 use ty_python_semantic::{
     HasType, ImportAliasResolution, ResolvedDefinition, SemanticModel, definitions_for_attribute,
     definitions_for_imported_symbol,
+    types::format::{SpecLanguage, spec_language},
     types::ide_support::{
         CallArgumentForm, call_argument_forms, definition_for_name,
         static_member_type_for_attribute,
@@ -328,6 +332,24 @@ fn accessor_content(statement: &Stmt) -> Vec<AccessorContent<'_>> {
 }
 
 /// The name a place is rooted at — `self` in `self.data`.
+/// how a format spec clause is coloured: the counts read as numbers, the fill
+/// as the character it is, and the flags and presentation type as the operators
+/// of the mini-language
+fn format_spec_token_type(component: FormatSpecComponent) -> SemanticTokenType {
+    match component {
+        FormatSpecComponent::Fill => SemanticTokenType::String,
+        FormatSpecComponent::Zero | FormatSpecComponent::Width | FormatSpecComponent::Precision => {
+            SemanticTokenType::Number
+        }
+        FormatSpecComponent::Conversion
+        | FormatSpecComponent::Align
+        | FormatSpecComponent::Sign
+        | FormatSpecComponent::AlternateForm
+        | FormatSpecComponent::Grouping
+        | FormatSpecComponent::Type => SemanticTokenType::Keyword,
+    }
+}
+
 fn place_root(place: &Expr) -> Option<&ast::ExprName> {
     match place {
         Expr::Name(name) => Some(name),
@@ -390,6 +412,10 @@ struct SemanticTokenVisitor<'db> {
     in_docstring: bool,
     expecting_docstring: bool,
     range_filter: Option<TextRange>,
+    /// the language the format spec being visited is written in, when the
+    /// value's type says which. its clauses are classified individually rather
+    /// than as one string
+    in_format_spec: Option<SpecLanguage>,
     /// basedpython: the places a narrowing return annotation names, each with the
     /// classification of the parameter it refers to. Only set while the annotation
     /// is being visited.
@@ -412,6 +438,7 @@ impl<'db> SemanticTokenVisitor<'db> {
             in_target_creating_definition: false,
             in_type_form: false,
             in_docstring: false,
+            in_format_spec: None,
             range_filter,
             expecting_docstring: false,
             guard_places: Vec::new(),
@@ -498,6 +525,51 @@ impl<'db> SemanticTokenVisitor<'db> {
                 SemanticTokenModifier::empty(),
             );
         }
+    }
+
+    /// emit one token per clause of a format spec, in written order
+    ///
+    /// returns `false` when the run is not a spec this can make sense of — an
+    /// unparsable one, or a fragment either side of a nested replacement
+    /// field — and the caller should fall back to a single `String` token
+    fn add_format_spec_tokens(
+        &mut self,
+        literal: &ast::InterpolatedStringLiteralElement,
+        language: SpecLanguage,
+    ) -> bool {
+        let range = literal.range();
+        let Some(text) = self
+            .source
+            .get(range.start().to_usize()..range.end().to_usize())
+        else {
+            return false;
+        };
+        let spans: Vec<(std::ops::Range<usize>, SemanticTokenType)> = match language {
+            // every `%` run is a directive, however well the platform renders it
+            SpecLanguage::Strftime => strftime::directives(text)
+                .into_iter()
+                .map(|directive| (directive.span, SemanticTokenType::Keyword))
+                .collect(),
+            SpecLanguage::MiniLanguage(_) => {
+                let Ok((FormatSpec::Static(_), spans)) = FormatSpec::parse_spanned(text) else {
+                    return false;
+                };
+                spans
+                    .iter()
+                    .map(|(component, span)| (span, format_spec_token_type(component)))
+                    .collect()
+            }
+        };
+        for (span, token_type) in &spans {
+            let start = range.start() + TextSize::try_from(span.start).unwrap_or_default();
+            let end = range.start() + TextSize::try_from(span.end).unwrap_or_default();
+            self.add_token(
+                TextRange::new(start, end),
+                *token_type,
+                SemanticTokenModifier::empty(),
+            );
+        }
+        !spans.is_empty()
     }
 
     fn add_token(
@@ -2031,6 +2103,13 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
     ) {
         match interpolated_string_element {
             InterpolatedStringElement::Literal(literal) => {
+                // inside a format spec the literal text is a language of its
+                // own, worth more than one flat `String` token
+                if let Some(language) = self.in_format_spec
+                    && self.add_format_spec_tokens(literal, language)
+                {
+                    return;
+                }
                 // Emit a String token for literal parts of f-strings/t-strings
                 self.add_token(
                     literal.range(),
@@ -2038,9 +2117,24 @@ impl SourceOrderVisitor<'_> for SemanticTokenVisitor<'_> {
                     SemanticTokenModifier::empty(),
                 );
             }
-            InterpolatedStringElement::Interpolation(_) => {
-                // The default walker handles visiting the expression and format spec
-                walk_interpolated_string_element(self, interpolated_string_element);
+            InterpolatedStringElement::Interpolation(element) => {
+                // the walk is done by hand so the format spec's own elements
+                // can be told apart from the field's expression, which is
+                // ordinary code even when the field is nested inside a spec
+                let outer = self.in_format_spec.take();
+                self.visit_expr(&element.expression);
+                if let Some(format_spec) = &element.format_spec {
+                    // which language the spec is in is decided by the value's
+                    // `__format__`, so the type has to be asked
+                    self.in_format_spec = element
+                        .expression
+                        .inferred_type(self.model)
+                        .and_then(|ty| spec_language(self.model.db(), ty));
+                    for part in &format_spec.elements {
+                        self.visit_interpolated_string_element(part);
+                    }
+                }
+                self.in_format_spec = outer;
             }
         }
     }
@@ -5153,7 +5247,108 @@ complex_fstring = f"User: {name.upper()}, Count: {len(data)}, Hex: {value:x}"
         "data" @ 394..398: Variable
         ", Hex: " @ 400..407: String
         "value" @ 408..413: Variable
-        "x" @ 414..415: String
+        "x" @ 414..415: Keyword
+        "#);
+    }
+
+    #[test]
+    fn fstring_format_spec_clauses() {
+        let test = SemanticTokenTest::new(
+            r#"
+value = 42
+f"{value:*^+#08_.3f}"
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r##"
+        "value" @ 1..6: Variable [definition]
+        "42" @ 9..11: Number
+        "value" @ 15..20: Variable
+        "*" @ 21..22: String
+        "^" @ 22..23: Keyword
+        "+" @ 23..24: Keyword
+        "#" @ 24..25: Keyword
+        "0" @ 25..26: Number
+        "8" @ 26..27: Number
+        "_" @ 27..28: Keyword
+        ".3" @ 28..30: Number
+        "f" @ 30..31: Keyword
+        "##);
+    }
+
+    #[test]
+    fn fstring_format_spec_around_a_nested_field() {
+        let test = SemanticTokenTest::new(
+            r#"
+value = 42
+width = 8
+f"{value:>{width}.3f}"
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "value" @ 1..6: Variable [definition]
+        "42" @ 9..11: Number
+        "width" @ 12..17: Variable [definition]
+        "8" @ 20..21: Number
+        "value" @ 25..30: Variable
+        ">" @ 31..32: Keyword
+        "width" @ 33..38: Variable
+        ".3" @ 39..41: Number
+        "f" @ 41..42: Keyword
+        "#);
+    }
+
+    #[test]
+    fn fstring_strftime_directives() {
+        let test = SemanticTokenTest::new(
+            r#"
+import datetime
+f"{datetime.date.today():%Y-%m-%d %H:%M}"
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "datetime" @ 8..16: Namespace
+        "datetime" @ 20..28: Namespace
+        "date" @ 29..33: Class
+        "today" @ 34..39: Method
+        "%Y" @ 42..44: Keyword
+        "%m" @ 45..47: Keyword
+        "%d" @ 48..50: Keyword
+        "%H" @ 51..53: Keyword
+        "%M" @ 54..56: Keyword
+        "#);
+    }
+
+    #[test]
+    fn fstring_spec_of_an_unknown_language_stays_a_string() {
+        let test = SemanticTokenTest::new(
+            r#"
+class Opaque:
+    def __format__(self, spec: str, /) -> str: ...
+
+f"{Opaque():whatever}"
+"#,
+        );
+
+        let tokens = test.highlight_file();
+
+        assert_snapshot!(test.to_snapshot(&tokens), @r#"
+        "Opaque" @ 7..13: Class [definition]
+        "__format__" @ 23..33: Method [definition]
+        "self" @ 34..38: SelfParameter [definition]
+        "spec" @ 40..44: Parameter [definition]
+        "str" @ 46..49: Class
+        "str" @ 57..60: Class
+        "Opaque" @ 70..76: Class
+        "whatever" @ 79..87: String
         "#);
     }
 
