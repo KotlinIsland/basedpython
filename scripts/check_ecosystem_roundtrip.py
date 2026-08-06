@@ -234,13 +234,13 @@ async def _run(
     # recorded as a (canonical) error instead of OOM-killing or stalling the
     # whole shard. poll often so a fast memory spike can't outrun us
     comm = asyncio.ensure_future(proc.communicate(stdin))
-    deadline = time.monotonic() + timeout if timeout is not None else None
+    started = time.monotonic()
     killed: str | None = None
     while not comm.done():
         await asyncio.wait({comm}, timeout=0.25)
         if comm.done():
             break
-        if deadline is not None and time.monotonic() > deadline:
+        if timeout is not None and time.monotonic() - started > timeout:
             killed = f"timed out after {timeout:g}s"
             proc.kill()
             break
