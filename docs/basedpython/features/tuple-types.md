@@ -24,16 +24,44 @@ def origin() -> tuple[int, int]:
     return (0, 0)
 ```
 
+## unpacking
+
+a `*` element splices the tuple it names in, rather than nesting it as a single
+field:
+
+```by
+type Pair = (int, str)
+type Triple = (bool, *Pair)   # (bool, int, str)
+type Same = (*Pair)           # (int, str)
+```
+
+the star has already made this a tuple, so the lone-element form needs no
+trailing comma. a `type` alias is resolved first, so a named tuple type unpacks
+exactly as the tuple it stands for — that holds for python's `tuple[*Pair]` and
+`Unpack[Pair]` spellings too
+
+`*A` and the [variadic `*: T`](callable.md) parse to the same shape but mean
+different things: `*: T` annotates every field, while `*A` splices one tuple in.
+what tells them apart is the `:`
+
+unpacking lowers to python's own `*` spelling, so it inherits python's runtime
+rule: `*` on a `type` alias is only evaluatable lazily. that covers the type
+positions the form is written in — another `type` alias, or any annotation once
+`from __future__ import annotations` is on — but an eagerly evaluated annotation
+that unpacks an alias raises at import, exactly as the same annotation would in
+python. unpacking a tuple type or a `TypeVarTuple` directly has no such limit
+
 ## syntax
 
 ```text
-tuple_type ::= "(" type ("," type)* [","] ")"
+tuple_type ::= "(" element ("," element)* [","] ")"
+element    ::= type | "*" type
 ```
 
-a parenthesized list of one or more types — trailing comma allowed. a
+a parenthesized list of one or more elements — trailing comma allowed. a
 single-element form requires the trailing comma to disambiguate from a
 parenthesized expression: `(int,)` is `tuple[int]`, while `(int)` is
-just `int`
+just `int`. an unpacked element is already unambiguous, so `(*A)` needs none
 
 ## scope
 

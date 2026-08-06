@@ -20,6 +20,14 @@ type Named = (*args: int, **kwargs: str)
 # a named variadic whose annotation is itself starred — it unpacks a pack
 type UnpackedVariadic = (*args: *Ts)
 
+# a bare `*A` splices `A` in rather than annotating each field, so it needs no
+# `:`. the lone-element form drops python's disambiguating comma — the star has
+# already said this is a tuple
+type Pair = (int, str)
+type Spliced = (*Pair)
+type SplicedWithComma = (*Pair,)
+type SplicedAfterPrefix = (bool, *Pair)
+
 # positional-only and keyword-only markers
 type Markers = (int, /, str, *, name: bool)
 
