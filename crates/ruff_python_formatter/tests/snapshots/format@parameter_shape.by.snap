@@ -32,6 +32,11 @@ type Markers = (int, /, str, *, name: bool)
 
 class Callback[Params: (*: *, **: *)]:
     def get(self) -> (**Params) -> None: ...
+
+
+# the same bound on a function's own type parameters — the form the vendored
+# typeshed uses for a python `ParamSpec`
+def wrap[Parameters: (*: *, **: *), R](f: (**Parameters) -> R) -> (**Parameters) -> R: ...
 ```
 
 ## Output
@@ -64,4 +69,11 @@ type Markers = (int, /, str, *, name: bool)
 
 class Callback[Params: (*: *, **: *)]:
     def get(self) -> (**Params) -> None: ...
+
+
+# the same bound on a function's own type parameters — the form the vendored
+# typeshed uses for a python `ParamSpec`
+def wrap[Parameters: (*: *, **: *), R](
+    f: (**Parameters) -> R,
+) -> (**Parameters) -> R: ...
 ```
