@@ -91,7 +91,10 @@ class object:
     def __str__(self) -> str  # noqa: Y029
     def __repr__(self) -> str  # noqa: Y029
     def __hash__(self) -> int
-    def __format__(self, format_spec: str, /) -> str
+    # the default implementation raises `TypeError` for any non-empty spec: it
+    # has nothing to interpret one with. a class that wants a format spec has
+    # to override this
+    def __format__(self, format_spec: "", /) -> str
     def __getattribute__(self, name: str, /) -> dynamic
     def __sizeof__(self) -> int
     # return type of pickle methods is rather hard to express in the current type system

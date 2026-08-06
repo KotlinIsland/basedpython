@@ -1,0 +1,41 @@
+---
+source: crates/ruff_python_formatter/tests/fixtures.rs
+input_file: crates/ruff_python_formatter/resources/test/fixtures/ruff/literal_annotation.by
+---
+## Input
+```bython
+a: "asdf" = "asdf"
+b: "" = ""
+c: list["one", "two"]
+
+
+def f(x: "keep") -> "": ...
+
+
+class C:
+    # the vendored typeshed writes `object.__format__` this way, so a
+    # regression here corrupts every stub on reformat
+    def __format__(self, format_spec: "", /) -> str: ...
+
+
+type Y = "alias"
+```
+
+## Output
+```bython
+a: "asdf" = "asdf"
+b: ""     = ""
+c: list["one", "two"]
+
+
+def f(x: "keep") -> "": ...
+
+
+class C:
+    # the vendored typeshed writes `object.__format__` this way, so a
+    # regression here corrupts every stub on reformat
+    def __format__(self, format_spec: "", /) -> str: ...
+
+
+type Y = "alias"
+```

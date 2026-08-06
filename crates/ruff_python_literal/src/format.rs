@@ -1,6 +1,7 @@
 use itertools::{Itertools, PeekingNext};
 
 use std::error::Error;
+use std::ops::Range;
 use std::str::FromStr;
 
 use crate::Case;
@@ -226,23 +227,47 @@ pub enum FormatSpec {
 #[derive(Debug, PartialEq)]
 pub struct StaticFormatSpec {
     // Ex) `!s` in `'{!s}'`
-    conversion: Option<FormatConversion>,
+    pub conversion: Option<FormatConversion>,
     // Ex) `*` in `'{:*^30}'`
-    fill: Option<char>,
+    pub fill: Option<char>,
     // Ex) `<` in `'{:<30}'`
-    align: Option<FormatAlign>,
+    pub align: Option<FormatAlign>,
     // Ex) `+` in `'{:+f}'`
-    sign: Option<FormatSign>,
+    pub sign: Option<FormatSign>,
     // Ex) `#` in `'{:#x}'`
-    alternate_form: bool,
+    pub alternate_form: bool,
+    // Ex) the leading `0` in `'{:08.3f}'`. the zero is also folded into `fill`
+    // and `align`, which is what formatting itself uses; this records whether
+    // it was written, which the sign-aware-zero-padding rules need
+    pub zero: bool,
     // Ex) `30` in `'{:<30}'`
-    width: Option<usize>,
+    pub width: Option<usize>,
     // Ex) `,` in `'{:,}'`
-    grouping_option: Option<FormatGrouping>,
+    pub grouping_option: Option<FormatGrouping>,
     // Ex) `2` in `'{:.2}'`
-    precision: Option<usize>,
+    pub precision: Option<usize>,
     // Ex) `f` in `'{:+f}'`
-    format_type: Option<FormatType>,
+    pub format_type: Option<FormatType>,
+}
+
+/// byte spans of the individual components of a [`StaticFormatSpec`], relative
+/// to the start of the format spec text it was parsed from
+///
+/// a component that was not written has no span. these drive the editor
+/// features — highlighting, completion and hover — which need to know which
+/// part of the spec a given offset falls in
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FormatSpecSpans {
+    pub conversion: Option<Range<usize>>,
+    pub fill: Option<Range<usize>>,
+    pub align: Option<Range<usize>>,
+    pub sign: Option<Range<usize>>,
+    pub alternate_form: Option<Range<usize>>,
+    pub zero: Option<Range<usize>>,
+    pub width: Option<Range<usize>>,
+    pub grouping_option: Option<Range<usize>>,
+    pub precision: Option<Range<usize>>,
+    pub format_type: Option<Range<usize>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -360,25 +385,95 @@ fn parse_nested_placeholders(mut text: &str) -> Result<Vec<FormatPart>, FormatSp
 
 impl FormatSpec {
     pub fn parse(text: &str) -> Result<Self, FormatSpecError> {
+        Self::parse_spanned(text).map(|(spec, _)| spec)
+    }
+
+    /// like [`FormatSpec::parse`], but also reports where each component sits
+    /// in `text`. a dynamic spec has no components, so its spans are all empty
+    pub fn parse_spanned(text: &str) -> Result<(Self, FormatSpecSpans), FormatSpecError> {
         let placeholders = parse_nested_placeholders(text)?;
         if !placeholders.is_empty() {
-            return Ok(FormatSpec::Dynamic(DynamicFormatSpec { placeholders }));
+            return Ok((
+                FormatSpec::Dynamic(DynamicFormatSpec { placeholders }),
+                FormatSpecSpans::default(),
+            ));
         }
 
-        let (conversion, text) = FormatConversion::parse(text);
-        let (mut fill, mut align, text) = parse_fill_and_align(text);
-        let (sign, text) = FormatSign::parse(text);
-        let (alternate_form, text) = parse_alternate_form(text);
-        let (zero, text) = parse_zero(text);
-        let (width, text) = parse_number(text)?;
-        let (grouping_option, text) = FormatGrouping::parse(text);
-        let (precision, text) = parse_precision(text)?;
+        // every sub-parser returns the unconsumed tail of the same string, so
+        // how much a step consumed is the difference in remaining length
+        let total = text.len();
+        let mut spans = FormatSpecSpans::default();
+        let mut start = 0;
+        // records the span of the step that just ran, given the tail it left
+        macro_rules! consumed {
+            ($rest:expr) => {{
+                let end = total - $rest.len();
+                let range = start..end;
+                start = end;
+                range
+            }};
+        }
+
+        let (conversion, rest) = FormatConversion::parse(text);
+        let range = consumed!(rest);
+        if conversion.is_some() {
+            spans.conversion = Some(range);
+        }
+
+        let (mut fill, mut align, rest) = parse_fill_and_align(rest);
+        let range = consumed!(rest);
+        if let Some(fill) = fill {
+            let boundary = range.start + fill.len_utf8();
+            spans.fill = Some(range.start..boundary);
+            spans.align = Some(boundary..range.end);
+        } else if align.is_some() {
+            spans.align = Some(range);
+        }
+
+        let (sign, rest) = FormatSign::parse(rest);
+        let range = consumed!(rest);
+        if sign.is_some() {
+            spans.sign = Some(range);
+        }
+
+        let (alternate_form, rest) = parse_alternate_form(rest);
+        let range = consumed!(rest);
+        if alternate_form {
+            spans.alternate_form = Some(range);
+        }
+
+        let (zero, rest) = parse_zero(rest);
+        let range = consumed!(rest);
+        if zero {
+            spans.zero = Some(range);
+        }
+
+        let (width, rest) = parse_number(rest)?;
+        let range = consumed!(rest);
+        if width.is_some() {
+            spans.width = Some(range);
+        }
+
+        let (grouping_option, rest) = FormatGrouping::parse(rest);
+        let range = consumed!(rest);
+        if grouping_option.is_some() {
+            spans.grouping_option = Some(range);
+        }
+
+        let (precision, rest) = parse_precision(rest)?;
+        let range = consumed!(rest);
+        if precision.is_some() {
+            spans.precision = Some(range);
+        }
 
         // If there's any remaining text, we should yield a valid format type and consume it
         // all.
-        let (format_type, text) =
-            FormatType::parse(text).map_err(FormatSpecError::InvalidFormatType)?;
-        if !text.is_empty() {
+        let (format_type, rest) =
+            FormatType::parse(rest).map_err(FormatSpecError::InvalidFormatType)?;
+        if format_type.is_some() {
+            spans.format_type = Some(start..total - rest.len());
+        }
+        if !rest.is_empty() {
             return Err(FormatSpecError::InvalidFormatSpecifier);
         }
 
@@ -387,17 +482,21 @@ impl FormatSpec {
             align = align.or(Some(FormatAlign::AfterSign));
         }
 
-        Ok(FormatSpec::Static(StaticFormatSpec {
-            conversion,
-            fill,
-            align,
-            sign,
-            alternate_form,
-            width,
-            grouping_option,
-            precision,
-            format_type,
-        }))
+        Ok((
+            FormatSpec::Static(StaticFormatSpec {
+                conversion,
+                fill,
+                align,
+                sign,
+                alternate_form,
+                zero,
+                width,
+                grouping_option,
+                precision,
+                format_type,
+            }),
+            spans,
+        ))
     }
 }
 
@@ -772,6 +871,7 @@ mod tests {
             align: None,
             sign: None,
             alternate_form: false,
+            zero: false,
             width: Some(33),
             grouping_option: None,
             precision: None,
@@ -788,6 +888,7 @@ mod tests {
             align: Some(FormatAlign::Right),
             sign: None,
             alternate_form: false,
+            zero: false,
             width: Some(33),
             grouping_option: None,
             precision: None,
@@ -852,12 +953,79 @@ mod tests {
             align: Some(FormatAlign::Right),
             sign: Some(FormatSign::Minus),
             alternate_form: true,
+            zero: false,
             width: Some(23),
             grouping_option: Some(FormatGrouping::Comma),
             precision: Some(11),
             format_type: Some(FormatType::Binary),
         }));
         assert_eq!(FormatSpec::parse("<>-#23,.11b"), expected);
+    }
+
+    fn spans(text: &str) -> FormatSpecSpans {
+        FormatSpec::parse_spanned(text).unwrap().1
+    }
+
+    #[test]
+    fn spans_cover_every_component() {
+        assert_eq!(
+            spans("<>-#23,.11b"),
+            FormatSpecSpans {
+                fill: Some(0..1),
+                align: Some(1..2),
+                sign: Some(2..3),
+                alternate_form: Some(3..4),
+                width: Some(4..6),
+                grouping_option: Some(6..7),
+                precision: Some(7..10),
+                format_type: Some(10..11),
+                ..FormatSpecSpans::default()
+            }
+        );
+    }
+
+    #[test]
+    fn spans_of_absent_components_are_empty() {
+        assert_eq!(
+            spans("10"),
+            FormatSpecSpans {
+                width: Some(0..2),
+                ..FormatSpecSpans::default()
+            }
+        );
+        assert_eq!(spans(""), FormatSpecSpans::default());
+    }
+
+    #[test]
+    fn spans_separate_zero_padding_from_width() {
+        assert_eq!(
+            spans("08.3f"),
+            FormatSpecSpans {
+                zero: Some(0..1),
+                width: Some(1..2),
+                precision: Some(2..4),
+                format_type: Some(4..5),
+                ..FormatSpecSpans::default()
+            }
+        );
+    }
+
+    #[test]
+    fn spans_of_a_multibyte_fill() {
+        assert_eq!(
+            spans("→^9"),
+            FormatSpecSpans {
+                fill: Some(0..3),
+                align: Some(3..4),
+                width: Some(4..5),
+                ..FormatSpecSpans::default()
+            }
+        );
+    }
+
+    #[test]
+    fn spans_are_empty_for_a_dynamic_spec() {
+        assert_eq!(spans(">{width}"), FormatSpecSpans::default());
     }
 
     #[test]

@@ -219,6 +219,7 @@ pub(crate) fn register_lints(registry: &mut LintRegistryBuilder) {
     registry.register_lint(&OVERLAPPING_CONDITION);
     registry.register_lint(&REDUNDANT_CONDITION);
     registry.register_lint(&REDUNDANT_BOOLEAN_COMPARISON);
+    registry.register_lint(&INVALID_FORMAT_SPEC);
 
     // String annotations
     registry.register_lint(&ESCAPE_CHARACTER_IN_FORWARD_ANNOTATION);
@@ -2682,6 +2683,48 @@ declare_lint! {
         summary: "detects a comparison of a `bool` against `True` or `False`",
         status: LintStatus::stable("0.0.62"),
         default_level: Level::Warn,
+    }
+}
+
+declare_lint! {
+    /// ## What it does
+    /// Checks the format spec in an f-string replacement field against the
+    /// `__format__` that will read it.
+    ///
+    /// ## Why is this bad?
+    /// `f"{value:spec}"` calls `type(value).__format__(value, "spec")`, so a
+    /// spec the type does not accept is a `TypeError` or `ValueError` at
+    /// runtime, on a line that looks like nothing but text.
+    ///
+    /// Two things are checked. The spec has to be an argument `__format__`
+    /// accepts, which for a class that defines none of its own means the empty
+    /// spec, because that is all `object.__format__` can do. And when the
+    /// `__format__` reached is one of the four that read the [format
+    /// specification mini-language] — `str`, `int`, `float`, `complex` — the
+    /// spec has to be one those rules allow: `str` has no sign, `int` has no
+    /// precision, and neither has the other's presentation types.
+    ///
+    /// A type with a `__format__` of its own outside that set is checked only
+    /// as a call. `datetime` reads the same string as strftime codes, and
+    /// nothing about the mini-language applies to it.
+    ///
+    /// ## Examples
+    /// ```python
+    /// class Point:
+    ///     pass
+    ///
+    /// f"{Point():>10}"  # error: `Point` only has `object.__format__`
+    /// f"{'name':d}"     # error: `d` is not a presentation type for `str`
+    /// f"{1:.2}"         # error: an integer has no precision
+    /// f"{1:.2f}"        # ok — `f` formats the integer as a float
+    /// f"{'name':>10}"   # ok
+    /// ```
+    ///
+    /// [format specification mini-language]: https://docs.python.org/3/library/string.html#format-specification-mini-language
+    pub(crate) static INVALID_FORMAT_SPEC = {
+        summary: "detects a format spec the value's `__format__` does not accept",
+        status: LintStatus::stable("0.0.68"),
+        default_level: Level::Error,
     }
 }
 

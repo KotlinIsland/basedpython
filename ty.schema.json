@@ -923,6 +923,16 @@
             }
           ]
         },
+        "invalid-format-spec": {
+          "title": "detects a format spec the value's `__format__` does not accept",
+          "description": "## What it does\nChecks the format spec in an f-string replacement field against the\n`__format__` that will read it.\n\n## Why is this bad?\n`f\"{value:spec}\"` calls `type(value).__format__(value, \"spec\")`, so a\nspec the type does not accept is a `TypeError` or `ValueError` at\nruntime, on a line that looks like nothing but text.\n\nTwo things are checked. The spec has to be an argument `__format__`\naccepts, which for a class that defines none of its own means the empty\nspec, because that is all `object.__format__` can do. And when the\n`__format__` reached is one of the four that read the [format\nspecification mini-language] — `str`, `int`, `float`, `complex` — the\nspec has to be one those rules allow: `str` has no sign, `int` has no\nprecision, and neither has the other's presentation types.\n\nA type with a `__format__` of its own outside that set is checked only\nas a call. `datetime` reads the same string as strftime codes, and\nnothing about the mini-language applies to it.\n\n## Examples\n```python\nclass Point:\n    pass\n\nf\"{Point():>10}\"  # error: `Point` only has `object.__format__`\nf\"{'name':d}\"     # error: `d` is not a presentation type for `str`\nf\"{1:.2}\"         # error: an integer has no precision\nf\"{1:.2f}\"        # ok — `f` formats the integer as a float\nf\"{'name':>10}\"   # ok\n```\n\n[format specification mini-language]: https://docs.python.org/3/library/string.html#format-specification-mini-language",
+          "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
         "invalid-frozen-dataclass-subclass": {
           "title": "detects dataclasses with invalid frozen/non-frozen subclassing",
           "description": "## What it does\n\nChecks for dataclasses with invalid frozen inheritance:\n\n- A frozen dataclass cannot inherit from a non-frozen dataclass.\n- A non-frozen dataclass cannot inherit from a frozen dataclass.\n\n## Why is this bad?\n\nPython raises a `TypeError` at runtime when either of these inheritance\npatterns occurs.\n\n## Example\n\n```python\nfrom dataclasses import dataclass\n\n\n@dataclass\nclass Base:\n    x: int\n\n\n@dataclass(frozen=True)\nclass Child(Base):  # error\n    y: int\n\n\n@dataclass(frozen=True)\nclass FrozenBase:\n    x: int\n\n\n@dataclass\nclass NonFrozenChild(FrozenBase):  # error\n    y: int\n```",

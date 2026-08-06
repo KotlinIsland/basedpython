@@ -10,6 +10,7 @@
 //!
 //! each patch is scoped to a single named symbol and is idempotent
 
+use std::fmt::Write as _;
 use std::path::Path;
 
 use ruff_python_ast::{Expr, ModModule, Parameter, Stmt, StmtClassDef, TypeParam};
@@ -382,6 +383,89 @@ fn already_local(source: &str, parameter: &Parameter) -> bool {
         .ends_with("local")
 }
 
+// ---------------------------------------------------------------------------
+
+pub struct ObjectFormatSpec;
+
+/// the comment written above the narrowed signature, so a reader does not take
+/// the divergence from upstream typeshed for a mistake
+const OBJECT_FORMAT_NOTE: &str = "\
+# the default implementation raises `TypeError` for any non-empty spec: it
+# has nothing to interpret one with. a class that wants a format spec has
+# to override this
+";
+
+impl Patch for ObjectFormatSpec {
+    fn name(&self) -> &'static str {
+        "object-format-empty-spec"
+    }
+    fn target_symbols(&self) -> &'static [&'static str] {
+        &["builtins.object.__format__"]
+    }
+    fn rewrite(&self, module_path: &Path, parsed: &Parsed<ModModule>, source: &str) -> Vec<Edit> {
+        if !in_builtins(module_path) {
+            return Vec::new();
+        }
+        let mut edits = Vec::new();
+        walk_classes(&parsed.syntax().body, &mut |class| {
+            if class.name.as_str() != "object" {
+                return;
+            }
+            for member in &class.body {
+                let Stmt::FunctionDef(function) = member else {
+                    continue;
+                };
+                if function.name.as_str() != "__format__" {
+                    continue;
+                }
+                let Some(annotation) = function
+                    .parameters
+                    .posonlyargs
+                    .iter()
+                    .find(|with_default| with_default.parameter.name.as_str() == "format_spec")
+                    .and_then(|with_default| with_default.parameter.annotation.as_ref())
+                else {
+                    continue;
+                };
+                // already narrowed, so a re-run is a no-op and the note is not
+                // written twice
+                if &source[annotation.range()] != "str" {
+                    continue;
+                }
+                edits.push(Edit {
+                    start: annotation.range().start().to_usize(),
+                    end: annotation.range().end().to_usize(),
+                    replacement: "\"\"".to_string(),
+                });
+                let (line, indent) = line_start(source, function.range().start().to_usize());
+                edits.push(Edit {
+                    start: line,
+                    end: line,
+                    replacement: OBJECT_FORMAT_NOTE.lines().fold(
+                        String::new(),
+                        |mut note, comment| {
+                            let _ = writeln!(note, "{indent}{comment}");
+                            note
+                        },
+                    ),
+                });
+            }
+        });
+        edits
+    }
+}
+
+/// the offset the line containing `at` starts at, and the indentation it opens
+/// with
+fn line_start(source: &str, at: usize) -> (usize, &str) {
+    let bytes = source.as_bytes();
+    let mut start = at;
+    while start > 0 && bytes[start - 1] != b'\n' {
+        start -= 1;
+    }
+    (start, &source[start..at])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,6 +569,34 @@ class frozenset[out Element: Hashable](AbstractSet[Element]): ...
         assert_eq!(run(&HashableKeyBound, src), expected);
         // idempotent: the bounded form is left untouched
         assert_eq!(run(&HashableKeyBound, expected), expected);
+    }
+
+    #[test]
+    fn object_format_takes_only_the_empty_spec() {
+        let src = "\
+class object:
+    def __format__(self, format_spec: str, /) -> str
+";
+        let expected = "\
+class object:
+    # the default implementation raises `TypeError` for any non-empty spec: it
+    # has nothing to interpret one with. a class that wants a format spec has
+    # to override this
+    def __format__(self, format_spec: \"\", /) -> str
+";
+        assert_eq!(run(&ObjectFormatSpec, src), expected);
+        // idempotent: the narrowed annotation is no longer `str`, so neither
+        // the signature nor the note is rewritten
+        assert_eq!(run(&ObjectFormatSpec, expected), expected);
+    }
+
+    #[test]
+    fn object_format_leaves_overriding_classes_alone() {
+        let src = "\
+class int:
+    override def __format__(self, format_spec: str, /) -> str
+";
+        assert_eq!(run(&ObjectFormatSpec, src), src);
     }
 
     #[test]

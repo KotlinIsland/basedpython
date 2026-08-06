@@ -1,0 +1,15 @@
+a: "asdf" = "asdf"
+b: "" = ""
+c: list["one", "two"]
+
+
+def f(x: "keep") -> "": ...
+
+
+class C:
+    # the vendored typeshed writes `object.__format__` this way, so a
+    # regression here corrupts every stub on reformat
+    def __format__(self, format_spec: "", /) -> str: ...
+
+
+type Y = "alias"
