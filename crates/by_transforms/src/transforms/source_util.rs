@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use ruff_python_ast::helpers::consumed_keywords;
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
-use ruff_python_ast::{Decorator, Expr, Parameters, Stmt, StmtImportFrom};
+use ruff_python_ast::{Decorator, Expr, Parameters, Stmt, StmtImportFrom, TypeParam, TypeParams};
 use ruff_text_size::{Ranged, TextRange, TextSize};
 
 /// Names a temporary a lowering needs in its output.
@@ -100,6 +100,27 @@ fn is_type_alias_annotation(annotation: &Expr) -> bool {
 }
 
 impl<F: FnMut(&Expr)> AnnotationWalker<'_, F> {
+    /// a pep 695 type parameter's bound and default are type expressions.
+    ///
+    /// a `constraints` bound is one too, but it is spelled as a parenthesized
+    /// tuple, which every caller walks into without rewriting — so it needs no
+    /// special case here
+    fn walk_type_params(&mut self, type_params: Option<&TypeParams>) {
+        let Some(type_params) = type_params else {
+            return;
+        };
+        for type_param in &type_params.type_params {
+            let (bound, default) = match type_param {
+                TypeParam::TypeVar(tv) => (tv.bound.as_deref(), tv.default.as_deref()),
+                TypeParam::TypeVarTuple(tvt) => (None, tvt.default.as_deref()),
+                TypeParam::ParamSpec(ps) => (None, ps.default.as_deref()),
+            };
+            for expr in bound.into_iter().chain(default) {
+                (self.on_ann)(expr);
+            }
+        }
+    }
+
     fn walk_parameters(&mut self, params: &Parameters) {
         for p in params.iter_non_variadic_params() {
             if let Some(ann) = &p.parameter.annotation {
@@ -132,8 +153,12 @@ impl<'ast, F: FnMut(&Expr)> Visitor<'ast> for AnnotationWalker<'_, F> {
                     (self.on_ann)(value);
                 }
             }
-            Stmt::TypeAlias(a) => (self.on_ann)(&a.value),
+            Stmt::TypeAlias(a) => {
+                self.walk_type_params(a.type_params.as_deref());
+                (self.on_ann)(&a.value);
+            }
             Stmt::FunctionDef(f) => {
+                self.walk_type_params(f.type_params.as_deref());
                 self.walk_parameters(&f.parameters);
                 if let Some(ret) = &f.returns {
                     (self.on_ann)(ret);
@@ -141,6 +166,14 @@ impl<'ast, F: FnMut(&Expr)> Visitor<'ast> for AnnotationWalker<'_, F> {
                 for s in &f.body {
                     self.visit_stmt(s);
                 }
+            }
+            // a class's bases are deliberately *not* walked: a base is a runtime
+            // value position, where the basedpython tuple type is a plain tuple
+            // literal — `class C((str, int))` is an `invalid-base` error that
+            // raises `TypeError` at runtime, unlike `class C(tuple[str, int])`
+            Stmt::ClassDef(c) => {
+                self.walk_type_params(c.type_params.as_deref());
+                walk_stmt(self, stmt);
             }
             _ => walk_stmt(self, stmt),
         }

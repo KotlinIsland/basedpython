@@ -17,7 +17,7 @@ if sys.version_info >= (3, 13):
         """Open for binary reading the *resource* within *package*."""
 
     def open_text(
-        anchor: Anchor, *path_names: *tuple[StrPath], encoding: str | None = "utf-8", errors: str | None = "strict"
+        anchor: Anchor, *path_names: *(StrPath,), encoding: str | None = "utf-8", errors: str | None = "strict"
     ) -> TextIOWrapper:
         """Open for text reading the *resource* within *package*."""
     def open_text(anchor: Anchor, *path_names: StrPath, encoding: str | None, errors: str | None = "strict") -> TextIOWrapper
@@ -26,7 +26,7 @@ if sys.version_info >= (3, 13):
         """Read and return contents of *resource* within *package* as bytes."""
 
     def read_text(
-        anchor: Anchor, *path_names: *tuple[StrPath], encoding: str | None = "utf-8", errors: str | None = "strict"
+        anchor: Anchor, *path_names: *(StrPath,), encoding: str | None = "utf-8", errors: str | None = "strict"
     ) -> str:
         """Read and return contents of *resource* within *package* as str."""
     def read_text(anchor: Anchor, *path_names: StrPath, encoding: str | None, errors: str | None = "strict") -> str
