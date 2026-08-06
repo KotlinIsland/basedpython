@@ -229,6 +229,15 @@ impl<'db> StaticClassLiteral<'db> {
                 .is_some_and(|params| params.flags(db).contains(DataclassFlags::ORDER))
     }
 
+    /// Returns `true` if `@dataclass` synthesizes a `__repr__` for this class,
+    /// which it does unless the decorator was passed `repr=False`.
+    pub(crate) fn synthesizes_dataclass_repr(self, db: &'db dyn Db) -> bool {
+        self.find_dataclass_decorator_position(db).is_some()
+            && self
+                .dataclass_params(db)
+                .is_some_and(|params| params.flags(db).contains(DataclassFlags::REPR))
+    }
+
     /// Returns a new [`StaticClassLiteral`] with the given dataclass params, preserving all other fields.
     pub(crate) fn with_dataclass_params(
         self,

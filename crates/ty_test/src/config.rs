@@ -170,6 +170,10 @@ pub(crate) struct Analysis {
     pub(crate) overlapping_condition_exempt_types: Option<Vec<String>>,
 
     pub(crate) overlapping_condition_assume_truthy_instances: Option<bool>,
+
+    pub(crate) implicit_object_repr_exempt_types: Option<Vec<String>>,
+
+    pub(crate) implicit_object_repr_report_types: Option<Vec<String>>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

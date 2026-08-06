@@ -1764,6 +1764,49 @@ pub struct AnalysisOptions {
     )]
     pub overlapping_condition_exempt_types: Option<Vec<RangedValue<String>>>,
 
+    /// A list of classes never reported as an
+    /// [`implicit-object-repr`](rules.md#implicit-object-repr).
+    ///
+    /// A class deriving from one of these is exempt too, so listing a base opts out a whole
+    /// hierarchy.
+    ///
+    /// Entries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be
+    /// spelled bare (`int`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"[]"#,
+        value_type = "list[str]",
+        example = r#"
+            # Never report a bare `Thread` or `Lock`
+            implicit-object-repr-exempt-types = ["threading.Thread", "threading.Lock"]
+        "#
+    )]
+    pub implicit_object_repr_exempt_types: Option<Vec<RangedValue<String>>>,
+
+    /// A list of classes whose stub is taken at its word when looking for an
+    /// [`implicit-object-repr`](rules.md#implicit-object-repr).
+    ///
+    /// A stub normally settles nothing, because it omits `__str__` and `__repr__` whether or not
+    /// the runtime class has them — `int` declares neither and still prints as a number. For a
+    /// class listed here the omission counts as real, the same way it would for a class written
+    /// in source, so a value of that class is reported unless the stub does declare one.
+    ///
+    /// Defaults to the two whose bare repr is seen most often: `types.FunctionType`, which prints
+    /// `<function f at 0x...>`, and `builtins.type`, which prints `<class 'C'>`.
+    ///
+    /// Entries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be
+    /// spelled bare (`int`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[option(
+        default = r#"["types.FunctionType", "builtins.type"]"#,
+        value_type = "list[str]",
+        example = r#"
+            # Also report a bare module object
+            implicit-object-repr-report-types = ["types.FunctionType", "type", "types.ModuleType"]
+        "#
+    )]
+    pub implicit_object_repr_report_types: Option<Vec<RangedValue<String>>>,
+
     /// Whether an instance with no `__bool__` and no `__len__` counts as always truthy when
     /// looking for an [`overlapping-condition`](rules.md#overlapping-condition).
     ///
@@ -1851,6 +1894,8 @@ impl AnalysisOptions {
             precise_unsolved_typevars,
             overlapping_condition_exempt_types,
             overlapping_condition_assume_truthy_instances,
+            implicit_object_repr_exempt_types,
+            implicit_object_repr_report_types,
         } = self;
 
         let AnalysisSettings {
@@ -1865,6 +1910,8 @@ impl AnalysisOptions {
             overlapping_condition_exempt_types: overlapping_condition_exempt_types_default,
             overlapping_condition_assume_truthy_instances:
                 overlapping_condition_assume_truthy_instances_default,
+            implicit_object_repr_exempt_types: implicit_object_repr_exempt_types_default,
+            implicit_object_repr_report_types: implicit_object_repr_report_types_default,
         } = AnalysisSettings::default();
 
         let allowed_unresolved_imports =
@@ -1905,11 +1952,40 @@ impl AnalysisOptions {
                 .unwrap_or(precise_unsolved_typevars_default),
             overlapping_condition_exempt_types: overlapping_condition_exempt_types
                 .as_ref()
-                .map(|types| build_class_name_list(db, types, diagnostics))
+                .map(|types| {
+                    build_class_name_list(
+                        db,
+                        types,
+                        "overlapping-condition-exempt-types",
+                        diagnostics,
+                    )
+                })
                 .unwrap_or(overlapping_condition_exempt_types_default),
             overlapping_condition_assume_truthy_instances:
                 overlapping_condition_assume_truthy_instances
                     .unwrap_or(overlapping_condition_assume_truthy_instances_default),
+            implicit_object_repr_exempt_types: implicit_object_repr_exempt_types
+                .as_ref()
+                .map(|types| {
+                    build_class_name_list(
+                        db,
+                        types,
+                        "implicit-object-repr-exempt-types",
+                        diagnostics,
+                    )
+                })
+                .unwrap_or(implicit_object_repr_exempt_types_default),
+            implicit_object_repr_report_types: implicit_object_repr_report_types
+                .as_ref()
+                .map(|types| {
+                    build_class_name_list(
+                        db,
+                        types,
+                        "implicit-object-repr-report-types",
+                        diagnostics,
+                    )
+                })
+                .unwrap_or(implicit_object_repr_report_types_default),
         }
     }
 }
@@ -1922,10 +1998,9 @@ impl AnalysisOptions {
 fn build_class_name_list(
     db: &dyn Db,
     names: &[RangedValue<String>],
+    option_name: &'static str,
     diagnostics: &mut Vec<OptionDiagnostic>,
 ) -> Box<[Box<str>]> {
-    const OPTION_NAME: &str = "overlapping-condition-exempt-types";
-
     let is_identifier = |segment: &str| {
         let mut chars = segment.chars();
         chars
@@ -1952,7 +2027,7 @@ fn build_class_name_list(
                     db,
                     name,
                     "class name",
-                    OPTION_NAME,
+                    option_name,
                     "Expected a bare or qualified class name, such as `int` or `decimal.Decimal`",
                 ),
             );

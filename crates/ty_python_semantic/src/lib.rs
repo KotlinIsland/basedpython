@@ -169,7 +169,70 @@ pub struct AnalysisSettings {
     /// `if not x` over an optional instance.
     pub overlapping_condition_assume_truthy_instances: bool,
 
+    /// Classes never reported as rendering through `object.__repr__`.
+    ///
+    /// Entries are qualified class names (`decimal.Decimal`); a class in `builtins` may also be
+    /// spelled bare (`int`). A class deriving from one of these is exempt too.
+    pub implicit_object_repr_exempt_types: Box<[Box<str>]>,
+
+    /// Classes whose stub is taken at its word when looking for a value rendered through
+    /// `object.__repr__`.
+    ///
+    /// A stub normally settles nothing, because it omits `__str__` and `__repr__` whether or not
+    /// the runtime class has them. For a class listed here the omission counts as real, the same
+    /// way it would for a class written in source.
+    pub implicit_object_repr_report_types: Box<[Box<str>]>,
 }
+
+/// the stdlib classes whose default rendering says nothing about the value, and
+/// which therefore default to being reported
+///
+/// membership is decided by one question asked of a real interpreter — does
+/// `repr(v)` contain `hex(id(v))` — not by whether the stub declares a
+/// `__repr__`. the two come apart in both directions: `generator` defines one
+/// and it is still an address, while `threading.Thread` and `itertools.count`
+/// declare nothing and print perfectly well. a class that ends up here is still
+/// only reported when nothing in its hierarchy supplies a rendering, so a
+/// subclass that writes a `__repr__` is quiet
+///
+/// only the stdlib is listed. an extension class from somewhere else cannot be
+/// judged from its stub, and is left alone rather than guessed at
+const OPAQUE_REPR_CLASSES: &[&str] = &[
+    // `<function f at 0x…>`
+    "types.FunctionType",
+    // the one entry the address question does not settle: `<class 'C'>` carries
+    // no address, but it identifies the class rather than a value, and printing
+    // a class where an instance was meant is the same mistake
+    "builtins.type",
+    // the lazy sequences, which are printed instead of consumed
+    "types.GeneratorType",
+    "types.AsyncGeneratorType",
+    "types.CoroutineType",
+    "builtins.map",
+    "builtins.filter",
+    "builtins.zip",
+    "builtins.enumerate",
+    "builtins.reversed",
+    "itertools.chain",
+    "itertools.islice",
+    "itertools.cycle",
+    "itertools.accumulate",
+    "itertools.groupby",
+    "itertools.product",
+    "itertools.permutations",
+    // `_thread` renames its lock across versions, so both spellings are listed
+    "_thread.LockType",
+    "_thread.lock",
+    "_thread.RLock",
+    "threading.Event",
+    "threading.Semaphore",
+    "contextlib.ExitStack",
+    "contextlib.AsyncExitStack",
+    "builtins.memoryview",
+    "builtins.property",
+    "builtins.staticmethod",
+    "builtins.classmethod",
+];
 
 impl Default for AnalysisSettings {
     fn default() -> Self {
@@ -184,6 +247,11 @@ impl Default for AnalysisSettings {
             precise_unsolved_typevars: true,
             overlapping_condition_exempt_types: Box::default(),
             overlapping_condition_assume_truthy_instances: false,
+            implicit_object_repr_exempt_types: Box::default(),
+            implicit_object_repr_report_types: OPAQUE_REPR_CLASSES
+                .iter()
+                .map(|name| Box::from(*name))
+                .collect(),
         }
     }
 }

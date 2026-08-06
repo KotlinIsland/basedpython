@@ -107,6 +107,26 @@
             "null"
           ]
         },
+        "implicit-object-repr-exempt-types": {
+          "description": "A list of classes never reported as an\n[`implicit-object-repr`](rules.md#implicit-object-repr).\n\nA class deriving from one of these is exempt too, so listing a base opts out a whole\nhierarchy.\n\nEntries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be\nspelled bare (`int`).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/string"
+          }
+        },
+        "implicit-object-repr-report-types": {
+          "description": "A list of classes whose stub is taken at its word when looking for an\n[`implicit-object-repr`](rules.md#implicit-object-repr).\n\nA stub normally settles nothing, because it omits `__str__` and `__repr__` whether or not\nthe runtime class has them — `int` declares neither and still prints as a number. For a\nclass listed here the omission counts as real, the same way it would for a class written\nin source, so a value of that class is reported unless the stub does declare one.\n\nDefaults to the two whose bare repr is seen most often: `types.FunctionType`, which prints\n`<function f at 0x...>`, and `builtins.type`, which prints `<class 'C'>`.\n\nEntries are qualified class names (`decimal.Decimal`). A class in `builtins` may also be\nspelled bare (`int`).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/definitions/string"
+          }
+        },
         "overlapping-condition-assume-truthy-instances": {
           "description": "Whether an instance with no `__bool__` and no `__len__` counts as always truthy when\nlooking for an [`overlapping-condition`](rules.md#overlapping-condition).\n\nSuch an instance is only *ambiguously* truthy — a subclass may define `__bool__` — so by\ndefault it is a falsy member of `if not x` just as `None` is. Enabling this assumes the\nclass means what it looks like it means, which drops the reports for the very common\n`if not x` over an optional instance.\n\nDefaults to `false`.",
           "type": [
@@ -707,6 +727,16 @@
           "title": "detects implicit concatenated strings in type annotations",
           "description": "## What it does\n\nChecks for implicit concatenated strings in type annotation positions.\n\n## Why is this bad?\n\nStatic analysis tools like ty can't analyze type annotations that use implicit concatenated strings.\n\n## Examples\n\n<!-- fmt:off -->\n\n```python\nfrom typing import Literal\n\ndef test() -> \"Literal[\" \"5\" \"]\":  # error\n    return 5\n```\n\n<!-- fmt:on -->\n\nUse instead:\n\n```python\nfrom typing import Literal\n\n\ndef test() -> \"Literal[5]\":\n    return 5\n```",
           "default": "error",
+          "oneOf": [
+            {
+              "$ref": "#/definitions/Level"
+            }
+          ]
+        },
+        "implicit-object-repr": {
+          "title": "detects a value printed through `object.__repr__`",
+          "description": "## What it does\nChecks for a value rendered as text when its class says nothing about\nhow it should look.\n\n## Why is this bad?\nA class that defines nothing the site can use falls back to the\ninterpreter's own default, which prints the class name and the address\nthe object happens to sit at — `<__main__.A object at 0x102bcc6a0>`.\nThat is never what the message was meant to say, and the address makes\nthe output differ on every run.\n\nWhich dunders count depends on what the site asks for, because the\nfallbacks run one way only: `object.__str__` calls `__repr__`, and\n`object.__format__` calls `str`, but nothing falls back to `__str__`.\n\n- `repr(x)`, `ascii(x)`, `f\"{x!r}\"` — only `__repr__`\n- `str(x)`, `print(x)`, `f\"{x!s}\"` — `__str__` or `__repr__`\n- `format(x)`, `f\"{x}\"` — `__format__`, `__str__` or `__repr__`\n\nOnly a class written in source is judged. A stub leaves these dunders\nout whether or not the runtime class has them — `int` declares none of\nthe three and still prints as a number — so a class that comes from a\nstub, or that inherits from one, is not reported. The exception is a\nstub named in `analysis.implicit-object-repr-report-types`, which\ndefaults to `types.FunctionType` and `builtins.type`: printing a bare\nfunction or class object is the same mistake, and neither stub is\nhiding a rendering.\n\n## Options\n- `analysis.implicit-object-repr-exempt-types`\n- `analysis.implicit-object-repr-report-types`\n\n## Examples\n```python\nclass Point:\n    def __init__(self, x: int):\n        self.x = x\n\nprint(Point(1))    # warning: prints `<__main__.Point object at 0x...>`\nf\"at {Point(1)}\"   # warning\n\nclass Spoken:\n    def __str__(self) -> str:\n        return \"Spoken()\"\n\nprint(Spoken())    # ok\nrepr(Spoken())     # warning: `__str__` is not what `repr` asks for\n\nclass Labelled:\n    def __repr__(self) -> str:\n        return \"Labelled()\"\n\nprint(Labelled())  # ok — `str` falls back to `__repr__`\nrepr(Labelled())   # ok\n\ndef helper() -> None: ...\n\nprint(helper)      # warning: prints `<function helper at 0x...>`\nprint(Labelled)    # warning: prints `<class '__main__.Labelled'>`\n```",
+          "default": "warn",
           "oneOf": [
             {
               "$ref": "#/definitions/Level"

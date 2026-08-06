@@ -21,9 +21,51 @@ use ruff_text_size::{Ranged, TextRange, TextSize};
 use crate::types::class::{ClassLiteral, ClassType};
 use crate::types::class_base::ClassBase;
 use crate::types::context::InferContext;
-use crate::Db;
-use crate::types::diagnostic::INVALID_FORMAT_SPEC;
-use crate::types::{CallArguments, KnownClass, Type, TypeContext};
+use crate::types::diagnostic::{IMPLICIT_OBJECT_REPR, INVALID_FORMAT_SPEC};
+use crate::types::function::KnownFunction;
+use crate::types::{CallArguments, KnownClass, MemberLookupPolicy, Type, TypeContext};
+use crate::{AnalysisSettings, Db};
+
+/// what a site asks a value for, and so which dunders can answer it
+///
+/// the fallbacks run one way only: `object.__str__` calls `__repr__`, and
+/// `object.__format__` calls `str`, but nothing falls back to `__str__`. so a
+/// class with a `__str__` and no `__repr__` still prints an address from
+/// `repr(x)`
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) enum Rendering {
+    /// `repr(x)`, `ascii(x)`, `f"{x!r}"`, `f"{x!a}"`
+    Repr,
+    /// `str(x)`, `print(x)`, `f"{x!s}"`
+    Str,
+    /// `format(x)`, `f"{x}"`
+    Format,
+}
+
+impl Rendering {
+    /// the dunders consulted, in the order the fallback chain reaches them
+    fn dunders(self) -> &'static [&'static str] {
+        match self {
+            Rendering::Repr => &["__repr__"],
+            Rendering::Str => &["__str__", "__repr__"],
+            Rendering::Format => &["__format__", "__str__", "__repr__"],
+        }
+    }
+
+    /// the dunders listed as prose — "`__str__` or `__repr__`"
+    fn dunder_list(self) -> String {
+        let quoted: Vec<String> = self
+            .dunders()
+            .iter()
+            .map(|dunder| format!("`{dunder}`"))
+            .collect();
+        match quoted.split_last() {
+            Some((last, [])) => last.clone(),
+            Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
+            None => String::new(),
+        }
+    }
+}
 
 /// the language a format spec is written in, which is decided by the
 /// `__format__` that reads it
@@ -79,24 +121,6 @@ fn owner_of<'db>(db: &'db dyn Db, class: ClassType<'db>, name: &str) -> Option<C
         .iter_mro(db)
         .filter_map(ClassBase::into_class)
         .find(|base| !base.own_class_member(db, None, name).is_undefined())
-}
-
-/// whether `class` is one of a list of class names
-///
-/// a name is qualified (`datetime.date`); a class in `builtins` may also be
-/// spelled bare, matching how the other class-list options read
-fn is_named<'db>(
-    db: &'db dyn Db,
-    class: ClassLiteral<'db>,
-    names: impl IntoIterator<Item: AsRef<str>>,
-) -> bool {
-    let names: Vec<_> = names.into_iter().collect();
-    if names.is_empty() {
-        return false;
-    }
-    let qualified = class.qualified_name(db).to_string();
-    let matches = |name: &str| names.iter().any(|entry| entry.as_ref() == name);
-    matches(&qualified) || qualified.strip_prefix("builtins.").is_some_and(matches)
 }
 
 /// the format spec written in a replacement field
@@ -165,6 +189,22 @@ pub(crate) fn check_interpolation<'db>(
     let formatted = converted(db, value_ty, element.conversion);
     let spec = WrittenSpec::of(element);
 
+    // the conversion does not excuse the value — `!r` is a request for the very
+    // repr that has nothing to say — but it does decide which dunder is asked
+    let rendering = match element.conversion {
+        ast::ConversionFlag::Str => Rendering::Str,
+        ast::ConversionFlag::Repr | ast::ConversionFlag::Ascii => Rendering::Repr,
+        // `f"{x=}"` writes the expression and then `repr(x)`. a spec of its own
+        // switches it back to `format`, and a conversion above wins outright
+        ast::ConversionFlag::None
+            if element.debug_text.is_some() && element.format_spec.is_none() =>
+        {
+            Rendering::Repr
+        }
+        ast::ConversionFlag::None => Rendering::Format,
+    };
+    check_implicit_object_repr(context, element.expression.range(), value_ty, rendering);
+
     // the empty spec is the one every type accepts by construction:
     // `object.__format__` takes it, and an override can only widen from there.
     // a call that fails on `""` is this checker failing to resolve it — a
@@ -185,6 +225,83 @@ pub(crate) fn check_interpolation<'db>(
     }
 
     check_spec_content(context, &spec, formatted);
+}
+
+/// a builtin that turns a value into text
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub(crate) enum Stringifying {
+    /// `str(x)` renders, but `str(buffer, encoding)` decodes and never asks the
+    /// value how it looks
+    Str,
+    Repr,
+    Ascii,
+    Format,
+    Print,
+}
+
+impl Stringifying {
+    /// which of the stringifying builtins `callable_ty` is, if any
+    pub(crate) fn of<'db>(db: &'db dyn Db, callable_ty: Type<'db>) -> Option<Self> {
+        if let Some(class) = callable_ty.as_class_literal()
+            && class.known(db) == Some(KnownClass::Str)
+        {
+            return Some(Stringifying::Str);
+        }
+        match callable_ty.as_function_literal()?.known(db)? {
+            KnownFunction::Repr => Some(Stringifying::Repr),
+            KnownFunction::Ascii => Some(Stringifying::Ascii),
+            KnownFunction::Format => Some(Stringifying::Format),
+            KnownFunction::Print => Some(Stringifying::Print),
+            _ => None,
+        }
+    }
+
+    /// what this builtin asks the value for
+    fn rendering(self) -> Rendering {
+        match self {
+            // `ascii` is `repr` with the non-ascii escaped, so it asks the same
+            Stringifying::Repr | Stringifying::Ascii => Rendering::Repr,
+            Stringifying::Str | Stringifying::Print => Rendering::Str,
+            Stringifying::Format => Rendering::Format,
+        }
+    }
+
+    /// the arguments whose rendering ends up in the output
+    fn rendered(self, arguments: &ast::Arguments) -> &[ast::Expr] {
+        let positional = arguments
+            .args
+            .iter()
+            .position(ast::Expr::is_starred_expr)
+            // a starred argument hides how many values there are, so only the
+            // ones written out are checked
+            .map_or(&arguments.args[..], |starred| &arguments.args[..starred]);
+        match self {
+            Stringifying::Print => positional,
+            // `str(buffer, "utf-8")` is the decoding overload — a different
+            // function that happens to share a name, and no `__str__` runs
+            Stringifying::Str if positional.len() != 1 || !arguments.keywords.is_empty() => &[],
+            _ => &positional[..positional.len().min(1)],
+        }
+    }
+}
+
+/// check a call to one of the builtins that renders a value as text
+pub(crate) fn check_stringifying_call<'db>(
+    context: &InferContext<'db, '_>,
+    stringifying: Stringifying,
+    arguments: &ast::Arguments,
+    argument_type: impl Fn(&ast::Expr) -> Option<Type<'db>>,
+) {
+    for argument in stringifying.rendered(arguments) {
+        if let Some(ty) = argument_type(argument) {
+            check_implicit_object_repr(
+                context,
+                argument.range(),
+                ty.erase_restriction(context.db()),
+                stringifying.rendering(),
+            );
+        }
+    }
 }
 
 /// the type that reaches `__format__`, once the conversion has run
@@ -244,6 +361,8 @@ fn report_rejected_spec<'db>(
 /// implements the whole mini-language and its stub never mentions `__format__`.
 /// silence outside the vendored typeshed is therefore not a rejection
 ///
+/// (`implicit-object-repr` distrusts even the vendored stubs, because typeshed
+/// omits `__str__` and `__repr__` wholesale and we have not patched that)
 fn declares_what_it_implements<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
     let Some(class) = ty.nominal_class(db) else {
         return false;
@@ -370,4 +489,148 @@ fn malformed_detail(error: &FormatSpecError) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// warn when a value is rendered by `object`'s own `__repr__`, whose output is
+/// the class name and an address
+///
+/// only a class written in source can be judged: a stub omits `__str__` and
+/// `__repr__` whether or not the runtime class has them — `int` declares
+/// neither and still prints as a number — so a class from a stub anywhere in
+/// the MRO makes the answer unknowable and nothing is reported
+pub(crate) fn check_implicit_object_repr<'db>(
+    context: &InferContext<'db, '_>,
+    at: TextRange,
+    value_ty: Type<'db>,
+    rendering: Rendering,
+) {
+    let db = context.db();
+    // a stub describes an interface and never runs, so no rendering of it
+    // reaches anyone
+    if context.file().is_stub(db) {
+        return;
+    }
+    let settings = db.analysis_settings(context.file());
+    let Some(class) = unrendered_class(db, settings, value_ty, rendering) else {
+        return;
+    };
+    let Some(builder) = context.report_lint(&IMPLICIT_OBJECT_REPR, at) else {
+        return;
+    };
+    let dunders = rendering.dunder_list();
+    // the class is named rather than the value, because it is the class that
+    // is missing something — `print(some_function)` is about `FunctionType`
+    let named = Type::instance(db, class).display(db).to_string();
+    let mut diagnostic =
+        builder.into_diagnostic(format_args!("`{named}` has no {dunders} of its own"));
+    diagnostic.info(
+        "nothing in its hierarchy defines one, so the output is the interpreter's default, \
+         which identifies the class rather than the value",
+    );
+    // a stub class is not one the author can add a dunder to
+    if !class.class_literal(db).file(db).is_stub(db) {
+        diagnostic.help(format_args!("define {dunders} on `{named}`"));
+    }
+}
+
+/// the class a value has at runtime
+///
+/// most values are instances, and their own class is the answer. a value that
+/// *is* a class or a function is an instance of its meta type — `type` and
+/// `types.FunctionType` — which is what decides how it prints
+fn runtime_class<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<ClassType<'db>> {
+    ty.nominal_class(db)
+        .or_else(|| ty.to_meta_type(db).to_class_type(db))
+}
+
+/// whether `class` is one of the configured class names
+///
+/// a name is qualified (`types.FunctionType`); a class in `builtins` may also
+/// be spelled bare, matching how the other class-list options read
+fn is_named<'db>(
+    db: &'db dyn Db,
+    class: ClassLiteral<'db>,
+    names: impl IntoIterator<Item: AsRef<str>>,
+) -> bool {
+    let names: Vec<_> = names.into_iter().collect();
+    if names.is_empty() {
+        return false;
+    }
+    let qualified = class.qualified_name(db).to_string();
+    let matches = |name: &str| names.iter().any(|entry| entry.as_ref() == name);
+    matches(&qualified) || qualified.strip_prefix("builtins.").is_some_and(matches)
+}
+
+/// the class of `ty` when nothing in its hierarchy answers `rendering`, and so
+/// the value renders by whatever default the interpreter has
+fn unrendered_class<'db>(
+    db: &'db dyn Db,
+    settings: &AnalysisSettings,
+    ty: Type<'db>,
+    rendering: Rendering,
+) -> Option<ClassType<'db>> {
+    // `A()` is inferred as `final A`; it is `A` that has or lacks a rendering
+    let ty = ty.erase_restriction(db);
+    let class = runtime_class(db, ty)?;
+    // `object` itself is the one class whose bare repr is not a mistake: it is
+    // what the author asked for
+    if class.class_literal(db).known(db) == Some(KnownClass::Object) {
+        return None;
+    }
+    let hierarchy: Vec<_> = class
+        .iter_mro(db)
+        .filter_map(ClassBase::into_class)
+        .take_while(|base| base.class_literal(db).known(db) != Some(KnownClass::Object))
+        .map(|base| base.class_literal(db))
+        .collect();
+
+    // an exempt base exempts everything that derives from it
+    if hierarchy
+        .iter()
+        .any(|literal| is_named(db, *literal, &settings.implicit_object_repr_exempt_types))
+    {
+        return None;
+    }
+    // a listed class is a claim about how its instances actually print, which
+    // already accounts for whatever it inherits — so one match settles the
+    // whole chain, stub bases and all. `GeneratorType` derives from the
+    // `Generator` abc, and neither of them is going to supply a rendering
+    let listed = hierarchy
+        .iter()
+        .any(|literal| is_named(db, *literal, &settings.implicit_object_repr_report_types));
+    for literal in &hierarchy {
+        // a stub leaves these dunders out whether or not the runtime class has
+        // them, so a stub anywhere below the value makes the question
+        // undecidable and nothing is claimed
+        if !listed && literal.file(db).is_stub(db) {
+            return None;
+        }
+        // `@dataclass` writes a `__repr__` that never appears in the class body
+        if literal
+            .as_static()
+            .is_some_and(|literal| literal.synthesizes_dataclass_repr(db))
+        {
+            return None;
+        }
+    }
+
+    // asked of an instance of the class, so a value that *is* a class or a
+    // function is asked about `type` and `types.FunctionType` rather than about
+    // its own members
+    let instance = Type::instance(db, class);
+    rendering
+        .dunders()
+        .iter()
+        .all(|dunder| {
+            instance
+                .member_lookup_with_policy(
+                    db,
+                    dunder,
+                    MemberLookupPolicy::MRO_NO_OBJECT_FALLBACK
+                        | MemberLookupPolicy::NO_INSTANCE_FALLBACK,
+                )
+                .place
+                .is_undefined()
+        })
+        .then_some(class)
 }

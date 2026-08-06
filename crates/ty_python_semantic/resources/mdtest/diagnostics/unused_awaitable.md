@@ -43,11 +43,14 @@ When a coroutine is passed as an argument rather than used as an expression stat
 should be emitted.
 
 ```py
+from typing import Any
+
 async def fetch() -> int:
     return 42
 
+def consume(value: Any) -> None: ...
 async def main():
-    print(fetch())
+    consume(fetch())
 ```
 
 ## Top-level coroutine call

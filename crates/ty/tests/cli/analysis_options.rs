@@ -529,3 +529,78 @@ fn overlapping_condition_exempt_types_accepts_an_unresolvable_name() -> anyhow::
 
     Ok(())
 }
+
+/// The option name reaches the diagnostic, so the report names the setting that was wrong.
+#[test]
+fn implicit_object_repr_report_types_rejects_a_malformed_name() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "ty.toml",
+            r#"
+            [analysis]
+            implicit-object-repr-report-types = ["types.FunctionType", "not a class"]
+            "#,
+        ),
+        ("test.py", "print(1)\n"),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @r#"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    by failed
+      Cause: error[invalid-class-name]: Invalid class name
+     --> ty.toml:3:60
+      |
+    2 | [analysis]
+    3 | implicit-object-repr-report-types = ["types.FunctionType", "not a class"]
+      |                                                            ^^^^^^^^^^^^^ Expected a bare or qualified class name, such as `int` or `decimal.Decimal`
+      |
+    "#);
+
+    Ok(())
+}
+
+/// Exempting a class silences the report the defaults would otherwise produce.
+#[test]
+fn implicit_object_repr_exempt_types_silences_a_default() -> anyhow::Result<()> {
+    let case = CliTest::with_files([
+        (
+            "ty.toml",
+            r#"
+            [analysis]
+            implicit-object-repr-exempt-types = ["types.FunctionType"]
+            "#,
+        ),
+        (
+            "test.py",
+            r#"
+            def f() -> None: ...
+
+            print(f)
+            print(int)
+            "#,
+        ),
+    ])?;
+
+    assert_cmd_snapshot!(case.command(), @"
+    success: false
+    exit_code: 1
+    ----- stdout -----
+    warning[implicit-object-repr]: `type` has no `__str__` or `__repr__` of its own
+     --> test.py:5:7
+      |
+    5 | print(int)
+      |       ^^^
+      |
+    info: nothing in its hierarchy defines one, so the output is the interpreter's default, which identifies the class rather than the value
+
+    Found 1 diagnostic
+
+    ----- stderr -----
+    ");
+
+    Ok(())
+}
