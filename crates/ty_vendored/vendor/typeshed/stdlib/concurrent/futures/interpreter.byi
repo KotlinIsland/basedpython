@@ -10,7 +10,7 @@ private type Task = tuple[bytes, "function" | "script"]
 
 @type_check_only
 private protocol TaskFunc:
-    def __call__[**P, R](self, fn: (**P) -> R, *args: P.args, **kwargs: P.kwargs) -> (bytes, "function")
+    def __call__[Parameters: (*: *, **: *), R](self, fn: (**Parameters) -> R, *args: Parameters.args, **kwargs: Parameters.kwargs) -> (bytes, "function")
     def __call__(self, fn: str) -> (bytes, "script")
 
 if sys.version_info >= (3, 14):
@@ -23,8 +23,8 @@ if sys.version_info >= (3, 14):
         interp: Interpreter | None
         results: Queue | None
 
-        class def prepare[*Ts](
-            cls, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)
+        class def prepare[*Args](
+            cls, initializer: (*Args) -> object, initargs: (Unpack[Args],)
         ) -> (() -> Self, TaskFunc)
         class def prepare(cls, initializer: () -> object, initargs: tuple[()]) -> (() -> Self, TaskFunc)
 
@@ -43,8 +43,8 @@ if sys.version_info >= (3, 14):
         class def prepare_context(
             cls, initializer: () -> object, initargs: tuple[()]
         ) -> (() -> WorkerContext, TaskFunc)
-        class def prepare_context[*Ts](
-            cls, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)
+        class def prepare_context[*Args](
+            cls, initializer: (*Args) -> object, initargs: (Unpack[Args],)
         ) -> (() -> WorkerContext, TaskFunc)
 
         init(
@@ -64,18 +64,18 @@ if sys.version_info >= (3, 14):
                     each worker interpreter.
                 initargs: A tuple of arguments to pass to the initializer.
             """
-        def __init__[*Ts](
+        def __init__[*Args](
             self,
             max_workers: int | None = None,
             thread_name_prefix: str = "",
             *,
-            initializer: Callable[[Unpack[Ts]], object],
-            initargs: (Unpack[Ts],),
+            initializer: (*Args) -> object,
+            initargs: (Unpack[Args],),
         ) -> None
-        def __init__[*Ts](
+        def __init__[*Args](
             self,
             max_workers: int | None,
             thread_name_prefix: str,
-            initializer: Callable[[Unpack[Ts]], object],
-            initargs: (Unpack[Ts],),
+            initializer: (*Args) -> object,
+            initargs: (Unpack[Args],),
         ) -> None

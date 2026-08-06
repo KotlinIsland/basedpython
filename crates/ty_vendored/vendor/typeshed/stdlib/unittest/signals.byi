@@ -8,4 +8,4 @@ def registerResult(result: unittest.result.TestResult) -> None
 def removeResult(result: unittest.result.TestResult) -> bool
 
 def removeHandler(method: None = None) -> None
-def removeHandler[**P, Element](method: (**P) -> Element) -> (**P) -> Element
+def removeHandler[Parameters: (*: *, **: *), Element](method: (**Parameters) -> Element) -> (**Parameters) -> Element

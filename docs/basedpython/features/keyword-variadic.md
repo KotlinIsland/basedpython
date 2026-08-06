@@ -80,13 +80,14 @@ this is why a pack's context can't also use the
 ## scope
 
 the keyword-pack reading is confined to `.by`. `.byi` is the interop surface with python's typing
-ecosystem — the vendored typeshed is converted from upstream, where `**P` means `ParamSpec` — so a
-PEP-695 `**P` in a stub is still a `ParamSpec`.
+ecosystem, where `**P` means `ParamSpec`, so a PEP-695 `**P` in a stub is still a `ParamSpec`.
 
-in `.by` a `ParamSpec` is a type variable bound by the *top parameters* form — `class A[P: (*: *, **: *)]` — an anonymous variadic and an anonymous keyword-variadic, both admitting anything. every
-parameter list is a subtype of it, so the bound ranges over all parameter lists. that is what a
-python `ParamSpec` reverse-transpiles to, so `class A[**P]` round-trips. the legacy
-`P = ParamSpec("P")` form also works, and the arrow syntax unpacks any of them
+a `ParamSpec` is a type variable bound by the *top parameters* form —
+`class A[P: (*: *, **: *)]` — an anonymous variadic and an anonymous keyword-variadic, both
+admitting anything. every parameter list is a subtype of it, so the bound ranges over all parameter
+lists. that is what a python `ParamSpec` reverse-transpiles to, so `class A[**P]` round-trips, and
+it is the form the vendored typeshed uses. the legacy `P = ParamSpec("P")` form also works, and the
+arrow syntax unpacks any of them
 
 ## lowering
 

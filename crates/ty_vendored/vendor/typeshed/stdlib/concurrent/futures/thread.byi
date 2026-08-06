@@ -24,20 +24,20 @@ private type Task = tuple[(...) -> dynamic, (*: dynamic), dict[str, dynamic]]
 
 @type_check_only
 private protocol ResolveTaskFunc:
-    def __call__[C: (...) -> object, *Ts, Key: str, Value](
-        self, func: C, args: (Unpack[Ts],), kwargs: dict[Key, Value]
-    ) -> (C, (Unpack[Ts],), dict[Key, Value])
+    def __call__[C: (...) -> object, *Args, Key: str, Value](
+        self, func: C, args: (Unpack[Args],), kwargs: dict[Key, Value]
+    ) -> (C, (Unpack[Args],), dict[Key, Value])
 
 if sys.version_info >= (3, 14):
     class WorkerContext:
-        class def prepare[*Ts](
-            cls, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)
+        class def prepare[*Args](
+            cls, initializer: (*Args) -> object, initargs: (Unpack[Args],)
         ) -> (() -> Self, ResolveTaskFunc)
         class def prepare(
             cls, initializer: () -> object, initargs: tuple[()]
         ) -> (() -> Self, ResolveTaskFunc)
 
-        def __init__[*Ts](self, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)) -> None
+        def __init__[*Args](self, initializer: (*Args) -> object, initargs: (Unpack[Args],)) -> None
         init(self, initializer: () -> object, initargs: tuple[()])
 
         def initialize(self) -> None
@@ -73,11 +73,11 @@ else:
             E.g. for t = list[int], t.__origin__ is list and t.__args__ is (int,).
             """
 
-    def _worker[*Ts](
+    def _worker[*Args](
         executor_reference: ref[dynamic],
         work_queue: queue.SimpleQueue[dynamic],
-        initializer: Callable[[Unpack[Ts]], object],
-        initargs: (Unpack[Ts],),
+        initializer: (*Args) -> object,
+        initargs: (Unpack[Args],),
     ) -> None
 
 class BrokenThreadPool(BrokenExecutor):
@@ -108,8 +108,8 @@ class ThreadPoolExecutor(Executor):
         class def prepare_context(
             cls, initializer: () -> object, initargs: tuple[()]
         ) -> (() -> WorkerContext, ResolveTaskFunc)
-        class def prepare_context[*Ts](
-            cls, initializer: Callable[[Unpack[Ts]], object], initargs: (Unpack[Ts],)
+        class def prepare_context[*Args](
+            cls, initializer: (*Args) -> object, initargs: (Unpack[Args],)
         ) -> (() -> WorkerContext, ResolveTaskFunc)
 
     init(
@@ -129,20 +129,20 @@ class ThreadPoolExecutor(Executor):
             initargs: A tuple of arguments to pass to the initializer.
             ctxkwargs: Additional arguments to cls.prepare_context().
         """
-    def __init__[*Ts](
+    def __init__[*Args](
         self,
         max_workers: int | None = None,
         thread_name_prefix: str = "",
         *,
-        initializer: Callable[[Unpack[Ts]], object],
-        initargs: (Unpack[Ts],),
+        initializer: (*Args) -> object,
+        initargs: (Unpack[Args],),
     ) -> None
-    def __init__[*Ts](
+    def __init__[*Args](
         self,
         max_workers: int | None,
         thread_name_prefix: str,
-        initializer: Callable[[Unpack[Ts]], object],
-        initargs: (Unpack[Ts],),
+        initializer: (*Args) -> object,
+        initargs: (Unpack[Args],),
     ) -> None
 
     def _adjust_thread_count(self) -> None

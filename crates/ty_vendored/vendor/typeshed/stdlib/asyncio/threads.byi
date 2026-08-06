@@ -6,7 +6,7 @@ from typing import ParamSpec, TypeVar
 # Keep asyncio.__all__ updated with any changes to __all__ here
 __all__ = ("to_thread",)
 
-async def to_thread[**P, R](func: (**P) -> R, /, *args: P.args, **kwargs: P.kwargs) -> R:
+async def to_thread[Parameters: (*: *, **: *), R](func: (**Parameters) -> R, /, *args: Parameters.args, **kwargs: Parameters.kwargs) -> R:
     """Asynchronously run function *func* in a separate thread.
 
     Any *args and **kwargs supplied for this function are directly passed

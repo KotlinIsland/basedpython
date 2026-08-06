@@ -7,6 +7,7 @@
 //! for a conservative reverse pass
 
 use ruff_diagnostics::{Edit, Fix};
+use ruff_python_ast::helpers::TOP_PARAMETERS_FORM;
 use ruff_python_ast::visitor::{Visitor, walk_stmt};
 use ruff_python_ast::{Expr, Stmt, TypeParam};
 use ruff_text_size::{Ranged, TextRange};
@@ -44,7 +45,7 @@ impl<'src> GenericsReverse<'src> {
                     .map(|default| format!(" = {}", self.src(default.range())))
                     .unwrap_or_default();
                 self.edits.push(Fix::safe_edit(Edit::range_replacement(
-                    format!("{name}: (*: *, **: *){default}"),
+                    format!("{name}: {TOP_PARAMETERS_FORM}{default}"),
                     param.range(),
                 )));
             }

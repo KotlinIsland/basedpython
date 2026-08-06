@@ -219,8 +219,8 @@ class Command:
         """
 
     def warn(self, msg: str) -> None
-    def execute[*Ts](
-        self, func: Callable[[Unpack[Ts]], Unused], args: (Unpack[Ts],), msg: str | None = None, level: int = 1
+    def execute[*Args](
+        self, func: (*Args) -> Unused, args: (Unpack[Args],), msg: str | None = None, level: int = 1
     ) -> None
     def mkpath(self, name: str, mode: int = 0o777) -> None
 
@@ -286,12 +286,12 @@ class Command:
         group: str | None = None,
     ) -> str
 
-    def make_file[*Ts](
+    def make_file[*Args](
         self,
         infiles: str | list[str] | (*: str),
         outfile: StrOrBytesPath,
-        func: Callable[[Unpack[Ts]], Unused],
-        args: (Unpack[Ts],),
+        func: (*Args) -> Unused,
+        args: (Unpack[Args],),
         exec_msg: str | None = None,
         skip_msg: str | None = None,
         level: Unused = 1,

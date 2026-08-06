@@ -142,8 +142,8 @@ def h(cb: (**kwargs: str) -> int):
 
 ## PEP-695 `[**P]` stays a `ParamSpec` in a stub
 
-`.byi` is the interop surface with python's typing ecosystem — the vendored typeshed is converted
-from upstream, where `**P` means `ParamSpec` — so the keyword-pack reading is confined to `.by`
+`.byi` is the interop surface with python's typing ecosystem, where `**P` means `ParamSpec`, so the
+keyword-pack reading is confined to `.by`
 
 `stub.byi`:
 
@@ -161,4 +161,27 @@ from stub import C
 
 def f(c: C[[str, int]]):
     reveal_type(c.get())  # revealed: (str, int, /) -> int
+```
+
+## a top-parameters bound declares a `ParamSpec` in a stub too
+
+this is the form the vendored typeshed uses, `.args`/`.kwargs` included
+
+`stub.byi`:
+
+```byi
+class C[P: (*: *, **: *), out R]:
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+```
+
+`main.by`:
+
+```by
+from stub import C
+
+def f(c: C[[str, int], bool]):
+    reveal_type(c("x", 1))  # revealed: bool
+    # error: [invalid-argument-type] "Expected `str`, found `1`"
+    # error: [invalid-argument-type] "Expected `int`, found `"x"`"
+    c(1, "x")
 ```

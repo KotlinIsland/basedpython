@@ -44,7 +44,7 @@ class _AssertRaisesBaseContext(_BaseTestCaseContext):
         arguments.
         """
 
-def addModuleCleanup[**P](function: (**P) -> object, /, *args: P.args, **kwargs: P.kwargs) -> None:
+def addModuleCleanup[Parameters: (*: *, **: *)](function: (**Parameters) -> object, /, *args: Parameters.args, **kwargs: Parameters.kwargs) -> None:
     """Same as addCleanup, except the cleanup items are called even if
     setUpModule fails (unlike tearDownModule).
     """
@@ -286,12 +286,12 @@ class TestCase:
         self, expected_exception: type[E] | (*: type[E]), expected_regex: str | Pattern[str], *, msg: dynamic = ...
     ) -> _AssertRaisesContext[E]
 
-    def assertWarns[**P](
+    def assertWarns[Parameters: (*: *, **: *)](
         self,
         expected_warning: type[Warning] | (*: type[Warning]),
-        callable: (**P) -> object,
-        *args: P.args,
-        **kwargs: P.kwargs,
+        callable: (**Parameters) -> object,
+        *args: Parameters.args,
+        **kwargs: Parameters.kwargs,
     ) -> None:
         """Fail unless a warning of class warnClass is triggered
         by the callable when invoked with specified positional and
@@ -324,13 +324,13 @@ class TestCase:
         self, expected_warning: type[Warning] | (*: type[Warning]), *, msg: dynamic = ...
     ) -> _AssertWarnsContext
 
-    def assertWarnsRegex[**P](
+    def assertWarnsRegex[Parameters: (*: *, **: *)](
         self,
         expected_warning: type[Warning] | (*: type[Warning]),
         expected_regex: str | Pattern[str],
-        callable: (**P) -> object,
-        *args: P.args,
-        **kwargs: P.kwargs,
+        callable: (**Parameters) -> object,
+        *args: Parameters.args,
+        **kwargs: Parameters.kwargs,
     ) -> None:
         """Asserts that the message in a triggered warning matches a regexp.
         Basic functioning is similar to assertWarns() with the addition
@@ -581,7 +581,7 @@ class TestCase:
         the specified test method's docstring.
         """
 
-    def addCleanup[**P](self, function: (**P) -> object, /, *args: P.args, **kwargs: P.kwargs) -> None:
+    def addCleanup[Parameters: (*: *, **: *)](self, function: (**Parameters) -> object, /, *args: Parameters.args, **kwargs: Parameters.kwargs) -> None:
         """Add a function, with arguments, to be called when the test is
         completed. Functions added are called on a LIFO basis and are
         called after tearDown on test failure or success.
@@ -602,7 +602,7 @@ class TestCase:
         tearDown.
         """
 
-    class def addClassCleanup[**P](cls, function: (**P) -> object, /, *args: P.args, **kwargs: P.kwargs) -> None:
+    class def addClassCleanup[Parameters: (*: *, **: *)](cls, function: (**Parameters) -> object, /, *args: Parameters.args, **kwargs: Parameters.kwargs) -> None:
         """Same as addCleanup, except the cleanup items are called even if
         setUpClass fails (unlike tearDownClass).
         """

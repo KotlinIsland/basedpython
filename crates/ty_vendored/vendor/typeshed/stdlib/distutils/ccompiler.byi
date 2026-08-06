@@ -474,8 +474,8 @@ class CCompiler:
     def shared_object_filename(self, basename: str, strip_dir: 0 | False = 0, output_dir: StrPath = "") -> str
     def shared_object_filename(self, basename: StrPath, strip_dir: 1 | True, output_dir: StrPath = "") -> str
 
-    def execute[*Ts](
-        self, func: Callable[[Unpack[Ts]], Unused], args: (Unpack[Ts],), msg: str | None = None, level: int = 1
+    def execute[*Args](
+        self, func: (*Args) -> Unused, args: (Unpack[Args],), msg: str | None = None, level: int = 1
     ) -> None
     def spawn(self, cmd: Iterable[str]) -> None
     def mkpath(self, name: str, mode: int = 0o777) -> None

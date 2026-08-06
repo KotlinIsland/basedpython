@@ -130,7 +130,7 @@ class BaseEventLoop(AbstractEventLoop):
         """Shutdown all active asynchronous generators."""
 
     # Methods scheduling callbacks.  All these return Handles.
-    override def call_soon[*Ts](self, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None) -> Handle:
+    override def call_soon[*Args](self, callback: (*Args) -> object, *args: *Args, context: Context | None = None) -> Handle:
         """Arrange for a callback to be called as soon as possible.
 
         This operates as a FIFO queue: callbacks are called in the
@@ -141,8 +141,8 @@ class BaseEventLoop(AbstractEventLoop):
         the callback when it is called.
         """
 
-    override def call_later[*Ts](
-        self, delay: float, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None
+    override def call_later[*Args](
+        self, delay: float, callback: (*Args) -> object, *args: *Args, context: Context | None = None
     ) -> TimerHandle:
         """Arrange for a callback to be called at a given time.
 
@@ -160,8 +160,8 @@ class BaseEventLoop(AbstractEventLoop):
         the callback when it is called.
         """
 
-    override def call_at[*Ts](
-        self, when: float, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None
+    override def call_at[*Args](
+        self, when: float, callback: (*Args) -> object, *args: *Args, context: Context | None = None
     ) -> TimerHandle:
         """Like call_later(), but uses an absolute time.
 
@@ -225,12 +225,12 @@ class BaseEventLoop(AbstractEventLoop):
         """Return a task factory, or None if the default one is in use."""
 
     # Methods for interacting with threads
-    override def call_soon_threadsafe[*Ts](
-        self, callback: Callable[[Unpack[Ts]], object], *args: *Ts, context: Context | None = None
+    override def call_soon_threadsafe[*Args](
+        self, callback: (*Args) -> object, *args: *Args, context: Context | None = None
     ) -> Handle:
         """Like call_soon(), but thread-safe."""
 
-    override def run_in_executor[*Ts, Element](self, executor: Executor | None, func: Callable[[Unpack[Ts]], Element], *args: *Ts) -> Future[Element]
+    override def run_in_executor[*Args, Element](self, executor: Executor | None, func: (*Args) -> Element, *args: *Args) -> Future[Element]
     override def set_default_executor(self, executor: ThreadPoolExecutor) -> None
     # Network I/O methods returning Futures.
     override async def getaddrinfo(
@@ -696,9 +696,9 @@ class BaseEventLoop(AbstractEventLoop):
         text: False | None = None,
         **kwargs: dynamic,
     ) -> (SubprocessTransport, ProtocolT)
-    override def add_reader[*Ts](self, fd: FileDescriptorLike, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
+    override def add_reader[*Args](self, fd: FileDescriptorLike, callback: (*Args) -> dynamic, *args: *Args) -> None
     override def remove_reader(self, fd: FileDescriptorLike) -> bool
-    override def add_writer[*Ts](self, fd: FileDescriptorLike, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
+    override def add_writer[*Args](self, fd: FileDescriptorLike, callback: (*Args) -> dynamic, *args: *Args) -> None
     override def remove_writer(self, fd: FileDescriptorLike) -> bool
     # The sock_* methods (and probably some others) are not actually implemented on
     # BaseEventLoop, only on subclasses. We list them here for now for convenience.
@@ -712,7 +712,7 @@ class BaseEventLoop(AbstractEventLoop):
         async def sock_recvfrom_into(self, sock: socket, buf: WriteableBuffer, nbytes: int = 0) -> (int, _RetAddress)
         async def sock_sendto(self, sock: socket, data: ReadableBuffer, address: _Address) -> int
     # Signal handling.
-    override def add_signal_handler[*Ts](self, sig: int, callback: Callable[[Unpack[Ts]], dynamic], *args: *Ts) -> None
+    override def add_signal_handler[*Args](self, sig: int, callback: (*Args) -> dynamic, *args: *Args) -> None
     override def remove_signal_handler(self, sig: int) -> bool
     # Error handlers.
     override def set_exception_handler(self, handler: ExceptionHandler | None) -> None:

@@ -30,7 +30,7 @@ COLS: int
 final COLORS: int
 final COLOR_PAIRS: int
 
-def wrapper[**P, Element](func: (window, **P) -> Element, /, *arg: P.args, **kwds: P.kwargs) -> Element:
+def wrapper[Parameters: (*: *, **: *), Element](func: (window, **Parameters) -> Element, /, *arg: Parameters.args, **kwds: Parameters.kwargs) -> Element:
     """Wrapper function that initializes curses and calls another function,
     restoring normal keyboard/screen behavior on error.
     The callable object 'func' is then passed the main window 'stdscr'

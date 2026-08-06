@@ -54,6 +54,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use ruff_python_ast::helpers::TOP_PARAMETERS_FORM;
 use ruff_python_ast::visitor::source_order::{SourceOrderVisitor, walk_expr, walk_stmt};
 use ruff_python_ast::{
     Arguments, Expr, ExprSubscript, Keyword, ModModule, Stmt, StmtAssign, StmtClassDef,
@@ -280,7 +281,7 @@ fn convert_function<'a>(
     let mut used = claimed_names(&ctx.module_names, bound);
     let mut new_names = Vec::with_capacity(params.len());
     for legacy in &params {
-        new_names.push(pick_name(legacy, &mut used));
+        new_names.push(pick_name(legacy, ctx.table[*legacy].kind, &mut used));
     }
     let renames: HashMap<&str, &str> = params
         .iter()
@@ -398,7 +399,7 @@ fn convert_class<'a>(
     let mut used = claimed_names(&ctx.module_names, bound);
     let mut new_names = Vec::with_capacity(params.len());
     for legacy in &params {
-        new_names.push(pick_name(legacy, &mut used));
+        new_names.push(pick_name(legacy, table[*legacy].kind, &mut used));
     }
     let renames: HashMap<&str, &str> = params
         .iter()
@@ -597,9 +598,14 @@ fn render_params(
                 out.push('*');
                 out.push_str(new_name);
             }
+            // basedpython spells a `ParamSpec` as a type variable bound by the
+            // *top parameters* form — every parameter list is a subtype of it,
+            // so the variable ranges over parameter lists. `[**P]` is reserved
+            // for a keyword-variadic pack
             TvKind::ParamSpec => {
-                out.push_str("**");
                 out.push_str(new_name);
+                out.push_str(": ");
+                out.push_str(TOP_PARAMETERS_FORM);
             }
         }
         if let Some(default) = decl.default {
@@ -691,8 +697,8 @@ impl<'a> SourceOrderVisitor<'a> for RefRenamer<'_, 'a> {
 /// so a collision with a module binding or an enclosing scope's name (e.g. a
 /// method's element type vs its class's `Element`) degrades to a clean
 /// alternative rather than `Element2`
-fn pick_name(legacy: &str, used: &mut HashSet<String>) -> String {
-    let nice = nice_name(legacy);
+fn pick_name(legacy: &str, kind: TvKind, used: &mut HashSet<String>) -> String {
+    let nice = nice_name(legacy, kind);
     let mechanical = mechanical_name(legacy);
     for candidate in nice
         .map(str::to_string)
@@ -714,16 +720,20 @@ fn pick_name(legacy: &str, used: &mut HashSet<String>) -> String {
     }
 }
 
-/// curated names for the core container and protocol typevars
-fn nice_name(legacy: &str) -> Option<&'static str> {
-    Some(match legacy {
-        "_T" | "_T_co" | "_YieldT_co" => "Element",
-        "_T_contra" => "Input",
-        "_KT" | "_KT_co" => "Key",
-        "_VT" | "_VT_co" => "Value",
-        "_S" => "Other",
-        "_SendT_contra" => "Sent",
-        "_ReturnT_co" => "Return",
+/// curated names for the core container and protocol typevars. keyed by kind as
+/// well as legacy name: `_P` is `Parameters` only when it really is a
+/// `ParamSpec`, never when a module happens to call a plain `TypeVar` that
+fn nice_name(legacy: &str, kind: TvKind) -> Option<&'static str> {
+    Some(match (kind, legacy) {
+        (TvKind::TypeVar, "_T" | "_T_co" | "_YieldT_co") => "Element",
+        (TvKind::TypeVar, "_T_contra") => "Input",
+        (TvKind::TypeVar, "_KT" | "_KT_co") => "Key",
+        (TvKind::TypeVar, "_VT" | "_VT_co") => "Value",
+        (TvKind::TypeVar, "_S") => "Other",
+        (TvKind::TypeVar, "_SendT_contra") => "Sent",
+        (TvKind::TypeVar, "_ReturnT_co") => "Return",
+        (TvKind::TypeVarTuple, "_Ts") => "Args",
+        (TvKind::ParamSpec, "_P") => "Parameters",
         _ => return None,
     })
 }
@@ -1162,6 +1172,8 @@ class Pair[in out T1, in out T2]:
         assert_eq!(convert(src), expected);
     }
 
+    /// a `ParamSpec` becomes a type variable bound by the top parameters form —
+    /// `[**P]` in a basedpython file declares a keyword-variadic pack instead
     #[test]
     fn paramspec_and_typevartuple() {
         let src = "\
@@ -1171,8 +1183,24 @@ class C(Generic[_P, _Ts]):
     args: _Ts
 ";
         let expected = "\
-class C[**P, *Ts]:
-    args: Ts
+class C[Parameters: (*: *, **: *), *Args]:
+    args: Args
+";
+        assert_eq!(convert(src), expected);
+    }
+
+    /// the curated nice name is keyed by kind: a plain `TypeVar` named `_P` is
+    /// not a `ParamSpec` and keeps its mechanical name
+    #[test]
+    fn a_typevar_named_p_is_not_named_parameters() {
+        let src = "\
+_P = TypeVar(\"_P\")
+class C(Generic[_P]):
+    value: _P
+";
+        let expected = "\
+class C[in out P]:
+    value: P
 ";
         assert_eq!(convert(src), expected);
     }
@@ -1358,7 +1386,7 @@ _R = TypeVar(\"_R\")
 def wrap(f: Callable[_P, _R]) -> Callable[_P, _R]: ...
 ";
         let expected = "\
-def wrap[**P, R](f: Callable[P, R]) -> Callable[P, R]: ...
+def wrap[Parameters: (*: *, **: *), R](f: Callable[Parameters, R]) -> Callable[Parameters, R]: ...
 ";
         assert_eq!(convert(src), expected);
     }

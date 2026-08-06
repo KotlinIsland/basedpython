@@ -81,5 +81,5 @@ class Profile:
     def snapshot_stats(self) -> None
     def run(self, cmd: str) -> Self
     def runctx(self, cmd: str, globals: dict[str, dynamic], locals: Mapping[str, dynamic]) -> Self
-    def runcall[**P, Element](self, func: (**P) -> Element, /, *args: P.args, **kw: P.kwargs) -> Element
+    def runcall[Parameters: (*: *, **: *), Element](self, func: (**Parameters) -> Element, /, *args: Parameters.args, **kw: Parameters.kwargs) -> Element
     def calibrate(self, m: int, verbose: int = 0) -> float
