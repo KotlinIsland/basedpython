@@ -81,6 +81,7 @@ use crate::types::diagnostic::{
 use crate::types::display::DisplaySettings;
 use crate::types::generics::{ApplySpecialization, GenericContext, typing_self};
 use crate::types::infer::{nearest_enclosing_class, original_class_type};
+use crate::types::inferred_signature::inferred_return_type;
 use crate::types::known_instance::DeprecatedInstance;
 use crate::types::list_members::all_members;
 use crate::types::narrow::ClassInfoConstraintFunction;
@@ -657,6 +658,18 @@ impl<'db> OverloadLiteral<'db> {
         self.body_scope(db).is_method_scope(db) && !self.is_staticmethod(db)
     }
 
+    /// basedpython: whether this method's first parameter is bound by the *receiver* rather than
+    /// supplied as an argument.
+    ///
+    /// `__new__` is an implicit staticmethod, so it has no `self` and
+    /// [`Signature::add_implicit_self_annotation`] leaves its `cls` alone — but construction
+    /// still binds the class there, and nothing a call site writes lands in it. A parameter no
+    /// caller fills is not a hole for one to fill.
+    pub(crate) fn binds_first_parameter(self, db: &'db dyn Db) -> bool {
+        self.body_scope(db).is_method_scope(db)
+            && (!self.is_staticmethod(db) || is_implicit_staticmethod(self.name(db)))
+    }
+
     pub(crate) fn node<'ast>(
         self,
         db: &dyn Db,
@@ -1015,10 +1028,13 @@ impl<'db> OverloadLiteral<'db> {
             }
         }
 
-        // basedpython: under `sound-types`, an unannotated method inherits its parameter and
-        // return types from the method it overrides, so `def m(self, a)` over
-        // `def m(self, a: int) -> bytes` sees `a: int` and returns `bytes`
-        if db.analysis_settings(self.file(db)).sound_types
+        // basedpython: an unannotated method inherits its parameter and return types from the
+        // method it overrides, so `def m(self, a)` over `def m(self, a: int) -> bytes` sees
+        // `a: int` and returns `bytes`. this is the first place a missing annotation is recovered
+        // from, so it shares the gate with the body-derived recovery below — reading the body
+        // while skipping this would answer with what the placeholder body happens to do rather
+        // than with what the base already declared
+        if infers_unannotated_signatures(db, self.file(db))
             && raw_signature.has_inherited_annotations_to_fill(function_stmt_node.returns.is_none())
             && let Some(base_signature) = self.overridden_signature(db)
         {
@@ -1029,7 +1045,156 @@ impl<'db> OverloadLiteral<'db> {
             );
         }
 
+        // basedpython: an overridden base that could not supply a whole signature can still
+        // supply its return type
+        if infers_unannotated_signatures(db, self.file(db))
+            && function_stmt_node.returns.is_none()
+            && !function_stmt_node.is_asserts_return
+            && raw_signature.return_ty.is_unknown()
+            && let OverriddenReturnType::Declared(base_return) = self.overridden_return_type(db)
+        {
+            raw_signature.return_ty = base_return;
+        }
+
+        // basedpython: a parameter nothing else typed opens an anonymous type parameter, so
+        // that what a call passes in stays connected to what it gets back
+        if infers_unannotated_signatures(db, self.file(db)) {
+            raw_signature.open_unannotated_parameter_holes(
+                db,
+                definition,
+                self.binds_first_parameter(db),
+            );
+        }
+
+        // basedpython: a return type nothing else supplied is recovered from the body — the
+        // union of what it returns, and `None` when it can also fall off the end. this runs
+        // last so that an annotation, a sibling overload and an overridden base all still win
+        //
+        // the three blocks above plus this one are the sources a `def` that leaves its return
+        // type out draws on; [`OverloadLiteral::return_type_without_annotation`] mirrors them in
+        // this order, so a change here belongs there too
+        if infers_unannotated_signatures(db, self.file(db))
+            && function_stmt_node.returns.is_none()
+            && !function_stmt_node.is_asserts_return
+            && raw_signature.return_ty.is_unknown()
+            && self.recovers_return_type_from_body(db)
+        {
+            raw_signature.return_ty = inferred_return_type(db, self);
+        }
+
         raw_signature
+    }
+
+    /// basedpython: the return type this function would have if its return annotation were
+    /// deleted.
+    ///
+    /// The sources are the ones [`OverloadLiteral::raw_signature`] consults for a `def` that
+    /// leaves its return type out, in the same order: a sibling overload group, then an
+    /// overridden base method under `sound-types`, and — only when neither of those supplied
+    /// anything — the body.
+    ///
+    /// The body is the one source not computed here. It reads the function's own scope
+    /// inference, and the `redundant-return-annotation` lint calls this from inside that very
+    /// inference, so the caller supplies it.
+    pub(crate) fn return_type_without_annotation(
+        self,
+        db: &'db dyn Db,
+        from_body: impl FnOnce() -> Type<'db>,
+    ) -> Type<'db> {
+        let mut return_ty = Type::unknown();
+
+        if !self.is_overload(db)
+            && let Some(previous) = self.previous_overload(db)
+        {
+            let (overload_list, _) = previous.overloads_and_implementation(db);
+            if !overload_list.is_empty() {
+                return_ty = UnionType::from_elements(
+                    db,
+                    overload_list.iter().map(|overload| {
+                        overload
+                            .raw_signature(db, ReturnCallableTypeVarScope::Public)
+                            .return_ty
+                    }),
+                );
+            }
+        }
+
+        if db.analysis_settings(self.file(db)).sound_types
+            && let Some(base_signature) = self.overridden_signature(db)
+        {
+            return_ty = base_signature.return_ty;
+        }
+
+        if return_ty.is_unknown()
+            && infers_unannotated_signatures(db, self.file(db))
+            && let OverriddenReturnType::Declared(base_return) = self.overridden_return_type(db)
+        {
+            return_ty = base_return;
+        }
+
+        if infers_unannotated_signatures(db, self.file(db))
+            && return_ty.is_unknown()
+            && self.recovers_return_type_from_body(db)
+        {
+            return_ty = from_body();
+        }
+
+        return_ty
+    }
+
+    /// basedpython: what the method this one overrides says its return type is, for the cases
+    /// where [`OverloadLiteral::overridden_signature`] could not supply the whole signature.
+    ///
+    /// Inheriting a whole signature has to refuse a base whose *parameters* mention a type
+    /// variable — the implicit `Self` alone is enough — and a base that is overloaded, since
+    /// neither can be copied wholesale. Neither of those says anything about the return type, and
+    /// a base that declares one is still where a missing annotation should draw from:
+    /// `def __len__(self): ...` under `Collection.__len__` returns `int`, not the `None` that
+    /// running its placeholder body would give.
+    fn overridden_return_type(self, db: &'db dyn Db) -> OverriddenReturnType<'db> {
+        let Some(base) = self.overridden_method(db) else {
+            return OverriddenReturnType::NotOverridden;
+        };
+        if base.signature(db).overloads.len() != 1 {
+            // which type an overloaded base returns depends on the arguments, so there is no one
+            // type to copy
+            return OverriddenReturnType::Inexpressible;
+        }
+        let return_ty = base_raw_signature(db, base).return_ty;
+        if return_ty.is_unknown() {
+            return OverriddenReturnType::NotOverridden;
+        }
+        // a type variable in the base's return type is bound to the base method's scope, so
+        // copying it here would silently rebind it
+        if any_over_type(db, return_ty, false, |ty| matches!(ty, Type::TypeVar(_))) {
+            return OverriddenReturnType::Inexpressible;
+        }
+        OverriddenReturnType::Declared(return_ty)
+    }
+
+    /// basedpython: whether a return type nobody wrote is read off the body.
+    ///
+    /// It always is, except for `__new__`. Construction *reads* `__new__`'s return type
+    /// structurally — it decides whether the result is an instance and so whether `__init__` runs
+    /// at all — and the usual body, `return super().__new__(cls)`, does not currently describe
+    /// one: `object.__new__(cls)` solves to `Never`. That is a pre-existing gap, reproducible with
+    /// `infer-unannotated-signatures` turned off, so recovering a return type here would only
+    /// hand that gap the power to change what a call means.
+    ///
+    /// A base method that already answers the question is the other exception, even when what it
+    /// answered cannot be written down here — an overloaded base, or one whose return type is in
+    /// terms of its own type variables. The body must not answer differently from the base, so
+    /// where the base's answer cannot be copied the return type stays gradual.
+    ///
+    /// [`OverloadLiteral::raw_signature`] and [`OverloadLiteral::return_type_without_annotation`]
+    /// both consult this, so the signature and the `redundant-return-annotation` lint cannot
+    /// disagree about whether the body was the source.
+    fn recovers_return_type_from_body(self, db: &'db dyn Db) -> bool {
+        self.name(db) != "__new__"
+            && !matches!(
+                self.overridden_return_type(db),
+                OverriddenReturnType::Inexpressible
+            )
     }
 
     /// basedpython: the signature of the method that this method overrides, resolved by looking
@@ -1041,6 +1206,30 @@ impl<'db> OverloadLiteral<'db> {
     /// Type variables (including the implicit `Self`) are bound to the *base* method's scope, so
     /// copying them into this signature would silently rebind them.
     fn overridden_signature(self, db: &'db dyn Db) -> Option<Signature<'db>> {
+        let base = self.overridden_method(db)?;
+
+        if base.signature(db).overloads.len() != 1 {
+            return None;
+        }
+        let signature = base_raw_signature(db, base);
+
+        let mentions_typevar =
+            |ty: Type<'db>| any_over_type(db, ty, false, |ty| matches!(ty, Type::TypeVar(_)));
+        if mentions_typevar(signature.return_ty)
+            || signature
+                .parameters()
+                .iter()
+                .any(|param| mentions_typevar(param.annotated_type()))
+        {
+            return None;
+        }
+
+        Some(signature.clone())
+    }
+
+    /// basedpython: the method this method overrides, found by looking `self`'s name up in the
+    /// enclosing class's MRO starting *after* the class itself — the same lookup `super()` performs.
+    fn overridden_method(self, db: &'db dyn Db) -> Option<FunctionType<'db>> {
         let definition = self.definition(db);
         let file = definition.file(db);
         let index = semantic_index(db, file);
@@ -1057,26 +1246,10 @@ impl<'db> OverloadLiteral<'db> {
         let member =
             class_literal.class_member_from_mro(db, name, MemberLookupPolicy::default(), mro);
 
-        let Type::FunctionLiteral(base) = member.place.ignore_possibly_undefined()? else {
-            return None;
-        };
-
-        let [signature] = base.signature(db).overloads.as_slice() else {
-            return None;
-        };
-
-        let mentions_typevar =
-            |ty: Type<'db>| any_over_type(db, ty, false, |ty| matches!(ty, Type::TypeVar(_)));
-        if mentions_typevar(signature.return_ty)
-            || signature
-                .parameters()
-                .iter()
-                .any(|param| mentions_typevar(param.annotated_type()))
-        {
-            return None;
+        match member.place.ignore_possibly_undefined()? {
+            Type::FunctionLiteral(base) => Some(base),
+            _ => None,
         }
-
-        Some(signature.clone())
     }
 
     pub(crate) fn parameter_span(
@@ -1368,6 +1541,15 @@ impl<'db> FunctionLiteral<'db> {
 /// a cross-module dependency directly on the full AST which will lead to cache
 /// over-invalidation. Cross-module callers should use the tracked
 /// [`FunctionType::last_definition_raw_signature`] query instead.
+/// basedpython: the base method's *raw* signature — the one whose return type has not yet been
+/// wrapped for `async`.
+///
+/// An unannotated override copies into its own raw signature, which `FunctionType::signature`
+/// then wraps. Copying the already-wrapped form would wrap a coroutine in a coroutine.
+fn base_raw_signature<'db>(db: &'db dyn Db, base: FunctionType<'db>) -> &'db Signature<'db> {
+    base.last_definition_raw_signature(db, ReturnCallableTypeVarScope::Public)
+}
+
 pub(super) fn same_module_uncached_raw_signature<'db>(
     db: &'db dyn Db,
     function: FunctionType<'db>,
@@ -1376,6 +1558,38 @@ pub(super) fn same_module_uncached_raw_signature<'db>(
     function
         .literal(db)
         .last_definition_raw_signature(db, return_callable_typevar_scope)
+}
+
+/// basedpython: whether a function in `file` with no annotations is given the signature its body
+/// determines.
+///
+/// `sound-types` is a mode for inferring a precise type wherever one is available rather than
+/// falling back to a gradual one, so it implies this; the dedicated option turns it on by itself.
+///
+/// A vendored stub is part of the language ty defines rather than the consumer's own code, so what
+/// its unannotated forms mean cannot depend on a consumer's setting: `list.append` returns `None`
+/// whatever a project — or an `[[overrides]]` section covering part of one — has asked for. A
+/// third-party stub in the user's own environment is their code and follows their settings.
+pub(crate) fn infers_unannotated_signatures(db: &dyn Db, file: File) -> bool {
+    if file.path(db).is_vendored_path() {
+        return true;
+    }
+    let settings = db.analysis_settings(file);
+    settings.infer_unannotated_signatures || settings.sound_types
+}
+
+/// basedpython: what the method an unannotated method overrides says about its return type.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum OverriddenReturnType<'db> {
+    /// nothing in the MRO after this class defines the name, so the base has nothing to say
+    NotOverridden,
+    /// the base declares this, and it can stand as this method's own return type
+    Declared(Type<'db>),
+    /// the base declares one that cannot be written as a single return type here — it is
+    /// overloaded, so which type it returns depends on the arguments, or it is in terms of type
+    /// variables bound to the base's own scope. the base has still answered the question, so the
+    /// body must not answer it differently
+    Inexpressible,
 }
 
 /// Indicates whether a method is explicitly or implicitly abstract.

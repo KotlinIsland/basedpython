@@ -486,7 +486,7 @@ class C:
     @classmethod
     def f(cls): ...
 
-reveal_type(getattr_static(C, "f"))  # revealed: def f(cls) -> Unknown
+reveal_type(getattr_static(C, "f"))  # revealed: def f(cls)
 # revealed: <method-wrapper '__get__' of function 'f'>
 reveal_type(getattr_static(C, "f").__get__)
 ```
@@ -494,15 +494,15 @@ reveal_type(getattr_static(C, "f").__get__)
 But we correctly model how the `classmethod` descriptor works:
 
 ```py
-reveal_type(getattr_static(C, "f").__get__(None, C))  # revealed: bound method <class 'C'>.f() -> Unknown
-reveal_type(getattr_static(C, "f").__get__(C(), C))  # revealed: bound method <class 'C'>.f() -> Unknown
-reveal_type(getattr_static(C, "f").__get__(C()))  # revealed: bound method type[C].f() -> Unknown
+reveal_type(getattr_static(C, "f").__get__(None, C))  # revealed: bound method <class 'C'>.f()
+reveal_type(getattr_static(C, "f").__get__(C(), C))  # revealed: bound method <class 'C'>.f()
+reveal_type(getattr_static(C, "f").__get__(C()))  # revealed: bound method type[C].f()
 ```
 
 The `owner` argument takes precedence over the `instance` argument:
 
 ```py
-reveal_type(getattr_static(C, "f").__get__("dummy", C))  # revealed: bound method <class 'C'>.f() -> Unknown
+reveal_type(getattr_static(C, "f").__get__("dummy", C))  # revealed: bound method <class 'C'>.f()
 ```
 
 ### Classmethods mixed with other decorators
@@ -926,17 +926,17 @@ Accessing the staticmethod as a static member. This will reveal the raw function
 is transparent when accessed via `getattr_static`.
 
 ```py
-reveal_type(getattr_static(C, "f"))  # revealed: def f() -> Unknown
+reveal_type(getattr_static(C, "f"))  # revealed: def f()
 ```
 
 The `__get__` of a `staticmethod` object simply returns the underlying function. It ignores both the
 instance and owner arguments.
 
 ```py
-reveal_type(getattr_static(C, "f").__get__(None, C))  # revealed: def f() -> Unknown
-reveal_type(getattr_static(C, "f").__get__(C(), C))  # revealed: def f() -> Unknown
-reveal_type(getattr_static(C, "f").__get__(C()))  # revealed: def f() -> Unknown
-reveal_type(getattr_static(C, "f").__get__("dummy", C))  # revealed: def f() -> Unknown
+reveal_type(getattr_static(C, "f").__get__(None, C))  # revealed: def f()
+reveal_type(getattr_static(C, "f").__get__(C(), C))  # revealed: def f()
+reveal_type(getattr_static(C, "f").__get__(C()))  # revealed: def f()
+reveal_type(getattr_static(C, "f").__get__("dummy", C))  # revealed: def f()
 ```
 
 ### Staticmethods mixed with other decorators
@@ -1070,7 +1070,7 @@ static_assert(is_assignable_to(types.FunctionType, Callable[..., Any]))
 reveal_type(types.FunctionType.__get__)
 static_assert(is_assignable_to(TypeOf[types.FunctionType.__get__], Callable[..., Any]))
 
-# revealed: def f(obj: type) -> None
+# revealed: def f(obj: type)
 reveal_type(f)
 static_assert(is_assignable_to(TypeOf[f], Callable[..., Any]))
 

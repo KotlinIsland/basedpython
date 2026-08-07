@@ -734,7 +734,7 @@ class HalfUnknownQux:
     def __init__(self, x: int, y, flag: bool) -> None:
         self.x = x if flag else y
 
-reveal_type(HalfUnknownQux(1, "foo", True).x)  # revealed: int | Unknown
+reveal_type(HalfUnknownQux(1, "foo", True).x)  # revealed: int | y@__init__
 
 static_assert(not is_subtype_of(HalfUnknownQux, HasX))
 static_assert(is_assignable_to(HalfUnknownQux, HasX))

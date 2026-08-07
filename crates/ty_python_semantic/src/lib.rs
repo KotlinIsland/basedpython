@@ -136,6 +136,14 @@ pub struct AnalysisSettings {
     /// collection literal has element type `Never` rather than `Unknown`.
     pub sound_types: bool,
 
+    /// Whether a function with no annotations is given the signature its body determines.
+    ///
+    /// Each unannotated parameter opens an anonymous type parameter — a `some` hole — bounded by
+    /// everything the function requires of it, and a missing return type is the union of what the
+    /// body returns. When this is disabled, an unannotated parameter accepts anything and an
+    /// unannotated function returns `Unknown`, as the gradual guarantee requires.
+    pub infer_unannotated_signatures: bool,
+
     /// Whether a private attribute leaves an inferred type parameter bivariant.
     ///
     /// A private (single-underscore or name-mangled) member is invisible to external observers,
@@ -243,6 +251,7 @@ impl Default for AnalysisSettings {
             replace_imports_with_any: ModuleGlobSet::empty(),
             disable_fluid_specializations: false,
             sound_types: false,
+            infer_unannotated_signatures: true,
             bivariant_private_attributes: true,
             precise_unsolved_typevars: true,
             overlapping_condition_exempt_types: Box::default(),

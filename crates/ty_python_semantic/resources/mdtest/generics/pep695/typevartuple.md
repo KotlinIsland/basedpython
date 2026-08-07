@@ -596,16 +596,16 @@ def positional_or_keyword(x: int, y: str, flag: bool) -> None: ...
 def keyword_catch_all(x: int, y: str, **kwargs: object) -> None: ...
 
 # TODO: Should reveal `tuple[int, str]`.
-# error: [invalid-argument-type] "Argument to function `infer_keyword_only` is incorrect: Expected `KeywordOnlyCallback[*tuple[Unknown, ...]]`, found `def explicit_keyword_only(x: int, y: str, *, flag: bool) -> None`"
+# error: [invalid-argument-type] "Argument to function `infer_keyword_only` is incorrect: Expected `KeywordOnlyCallback[*tuple[Unknown, ...]]`, found `def explicit_keyword_only(x: int, y: str, *, flag: bool)`"
 reveal_type(infer_keyword_only(explicit_keyword_only))  # revealed: tuple[Unknown, ...]
 # TODO: Should reveal `tuple[int, str]`.
-# error: [invalid-argument-type] "Argument to function `infer_keyword_only` is incorrect: Expected `KeywordOnlyCallback[*tuple[Unknown, ...]]`, found `def positional_only_with_keyword(x: int, y: str, /, *, flag: bool) -> None`"
+# error: [invalid-argument-type] "Argument to function `infer_keyword_only` is incorrect: Expected `KeywordOnlyCallback[*tuple[Unknown, ...]]`, found `def positional_only_with_keyword(x: int, y: str, /, *, flag: bool)`"
 reveal_type(infer_keyword_only(positional_only_with_keyword))  # revealed: tuple[Unknown, ...]
 # TODO: Should reveal `tuple[int, str]`.
-# error: [invalid-argument-type] "Argument to function `infer_keyword_only` is incorrect: Expected `KeywordOnlyCallback[*tuple[Unknown, ...]]`, found `def positional_or_keyword(x: int, y: str, flag: bool) -> None`"
+# error: [invalid-argument-type] "Argument to function `infer_keyword_only` is incorrect: Expected `KeywordOnlyCallback[*tuple[Unknown, ...]]`, found `def positional_or_keyword(x: int, y: str, flag: bool)`"
 reveal_type(infer_keyword_only(positional_or_keyword))  # revealed: tuple[Unknown, ...]
 # TODO: Should reveal `tuple[int, str]`.
-# error: [invalid-argument-type] "Argument to function `infer_keyword_only` is incorrect: Expected `KeywordOnlyCallback[*tuple[Unknown, ...]]`, found `def keyword_catch_all(x: int, y: str, **kwargs: object) -> None`"
+# error: [invalid-argument-type] "Argument to function `infer_keyword_only` is incorrect: Expected `KeywordOnlyCallback[*tuple[Unknown, ...]]`, found `def keyword_catch_all(x: int, y: str, **kwargs: object)`"
 reveal_type(infer_keyword_only(keyword_catch_all))  # revealed: tuple[Unknown, ...]
 
 class OptionalKeywordCallback[*Ts](Protocol):
@@ -617,7 +617,7 @@ def infer_optional_keyword[*Ts](callback: OptionalKeywordCallback[*Ts]) -> tuple
 def optional_keyword_callback(x: int, y: str, *, flag: bool = False) -> None: ...
 
 # TODO: Should reveal `tuple[int, str]`.
-# error: [invalid-argument-type] "Argument to function `infer_optional_keyword` is incorrect: Expected `OptionalKeywordCallback[*tuple[Unknown, ...]]`, found `def optional_keyword_callback(x: int, y: str, *, flag: bool = False) -> None`"
+# error: [invalid-argument-type] "Argument to function `infer_optional_keyword` is incorrect: Expected `OptionalKeywordCallback[*tuple[Unknown, ...]]`, found `def optional_keyword_callback(x: int, y: str, *, flag: bool = False)`"
 reveal_type(infer_optional_keyword(optional_keyword_callback))  # revealed: tuple[Unknown, ...]
 
 class PrefixedKeywordCallback[*Ts](Protocol):
@@ -630,7 +630,7 @@ def prefixed(prefix: bytes, x: int, y: str, *, flag: bool) -> None: ...
 def prefixed_variadic(prefix: bytes, *args: str, flag: bool) -> None: ...
 
 # TODO: Should reveal `tuple[int, str]`.
-# error: [invalid-argument-type] "Argument to function `infer_prefixed` is incorrect: Expected `PrefixedKeywordCallback[*tuple[Unknown, ...]]`, found `def prefixed(prefix: bytes, x: int, y: str, *, flag: bool) -> None`"
+# error: [invalid-argument-type] "Argument to function `infer_prefixed` is incorrect: Expected `PrefixedKeywordCallback[*tuple[Unknown, ...]]`, found `def prefixed(prefix: bytes, x: int, y: str, *, flag: bool)`"
 reveal_type(infer_prefixed(prefixed))  # revealed: tuple[Unknown, ...]
 
 # An open-ended positional parameter can be inferred in an otherwise mixed signature.
@@ -654,7 +654,7 @@ def infer_keyword_variadic[*Ts](callback: KeywordVariadicCallback[*Ts]) -> tuple
 def keyword_variadic(x: int, y: str, **kwargs: int) -> None: ...
 
 # TODO: Should reveal `tuple[int, str]`.
-# error: [invalid-argument-type] "Argument to function `infer_keyword_variadic` is incorrect: Expected `KeywordVariadicCallback[*tuple[Unknown, ...]]`, found `def keyword_variadic(x: int, y: str, **kwargs: int) -> None`"
+# error: [invalid-argument-type] "Argument to function `infer_keyword_variadic` is incorrect: Expected `KeywordVariadicCallback[*tuple[Unknown, ...]]`, found `def keyword_variadic(x: int, y: str, **kwargs: int)`"
 reveal_type(infer_keyword_variadic(keyword_variadic))  # revealed: tuple[Unknown, ...]
 
 class KeywordOnlyAndVariadicCallback[*Ts](Protocol):
@@ -668,7 +668,7 @@ def infer_keyword_only_and_variadic[*Ts](
 def keyword_only_and_variadic(x: int, y: str, *, flag: bool, **kwargs: int) -> None: ...
 
 # TODO: Should reveal `tuple[int, str]`.
-# error: [invalid-argument-type] "Argument to function `infer_keyword_only_and_variadic` is incorrect: Expected `KeywordOnlyAndVariadicCallback[*tuple[Unknown, ...]]`, found `def keyword_only_and_variadic(x: int, y: str, *, flag: bool, **kwargs: int) -> None`"
+# error: [invalid-argument-type] "Argument to function `infer_keyword_only_and_variadic` is incorrect: Expected `KeywordOnlyAndVariadicCallback[*tuple[Unknown, ...]]`, found `def keyword_only_and_variadic(x: int, y: str, *, flag: bool, **kwargs: int)`"
 reveal_type(infer_keyword_only_and_variadic(keyword_only_and_variadic))  # revealed: tuple[Unknown, ...]
 
 class MultipleKeywordCallback[*Ts](Protocol):
@@ -680,7 +680,7 @@ def infer_multiple_keywords[*Ts](callback: MultipleKeywordCallback[*Ts]) -> tupl
 def multiple_keyword_catch_all(x: int, y: str, **kwargs: object) -> None: ...
 
 # TODO: Should reveal `tuple[int, str]`.
-# error: [invalid-argument-type] "Argument to function `infer_multiple_keywords` is incorrect: Expected `MultipleKeywordCallback[*tuple[Unknown, ...]]`, found `def multiple_keyword_catch_all(x: int, y: str, **kwargs: object) -> None`"
+# error: [invalid-argument-type] "Argument to function `infer_multiple_keywords` is incorrect: Expected `MultipleKeywordCallback[*tuple[Unknown, ...]]`, found `def multiple_keyword_catch_all(x: int, y: str, **kwargs: object)`"
 reveal_type(infer_multiple_keywords(multiple_keyword_catch_all))  # revealed: tuple[Unknown, ...]
 ```
 
@@ -938,13 +938,13 @@ def fn1(a: int, b: str) -> None: ...
 def fn2(a: int, b: str, c: bytes) -> None: ...
 
 # TODO: Should reveal `tuple[()]` without an error.
-# error: [invalid-argument-type] "Argument to function `test` is incorrect: Expected `Alias[*tuple[int, *tuple[Unknown, ...]]]`, found `def fn0(a: int) -> None`"
+# error: [invalid-argument-type] "Argument to function `test` is incorrect: Expected `Alias[*tuple[int, *tuple[Unknown, ...]]]`, found `def fn0(a: int)`"
 reveal_type(test(fn0))  # revealed: tuple[Unknown, ...]
 # TODO: Should reveal `tuple[str]` without an error.
-# error: [invalid-argument-type] "Argument to function `test` is incorrect: Expected `Alias[*tuple[int, *tuple[Unknown, ...]]]`, found `def fn1(a: int, b: str) -> None`"
+# error: [invalid-argument-type] "Argument to function `test` is incorrect: Expected `Alias[*tuple[int, *tuple[Unknown, ...]]]`, found `def fn1(a: int, b: str)`"
 reveal_type(test(fn1))  # revealed: tuple[Unknown, ...]
 # TODO: Should reveal `tuple[str, bytes]` without an error.
-# error: [invalid-argument-type] "Argument to function `test` is incorrect: Expected `Alias[*tuple[int, *tuple[Unknown, ...]]]`, found `def fn2(a: int, b: str, c: bytes) -> None`"
+# error: [invalid-argument-type] "Argument to function `test` is incorrect: Expected `Alias[*tuple[int, *tuple[Unknown, ...]]]`, found `def fn2(a: int, b: str, c: bytes)`"
 reveal_type(test(fn2))  # revealed: tuple[Unknown, ...]
 ```
 

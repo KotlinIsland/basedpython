@@ -81,27 +81,27 @@ info: First overload defined here
   | |____________________________________^ First overload defined here
   |
 info: Possible overloads for function `foo`:
-info:   (a: int, b: int, c: int) -> Unknown
-info:   (a: str, b: int, c: int) -> Unknown
-info:   (a: int, b: str, c: int) -> Unknown
-info:   (a: int, b: int, c: str) -> Unknown
-info:   (a: str, b: str, c: int) -> Unknown
-info:   (a: int, b: str, c: str) -> Unknown
-info:   (a: str, b: str, c: str) -> Unknown
-info:   (a: int, b: int, c: int) -> Unknown
-info:   (a: int | float, b: int, c: int) -> Unknown
-info:   (a: int, b: int | float, c: int) -> Unknown
-info:   (a: int, b: int, c: int | float) -> Unknown
-info:   (a: int | float, b: int | float, c: int) -> Unknown
-info:   (a: int, b: int | float, c: int | float) -> Unknown
-info:   (a: int | float, b: int | float, c: int | float) -> Unknown
-info:   (a: str, b: str, c: str) -> Unknown
-info:   (a: int | float, b: str, c: str) -> Unknown
-info:   (a: str, b: int | float, c: str) -> Unknown
-info:   (a: str, b: str, c: int | float) -> Unknown
-info:   (a: int | float, b: int | float, c: str) -> Unknown
-info:   (a: str, b: int | float, c: int | float) -> Unknown
-info:   (a: int | float, b: int | float, c: int | float) -> Unknown
+info:   (a: int, b: int, c: int) -> None
+info:   (a: str, b: int, c: int) -> None
+info:   (a: int, b: str, c: int) -> None
+info:   (a: int, b: int, c: str) -> None
+info:   (a: str, b: str, c: int) -> None
+info:   (a: int, b: str, c: str) -> None
+info:   (a: str, b: str, c: str) -> None
+info:   (a: int, b: int, c: int) -> None
+info:   (a: int | float, b: int, c: int) -> None
+info:   (a: int, b: int | float, c: int) -> None
+info:   (a: int, b: int, c: int | float) -> None
+info:   (a: int | float, b: int | float, c: int) -> None
+info:   (a: int, b: int | float, c: int | float) -> None
+info:   (a: int | float, b: int | float, c: int | float) -> None
+info:   (a: str, b: str, c: str) -> None
+info:   (a: int | float, b: str, c: str) -> None
+info:   (a: str, b: int | float, c: str) -> None
+info:   (a: str, b: str, c: int | float) -> None
+info:   (a: int | float, b: int | float, c: str) -> None
+info:   (a: str, b: int | float, c: int | float) -> None
+info:   (a: int | float, b: int | float, c: int | float) -> None
 info: Overload implementation defined here
   --> src/mdtest_snippet.py:47:5
    |

@@ -58,7 +58,7 @@ private type Key = str | int
 
 def lookup(k: Key) -> None: ...
 
-reveal_type(lookup)  # revealed: def lookup(k: Key) -> None
+reveal_type(lookup)  # revealed: def lookup(k: Key)
 ```
 
 ## a private alias may be used freely inside its own module

@@ -859,7 +859,7 @@ Narrowing can leave a bounded typevar represented as an intersection, but it sho
 assignable to its upper bound.
 
 ```py
-from typing import Callable
+from typing import Any, Callable
 from ty_extensions import Intersection, Not
 
 class A: ...
@@ -887,7 +887,9 @@ def lenient_issubclass[T: type | tuple[type, ...]](class_or_tuple: T) -> T:
         return check(class_or_tuple)
     return class_or_tuple
 
-def check(check_type: type): ...
+# the parameter is what this exercises — an unannotated return would now be `None`, and the
+# point here is not what `check` hands back
+def check(check_type: type) -> Any: ...
 
 # In this scenario, we do not expand the intersection,
 # because it only has inferrable type variables in it.

@@ -80,6 +80,7 @@ def bar() -> None:
 
 def outer_sync():  # `yield` from is only valid syntax inside a synchronous function
     def _(
+        # error: [invalid-yield]
         a: (yield from [1]),  # error: [invalid-type-form] "`yield from` expressions are not allowed in parameter annotations"
     ): ...
 
@@ -100,6 +101,7 @@ async def outer_async():  # avoid unrelated syntax errors on `yield` and `await`
         j: lambda: 1,  # error: [invalid-type-form] "`lambda` expressions are not allowed in parameter annotations"
         k: 1 if True else 2,  # error: [invalid-type-form] "`if` expressions are not allowed in parameter annotations"
         l: await baz(),  # error: [invalid-type-form] "`await` expressions are not allowed in parameter annotations"
+        # error: [invalid-yield]
         m: (yield 1),  # error: [invalid-type-form] "`yield` expressions are not allowed in parameter annotations"
         n: 1 < 2,  # error: [invalid-type-form] "Comparison expressions are not allowed in parameter annotations"
         o: bar(),  # error: [invalid-type-form] "Function calls are not allowed in parameter annotations"

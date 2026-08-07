@@ -117,7 +117,7 @@ import typing
 import namespace_package
 
 reveal_type(typing.__name__)  # revealed: str
-reveal_type(typing.__init__)  # revealed: bound method ModuleType.__init__(name: str, doc: str | None = ...) -> None
+reveal_type(typing.__init__)  # revealed: bound method ModuleType.__init__(name: str, doc: str | None = ...)
 
 # Note that since the source for the `typing` module is a stub file,
 # we can't know for sure that it's not a C extension at runtime,
@@ -134,7 +134,7 @@ reveal_type(typing.__class__)  # revealed: <class 'ModuleType'>
 reveal_type(typing.__dict__)  # revealed: dict[str, Any]
 
 reveal_type(namespace_package.__name__)  # revealed: str
-reveal_type(namespace_package.__init__)  # revealed: bound method ModuleType.__init__(name: str, doc: str | None = ...) -> None
+reveal_type(namespace_package.__init__)  # revealed: bound method ModuleType.__init__(name: str, doc: str | None = ...)
 reveal_type(namespace_package.__file__)  # revealed: None
 reveal_type(namespace_package.__eq__)  # revealed: bound method ModuleType.__eq__(value: object, /) -> bool
 reveal_type(namespace_package.__class__)  # revealed: <class 'ModuleType'>

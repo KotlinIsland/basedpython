@@ -1324,7 +1324,7 @@ f()
 ```py
 from a import *
 
-reveal_type(f)  # revealed: def f() -> Unknown
+reveal_type(f)  # revealed: def f()
 
 # This could be considered a false positive, since this use of `g` isn't a runtime error, but we're
 # being conservative.

@@ -154,8 +154,11 @@ def passthrough[T, R](f: Callable[[T], R]) -> Callable[[T], R]:
 def f(x):
     return x
 
-reveal_type(f)  # revealed: (Unknown, /) -> Unknown
-reveal_type(f(1))  # revealed: Unknown
+reveal_type(f)  # revealed: (T@passthrough, /) -> T@passthrough
+# basedpython: `f` is recovered as the identity function, so it is itself generic and
+# `passthrough`'s own type variable is left for the call site to solve — which it cannot
+# error: [invalid-argument-type]
+reveal_type(f(1))  # revealed: T@passthrough
 ```
 
 And with unions of `Callable` types:
@@ -396,7 +399,9 @@ from typing import ClassVar
 from ty_extensions._internal import RegularCallableTypeOf
 
 class WithNew:
-    def __new__(self, x: int) -> WithNew:
+    # `__new__` is an implicit staticmethod, so its first parameter is an ordinary one and an
+    # unannotated one would open a hole that `ClassVar` cannot hold
+    def __new__(self: type[WithNew], x: int) -> WithNew:
         return super().__new__(WithNew)
 
 class WithInit:

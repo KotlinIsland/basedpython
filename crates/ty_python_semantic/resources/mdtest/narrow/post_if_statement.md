@@ -115,7 +115,7 @@ def _(x):
         return
 
     if flag:
-        reveal_type(x)  # revealed: Unknown
+        reveal_type(x)  # revealed: x@_
 ```
 
 ## Multiple sequential if-statements don't leak narrowing

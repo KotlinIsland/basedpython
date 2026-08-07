@@ -1,7 +1,6 @@
 use crate::types::any_over_type;
 use crate::{
     Db,
-    reachability::ReachabilityConstraintsExtension,
     types::{
         KnownClass, KnownInstanceType, ParamSpecAttrKind, SubclassOfInner, SubclassOfType, Type,
         TypeContext, TypeVarKind, UnionType,
@@ -9,9 +8,9 @@ use crate::{
         dedicated::pytest,
         diagnostic::{
             FINAL_ON_NON_METHOD, INVALID_FIXTURE_TYPE, INVALID_PARAMETER_DEFAULT,
-            INVALID_PARAMETRIZE, INVALID_PARAMSPEC, INVALID_TYPE_FORM, REIFIED_CLASSMETHOD,
-            TRAILING_LAMBDA_PARAMETERS, TRAILING_LAMBDA_RETURN_TYPE, UNKNOWN_FIXTURE,
-            USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
+            INVALID_PARAMETRIZE, INVALID_PARAMSPEC, INVALID_TYPE_FORM, REDUNDANT_RETURN_ANNOTATION,
+            REIFIED_CLASSMETHOD, TRAILING_LAMBDA_PARAMETERS, TRAILING_LAMBDA_RETURN_TYPE,
+            UNKNOWN_FIXTURE, USELESS_OVERLOAD_BODY, add_type_expression_reference_link,
             is_invalid_typed_dict_literal, report_bool_as_int, report_implicit_return_type,
             report_invalid_generator_function_return_type, report_invalid_return_type,
             report_shadowed_type_variable,
@@ -19,8 +18,8 @@ use crate::{
         extensions,
         function::{
             FunctionBodyKind, FunctionDecorators, FunctionLiteral, FunctionType, KnownFunction,
-            OverloadLiteral, function_body_kind, is_implicit_classmethod,
-            same_module_uncached_raw_signature,
+            OverloadLiteral, function_body_kind, infers_unannotated_signatures,
+            is_implicit_classmethod, same_module_uncached_raw_signature,
         },
         function_framework_role,
         generics::{enclosing_generic_contexts, typing_self},
@@ -34,6 +33,7 @@ use crate::{
             original_class_type,
         },
         infer_definition_types, infer_expression_types, infer_scope_types,
+        inferred_signature::{can_implicitly_return_none, return_type_from_body},
         lifetimes::InheritedBorrow,
         signatures::ReturnCallableTypeVarScope,
         trailing_lambda::{
@@ -44,7 +44,6 @@ use crate::{
     },
 };
 use ty_python_core::{
-    UseDefMap,
     definition::{Definition, DefinitionKind},
     scope::NodeWithScopeRef,
 };
@@ -131,17 +130,6 @@ impl<'db> ExpectedReturnType<'db> {
 
 impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     pub(super) fn infer_function_body(&mut self, function: &ast::StmtFunctionDef) {
-        fn can_implicitly_return_none<'db>(db: &'db dyn Db, use_def: &UseDefMap<'db>) -> bool {
-            !use_def
-                .reachability_constraints()
-                .evaluate(
-                    db,
-                    use_def.predicates(),
-                    use_def.end_of_scope_reachability(),
-                )
-                .is_always_false()
-        }
-
         let db = self.db();
 
         // Parameters are odd: they are Definitions in the function body scope, but have no
@@ -229,6 +217,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             |expr| self.try_expression_type(expr),
         );
 
+        // basedpython: `None` is what a `def` returns when it says nothing, so an
+        // explicit `-> None` on a body that already hands back `None` is a word
+        // with nothing behind it
+        self.check_redundant_return_annotation(function);
+
         let enclosing_function_for_return_check =
             nearest_enclosing_function(db, self.index, self.scope());
 
@@ -289,8 +282,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 }
             }
 
-            let enclosing_function = nearest_enclosing_function(db, self.index, self.scope())
-                .expect("should be in a function body scope");
+            // the enclosing function has no type yet while this scope is still going round a
+            // cycle — recovering an unannotated signature reads the body, which is what put us
+            // here. the check runs on the iteration that settles, and diagnostics from the
+            // provisional ones are discarded
+            let Some(enclosing_function) = enclosing_function_for_return_check else {
+                return;
+            };
             let declared_ty = same_module_uncached_raw_signature(
                 db,
                 enclosing_function,
@@ -451,6 +449,69 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
         }
     }
 
+    /// basedpython: report an explicit `-> None` that leaves the function's type exactly where
+    /// deleting it would.
+    ///
+    /// The question is only ever that one: what would this `def` return with the annotation
+    /// gone? Where that type comes from — the body, an overridden base, a sibling overload
+    /// group — decides nothing. Everything left unreported is a case where the answer is not
+    /// `None`: a generator hands back a generator, a body that always raises hands back `Never`,
+    /// and an override or an overload implementation hands back whatever it inherits.
+    fn check_redundant_return_annotation(&self, function: &ast::StmtFunctionDef) {
+        let db = self.db();
+
+        let Some(returns) = function.returns.as_deref() else {
+            return;
+        };
+        // `-> asserts x` names a place a call narrows, not a type
+        if function.is_asserts_return || !returns.is_none_literal_expr() {
+            return;
+        }
+
+        // everything below reads the class MRO and the enclosing overload chain, so don't
+        // pay for it when nothing will be reported
+        if !self.context.is_lint_enabled(&REDUNDANT_RETURN_ANNOTATION) {
+            return;
+        }
+
+        // with nothing recovering the signature, dropping `-> None` widens the return type to
+        // `Unknown`, so the annotation is carrying the type on its own
+        if !infers_unannotated_signatures(db, self.file()) {
+            return;
+        }
+
+        let Some(function_type) = self.current_function_type() else {
+            return;
+        };
+
+        let scope_id = self.index.node_scope(NodeWithScopeRef::Function(function));
+        let without_annotation = function_type
+            .literal(db)
+            .last_definition
+            .return_type_without_annotation(db, || {
+                return_type_from_body(
+                    db,
+                    function,
+                    scope_id.is_generator_function(self.index),
+                    can_implicitly_return_none(db, self.index.use_def_map(scope_id)),
+                    |expr| self.expression_type(expr),
+                )
+            });
+
+        if !without_annotation.is_none(db) {
+            return;
+        }
+
+        if let Some(builder) = self
+            .context
+            .report_lint(&REDUNDANT_RETURN_ANNOTATION, returns)
+        {
+            let mut diagnostic = builder.into_diagnostic("Redundant `-> None` return annotation");
+            diagnostic.info("a `def` that leaves out its return type already returns `None`");
+            diagnostic.help("Remove the annotation");
+        }
+    }
+
     /// Check a pytest test or fixture function: its parameters against the
     /// fixtures they resolve to, and any `@pytest.mark.parametrize` markers
     /// against the function's signature. A function pytest does not manage is
@@ -495,8 +556,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             match pytest::resolve_fixture(db, file, name.as_str()) {
                 Some(fixture) => {
                     // only an explicitly annotated parameter can disagree with
-                    // its fixture; an unannotated one adopts the fixture's type
-                    if !parameter.should_annotation_be_displayed() {
+                    // its fixture; an unannotated one adopts the fixture's type,
+                    // whether it is left gradual or given an anonymous hole
+                    if !parameter.should_annotation_be_displayed()
+                        || parameter.annotated_type().is_inferred_parameter_hole(db)
+                    {
                         continue;
                     }
                     let Some(provided) = fixture.provided_type else {
@@ -1420,6 +1484,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             // value, the default is folded into the inherited base only if it
             // doesn't already fit
             let inherited = self.inherited_parameter_type(parameter);
+            // basedpython: under `sound-types` an unannotated parameter is an anonymous type
+            // parameter. it is the last thing tried, so pytest's fixture injection and the
+            // implicit `self` still win, and it is read back off the signature rather than
+            // rebuilt here so that the body and its call sites cannot disagree
+            let hole = self.inferred_parameter_hole(parameter);
             let ty = if let Some(default_expr) = default_expr {
                 let default_ty = self.file_expression_type(default_expr);
                 if let Some(base) = inherited {
@@ -1428,11 +1497,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                     } else {
                         UnionType::from_two_elements(db, base, default_ty)
                     }
-                } else if self.settings().sound_types {
-                    // basedpython: give the parameter the default's (promoted) type instead of
-                    // folding an implicit gradual `Unknown` in. deliberately breaks the gradual
-                    // guarantee (`def f(a=1)` sees `a: int` in the body)
-                    default_ty.promote(db)
+                } else if let Some(hole) = hole {
+                    hole
                 } else {
                     UnionType::from_two_elements(db, Type::unknown(), default_ty)
                 }
@@ -1442,6 +1508,8 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ty
             } else if let Some(ty) = self.pytest_fixture_parameter_type(parameter) {
                 ty
+            } else if let Some(hole) = hole {
+                hole
             } else {
                 Type::unknown()
             };
@@ -1467,10 +1535,28 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
     /// [`OverloadLiteral::raw_signature`] filled in for it — from the sibling overloads when this
     /// is an overload implementation, or (under `sound-types`) from the overridden base method.
     /// matching is by name
-    ///
-    /// A parameter that received no inherited annotation still has its implicit `Unknown`, which
-    /// `should_annotation_be_displayed` reports as not displayable, so this returns `None` for it.
     fn inherited_parameter_type(&self, parameter: &ast::Parameter) -> Option<Type<'db>> {
+        let ty = self.signature_parameter_type(parameter)?;
+        // an anonymous hole is not inherited from anywhere; it is offered separately, after
+        // everything that should outrank it
+        (!ty.is_inferred_parameter_hole(self.db())).then_some(ty)
+    }
+
+    /// basedpython: for an unannotated parameter under `sound-types`, the anonymous type
+    /// parameter [`open_unannotated_parameter_holes`] opened for it.
+    ///
+    /// [`open_unannotated_parameter_holes`]: crate::types::signatures::Signature::open_unannotated_parameter_holes
+    fn inferred_parameter_hole(&self, parameter: &ast::Parameter) -> Option<Type<'db>> {
+        let ty = self.signature_parameter_type(parameter)?;
+        ty.is_inferred_parameter_hole(self.db()).then_some(ty)
+    }
+
+    /// The type the enclosing function's signature gives `parameter`, when that type was not
+    /// written as an annotation.
+    ///
+    /// A parameter that received no type at all still has its implicit `Unknown`, which
+    /// `should_annotation_be_displayed` reports as not displayable, so this returns `None` for it.
+    fn signature_parameter_type(&self, parameter: &ast::Parameter) -> Option<Type<'db>> {
         let db = self.db();
         let enclosing = nearest_enclosing_function(db, self.index, self.scope())?;
         let signature =

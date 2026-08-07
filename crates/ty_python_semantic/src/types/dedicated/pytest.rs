@@ -104,10 +104,20 @@ fn is_pytest_fixture<'db>(db: &'db dyn Db, ty: Type<'db>) -> bool {
 
 /// the fixtures a file defines at module level, keyed by fixture name.
 ///
-/// this reads only decorator resolution and each candidate's signature — no
-/// body inference — so a consumer does not drag whole-module inference in.
-/// a later definition of the same name wins, mirroring python rebinding.
-#[salsa::tracked(returns(ref), heap_size = ruff_memory_usage::heap_size)]
+/// this reads only decorator resolution and each candidate's signature, so a
+/// consumer does not drag whole-module inference in. a later definition of the
+/// same name wins, mirroring python rebinding.
+///
+/// a signature is not always cheap, though: under `infer-unannotated-signatures`
+/// an unannotated one is recovered from its body, and a body in this very module
+/// asks which fixture its parameters resolve to — so the two meet in a cycle.
+/// no fixtures is the right thing to start that fixpoint from: a test whose own
+/// signature is still being computed cannot be the fixture another one wants.
+#[salsa::tracked(
+    returns(ref),
+    cycle_initial = |_, _, _| FxHashMap::default(),
+    heap_size = ruff_memory_usage::heap_size,
+)]
 pub(in crate::types) fn module_fixtures(
     db: &dyn Db,
     file: File,

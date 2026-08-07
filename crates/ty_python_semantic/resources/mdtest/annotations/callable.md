@@ -455,7 +455,7 @@ def unpack_special_form(c: Callable[[int, Unpack[Ts]], int]):
 from typing import Callable
 
 def _(c: Callable[[int], int]):
-    reveal_type(c.__init__)  # revealed: bound method object.__init__() -> None
+    reveal_type(c.__init__)  # revealed: bound method object.__init__()
     reveal_type(c.__class__)  # revealed: type
     reveal_type(c.__call__)  # revealed: (int, /) -> int
 ```

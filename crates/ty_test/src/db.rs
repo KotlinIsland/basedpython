@@ -258,6 +258,7 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
         replace_imports_with_any: replace_imports_with_any_default,
         disable_fluid_specializations: disable_fluid_specializations_default,
         sound_types: sound_types_default,
+        infer_unannotated_signatures: infer_unannotated_signatures_default,
         bivariant_private_attributes: bivariant_private_attributes_default,
         precise_unsolved_typevars: precise_unsolved_typevars_default,
         overlapping_condition_exempt_types: overlapping_condition_exempt_types_default,
@@ -306,6 +307,9 @@ fn mdtest_analysis_settings(options: Option<&Analysis>) -> AnalysisSettings {
             .disable_fluid_specializations
             .unwrap_or(disable_fluid_specializations_default),
         sound_types: options.sound_types.unwrap_or(sound_types_default),
+        infer_unannotated_signatures: options
+            .infer_unannotated_signatures
+            .unwrap_or(infer_unannotated_signatures_default),
         bivariant_private_attributes: options
             .bivariant_private_attributes
             .unwrap_or(bivariant_private_attributes_default),
@@ -354,6 +358,14 @@ fn mdtest_rule_selection(rules: Option<&Rules>, required_rule: Option<&str>) -> 
         .get("experimental-syntax")
         .expect("experimental-syntax is a known lint rule");
     selection.disable(experimental_syntax);
+
+    // `redundant-return-annotation` is a third exception: the corpus writes `-> None` out
+    // thousands of times, and reporting all of them would bury every test that is about
+    // something else.
+    let redundant_return_annotation = registry
+        .get("redundant-return-annotation")
+        .expect("redundant-return-annotation is a known lint rule");
+    selection.disable(redundant_return_annotation);
 
     if let Some(rules) = rules {
         let set_lint_level =

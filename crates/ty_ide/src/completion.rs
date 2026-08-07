@@ -4782,7 +4782,7 @@ quux.<CURSOR>
         foo :: int
         __annotations__ :: dict[str, Any]
         __class__ :: type[Quux]
-        __delattr__ :: bound method Quux.__delattr__(name: str, /) -> None
+        __delattr__ :: bound method Quux.__delattr__(name: str, /)
         __dict__ :: dict[str, Any]
         __dir__ :: bound method Quux.__dir__() -> Iterable[str]
         __doc__ :: str | None
@@ -4791,15 +4791,15 @@ quux.<CURSOR>
         __getattribute__ :: bound method Quux.__getattribute__(name: str, /) -> Any
         __getstate__ :: bound method Quux.__getstate__() -> object
         __hash__ :: bound method Quux.__hash__() -> int
-        __init__ :: bound method Quux.__init__() -> Unknown
-        __init_subclass__ :: bound method type[Quux].__init_subclass__() -> None
+        __init__ :: bound method Quux.__init__()
+        __init_subclass__ :: bound method type[Quux].__init_subclass__()
         __module__ :: str
         __ne__ :: bound method Quux.__ne__(value: object, /) -> bool
         __new__ :: def __new__[Self](cls) -> Self
         __reduce__ :: bound method Quux.__reduce__() -> str | tuple[Any, ...]
         __reduce_ex__ :: bound method Quux.__reduce_ex__(protocol: SupportsIndex, /) -> str | tuple[Any, ...]
         __repr__ :: bound method Quux.__repr__() -> str
-        __setattr__ :: bound method Quux.__setattr__(name: str, value: Any, /) -> None
+        __setattr__ :: bound method Quux.__setattr__(name: str, value: Any, /)
         __sizeof__ :: bound method Quux.__sizeof__() -> int
         __str__ :: bound method Quux.__str__() -> str
         __subclasshook__ :: bound method type[Quux].__subclasshook__(subclass: type, /) -> bool
@@ -4826,7 +4826,7 @@ quux.b<CURSOR>
         bar :: int
         baz :: int
         __getattribute__ :: bound method Quux.__getattribute__(name: str, /) -> Any
-        __init_subclass__ :: bound method type[Quux].__init_subclass__() -> None
+        __init_subclass__ :: bound method type[Quux].__init_subclass__()
         __subclasshook__ :: bound method type[Quux].__subclasshook__(subclass: type, /) -> bool
         ");
     }
@@ -4857,7 +4857,7 @@ C.<CURSOR>
         __basicsize__ :: int
         __call__ :: bound method <class 'C'>.__call__(...) -> Any
         __class__ :: <class 'Meta'>
-        __delattr__ :: def __delattr__(self, name: str, /) -> None
+        __delattr__ :: def __delattr__(self, name: str, /)
         __dict__ :: dict[str, Any]
         __dictoffset__ :: int
         __dir__ :: def __dir__(self) -> Iterable[str]
@@ -4868,8 +4868,8 @@ C.<CURSOR>
         __getattribute__ :: def __getattribute__(self, name: str, /) -> Any
         __getstate__ :: def __getstate__(self) -> object
         __hash__ :: def __hash__(self) -> int
-        __init__ :: def __init__(self) -> None
-        __init_subclass__ :: bound method <class 'C'>.__init_subclass__() -> None
+        __init__ :: def __init__(self)
+        __init_subclass__ :: bound method <class 'C'>.__init_subclass__()
         __instancecheck__ :: bound method <class 'C'>.__instancecheck__(instance: Any, /) -> bool
         __itemsize__ :: int
         __module__ :: str
@@ -4884,7 +4884,7 @@ C.<CURSOR>
         __reduce_ex__ :: def __reduce_ex__(self, protocol: SupportsIndex, /) -> str | tuple[Any, ...]
         __repr__ :: def __repr__(self) -> str
         __ror__ :: bound method <class 'C'>.__ror__[Self](value: Any, /) -> UnionType | Self
-        __setattr__ :: def __setattr__(self, name: str, value: Any, /) -> None
+        __setattr__ :: def __setattr__(self, name: str, value: Any, /)
         __sizeof__ :: def __sizeof__(self) -> int
         __str__ :: def __str__(self) -> str
         __subclasscheck__ :: bound method <class 'C'>.__subclasscheck__(subclass: type, /) -> bool
@@ -4927,7 +4927,7 @@ Meta.<CURSOR>
                 __basicsize__ :: int
                 __call__ :: def __call__(self, *args: Any, **kwds: Any) -> Any
                 __class__ :: <class 'type'>
-                __delattr__ :: def __delattr__(self, name: str, /) -> None
+                __delattr__ :: def __delattr__(self, name: str, /)
                 __dict__ :: MappingProxyType[str, Any]
                 __dictoffset__ :: int
                 __dir__ :: def __dir__(self) -> Iterable[str]
@@ -4939,7 +4939,7 @@ Meta.<CURSOR>
                 __getstate__ :: def __getstate__(self) -> object
                 __hash__ :: def __hash__(self) -> int
                 __init__ :: Overload[(self, o: object, /) -> None, (self, name: str, bases: tuple[type, ...], dict: dict[str, Any], /, **kwds: Any) -> None]
-                __init_subclass__ :: bound method <class 'Meta'>.__init_subclass__() -> None
+                __init_subclass__ :: bound method <class 'Meta'>.__init_subclass__()
                 __instancecheck__ :: def __instancecheck__(self, instance: Any, /) -> bool
                 __itemsize__ :: int
                 __module__ :: str
@@ -4953,7 +4953,7 @@ Meta.<CURSOR>
                 __reduce_ex__ :: def __reduce_ex__(self, protocol: SupportsIndex, /) -> str | tuple[Any, ...]
                 __repr__ :: def __repr__(self) -> str
                 __ror__ :: def __ror__[Self](self: Self, value: Any, /) -> UnionType | Self
-                __setattr__ :: def __setattr__(self, name: str, value: Any, /) -> None
+                __setattr__ :: def __setattr__(self, name: str, value: Any, /)
                 __sizeof__ :: def __sizeof__(self) -> int
                 __str__ :: def __str__(self) -> str
                 __subclasscheck__ :: def __subclasscheck__(self, subclass: type, /) -> bool
@@ -5056,7 +5056,7 @@ Quux.<CURSOR>
         __basicsize__ :: int
         __call__ :: bound method <class 'Quux'>.__call__(...) -> Any
         __class__ :: <class 'type'>
-        __delattr__ :: def __delattr__(self, name: str, /) -> None
+        __delattr__ :: def __delattr__(self, name: str, /)
         __dict__ :: dict[str, Any]
         __dictoffset__ :: int
         __dir__ :: def __dir__(self) -> Iterable[str]
@@ -5067,8 +5067,8 @@ Quux.<CURSOR>
         __getattribute__ :: def __getattribute__(self, name: str, /) -> Any
         __getstate__ :: def __getstate__(self) -> object
         __hash__ :: def __hash__(self) -> int
-        __init__ :: def __init__(self) -> Unknown
-        __init_subclass__ :: bound method <class 'Quux'>.__init_subclass__() -> None
+        __init__ :: def __init__(self)
+        __init_subclass__ :: bound method <class 'Quux'>.__init_subclass__()
         __instancecheck__ :: bound method <class 'Quux'>.__instancecheck__(instance: Any, /) -> bool
         __itemsize__ :: int
         __module__ :: str
@@ -5083,7 +5083,7 @@ Quux.<CURSOR>
         __reduce_ex__ :: def __reduce_ex__(self, protocol: SupportsIndex, /) -> str | tuple[Any, ...]
         __repr__ :: def __repr__(self) -> str
         __ror__ :: bound method <class 'Quux'>.__ror__[Self](value: Any, /) -> UnionType | Self
-        __setattr__ :: def __setattr__(self, name: str, value: Any, /) -> None
+        __setattr__ :: def __setattr__(self, name: str, value: Any, /)
         __sizeof__ :: def __sizeof__(self) -> int
         __str__ :: def __str__(self) -> str
         __subclasscheck__ :: bound method <class 'Quux'>.__subclasscheck__(subclass: type, /) -> bool
@@ -5130,7 +5130,7 @@ Answer.<CURSOR>
                 __contains__ :: bound method <class 'Answer'>.__contains__(value: object) -> bool
                 __copy__ :: def __copy__[Self](self) -> Self
                 __deepcopy__ :: def __deepcopy__[Self](self, memo: Any) -> Self
-                __delattr__ :: def __delattr__(self, name: str, /) -> None
+                __delattr__ :: def __delattr__(self, name: str, /)
                 __dict__ :: dict[str, Any]
                 __dictoffset__ :: int
                 __dir__ :: def __dir__(self) -> list[str]
@@ -5142,8 +5142,8 @@ Answer.<CURSOR>
                 __getitem__ :: bound method <class 'Answer'>.__getitem__[EnumMemberT](name: str) -> EnumMemberT
                 __getstate__ :: def __getstate__(self) -> object
                 __hash__ :: def __hash__(self) -> int
-                __init__ :: def __init__(self) -> None
-                __init_subclass__ :: bound method <class 'Answer'>.__init_subclass__() -> None
+                __init__ :: def __init__(self)
+                __init_subclass__ :: bound method <class 'Answer'>.__init_subclass__()
                 __instancecheck__ :: bound method <class 'Answer'>.__instancecheck__(instance: Any, /) -> bool
                 __itemsize__ :: int
                 __iter__ :: bound method <class 'Answer'>.__iter__[EnumMemberT]() -> Iterator[EnumMemberT]
@@ -5162,7 +5162,7 @@ Answer.<CURSOR>
                 __repr__ :: def __repr__(self) -> str
                 __reversed__ :: bound method <class 'Answer'>.__reversed__[EnumMemberT]() -> Iterator[EnumMemberT]
                 __ror__ :: bound method <class 'Answer'>.__ror__[Self](value: Any, /) -> UnionType | Self
-                __setattr__ :: def __setattr__(self, name: str, value: Any, /) -> None
+                __setattr__ :: def __setattr__(self, name: str, value: Any, /)
                 __sizeof__ :: def __sizeof__(self) -> int
                 __str__ :: def __str__(self) -> str
                 __subclasscheck__ :: bound method <class 'Answer'>.__subclasscheck__(subclass: type, /) -> bool
@@ -5171,8 +5171,8 @@ Answer.<CURSOR>
                 __text_signature__ :: str | None
                 __type_params__ :: tuple[TypeVar | ParamSpec | TypeVarTuple, ...]
                 __weakrefoffset__ :: int
-                _add_alias_ :: def _add_alias_(self, name: str) -> None
-                _add_value_alias_ :: def _add_value_alias_(self, value: Any) -> None
+                _add_alias_ :: def _add_alias_(self, name: str)
+                _add_value_alias_ :: def _add_value_alias_(self, value: Any)
                 _generate_next_value_ :: def _generate_next_value_(name: str, start: int, count: int, last_values: list[Any]) -> Any
                 _ignore_ :: str | list[str]
                 _member_map_ :: dict[str, Enum]
@@ -5213,7 +5213,7 @@ quux.<CURSOR>
         __class__ :: type[Quux]
         __class_getitem__ :: bound method type[Quux].__class_getitem__(item: Any, /) -> GenericAlias
         __contains__ :: bound method Quux.__contains__(key: Overlapping[int | str], /) -> bool
-        __delattr__ :: bound method Quux.__delattr__(name: str, /) -> None
+        __delattr__ :: bound method Quux.__delattr__(name: str, /)
         __dict__ :: dict[str, Any]
         __dir__ :: bound method Quux.__dir__() -> Iterable[str]
         __doc__ :: str | None
@@ -5225,8 +5225,8 @@ quux.<CURSOR>
         __getstate__ :: bound method Quux.__getstate__() -> object
         __gt__ :: bound method Quux.__gt__(value: tuple[int | str, ...], /) -> bool
         __hash__ :: bound method Quux.__hash__() -> int
-        __init__ :: bound method Quux.__init__() -> None
-        __init_subclass__ :: bound method type[Quux].__init_subclass__() -> None
+        __init__ :: bound method Quux.__init__()
+        __init_subclass__ :: bound method type[Quux].__init_subclass__()
         __iter__ :: bound method Quux.__iter__() -> Iterator[int | str]
         __le__ :: bound method Quux.__le__(value: tuple[int | str, ...], /) -> bool
         __len__ :: () -> Literal[2]
@@ -5243,7 +5243,7 @@ quux.<CURSOR>
         __repr__ :: bound method Quux.__repr__() -> str
         __reversed__ :: bound method Quux.__reversed__() -> Iterator[int | str]
         __rmul__ :: bound method Quux.__rmul__(value: SupportsIndex, /) -> tuple[int | str, ...]
-        __setattr__ :: bound method Quux.__setattr__(name: str, value: Any, /) -> None
+        __setattr__ :: bound method Quux.__setattr__(name: str, value: Any, /)
         __sizeof__ :: bound method Quux.__sizeof__() -> int
         __str__ :: bound method Quux.__str__() -> str
         __subclasshook__ :: bound method type[Quux].__subclasshook__(subclass: type, /) -> bool

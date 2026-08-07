@@ -1506,7 +1506,7 @@ from module import Foo
 from typing_extensions import LiteralString
 
 def f(a: Foo, b: list[str], c: list[LiteralString], e):
-    reveal_type(e)  # revealed: Unknown
+    reveal_type(e)  # revealed: e@f
     reveal_type(a.join(b))  # revealed: str
     reveal_type(a.join(c))  # revealed: LiteralString
 

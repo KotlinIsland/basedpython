@@ -239,12 +239,23 @@ def main():
 
 ## recursion terminates
 
+a function that calls itself is followed once. each of these gets its own `main`, because a body
+that always raises returns `Never` and so anything after the call would be unreachable
+
 ```by
 def down(n: int):
     if n > 0:
         down(n - 1)
     raise ValueError
 
+def main():
+    # error: [unhandled-exception] "`ValueError` can escape `main`, the entry point"
+    down(3)
+```
+
+## mutual recursion terminates
+
+```by
 def ping(n: int):
     pong(n)
 
@@ -254,8 +265,6 @@ def pong(n: int):
     raise TypeError
 
 def main():
-    # error: [unhandled-exception] "`ValueError` can escape `main`, the entry point"
-    down(3)
     # error: [unhandled-exception] "`TypeError` can escape `main`, the entry point"
     ping(3)
 ```

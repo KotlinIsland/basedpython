@@ -74,7 +74,7 @@ enum KeywordAggregateKind {
     /// `**kwargs: Unpack[T]` where `T` is bounded by `TypedDict`.
     TypedDict,
 }
-use crate::types::typevar::{BoundTypeVarIdentity, TypeVarNonceGenerator};
+use crate::types::typevar::{BoundTypeVarIdentity, TypeVarKind, TypeVarNonceGenerator};
 use crate::types::visitor::{
     TypeCollector, TypeKind, TypeVisitor, any_over_type, walk_non_atomic_type,
     walk_type_with_recursion_guard,
@@ -8571,16 +8571,24 @@ impl<'db> BindingError<'db> {
                     SpecializationError::MismatchedBound { bound_typevar, .. } => {
                         let typevar = bound_typevar.typevar(context.db());
                         let typevar_name = typevar.name(context.db());
-                        diag.set_primary_message(format_args!(
-                            "Argument type `{argument_ty_display}` does not \
-                                satisfy upper bound `{}` of type variable `{typevar_name}`",
-                            typevar
-                                .upper_bound(context.db())
-                                .expect(
-                                    "type variable should have an upper bound if this error occurs"
-                                )
-                                .display(context.db())
-                        ));
+                        let bound = typevar
+                            .upper_bound(context.db())
+                            .expect("type variable should have an upper bound if this error occurs")
+                            .display(context.db());
+                        // basedpython: the hole an unannotated parameter opens is a type variable
+                        // nobody wrote, so naming it as one would send the reader looking for a
+                        // declaration that does not exist
+                        if typevar.kind(context.db()) == TypeVarKind::InferredParameter {
+                            diag.set_primary_message(format_args!(
+                                "Argument type `{argument_ty_display}` does not satisfy \
+                                    `{bound}`, inferred for parameter `{typevar_name}`"
+                            ));
+                        } else {
+                            diag.set_primary_message(format_args!(
+                                "Argument type `{argument_ty_display}` does not \
+                                    satisfy upper bound `{bound}` of type variable `{typevar_name}`"
+                            ));
+                        }
                     }
                     SpecializationError::UnsatisfiedPackBound {
                         bound_typevar,
@@ -8609,17 +8617,18 @@ impl<'db> BindingError<'db> {
                     }
                 }
 
-                if let Some(typevar_definition) = error
-                    .bound_typevar()
-                    .typevar(context.db())
-                    .definition(context.db())
-                {
+                let typevar = error.bound_typevar().typevar(context.db());
+                if let Some(typevar_definition) = typevar.definition(context.db()) {
                     let module = parsed_module(context.db(), typevar_definition.file(context.db()))
                         .load(context.db());
                     let typevar_range = typevar_definition.full_range(context.db(), &module);
                     let mut sub = SubDiagnostic::new(
                         SubDiagnosticSeverity::Info,
-                        "Type variable defined here",
+                        if typevar.kind(context.db()) == TypeVarKind::InferredParameter {
+                            "Parameter declared here"
+                        } else {
+                            "Type variable defined here"
+                        },
                     );
                     sub.annotate(Annotation::primary(typevar_range.into()));
                     diag.sub(sub);

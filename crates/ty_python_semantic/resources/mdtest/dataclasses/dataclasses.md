@@ -285,7 +285,7 @@ class D:
     class_literal: TypeOf[SomeClass]
     class_subtype_of: type[SomeClass]
 
-# revealed: (self: D, function_literal: def some_function() -> None, class_literal: <class 'SomeClass'>, class_subtype_of: type[SomeClass]) -> None
+# revealed: (self: D, function_literal: def some_function(), class_literal: <class 'SomeClass'>, class_subtype_of: type[SomeClass]) -> None
 reveal_type(D.__init__)
 ```
 

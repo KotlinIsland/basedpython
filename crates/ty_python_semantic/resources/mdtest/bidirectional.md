@@ -2056,12 +2056,15 @@ As well as the value parameter type of augmented assignment dunder calls:
 
 ```py
 from typing import TypedDict
+from ty_extensions import Unknown
 
 def _(bar: Bar):
     bar |= reveal_type({"bar": [1]})  # revealed: Bar
 
 class X:
-    def __ior__(self, other: Baz): ...
+    # what `__ior__` hands back is what the augmented assignment rebinds; these are about the
+    # argument, so they leave the receiver's own type out of it
+    def __ior__(self, other: Baz) -> Unknown: ...
 
 def _(x: X):
     x |= reveal_type({"bar": [1]})  # revealed: Baz
@@ -2070,7 +2073,7 @@ def _(x: X | Bar):
     x |= reveal_type({"bar": [1]})  # revealed: dict[str, list[int]]
 
 class Y:
-    def __ior__(self, other: Bar): ...
+    def __ior__(self, other: Bar) -> Unknown: ...
 
 def _(x: Intersection[X, Y]):
     # TODO: Reveal `Bar` and `Baz` here.

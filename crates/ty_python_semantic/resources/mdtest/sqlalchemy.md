@@ -148,7 +148,7 @@ class Account(Base):
     def __init__(self, name: str) -> None:
         self.name = name
 
-reveal_type(Account.__init__)  # revealed: def __init__(self, name: str) -> None
+reveal_type(Account.__init__)  # revealed: def __init__(self, name: str)
 ```
 
 ## Non-Mapped annotations are not fields
@@ -264,5 +264,5 @@ from does_not_exist import Weird
 class Model(DeclarativeBase, Weird):
     id: Mapped[int]
 
-reveal_type(Model.__init__)  # revealed: def __init__(self, **kw: Any) -> None
+reveal_type(Model.__init__)  # revealed: def __init__(self, **kw: Any)
 ```

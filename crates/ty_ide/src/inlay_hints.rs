@@ -1744,21 +1744,36 @@ mod tests {
     use ty_project::ProjectMetadata;
 
     pub(super) fn inlay_hint_test(source: &str) -> InlayHintTest {
-        inlay_hint_test_in("main.py", source)
+        inlay_hint_test_in("main.py", source, false)
     }
 
     /// Like [`inlay_hint_test`], but for a `.by` source, so basedpython-only
     /// hints are produced.
     pub(super) fn basedpython_inlay_hint_test(source: &str) -> InlayHintTest {
-        inlay_hint_test_in("main.by", source)
+        inlay_hint_test_in("main.by", source, false)
     }
 
-    fn inlay_hint_test_in(file_name: &str, source: &str) -> InlayHintTest {
+    /// An inlay-hint test with `analysis.sound-types` enabled, for the signatures ty
+    /// recovers rather than reads.
+    pub(super) fn sound_types_inlay_hint_test(source: &str) -> InlayHintTest {
+        inlay_hint_test_in("main.by", source, true)
+    }
+
+    fn inlay_hint_test_in(file_name: &str, source: &str, sound_types: bool) -> InlayHintTest {
         const START: &str = "<START>";
         const END: &str = "<END>";
 
-        let mut db =
-            ty_project::TestDb::new(ProjectMetadata::new("test", SystemPathBuf::from("/")));
+        let mut metadata = ProjectMetadata::new("test", SystemPathBuf::from("/"));
+        if sound_types {
+            metadata.apply_override_options(ty_project::metadata::Options {
+                analysis: Some(ty_project::metadata::options::AnalysisOptions {
+                    sound_types: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+        let mut db = ty_project::TestDb::new(metadata);
 
         db.init_program().unwrap();
 
@@ -3087,25 +3102,12 @@ Source with applied edits:
         class A:
             def __init__(self, y):
                 self.x = int(1)
-                self.y[: Unknown] = y
+                self.y[: y@__init__] = y
 
         a = A([y=]2)
         a.y = int(3)
 
         ---------------------------------------------
-        info[inlay-hint-location]: Inlay Hint Target
-          --> stdlib/ty_extensions/__init__.pyi:LL:1
-           |
-        LL | Unknown: _SpecialForm
-           | ^^^^^^^
-           |
-        info: Source
-          --> main2.py:LL:18
-           |
-        LL |         self.y[: Unknown] = y
-           |                  ^^^^^^^
-           |
-
         info[inlay-hint-location]: Inlay Hint Target
          --> main.py:3:24
           |
@@ -3123,17 +3125,10 @@ Source with applied edits:
         info[inlay-hint-edit]: Inlay hint edits
         --> main.py:1:1
           |
-        1 + from ty_extensions import Unknown
-        2 |
-        3 | class A:
-        4 |     def __init__(self, y):
-        5 |         self.x = int(1)
-          -         self.y = y
-        6 +         self.y: Unknown = y
-        7 |
+        6 |
           - a = A(2)
-        8 + a = A(y=2)
-        9 | a.y = int(3)
+        7 + a = A(y=2)
+        8 | a.y = int(3)
           |
         ");
     }
@@ -7677,7 +7672,7 @@ Source with applied edits:
 
         def foo(x: int, *y: bool, z: str | int | list[str]): ...
 
-        a[: def foo(x: int, *y: bool, *, z: str | int | list[str]) -> Unknown] = foo
+        a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
         ---------------------------------------------
         info[inlay-hint-location]: Inlay Hint Target
           --> stdlib/builtins.byi:LL:7
@@ -7688,7 +7683,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:16
            |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str]) -> Unknown] = foo
+        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
            |                ^^^
            |
 
@@ -7701,7 +7696,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:25
            |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str]) -> Unknown] = foo
+        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
            |                         ^^^^
            |
 
@@ -7714,7 +7709,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:37
            |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str]) -> Unknown] = foo
+        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
            |                                     ^^^
            |
 
@@ -7727,7 +7722,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:43
            |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str]) -> Unknown] = foo
+        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
            |                                           ^^^
            |
 
@@ -7740,7 +7735,7 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:49
            |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str]) -> Unknown] = foo
+        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
            |                                                 ^^^^
            |
 
@@ -7753,21 +7748,8 @@ Source with applied edits:
         info: Source
           --> main2.py:LL:54
            |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str]) -> Unknown] = foo
+        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str])] = foo
            |                                                      ^^^
-           |
-
-        info[inlay-hint-location]: Inlay Hint Target
-          --> stdlib/ty_extensions/__init__.pyi:LL:1
-           |
-        LL | Unknown: _SpecialForm
-           | ^^^^^^^
-           |
-        info: Source
-          --> main2.py:LL:63
-           |
-        LL | a[: def foo(x: int, *y: bool, *, z: str | int | list[str]) -> Unknown] = foo
-           |                                                               ^^^^^^^
            |
         ");
     }
@@ -10023,6 +10005,30 @@ Source with applied edits:
                 return s
 
             def pair[Element](s: some str, e: Element) -> Element:
+                return e
+
+            a = echo('lit')
+            b = pair('lit', 1)
+            ",
+        );
+
+        assert_snapshot!(test.inlay_hints_with_settings(&InlayHintSettings {
+            call_type_arguments: true,
+            type_argument_names: true,
+            ..InlayHintSettings::none()
+        }));
+    }
+
+    /// The hole an unannotated parameter opens under `sound-types` is not a position a
+    /// call site can supply either, so it is left out the same way a written `some` is.
+    #[test]
+    fn basedpython_inferred_holes_are_not_hinted() {
+        let mut test = sound_types_inlay_hint_test(
+            "
+            def echo(s):
+                return s
+
+            def pair[Element](s, e: Element) -> Element:
                 return e
 
             a = echo('lit')

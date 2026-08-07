@@ -25,6 +25,7 @@ use crate::types::class::{ClassLiteral, ClassType, DynamicNamedTupleAnchor, Gene
 use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::function::{FunctionType, OverloadLiteral};
 use crate::types::generics::{GenericContext, Specialization};
+use crate::types::protocol_class::{InlineProtocolMemberForm, ProtocolInterface};
 use crate::types::signatures::{
     CallableSignature, Parameter, Parameters, ParametersKind, Signature,
 };
@@ -133,6 +134,10 @@ pub struct DisplaySettings<'db> {
     /// Whether to hide the return type of the outermost signature.
     /// Return types of nested callable types inside parameters are still shown.
     pub hide_return_type: bool,
+    /// basedpython: whether the caller has already written the `def <name>` this signature
+    /// belongs to, as the bound-method display does. Such a signature is a *declaration*, so it
+    /// leaves out a `None` return the way the source may.
+    pub name_already_written: bool,
     /// basedpython: whether a specialization names the type parameter each of
     /// its arguments fills (`A[Key=str, Value=int]`), the way a keyword
     /// subscript writes it. Only ever set for `.by` output — python's subscript
@@ -210,6 +215,16 @@ impl<'db> DisplaySettings<'db> {
     pub fn hide_return_type(&self) -> Self {
         Self {
             hide_return_type: true,
+            ..self.clone()
+        }
+    }
+
+    /// basedpython: this signature's `def <name>` has already been written, so it is a
+    /// declaration rather than a callable type.
+    #[must_use]
+    fn name_already_written(&self) -> Self {
+        Self {
+            name_already_written: true,
             ..self.clone()
         }
     }
@@ -1045,6 +1060,22 @@ fn deferred_binding_power(db: &dyn Db, ty: Type<'_>) -> u8 {
     }
 }
 
+/// basedpython: the receiver and member name a symbolic call's callee was reached through,
+/// when it was reached through one at all.
+fn deferred_call_receiver<'db>(
+    db: &'db dyn Db,
+    callee: Type<'db>,
+) -> Option<(Type<'db>, &'db str)> {
+    match callee {
+        Type::BoundMethod(method) => Some((method.self_instance(db), method.function(db).name(db))),
+        Type::Deferred(deferred) => match (deferred.operation(db), deferred.operands(db)) {
+            (DeferredOperation::Attribute(name), [receiver]) => Some((*receiver, name.as_str())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// basedpython: write a symbolic operation back out as the expression it stands for, e.g.
 /// `I@succ + 1` or `s@starts.startswith("foo")`. `minimum_binding_power` is what the
 /// surrounding operator requires of this position; a weaker-binding operation there is
@@ -1088,11 +1119,15 @@ fn fmt_deferred_operation<'db>(
             operand(f, *inner, binding_power)?;
         }
         // the callee carries the receiver it was bound to, which is what the annotation
-        // was written against — `s.startswith` reads back as `s@f.startswith`
-        (DeferredOperation::Call, [Type::BoundMethod(method), args @ ..]) => {
-            operand(f, method.self_instance(db), receiver)?;
+        // was written against — `s.startswith` reads back as `s@f.startswith`. a class
+        // member carries it as the bound method's instance, a structural one as the
+        // attribute type's own receiver
+        (DeferredOperation::Call, [callee, args @ ..])
+            if let Some((callee_receiver, method_name)) = deferred_call_receiver(db, *callee) =>
+        {
+            operand(f, callee_receiver, receiver)?;
             f.write_char('.')?;
-            f.write_str(method.function(db).name(db))?;
+            f.write_str(method_name)?;
             f.write_char('(')?;
             for (index, arg) in args.iter().enumerate() {
                 if index > 0 {
@@ -1103,7 +1138,7 @@ fn fmt_deferred_operation<'db>(
             f.write_char(')')?;
         }
         // `is_checked` admits no other shape; a deferral built with the wrong operand
-        // count, or a call through something other than a bound method, is still better
+        // count, or a call through a callee that names no receiver, is still better
         // shown reduced than not at all
         _ => Type::Deferred(deferred)
             .reduce_deferred(db)
@@ -1179,6 +1214,17 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                         .fmt_detailed(f),
                 },
                 Protocol::Synthesized(synthetic) => {
+                    // basedpython: a structural type *is* writable here — `protocol(...)` is
+                    // the syntax that declares one — so it is spelled rather than described
+                    if basedpython_display_enabled()
+                        && let Some(inline) = DisplayInlineProtocol::new(
+                            self.db,
+                            synthetic.interface(),
+                            self.settings.clone(),
+                        )
+                    {
+                        return inline.fmt_detailed(f);
+                    }
                     f.set_invalid_type_annotation();
                     f.write_char('<')?;
                     f.with_type(Type::SpecialForm(SpecialFormType::Protocol))
@@ -1329,7 +1375,12 @@ impl<'db> FmtDetailed<'db> for DisplayRepresentation<'db> {
                         f.with_type(self.ty).write_str(function.name(self.db))?;
                         type_parameters.fmt_detailed(f)?;
                         signature
-                            .display_with(self.db, self.settings.disallow_signature_name())
+                            .display_with(
+                                self.db,
+                                self.settings
+                                    .disallow_signature_name()
+                                    .name_already_written(),
+                            )
                             .fmt_detailed(f)
                     }
                     signatures => {
@@ -1974,7 +2025,12 @@ impl<'db> FmtDetailed<'db> for DisplayOverloadLiteral<'db> {
         write!(f, "{}", self.literal.name(self.db))?;
         type_parameters.fmt_detailed(f)?;
         signature
-            .display_with(self.db, self.settings.disallow_signature_name())
+            .display_with(
+                self.db,
+                self.settings
+                    .disallow_signature_name()
+                    .name_already_written(),
+            )
             .fmt_detailed(f)
     }
 }
@@ -2042,7 +2098,10 @@ impl<'db> FmtDetailed<'db> for DisplayFunctionType<'db> {
                 write!(f, "{}", self.ty.name(self.db))?;
                 type_parameters.fmt_detailed(f)?;
                 signature
-                    .display_with(self.db, settings.disallow_signature_name())
+                    .display_with(
+                        self.db,
+                        settings.disallow_signature_name().name_already_written(),
+                    )
                     .fmt_detailed(f)
             }
             signatures => {
@@ -2235,6 +2294,90 @@ impl<'db> GenericContext<'db> {
     }
 }
 
+/// basedpython: what a parameter's own anonymous hole bounds it by, when its annotated type is
+/// one. See [`DisplayParameter`].
+enum SomeHoleBound<'db> {
+    Bounded(Type<'db>),
+    /// nothing was ever required of it, so `some` has nothing to say
+    Unbounded,
+}
+
+/// basedpython: the bound of the `some` hole `ty` is, when it is one.
+fn some_hole_bound<'db>(db: &'db dyn Db, ty: Type<'db>) -> Option<SomeHoleBound<'db>> {
+    let Type::TypeVar(bound_typevar) = ty else {
+        return None;
+    };
+    let typevar = bound_typevar.typevar(db);
+    if !typevar.is_some_hole(db) {
+        return None;
+    }
+    Some(match typevar.upper_bound(db) {
+        Some(bound) if !bound.is_dynamic() => SomeHoleBound::Bounded(bound),
+        _ => SomeHoleBound::Unbounded,
+    })
+}
+
+/// basedpython: a synthesized protocol spelled as the inline `protocol(...)` type expression
+/// that would declare it — `protocol(a: int; def m(self) -> str)`.
+struct DisplayInlineProtocol<'db> {
+    db: &'db dyn Db,
+    interface: ProtocolInterface<'db>,
+    settings: DisplaySettings<'db>,
+}
+
+impl<'db> DisplayInlineProtocol<'db> {
+    /// `None` when some part of the interface has no inline spelling, so that the protocol is
+    /// described rather than spelled wrongly.
+    fn new(
+        db: &'db dyn Db,
+        interface: ProtocolInterface<'db>,
+        settings: DisplaySettings<'db>,
+    ) -> Option<Self> {
+        interface
+            .members(db)
+            .all(|member| member.inline_form().is_some())
+            .then_some(Self {
+                db,
+                interface,
+                settings,
+            })
+    }
+}
+
+impl<'db> FmtDetailed<'db> for DisplayInlineProtocol<'db> {
+    fn fmt_detailed(&self, f: &mut TypeWriter<'_, '_, 'db>) -> fmt::Result {
+        f.write_str("protocol(")?;
+        let mut first = true;
+        for member in self.interface.members(self.db) {
+            if !std::mem::take(&mut first) {
+                f.write_str("; ")?;
+            }
+            match member.inline_form() {
+                Some(InlineProtocolMemberForm::Method(callable)) => {
+                    write!(f, "def {}", member.name())?;
+                    callable
+                        .display_with(self.db, self.settings.clone())
+                        .fmt_detailed(f)?;
+                }
+                Some(InlineProtocolMemberForm::Attribute(ty)) => {
+                    write!(f, "{}: ", member.name())?;
+                    ty.display_with(self.db, self.settings.clone())
+                        .fmt_detailed(f)?;
+                }
+                // `new` rejected an interface with such a member
+                None => return Err(fmt::Error),
+            }
+        }
+        for pack in self.interface.pending_packs(self.db) {
+            if !std::mem::take(&mut first) {
+                f.write_str("; ")?;
+            }
+            write!(f, "**{}", pack.display(self.db))?;
+        }
+        f.write_char(')')
+    }
+}
+
 struct DisplayOptionalGenericContext<'a, 'db> {
     generic_context: Option<&'a GenericContext<'db>>,
     db: &'db dyn Db,
@@ -2286,6 +2429,9 @@ impl<'db> DisplayGenericContext<'_, 'db> {
                 // If hide_unused_self is true and this is a Self typevar, skip it
                 !self.hide_unused_self || !bound_typevar.typevar(self.db).is_self(self.db)
             })
+            // basedpython: an anonymous hole is not an entry a call site can supply, and it is
+            // shown where it was opened — as the `some` on its own parameter
+            .filter(|bound_typevar| !bound_typevar.typevar(self.db).is_some_hole(self.db))
             .peekable();
 
         if variables.peek().is_none() {
@@ -2685,6 +2831,7 @@ impl<'db> FmtDetailed<'db> for DisplaySignature<'_, 'db> {
 
         // If the current display policy wants a signature name and a name hasn't been emitted,
         // remember what the name was by checking if we have a definition
+        let mut is_declaration = self.settings.name_already_written;
         if self
             .settings
             .signature_name_display
@@ -2694,6 +2841,7 @@ impl<'db> FmtDetailed<'db> for DisplaySignature<'_, 'db> {
         {
             f.write_str("def ")?;
             f.write_str(&name)?;
+            is_declaration = true;
         }
 
         let settings = self
@@ -2718,17 +2866,24 @@ impl<'db> FmtDetailed<'db> for DisplaySignature<'_, 'db> {
             .fmt_detailed(&mut f)?;
         }
 
-        // Parameters
+        // Parameters. Whatever is nested in here is a *type*, not this declaration, so it does
+        // not inherit the right to leave out a `None` return
         let param_settings = DisplaySettings {
             hide_return_type: false,
+            name_already_written: false,
             ..settings.clone()
         };
         self.parameters
             .display_with(self.db, param_settings)
             .fmt_detailed(&mut f)?;
 
-        // Return type
-        if !self.settings.hide_return_type {
+        // Return type.
+        //
+        // basedpython: a `def` that says nothing returns `None`, so spelling it out is noise —
+        // `def f()` and `def f() -> None` are the same declaration. A callable *type* has no
+        // such default and always states what it returns, or `() -> None` would read as `()`
+        let omit_none_return = is_declaration && self.return_ty.is_none(self.db);
+        if !self.settings.hide_return_type && !omit_none_return {
             f.write_str(" -> ")?;
 
             let should_parenthesize_return_type =
@@ -2737,7 +2892,13 @@ impl<'db> FmtDetailed<'db> for DisplaySignature<'_, 'db> {
                 f.write_char('(')?;
             }
             self.return_ty
-                .display_with(self.db, settings.singleline())
+                .display_with(
+                    self.db,
+                    DisplaySettings {
+                        name_already_written: false,
+                        ..settings.singleline()
+                    },
+                )
                 .fmt_detailed(&mut f)?;
             if should_parenthesize_return_type {
                 f.write_char(')')?;
@@ -2970,10 +3131,24 @@ impl<'db> FmtDetailed<'db> for DisplayParameter<'_, 'db> {
             write!(f, "{name}")?;
             if self.param.should_annotation_be_displayed() {
                 let annotated_type = self.param.annotated_type();
-                f.write_str(": ")?;
-                annotated_type
-                    .display_with(self.db, self.settings.clone())
-                    .fmt_detailed(f)?;
+                // basedpython: the hole this parameter opened is spelled where it was
+                // opened — `some <bound>` — rather than as a type parameter of its own. an
+                // unbounded hole has nothing to say, so the parameter reads as unannotated
+                match some_hole_bound(self.db, annotated_type) {
+                    Some(SomeHoleBound::Bounded(bound)) => {
+                        f.write_str(": some ")?;
+                        bound
+                            .display_with(self.db, self.settings.clone())
+                            .fmt_detailed(f)?;
+                    }
+                    Some(SomeHoleBound::Unbounded) => {}
+                    None => {
+                        f.write_str(": ")?;
+                        annotated_type
+                            .display_with(self.db, self.settings.clone())
+                            .fmt_detailed(f)?;
+                    }
+                }
             }
             // Default value can only be specified if `name` is given.
             if let Some(default_type) = self.param.default_type() {

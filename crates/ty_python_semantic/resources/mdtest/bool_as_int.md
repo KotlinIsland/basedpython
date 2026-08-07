@@ -241,7 +241,7 @@ time any check sees the annotation. `int | bool` really is `int`, and it is repo
 ```py
 def take(n: int | bool) -> None: ...
 
-reveal_type(take)  # revealed: def take(n: int) -> None
+reveal_type(take)  # revealed: def take(n: int)
 
 # error: [bool-as-int] "`Literal[True]` is implicitly used as `int`"
 a: int | bool = True

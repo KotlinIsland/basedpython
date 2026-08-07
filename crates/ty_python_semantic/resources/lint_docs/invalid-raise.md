@@ -23,7 +23,7 @@ def f():
         something()
     except NameError:
         # error: "Cannot raise object of type `Literal["oops!"]`"
-        # error: "Cannot use object of type `def cause() -> None` as an exception cause"
+        # error: "Cannot use object of type `def cause()` as an exception cause"
         raise "oops!" from cause
 
 

@@ -1706,6 +1706,17 @@ impl<'a, 'c, 'db> TypeRelationChecker<'a, 'c, 'db> {
                 self.always()
             }
 
+            // basedpython: a hole nothing bounded is the gradual type it replaced, so anything is
+            // consistent with it — the same rule the source-side arm below already gives in the
+            // other direction by widening a typevar to its upper bound
+            (_, Type::TypeVar(bound_typevar))
+                if self.is_eager_assignability()
+                    && !bound_typevar.is_inferable(db, self.inferable)
+                    && crate::types::inferred_signature::gradual_hole(db, target).is_some() =>
+            {
+                self.always()
+            }
+
             // basedpython: a bound range `T: Lower..Upper` puts a floor under every
             // specialization, so `X <: T` holds exactly when `X` is below the smallest `T` there
             // is — the lower end. this has to come before the source-side rule below: that rule

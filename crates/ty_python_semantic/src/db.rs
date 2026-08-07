@@ -92,6 +92,19 @@ pub(crate) mod tests {
             self.open_files.insert(file);
         }
 
+        /// basedpython: read a missing annotation gradually, the way python does.
+        ///
+        /// For a test about the *shape* a signature is parsed into rather than about what is
+        /// recovered for the parts nobody wrote.
+        pub(crate) fn without_inferred_signatures(mut self) -> Self {
+            self.analysis_settings = AnalysisSettings {
+                infer_unannotated_signatures: false,
+                ..AnalysisSettings::default()
+            }
+            .into();
+            self
+        }
+
         /// Takes the salsa events.
         pub(crate) fn take_salsa_events(&mut self) -> Vec<salsa::Event> {
             let mut events = self.events.lock().unwrap();

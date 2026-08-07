@@ -858,7 +858,7 @@ mod tests {
         def my_func(
             a,
             b
-        ) -> Unknown
+        ) -> Literal[0]
         ---------------------------------------------
         This is such a great func!!
 
@@ -871,7 +871,7 @@ mod tests {
         def my_func(
             a,
             b
-        ) -> Unknown
+        ) -> Literal[0]
         ```
         ---
         This is such a great func!!
@@ -914,7 +914,7 @@ mod tests {
         def my_func(
             a,
             b
-        ) -> Unknown
+        ) -> Literal[0]
         ---------------------------------------------
         This is such a great func!!
 
@@ -927,7 +927,7 @@ mod tests {
         def my_func(
             a,
             b
-        ) -> Unknown
+        ) -> Literal[0]
         ```
         ---
         This is such a great func!!
@@ -968,7 +968,7 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @r#"
-        def documented(value) -> Unknown
+        def documented(value) -> value
         ---------------------------------------------
         Return a value.
 
@@ -977,7 +977,7 @@ mod tests {
 
         ---------------------------------------------
         ```python
-        def documented(value) -> Unknown
+        def documented(value) -> value
         ```
         ---
         Return a value.
@@ -1947,7 +1947,7 @@ mod tests {
         bound method MyClass.my_method(
             a,
             b
-        ) -> Unknown
+        ) -> Literal[0]
         ---------------------------------------------
         This is such a great func!!
 
@@ -1960,7 +1960,7 @@ mod tests {
         bound method MyClass.my_method(
             a,
             b
-        ) -> Unknown
+        ) -> Literal[0]
         ```
         ---
         This is such a great func!!
@@ -2172,13 +2172,13 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
-        Unknown
+        Literal[42]
         ---------------------------------------------
         Foo documentation
 
         ---------------------------------------------
         ```python
-        Unknown
+        Literal[42]
         ```
         ---
         Foo documentation
@@ -2221,13 +2221,13 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
-        def test() -> None
+        def test()
         ---------------------------------------------
         Implementation docstring
 
         ---------------------------------------------
         ```python
-        def test() -> None
+        def test()
         ```
         ---
         Implementation docstring
@@ -2278,13 +2278,13 @@ mod tests {
             .build();
 
         assert_snapshot!(test.hover(), @"
-        def test() -> None
+        def test()
         ---------------------------------------------
         Version 3.10+ implementation
 
         ---------------------------------------------
         ```python
-        def test() -> None
+        def test()
         ```
         ---
         Version 3.10+ implementation
@@ -2331,13 +2331,13 @@ mod tests {
         // definition, which is the first definition with a docstring found
         // by the fallback path.
         assert_snapshot!(test.hover(), @"
-        (Overload[(x: int) -> int, (x: str) -> str]) | (def test() -> Unknown)
+        (Overload[(x: int) -> int, (x: str) -> str]) | (def test())
         ---------------------------------------------
         Unrelated docstring
 
         ---------------------------------------------
         ```python
-        (Overload[(x: int) -> int, (x: str) -> str]) | (def test() -> Unknown)
+        (Overload[(x: int) -> int, (x: str) -> str]) | (def test())
         ```
         ---
         Unrelated docstring
@@ -2383,13 +2383,13 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
-        (Overload[(x: int) -> int, (x: str) -> str]) | (def test() -> Unknown)
+        (Overload[(x: int) -> int, (x: str) -> str]) | (def test())
         ---------------------------------------------
         The int overload
 
         ---------------------------------------------
         ```python
-        (Overload[(x: int) -> int, (x: str) -> str]) | (def test() -> Unknown)
+        (Overload[(x: int) -> int, (x: str) -> str]) | (def test())
         ```
         ---
         The int overload
@@ -2436,13 +2436,13 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
-        (Overload[(x: int) -> int, (x: str) -> str]) | (def test() -> Unknown)
+        (Overload[(x: int) -> int, (x: str) -> str]) | (def test())
         ---------------------------------------------
         The real implementation
 
         ---------------------------------------------
         ```python
-        (Overload[(x: int) -> int, (x: str) -> str]) | (def test() -> Unknown)
+        (Overload[(x: int) -> int, (x: str) -> str]) | (def test())
         ```
         ---
         The real implementation
@@ -2512,13 +2512,13 @@ mod tests {
         def foo(
             a,
             b
-        ) -> Unknown
+        )
         ---------------------------------------------
         ```python
         def foo(
             a,
             b
-        ) -> Unknown
+        )
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -2942,10 +2942,10 @@ mod tests {
         );
 
         assert_snapshot!(test.hover(), @"
-        (def foo(a, b) -> Unknown) | (def bar(a, b) -> Unknown)
+        (def foo(a, b) -> Literal[0]) | (def bar(a, b) -> Literal[1])
         ---------------------------------------------
         ```python
-        (def foo(a, b) -> Unknown) | (def bar(a, b) -> Unknown)
+        (def foo(a, b) -> Literal[0]) | (def bar(a, b) -> Literal[1])
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -3499,13 +3499,13 @@ def ab(a: str): ...
             .build();
 
         assert_snapshot!(test.hover(), @"
-        def ab(a: int) -> Unknown
+        def ab(a: int)
         ---------------------------------------------
         the int overload
 
         ---------------------------------------------
         ```python
-        def ab(a: int) -> Unknown
+        def ab(a: int)
         ```
         ---
         the int overload
@@ -3545,13 +3545,13 @@ def bar() -> None:
             .build();
 
         assert_snapshot!(test.hover(), @"
-        def bar() -> None
+        def bar()
         ---------------------------------------------
         Implementation docstring
 
         ---------------------------------------------
         ```python
-        def bar() -> None
+        def bar()
         ```
         ---
         Implementation docstring
@@ -3603,13 +3603,13 @@ def ab(a: str):
             .build();
 
         assert_snapshot!(test.hover(), @r#"
-        def ab(a: str) -> Unknown
+        def ab(a: str)
         ---------------------------------------------
         the str overload
 
         ---------------------------------------------
         ```python
-        def ab(a: str) -> Unknown
+        def ab(a: str)
         ```
         ---
         the str overload
@@ -3664,7 +3664,7 @@ def ab(a: int):
         def ab(
             a: int,
             b: int
-        ) -> Unknown
+        )
         ---------------------------------------------
         the two arg overload
 
@@ -3673,7 +3673,7 @@ def ab(a: int):
         def ab(
             a: int,
             b: int
-        ) -> Unknown
+        )
         ```
         ---
         the two arg overload
@@ -3725,13 +3725,13 @@ def ab(a: int):
             .build();
 
         assert_snapshot!(test.hover(), @"
-        def ab(a: int) -> Unknown
+        def ab(a: int)
         ---------------------------------------------
         the one arg overload
 
         ---------------------------------------------
         ```python
-        def ab(a: int) -> Unknown
+        def ab(a: int)
         ```
         ---
         the one arg overload
@@ -3791,7 +3791,7 @@ def ab(a: int, *, c: int):
             a: int,
             *,
             b: int
-        ) -> Unknown
+        )
         ---------------------------------------------
         b overload
 
@@ -3801,7 +3801,7 @@ def ab(a: int, *, c: int):
             a: int,
             *,
             b: int
-        ) -> Unknown
+        )
         ```
         ---
         b overload
@@ -3861,7 +3861,7 @@ def ab(a: int, *, c: int):
             a: int,
             *,
             c: int
-        ) -> Unknown
+        )
         ---------------------------------------------
         c overload
 
@@ -3871,7 +3871,7 @@ def ab(a: int, *, c: int):
             a: int,
             *,
             c: int
-        ) -> Unknown
+        )
         ```
         ---
         c overload
@@ -3917,11 +3917,11 @@ def ab(a: int, *, c: int):
         def foo(
             a: int,
             b
-        ) -> Unknown
+        ) -> Literal[0]
         def foo(
             a: str,
             b
-        ) -> Unknown
+        ) -> Literal[1]
         ---------------------------------------------
         The first overload
 
@@ -3930,11 +3930,11 @@ def ab(a: int, *, c: int):
         def foo(
             a: int,
             b
-        ) -> Unknown
+        ) -> Literal[0]
         def foo(
             a: str,
             b
-        ) -> Unknown
+        ) -> Literal[1]
         ```
         ---
         The first overload
@@ -3976,15 +3976,15 @@ def ab(a: int, *, c: int):
         );
 
         assert_snapshot!(test.hover(), @"
-        def foo(a: int) -> Unknown
-        def foo(a: str) -> Unknown
+        def foo(a: int) -> Literal[0]
+        def foo(a: str) -> Literal[1]
         ---------------------------------------------
         The first overload
 
         ---------------------------------------------
         ```python
-        def foo(a: int) -> Unknown
-        def foo(a: str) -> Unknown
+        def foo(a: int) -> Literal[0]
+        def foo(a: str) -> Literal[1]
         ```
         ---
         The first overload
@@ -5626,13 +5626,13 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        def ab() -> Unknown
+        def ab()
         ---------------------------------------------
         wow cool docsand docs
 
         ---------------------------------------------
         ```python
-        def ab() -> Unknown
+        def ab()
         ```
         ---
         wow cool docsand docs
@@ -5661,15 +5661,15 @@ def function():
         "#,
         );
 
-        assert_snapshot!(test.hover(), @r#"
-        def urlparse() -> Unknown
+        assert_snapshot!(test.hover(), @"
+        def urlparse()
         ---------------------------------------------
         Parse a URL into components:
         <scheme>://<netloc>/<path>;<params>?<query>#<fragment>
 
         ---------------------------------------------
         ```python
-        def urlparse() -> Unknown
+        def urlparse()
         ```
         ---
         Parse a URL into components:<HB>
@@ -5684,7 +5684,7 @@ def function():
           |     |  Cursor offset
           |     source
           |
-        "#);
+        ");
     }
 
     #[test]
@@ -5698,10 +5698,10 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        def ab() -> Unknown
+        def ab()
         ---------------------------------------------
         ```python
-        def ab() -> Unknown
+        def ab()
         ```
         ---------------------------------------------
         info[hover]: Hovered content is
@@ -5728,13 +5728,13 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        def ab() -> Unknown
+        def ab()
         ---------------------------------------------
         wow cool docsand docs
 
         ---------------------------------------------
         ```python
-        def ab() -> Unknown
+        def ab()
         ```
         ---
         wow cool docsand docs
@@ -5763,13 +5763,13 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        def ab() -> Unknown
+        def ab()
         ---------------------------------------------
         wow cool docs
 
         ---------------------------------------------
         ```python
-        def ab() -> Unknown
+        def ab()
         ```
         ---
         wow cool docs
@@ -5799,13 +5799,13 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        def ab() -> Unknown
+        def ab()
         ---------------------------------------------
         wow cool docs
 
         ---------------------------------------------
         ```python
-        def ab() -> Unknown
+        def ab()
         ```
         ---
         wow cool docs
@@ -5836,13 +5836,13 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        def ab() -> Unknown
+        def ab()
         ---------------------------------------------
         wow cool docsand docs
 
         ---------------------------------------------
         ```python
-        def ab() -> Unknown
+        def ab()
         ```
         ---
         wow cool docsand docs
@@ -5874,13 +5874,13 @@ def function():
         );
 
         assert_snapshot!(test.hover(), @"
-        def ab() -> Unknown
+        def ab()
         ---------------------------------------------
         wow cool docsand docs
 
         ---------------------------------------------
         ```python
-        def ab() -> Unknown
+        def ab()
         ```
         ---
         wow cool docsand docs

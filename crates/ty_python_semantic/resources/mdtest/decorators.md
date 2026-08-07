@@ -256,7 +256,7 @@ first argument:
 def wrong_signature(f: int) -> str:
     return "a"
 
-# error: [invalid-argument-type] "Argument to function `wrong_signature` is incorrect: Expected `int`, found `def f(x) -> Unknown`"
+# error: [invalid-argument-type] "Argument to function `wrong_signature` is incorrect: Expected `int`, found `def f(x)`"
 @wrong_signature
 def f(x): ...
 
@@ -485,8 +485,8 @@ class OverloadedCacheClient:
         return b""
 ```
 
-Unannotated class decorators are assumed to preserve the class binding. We do not infer returned
-classes from decorator bodies:
+basedpython: an unannotated class decorator has its return type recovered from its body, so the
+class it hands back is the one the decorated name is bound to:
 
 ```py
 def personify(cls):
@@ -501,10 +501,10 @@ def personify(cls):
 @personify
 class Animal: ...
 
-reveal_type(Animal)  # revealed: <class 'Animal'>
-reveal_type(Animal())  # revealed: Animal
+reveal_type(Animal)  # revealed: <class 'Wrapped'>
+reveal_type(Animal())  # revealed: Wrapped
 
-Animal().set_full_name("John")  # error: [unresolved-attribute]
+Animal().set_full_name("John")  # ok
 ```
 
 This also applies to unannotated callables that are not function definitions:

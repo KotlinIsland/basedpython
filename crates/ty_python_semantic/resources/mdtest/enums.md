@@ -1574,7 +1574,7 @@ class CustomNextValue(Enum):
     A = auto()
     B = auto()
 
-reveal_type(CustomNextValue.A.value)  # revealed: Unknown
+reveal_type(CustomNextValue.A.value)  # revealed: Any
 
 class CustomNextValueNonAuto(Enum):
     @staticmethod

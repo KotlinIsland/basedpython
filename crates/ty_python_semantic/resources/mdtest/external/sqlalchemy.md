@@ -138,7 +138,7 @@ class User(Base):
     def __init__(self, name: str) -> None:
         self.name = name
 
-reveal_type(User.__init__)  # revealed: def __init__(self, name: str) -> None
+reveal_type(User.__init__)  # revealed: def __init__(self, name: str)
 User("Alice")
 # error: [missing-argument]
 User()

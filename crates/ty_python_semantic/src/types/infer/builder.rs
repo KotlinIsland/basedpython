@@ -3932,6 +3932,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                         ty
                     };
 
+                    // this branch answers a call without going through
+                    // `infer_call_expression`, so a method call on a symbolic receiver has to
+                    // be kept symbolic here too — otherwise `a = x.foo()` would name a
+                    // different value than the `x.foo()` a `return` names
+                    let ty = self.basedpython_symbolic_call(call_expr, callable_type, ty);
+
                     self.store_expression_type(value, ty);
                     ty
                 } else {
@@ -9375,9 +9381,13 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 )
             } else if let Some(ctx_ty) = ctx_ty {
                 Some(ctx_ty)
-            } else if builder.settings().sound_types {
+            } else if crate::types::function::infers_unannotated_signatures(
+                builder.db(),
+                builder.file(),
+            ) {
                 // basedpython: mirrors the unannotated function parameter rule, so that a
-                // lambda's own signature is checked at its call sites
+                // lambda's own signature is checked at its call sites. a lambda body is a
+                // single expression, so there is nothing else to read and no hole is opened
                 default_ty.map(|default_ty| default_ty.promote(builder.db()))
             } else {
                 None

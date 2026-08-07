@@ -362,10 +362,10 @@ def labelled(fn: (**kwargs: Unpack[TD]) -> None): ...
 
 def anonymous(fn: (**: Unpack[TD]) -> None): ...
 
-reveal_type(base)  # revealed: def base(*, a: int, **kwargs: object) -> None
-reveal_type(bare)  # revealed: def bare(fn: (*, a: int, **kwargs: object) -> None) -> Unknown
-reveal_type(labelled)  # revealed: def labelled(fn: (*, a: int, **kwargs: object) -> None) -> Unknown
-reveal_type(anonymous)  # revealed: def anonymous(fn: (*, a: int, **kwargs: object) -> None) -> Unknown
+reveal_type(base)  # revealed: def base(*, a: int, **kwargs: object)
+reveal_type(bare)  # revealed: def bare(fn: (*, a: int, **kwargs: object) -> None)
+reveal_type(labelled)  # revealed: def labelled(fn: (*, a: int, **kwargs: object) -> None)
+reveal_type(anonymous)  # revealed: def anonymous(fn: (*, a: int, **kwargs: object) -> None)
 ```
 
 ## `(**P)` unpacks a protocol's data members

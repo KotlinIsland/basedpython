@@ -877,7 +877,7 @@ def f3(coinflip: bool):
     # error: [invalid-argument-type] "Argument to function `f2` is incorrect: Expected `bool`, found `Literal[True] | tuple[Literal[True]]`"
     f2(*other_args)
 
-def f4(a=None, b=None, c=None, d=None, e=None): ...
+def f4(a: object = None, b: object = None, c: object = None, d: object = None, e: object = None): ...
 
 my_args = ((1, 2), (3, 4), (5, 6))
 

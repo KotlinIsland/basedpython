@@ -9,7 +9,7 @@ parameter
 
 ```by
 def f(_, _):
-    reveal_type(_)  # revealed: Unknown
+    reveal_type(_)  # revealed: _@f
 
 def g(_, _, _, x: int):
     reveal_type(x)  # revealed: int

@@ -133,7 +133,7 @@ to `Never` under `out`, so no argument can be written:
 
 ```by
 def f(a: list[out int | str]):
-    reveal_type(a.append)  # revealed: bound method list[out int | str].append(object: Never, /) -> None
+    reveal_type(a.append)  # revealed: bound method list[out int | str].append(object: Never, /)
     # error: [invalid-argument-type] "Argument to bound method `list.append` is incorrect: Expected `Never`, found `"a"`"
     a.append("a")
     # even a value of the element type is rejected — an `out` view writes nothing
@@ -166,7 +166,7 @@ Union element types are consumed whole:
 
 ```by
 def f(a: list[in int | str]):
-    reveal_type(a.append)  # revealed: bound method list[in int | str].append(object: int | str, /) -> None
+    reveal_type(a.append)  # revealed: bound method list[in int | str].append(object: int | str, /)
     a.append(1)  # ok
     a.append("ok")  # ok
     # error: [invalid-argument-type] "Argument to bound method `list.append` is incorrect: Expected `int | str`, found `b"bad"`"

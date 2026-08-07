@@ -161,56 +161,56 @@ info: First overload defined here
   | |____________________________________^ First overload defined here
   |
 info: Possible overloads for function `foo`:
-info:   (a: int, b: int, c: int) -> Unknown
-info:   (a: str, b: int, c: int) -> Unknown
-info:   (a: int, b: str, c: int) -> Unknown
-info:   (a: int, b: int, c: str) -> Unknown
-info:   (a: str, b: str, c: int) -> Unknown
-info:   (a: int, b: str, c: str) -> Unknown
-info:   (a: str, b: str, c: str) -> Unknown
-info:   (a: int, b: int, c: int) -> Unknown
-info:   (a: int | float, b: int, c: int) -> Unknown
-info:   (a: int, b: int | float, c: int) -> Unknown
-info:   (a: int, b: int, c: int | float) -> Unknown
-info:   (a: int | float, b: int | float, c: int) -> Unknown
-info:   (a: int, b: int | float, c: int | float) -> Unknown
-info:   (a: int | float, b: int | float, c: int | float) -> Unknown
-info:   (a: str, b: str, c: str) -> Unknown
-info:   (a: int | float, b: str, c: str) -> Unknown
-info:   (a: str, b: int | float, c: str) -> Unknown
-info:   (a: str, b: str, c: int | float) -> Unknown
-info:   (a: int | float, b: int | float, c: str) -> Unknown
-info:   (a: str, b: int | float, c: int | float) -> Unknown
-info:   (a: int | float, b: int | float, c: int | float) -> Unknown
-info:   (a: list[int], b: list[int], c: list[int]) -> Unknown
-info:   (a: list[str], b: list[int], c: list[int]) -> Unknown
-info:   (a: list[int], b: list[str], c: list[int]) -> Unknown
-info:   (a: list[int], b: list[int], c: list[str]) -> Unknown
-info:   (a: list[str], b: list[str], c: list[int]) -> Unknown
-info:   (a: list[int], b: list[str], c: list[str]) -> Unknown
-info:   (a: list[str], b: list[str], c: list[str]) -> Unknown
-info:   (a: list[int], b: list[int], c: list[int]) -> Unknown
-info:   (a: list[int | float], b: list[int], c: list[int]) -> Unknown
-info:   (a: list[int], b: list[int | float], c: list[int]) -> Unknown
-info:   (a: list[int], b: list[int], c: list[int | float]) -> Unknown
-info:   (a: list[int | float], b: list[int | float], c: list[int]) -> Unknown
-info:   (a: list[int], b: list[int | float], c: list[int | float]) -> Unknown
-info:   (a: list[int | float], b: list[int | float], c: list[int | float]) -> Unknown
-info:   (a: list[str], b: list[str], c: list[str]) -> Unknown
-info:   (a: list[int | float], b: list[str], c: list[str]) -> Unknown
-info:   (a: list[str], b: list[int | float], c: list[str]) -> Unknown
-info:   (a: list[str], b: list[str], c: list[int | float]) -> Unknown
-info:   (a: list[int | float], b: list[int | float], c: list[str]) -> Unknown
-info:   (a: list[str], b: list[int | float], c: list[int | float]) -> Unknown
-info:   (a: list[int | float], b: list[int | float], c: list[int | float]) -> Unknown
-info:   (a: bool, b: bool, c: bool) -> Unknown
-info:   (a: str, b: bool, c: bool) -> Unknown
-info:   (a: bool, b: str, c: bool) -> Unknown
-info:   (a: bool, b: bool, c: str) -> Unknown
-info:   (a: str, b: str, c: bool) -> Unknown
-info:   (a: bool, b: str, c: str) -> Unknown
-info:   (a: str, b: str, c: str) -> Unknown
-info:   (a: int, b: int, c: int) -> Unknown
+info:   (a: int, b: int, c: int) -> None
+info:   (a: str, b: int, c: int) -> None
+info:   (a: int, b: str, c: int) -> None
+info:   (a: int, b: int, c: str) -> None
+info:   (a: str, b: str, c: int) -> None
+info:   (a: int, b: str, c: str) -> None
+info:   (a: str, b: str, c: str) -> None
+info:   (a: int, b: int, c: int) -> None
+info:   (a: int | float, b: int, c: int) -> None
+info:   (a: int, b: int | float, c: int) -> None
+info:   (a: int, b: int, c: int | float) -> None
+info:   (a: int | float, b: int | float, c: int) -> None
+info:   (a: int, b: int | float, c: int | float) -> None
+info:   (a: int | float, b: int | float, c: int | float) -> None
+info:   (a: str, b: str, c: str) -> None
+info:   (a: int | float, b: str, c: str) -> None
+info:   (a: str, b: int | float, c: str) -> None
+info:   (a: str, b: str, c: int | float) -> None
+info:   (a: int | float, b: int | float, c: str) -> None
+info:   (a: str, b: int | float, c: int | float) -> None
+info:   (a: int | float, b: int | float, c: int | float) -> None
+info:   (a: list[int], b: list[int], c: list[int]) -> None
+info:   (a: list[str], b: list[int], c: list[int]) -> None
+info:   (a: list[int], b: list[str], c: list[int]) -> None
+info:   (a: list[int], b: list[int], c: list[str]) -> None
+info:   (a: list[str], b: list[str], c: list[int]) -> None
+info:   (a: list[int], b: list[str], c: list[str]) -> None
+info:   (a: list[str], b: list[str], c: list[str]) -> None
+info:   (a: list[int], b: list[int], c: list[int]) -> None
+info:   (a: list[int | float], b: list[int], c: list[int]) -> None
+info:   (a: list[int], b: list[int | float], c: list[int]) -> None
+info:   (a: list[int], b: list[int], c: list[int | float]) -> None
+info:   (a: list[int | float], b: list[int | float], c: list[int]) -> None
+info:   (a: list[int], b: list[int | float], c: list[int | float]) -> None
+info:   (a: list[int | float], b: list[int | float], c: list[int | float]) -> None
+info:   (a: list[str], b: list[str], c: list[str]) -> None
+info:   (a: list[int | float], b: list[str], c: list[str]) -> None
+info:   (a: list[str], b: list[int | float], c: list[str]) -> None
+info:   (a: list[str], b: list[str], c: list[int | float]) -> None
+info:   (a: list[int | float], b: list[int | float], c: list[str]) -> None
+info:   (a: list[str], b: list[int | float], c: list[int | float]) -> None
+info:   (a: list[int | float], b: list[int | float], c: list[int | float]) -> None
+info:   (a: bool, b: bool, c: bool) -> None
+info:   (a: str, b: bool, c: bool) -> None
+info:   (a: bool, b: str, c: bool) -> None
+info:   (a: bool, b: bool, c: str) -> None
+info:   (a: str, b: str, c: bool) -> None
+info:   (a: bool, b: str, c: str) -> None
+info:   (a: str, b: str, c: str) -> None
+info:   (a: int, b: int, c: int) -> None
 info: ... omitted 11 overloads
 info: Overload implementation defined here
    --> src/mdtest_snippet.py:127:5

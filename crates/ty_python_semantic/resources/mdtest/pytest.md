@@ -277,8 +277,8 @@ def test_it(number, renamed, yielded, from_conftest, untyped, missing) -> None: 
     reveal_type(renamed)  # revealed: str
     reveal_type(yielded)  # revealed: bool
     reveal_type(from_conftest)  # revealed: bytes
-    reveal_type(untyped)  # revealed: Unknown
-    reveal_type(missing)  # revealed: Unknown
+    reveal_type(untyped)  # revealed: object
+    reveal_type(missing)  # revealed: missing@test_it
 ```
 
 ## A fixture's own parameters take fixture types
@@ -406,11 +406,11 @@ def value() -> int:
 @pytest.mark.parametrize("value", ["a", "b"])
 def test_it(value) -> None:
     # supplied by the marker, so the same-named fixture does not apply
-    reveal_type(value)  # revealed: Unknown
+    reveal_type(value)  # revealed: value@test_it
 
 @pytest.mark.parametrize("other", ["a", "b"])
 def test_mixed(other, value) -> None:
-    reveal_type(other)  # revealed: Unknown
+    reveal_type(other)  # revealed: other@test_mixed
     reveal_type(value)  # revealed: int
 ```
 
@@ -462,7 +462,7 @@ def number() -> int:
 
 # a helper, not a test: pytest never calls it, so `number` is an ordinary parameter
 def helper(number) -> None:
-    reveal_type(number)  # revealed: Unknown
+    reveal_type(number)  # revealed: number@helper
 
 def test_it() -> None:
     helper("anything")

@@ -46,6 +46,16 @@ impl<'db> Type<'db> {
         }
     }
 
+    /// basedpython: whether this is the anonymous type parameter an unannotated parameter opens
+    /// under `sound-types`, rather than a type anybody wrote.
+    pub(crate) fn is_inferred_parameter_hole(self, db: &'db dyn Db) -> bool {
+        matches!(
+            self,
+            Type::TypeVar(bound_typevar)
+                if bound_typevar.typevar(db).kind(db) == TypeVarKind::InferredParameter
+        )
+    }
+
     pub(crate) fn has_typevar(self, db: &'db dyn Db) -> bool {
         any_over_type(db, self, false, |ty| matches!(ty, Type::TypeVar(_)))
     }
@@ -670,6 +680,11 @@ impl<'db> TypeVarInstance<'db> {
                 let expr = &call_expr.arguments.find_keyword("bound")?.value;
                 definition_expression_type(db, definition, expr)
             }
+            // basedpython: an unannotated parameter's hole is bounded by everything the
+            // function requires of it, which is read out of the body it is used in
+            DefinitionKind::Parameter(_) => {
+                crate::types::inferred_signature::inferred_parameter_bound(db, definition)
+            }
             _ => return None,
         };
 
@@ -699,14 +714,17 @@ impl<'db> TypeVarInstance<'db> {
             .is_some_and(|bound| matches!(bound, ast::Expr::Starred(_)))
     }
 
-    /// basedpython: whether this parameter is the anonymous hole a `some T` annotation
-    /// declares, rather than an entry someone wrote in a `[...]` list.
+    /// basedpython: whether this parameter is an anonymous hole rather than an entry someone
+    /// wrote in a `[...]` list — the one a `some T` annotation declares, or the one an
+    /// unannotated parameter opens under `sound-types`.
     ///
-    /// A hole is not a supplyable position — it takes the name of the parameter whose
-    /// annotation opened it — so anything that offers or reads back a type parameter list has
-    /// to leave it out.
+    /// A hole is not a supplyable position — it takes the name of the parameter that opened
+    /// it — so anything that offers or reads back a type parameter list has to leave it out.
     #[salsa::tracked(returns(copy), heap_size=ruff_memory_usage::heap_size)]
     pub(crate) fn is_some_hole(self, db: &'db dyn Db) -> bool {
+        if self.kind(db) == TypeVarKind::InferredParameter {
+            return true;
+        }
         let Some(definition) = self.definition(db) else {
             return false;
         };
@@ -871,6 +889,11 @@ impl<'db> TypeVarInstance<'db> {
             DefinitionKind::TypeVarTuple(typevartuple) => {
                 let typevartuple_node = typevartuple.node(&module);
                 definition_expression_type(db, definition, typevartuple_node.default.as_ref()?)
+            }
+            // basedpython: an unannotated parameter's hole defaults to the parameter's own
+            // default value, so a call that omits the argument still names its type
+            DefinitionKind::Parameter(_) => {
+                crate::types::inferred_signature::inferred_parameter_default(db, definition)?
             }
             _ => return None,
         };
@@ -1733,6 +1756,12 @@ pub enum TypeVarKind {
     Pep695KeywordVariadic,
     /// `Alias: typing.TypeAlias = T`
     Pep613Alias,
+    /// basedpython: the anonymous type parameter an unannotated `def f(x)` parameter opens
+    /// under `sound-types`.
+    ///
+    /// It is a `some` hole that nobody wrote: named after the parameter, bound by whatever the
+    /// function turns out to require of it, and defaulted to the parameter's default value.
+    InferredParameter,
 }
 
 impl TypeVarKind {

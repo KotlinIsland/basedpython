@@ -233,11 +233,11 @@ target: Callable[[int, bytes], bool] = source  # snapshot
 ```
 
 ```snapshot
-error[invalid-assignment]: Object of type `def source(x: int, y: str) -> None` is not assignable to `(int, bytes, /) -> bool`
+error[invalid-assignment]: Object of type `def source(x: int, y: str)` is not assignable to `(int, bytes, /) -> bool`
  --> src/mdtest_snippet.py:6:9
   |
 6 | target: Callable[[int, bytes], bool] = source  # snapshot
-  |         ----------------------------   ^^^^^^ Incompatible value of type `def source(x: int, y: str) -> None`
+  |         ----------------------------   ^^^^^^ Incompatible value of type `def source(x: int, y: str)`
   |         |
   |         Declared type
   |

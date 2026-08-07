@@ -308,7 +308,9 @@ def not_that_value[I: int](i: I) -> (I + 1) | None:
 unannotated helper unusable in symbolic code.
 
 ```by
-def unannotated(x):
+from ty_extensions import Unknown
+
+def unannotated(x) -> Unknown:
     return x
 
 def gradual[I: int](i: I) -> I + 1:

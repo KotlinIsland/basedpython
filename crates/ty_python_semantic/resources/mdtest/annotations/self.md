@@ -152,11 +152,11 @@ class A:
             reveal_type(self)  # revealed: Self@method_a
 
         def first_param_is_not_self_unannotated(a):
-            reveal_type(a)  # revealed: Unknown
+            reveal_type(a)  # revealed: a@first_param_is_not_self_unannotated
             reveal_type(self)  # revealed: Self@method_a
 
         def first_param_is_also_not_self(self) -> None:
-            reveal_type(self)  # revealed: Unknown
+            reveal_type(self)  # revealed: self@first_param_is_also_not_self
 
         def first_param_is_explicit_self(this: Self) -> None:
             reveal_type(this)  # revealed: Self@method_a
@@ -245,17 +245,17 @@ class B:
     @staticmethod
     def static_method(self):
         # The parameter can be called `self`, but it is not treated as `Self`
-        reveal_type(self)  # revealed: Unknown
+        reveal_type(self)  # revealed: self@static_method
 
     @staticmethod
     @some_decorator
     def decorated_static_method(self):
-        reveal_type(self)  # revealed: Unknown
+        reveal_type(self)  # revealed: self@decorated_static_method
     # TODO: On Python <3.10, this should ideally be rejected, because `staticmethod` objects were not callable.
     @some_decorator
     @staticmethod
     def decorated_static_method_2(self):
-        reveal_type(self)  # revealed: Unknown
+        reveal_type(self)  # revealed: self@decorated_static_method_2
 
 reveal_type(B().name_does_not_matter())  # revealed: B
 reveal_type(B().positional_only(1))  # revealed: B
@@ -289,7 +289,7 @@ Free functions and nested functions do not use implicit `Self`:
 
 ```py
 def not_a_method(self):
-    reveal_type(self)  # revealed: Unknown
+    reveal_type(self)  # revealed: self@not_a_method
 
 # error: [invalid-type-form]
 def does_not_return_self(self) -> Self:
@@ -298,9 +298,9 @@ def does_not_return_self(self) -> Self:
 class C:
     def outer(self) -> None:
         def inner(self):
-            reveal_type(self)  # revealed: Unknown
+            reveal_type(self)  # revealed: self@inner
 
-reveal_type(not_a_method)  # revealed: def not_a_method(self) -> Unknown
+reveal_type(not_a_method)  # revealed: def not_a_method(self)
 ```
 
 ## Different occurrences of `Self` represent different types

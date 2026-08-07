@@ -186,6 +186,7 @@ Settings: Settings {
         },
         disable_fluid_specializations: false,
         sound_types: false,
+        infer_unannotated_signatures: true,
         bivariant_private_attributes: true,
         precise_unsolved_typevars: true,
         overlapping_condition_exempt_types: [],

@@ -94,9 +94,10 @@ class Foo(metaclass=Meta):
     def __init__(self, x: int) -> None:
         pass
 
-# No return type annotation means we fall through to check __init__ parameters.
-Foo()  # error: [missing-argument]
-reveal_type(Foo(1))  # revealed: Foo
+# basedpython: the metaclass `__call__` has its return type recovered from its body, so that is
+# what a call gives and `__init__` is not consulted
+Foo()  # ok
+reveal_type(Foo(1))  # revealed: Any
 ```
 
 ### Metaclass `__call__` with specific parameters

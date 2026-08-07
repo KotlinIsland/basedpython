@@ -302,7 +302,7 @@ def random() -> bool:
 foo = None
 Bar = None
 while random():
-    reveal_type(foo)  # revealed: None | (def foo() -> None)
+    reveal_type(foo)  # revealed: None | (def foo())
     reveal_type(Bar)  # revealed: None | <class 'Bar'>
 
     def foo() -> None: ...

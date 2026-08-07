@@ -14,13 +14,13 @@ a dictionary from strings to its annotated type.
 from typing import Literal
 
 def f(a, b: int, c=1, d: int = 2, /, e=3, f: Literal[4] = 4, *args: object, g=5, h: Literal[6] = 6, **kwargs: str):
-    reveal_type(a)  # revealed: Unknown
+    reveal_type(a)  # revealed: a@f
     reveal_type(b)  # revealed: int
-    reveal_type(c)  # revealed: Unknown | Literal[1]
+    reveal_type(c)  # revealed: c@f
     reveal_type(d)  # revealed: int
-    reveal_type(e)  # revealed: Unknown | Literal[3]
+    reveal_type(e)  # revealed: e@f
     reveal_type(f)  # revealed: Literal[4]
-    reveal_type(g)  # revealed: Unknown | Literal[5]
+    reveal_type(g)  # revealed: g@f
     reveal_type(h)  # revealed: Literal[6]
     reveal_type(args)  # revealed: tuple[object, ...]
     reveal_type(kwargs)  # revealed: dict[str, str]
