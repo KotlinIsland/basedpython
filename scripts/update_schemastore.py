@@ -56,9 +56,7 @@ class GitProtocol(enum.Enum):
                 assert_never(self)
 
 
-def update_schemastore(
-    schemastore_path: Path, schemastore_repos: SchemastoreRepos
-) -> None:
+def update_schemastore(schemastore_path: Path, schemastore_repos: SchemastoreRepos):
     if not (schemastore_path / ".git").is_dir():
         check_call(
             ["git", "clone", schemastore_repos.fork, schemastore_path, "--depth=1"]
@@ -154,7 +152,7 @@ def determine_git_protocol(argv: list[str] | None = None) -> GitProtocol:
     return GitProtocol(args.proto)
 
 
-def main() -> None:
+def main():
     schemastore_repos = determine_git_protocol().schemastore_repos()
     schemastore_existing = RUFF_ROOT / "schemastore"
     if schemastore_existing.is_dir():

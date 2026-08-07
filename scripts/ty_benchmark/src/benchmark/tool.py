@@ -29,7 +29,7 @@ class Tool(abc.ABC):
     @abc.abstractmethod
     def name(self) -> str: ...
 
-    def write_config(self, project: Project, venv: Venv) -> None:
+    def write_config(self, project: Project, venv: Venv):
         """Write the tool's configuration file."""
 
         if config := self.config(project, venv):

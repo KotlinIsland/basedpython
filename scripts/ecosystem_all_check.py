@@ -24,7 +24,7 @@ class Repository(NamedTuple):
     ref: str | None
 
 
-def main() -> None:
+def main():
     ruff_args = sys.argv[1:]
     checkouts = Path("checkouts")
     out_dir = Path("ecosystem_all_results")

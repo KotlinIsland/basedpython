@@ -35,6 +35,9 @@ enable_error_code = "ignore-without-code,redundant-expr,truthy-bool"
 [tool.ty.rules]
 possibly-unresolved-reference = "error"
 unused-ignore-comment = "error"
+# mypy checks this project too, in strict mode, where `no-untyped-def` requires
+# the `-> None` ty reads off the body. mypy wins here — it cannot infer it
+redundant-return-annotation = "ignore"
 
 [tool.ruff]
 fix = true

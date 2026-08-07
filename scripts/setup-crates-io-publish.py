@@ -92,7 +92,7 @@ def load_known_crates() -> set[str]:
     return known
 
 
-def save_known_crates(crates: set[str]) -> None:
+def save_known_crates(crates: set[str]):
     """Persist the sorted set of fully-configured crate names."""
     lines = [KNOWN_CRATES_HEADER]
     for name in sorted(crates):
@@ -188,7 +188,7 @@ def publish_placeholder_crate(
         return True
 
 
-def create_trusted_publisher(client: httpx.Client, crate_name: str) -> None:
+def create_trusted_publisher(client: httpx.Client, crate_name: str):
     """Create a Trusted Publishing GitHub config for *crate_name*."""
     response = client.post(
         f"{CRATES_IO_API}/trusted_publishing/github_configs",
@@ -218,7 +218,7 @@ def list_trusted_publishers(
     return payload.get("github_configs", [])
 
 
-def delete_trusted_publisher(client: httpx.Client, config_id: int) -> None:
+def delete_trusted_publisher(client: httpx.Client, config_id: int):
     """Delete a Trusted Publishing GitHub config by ID."""
     response = client.delete(
         f"{CRATES_IO_API}/trusted_publishing/github_configs/{config_id}"
@@ -226,7 +226,7 @@ def delete_trusted_publisher(client: httpx.Client, config_id: int) -> None:
     response.raise_for_status()
 
 
-def set_trustpub_only(client: httpx.Client, crate_name: str, enabled: bool) -> None:
+def set_trustpub_only(client: httpx.Client, crate_name: str, enabled: bool):
     """Enable or disable `trustpub_only` for a crate."""
     response = client.patch(
         f"{CRATES_IO_API}/crates/{crate_name}",
@@ -273,7 +273,7 @@ def handle_trusted_publisher_error(exc: httpx.HTTPStatusError) -> None:
     sys.exit(1)
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser(
         description="Ensure workspace crates are ready for trusted publishing on crates.io."
     )

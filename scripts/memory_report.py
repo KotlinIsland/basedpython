@@ -272,7 +272,7 @@ def run_ty_memory_check(
     ty_path: str,
     project_path: Path,
     output_path: Path,
-) -> None:
+):
     """Run ty on a project and capture memory report to a file."""
     env = os.environ.copy()
     env["TY_MEMORY_REPORT"] = "json"
@@ -296,7 +296,7 @@ def run_memory_tests(
     projects_dir: Path,
     old_reports_dir: Path,
     new_reports_dir: Path,
-) -> None:
+):
     """Run memory tests for all projects with both ty versions."""
     old_reports_dir.mkdir(parents=True, exist_ok=True)
     new_reports_dir.mkdir(parents=True, exist_ok=True)
@@ -317,7 +317,7 @@ def run_memory_tests(
         )
 
 
-def cmd_compare(args: argparse.Namespace) -> None:
+def cmd_compare(args: argparse.Namespace):
     """Handle the 'compare' subcommand."""
     comparisons = []
 
@@ -368,7 +368,7 @@ def cmd_compare(args: argparse.Namespace) -> None:
         print(rendered)
 
 
-def cmd_run(args: argparse.Namespace) -> None:
+def cmd_run(args: argparse.Namespace):
     """Handle the 'run' subcommand."""
     with tempfile.TemporaryDirectory() as tmpdir:
         # Set up directories
@@ -491,7 +491,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> None:
+def main():
     args = parse_args()
 
     match args.command:

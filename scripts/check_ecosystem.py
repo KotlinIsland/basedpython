@@ -352,7 +352,7 @@ async def main(
     ruff2: Path,
     projects_jsonl: Path | None,
     checkouts: Path | None = None,
-) -> None:
+):
     """Check two versions of ruff against a corpus of open-source code."""
     if projects_jsonl:
         repositories = read_projects_jsonl(projects_jsonl)

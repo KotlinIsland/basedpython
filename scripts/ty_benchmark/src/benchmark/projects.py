@@ -34,7 +34,7 @@ class Project(NamedTuple):
 
     edit: IncrementalEdit | None = None
 
-    def clone(self, checkout_dir: Path) -> None:
+    def clone(self, checkout_dir: Path):
         # Skip cloning if the project has already been cloned (the script doesn't yet support updating)
         if (checkout_dir / ".git").exists():
             return

@@ -52,7 +52,7 @@ def builtin_modules_on_version(minor_version: int) -> set[str]:
     return set(eval(run(command_2)))
 
 
-def generate_module() -> None:
+def generate_module():
     with MODULE_PATH.open("w") as f:
         print = partial(builtins.print, file=f)
 

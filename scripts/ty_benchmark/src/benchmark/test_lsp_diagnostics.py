@@ -129,10 +129,10 @@ def run_benchmark(
                 runner.run(test.setup())
                 return (test,), {}
 
-            def run(test: LspTest) -> None:
+            def run(test: LspTest):
                 runner.run(test.run())
 
-            def teardown(test: LspTest) -> None:
+            def teardown(test: LspTest):
                 nonlocal verbose
 
                 test.assert_output(verbose=verbose)
@@ -474,7 +474,7 @@ def print_diagnostic_diff(
     project_name: str,
     tool_name: str,
     cwd: Path,
-) -> None:
+):
     """Print the difference in diagnostics before and after a change."""
 
     added = diff_diagnostics(before_diagnostics, after_diagnostics)

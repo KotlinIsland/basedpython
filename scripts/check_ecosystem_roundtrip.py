@@ -276,7 +276,7 @@ def collect_outputs(out_dir: Path) -> dict[str, bytes]:
     return outputs
 
 
-async def reset_project(root: Path) -> None:
+async def reset_project(root: Path):
     """Restore pristine source for the next binary: bring back the tracked
     `.py` files reverse deleted and drop the generated `.by`/`out`. Keep the
     venv (if any). The clones are git repos, so this is cheap."""

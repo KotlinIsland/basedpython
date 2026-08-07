@@ -89,7 +89,7 @@ def format_confusables_rs(raw_data: dict[str, list[int]]) -> str:
     return prelude + "".join(tuples) + postlude
 
 
-def main() -> None:
+def main():
     print("Retrieving data...")
     mapping_data = get_mapping_data()
     formatted_data = format_confusables_rs(mapping_data)
