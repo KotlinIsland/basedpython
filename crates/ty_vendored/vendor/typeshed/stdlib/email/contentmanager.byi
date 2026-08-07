@@ -3,7 +3,7 @@ from email.message import Message
 class ContentManager:
     def get_content(self, msg: Message, *args: dynamic, **kw: dynamic) -> dynamic
     def set_content(self, msg: Message, obj: dynamic, *args: dynamic, **kw: dynamic) -> dynamic
-    def add_get_handler(self, key: str, handler: (...) -> dynamic) -> None
-    def add_set_handler(self, typekey: type, handler: (...) -> dynamic) -> None
+    def add_get_handler(self, key: str, handler: (...) -> dynamic)
+    def add_set_handler(self, typekey: type, handler: (...) -> dynamic)
 
 raw_data_manager: ContentManager

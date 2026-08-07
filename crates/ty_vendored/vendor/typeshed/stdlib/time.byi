@@ -148,7 +148,7 @@ def mktime(time_tuple: _TimeTuple | struct_time, /) -> float:
     of the timezone or altzone attributes on the time module.
     """
 
-def sleep(seconds: _SupportsFloatOrIndex, /) -> None:
+def sleep(seconds: _SupportsFloatOrIndex, /):
     """sleep(seconds)
 
     Delay execution for a given number of seconds.  The argument may be
@@ -219,7 +219,7 @@ def time() -> float:
     """
 
 if sys.platform != "win32":
-    def tzset() -> None:  # Unix only
+    def tzset():  # Unix only
         """tzset()
 
         Initialize, or reinitialize, the local timezone to the value stored in
@@ -274,7 +274,7 @@ if sys.platform != "win32":
     def clock_gettime(clk_id: int, /) -> float:  # Unix only
         """Return the time of the specified clock clk_id as a float."""
 
-    def clock_settime(clk_id: int, time: float, /) -> None:  # Unix only
+    def clock_settime(clk_id: int, time: float, /):  # Unix only
         """clock_settime(clk_id, time)
 
         Set the time of the specified clock clk_id.

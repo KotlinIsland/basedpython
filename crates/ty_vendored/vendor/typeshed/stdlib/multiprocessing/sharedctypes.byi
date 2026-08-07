@@ -94,7 +94,7 @@ class SynchronizedBase[in out CT: _CData]:
     def __enter__(self) -> bool
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None, /
-    ) -> None
+    )
 
 class Synchronized[in out Element](SynchronizedBase[_SimpleCData[Element]]):
     value: Element
@@ -109,7 +109,7 @@ class SynchronizedArray[in out Element](SynchronizedBase[ctypes.Array[_SimpleCDa
     def __setitem__(self, i: SupportsIndex, value: Element) -> None
 
     def __getslice__(self, start: SupportsIndex, stop: SupportsIndex) -> list[Element]
-    def __setslice__(self, start: SupportsIndex, stop: SupportsIndex, values: Iterable[Element]) -> None
+    def __setslice__(self, start: SupportsIndex, stop: SupportsIndex, values: Iterable[Element])
 
 class SynchronizedString(SynchronizedArray[bytes]):
     override def __getitem__(self, i: slice[SupportsIndex | None]) -> bytes

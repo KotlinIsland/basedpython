@@ -170,7 +170,7 @@ def register_dialect(
     lineterminator: str = "\r\n",
     quoting: _QuotingType = 0,
     strict: bool = False,
-) -> None:
+):
     """Create a mapping from a string name to a CVS dialect.
 
     The optional "dialect" argument specifies the base dialect instance
@@ -179,7 +179,7 @@ def register_dialect(
     dialect.
     """
 
-def unregister_dialect(name: str) -> None:
+def unregister_dialect(name: str):
     """Delete the name/dialect mapping associated with a string name."""
 
 def get_dialect(name: str) -> Dialect:

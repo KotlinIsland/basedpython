@@ -123,7 +123,7 @@ class Morsel[in out Element](dict[str, dynamic]):
     let coded_value: Element | MaybeNone
     let key: str | MaybeNone
     init(self)
-    def set(self, key: str, val: str, coded_val: Element) -> None
+    def set(self, key: str, val: str, coded_val: Element)
     override def setdefault(self, key: str, val: str | None = None) -> str
     # The dict update can also get a keywords argument so this is incompatible
     override def update(self, values: Iterable[(str, str)] | SupportsKeysAndGetItem[str, str]) -> None
@@ -167,7 +167,7 @@ class BaseCookie[in out Element](dict[str, Morsel[Element]]):
     def js_output(self, attrs: Container[str] | None = None) -> str:
         """Return a string suitable for JavaScript."""
 
-    def load(self, rawdata: str | SupportsItems[str, str | Morsel[dynamic]]) -> None:
+    def load(self, rawdata: str | SupportsItems[str, str | Morsel[dynamic]]):
         """Load cookies from a string (presumably HTTP_COOKIE) or
         from a dictionary.  Loading cookies from a dictionary 'd'
         is equivalent to calling:

@@ -44,7 +44,7 @@ class CoverageResults:
         callers: dict[(FileModuleFunction, FileModuleFunction), int] | None = None,
         outfile: StrPath | None = None,
     )  # undocumented
-    def update(self, other: CoverageResults) -> None:
+    def update(self, other: CoverageResults):
         """Merge in the data from another CoverageResults"""
 
     if sys.version_info >= (3, 13):
@@ -136,25 +136,25 @@ class Trace:
         @param timing true iff timing information be displayed
         """
 
-    def run(self, cmd: str | types.CodeType) -> None
+    def run(self, cmd: str | types.CodeType)
     def runctx(
         self, cmd: str | types.CodeType, globals: Mapping[str, dynamic] | None = None, locals: Mapping[str, dynamic] | None = None
-    ) -> None
+    )
     def runfunc[Parameters: (*: *, **: *), Element](self, func: (**Parameters) -> Element, /, *args: Parameters.args, **kw: Parameters.kwargs) -> Element
     def file_module_function_of(self, frame: types.FrameType) -> FileModuleFunction
-    def globaltrace_trackcallers(self, frame: types.FrameType, why: str, arg: dynamic) -> None:
+    def globaltrace_trackcallers(self, frame: types.FrameType, why: str, arg: dynamic):
         """Handler for call events.
 
         Adds information about who called who to the self._callers dict.
         """
 
-    def globaltrace_countfuncs(self, frame: types.FrameType, why: str, arg: dynamic) -> None:
+    def globaltrace_countfuncs(self, frame: types.FrameType, why: str, arg: dynamic):
         """Handler for call events.
 
         Adds (filename, modulename, funcname) to the self._calledfuncs dict.
         """
 
-    def globaltrace_lt(self, frame: types.FrameType, why: str, arg: dynamic) -> None:
+    def globaltrace_lt(self, frame: types.FrameType, why: str, arg: dynamic):
         """Handler for call events.
 
         If the code block being entered is to be ignored, returns 'None',

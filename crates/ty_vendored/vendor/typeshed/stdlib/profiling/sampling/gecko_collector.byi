@@ -53,19 +53,19 @@ class SpillColumn:
 
     init(self, directory: StrPath, basename: StrPath, *, buffer_bytes: int | None = None)
     # "value" accepts the same types as json.JSONEncoder.encode()
-    def append(self, value: dynamic) -> None
-    def flush(self) -> None
+    def append(self, value: dynamic)
+    def flush(self)
     def iter_tokens(self) -> Generator[str]
 
 class GeckoThreadSpill:
     sample_count: int
     marker_count: int
     init(self, directory: StrPath, tid: int)
-    def append_sample(self, stack_index: int, time_ms: float) -> None
+    def append_sample(self, stack_index: int, time_ms: float)
     def append_marker(
         self, name_idx: int, start_time: float, end_time: float, phase: int, category: int, data: dict[str, dynamic]
-    ) -> None
-    def prepare_read(self) -> None
+    )
+    def prepare_read(self)
 
 class GeckoCollector(Collector):
     aggregating: ClassVar[bool]
@@ -105,7 +105,7 @@ class GeckoCollector(Collector):
     opcode_state: dict[int, (Incomplete, int, int, str, str, float)]
 
     init(self, sample_interval_usec: int, *, skip_idle: bool = False, opcodes: bool = False)
-    def collect(self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None) -> None:
+    def collect(self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None):
         """Collect samples from stack frames.
 
         Args:
@@ -113,5 +113,5 @@ class GeckoCollector(Collector):
             timestamps_us: List of timestamps in microseconds (None for live sampling)
         """
 
-    def export(self, filename: StrOrBytesPath) -> None:
+    def export(self, filename: StrOrBytesPath):
         """Export the profile to a Gecko JSON file."""

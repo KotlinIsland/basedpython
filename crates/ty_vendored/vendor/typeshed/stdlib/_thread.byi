@@ -42,7 +42,7 @@ final class RLock:
         the lock is taken and its internal counter initialized to 1.
         """
 
-    def release(self) -> None:
+    def release(self):
         """Release the lock.
 
         Allows another thread that is blocked waiting for the lock
@@ -58,7 +58,7 @@ final class RLock:
     __enter__ = acquire
     """Lock the lock."""
 
-    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None:
+    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None):
         """Release the lock."""
 
     if sys.version_info >= (3, 14):
@@ -69,9 +69,9 @@ if sys.version_info >= (3, 13):
     final class _ThreadHandle:
         ident: int
 
-        def join(self, timeout: float | None = None, /) -> None
+        def join(self, timeout: float | None = None, /)
         def is_done(self) -> bool
-        def _set_done(self) -> None
+        def _set_done(self)
 
     def start_joinable_thread(
         function: () -> object, handle: _ThreadHandle | None = None, daemon: bool = True
@@ -111,7 +111,7 @@ if sys.version_info >= (3, 13):
             The blocking operation is interruptible.
             """
 
-        def release(self) -> None:
+        def release(self):
             """Release the lock.
 
             Allows another thread that is blocked waiting for
@@ -139,7 +139,7 @@ if sys.version_info >= (3, 13):
 
         def __exit__(
             self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
-        ) -> None:
+        ):
             """Release the lock."""
 
     LockType = lock
@@ -169,7 +169,7 @@ else:
             The blocking operation is interruptible.
             """
 
-        def release(self) -> None:
+        def release(self):
             """release()
             (release_lock() is an obsolete synonym)
 
@@ -230,7 +230,7 @@ else:
 
         def __exit__(
             self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
-        ) -> None:
+        ):
             """release()
             (release_lock() is an obsolete synonym)
 
@@ -257,7 +257,7 @@ def start_new[*Args](function: (*Args) -> object, args: (Unpack[Args],), /) -> i
 @deprecated("Obsolete synonym. Use `start_new_thread()` instead.")
 def start_new(function: (...) -> object, args: (*: dynamic), kwargs: dict[str, dynamic], /) -> int  # undocumented
 
-def interrupt_main(signum: signal.Signals = signal.SIGINT, /) -> None:
+def interrupt_main(signum: signal.Signals = signal.SIGINT, /):
     """Simulate the arrival of the given signal in the main thread,
     where the corresponding signal handler will be executed.
     If *signum* is omitted, SIGINT is assumed.
@@ -347,7 +347,7 @@ if sys.version_info >= (3, 12):
         """
 
 if sys.version_info >= (3, 14):
-    def set_name(name: str) -> None:
+    def set_name(name: str):
         """Set the name of the current thread."""
 
 @disjoint_base

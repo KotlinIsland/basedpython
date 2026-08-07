@@ -479,7 +479,7 @@ else:
         the disassembled code object.
         """
 
-def show_code(co: HaveCodeType, *, file: IO[str] | None = None) -> None:
+def show_code(co: HaveCodeType, *, file: IO[str] | None = None):
     """Print details of methods, functions, or code to *file*.
 
     If *file* is not provided, the output is printed on stdout.

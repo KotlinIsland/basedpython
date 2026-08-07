@@ -19,6 +19,6 @@ class FatalIncludeError(SyntaxError)
 def default_loader(href: FileDescriptorOrPath, parse: "xml", encoding: str | None = None) -> Element
 def default_loader(href: FileDescriptorOrPath, parse: "text", encoding: str | None = None) -> str
 
-def include(elem: Element, loader: Loader | None = None, base_url: str | None = None, max_depth: int | None = 6) -> None
+def include(elem: Element, loader: Loader | None = None, base_url: str | None = None, max_depth: int | None = 6)
 
 class LimitedRecursiveIncludeError(FatalIncludeError)

@@ -9,8 +9,8 @@ class PstatsCollector(Collector):
     init(self, sample_interval_usec: int, *, skip_idle: bool = False)
     def collect(
         self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None
-    ) -> None
-    def export(self, filename: StrOrBytesPath) -> None
-    def create_stats(self) -> None
-    def print_stats(self, sort: int = -1, limit: int | None = None, show_summary: bool = True, mode: int | None = None) -> None:
+    )
+    def export(self, filename: StrOrBytesPath)
+    def create_stats(self)
+    def print_stats(self, sort: int = -1, limit: int | None = None, show_summary: bool = True, mode: int | None = None):
         """Print formatted statistics to stdout."""

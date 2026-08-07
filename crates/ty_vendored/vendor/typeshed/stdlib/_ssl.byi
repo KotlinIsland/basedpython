@@ -51,7 +51,7 @@ class _CertInfo(TypedDict):
     caIssuers: NotRequired[(*: str) | None]
     crlDistributionPoints: NotRequired[(*: str) | None]
 
-def RAND_add(string: str | ReadableBuffer, entropy: float, /) -> None:
+def RAND_add(string: str | ReadableBuffer, entropy: float, /):
     """Mix string into the OpenSSL PRNG state.
 
     entropy (a float) is a lower bound on the entropy contained in
@@ -170,29 +170,29 @@ class _SSLContext:
     def get_ciphers(self) -> list[_Cipher]
     def load_cert_chain(
         self, certfile: StrOrBytesPath, keyfile: StrOrBytesPath | None = None, password: _PasswordType | None = None
-    ) -> None
-    def load_dh_params(self, path: str, /) -> None
+    )
+    def load_dh_params(self, path: str, /)
     def load_verify_locations(
         self,
         cafile: StrOrBytesPath | None = None,
         capath: StrOrBytesPath | None = None,
         cadata: str | ReadableBuffer | None = None,
-    ) -> None
+    )
     def session_stats(self) -> dict[str, int]
-    def set_ciphers(self, cipherlist: str, /) -> None
-    def set_default_verify_paths(self) -> None
-    def set_ecdh_curve(self, name: str, /) -> None
+    def set_ciphers(self, cipherlist: str, /)
+    def set_default_verify_paths(self)
+    def set_ecdh_curve(self, name: str, /)
     if sys.version_info >= (3, 15):
         def get_groups(self, *, include_aliases: bool = False) -> list[str]
-        def set_ciphersuites(self, ciphersuites: str, /) -> None
-        def set_client_sigalgs(self, sigalgslist: str, /) -> None
-        def set_groups(self, grouplist: str, /) -> None
-        def set_server_sigalgs(self, sigalgslist: str, /) -> None
+        def set_ciphersuites(self, ciphersuites: str, /)
+        def set_client_sigalgs(self, sigalgslist: str, /)
+        def set_groups(self, grouplist: str, /)
+        def set_server_sigalgs(self, sigalgslist: str, /)
     if sys.version_info >= (3, 13):
-        def set_psk_client_callback(self, callback: ((str | None) -> (str | None, bytes)) | None) -> None
+        def set_psk_client_callback(self, callback: ((str | None) -> (str | None, bytes)) | None)
         def set_psk_server_callback(
             self, callback: ((str | None) -> bytes) | None, identity_hint: str | None = None
-        ) -> None
+        )
 
 final class MemoryBIO:
     eof: bool
@@ -217,7 +217,7 @@ final class MemoryBIO:
         Returns the number of bytes written.
         """
 
-    def write_eof(self) -> None:
+    def write_eof(self):
         """Write an EOF marker to the memory BIO.
 
         When all data has been read, the "eof" property will be True.

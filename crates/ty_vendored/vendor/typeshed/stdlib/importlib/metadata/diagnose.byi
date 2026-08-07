@@ -1,2 +1,2 @@
-def inspect(path: str) -> None
-def run() -> None
+def inspect(path: str)
+def run()

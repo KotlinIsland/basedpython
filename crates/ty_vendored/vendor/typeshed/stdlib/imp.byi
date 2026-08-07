@@ -90,7 +90,7 @@ class NullImporter:
     """
 
     init(self, path: StrPath)
-    def find_module(self, fullname: dynamic) -> None:
+    def find_module(self, fullname: dynamic):
         """Always returns None."""
 
 # Technically, a text file has to support a slightly different set of operations than a binary file,

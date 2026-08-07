@@ -13,7 +13,7 @@ from ..cmd import Command
 
 extension_name_re: Incomplete
 
-def show_compilers() -> None
+def show_compilers()
 
 class build_ext(Command):
     description: str
@@ -45,7 +45,7 @@ class build_ext(Command):
     override def initialize_options(self) -> None
     override def finalize_options(self) -> None
     override def run(self) -> None
-    def check_extensions_list(self, extensions) -> None:
+    def check_extensions_list(self, extensions):
         """Ensure that the list of extensions (presumably provided as a
         command option 'extensions') is valid, i.e. it is a list of
         Extension objects.  We also support the old-style list of 2-tuples,
@@ -58,8 +58,8 @@ class build_ext(Command):
 
     def get_source_files(self)
     def get_outputs(self)
-    def build_extensions(self) -> None
-    def build_extension(self, ext) -> None
+    def build_extensions(self)
+    def build_extension(self, ext)
     def swig_sources(self, sources, extension):
         """Walk the list of source files in 'sources', looking for SWIG
         interface (.i) files.  Run SWIG on all that are found, and

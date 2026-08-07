@@ -65,9 +65,9 @@ class Chunk:
     def getsize(self) -> int:
         """Return the size of the current chunk."""
 
-    def close(self) -> None
+    def close(self)
     def isatty(self) -> bool
-    def seek(self, pos: int, whence: int = 0) -> None:
+    def seek(self, pos: int, whence: int = 0):
         """Seek to specified position into the chunk.
         Default position is 0 (start of chunk).
         If the file is not seekable, this will result in an error.
@@ -80,7 +80,7 @@ class Chunk:
         of the chunk.
         """
 
-    def skip(self) -> None:
+    def skip(self):
         """Skip the rest of the chunk.
         If you are not interested in the contents of the chunk,
         this method should be called so that the file points to

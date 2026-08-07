@@ -116,7 +116,7 @@ class TokenList(list[TokenList | Terminal]):
 
     let comments: list[str]
     def fold(self, *, policy: Policy) -> str
-    def pprint(self, indent: str = "") -> None
+    def pprint(self, indent: str = "")
     def ppstr(self, indent: str = "") -> str
 
 class WhiteSpaceTokenList(TokenList)
@@ -349,9 +349,9 @@ class Terminal(str):
     token_type: str
     defects: list[MessageDefect]
     def __new__(cls, value: str, token_type: str) -> Self
-    def pprint(self) -> None
+    def pprint(self)
     let all_defects: list[MessageDefect]
-    def pop_trailing_ws(self) -> None
+    def pop_trailing_ws(self)
     let comments: list[str]
     override def __getnewargs__(self) -> (str, str)
 

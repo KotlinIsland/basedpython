@@ -14,7 +14,7 @@ def spawn(
     search_path: bool | 0 | 1 = 1,
     verbose: bool | 0 | 1 = 0,
     dry_run: bool | 0 | 1 = 0,
-) -> None:
+):
     """Run another program, specified as a command list 'cmd', in a new process.
 
     'cmd' is just the argument list for the new process, ie.

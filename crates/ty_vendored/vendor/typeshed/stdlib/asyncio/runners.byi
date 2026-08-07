@@ -43,8 +43,8 @@ if sys.version_info >= (3, 11):
 
         init(self, *, debug: bool | None = None, loop_factory: (() -> AbstractEventLoop) | None = None)
         def __enter__(self) -> Self
-        def __exit__(self, exc_type: Unused, exc_val: Unused, exc_tb: Unused) -> None
-        def close(self) -> None:
+        def __exit__(self, exc_type: Unused, exc_val: Unused, exc_tb: Unused)
+        def close(self):
             """Shutdown and close event loop."""
 
         def get_loop(self) -> AbstractEventLoop:

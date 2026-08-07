@@ -52,10 +52,10 @@ if sys.platform != "win32":
     def LOG_UPTO(pri: int, /) -> int:
         """Calculates the mask for all priorities up to and including pri."""
 
-    def closelog() -> None:
+    def closelog():
         """Reset the syslog module values and call the system library closelog()."""
 
-    def openlog(ident: str = ..., logoption: int = 0, facility: int = ...) -> None:
+    def openlog(ident: str = ..., logoption: int = 0, facility: int = ...):
         """Set logging options of subsequent syslog() calls."""
 
     def setlogmask(maskpri: int, /) -> int:

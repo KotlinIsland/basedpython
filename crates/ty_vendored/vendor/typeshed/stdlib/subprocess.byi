@@ -127,7 +127,7 @@ class CompletedProcess[in out Element]:
     stdout: Element
     stderr: Element
     init(self, args: _CMD, returncode: int, stdout: Element | None = None, stderr: Element | None = None)
-    def check_returncode(self) -> None:
+    def check_returncode(self):
         """Raise CalledProcessError if the exit code is non-zero."""
 
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
@@ -1684,20 +1684,20 @@ class Popen(Generic[AnyStr]):
         universal_newlines.
         """
 
-    def send_signal(self, sig: int) -> None:
+    def send_signal(self, sig: int):
         """Send a signal to the process."""
 
-    def terminate(self) -> None:
+    def terminate(self):
         """Terminate the process with SIGTERM"""
 
-    def kill(self) -> None:
+    def kill(self):
         """Kill the process with SIGKILL"""
 
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
-    ) -> None
-    def __del__(self) -> None
+    )
+    def __del__(self)
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 

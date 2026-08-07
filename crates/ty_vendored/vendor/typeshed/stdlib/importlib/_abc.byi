@@ -48,4 +48,4 @@ class Loader(metaclass=ABCMeta):
 
     # Not defined on the actual class for backwards-compatibility reasons,
     # but expected in new code.
-    def exec_module(self, module: types.ModuleType) -> None
+    def exec_module(self, module: types.ModuleType)

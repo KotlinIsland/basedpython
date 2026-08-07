@@ -61,7 +61,7 @@ class BaseHeader(str):
     let name: str
     let defects: (*: MessageDefect)
     def __new__(cls, name: str, value: dynamic) -> Self
-    def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect]) -> None
+    def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect])
     def fold(self, *, policy: Policy) -> str:
         """Fold header according to policy.
 
@@ -101,7 +101,7 @@ class UnstructuredHeader:
 
         """
 
-    class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
+    class def parse(cls, value: str, kwds: dict[str, dynamic])
 
 class UniqueUnstructuredHeader(UnstructuredHeader):
     max_count: ClassVar[1]
@@ -117,7 +117,7 @@ class DateHeader:
     """
 
     max_count: ClassVar[1 | None]
-    def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect], datetime: _datetime) -> None
+    def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect], datetime: _datetime)
     let datetime: _datetime | None
     static def value_parser(value: str) -> UnstructuredTokenList:
         """unstructured = (*([FWS] vchar) *WSP) / obs-unstruct
@@ -139,18 +139,18 @@ class DateHeader:
 
         """
 
-    class def parse(cls, value: str | _datetime, kwds: dict[str, dynamic]) -> None
+    class def parse(cls, value: str | _datetime, kwds: dict[str, dynamic])
 
 class UniqueDateHeader(DateHeader):
     max_count: ClassVar[1]
 
 class AddressHeader:
     max_count: ClassVar[1 | None]
-    def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect], groups: Iterable[Group]) -> None
+    def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect], groups: Iterable[Group])
     let groups: (*: Group)
     let addresses: (*: Address)
     static def value_parser(value: str) -> AddressList
-    class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
+    class def parse(cls, value: str, kwds: dict[str, dynamic])
 
 class UniqueAddressHeader(AddressHeader):
     max_count: ClassVar[1]
@@ -172,20 +172,20 @@ class MIMEVersionHeader:
         version: str | None,
         major: int | None,
         minor: int | None,
-    ) -> None
+    )
     let version: str | None
     let major: int | None
     let minor: int | None
     static def value_parser(value: str) -> MIMEVersion:
         """mime-version = [CFWS] 1*digit [CFWS] "." [CFWS] 1*digit [CFWS]"""
 
-    class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
+    class def parse(cls, value: str, kwds: dict[str, dynamic])
 
 class ParameterizedMIMEHeader:
     max_count: ClassVar[1]
-    def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect], params: Mapping[str, dynamic]) -> None
+    def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect], params: Mapping[str, dynamic])
     let params: types.MappingProxyType[str, dynamic]
-    class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
+    class def parse(cls, value: str, kwds: dict[str, dynamic])
 
 class ContentTypeHeader(ParameterizedMIMEHeader):
     let content_type: str
@@ -207,15 +207,15 @@ class ContentDispositionHeader(ParameterizedMIMEHeader):
 
 class ContentTransferEncodingHeader:
     max_count: ClassVar[1]
-    def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect]) -> None
+    def init(self, name: str, *, parse_tree: TokenList, defects: Iterable[MessageDefect])
     let cte: str
-    class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
+    class def parse(cls, value: str, kwds: dict[str, dynamic])
     static def value_parser(value: str) -> ContentTransferEncoding:
         """mechanism"""
 
 class MessageIDHeader:
     max_count: ClassVar[1]
-    class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
+    class def parse(cls, value: str, kwds: dict[str, dynamic])
     static def value_parser(value: str) -> MessageID:
         """message-id      =   "Message-ID:" msg-id CRLF"""
 
@@ -225,7 +225,7 @@ if sys.version_info >= (3, 13):
     # Added in Python 3.13.12, 3.14.3
     class ReferencesHeader:
         max_count: ClassVar[1]
-        class def parse(cls, value: str, kwds: dict[str, dynamic]) -> None
+        class def parse(cls, value: str, kwds: dict[str, dynamic])
         static def value_parser(value: str) -> MessageIDList:
             """in-reply-to     =   "In-Reply-To:" 1*msg-id CRLF
             references      =   "References:" 1*msg-id CRLF
@@ -235,7 +235,7 @@ if sys.version_info >= (3, 13):
 private protocol HeaderParser:
     max_count: ClassVar[1 | None]
     static def value_parser(value: str, /) -> TokenList
-    class def parse(cls, value: str, kwds: dict[str, dynamic], /) -> None
+    class def parse(cls, value: str, kwds: dict[str, dynamic], /)
 
 class HeaderRegistry:
     """A header_factory and header registry."""
@@ -257,7 +257,7 @@ class HeaderRegistry:
 
         """
 
-    def map_to_type(self, name: str, cls: type[BaseHeader]) -> None:
+    def map_to_type(self, name: str, cls: type[BaseHeader]):
         """Register cls as the specialized class for handling "name" headers."""
 
     def __getitem__(self, name: str) -> type[BaseHeader]

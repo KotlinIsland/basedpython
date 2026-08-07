@@ -84,8 +84,8 @@ class object:
     def __new__(cls) -> Self
     # N.B. `object.__setattr__` and `object.__delattr__` are heavily special-cased by type checkers.
     # Overriding them in subclasses has different semantics, even if the override has an identical signature.
-    def __setattr__(self, name: str, value: dynamic, /) -> None
-    def __delattr__(self, name: str, /) -> None
+    def __setattr__(self, name: str, value: dynamic, /)
+    def __delattr__(self, name: str, /)
     def __eq__(self, value: object, /) -> bool
     def __ne__(self, value: object, /) -> bool
     def __str__(self) -> str  # noqa: Y029
@@ -105,7 +105,7 @@ class object:
         def __getstate__(self) -> object
 
     def __dir__(self) -> Iterable[str]
-    def __init_subclass__(cls) -> None
+    def __init_subclass__(cls)
     class def __subclasshook__(cls, subclass: type, /) -> bool
 
 @disjoint_base
@@ -2350,11 +2350,11 @@ class bytearray(MutableSequence[int]):
     def __buffer__(self, flags: int, /) -> memoryview:
         """Return a buffer object that exposes the underlying memory of the object."""
 
-    def __release_buffer__(self, buffer: memoryview, /) -> None:
+    def __release_buffer__(self, buffer: memoryview, /):
         """Release the buffer object that exposes the underlying memory of the object."""
 
     if sys.version_info >= (3, 14):
-        def resize(self, size: int, /) -> None:
+        def resize(self, size: int, /):
             """Resize the internal buffer of bytearray to len.
 
             size
@@ -2398,7 +2398,7 @@ final class memoryview[in out I = int](Sequence[I]):
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
         /,
-    ) -> None:
+    ):
         """Release the underlying buffer exposed by the memoryview object."""
 
     def cast(self, format: "c" | "@c", shape: list[int] | (*: int) = ...) -> memoryview[bytes]:
@@ -2442,7 +2442,7 @@ final class memoryview[in out I = int](Sequence[I]):
     def toreadonly(self) -> memoryview:
         """Return a readonly version of the memoryview."""
 
-    def release(self) -> None:
+    def release(self):
         """Release the underlying buffer exposed by the memoryview object."""
 
     def hex(self, sep: str | bytes = ..., bytes_per_sep: SupportsIndex = 1) -> str:
@@ -2469,7 +2469,7 @@ final class memoryview[in out I = int](Sequence[I]):
     def __buffer__(self, flags: int, /) -> memoryview:
         """Return a buffer object that exposes the underlying memory of the object."""
 
-    def __release_buffer__(self, buffer: memoryview, /) -> None:
+    def __release_buffer__(self, buffer: memoryview, /):
         """Release the buffer object that exposes the underlying memory of the object."""
 
     if sys.version_info >= (3, 14):
@@ -2958,7 +2958,7 @@ class set[in out Element: Hashable](MutableSet[Element]):
     def difference[WidenElement = Never](self, *s: Iterable[object]) -> set[Element | WidenElement]:
         """Return a new set with elements in the set that are not in the others."""
 
-    def difference_update(self, *s: Iterable[object]) -> None:
+    def difference_update(self, *s: Iterable[object]):
         """Update the set, removing elements found in others."""
 
     override def discard(self, element: object, /) -> None:
@@ -2971,7 +2971,7 @@ class set[in out Element: Hashable](MutableSet[Element]):
     def intersection[WidenElement = Never](self, *s: Iterable[object]) -> set[Element | WidenElement]:
         """Return a new set with elements common to the set and all others."""
 
-    def intersection_update(self, *s: Iterable[object]) -> None:
+    def intersection_update(self, *s: Iterable[object]):
         """Update the set, keeping only elements found in it and all others."""
 
     override def isdisjoint(self, s: Iterable[object], /) -> bool:
@@ -2992,13 +2992,13 @@ class set[in out Element: Hashable](MutableSet[Element]):
     def symmetric_difference[Other, WidenElement = Never](self, s: Iterable[Other], /) -> set[Element | Other | WidenElement]:
         """Return a new set with elements in either the set or other but not both."""
 
-    def symmetric_difference_update(self, s: Iterable[Element], /) -> None:
+    def symmetric_difference_update(self, s: Iterable[Element], /):
         """Update the set, keeping only elements found in either set, but not in both."""
 
     def union[Other, WidenElement = Never](self, *s: Iterable[Other]) -> set[Element | Other | WidenElement]:
         """Return a new set with elements from the set and all others."""
 
-    def update(self, *s: Iterable[Element]) -> None:
+    def update(self, *s: Iterable[Element]):
         """Update the set, adding elements from all others."""
 
     override def __len__(self) -> int:
@@ -3235,10 +3235,10 @@ class property:
         """Return an attribute of instance, which is of type owner."""
     def __get__(self, instance: dynamic, owner: type | None = None, /) -> dynamic
 
-    def __set__(self, instance: dynamic, value: dynamic, /) -> None:
+    def __set__(self, instance: dynamic, value: dynamic, /):
         """Set an attribute of instance to value."""
 
-    def __delete__(self, instance: dynamic, /) -> None:
+    def __delete__(self, instance: dynamic, /):
         """Delete an attribute of instance."""
 
 def abs[Element](x: SupportsAbs[Element], /) -> Element:
@@ -3281,7 +3281,7 @@ else:
         '0b1010101010101010101010'
         """
 
-def breakpoint(*args: dynamic, **kws: dynamic) -> None:
+def breakpoint(*args: dynamic, **kws: dynamic):
     """Call sys.breakpointhook(*args, **kws).  sys.breakpointhook() must accept
     whatever arguments are passed.
 
@@ -3432,7 +3432,7 @@ else:
 copyright: _sitebuiltins._Printer
 credits: _sitebuiltins._Printer
 
-def delattr(obj: object, name: str, /) -> None:
+def delattr(obj: object, name: str, /):
     """Deletes the named attribute from the given object.
 
     delattr(x, 'y') is equivalent to ``del x.y``
@@ -4223,7 +4223,7 @@ def round[Element](number: SupportsRound2[Element], ndigits: SupportsIndex) -> E
 
 # See https://github.com/python/typeshed/pull/6292#discussion_r748875189
 # for why arg 3 of `setattr` should be annotated with `Any` and not `object`
-def setattr(obj: object, name: str, value: dynamic, /) -> None:
+def setattr(obj: object, name: str, value: dynamic, /):
     """Sets the named attribute on the given object to the specified value.
 
     setattr(x, 'y', v) is equivalent to ``x.y = v``
@@ -4407,7 +4407,7 @@ class BaseException:
     __traceback__: TracebackType | None
     init(self, *args: object)
     def __new__(cls, *args: dynamic, **kwds: dynamic) -> Self
-    def __setstate__(self, state: dict[str, dynamic] | None, /) -> None
+    def __setstate__(self, state: dict[str, dynamic] | None, /)
     def with_traceback(self, tb: TracebackType | None, /) -> Self:
         """Set self.__traceback__ to tb and return self."""
 
@@ -4418,7 +4418,7 @@ class BaseException:
     if sys.version_info >= (3, 11):
         # only present after add_note() is called
         __notes__: list[str]
-        def add_note(self, note: str, /) -> None:
+        def add_note(self, note: str, /):
             """Add a note to the exception"""
 
 class GeneratorExit(BaseException):

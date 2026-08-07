@@ -222,7 +222,7 @@ class DictWriter[in out Element]:
     )
     def writeheader(self) -> dynamic
     def writerow(self, rowdict: Mapping[Element, dynamic]) -> dynamic
-    def writerows(self, rowdicts: Iterable[Mapping[Element, dynamic]]) -> None
+    def writerows(self, rowdicts: Iterable[Mapping[Element, dynamic]])
     if sys.version_info >= (3, 12):
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
             """Represent a PEP 585 generic type

@@ -169,7 +169,7 @@ class Snapshot:
         group_by.
         """
 
-    def dump(self, filename: str) -> None:
+    def dump(self, filename: str):
         """
         Write the snapshot into a file.
         """

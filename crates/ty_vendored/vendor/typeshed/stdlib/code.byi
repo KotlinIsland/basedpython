@@ -53,7 +53,7 @@ class InteractiveInterpreter:
 
         """
 
-    def runcode(self, code: CodeType) -> None:
+    def runcode(self, code: CodeType):
         """Execute a code object.
 
         When an exception occurs, self.showtraceback() is called to
@@ -94,7 +94,7 @@ class InteractiveInterpreter:
 
             """
 
-    def showtraceback(self) -> None:
+    def showtraceback(self):
         """Display the exception that just occurred.
 
         We remove the first stack item because it is our own code.
@@ -103,7 +103,7 @@ class InteractiveInterpreter:
 
         """
 
-    def write(self, data: str) -> None:
+    def write(self, data: str):
         """Write a string.
 
         The base implementation writes to sys.stderr; a subclass may
@@ -178,7 +178,7 @@ class InteractiveConsole(InteractiveInterpreter):
 
             """
 
-    def interact(self, banner: str | None = None, exitmsg: str | None = None) -> None:
+    def interact(self, banner: str | None = None, exitmsg: str | None = None):
         """Closely emulate the interactive Python console.
 
         The optional banner argument specifies the banner to print
@@ -195,7 +195,7 @@ class InteractiveConsole(InteractiveInterpreter):
 
         """
 
-    def resetbuffer(self) -> None:
+    def resetbuffer(self):
         """Reset the input buffer."""
 
     def raw_input(self, prompt: str = "") -> str:

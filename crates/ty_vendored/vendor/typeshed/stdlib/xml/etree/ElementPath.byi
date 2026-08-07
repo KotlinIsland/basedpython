@@ -7,18 +7,18 @@ final xpath_tokenizer_re: Pattern[str]
 
 private type Token = (str, str)
 private type Next = () -> Token
-_Callback: TypeAlias = (_SelectorContext, Iterable[Element]) -> Generator[Element]
+private type Callback = (_SelectorContext, Iterable[Element]) -> Generator[Element]
 
 def xpath_tokenizer(pattern: str, namespaces: dict[str, str] | None = None) -> Generator[Token]
 def get_parent_map(context: _SelectorContext) -> dict[Element, Element]
-def prepare_child(next: Next, token: Token) -> _Callback
-def prepare_star(next: Next, token: Token) -> _Callback
-def prepare_self(next: Next, token: Token) -> _Callback
-def prepare_descendant(next: Next, token: Token) -> _Callback | None
-def prepare_parent(next: Next, token: Token) -> _Callback
-def prepare_predicate(next: Next, token: Token) -> _Callback | None
+def prepare_child(next: Next, token: Token) -> Callback
+def prepare_star(next: Next, token: Token) -> Callback
+def prepare_self(next: Next, token: Token) -> Callback
+def prepare_descendant(next: Next, token: Token) -> Callback | None
+def prepare_parent(next: Next, token: Token) -> Callback
+def prepare_predicate(next: Next, token: Token) -> Callback | None
 
-final ops: dict[str, (Next, Token) -> (_Callback | None)]
+final ops: dict[str, (Next, Token) -> (Callback | None)]
 
 class _SelectorContext:
     parent_map: dict[Element, Element] | None

@@ -91,17 +91,17 @@ class mmap:
                 cls, fileno: int, length: int, flags: int = ..., prot: int = ..., access: int = 0, offset: int = 0
             ) -> Self
 
-    def close(self) -> None
+    def close(self)
     if sys.version_info >= (3, 15):
         def flush(self, offset: int = 0, size: int = ..., /, *, flags: int = 0) -> None
     else:
         def flush(self, offset: int = 0, size: int = ..., /) -> None
 
-    def move(self, dest: int, src: int, count: int, /) -> None
+    def move(self, dest: int, src: int, count: int, /)
     def read_byte(self) -> int
     def readline(self) -> bytes
     if sys.version_info < (3, 15) or sys.platform != "darwin":
-        def resize(self, newsize: int, /) -> None
+        def resize(self, newsize: int, /)
     if sys.platform != "win32":
         def seek(self, pos: int, whence: 0 | 1 | 2 | 3 | 4 = os.SEEK_SET, /) -> None
     else:
@@ -109,7 +109,7 @@ class mmap:
 
     def size(self) -> int
     def tell(self) -> int
-    def write_byte(self, byte: int, /) -> None
+    def write_byte(self, byte: int, /)
     def __len__(self) -> int:
         """Return len(self)."""
 
@@ -131,7 +131,7 @@ class mmap:
     def read(self, n: int | None = None, /) -> bytes
     def write(self, bytes: ReadableBuffer, /) -> int
     if sys.version_info >= (3, 15):
-        def set_name(self, name: str, /) -> None
+        def set_name(self, name: str, /)
 
     def __getitem__(self, key: SupportsIndex, /) -> int:
         """Return self[key]."""
@@ -151,11 +151,11 @@ class mmap:
     # so we claim that there is also an __iter__ to help type checkers.
     def __iter__(self) -> Iterator[int]
     def __enter__(self) -> Self
-    def __exit__(self, exc_type: Unused, exc_value: Unused, traceback: Unused, /) -> None
+    def __exit__(self, exc_type: Unused, exc_value: Unused, traceback: Unused, /)
     def __buffer__(self, flags: int, /) -> memoryview:
         """Return a buffer object that exposes the underlying memory of the object."""
 
-    def __release_buffer__(self, buffer: memoryview, /) -> None:
+    def __release_buffer__(self, buffer: memoryview, /):
         """Release the buffer object that exposes the underlying memory of the object."""
 
     if sys.version_info >= (3, 13):

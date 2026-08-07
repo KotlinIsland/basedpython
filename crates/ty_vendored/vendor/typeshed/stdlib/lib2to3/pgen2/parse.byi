@@ -91,7 +91,7 @@ class Parser:
 
         """
 
-    def setup(self, start: int | None = None) -> None:
+    def setup(self, start: int | None = None):
         """Prepare for parsing.
 
         This *must* be called before starting to parse.
@@ -111,11 +111,11 @@ class Parser:
     def classify(self, type: int, value: str | None, context: Context) -> int:
         """Turn a token into a label.  (Internal)"""
 
-    def shift(self, type: int, value: str | None, newstate: int, context: Context) -> None:
+    def shift(self, type: int, value: str | None, newstate: int, context: Context):
         """Shift a token.  (Internal)"""
 
-    def push(self, type: int, newdfa: _DFAS, newstate: int, context: Context) -> None:
+    def push(self, type: int, newdfa: _DFAS, newstate: int, context: Context):
         """Push a nonterminal.  (Internal)"""
 
-    def pop(self) -> None:
+    def pop(self):
         """Pop a nonterminal.  (Internal)"""

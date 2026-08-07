@@ -38,7 +38,7 @@ class Queue[in out Element]:
     # we treat it as `Any` to allow different implementations in subtypes.
     queue: dynamic  # undocumented
     init(self, maxsize: int = 0)
-    def _init(self, maxsize: int) -> None
+    def _init(self, maxsize: int)
     def empty(self) -> bool:
         """Return True if the queue is empty, False otherwise (not reliable!).
 
@@ -83,7 +83,7 @@ class Queue[in out Element]:
         """
 
     if sys.version_info >= (3, 13):
-        def shutdown(self, immediate: bool = False) -> None:
+        def shutdown(self, immediate: bool = False):
             """Shut-down the queue, making queue gets and puts raise ShutDown.
 
             By default, gets will only raise once the queue is empty. Set
@@ -97,7 +97,7 @@ class Queue[in out Element]:
             """
 
     def _get(self) -> Element
-    def put(self, item: Element, block: bool = True, timeout: float | None = None) -> None:
+    def put(self, item: Element, block: bool = True, timeout: float | None = None):
         """Put an item into the queue.
 
         If optional args 'block' is true and 'timeout' is None (the default),
@@ -111,15 +111,15 @@ class Queue[in out Element]:
         Raises ShutDown if the queue has been shut down.
         """
 
-    def put_nowait(self, item: Element) -> None:
+    def put_nowait(self, item: Element):
         """Put an item into the queue without blocking.
 
         Only enqueue the item if a free slot is immediately available.
         Otherwise raise the Full exception.
         """
 
-    def _put(self, item: Element) -> None
-    def join(self) -> None:
+    def _put(self, item: Element)
+    def join(self):
         """Blocks until all items in the Queue have been gotten and processed.
 
         The count of unfinished tasks goes up whenever an item is added to the
@@ -133,7 +133,7 @@ class Queue[in out Element]:
         """Return the approximate size of the queue (not reliable!)."""
 
     def _qsize(self) -> int
-    def task_done(self) -> None:
+    def task_done(self):
         """Indicate that a formerly enqueued task is complete.
 
         Used by Queue consumer threads.  For each get() used to fetch a task,

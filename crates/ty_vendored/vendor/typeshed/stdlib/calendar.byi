@@ -103,7 +103,7 @@ class Calendar:
     firstweekday: int
     init(self, firstweekday: int = 0)
     def getfirstweekday(self) -> int
-    def setfirstweekday(self, firstweekday: int) -> None
+    def setfirstweekday(self, firstweekday: int)
     def iterweekdays(self) -> Iterator[int]:
         """
         Return an iterator for one week of weekday numbers starting with the
@@ -190,7 +190,7 @@ class TextCalendar(Calendar):
     similar to the UNIX program cal.
     """
 
-    def prweek(self, theweek: Iterable[(int, int)], width: int) -> None:
+    def prweek(self, theweek: Iterable[(int, int)], width: int):
         """
         Print a single week (no newline).
         """
@@ -220,7 +220,7 @@ class TextCalendar(Calendar):
         Return a formatted month name.
         """
 
-    def prmonth(self, theyear: int, themonth: int, w: int = 0, l: int = 0) -> None:
+    def prmonth(self, theyear: int, themonth: int, w: int = 0, l: int = 0):
         """
         Print a month's calendar.
         """
@@ -235,7 +235,7 @@ class TextCalendar(Calendar):
         Returns a year's calendar as a multi-line string.
         """
 
-    def pryear(self, theyear: int, w: int = 0, l: int = 0, c: int = 6, m: int = 3) -> None:
+    def pryear(self, theyear: int, w: int = 0, l: int = 0, c: int = 6, m: int = 3):
         """Print a year's calendar."""
 
 def firstweekday() -> int
@@ -245,7 +245,7 @@ def monthcalendar(year: int, month: int) -> list[list[int]]:
     Each row represents a week; days outside this month are zero.
     """
 
-def prweek(theweek: int, width: int) -> None:
+def prweek(theweek: int, width: int):
     """
     Print a single week (no newline).
     """
@@ -260,7 +260,7 @@ def weekheader(width: int) -> str:
     Return a header for a week.
     """
 
-def prmonth(theyear: int, themonth: int, w: int = 0, l: int = 0) -> None:
+def prmonth(theyear: int, themonth: int, w: int = 0, l: int = 0):
     """
     Print a month's calendar.
     """
@@ -275,7 +275,7 @@ def calendar(theyear: int, w: int = 2, l: int = 1, c: int = 6, m: int = 3) -> st
     Returns a year's calendar as a multi-line string.
     """
 
-def prcal(theyear: int, w: int = 0, l: int = 0, c: int = 6, m: int = 3) -> None:
+def prcal(theyear: int, w: int = 0, l: int = 0, c: int = 6, m: int = 3):
     """Print a year's calendar."""
 
 class HTMLCalendar(Calendar):
@@ -342,8 +342,8 @@ class HTMLCalendar(Calendar):
 
 class different_locale:
     init(self, locale: LocaleType)
-    def __enter__(self) -> None
-    def __exit__(self, *args: Unused) -> None
+    def __enter__(self)
+    def __exit__(self, *args: Unused)
 
 class LocaleTextCalendar(TextCalendar):
     """
@@ -365,7 +365,7 @@ class LocaleHTMLCalendar(HTMLCalendar):
 
 c: TextCalendar
 
-def setfirstweekday(firstweekday: int) -> None
+def setfirstweekday(firstweekday: int)
 def format(cols: int, colwidth: int = 20, spacing: int = 6) -> str:
     """Prints multi-column formatting for year calendars"""
 

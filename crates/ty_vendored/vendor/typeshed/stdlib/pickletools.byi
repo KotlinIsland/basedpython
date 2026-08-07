@@ -456,7 +456,7 @@ def dis(
     memo: MutableMapping[int, dynamic] | None = None,
     indentlevel: int = 4,
     annotate: int = 0,
-) -> None:
+):
     """Produce a symbolic disassembly of a pickle.
 
     'pickle' is a file-like object, or string, containing a (at least one)

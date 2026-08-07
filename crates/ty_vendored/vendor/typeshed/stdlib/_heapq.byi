@@ -34,13 +34,13 @@ from typing import Final
 
 final __about__: str
 
-def heapify(heap: list[_T], /) -> None:  # To work around the fact that list is invariant
+def heapify(heap: list[_T], /):  # To work around the fact that list is invariant
     """Transform list into a heap, in-place, in O(len(heap)) time."""
 
 def heappop(heap: list[_T], /) -> _T:
     """Pop the smallest item off the heap, maintaining the heap invariant."""
 
-def heappush(heap: list[_T], item: _T, /) -> None:
+def heappush(heap: list[_T], item: _T, /):
     """Push item onto heap, maintaining the heap invariant."""
 
 def heappushpop(heap: list[_T], item: _T, /) -> _T:
@@ -63,13 +63,13 @@ def heapreplace(heap: list[_T], item: _T, /) -> _T:
     """
 
 if sys.version_info >= (3, 14):
-    def heapify_max(heap: list[_T], /) -> None:
+    def heapify_max(heap: list[_T], /):
         """Maxheap variant of heapify."""
 
     def heappop_max(heap: list[_T], /) -> _T:
         """Maxheap variant of heappop."""
 
-    def heappush_max(heap: list[_T], item: _T, /) -> None:
+    def heappush_max(heap: list[_T], item: _T, /):
         """Push item onto max heap, maintaining the heap invariant."""
 
     def heappushpop_max(heap: list[_T], item: _T, /) -> _T:

@@ -25,9 +25,9 @@ class install_lib(Command):
     override def initialize_options(self) -> None
     override def finalize_options(self) -> None
     override def run(self) -> None
-    def build(self) -> None
+    def build(self)
     def install(self)
-    def byte_compile(self, files) -> None
+    def byte_compile(self, files)
     def get_outputs(self):
         """Return the list of files that would be installed if this command
         were actually run.  Not affected by the "dry-run" flag or whether

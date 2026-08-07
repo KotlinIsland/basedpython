@@ -79,13 +79,13 @@ class Base:
         This must be implemented by the concrete subclass.
         """
 
-    def replace(self, new: _NL | list[_NL]) -> None:
+    def replace(self, new: _NL | list[_NL]):
         """Replace this node with a new one in the parent."""
 
     def get_lineno(self) -> int:
         """Return the line number which generated the invocant node."""
 
-    def changed(self) -> None
+    def changed(self)
     def remove(self) -> int | None:
         """
         Remove the node from the tree. Returns the position of the node in its
@@ -141,19 +141,19 @@ class Node(Base):
     override def pre_order(self) -> Iterator[Self]:
         """Return a pre-order iterator for the tree."""
 
-    def set_child(self, i: int, child: _NL) -> None:
+    def set_child(self, i: int, child: _NL):
         """
         Equivalent to 'node.children[i] = child'. This method also sets the
         child's parent attribute appropriately.
         """
 
-    def insert_child(self, i: int, child: _NL) -> None:
+    def insert_child(self, i: int, child: _NL):
         """
         Equivalent to 'node.children.insert(i, child)'. This method also sets
         the child's parent attribute appropriately.
         """
 
-    def append_child(self, child: _NL) -> None:
+    def append_child(self, child: _NL):
         """
         Equivalent to 'node.children.append(child)'. This method also sets the
         child's parent attribute appropriately.

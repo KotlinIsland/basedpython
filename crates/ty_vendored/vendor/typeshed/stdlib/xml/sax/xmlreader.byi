@@ -23,34 +23,34 @@ class XMLReader:
     the next event.
     """
 
-    def parse(self, source: InputSource | _Source) -> None:
+    def parse(self, source: InputSource | _Source):
         """Parse an XML document from a system identifier or an InputSource."""
 
     def getContentHandler(self) -> _ContentHandlerProtocol:
         """Returns the current ContentHandler."""
 
-    def setContentHandler(self, handler: _ContentHandlerProtocol) -> None:
+    def setContentHandler(self, handler: _ContentHandlerProtocol):
         """Registers a new object to receive document content events."""
 
     def getDTDHandler(self) -> _DTDHandlerProtocol:
         """Returns the current DTD handler."""
 
-    def setDTDHandler(self, handler: _DTDHandlerProtocol) -> None:
+    def setDTDHandler(self, handler: _DTDHandlerProtocol):
         """Register an object to receive basic DTD-related events."""
 
     def getEntityResolver(self) -> _EntityResolverProtocol:
         """Returns the current EntityResolver."""
 
-    def setEntityResolver(self, resolver: _EntityResolverProtocol) -> None:
+    def setEntityResolver(self, resolver: _EntityResolverProtocol):
         """Register an object to resolve external entities."""
 
     def getErrorHandler(self) -> _ErrorHandlerProtocol:
         """Returns the current ErrorHandler."""
 
-    def setErrorHandler(self, handler: _ErrorHandlerProtocol) -> None:
+    def setErrorHandler(self, handler: _ErrorHandlerProtocol):
         """Register an object to receive error-message events."""
 
-    def setLocale(self, locale: str) -> None:
+    def setLocale(self, locale: str):
         """Allow an application to set the locale for errors and warnings.
 
         SAX parsers are not required to provide localization for errors
@@ -62,13 +62,13 @@ class XMLReader:
     def getFeature(self, name: str) -> 0 | 1 | bool:
         """Looks up and returns the state of a SAX2 feature."""
 
-    def setFeature(self, name: str, state: 0 | 1 | bool) -> None:
+    def setFeature(self, name: str, state: 0 | 1 | bool):
         """Sets the state of a SAX2 feature."""
 
     def getProperty(self, name: str) -> object:
         """Looks up and returns the value of a SAX2 property."""
 
-    def setProperty(self, name: str, value: object) -> None:
+    def setProperty(self, name: str, value: object):
         """Sets the value of a SAX2 property."""
 
 class IncrementalParser(XMLReader):
@@ -94,7 +94,7 @@ class IncrementalParser(XMLReader):
 
     init(self, bufsize: int = 65536)
     override def parse(self, source: InputSource | _Source) -> None
-    def feed(self, data: str | ReadableBuffer) -> None:
+    def feed(self, data: str | ReadableBuffer):
         """This method gives the raw XML data in the data parameter to
         the parser and makes it parse the data, emitting the
         corresponding events. It is allowed for XML constructs to be
@@ -103,12 +103,12 @@ class IncrementalParser(XMLReader):
         feed may raise SAXException.
         """
 
-    def prepareParser(self, source: InputSource) -> None:
+    def prepareParser(self, source: InputSource):
         """This method is called by the parse implementation to allow
         the SAX 2.0 driver to prepare itself for parsing.
         """
 
-    def close(self) -> None:
+    def close(self):
         """This method is called when the entire XML document has been
         passed to the parser through the feed method, to notify the
         parser that there are no more data. This allows the parser to
@@ -121,7 +121,7 @@ class IncrementalParser(XMLReader):
         close may raise SAXException.
         """
 
-    def reset(self) -> None:
+    def reset(self):
         """This method is called after close has been called to reset
         the parser so that it is ready to parse new documents. The
         results of calling parse or feed after close without calling
@@ -165,19 +165,19 @@ class InputSource:
     """
 
     init(self, system_id: str | None = None)
-    def setPublicId(self, public_id: str | None) -> None:
+    def setPublicId(self, public_id: str | None):
         """Sets the public identifier of this InputSource."""
 
     def getPublicId(self) -> str | None:
         """Returns the public identifier of this InputSource."""
 
-    def setSystemId(self, system_id: str | None) -> None:
+    def setSystemId(self, system_id: str | None):
         """Sets the system identifier of this InputSource."""
 
     def getSystemId(self) -> str | None:
         """Returns the system identifier of this InputSource."""
 
-    def setEncoding(self, encoding: str | None) -> None:
+    def setEncoding(self, encoding: str | None):
         """Sets the character encoding of this InputSource.
 
         The encoding must be a string acceptable for an XML encoding
@@ -190,7 +190,7 @@ class InputSource:
     def getEncoding(self) -> str | None:
         """Get the character encoding of this InputSource."""
 
-    def setByteStream(self, bytefile: _SupportsReadClose[bytes] | None) -> None:
+    def setByteStream(self, bytefile: _SupportsReadClose[bytes] | None):
         """Set the byte stream (a Python file-like object which does
         not perform byte-to-character conversion) for this input
         source.
@@ -210,7 +210,7 @@ class InputSource:
         this byte stream, or None if unknown.
         """
 
-    def setCharacterStream(self, charfile: _SupportsReadClose[str] | None) -> None:
+    def setCharacterStream(self, charfile: _SupportsReadClose[str] | None):
         """Set the character stream for this input source. (The stream
         must be a Python 2.0 Unicode-wrapped file-like that performs
         conversion to Unicode strings.)

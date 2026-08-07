@@ -27,4 +27,4 @@ def getregentry() -> codecs.CodecInfo
 
 rot13_map: dict[int, int]
 
-def rot13(infile: SupportsRead[str], outfile: SupportsWrite[str]) -> None
+def rot13(infile: SupportsRead[str], outfile: SupportsWrite[str])

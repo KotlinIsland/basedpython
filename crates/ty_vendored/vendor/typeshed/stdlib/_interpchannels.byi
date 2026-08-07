@@ -90,7 +90,7 @@ def create(unboundop: 1 | 2 | 3) -> ChannelID:
     Create a new cross-interpreter channel and return a unique generated ID.
     """
 
-def destroy(cid: SupportsIndex) -> None:
+def destroy(cid: SupportsIndex):
     """channel_destroy(cid)
 
     Close and finalize the channel.  Afterward attempts to use the channel
@@ -112,14 +112,14 @@ def list_interpreters(cid: SupportsIndex, *, send: bool) -> list[int]:
     receive end.
     """
 
-def send(cid: SupportsIndex, obj: object, *, blocking: bool = True, timeout: float | None = None) -> None:
+def send(cid: SupportsIndex, obj: object, *, blocking: bool = True, timeout: float | None = None):
     """channel_send(cid, obj, *, blocking=True, timeout=None)
 
     Add the object's data to the channel's queue.
     By default this waits for the object to be received.
     """
 
-def send_buffer(cid: SupportsIndex, obj: Buffer, *, blocking: bool = True, timeout: float | None = None) -> None:
+def send_buffer(cid: SupportsIndex, obj: Buffer, *, blocking: bool = True, timeout: float | None = None):
     """channel_send_buffer(cid, obj, *, blocking=True, timeout=None)
 
     Add the object's buffer to the channel's queue.
@@ -135,7 +135,7 @@ def recv(cid: SupportsIndex, default: object = ...) -> (dynamic, 1 | 2 | 3):
     a default value is provided.  In that case return it.
     """
 
-def close(cid: SupportsIndex, *, send: bool = False, recv: bool = False) -> None:
+def close(cid: SupportsIndex, *, send: bool = False, recv: bool = False):
     """channel_close(cid, *, send=None, recv=None, force=False)
 
     Close the channel for all interpreters.
@@ -181,7 +181,7 @@ def get_channel_defaults(cid: SupportsIndex) -> 1 | 2 | 3:
     Return the channel's default values, set when it was created.
     """
 
-def release(cid: SupportsIndex, *, send: bool = False, recv: bool = False, force: bool = False) -> None:
+def release(cid: SupportsIndex, *, send: bool = False, recv: bool = False, force: bool = False):
     """channel_release(cid, *, send=None, recv=None, force=True)
 
     Close the channel for the current interpreter.  'send' and 'recv'

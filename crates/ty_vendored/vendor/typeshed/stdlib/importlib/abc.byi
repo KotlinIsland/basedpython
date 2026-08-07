@@ -89,7 +89,7 @@ class InspectLoader(Loader):
         Raises ImportError if the module cannot be found.
         """
 
-    def exec_module(self, module: types.ModuleType) -> None:
+    def exec_module(self, module: types.ModuleType):
         """Execute the module."""
 
     static def source_to_code(
@@ -175,7 +175,7 @@ class MetaPathFinder(metaclass=ABCMeta):
 
             """
 
-    def invalidate_caches(self) -> None:
+    def invalidate_caches(self):
         """An optional method for clearing the finder's cache, if any.
         This method is used by importlib.invalidate_caches().
         """
@@ -215,7 +215,7 @@ class PathEntryFinder(metaclass=ABCMeta):
             functionality is provided.
             """
 
-    def invalidate_caches(self) -> None:
+    def invalidate_caches(self):
         """An optional method for clearing the finder's cache, if any.
         This method is used by PathFinder.invalidate_caches().
         """

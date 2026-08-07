@@ -19,7 +19,7 @@ protocol _HashObject:
     def copy(self) -> Self
     def digest(self) -> bytes
     def hexdigest(self) -> str
-    def update(self, obj: ReadableBuffer, /) -> None
+    def update(self, obj: ReadableBuffer, /)
 
 @disjoint_base
 class HASH:
@@ -50,7 +50,7 @@ class HASH:
     def hexdigest(self) -> str:
         """Return the digest value as a string of hexadecimal digits."""
 
-    def update(self, obj: ReadableBuffer, /) -> None:
+    def update(self, obj: ReadableBuffer, /):
         """Update this hash object's state with the provided string."""
 
 class UnsupportedDigestmodError(ValueError)
@@ -109,7 +109,7 @@ final class HMAC:
         non-binary environments.
         """
 
-    def update(self, msg: ReadableBuffer) -> None:
+    def update(self, msg: ReadableBuffer):
         """Update the HMAC object with msg."""
 
 def compare_digest(a: ReadableBuffer, b: ReadableBuffer, /) -> bool:

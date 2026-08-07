@@ -8,6 +8,6 @@ from typing import Final
 
 final MAXCODE: int
 
-def dis(code: list[_NamedIntConstant]) -> None
+def dis(code: list[_NamedIntConstant])
 def isstring(obj: object) -> obj is str | bytes
 def compile(p: str | bytes | SubPattern, flags: int = 0) -> Pattern[dynamic]

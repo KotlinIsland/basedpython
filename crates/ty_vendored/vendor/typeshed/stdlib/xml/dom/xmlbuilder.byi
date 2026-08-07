@@ -42,7 +42,7 @@ class DOMBuilder:
     ACTION_INSERT_AFTER: Final = 3
     ACTION_INSERT_BEFORE: Final = 4
     init(self)
-    def setFeature(self, name: str, state: int) -> None
+    def setFeature(self, name: str, state: int)
     def supportsFeature(self, name: str) -> bool
     def canSetFeature(self, name: str, state: 1 | 0) -> bool
     # getFeature could return any attribute from an instance of `Options`

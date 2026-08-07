@@ -59,7 +59,7 @@ class Command:
         instantiated.
         """
 
-    abstract def initialize_options(self) -> None:
+    abstract def initialize_options(self):
         """Set default values for all the options that this command
         supports.  Note that these defaults may be overridden by other
         commands, by the setup script, by config files, or by the
@@ -70,7 +70,7 @@ class Command:
         This method must be implemented by all command classes.
         """
 
-    abstract def finalize_options(self) -> None:
+    abstract def finalize_options(self):
         """Set final values for all the options that this command supports.
         This is always called as late as possible, ie.  after any option
         assignments from the command-line or from other commands have been
@@ -82,7 +82,7 @@ class Command:
         This method must be implemented by all command classes.
         """
 
-    abstract def run(self) -> None:
+    abstract def run(self):
         """A command's raison d'etre: carry out the action it exists to
         perform, controlled by the options initialized in
         'initialize_options()', customized by other commands, the setup
@@ -93,34 +93,34 @@ class Command:
         This method must be implemented by all command classes.
         """
 
-    def announce(self, msg: str, level: int = 1) -> None:
+    def announce(self, msg: str, level: int = 1):
         """If the current verbosity level is of greater than or equal to
         'level' print 'msg' to stdout.
         """
 
-    def debug_print(self, msg: str) -> None:
+    def debug_print(self, msg: str):
         """Print 'msg' to stdout if the global DEBUG (taken from the
         DISTUTILS_DEBUG environment variable) flag is true.
         """
 
-    def ensure_string(self, option: str, default: str | None = None) -> None:
+    def ensure_string(self, option: str, default: str | None = None):
         """Ensure that 'option' is a string; if not defined, set it to
         'default'.
         """
 
-    def ensure_string_list(self, option: str) -> None:
+    def ensure_string_list(self, option: str):
         """Ensure that 'option' is a list of strings.  If 'option' is
         currently a string, we split it either on /,\\s*/ or /\\s+/, so
         "foo bar baz", "foo,bar,baz", and "foo,   bar baz" all become
         ["foo", "bar", "baz"].
         """
 
-    def ensure_filename(self, option: str) -> None:
+    def ensure_filename(self, option: str):
         """Ensure that 'option' is the name of an existing file."""
 
-    def ensure_dirname(self, option: str) -> None
+    def ensure_dirname(self, option: str)
     def get_command_name(self) -> str
-    def set_undefined_options(self, src_cmd: str, *option_pairs: (str, str)) -> None:
+    def set_undefined_options(self, src_cmd: str, *option_pairs: (str, str)):
         """Set the values of any "undefined" options from corresponding
         option values in some other command object.  "Undefined" here means
         "is None", which is the convention used to indicate that an option
@@ -204,7 +204,7 @@ class Command:
     def reinitialize_command(self, command: str, reinit_subcommands: bool | 0 | 1 = 0) -> Command
     def reinitialize_command[CommandT: Command](self, command: CommandT, reinit_subcommands: bool | 0 | 1 = 0) -> CommandT
 
-    def run_command(self, command: str) -> None:
+    def run_command(self, command: str):
         """Run some other command: uses the 'run_command()' method of
         Distribution, which creates and finalizes the command object if
         necessary and then invokes its 'run()' method.
@@ -218,11 +218,11 @@ class Command:
         run for the current distribution.  Return a list of command names.
         """
 
-    def warn(self, msg: str) -> None
+    def warn(self, msg: str)
     def execute[*Args](
         self, func: (*Args) -> Unused, args: (Unpack[Args],), msg: str | None = None, level: int = 1
-    ) -> None
-    def mkpath(self, name: str, mode: int = 0o777) -> None
+    )
+    def mkpath(self, name: str, mode: int = 0o777)
 
     def copy_file(
         self,
@@ -264,7 +264,7 @@ class Command:
         """Move a file respecting dry-run flag."""
     def move_file(self, src: BytesPath, dst: _BytesPathT, level: Unused = 1) -> _BytesPathT | bytes
 
-    def spawn(self, cmd: Iterable[str], search_path: bool | 0 | 1 = 1, level: Unused = 1) -> None:
+    def spawn(self, cmd: Iterable[str], search_path: bool | 0 | 1 = 1, level: Unused = 1):
         """Spawn an external command respecting dry-run flag."""
 
     def make_archive(
@@ -295,7 +295,7 @@ class Command:
         exec_msg: str | None = None,
         skip_msg: str | None = None,
         level: Unused = 1,
-    ) -> None:
+    ):
         """Special case of 'execute()' for operations that process one or
         more input files and generate one output file.  Works just like
         'execute()', except the operation is skipped and a different
@@ -305,5 +305,5 @@ class Command:
         timestamp checks.
         """
 
-    def ensure_finalized(self) -> None
-    def dump_options(self, header=None, indent: str = "") -> None
+    def ensure_finalized(self)
+    def dump_options(self, header=None, indent: str = "")

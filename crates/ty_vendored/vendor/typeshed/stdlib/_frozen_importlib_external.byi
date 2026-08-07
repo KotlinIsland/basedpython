@@ -109,7 +109,7 @@ class WindowsRegistryFinder(importlib.abc.MetaPathFinder):
 class PathFinder(importlib.abc.MetaPathFinder):
     """Meta path finder for sys.path and package __path__ attributes."""
 
-    static def invalidate_caches() -> None:
+    static def invalidate_caches():
         """Call the invalidate_caches() method on all path entry finders
         stored in sys.path_importer_cache (where implemented).
         """
@@ -189,7 +189,7 @@ class _LoaderBasics:
     def create_module(self, spec: ModuleSpec) -> types.ModuleType | None:
         """Use default semantics for module creation."""
 
-    def exec_module(self, module: types.ModuleType) -> None:
+    def exec_module(self, module: types.ModuleType):
         """Execute the module."""
 
     def load_module(self, fullname: str) -> types.ModuleType:
@@ -203,7 +203,7 @@ class SourceLoader(_LoaderBasics):
         Raises OSError when the path cannot be handled.
         """
 
-    def set_data(self, path: str, data: bytes) -> None:
+    def set_data(self, path: str, data: bytes):
         """Optional method which writes data (bytes) to a file path (a str).
 
         Implementing this method allows for the writing of bytecode files.
@@ -271,7 +271,7 @@ class FileLoader:
 class SourceFileLoader(importlib.abc.FileLoader, FileLoader, importlib.abc.SourceLoader, SourceLoader):
     """Concrete implementation of SourceLoader using the file system."""
 
-    def set_data(self, path: str, data: ReadableBuffer, *, _mode: int = 0o666) -> None:
+    def set_data(self, path: str, data: ReadableBuffer, *, _mode: int = 0o666):
         """Write bytes data to a file."""
 
     def path_stats(self, path: str) -> Mapping[str, dynamic]:
@@ -293,7 +293,7 @@ class SourcelessFileLoader(importlib.abc.FileLoader, FileLoader, _LoaderBasics):
     """Loader which handles sourceless file imports."""
 
     def get_code(self, fullname: str) -> types.CodeType | None
-    def get_source(self, fullname: str) -> None:
+    def get_source(self, fullname: str):
         """Return None as there is no source code."""
 
 class ExtensionFileLoader(FileLoader, _LoaderBasics, importlib.abc.ExecutionLoader):
@@ -307,7 +307,7 @@ class ExtensionFileLoader(FileLoader, _LoaderBasics, importlib.abc.ExecutionLoad
     override def get_filename(self, fullname: str | None = None) -> str:
         """Return the path to the source file as found by the finder."""
 
-    def get_source(self, fullname: str) -> None:
+    def get_source(self, fullname: str):
         """Return None as extension modules have no source code."""
 
     override def create_module(self, spec: ModuleSpec) -> types.ModuleType:
@@ -316,7 +316,7 @@ class ExtensionFileLoader(FileLoader, _LoaderBasics, importlib.abc.ExecutionLoad
     override def exec_module(self, module: types.ModuleType) -> None:
         """Initialize an extension module"""
 
-    def get_code(self, fullname: str) -> None:
+    def get_code(self, fullname: str):
         """Return None as an extension module cannot create a code object."""
 
     override def __eq__(self, other: object) -> bool
@@ -330,10 +330,10 @@ if sys.version_info >= (3, 11):
         def is_package(self, fullname: str) -> True
         def get_source(self, fullname: str) -> ""
         def get_code(self, fullname: str) -> types.CodeType
-        def create_module(self, spec: ModuleSpec) -> None:
+        def create_module(self, spec: ModuleSpec):
             """Use default semantics for module creation."""
 
-        def exec_module(self, module: types.ModuleType) -> None
+        def exec_module(self, module: types.ModuleType)
         @deprecated("Deprecated since Python 3.10; will be removed in Python 3.15. Use `exec_module()` instead.")
         def load_module(self, fullname: str) -> types.ModuleType:
             """Load a namespace module.
@@ -365,10 +365,10 @@ else:
         def is_package(self, fullname: str) -> True
         def get_source(self, fullname: str) -> ""
         def get_code(self, fullname: str) -> types.CodeType
-        def create_module(self, spec: ModuleSpec) -> None:
+        def create_module(self, spec: ModuleSpec):
             """Use default semantics for module creation."""
 
-        def exec_module(self, module: types.ModuleType) -> None
+        def exec_module(self, module: types.ModuleType)
         @deprecated("Deprecated since Python 3.10; will be removed in Python 3.15. Use `exec_module()` instead.")
         def load_module(self, fullname: str) -> types.ModuleType:
             """Load a namespace module.

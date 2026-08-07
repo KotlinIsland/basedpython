@@ -28,10 +28,10 @@ final _SYSTEM_VERSION: str | None  # undocumented
 def _get_system_version() -> str:  # undocumented
     """Return the OS X system version as a string"""
 
-def _remove_original_values(_config_vars: dict[str, str]) -> None:  # undocumented
+def _remove_original_values(_config_vars: dict[str, str]):  # undocumented
     """Remove original unmodified values for testing"""
 
-def _save_modified_value(_config_vars: dict[str, str], cv: str, newvalue: str) -> None:  # undocumented
+def _save_modified_value(_config_vars: dict[str, str], cv: str, newvalue: str):  # undocumented
     """Save modified and original unmodified value of configuration var"""
 
 def _supports_universal_builds() -> bool:  # undocumented

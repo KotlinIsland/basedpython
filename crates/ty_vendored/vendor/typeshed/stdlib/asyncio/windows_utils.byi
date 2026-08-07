@@ -23,12 +23,12 @@ if sys.platform == "win32":
         """
 
         init(self, handle: int)
-        def __del__(self) -> None
+        def __del__(self)
         def __enter__(self) -> Self
-        def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None
+        def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None)
         let handle: int
         def fileno(self) -> int
-        def close(self, *, CloseHandle: (int) -> object = ...) -> None
+        def close(self, *, CloseHandle: (int) -> object = ...)
 
     class Popen(subprocess.Popen[AnyStr]):
         """Replacement for subprocess.Popen using overlapped pipe handles.

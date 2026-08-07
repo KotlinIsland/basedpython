@@ -55,9 +55,9 @@ if sys.platform == "win32":
         """
 
         init(self, address: str)
-        def __del__(self) -> None
+        def __del__(self)
         def closed(self) -> bool
-        def close(self) -> None
+        def close(self)
 
     class _WindowsSelectorEventLoop(selector_events.BaseSelectorEventLoop):
         """Windows version of selector event loop."""
@@ -77,8 +77,8 @@ if sys.platform == "win32":
         """Proactor implementation using IOCP."""
 
         init(self, concurrency: int = 0xFFFFFFFF)
-        def __del__(self) -> None
-        def set_loop(self, loop: events.AbstractEventLoop) -> None
+        def __del__(self)
+        def set_loop(self, loop: events.AbstractEventLoop)
         def select(self, timeout: int | None = None) -> list[futures.Future[dynamic]]
         def recv(self, conn: socket.socket, nbytes: int, flags: int = 0) -> futures.Future[bytes]
         def recv_into(self, conn: socket.socket, buf: WriteableBuffer, flags: int = 0) -> futures.Future[dynamic]
@@ -105,7 +105,7 @@ if sys.platform == "win32":
             completed, or False if the wait did not complete (on timeout).
             """
 
-        def close(self) -> None
+        def close(self)
         if sys.version_info >= (3, 11):
             def recvfrom_into(
                 self, conn: socket.socket, buf: WriteableBuffer, flags: int = 0

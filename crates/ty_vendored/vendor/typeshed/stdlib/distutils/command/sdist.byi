@@ -9,7 +9,7 @@ from typing import ClassVar
 
 from ..cmd import Command
 
-def show_formats() -> None:
+def show_formats():
     """Print all possible values for the 'formats' option (used by
     the "--help-formats" command-line option).
     """
@@ -46,10 +46,10 @@ class sdist(Command):
     override def finalize_options(self) -> None
     filelist: Incomplete
     override def run(self) -> None
-    def check_metadata(self) -> None:
+    def check_metadata(self):
         """Deprecated API."""
 
-    def get_file_list(self) -> None:
+    def get_file_list(self):
         """Figure out the list of files to include in the source
         distribution, and put it in 'self.filelist'.  This might involve
         reading the manifest template (and writing the manifest), or just
@@ -57,7 +57,7 @@ class sdist(Command):
         depends on the user's options.
         """
 
-    def add_defaults(self) -> None:
+    def add_defaults(self):
         """Add all the default files to self.filelist:
           - README or README.txt
           - setup.py
@@ -72,14 +72,14 @@ class sdist(Command):
         else is optional.
         """
 
-    def read_template(self) -> None:
+    def read_template(self):
         """Read and parse manifest template file named by self.template.
 
         (usually "MANIFEST.in") The parsing and processing is done by
         'self.filelist', which updates itself accordingly.
         """
 
-    def prune_file_list(self) -> None:
+    def prune_file_list(self):
         """Prune off branches that might slip into the file list as created
         by 'read_template()', but really don't belong there:
           * the build tree (typically "build")
@@ -88,19 +88,19 @@ class sdist(Command):
           * any RCS, CVS, .svn, .hg, .git, .bzr, _darcs directories
         """
 
-    def write_manifest(self) -> None:
+    def write_manifest(self):
         """Write the file list in 'self.filelist' (presumably as filled in
         by 'add_defaults()' and 'read_template()') to the manifest file
         named by 'self.manifest'.
         """
 
-    def read_manifest(self) -> None:
+    def read_manifest(self):
         """Read the manifest file (named by 'self.manifest') and use it to
         fill in 'self.filelist', the list of files to include in the source
         distribution.
         """
 
-    def make_release_tree(self, base_dir, files) -> None:
+    def make_release_tree(self, base_dir, files):
         """Create the directory tree that will become the source
         distribution archive.  All directories implied by the filenames in
         'files' are created under 'base_dir', and then we hard link or copy
@@ -110,7 +110,7 @@ class sdist(Command):
         to be distributed.
         """
 
-    def make_distribution(self) -> None:
+    def make_distribution(self):
         """Create the source distribution(s).  First, we create the release
         tree with 'make_release_tree()'; then, we create all required
         archive files (according to 'self.formats') from the release tree.

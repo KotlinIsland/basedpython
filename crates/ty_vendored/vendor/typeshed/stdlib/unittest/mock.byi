@@ -222,29 +222,29 @@ class NonCallableMock(Base, dynamic):
     override def __dir__(self) -> list[str]:
         """Filter the output of `dir(mock)` to only useful members."""
 
-    def assert_called_with(self, *args: dynamic, **kwargs: dynamic) -> None:
+    def assert_called_with(self, *args: dynamic, **kwargs: dynamic):
         """assert that the last call was made with the specified arguments.
 
         Raises an AssertionError if the args and keyword args passed in are
         different to the last call to the mock.
         """
 
-    def assert_not_called(self) -> None:
+    def assert_not_called(self):
         """assert that the mock was never called."""
 
-    def assert_called_once_with(self, *args: dynamic, **kwargs: dynamic) -> None:
+    def assert_called_once_with(self, *args: dynamic, **kwargs: dynamic):
         """assert that the mock was called exactly once and that call was
         with the specified arguments.
         """
 
     def _format_mock_failure_message(self, args: dynamic, kwargs: dynamic, action: str = "call") -> str
-    def assert_called(self) -> None:
+    def assert_called(self):
         """assert that the mock was called at least once"""
 
-    def assert_called_once(self) -> None:
+    def assert_called_once(self):
         """assert that the mock was called only once."""
 
-    def reset_mock(self, visited: dynamic = None, *, return_value: bool = False, side_effect: bool = False) -> None:
+    def reset_mock(self, visited: dynamic = None, *, return_value: bool = False, side_effect: bool = False):
         """Restore the mock object to its initial state."""
 
     def _extract_mock_name(self) -> str
@@ -260,7 +260,7 @@ class NonCallableMock(Base, dynamic):
         and can be safely exited.
         """
 
-    def assert_any_call(self, *args: dynamic, **kwargs: dynamic) -> None:
+    def assert_any_call(self, *args: dynamic, **kwargs: dynamic):
         """assert the mock has been called with the specified arguments.
 
         The assert passes if the mock has *ever* been called, unlike
@@ -268,7 +268,7 @@ class NonCallableMock(Base, dynamic):
         the call is the most recent one.
         """
 
-    def assert_has_calls(self, calls: Sequence[_Call], any_order: bool = False) -> None:
+    def assert_has_calls(self, calls: Sequence[_Call], any_order: bool = False):
         """assert the mock has been called with the specified calls.
         The `mock_calls` list is checked for the calls.
 
@@ -280,7 +280,7 @@ class NonCallableMock(Base, dynamic):
         they must all appear in `mock_calls`.
         """
 
-    def mock_add_spec(self, spec: dynamic, spec_set: bool = False) -> None:
+    def mock_add_spec(self, spec: dynamic, spec_set: bool = False):
         """Add a spec to a mock. `spec` can either be an object or a
         list of strings. Only attributes on the `spec` can be fetched as
         attributes from the mock.
@@ -288,15 +288,15 @@ class NonCallableMock(Base, dynamic):
         If `spec_set` is True then only attributes on the spec can be set.
         """
 
-    def _mock_add_spec(self, spec: dynamic, spec_set: bool, _spec_as_instance: bool = False, _eat_self: bool = False) -> None
-    def attach_mock(self, mock: NonCallableMock, attribute: str) -> None:
+    def _mock_add_spec(self, spec: dynamic, spec_set: bool, _spec_as_instance: bool = False, _eat_self: bool = False)
+    def attach_mock(self, mock: NonCallableMock, attribute: str):
         """
         Attach a mock as an attribute of this one, replacing its name and
         parent. Calls to the attached mock will be recorded in the
         `method_calls` and `mock_calls` attributes of this one.
         """
 
-    def configure_mock(self, **kwargs: dynamic) -> None:
+    def configure_mock(self, **kwargs: dynamic):
         """Set attributes on the mock through keyword arguments.
 
         Attributes plus return values and side effects can be set on child
@@ -483,13 +483,13 @@ class _patch[in out Element]:
 
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None, /
-    ) -> None:
+    ):
         """Undo the patch."""
 
     def start(self) -> Element:
         """Activate a patch, returning any created mock."""
 
-    def stop(self) -> None:
+    def stop(self):
         """Stop an active patch."""
 
 # This class does not exist at runtime, it's a hack to make this work:
@@ -683,7 +683,7 @@ class _patcher:
         **kwargs: dynamic,
     ) -> _patch[dynamic]
 
-    static def stopall() -> None
+    static def stopall()
 
 patch: _patcher
 """
@@ -779,33 +779,33 @@ class MagicMock(MagicMixin, Mock):
 class AsyncMockMixin(Base):
     init(self, *args: dynamic, **kwargs: dynamic)
     async def _execute_mock_call(self, *args: dynamic, **kwargs: dynamic) -> dynamic
-    def assert_awaited(self) -> None:
+    def assert_awaited(self):
         """
         Assert that the mock was awaited at least once.
         """
 
-    def assert_awaited_once(self) -> None:
+    def assert_awaited_once(self):
         """
         Assert that the mock was awaited exactly once.
         """
 
-    def assert_awaited_with(self, *args: dynamic, **kwargs: dynamic) -> None:
+    def assert_awaited_with(self, *args: dynamic, **kwargs: dynamic):
         """
         Assert that the last await was with the specified arguments.
         """
 
-    def assert_awaited_once_with(self, *args: dynamic, **kwargs: dynamic) -> None:
+    def assert_awaited_once_with(self, *args: dynamic, **kwargs: dynamic):
         """
         Assert that the mock was awaited exactly once and with the specified
         arguments.
         """
 
-    def assert_any_await(self, *args: dynamic, **kwargs: dynamic) -> None:
+    def assert_any_await(self, *args: dynamic, **kwargs: dynamic):
         """
         Assert the mock has ever been awaited with the specified arguments.
         """
 
-    def assert_has_awaits(self, calls: Iterable[_Call], any_order: bool = False) -> None:
+    def assert_has_awaits(self, calls: Iterable[_Call], any_order: bool = False):
         """
         Assert the mock has been awaited with the specified calls.
         The :attr:`await_args_list` list is checked for the awaits.
@@ -818,12 +818,12 @@ class AsyncMockMixin(Base):
         they must all appear in :attr:`await_args_list`.
         """
 
-    def assert_not_awaited(self) -> None:
+    def assert_not_awaited(self):
         """
         Assert that the mock was never awaited.
         """
 
-    def reset_mock(self, *args: dynamic, **kwargs: dynamic) -> None:
+    def reset_mock(self, *args: dynamic, **kwargs: dynamic):
         """
         See :func:`.Mock.reset_mock()`
         """
@@ -976,7 +976,7 @@ class PropertyMock(Mock):
     """
 
     def __get__[Element](self, obj: Element, obj_type: type[Element] | None = None) -> Self
-    def __set__(self, obj: dynamic, val: dynamic) -> None
+    def __set__(self, obj: dynamic, val: dynamic)
 
 if sys.version_info >= (3, 13):
     class ThreadingMixin(Base):
@@ -984,12 +984,12 @@ if sys.version_info >= (3, 13):
 
         init(self, /, *args: dynamic, timeout: float | None | _SentinelObject = ..., **kwargs: dynamic)
         # Same as `NonCallableMock.reset_mock.`
-        def reset_mock(self, visited: dynamic = None, *, return_value: bool = False, side_effect: bool = False) -> None:
+        def reset_mock(self, visited: dynamic = None, *, return_value: bool = False, side_effect: bool = False):
             """
             See :func:`.Mock.reset_mock()`
             """
 
-        def wait_until_called(self, *, timeout: float | None | _SentinelObject = ...) -> None:
+        def wait_until_called(self, *, timeout: float | None | _SentinelObject = ...):
             """Wait until the mock object is called.
 
             `timeout` - time to wait for in seconds, waits forever otherwise.
@@ -997,7 +997,7 @@ if sys.version_info >= (3, 13):
             Use None to block undefinetively.
             """
 
-        def wait_until_any_call_with(self, *args: dynamic, **kwargs: dynamic) -> None:
+        def wait_until_any_call_with(self, *args: dynamic, **kwargs: dynamic):
             """Wait until the mock object is called with given args.
 
             Waits for the timeout in seconds provided in the constructor.
@@ -1017,7 +1017,7 @@ if sys.version_info >= (3, 13):
         If no timeout is set, it will block undefinetively.
         """
 
-def seal(mock: dynamic) -> None:
+def seal(mock: dynamic):
     """Disable the automatic generation of child mocks.
 
     Given an input Mock, seals it to ensure no further mocks will be generated

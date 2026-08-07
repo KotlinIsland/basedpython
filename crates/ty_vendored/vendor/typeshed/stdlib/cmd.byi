@@ -92,7 +92,7 @@ class Cmd:
         """
 
     old_completer: ((str, int) -> (str | None)) | None
-    def cmdloop(self, intro: dynamic | None = None) -> None:
+    def cmdloop(self, intro: dynamic | None = None):
         """Repeatedly issue a prompt, accept input, parse an initial prefix
         off the received input, and dispatch to action methods, passing them
         the remainder of the line as argument.
@@ -108,10 +108,10 @@ class Cmd:
     def postcmd(self, stop: bool, line: str) -> bool:
         """Hook method executed just after a command dispatch is finished."""
 
-    def preloop(self) -> None:
+    def preloop(self):
         """Hook method executed once when the cmdloop() method is called."""
 
-    def postloop(self) -> None:
+    def postloop(self):
         """Hook method executed once when the cmdloop() method is about to
         return.
 
@@ -142,7 +142,7 @@ class Cmd:
 
         """
 
-    def default(self, line: str) -> None:
+    def default(self, line: str):
         """Called on an input line when the command prefix is not recognized.
 
         If this method is not overridden, it prints an error message and
@@ -173,8 +173,8 @@ class Cmd:
     def do_help(self, arg: str) -> bool | None:
         """List available commands with "help" or detailed help with "help cmd"."""
 
-    def print_topics(self, header: str, cmds: list[str] | None, cmdlen: dynamic, maxcol: int) -> None
-    def columnize(self, list: list[str] | None, displaywidth: int = 80) -> None:
+    def print_topics(self, header: str, cmds: list[str] | None, cmdlen: dynamic, maxcol: int)
+    def columnize(self, list: list[str] | None, displaywidth: int = 80):
         """Display a list of strings as a compact set of columns.
 
         Each column is only as wide as necessary.

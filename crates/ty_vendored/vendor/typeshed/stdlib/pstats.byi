@@ -108,11 +108,11 @@ class Stats:
         *args: None | str | Profile | _cProfile | Self,
         stream: IO[dynamic] | None = None,
     )
-    def init(self, arg: None | str | Profile | _cProfile) -> None
-    def load_stats(self, arg: None | str | Profile | _cProfile) -> None
-    def get_top_level_stats(self) -> None
+    def init(self, arg: None | str | Profile | _cProfile)
+    def load_stats(self, arg: None | str | Profile | _cProfile)
+    def get_top_level_stats(self)
     def add(self, *arg_list: None | str | Profile | _cProfile | Self) -> Self
-    def dump_stats(self, filename: StrOrBytesPath) -> None:
+    def dump_stats(self, filename: StrOrBytesPath):
         """Write the profile data to a file we know how to load back."""
 
     def get_sort_arg_defs(self) -> SortArgDict:
@@ -123,7 +123,7 @@ class Stats:
 
     def reverse_order(self) -> Self
     def strip_dirs(self) -> Self
-    def calc_callees(self) -> None
+    def calc_callees(self)
     def eval_print_amount(self, sel: Selector, list: list[str], msg: str) -> (list[str], str)
     def get_stats_profile(self) -> StatsProfile:
         """This method returns an instance of StatsProfile, which contains a mapping
@@ -136,10 +136,10 @@ class Stats:
     def print_stats(self, *amount: Selector) -> Self
     def print_callees(self, *amount: Selector) -> Self
     def print_callers(self, *amount: Selector) -> Self
-    def print_call_heading(self, name_size: int, column_title: str) -> None
+    def print_call_heading(self, name_size: int, column_title: str)
     if sys.version_info >= (3, 15):
-        def print_call_subheading(self, name_size: int) -> None
+        def print_call_subheading(self, name_size: int)
 
-    def print_call_line(self, name_size: int, source: str, call_dict: dict[str, dynamic], arrow: str = "->") -> None
-    def print_title(self) -> None
-    def print_line(self, func: str) -> None
+    def print_call_line(self, name_size: int, source: str, call_dict: dict[str, dynamic], arrow: str = "->")
+    def print_title(self)
+    def print_line(self, func: str)

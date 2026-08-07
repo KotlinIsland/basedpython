@@ -38,22 +38,22 @@ error = OSError
 # class is intended to represent the common interface supported by all three.
 class _Database(MutableMapping[_KeyType, bytes]):
     init(self, filebasename: str, mode: str, flag: str = "c")
-    def sync(self) -> None
+    def sync(self)
     if sys.version_info >= (3, 15):
-        def reorganize(self) -> None
+        def reorganize(self)
 
     def iterkeys(self) -> Iterator[bytes]  # undocumented
-    def close(self) -> None
+    def close(self)
     override def __getitem__(self, key: _KeyType) -> bytes
     override def __setitem__(self, key: _KeyType, val: _ValueType) -> None
     override def __delitem__(self, key: _KeyType) -> None
     override def __iter__(self) -> Iterator[bytes]
     override def __len__(self) -> int
-    def __del__(self) -> None
+    def __del__(self)
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None
+    )
 
 if sys.version_info >= (3, 11):
     def open(file: StrOrBytesPath, flag: str = "c", mode: int = 0o666) -> _Database:

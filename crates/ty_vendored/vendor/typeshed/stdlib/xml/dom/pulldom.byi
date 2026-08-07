@@ -62,18 +62,18 @@ class PullDOM(ContentHandler):
     override def endElementNS(self, name: NSName, tagName: str | None) -> None
     override def startElement(self, name: str, attrs: AttributesImpl) -> None
     override def endElement(self, name: str) -> None
-    def comment(self, s: str) -> None
+    def comment(self, s: str)
     override def processingInstruction(self, target: str, data: str) -> None
     override def ignorableWhitespace(self, chars: str) -> None
     override def characters(self, chars: str) -> None
     override def startDocument(self) -> None
     def buildDocument(self, uri: str | None, tagname: str | None) -> Element
     override def endDocument(self) -> None
-    def clear(self) -> None:
+    def clear(self):
         """clear(): Explicitly release parsing structures"""
 
 class ErrorHandler:
-    def warning(self, exception: BaseException) -> None
+    def warning(self, exception: BaseException)
     def error(self, exception: BaseException) -> NoReturn
     def fatalError(self, exception: BaseException) -> NoReturn
 
@@ -89,9 +89,9 @@ class DOMEventStream:
     def __next__(self) -> Event
     def __iter__(self) -> Self
     def getEvent(self) -> Event | None
-    def expandNode(self, node: Document) -> None
-    def reset(self) -> None
-    def clear(self) -> None:
+    def expandNode(self, node: Document)
+    def reset(self)
+    def clear(self):
         """clear(): Explicitly release parsing objects"""
 
 class SAX2DOM(PullDOM):

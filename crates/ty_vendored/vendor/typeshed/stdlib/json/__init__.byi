@@ -177,7 +177,7 @@ def dump(
     default: ((dynamic) -> dynamic) | None = None,
     sort_keys: bool = False,
     **kwds: dynamic,
-) -> None:
+):
     """Serialize ``obj`` as a JSON formatted stream to ``fp`` (a
     ``.write()``-supporting file-like object).
 

@@ -73,7 +73,7 @@ class _DictConfigArgs(TypedDict, total=False):
 #
 # Also accept a TypedDict type, to allow callers to use TypedDict
 # types, and for somewhat stricter type checking of dict literals.
-def dictConfig(config: _DictConfigArgs | dict[str, dynamic]) -> None:
+def dictConfig(config: _DictConfigArgs | dict[str, dynamic]):
     """Configure logging using a dictionary."""
 
 def fileConfig(
@@ -81,7 +81,7 @@ def fileConfig(
     defaults: Mapping[str, str] | None = None,
     disable_existing_loggers: bool = True,
     encoding: str | None = None,
-) -> None:
+):
     """
     Read the logging configuration from a ConfigParser-format file.
 
@@ -112,7 +112,7 @@ def listen(port: int = 9030, verify: ((bytes) -> (bytes | None)) | None = None) 
     the bytes passed in.
     """
 
-def stopListening() -> None:
+def stopListening():
     """
     Stop the listening server which was created with a call to listen().
     """
@@ -200,7 +200,7 @@ class DictConfigurator(BaseConfigurator):
     configuration.
     """
 
-    def configure(self) -> None:  # undocumented
+    def configure(self):  # undocumented
         """Do the configuration."""
 
     def configure_formatter(self, config: FormatterConfiguration) -> Formatter | dynamic:  # undocumented
@@ -209,26 +209,26 @@ class DictConfigurator(BaseConfigurator):
     def configure_filter(self, config: FilterConfiguration) -> Filter | dynamic:  # undocumented
         """Configure a filter from a dictionary."""
 
-    def add_filters(self, filterer: Filterer, filters: Iterable[_FilterType]) -> None:  # undocumented
+    def add_filters(self, filterer: Filterer, filters: Iterable[_FilterType]):  # undocumented
         """Add filters to a filterer from a list of names."""
 
     def configure_handler(self, config: HandlerConfiguration) -> Handler | dynamic:  # undocumented
         """Configure a handler from a dictionary."""
 
-    def add_handlers(self, logger: Logger, handlers: Iterable[str]) -> None:  # undocumented
+    def add_handlers(self, logger: Logger, handlers: Iterable[str]):  # undocumented
         """Add handlers to a logger from a list of names."""
 
     def common_logger_config(
         self, logger: Logger, config: _LoggerConfiguration, incremental: bool = False
-    ) -> None:  # undocumented
+    ):  # undocumented
         """
         Perform configuration which is common to root and non-root loggers.
         """
 
-    def configure_logger(self, name: str, config: _LoggerConfiguration, incremental: bool = False) -> None:  # undocumented
+    def configure_logger(self, name: str, config: _LoggerConfiguration, incremental: bool = False):  # undocumented
         """Configure a non-root logger from a dictionary."""
 
-    def configure_root(self, config: _LoggerConfiguration, incremental: bool = False) -> None:  # undocumented
+    def configure_root(self, config: _LoggerConfiguration, incremental: bool = False):  # undocumented
         """Configure a root logger from a dictionary."""
 
 dictConfigClass = DictConfigurator

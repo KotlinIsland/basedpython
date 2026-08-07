@@ -10,13 +10,13 @@ class StackTraceCollector(Collector, metaclass=ABCMeta):
     init(self, sample_interval_usec: int, *, skip_idle: bool = False)
     def collect(
         self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None
-    ) -> None
-    def process_frames(self, frames: Sequence[_Frame], thread_id: int, weight: int = 1) -> None
+    )
+    def process_frames(self, frames: Sequence[_Frame], thread_id: int, weight: int = 1)
 
 class CollapsedStackCollector(StackTraceCollector):
     init(self, sample_interval_usec: int, *, skip_idle: bool = False)
     override def process_frames(self, frames: Sequence[_Frame], thread_id: int, weight: int = 1) -> None
-    def export(self, filename: StrOrBytesPath) -> None
+    def export(self, filename: StrOrBytesPath)
 
 class FlamegraphCollector(StackTraceCollector):
     init(self, sample_interval_usec: int, *, skip_idle: bool = False)
@@ -31,10 +31,10 @@ class FlamegraphCollector(StackTraceCollector):
         error_rate: float | None = None,
         missed_samples: float | None = None,
         mode: int | None = None,
-    ) -> None:
+    ):
         """Set profiling statistics to include in flamegraph data."""
 
-    def export(self, filename: StrOrBytesPath) -> None
+    def export(self, filename: StrOrBytesPath)
     override def process_frames(self, frames: Sequence[_Frame], thread_id: int, weight: int = 1) -> None:
         """Process stack frames into flamegraph tree structure.
 

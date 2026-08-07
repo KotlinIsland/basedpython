@@ -72,7 +72,7 @@ final class blake2b:
     def hexdigest(self) -> str:
         """Return the digest value as a string of hexadecimal digits."""
 
-    def update(self, data: ReadableBuffer, /) -> None:
+    def update(self, data: ReadableBuffer, /):
         """Update this hash object's state with the provided bytes-like object."""
 
 final class blake2s:
@@ -133,5 +133,5 @@ final class blake2s:
     def hexdigest(self) -> str:
         """Return the digest value as a string of hexadecimal digits."""
 
-    def update(self, data: ReadableBuffer, /) -> None:
+    def update(self, data: ReadableBuffer, /):
         """Update this hash object's state with the provided bytes-like object."""

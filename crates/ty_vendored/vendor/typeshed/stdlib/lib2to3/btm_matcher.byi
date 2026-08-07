@@ -34,7 +34,7 @@ class BottomMatcher:
     fixers: Incomplete
     logger: Incomplete
     init(self)
-    def add_fixer(self, fixer: BaseFix) -> None:
+    def add_fixer(self, fixer: BaseFix):
         """Reduces a fixer's pattern tree to a linear path and adds it
         to the matcher(a common Aho-Corasick automaton). The fixer is
         appended on the matching states and called when they are
@@ -61,7 +61,7 @@ class BottomMatcher:
            A dictionary of node matches with fixers as the keys
         """
 
-    def print_ac(self) -> None:
+    def print_ac(self):
         """Prints a graphviz diagram of the BM automaton(for debugging)"""
 
 def type_repr(type_num: int) -> str | int

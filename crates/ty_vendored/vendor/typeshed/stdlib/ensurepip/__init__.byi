@@ -13,7 +13,7 @@ def bootstrap(
     altinstall: bool = False,
     default_pip: bool = False,
     verbosity: int = 0,
-) -> None:
+):
     """
     Bootstrap pip into the current Python installation (or the given root
     directory).

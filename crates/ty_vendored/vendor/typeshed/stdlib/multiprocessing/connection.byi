@@ -24,13 +24,13 @@ class _ConnectionBase[in Send = dynamic, out RecvT = dynamic]:
     def fileno(self) -> int:
         """File descriptor or handle of the connection"""
 
-    def close(self) -> None:
+    def close(self):
         """Close the connection"""
 
-    def send_bytes(self, buf: ReadableBuffer, offset: int = 0, size: int | None = None) -> None:
+    def send_bytes(self, buf: ReadableBuffer, offset: int = 0, size: int | None = None):
         """Send the bytes data from a bytes-like object"""
 
-    def send(self, obj: Send) -> None:
+    def send(self, obj: Send):
         """Send a (picklable) object"""
 
     def recv_bytes(self, maxlength: int | None = None) -> bytes:
@@ -53,8 +53,8 @@ class _ConnectionBase[in Send = dynamic, out RecvT = dynamic]:
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None
-    ) -> None
-    def __del__(self) -> None
+    )
+    def __del__(self)
 
 class Connection[in Send = dynamic, out RecvT = dynamic](_ConnectionBase[Send, RecvT]):
     """
@@ -97,7 +97,7 @@ class Listener:
             Returns a `Connection` object.
             """
 
-    def close(self) -> None:
+    def close(self):
         """
         Close the bound socket or named pipe of `self`.
         """
@@ -107,7 +107,7 @@ class Listener:
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_value: BaseException | None, exc_tb: TracebackType | None
-    ) -> None
+    )
 
 # Any: send and recv methods unused
 if sys.version_info >= (3, 12):
@@ -116,7 +116,7 @@ if sys.version_info >= (3, 12):
 else:
     def deliver_challenge(connection: _ConnectionBase[dynamic, dynamic], authkey: bytes) -> None
 
-def answer_challenge(connection: _ConnectionBase[dynamic, dynamic], authkey: bytes) -> None
+def answer_challenge(connection: _ConnectionBase[dynamic, dynamic], authkey: bytes)
 def wait[Send = dynamic, RecvT = dynamic](
     object_list: Iterable[_ConnectionBase[Send, RecvT] | socket.socket | int], timeout: float | None = None
 ) -> list[_ConnectionBase[Send, RecvT] | socket.socket | int]:

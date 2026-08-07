@@ -17,7 +17,7 @@ class BaseProtocol:
     """
 
     __slots__ = ()
-    def connection_made(self, transport: transports.BaseTransport) -> None:
+    def connection_made(self, transport: transports.BaseTransport):
         """Called when a connection is made.
 
         The argument is the transport representing the pipe connection.
@@ -25,7 +25,7 @@ class BaseProtocol:
         When the connection is closed, connection_lost() is called.
         """
 
-    def connection_lost(self, exc: Exception | None) -> None:
+    def connection_lost(self, exc: Exception | None):
         """Called when the connection is lost or closed.
 
         The argument is an exception object or None (the latter
@@ -33,7 +33,7 @@ class BaseProtocol:
         aborted or closed).
         """
 
-    def pause_writing(self) -> None:
+    def pause_writing(self):
         """Called when the transport's buffer goes over the high-water mark.
 
         Pause and resume calls are paired -- pause_writing() is called
@@ -55,7 +55,7 @@ class BaseProtocol:
         without yielding until pause_writing() is called).
         """
 
-    def resume_writing(self) -> None:
+    def resume_writing(self):
         """Called when the transport's buffer drains below the low-water mark.
 
         See pause_writing() for details.
@@ -89,7 +89,7 @@ class Protocol(BaseProtocol):
 
     # Need annotation or mypy will complain about 'Cannot determine type of "__slots__" in base class'
     __slots__: (*: str) = ()
-    def data_received(self, data: bytes) -> None:
+    def data_received(self, data: bytes):
         """Called when some data is received.
 
         The argument is a bytes object.
@@ -139,7 +139,7 @@ class BufferedProtocol(BaseProtocol):
         It is an error to return a zero-sized buffer.
         """
 
-    def buffer_updated(self, nbytes: int) -> None:
+    def buffer_updated(self, nbytes: int):
         """Called when the buffer was updated with the received data.
 
         *nbytes* is the total number of bytes that were written to
@@ -170,10 +170,10 @@ class DatagramProtocol(BaseProtocol):
     # Use tuple[str | Any, int] to not cause typechecking issues on most usual cases.
     # This could be improved by using tuple[AnyOf[str, int], int] if the AnyOf feature is accepted.
     # See https://github.com/python/typing/issues/566
-    def datagram_received(self, data: bytes, addr: (str | dynamic, int)) -> None:
+    def datagram_received(self, data: bytes, addr: (str | dynamic, int)):
         """Called when some datagram is received."""
 
-    def error_received(self, exc: Exception) -> None:
+    def error_received(self, exc: Exception):
         """Called when a send or receive operation raises an OSError.
 
         (Other than BlockingIOError or InterruptedError.)
@@ -183,19 +183,19 @@ class SubprocessProtocol(BaseProtocol):
     """Interface for protocol for subprocess calls."""
 
     __slots__: (*: str) = ()
-    def pipe_data_received(self, fd: int, data: bytes) -> None:
+    def pipe_data_received(self, fd: int, data: bytes):
         """Called when the subprocess writes data into stdout/stderr pipe.
 
         fd is int file descriptor.
         data is bytes object.
         """
 
-    def pipe_connection_lost(self, fd: int, exc: Exception | None) -> None:
+    def pipe_connection_lost(self, fd: int, exc: Exception | None):
         """Called when a file descriptor associated with the child process is
         closed.
 
         fd is the int file descriptor that was closed.
         """
 
-    def process_exited(self) -> None:
+    def process_exited(self):
         """Called when subprocess has exited."""

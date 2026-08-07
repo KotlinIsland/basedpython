@@ -29,7 +29,7 @@ class ForkingPickler(pickle.Pickler):
         buffer_callback: _BufferCallback = None,
         /,
     )
-    class def register(cls, type: Type, reduce: (dynamic) -> _ReducedType) -> None:
+    class def register(cls, type: Type, reduce: (dynamic) -> _ReducedType):
         """Register a reduce function for a type."""
 
     class def dumps(cls, obj: dynamic, protocol: int | None = None) -> memoryview
@@ -38,7 +38,7 @@ class ForkingPickler(pickle.Pickler):
 register = ForkingPickler.register
 """Register a reduce function for a type."""
 
-def dump(obj: dynamic, file: SupportsWrite[bytes], protocol: int | None = None) -> None:
+def dump(obj: dynamic, file: SupportsWrite[bytes], protocol: int | None = None):
     """Replacement for pickle.dump() using ForkingPickler."""
 
 if sys.platform == "win32":
@@ -76,7 +76,7 @@ else:
     def recv_handle(conn: HasFileno) -> int:
         """Receive a handle over a local connection."""
 
-    def sendfds(sock: socket, fds: list[int]) -> None:
+    def sendfds(sock: socket, fds: list[int]):
         """Send an array of fds over an AF_UNIX socket."""
 
     def DupFd(fd: int) -> popen_forkserver._DupFd | popen_spawn_posix._DupFd | resource_sharer.DupFd:

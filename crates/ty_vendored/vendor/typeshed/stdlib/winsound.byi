@@ -48,7 +48,7 @@ if sys.platform == "win32":
         MB_ICONSTOP: Final = 16
         MB_ICONWARNING: Final = 48
 
-    def Beep(frequency: int, duration: int) -> None:
+    def Beep(frequency: int, duration: int):
         """A wrapper around the Windows Beep API.
 
         frequency
@@ -69,7 +69,7 @@ if sys.platform == "win32":
         """
     def PlaySound(sound: str | ReadableBuffer | None, flags: int) -> None
 
-    def MessageBeep(type: int = 0) -> None:
+    def MessageBeep(type: int = 0):
         """Call Windows MessageBeep(x).
 
         x defaults to MB_OK.

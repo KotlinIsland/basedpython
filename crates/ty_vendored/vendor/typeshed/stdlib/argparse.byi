@@ -139,9 +139,9 @@ class _ActionsContainer:
     _negative_number_matcher: Pattern[str]
     _has_negative_number_optionals: list[bool]
     init(self, description: str | None, prefix_chars: str, argument_default: dynamic, conflict_handler: str)
-    def register(self, registry_name: str, value: dynamic, object: dynamic) -> None
+    def register(self, registry_name: str, value: dynamic, object: dynamic)
     def _registry_get(self, registry_name: str, value: dynamic, default: dynamic = None) -> dynamic
-    def set_defaults(self, **kwargs: dynamic) -> None
+    def set_defaults(self, **kwargs: dynamic)
     def get_default(self, dest: str) -> dynamic
     def add_argument(
         self,
@@ -191,15 +191,15 @@ class _ActionsContainer:
 
     def add_mutually_exclusive_group(self, *, required: bool = False) -> _MutuallyExclusiveGroup
     def _add_action[ActionT: Action](self, action: ActionT) -> ActionT
-    def _remove_action(self, action: Action) -> None
-    def _add_container_actions(self, container: _ActionsContainer) -> None
+    def _remove_action(self, action: Action)
+    def _add_container_actions(self, container: _ActionsContainer)
     def _get_positional_kwargs(self, dest: str, **kwargs: dynamic) -> dict[str, dynamic]
     def _get_optional_kwargs(self, *args: dynamic, **kwargs: dynamic) -> dict[str, dynamic]
     def _pop_action_class(self, kwargs: dynamic, default: type[Action] | None = None) -> type[Action]
     def _get_handler(self) -> (Action, Iterable[(str, Action)]) -> dynamic
-    def _check_conflict(self, action: Action) -> None
+    def _check_conflict(self, action: Action)
     def _handle_conflict_error(self, action: Action, conflicting_actions: Iterable[(str, Action)]) -> NoReturn
-    def _handle_conflict_resolve(self, action: Action, conflicting_actions: Iterable[(str, Action)]) -> None
+    def _handle_conflict_resolve(self, action: Action, conflicting_actions: Iterable[(str, Action)])
 
 @type_check_only
 private protocol FormatterClass:
@@ -340,8 +340,8 @@ class ArgumentParser(_AttributeHolder, _ActionsContainer):
         metavar: str | None = None,
     ) -> _SubParsersAction[ArgumentParserT]
 
-    def print_usage(self, file: SupportsWrite[str] | None = None) -> None
-    def print_help(self, file: SupportsWrite[str] | None = None) -> None
+    def print_usage(self, file: SupportsWrite[str] | None = None)
+    def print_help(self, file: SupportsWrite[str] | None = None)
     if sys.version_info >= (3, 15):
         def format_usage(self, formatter: HelpFormatter | None = None) -> str
         def format_help(self, formatter: HelpFormatter | None = None) -> str
@@ -398,13 +398,13 @@ class ArgumentParser(_AttributeHolder, _ActionsContainer):
     def _get_nargs_pattern(self, action: Action) -> str
     def _get_values(self, action: Action, arg_strings: list[str]) -> dynamic
     def _get_value(self, action: Action, arg_string: str) -> dynamic
-    def _check_value(self, action: Action, value: dynamic) -> None
+    def _check_value(self, action: Action, value: dynamic)
     if sys.version_info >= (3, 15):
         def _get_formatter(self, file: SupportsWrite[str] | None = None) -> HelpFormatter
     else:
         def _get_formatter(self) -> HelpFormatter
 
-    def _print_message(self, message: str, file: SupportsWrite[str] | None = None) -> None
+    def _print_message(self, message: str, file: SupportsWrite[str] | None = None)
 
 class HelpFormatter:
     """Formatter for generating usage messages and argument help strings.
@@ -448,17 +448,17 @@ class HelpFormatter:
             self, prog: str, indent_increment: int = 2, max_help_position: int = 24, width: int | None = None
         ) -> None
 
-    def _indent(self) -> None
-    def _dedent(self) -> None
-    def _add_item(self, func: (...) -> str, args: Iterable[dynamic]) -> None
-    def start_section(self, heading: str | None) -> None
-    def end_section(self) -> None
-    def add_text(self, text: str | None) -> None
+    def _indent(self)
+    def _dedent(self)
+    def _add_item(self, func: (...) -> str, args: Iterable[dynamic])
+    def start_section(self, heading: str | None)
+    def end_section(self)
+    def add_text(self, text: str | None)
     def add_usage(
         self, usage: str | None, actions: Iterable[Action], groups: Iterable[_MutuallyExclusiveGroup], prefix: str | None = None
-    ) -> None
-    def add_argument(self, action: Action) -> None
-    def add_arguments(self, actions: Iterable[Action]) -> None
+    )
+    def add_argument(self, action: Action)
+    def add_arguments(self, actions: Iterable[Action])
     def format_help(self) -> str
     def _join_parts(self, part_strings: Iterable[str]) -> str
     def _format_usage(
@@ -603,7 +603,7 @@ class Action(_AttributeHolder):
 
     def __call__(
         self, parser: ArgumentParser, namespace: Namespace, values: str | Sequence[dynamic] | None, option_string: str | None = None
-    ) -> None
+    )
     def format_usage(self) -> str
 
 if sys.version_info >= (3, 12):

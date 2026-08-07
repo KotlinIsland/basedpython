@@ -11,7 +11,7 @@ class Random:
     """Random() -> create a random number generator with its own internal state."""
 
     init(self, seed: object = ..., /)
-    def seed(self, n: object = None, /) -> None:
+    def seed(self, n: object = None, /):
         """seed([n]) -> None.
 
         Defaults to use urandom and falls back to a combination
@@ -21,7 +21,7 @@ class Random:
     def getstate(self) -> State:
         """getstate() -> tuple containing the current state."""
 
-    def setstate(self, state: State, /) -> None:
+    def setstate(self, state: State, /):
         """setstate(state) -> None.  Restores generator state."""
 
     def random(self) -> float:

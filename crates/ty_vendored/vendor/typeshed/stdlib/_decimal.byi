@@ -47,7 +47,7 @@ final MIN_ETINY: int
 if sys.version_info >= (3, 14):
     final IEEE_CONTEXT_MAX_BITS: int
 
-def setcontext(context: Context, /) -> None:
+def setcontext(context: Context, /):
     """Set a new default context."""
 
 def getcontext() -> Context:

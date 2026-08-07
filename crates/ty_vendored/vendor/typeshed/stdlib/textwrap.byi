@@ -116,7 +116,7 @@ class TextWrapper:
         otherwise.
         """
 
-    def _fix_sentence_endings(self, chunks: list[str]) -> None:
+    def _fix_sentence_endings(self, chunks: list[str]):
         """_fix_sentence_endings(chunks : [string])
 
         Correct for sentence endings buried in 'chunks'.  Eg. when the
@@ -126,7 +126,7 @@ class TextWrapper:
         space to two.
         """
 
-    def _handle_long_word(self, reversed_chunks: list[str], cur_line: list[str], cur_len: int, width: int) -> None:
+    def _handle_long_word(self, reversed_chunks: list[str], cur_line: list[str], cur_len: int, width: int):
         """_handle_long_word(chunks : [string],
                              cur_line : [string],
                              cur_len : int, width : int)

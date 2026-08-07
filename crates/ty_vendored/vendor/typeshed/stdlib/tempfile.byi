@@ -421,7 +421,7 @@ class SpooledTemporaryFile(IO[AnyStr], _SpooledTemporaryFileBase):
     )
 
     let errors: str | None
-    def rollover(self) -> None
+    def rollover(self)
     override def __enter__(self) -> Self
     override def __exit__(self, exc: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None) -> None
     # These methods are copied from the abstract methods of IO, because
@@ -528,9 +528,9 @@ class TemporaryDirectory(Generic[AnyStr]):
             ignore_cleanup_errors: bool = False,
         ) -> None
 
-    def cleanup(self) -> None
+    def cleanup(self)
     def __enter__(self) -> AnyStr
-    def __exit__(self, exc: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None) -> None
+    def __exit__(self, exc: type[BaseException] | None, value: BaseException | None, tb: TracebackType | None)
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 

@@ -334,8 +334,8 @@ if sys.version_info >= (3, 12):
 
         def __eq__(self, value: object, /) -> bool
         def __getattribute__(self, name: str, /) -> dynamic
-        def __setattr__(self, name: str, value: dynamic, /) -> None
-        def __delattr__(self, name: str, /) -> None
+        def __setattr__(self, name: str, value: dynamic, /)
+        def __delattr__(self, name: str, /)
         if sys.version_info >= (3, 13):
             def __replace__(self, **kwargs: dynamic) -> Self:
                 """Return a copy of the namespace object with new values for the specified attributes."""
@@ -660,7 +660,7 @@ final class FrameType:
     f_trace_opcodes: bool
     """Return True if opcode tracing is enabled, False otherwise."""
 
-    def clear(self) -> None:
+    def clear(self):
         """Clear all references held by the frame."""
 
     if sys.version_info >= (3, 14):
@@ -678,10 +678,10 @@ if sys.version_info >= (3, 15):
 
         def __new__(cls, frame: FrameType, /) -> Self
         def __getitem__(self, key: str, /) -> dynamic
-        def __setitem__(self, key: str, value: dynamic, /) -> None:
+        def __setitem__(self, key: str, value: dynamic, /):
             """Set self[key] to value."""
 
-        def __delitem__(self, key: str, /) -> None:
+        def __delitem__(self, key: str, /):
             """Delete self[key]."""
 
         def __iter__(self) -> Iterator[str]:
@@ -695,7 +695,7 @@ if sys.version_info >= (3, 15):
         def copy(self) -> dict[str, dynamic]
         def pop(self, key: str, default: dynamic = ..., /) -> dynamic
         def setdefault(self, key: str, default: dynamic = ..., /) -> dynamic
-        def update(self, object: SupportsKeysAndGetItem[str, dynamic] | Iterable[(str, dynamic)], /) -> None
+        def update(self, object: SupportsKeysAndGetItem[str, dynamic] | Iterable[(str, dynamic)], /)
 
     final class LazyImportType:
         """Represents a lazy import that will be resolved on first use.
@@ -716,10 +716,10 @@ final class GetSetDescriptorType:
     def __get__(self, instance: dynamic, owner: type | None = None, /) -> dynamic:
         """Return an attribute of instance, which is of type owner."""
 
-    def __set__(self, instance: dynamic, value: dynamic, /) -> None:
+    def __set__(self, instance: dynamic, value: dynamic, /):
         """Set an attribute of instance to value."""
 
-    def __delete__(self, instance: dynamic, /) -> None:
+    def __delete__(self, instance: dynamic, /):
         """Delete an attribute of instance."""
 
 final class MemberDescriptorType:
@@ -729,10 +729,10 @@ final class MemberDescriptorType:
     def __get__(self, instance: dynamic, owner: type | None = None, /) -> dynamic:
         """Return an attribute of instance, which is of type owner."""
 
-    def __set__(self, instance: dynamic, value: dynamic, /) -> None:
+    def __set__(self, instance: dynamic, value: dynamic, /):
         """Set an attribute of instance to value."""
 
-    def __delete__(self, instance: dynamic, /) -> None:
+    def __delete__(self, instance: dynamic, /):
         """Delete an attribute of instance."""
 
 def new_class(

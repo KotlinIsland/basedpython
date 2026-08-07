@@ -16,12 +16,12 @@ COVERAGE_ID: Final = 1
 PROFILER_ID: Final = 2
 OPTIMIZER_ID: Final = 5
 
-def use_tool_id(tool_id: int, name: str, /) -> None
+def use_tool_id(tool_id: int, name: str, /)
 
 if sys.version_info >= (3, 14):
-    def clear_tool_id(tool_id: int, /) -> None
+    def clear_tool_id(tool_id: int, /)
 
-def free_tool_id(tool_id: int, /) -> None
+def free_tool_id(tool_id: int, /)
 def get_tool(tool_id: int, /) -> str | None
 
 final events: _events
@@ -57,10 +57,10 @@ class _events:
         final BRANCH: int
 
 def get_events(tool_id: int, /) -> int
-def set_events(tool_id: int, event_set: int, /) -> None
+def set_events(tool_id: int, event_set: int, /)
 def get_local_events(tool_id: int, code: CodeType, /) -> int
-def set_local_events(tool_id: int, code: CodeType, event_set: int, /) -> None
-def restart_events() -> None
+def set_local_events(tool_id: int, code: CodeType, event_set: int, /)
+def restart_events()
 
 final DISABLE: object
 final MISSING: object

@@ -89,7 +89,7 @@ class Lock(_ContextManagerMixin, _LoopBoundMixin):
         locked and returns True.
         """
 
-    def release(self) -> None:
+    def release(self):
         """Release a lock.
 
         When the lock is locked, reset it to unlocked, and return.
@@ -115,13 +115,13 @@ class Event(_LoopBoundMixin):
     def is_set(self) -> bool:
         """Return True if and only if the internal flag is true."""
 
-    def set(self) -> None:
+    def set(self):
         """Set the internal flag to true. All tasks waiting for it to
         become true are awakened. Tasks that call wait() once the flag is
         true will not block at all.
         """
 
-    def clear(self) -> None:
+    def clear(self):
         """Reset the internal flag to false. Subsequently, tasks calling
         wait() will block until set() is called to set the internal flag
         to true again.
@@ -149,7 +149,7 @@ class Condition(_ContextManagerMixin, _LoopBoundMixin):
     init(self, lock: Lock | None = None)
     def locked(self) -> bool
     async def acquire(self) -> True
-    def release(self) -> None
+    def release(self)
     async def wait(self) -> True:
         """Wait until notified.
 
@@ -175,7 +175,7 @@ class Condition(_ContextManagerMixin, _LoopBoundMixin):
         the return value.
         """
 
-    def notify(self, n: int = 1) -> None:
+    def notify(self, n: int = 1):
         """By default, wake up one task waiting on this condition, if any.
         If the calling task has not acquired the lock when this method
         is called, a RuntimeError is raised.
@@ -188,7 +188,7 @@ class Condition(_ContextManagerMixin, _LoopBoundMixin):
         not release the lock, its caller should.
         """
 
-    def notify_all(self) -> None:
+    def notify_all(self):
         """Wake up all tasks waiting on this condition. This method acts
         like notify(), but wakes up all waiting tasks instead of one. If the
         calling task has not acquired the lock when this method is called,
@@ -226,14 +226,14 @@ class Semaphore(_ContextManagerMixin, _LoopBoundMixin):
         True.
         """
 
-    def release(self) -> None:
+    def release(self):
         """Release a semaphore, incrementing the internal counter by one.
 
         When it was zero on entry and another task is waiting for it to
         become larger than zero again, wake up that task.
         """
 
-    def _wake_up_next(self) -> None:
+    def _wake_up_next(self):
         """Wake up the first waiter that isn't done."""
 
 class BoundedSemaphore(Semaphore):

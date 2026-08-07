@@ -111,7 +111,7 @@ class BaseSelector(metaclass=ABCMeta):
         `events` is a bitwise mask of EVENT_READ|EVENT_WRITE
         """
 
-    def close(self) -> None:
+    def close(self):
         """Close the selector.
 
         This must be called to make sure that any underlying resource is freed.
@@ -128,7 +128,7 @@ class BaseSelector(metaclass=ABCMeta):
         """Return a mapping of file objects to selector keys."""
 
     def __enter__(self) -> Self
-    def __exit__(self, *args: Unused) -> None
+    def __exit__(self, *args: Unused)
 
 class _BaseSelectorImpl(BaseSelector, metaclass=ABCMeta):
     """Base selector implementation."""

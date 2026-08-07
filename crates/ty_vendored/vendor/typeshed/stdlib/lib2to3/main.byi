@@ -71,7 +71,7 @@ class StdoutRefactoringTool(refactor.MultiprocessRefactoringTool):
     # filename has to be str
     override def print_output(self, old: str, new: str, filename: str, equal: bool) -> None
 
-def warn(msg: object) -> None
+def warn(msg: object)
 def main(fixer_pkg: str, args: Sequence[AnyStr] | None = None) -> 0 | 1 | 2:
     """Main program.
 

@@ -13,7 +13,7 @@ if sys.platform == "win32":
     SEM_NOALIGNMENTFAULTEXCEPT: Final = 0x0004
     SEM_NOGPFAULTERRORBOX: Final = 0x0002
     SEM_NOOPENFILEERRORBOX: Final = 0x8000
-    def locking(fd: int, mode: int, nbytes: int, /) -> None:
+    def locking(fd: int, mode: int, nbytes: int, /):
         """Lock part of a file based on file descriptor fd from the C runtime.
 
         Raises OSError on failure. The locked region of the file extends from
@@ -69,13 +69,13 @@ if sys.platform == "win32":
     def getwche() -> str:
         """Wide char variant of getche(), returning a Unicode value."""
 
-    def putch(char: bytes | bytearray, /) -> None:
+    def putch(char: bytes | bytearray, /):
         """Print the byte string char to the console without buffering."""
 
-    def putwch(unicode_char: str, /) -> None:
+    def putwch(unicode_char: str, /):
         """Wide char variant of putch(), accepting a Unicode value."""
 
-    def ungetch(char: bytes | bytearray, /) -> None:
+    def ungetch(char: bytes | bytearray, /):
         """Opposite of getch.
 
         Cause the byte string char to be "pushed back" into the
@@ -83,10 +83,10 @@ if sys.platform == "win32":
         getch() or getche().
         """
 
-    def ungetwch(unicode_char: str, /) -> None:
+    def ungetwch(unicode_char: str, /):
         """Wide char variant of ungetch(), accepting a Unicode value."""
 
-    def heapmin() -> None:
+    def heapmin():
         """Minimize the malloc() heap.
 
         Force the malloc() heap to clean itself up and return unused blocks

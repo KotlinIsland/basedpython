@@ -45,7 +45,7 @@ class Profiler:
             inlinetime    inline time (not in further subcalls)
         """
 
-    def enable(self, subcalls: bool = True, builtins: bool = True) -> None:
+    def enable(self, subcalls: bool = True, builtins: bool = True):
         """Start collecting profiling information.
 
         subcalls
@@ -56,10 +56,10 @@ class Profiler:
           built-in functions separately from their caller.
         """
 
-    def disable(self) -> None:
+    def disable(self):
         """Stop collecting profiling information."""
 
-    def clear(self) -> None:
+    def clear(self):
         """Clear all profiling information collected so far."""
 
 final class profiler_entry(structseq[dynamic], tuple[CodeType | str, int, int, float, float, list[profiler_subentry]]):

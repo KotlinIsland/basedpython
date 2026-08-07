@@ -413,7 +413,7 @@ class IncrementalEncoder:
         Encodes input and returns the resulting object.
         """
 
-    def reset(self) -> None:
+    def reset(self):
         """
         Resets the encoder to the initial state.
         """
@@ -424,7 +424,7 @@ class IncrementalEncoder:
         Return the current state of the encoder.
         """
 
-    def setstate(self, state: int | str) -> None:
+    def setstate(self, state: int | str):
         """
         Set the current state of the encoder. state must have been
         returned by getstate().
@@ -452,7 +452,7 @@ class IncrementalDecoder:
         Decode input and returns the resulting object.
         """
 
-    def reset(self) -> None:
+    def reset(self):
         """
         Reset the decoder to the initial state.
         """
@@ -470,7 +470,7 @@ class IncrementalDecoder:
         and after reset(), getstate() must return (b"", 0).
         """
 
-    def setstate(self, state: (bytes, int)) -> None:
+    def setstate(self, state: (bytes, int)):
         """
         Set the current state of the decoder.
 
@@ -530,15 +530,15 @@ class StreamWriter(Codec):
         register_error.
         """
 
-    def write(self, object: str) -> None:
+    def write(self, object: str):
         """Writes the object's contents encoded to self.stream."""
 
-    def writelines(self, list: Iterable[str]) -> None:
+    def writelines(self, list: Iterable[str]):
         """Writes the concatenated list of strings to the stream
         using .write().
         """
 
-    def reset(self) -> None:
+    def reset(self):
         """Resets the codec buffers used for keeping internal state.
 
         Calling this method should ensure that the data on the
@@ -548,9 +548,9 @@ class StreamWriter(Codec):
 
         """
 
-    def seek(self, offset: int, whence: int = 0) -> None
+    def seek(self, offset: int, whence: int = 0)
     def __enter__(self) -> Self
-    def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
+    def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None)
     def __getattr__(self, name: str, getattr: (dynamic, str) -> dynamic = ...) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 
@@ -625,7 +625,7 @@ class StreamReader(Codec):
 
         """
 
-    def reset(self) -> None:
+    def reset(self):
         """Resets the codec buffers used for keeping internal state.
 
         Note that no stream repositioning should take place.
@@ -634,14 +634,14 @@ class StreamReader(Codec):
 
         """
 
-    def seek(self, offset: int, whence: int = 0) -> None:
+    def seek(self, offset: int, whence: int = 0):
         """Set the input stream's current position.
 
         Resets the codec buffers used for keeping state.
         """
 
     def __enter__(self) -> Self
-    def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
+    def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None)
     def __iter__(self) -> Self
     def __next__(self) -> str:
         """Return the next decoded line from the input stream."""
@@ -684,7 +684,7 @@ class StreamReaderWriter(TextIO):
     override def __iter__(self) -> Self
     override def write(self, data: str) -> None
     override def writelines(self, list: Iterable[str]) -> None
-    def reset(self) -> None
+    def reset(self)
     override def seek(self, offset: int, whence: int = 0) -> None
     override def __enter__(self) -> Self
     override def __exit__(self, type: type[BaseException] | None, value: BaseException | None, tb: types.TracebackType | None) -> None
@@ -759,7 +759,7 @@ class StreamRecoder(BinaryIO):
     # Base class accepts more types than just bytes
     override def write(self, data: bytes) -> None
     override def writelines(self, list: Iterable[bytes]) -> None
-    def reset(self) -> None
+    def reset(self)
     def __getattr__(self, name: str) -> dynamic:
         """Inherit all other methods from the underlying stream."""
 

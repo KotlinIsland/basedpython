@@ -264,7 +264,7 @@ class Field[in out Element]:
             kw_only: bool,
         ) -> None
 
-    def __set_name__(self, owner: Type[dynamic], name: str) -> None
+    def __set_name__(self, owner: Type[dynamic], name: str)
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
         """Represent a PEP 585 generic type
 

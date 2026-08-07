@@ -22,8 +22,8 @@ class EmptyNodeList(tuple[()]):
     __slots__ = ()
     let length: 0
 
-    def item(self, index: int) -> None
+    def item(self, index: int)
     override def __add__[Element](self, other: Iterable[Element]) -> NodeList[Element]
     def __radd__[Element](self, other: Iterable[Element]) -> NodeList[Element]
 
-def defproperty(klass: type[dynamic], name: str, doc: str) -> None
+def defproperty(klass: type[dynamic], name: str, doc: str)

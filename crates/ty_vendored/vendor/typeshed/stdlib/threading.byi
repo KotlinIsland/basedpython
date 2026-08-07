@@ -106,14 +106,14 @@ def main_thread() -> Thread:
     Python interpreter was started.
     """
 
-def settrace(func: TraceFunction | None) -> None:
+def settrace(func: TraceFunction | None):
     """Set a trace function for all threads started from the threading module.
 
     The func will be passed to sys.settrace() for each thread, before its run()
     method is called.
     """
 
-def setprofile(func: ProfileFunction | None) -> None:
+def setprofile(func: ProfileFunction | None):
     """Set a profile function for all threads started from the threading module.
 
     The func will be passed to sys.setprofile() for each thread, before its
@@ -121,7 +121,7 @@ def setprofile(func: ProfileFunction | None) -> None:
     """
 
 if sys.version_info >= (3, 12):
-    def setprofile_all_threads(func: ProfileFunction | None) -> None:
+    def setprofile_all_threads(func: ProfileFunction | None):
         """Set a profile function for all threads started from the threading module
         and all Python threads that are currently executing.
 
@@ -129,7 +129,7 @@ if sys.version_info >= (3, 12):
         run() method is called.
         """
 
-    def settrace_all_threads(func: TraceFunction | None) -> None:
+    def settrace_all_threads(func: TraceFunction | None):
         """Set a trace function for all threads started from the threading module
         and all Python threads that are currently executing.
 
@@ -176,7 +176,7 @@ if sys.version_info >= (3, 15):
             Raises AttributeError if not a generator.
             """
 
-        def close(self) -> None:
+        def close(self):
             """Call close() on a generator.
 
             Raises AttributeError if not a generator.
@@ -347,7 +347,7 @@ class Thread:
 
             """
 
-    def start(self) -> None:
+    def start(self):
         """Start the thread's activity.
 
         It must be called at most once per thread object. It arranges for the
@@ -358,7 +358,7 @@ class Thread:
 
         """
 
-    def run(self) -> None:
+    def run(self):
         """Method representing the thread's activity.
 
         You may override this method in a subclass. The standard run() method
@@ -368,7 +368,7 @@ class Thread:
 
         """
 
-    def join(self, timeout: float | None = None) -> None:
+    def join(self, timeout: float | None = None):
         """Wait until the thread terminates.
 
         This blocks the calling thread until the thread whose join() method is
@@ -481,7 +481,7 @@ final class _RLock:
 
         """
 
-    def release(self) -> None:
+    def release(self):
         """Release a lock, decrementing the recursion level.
 
         If after the decrement it is zero, reset the lock to unlocked (not owned
@@ -499,7 +499,7 @@ final class _RLock:
         """
 
     __enter__ = acquire
-    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None
+    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None)
 
     if sys.version_info >= (3, 14):
         def locked(self) -> bool:
@@ -523,9 +523,9 @@ class Condition:
     def __enter__(self) -> bool
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None
+    )
     def acquire(self, blocking: bool = True, timeout: float = -1) -> bool
-    def release(self) -> None
+    def release(self)
     if sys.version_info >= (3, 14):
         def locked(self) -> bool
 
@@ -562,7 +562,7 @@ class Condition:
 
         """
 
-    def notify(self, n: int = 1) -> None:
+    def notify(self, n: int = 1):
         """Wake up one or more threads waiting on this condition, if any.
 
         If the calling thread has not acquired the lock when this method is
@@ -573,7 +573,7 @@ class Condition:
 
         """
 
-    def notify_all(self) -> None:
+    def notify_all(self):
         """Wake up all threads waiting on this condition.
 
         If the calling thread has not acquired the lock when this method
@@ -601,7 +601,7 @@ class Semaphore:
 
     _value: int
     init(self, value: int = 1)
-    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None) -> None
+    def __exit__(self, t: type[BaseException] | None, v: BaseException | None, tb: TracebackType | None)
     def acquire(self, blocking: bool = True, timeout: float | None = None) -> bool:
         """Acquire a semaphore, decrementing the internal counter by one.
 
@@ -652,7 +652,7 @@ class Semaphore:
 
         """
 
-    def release(self, n: int = 1) -> None:
+    def release(self, n: int = 1):
         """Release a semaphore, incrementing the internal counter by one or more.
 
         When the counter is zero on entry and another thread is waiting for it
@@ -697,7 +697,7 @@ class Event:
 
         """
 
-    def set(self) -> None:
+    def set(self):
         """Set the internal flag to true.
 
         All threads waiting for it to become true are awakened. Threads
@@ -705,7 +705,7 @@ class Event:
 
         """
 
-    def clear(self) -> None:
+    def clear(self):
         """Reset the internal flag to false.
 
         Subsequently, threads calling wait() will block until set() is called to
@@ -756,7 +756,7 @@ class Timer(Thread):
         args: Iterable[dynamic] | None = None,
         kwargs: Mapping[str, dynamic] | None = None,
     )
-    def cancel(self) -> None:
+    def cancel(self):
         """Stop the timer if it hasn't finished yet."""
 
 class Barrier:
@@ -794,7 +794,7 @@ class Barrier:
 
         """
 
-    def reset(self) -> None:
+    def reset(self):
         """Reset the barrier to the initial state.
 
         Any threads currently waiting will get the BrokenBarrier exception
@@ -802,7 +802,7 @@ class Barrier:
 
         """
 
-    def abort(self) -> None:
+    def abort(self):
         """Place the barrier into a 'broken' state.
 
         Useful in case of error.  Any currently waiting threads and threads

@@ -64,7 +64,7 @@ if sys.version_info >= (3, 14):
             password: _PasswordType | None = None,
             alpn_protocols: Iterable[str] | None = None,
         )
-        def server_activate(self) -> None:
+        def server_activate(self):
             """Wrap the socket in SSLSocket."""
 
     class ThreadingHTTPSServer(socketserver.ThreadingMixIn, HTTPSServer)
@@ -191,7 +191,7 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
     default_request_version: str  # undocumented
     weekdayname: ClassVar[Sequence[str]]  # undocumented
     monthname: ClassVar[Sequence[str | None]]  # undocumented
-    def handle_one_request(self) -> None:
+    def handle_one_request(self):
         """Handle a single HTTP request.
 
         You normally don't need to override this method; see the class
@@ -215,7 +215,7 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
 
         """
 
-    def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
+    def send_error(self, code: int, message: str | None = None, explain: str | None = None):
         """Send and log an error reply.
 
         Arguments are
@@ -233,7 +233,7 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
 
         """
 
-    def send_response(self, code: int, message: str | None = None) -> None:
+    def send_response(self, code: int, message: str | None = None):
         """Add the response header to the headers buffer and log the
         response code.
 
@@ -242,24 +242,24 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
 
         """
 
-    def send_header(self, keyword: str, value: str) -> None:
+    def send_header(self, keyword: str, value: str):
         """Send a MIME header to the headers buffer."""
 
-    def send_response_only(self, code: int, message: str | None = None) -> None:
+    def send_response_only(self, code: int, message: str | None = None):
         """Send the response header only."""
 
-    def end_headers(self) -> None:
+    def end_headers(self):
         """Send the blank line ending the MIME headers."""
 
-    def flush_headers(self) -> None
-    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+    def flush_headers(self)
+    def log_request(self, code: int | str = "-", size: int | str = "-"):
         """Log an accepted request.
 
         This is called by send_response().
 
         """
 
-    def log_error(self, format: str, *args: dynamic) -> None:
+    def log_error(self, format: str, *args: dynamic):
         """Log an error.
 
         This is called when a request cannot be fulfilled.  By
@@ -271,7 +271,7 @@ class BaseHTTPRequestHandler(socketserver.StreamRequestHandler):
 
         """
 
-    def log_message(self, format: str, *args: dynamic) -> None:
+    def log_message(self, format: str, *args: dynamic):
         """Log an arbitrary message.
 
         This is used by all other logging functions.  Override
@@ -351,10 +351,10 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
             directory: StrPath | None = None,
         ) -> None
 
-    def do_GET(self) -> None:
+    def do_GET(self):
         """Serve a GET request."""
 
-    def do_HEAD(self) -> None:
+    def do_HEAD(self):
         """Serve a HEAD request."""
 
     def send_head(self) -> io.BytesIO | BinaryIO | None:  # undocumented
@@ -387,7 +387,7 @@ class SimpleHTTPRequestHandler(BaseHTTPRequestHandler):
 
         """
 
-    def copyfile(self, source: SupportsRead[AnyStr], outputfile: SupportsWrite[AnyStr]) -> None:  # undocumented
+    def copyfile(self, source: SupportsRead[AnyStr], outputfile: SupportsWrite[AnyStr]):  # undocumented
         """Copy all data between two file objects.
 
         The SOURCE argument is a file object open for reading
@@ -433,7 +433,7 @@ if sys.version_info < (3, 15):
 
         cgi_directories: list[str]
         have_fork: bool  # undocumented
-        def do_POST(self) -> None:
+        def do_POST(self):
             """Serve a POST request.
 
             This is only implemented for CGI scripts.
@@ -462,5 +462,5 @@ if sys.version_info < (3, 15):
         def is_python(self, path: StrPath) -> bool:  # undocumented
             """Test whether argument path is a Python script."""
 
-        def run_cgi(self) -> None:  # undocumented
+        def run_cgi(self):  # undocumented
             """Execute a CGI script."""

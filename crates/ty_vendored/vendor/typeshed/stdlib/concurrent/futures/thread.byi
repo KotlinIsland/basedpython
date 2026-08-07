@@ -16,7 +16,7 @@ _threads_queues: Mapping[dynamic, dynamic]
 _shutdown: bool
 _global_shutdown_lock: Lock
 
-def _python_exit() -> None
+def _python_exit()
 
 
 private type Task = ((...) -> dynamic, (*: dynamic), dict[str, dynamic])
@@ -40,16 +40,16 @@ if sys.version_info >= (3, 14):
         def __init__[*Args](self, initializer: (*Args) -> object, initargs: (Unpack[Args],)) -> None
         init(self, initializer: () -> object, initargs: tuple[()])
 
-        def initialize(self) -> None
-        def finalize(self) -> None
-        def run(self, task: Task) -> None
+        def initialize(self)
+        def finalize(self)
+        def run(self, task: Task)
 
 if sys.version_info >= (3, 14):
     class _WorkItem[in out Other]:
         future: Future[dynamic]
         task: Task
         init(self, future: Future[dynamic], task: Task)
-        def run(self, ctx: WorkerContext) -> None
+        def run(self, ctx: WorkerContext)
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
             """Represent a PEP 585 generic type
 
@@ -66,7 +66,7 @@ else:
         args: Iterable[dynamic]
         kwargs: Mapping[str, dynamic]
         init(self, future: Future[Other], fn: (...) -> Other, args: Iterable[dynamic], kwargs: Mapping[str, dynamic])
-        def run(self) -> None
+        def run(self)
         def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
             """Represent a PEP 585 generic type
 
@@ -145,5 +145,5 @@ class ThreadPoolExecutor(Executor):
         initargs: (Unpack[Args],),
     ) -> None
 
-    def _adjust_thread_count(self) -> None
-    def _initializer_failed(self) -> None
+    def _adjust_thread_count(self)
+    def _initializer_failed(self)

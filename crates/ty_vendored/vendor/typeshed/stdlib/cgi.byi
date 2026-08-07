@@ -91,7 +91,7 @@ def parse_header(line: str) -> (str, dict[str, str]):
 
     """
 
-def test(environ: _Environ = os.environ) -> None:
+def test(environ: _Environ = os.environ):
     """Robust test CGI script, usable as main program.
 
     Write minimal HTTP headers and dump all information provided to
@@ -99,16 +99,16 @@ def test(environ: _Environ = os.environ) -> None:
 
     """
 
-def print_environ(environ: _Environ = os.environ) -> None:
+def print_environ(environ: _Environ = os.environ):
     """Dump the shell environment as HTML."""
 
-def print_form(form: dict[str, dynamic]) -> None:
+def print_form(form: dict[str, dynamic]):
     """Dump the contents of a form as HTML."""
 
-def print_directory() -> None:
+def print_directory():
     """Dump the current directory as HTML."""
 
-def print_environ_usage() -> None:
+def print_environ_usage():
     """Dump a list of environment variables used by CGI as HTML."""
 
 class MiniFieldStorage:
@@ -252,7 +252,7 @@ class FieldStorage:
         """
 
     def __enter__(self) -> Self
-    def __exit__(self, *args: Unused) -> None
+    def __exit__(self, *args: Unused)
     def __iter__(self) -> Iterator[str]
     def __getitem__(self, key: str) -> dynamic:
         """Dictionary style indexing."""
@@ -276,7 +276,7 @@ class FieldStorage:
         """Dictionary style len(x) support."""
 
     def __bool__(self) -> bool
-    def __del__(self) -> None
+    def __del__(self)
     # Returns bytes or str IO depending on an internal flag
     def make_file(self) -> IO[dynamic]:
         """Overridable: return a readable & writable file.
@@ -308,5 +308,5 @@ def print_exception(
     value: BaseException | None = None,
     tb: TracebackType | None = None,
     limit: int | None = None,
-) -> None
-def print_arguments() -> None
+)
+def print_arguments()

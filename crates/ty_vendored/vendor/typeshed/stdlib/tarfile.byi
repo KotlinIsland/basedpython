@@ -222,7 +222,7 @@ class TarFile:
     def __enter__(self) -> Self
     def __exit__(
         self, type: type[BaseException] | None, value: BaseException | None, traceback: TracebackType | None
-    ) -> None
+    )
     def __iter__(self) -> Iterator[TarInfo]:
         """Provide an iterator object."""
 
@@ -804,7 +804,7 @@ class TarFile:
         the same order as the list returned by getmembers().
         """
 
-    def list(self, verbose: bool = True, *, members: Iterable[TarInfo] | None = None) -> None:
+    def list(self, verbose: bool = True, *, members: Iterable[TarInfo] | None = None):
         """Print a table of contents to sys.stdout.
 
         If 'verbose' is False, only the names of the members are printed.
@@ -827,7 +827,7 @@ class TarFile:
         *,
         numeric_owner: bool = False,
         filter: _TarfileFilter | None = None,
-    ) -> None:
+    ):
         """Extract all members from the archive to the current working
         directory and set owner, modification time and permissions on
         directories afterwards. 'path' specifies a different directory
@@ -850,7 +850,7 @@ class TarFile:
         *,
         numeric_owner: bool = False,
         filter: _TarfileFilter | None = None,
-    ) -> None:
+    ):
         """Extract a member from the archive to the current working directory,
         using its full name. Its file information is extracted as accurately
         as possible. 'member' may be a filename or a TarInfo object. You can
@@ -873,7 +873,7 @@ class TarFile:
         *,
         filter_function: FilterFunction | None = None,
         extraction_root: str | None = None,
-    ) -> None:  # undocumented
+    ):  # undocumented
         """Extract the filtered TarInfo object tarinfo to a physical
         file called targetpath.
 
@@ -889,24 +889,24 @@ class TarFile:
         in the archive, KeyError is raised.
         """
 
-    def makedir(self, tarinfo: TarInfo, targetpath: StrOrBytesPath) -> None:  # undocumented
+    def makedir(self, tarinfo: TarInfo, targetpath: StrOrBytesPath):  # undocumented
         """Make a directory called targetpath."""
 
-    def makefile(self, tarinfo: TarInfo, targetpath: StrOrBytesPath) -> None:  # undocumented
+    def makefile(self, tarinfo: TarInfo, targetpath: StrOrBytesPath):  # undocumented
         """Make a file called targetpath."""
 
-    def makeunknown(self, tarinfo: TarInfo, targetpath: StrOrBytesPath) -> None:  # undocumented
+    def makeunknown(self, tarinfo: TarInfo, targetpath: StrOrBytesPath):  # undocumented
         """Make a file from a TarInfo object with an unknown type
         at targetpath.
         """
 
-    def makefifo(self, tarinfo: TarInfo, targetpath: StrOrBytesPath) -> None:  # undocumented
+    def makefifo(self, tarinfo: TarInfo, targetpath: StrOrBytesPath):  # undocumented
         """Make a fifo called targetpath."""
 
-    def makedev(self, tarinfo: TarInfo, targetpath: StrOrBytesPath) -> None:  # undocumented
+    def makedev(self, tarinfo: TarInfo, targetpath: StrOrBytesPath):  # undocumented
         """Make a character or block device called targetpath."""
 
-    def makelink(self, tarinfo: TarInfo, targetpath: StrOrBytesPath) -> None:  # undocumented
+    def makelink(self, tarinfo: TarInfo, targetpath: StrOrBytesPath):  # undocumented
         """Make a (symbolic) link called targetpath. If it cannot be created
         (platform limitation), we try to make a copy of the referenced file
         instead of a link.
@@ -914,7 +914,7 @@ class TarFile:
 
     def makelink_with_filter(
         self, tarinfo: TarInfo, targetpath: StrOrBytesPath, filter_function: FilterFunction, extraction_root: str
-    ) -> None:  # undocumented
+    ):  # undocumented
         """Make a (symbolic) link called targetpath. If it cannot be created
         (platform limitation), we try to make a copy of the referenced file
         instead of a link.
@@ -923,17 +923,17 @@ class TarFile:
         member (e.g. as fallback to creating a link).
         """
 
-    def chown(self, tarinfo: TarInfo, targetpath: StrOrBytesPath, numeric_owner: bool) -> None:  # undocumented
+    def chown(self, tarinfo: TarInfo, targetpath: StrOrBytesPath, numeric_owner: bool):  # undocumented
         """Set owner of targetpath according to tarinfo. If numeric_owner
         is True, use .gid/.uid instead of .gname/.uname. If numeric_owner
         is False, fall back to .gid/.uid when the search based on name
         fails.
         """
 
-    def chmod(self, tarinfo: TarInfo, targetpath: StrOrBytesPath) -> None:  # undocumented
+    def chmod(self, tarinfo: TarInfo, targetpath: StrOrBytesPath):  # undocumented
         """Set file permissions of targetpath according to tarinfo."""
 
-    def utime(self, tarinfo: TarInfo, targetpath: StrOrBytesPath) -> None:  # undocumented
+    def utime(self, tarinfo: TarInfo, targetpath: StrOrBytesPath):  # undocumented
         """Set modification time of targetpath according to tarinfo."""
 
     def add(
@@ -943,7 +943,7 @@ class TarFile:
         recursive: bool = True,
         *,
         filter: ((TarInfo) -> (TarInfo | None)) | None = None,
-    ) -> None:
+    ):
         """Add the file 'name' to the archive. 'name' may be any type of file
         (directory, fifo, symbolic link, etc.). If given, 'arcname'
         specifies an alternative name for the file in the archive.
@@ -954,7 +954,7 @@ class TarFile:
         excluded from the archive.
         """
 
-    def addfile(self, tarinfo: TarInfo, fileobj: SupportsRead[bytes] | None = None) -> None:
+    def addfile(self, tarinfo: TarInfo, fileobj: SupportsRead[bytes] | None = None):
         """Add the TarInfo object 'tarinfo' to the archive.
 
         If 'tarinfo' represents a non zero-size regular file, the 'fileobj'
@@ -975,7 +975,7 @@ class TarFile:
         string.
         """
 
-    def close(self) -> None:
+    def close(self):
         """Close the TarFile. In write-mode, two finishing zero blocks are
         appended to the archive.
         """

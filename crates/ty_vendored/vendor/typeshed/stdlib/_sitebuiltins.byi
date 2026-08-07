@@ -19,7 +19,7 @@ class _Printer:
 
     MAXLINES: ClassVar[23]
     init(self, name: str, data: str, files: Iterable[str] = (), dirs: Iterable[str] = ())
-    def __call__(self) -> None
+    def __call__(self)
 
 class _Helper:
     """Define the builtin 'help'.
@@ -31,4 +31,4 @@ class _Helper:
     Calling help(thing) prints help for the python object 'thing'.
     """
 
-    def __call__(self, request: object = ...) -> None
+    def __call__(self, request: object = ...)

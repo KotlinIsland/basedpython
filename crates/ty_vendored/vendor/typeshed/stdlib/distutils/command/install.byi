@@ -52,44 +52,44 @@ class install(Command):
     override def finalize_options(self) -> None:
         """Finalizes options."""
 
-    def dump_dirs(self, msg) -> None:
+    def dump_dirs(self, msg):
         """Dumps the list of user options."""
 
-    def finalize_unix(self) -> None:
+    def finalize_unix(self):
         """Finalizes options for posix platforms."""
 
-    def finalize_other(self) -> None:
+    def finalize_other(self):
         """Finalizes options for non-posix platforms"""
 
-    def select_scheme(self, name) -> None:
+    def select_scheme(self, name):
         """Sets the install directories by applying the install schemes."""
 
-    def expand_basedirs(self) -> None:
+    def expand_basedirs(self):
         """Calls `os.path.expanduser` on install_base, install_platbase and
         root.
         """
 
-    def expand_dirs(self) -> None:
+    def expand_dirs(self):
         """Calls `os.path.expanduser` on install dirs."""
 
-    def convert_paths(self, *names) -> None:
+    def convert_paths(self, *names):
         """Call `convert_path` over `names`."""
 
     path_file: Incomplete
     extra_dirs: Incomplete
-    def handle_extra_path(self) -> None:
+    def handle_extra_path(self):
         """Set `path_file` and `extra_dirs` using `extra_path`."""
 
-    def change_roots(self, *names) -> None:
+    def change_roots(self, *names):
         """Change the install directories pointed by name using root."""
 
-    def create_home_path(self) -> None:
+    def create_home_path(self):
         """Create directories under ~."""
 
     override def run(self) -> None:
         """Runs the command."""
 
-    def create_path_file(self) -> None:
+    def create_path_file(self):
         """Creates the .pth file"""
 
     def get_outputs(self):

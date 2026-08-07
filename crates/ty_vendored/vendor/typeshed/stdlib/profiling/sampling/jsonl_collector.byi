@@ -87,6 +87,6 @@ class JsonlCollector(StackTraceCollector):
     init(self, sample_interval_usec: int, *, skip_idle: bool = False, mode: int | None = None)
     def collect(
         self, stack_frames: Sequence[InterpreterInfo] | Sequence[AwaitedInfo], timestamps_us: _Timestamps = None
-    ) -> None
-    def export(self, filename: StrOrBytesPath) -> None
-    def process_frames(self, frames: Sequence[_Frame], _thread_id: int, weight: int = 1) -> None
+    )
+    def export(self, filename: StrOrBytesPath)
+    def process_frames(self, frames: Sequence[_Frame], _thread_id: int, weight: int = 1)

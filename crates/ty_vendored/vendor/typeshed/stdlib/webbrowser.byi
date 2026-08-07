@@ -11,7 +11,7 @@ class Error(Exception)
 
 def register(
     name: str, klass: (() -> BaseBrowser) | None, instance: BaseBrowser | None = None, *, preferred: bool = False
-) -> None:
+):
     """Register a browser connector."""
 
 def get(using: str | None = None) -> BaseBrowser:

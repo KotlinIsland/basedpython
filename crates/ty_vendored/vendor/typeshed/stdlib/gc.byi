@@ -44,10 +44,10 @@ def collect(generation: int = 2) -> int:
     The number of unreachable objects is returned.
     """
 
-def disable() -> None:
+def disable():
     """Disable automatic garbage collection."""
 
-def enable() -> None:
+def enable():
     """Enable automatic garbage collection."""
 
 def get_count() -> (int, int, int):
@@ -66,7 +66,7 @@ def get_objects(generation: int | None = None) -> list[dynamic]:
     collector that are in that generation.
     """
 
-def freeze() -> None:
+def freeze():
     """Freeze all current tracked objects and ignore them for future collections.
 
     This can be used before a POSIX fork() call to make the gc copy-on-write
@@ -75,7 +75,7 @@ def freeze() -> None:
     allocation which can cause copy-on-write.
     """
 
-def unfreeze() -> None:
+def unfreeze():
     """Unfreeze all objects in the permanent generation.
 
     Put all objects in the permanent generation back into oldest generation.
@@ -108,7 +108,7 @@ def is_finalized(obj: dynamic, /) -> bool:
 def isenabled() -> bool:
     """Returns true if automatic garbage collection is enabled."""
 
-def set_debug(flags: int, /) -> None:
+def set_debug(flags: int, /):
     """Set the garbage collection debugging flags.
 
       flags
@@ -123,7 +123,7 @@ def set_debug(flags: int, /) -> None:
     Debugging information is written to sys.stderr.
     """
 
-def set_threshold(threshold0: int, threshold1: int = 0, threshold2: int = 0, /) -> None:
+def set_threshold(threshold0: int, threshold1: int = 0, threshold2: int = 0, /):
     """set_threshold(threshold0, [threshold1, [threshold2]])
     Set the collection thresholds (the collection frequency).
 

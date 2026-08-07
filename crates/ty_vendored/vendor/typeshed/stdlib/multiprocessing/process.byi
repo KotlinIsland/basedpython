@@ -28,33 +28,33 @@ class BaseProcess:
         *,
         daemon: bool | None = None,
     )
-    def run(self) -> None:
+    def run(self):
         """
         Method to be run in sub-process; can be overridden in sub-class
         """
 
-    def start(self) -> None:
+    def start(self):
         """
         Start child process
         """
 
     if sys.version_info >= (3, 14):
-        def interrupt(self) -> None:
+        def interrupt(self):
             """
             Terminate process; sends SIGINT signal
             """
 
-    def terminate(self) -> None:
+    def terminate(self):
         """
         Terminate process; sends SIGTERM signal or uses TerminateProcess()
         """
 
-    def kill(self) -> None:
+    def kill(self):
         """
         Terminate process; sends SIGKILL signal or uses TerminateProcess()
         """
 
-    def close(self) -> None:
+    def close(self):
         """
         Close the Process object.
 
@@ -62,7 +62,7 @@ class BaseProcess:
         an error to call this method if the child process is still running.
         """
 
-    def join(self, timeout: float | None = None) -> None:
+    def join(self, timeout: float | None = None):
         """
         Wait until child process terminates
         """

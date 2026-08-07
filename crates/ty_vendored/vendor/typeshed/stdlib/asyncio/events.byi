@@ -80,8 +80,8 @@ class Handle:
     init(
         self, callback: (...) -> object, args: Sequence[dynamic], loop: AbstractEventLoop, context: Context | None = None
     )
-    def cancel(self) -> None
-    def _run(self) -> None
+    def cancel(self)
+    def _run(self)
     def cancelled(self) -> bool
     if sys.version_info >= (3, 12):
         def get_context(self) -> Context
@@ -115,14 +115,14 @@ class TimerHandle(Handle):
 class AbstractServer:
     """Abstract server returned by create_server()."""
 
-    abstract def close(self) -> None:
+    abstract def close(self):
         """Stop serving.  This leaves existing connections open."""
 
     if sys.version_info >= (3, 13):
-        abstract def close_clients(self) -> None:
+        abstract def close_clients(self):
             """Close all active connections."""
 
-        abstract def abort_clients(self) -> None:
+        abstract def abort_clients(self):
             """Close all active connections immediately."""
 
     async def __aenter__(self) -> Self
@@ -153,7 +153,7 @@ class AbstractEventLoop:
     """Abstract event loop."""
 
     slow_callback_duration: float
-    abstract def run_forever(self) -> None:
+    abstract def run_forever(self):
         """Run the event loop until stop() is called."""
 
     abstract def run_until_complete[Element](self, future: _AwaitableLike[Element]) -> Element:
@@ -162,7 +162,7 @@ class AbstractEventLoop:
         Return the Future's result, or raise its exception.
         """
 
-    abstract def stop(self) -> None:
+    abstract def stop(self):
         """Stop the event loop as soon as reasonable.
 
         Exactly how soon that is may depend on the implementation, but
@@ -175,7 +175,7 @@ class AbstractEventLoop:
     abstract def is_closed(self) -> bool:
         """Returns True if the event loop was closed."""
 
-    abstract def close(self) -> None:
+    abstract def close(self):
         """Close the loop.
 
         The loop should not be running.
@@ -219,7 +219,7 @@ class AbstractEventLoop:
     else:
         abstract def create_task[Element](self, coro: _CoroutineLike[Element], *, name: str | None = None) -> Task[Element]
 
-    abstract def set_task_factory(self, factory: _TaskFactory | None) -> None
+    abstract def set_task_factory(self, factory: _TaskFactory | None)
     abstract def get_task_factory(self) -> _TaskFactory | None
     # Methods for interacting with threads
     # "context" added in 3.9.10/3.10.2
@@ -227,7 +227,7 @@ class AbstractEventLoop:
         self, callback: (*Args) -> object, *args: *Args, context: Context | None = None
     ) -> Handle
     abstract def run_in_executor[*Args, Element](self, executor: Executor | None, func: (*Args) -> Element, *args: *Args) -> Future[Element]
-    abstract def set_default_executor(self, executor: Executor) -> None
+    abstract def set_default_executor(self, executor: Executor)
     # Network I/O methods returning Futures.
     abstract async def getaddrinfo(
         self,
@@ -846,9 +846,9 @@ class AbstractEventLoop:
         errors: None = None,
         **kwargs: dynamic,
     ) -> (SubprocessTransport, ProtocolT)
-    abstract def add_reader[*Args](self, fd: FileDescriptorLike, callback: (*Args) -> dynamic, *args: *Args) -> None
+    abstract def add_reader[*Args](self, fd: FileDescriptorLike, callback: (*Args) -> dynamic, *args: *Args)
     abstract def remove_reader(self, fd: FileDescriptorLike) -> bool
-    abstract def add_writer[*Args](self, fd: FileDescriptorLike, callback: (*Args) -> dynamic, *args: *Args) -> None
+    abstract def add_writer[*Args](self, fd: FileDescriptorLike, callback: (*Args) -> dynamic, *args: *Args)
     abstract def remove_writer(self, fd: FileDescriptorLike) -> bool
     abstract async def sock_recv(self, sock: socket, nbytes: int) -> bytes
     abstract async def sock_recv_into(self, sock: socket, buf: WriteableBuffer) -> int
@@ -860,16 +860,16 @@ class AbstractEventLoop:
         abstract async def sock_recvfrom_into(self, sock: socket, buf: WriteableBuffer, nbytes: int = 0) -> (int, _RetAddress)
         abstract async def sock_sendto(self, sock: socket, data: ReadableBuffer, address: _Address) -> int
     # Signal handling.
-    abstract def add_signal_handler[*Args](self, sig: int, callback: (*Args) -> object, *args: *Args) -> None
+    abstract def add_signal_handler[*Args](self, sig: int, callback: (*Args) -> object, *args: *Args)
     abstract def remove_signal_handler(self, sig: int) -> bool
     # Error handlers.
-    abstract def set_exception_handler(self, handler: ExceptionHandler | None) -> None
+    abstract def set_exception_handler(self, handler: ExceptionHandler | None)
     abstract def get_exception_handler(self) -> ExceptionHandler | None
-    abstract def default_exception_handler(self, context: _Context) -> None
-    abstract def call_exception_handler(self, context: _Context) -> None
+    abstract def default_exception_handler(self, context: _Context)
+    abstract def call_exception_handler(self, context: _Context)
     # Debug flag management.
     abstract def get_debug(self) -> bool
-    abstract def set_debug(self, enabled: bool) -> None
+    abstract def set_debug(self, enabled: bool)
     abstract async def shutdown_default_executor(self) -> None:
         """Schedule the shutdown of the default executor."""
 
@@ -887,7 +887,7 @@ if sys.version_info >= (3, 14):
             It should never return None.
             """
 
-        abstract def set_event_loop(self, loop: AbstractEventLoop | None) -> None:
+        abstract def set_event_loop(self, loop: AbstractEventLoop | None):
             """Set the event loop for the current context to loop."""
 
         abstract def new_event_loop(self) -> AbstractEventLoop:
@@ -900,7 +900,7 @@ else:
     @type_check_only
     class _AbstractEventLoopPolicy:
         abstract def get_event_loop(self) -> AbstractEventLoop
-        abstract def set_event_loop(self, loop: AbstractEventLoop | None) -> None
+        abstract def set_event_loop(self, loop: AbstractEventLoop | None)
         abstract def new_event_loop(self) -> AbstractEventLoop
         # Child processes handling (Unix only).
         @abstractmethod
@@ -932,7 +932,7 @@ if sys.version_info >= (3, 14):
             Returns an instance of EventLoop or raises an exception.
             """
 
-        def set_event_loop(self, loop: AbstractEventLoop | None) -> None:
+        def set_event_loop(self, loop: AbstractEventLoop | None):
             """Set the event loop."""
 
         def new_event_loop(self) -> AbstractEventLoop:
@@ -976,7 +976,7 @@ if sys.version_info >= (3, 14):
     def _get_event_loop_policy() -> _AbstractEventLoopPolicy:
         """Get the current event loop policy."""
 
-    def _set_event_loop_policy(policy: _AbstractEventLoopPolicy | None) -> None:
+    def _set_event_loop_policy(policy: _AbstractEventLoopPolicy | None):
         """Set the current event loop policy.
 
         If policy is None, the default policy is restored.
@@ -993,7 +993,7 @@ def set_event_loop_policy(policy: _AbstractEventLoopPolicy | None) -> None:
     If policy is None, the default policy is restored.
     """
 
-def set_event_loop(loop: AbstractEventLoop | None) -> None:
+def set_event_loop(loop: AbstractEventLoop | None):
     """Equivalent to calling get_event_loop_policy().set_event_loop(loop)."""
 
 def new_event_loop() -> AbstractEventLoop:

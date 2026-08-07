@@ -104,7 +104,7 @@ if sys.version_info < (3, 11):
             called without arguments.
             """
 
-        def feed_eof(self) -> None:
+        def feed_eof(self):
             """Send a potentially "ragged" EOF.
 
             This method will raise an SSL_ERROR_EOF exception if the EOF is
@@ -170,7 +170,7 @@ class _SSLProtocolTransport(transports._FlowControlMixin, transports.Transport):
     if sys.version_info >= (3, 11):
         def get_write_buffer_limits(self) -> (int, int)
         def get_read_buffer_limits(self) -> (int, int)
-        def set_read_buffer_limits(self, high: int | None = None, low: int | None = None) -> None:
+        def set_read_buffer_limits(self, high: int | None = None, low: int | None = None):
             """Set the high- and low-water limits for read flow control.
 
             These two values control when to call the upstream transport's
@@ -193,7 +193,7 @@ class _SSLProtocolTransport(transports._FlowControlMixin, transports.Transport):
         def get_read_buffer_size(self) -> int:
             """Return the current size of the read buffer."""
 
-    def __del__(self) -> None
+    def __del__(self)
 
 if sys.version_info >= (3, 11):
     _SSLProtocolBase: TypeAlias = protocols.BufferedProtocol
@@ -256,8 +256,8 @@ class SSLProtocol(_SSLProtocolBase):
             ssl_handshake_timeout: int | None = None,
         ) -> None
 
-    def _set_app_protocol(self, app_protocol: protocols.BaseProtocol) -> None
-    def _wakeup_waiter(self, exc: BaseException | None = None) -> None
+    def _set_app_protocol(self, app_protocol: protocols.BaseProtocol)
+    def _wakeup_waiter(self, exc: BaseException | None = None)
     override def connection_lost(self, exc: BaseException | None) -> None:
         """Called when the low-level connection is lost or closed.
 
@@ -276,20 +276,20 @@ class SSLProtocol(_SSLProtocolBase):
         """
 
     def _get_extra_info(self, name: str, default: dynamic | None = None) -> dynamic
-    def _start_shutdown(self) -> None
+    def _start_shutdown(self)
     if sys.version_info >= (3, 11):
         def _write_appdata(self, list_of_data: list[bytes]) -> None
     else:
         def _write_appdata(self, data: bytes) -> None
 
-    def _start_handshake(self) -> None
-    def _check_handshake_timeout(self) -> None
-    def _on_handshake_complete(self, handshake_exc: BaseException | None) -> None
-    def _fatal_error(self, exc: BaseException, message: str = "Fatal error on transport") -> None
+    def _start_handshake(self)
+    def _check_handshake_timeout(self)
+    def _on_handshake_complete(self, handshake_exc: BaseException | None)
+    def _fatal_error(self, exc: BaseException, message: str = "Fatal error on transport")
     if sys.version_info >= (3, 11):
         def _abort(self, exc: BaseException | None) -> None
         def get_buffer(self, n: int) -> memoryview
     else:
         def _abort(self) -> None
-        def _finalize(self) -> None
-        def _process_write_backlog(self) -> None
+        def _finalize(self)
+        def _process_write_backlog(self)

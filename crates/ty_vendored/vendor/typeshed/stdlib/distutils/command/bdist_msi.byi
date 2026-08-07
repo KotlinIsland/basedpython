@@ -22,7 +22,7 @@ if sys.platform == "win32":
             default, cancel, bitmap=true)
             """
 
-        def title(self, title) -> None:
+        def title(self, title):
             """Set the title text of the dialog at the top."""
 
         def back(self, title, next, name: str = "Back", active: bool | 0 | 1 = 1) -> Control:
@@ -72,13 +72,13 @@ if sys.platform == "win32":
         install_script: Incomplete
         pre_install_script: Incomplete
         versions: Incomplete
-        def initialize_options(self) -> None
+        def initialize_options(self)
         install_script_key: Incomplete
-        def finalize_options(self) -> None
+        def finalize_options(self)
         db: Incomplete
-        def run(self) -> None
-        def add_files(self) -> None
-        def add_find_python(self) -> None:
+        def run(self)
+        def add_files(self)
+        def add_find_python(self):
             """Adds code to the installer to compute the location of Python.
 
             Properties PYTHON.MACHINE.X.Y and PYTHON.USER.X.Y will be set from the
@@ -90,6 +90,6 @@ if sys.platform == "win32":
             Properties PYTHONX.Y will be set to TARGETDIRX.Y\\python.exe
             """
 
-        def add_scripts(self) -> None
-        def add_ui(self) -> None
+        def add_scripts(self)
+        def add_ui(self)
         def get_installer_filename(self, fullname)

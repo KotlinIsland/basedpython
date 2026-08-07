@@ -38,9 +38,9 @@ if sys.platform != "win32":
         """
 
         # default value is select.POLLIN | select.POLLPRI | select.POLLOUT
-        def register(self, fd: FileDescriptorLike, eventmask: int = 7, /) -> None
-        def modify(self, fd: FileDescriptorLike, eventmask: int, /) -> None
-        def unregister(self, fd: FileDescriptorLike, /) -> None
+        def register(self, fd: FileDescriptorLike, eventmask: int = 7, /)
+        def modify(self, fd: FileDescriptorLike, eventmask: int, /)
+        def unregister(self, fd: FileDescriptorLike, /)
         def poll(self, timeout: float | None = None, /) -> list[(int, int)]
 
 
@@ -125,7 +125,7 @@ if sys.platform != "linux" and sys.platform != "win32":
         """True if the kqueue handler is closed"""
 
         init(self)
-        def close(self) -> None:
+        def close(self):
             """Close the kqueue control file descriptor.
 
             Further operations on the kqueue object will raise an exception.
@@ -215,8 +215,8 @@ if sys.platform == "linux":
             exc_value: BaseException | None = None,
             exc_tb: TracebackType | None = None,
             /,
-        ) -> None
-        def close(self) -> None:
+        )
+        def close(self):
             """Close the epoll control file descriptor.
 
             Further operations on the epoll object will raise an exception.
@@ -228,7 +228,7 @@ if sys.platform == "linux":
         def fileno(self) -> int:
             """Return the epoll control file descriptor."""
 
-        def register(self, fd: FileDescriptorLike, eventmask: int = ...) -> None:
+        def register(self, fd: FileDescriptorLike, eventmask: int = ...):
             """Registers a new fd or raises an OSError if the fd is already registered.
 
               fd
@@ -239,7 +239,7 @@ if sys.platform == "linux":
             The epoll interface supports all file descriptors that support poll.
             """
 
-        def modify(self, fd: FileDescriptorLike, eventmask: int) -> None:
+        def modify(self, fd: FileDescriptorLike, eventmask: int):
             """Modify event mask for a registered file descriptor.
 
             fd
@@ -248,7 +248,7 @@ if sys.platform == "linux":
               a bit set composed of the various EPOLL constants
             """
 
-        def unregister(self, fd: FileDescriptorLike) -> None:
+        def unregister(self, fd: FileDescriptorLike):
             """Remove a registered file descriptor from the epoll object.
 
             fd
@@ -292,10 +292,10 @@ if sys.platform == "linux":
 if sys.platform != "linux" and sys.platform != "darwin" and sys.platform != "win32":
     # Solaris only
     final class devpoll:
-        def close(self) -> None
+        def close(self)
         closed: bool
         def fileno(self) -> int
-        def register(self, fd: FileDescriptorLike, eventmask: int = ...) -> None
-        def modify(self, fd: FileDescriptorLike, eventmask: int = ...) -> None
-        def unregister(self, fd: FileDescriptorLike) -> None
+        def register(self, fd: FileDescriptorLike, eventmask: int = ...)
+        def modify(self, fd: FileDescriptorLike, eventmask: int = ...)
+        def unregister(self, fd: FileDescriptorLike)
         def poll(self, timeout: float | None = None) -> list[(int, int)]

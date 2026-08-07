@@ -48,7 +48,7 @@ class check(Command):
     override def run(self) -> None:
         """Runs the command."""
 
-    def check_metadata(self) -> None:
+    def check_metadata(self):
         """Ensures that all required elements of meta-data are supplied.
 
         Required fields:
@@ -60,5 +60,5 @@ class check(Command):
         Warns if any are missing.
         """
 
-    def check_restructuredtext(self) -> None:
+    def check_restructuredtext(self):
         """Checks if the long string fields are reST-compliant."""

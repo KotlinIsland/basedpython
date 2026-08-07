@@ -55,5 +55,5 @@ class bdist_rpm(Command):
     quiet: int
     override def initialize_options(self) -> None
     override def finalize_options(self) -> None
-    def finalize_package_data(self) -> None
+    def finalize_package_data(self)
     override def run(self) -> None

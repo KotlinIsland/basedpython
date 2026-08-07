@@ -138,8 +138,8 @@ class DateTime:
     override def __eq__(self, other: DateTimeComparable) -> bool
     def make_comparable(self, other: DateTimeComparable) -> (str, str)  # undocumented
     def timetuple(self) -> time.struct_time  # undocumented
-    def decode(self, data: dynamic) -> None
-    def encode(self, out: SupportsWrite[str]) -> None
+    def decode(self, data: dynamic)
+    def encode(self, out: SupportsWrite[str])
 
 def _datetime(data: dynamic) -> DateTime  # undocumented
 def _datetime_type(data: str) -> datetime  # undocumented
@@ -149,8 +149,8 @@ class Binary:
 
     data: bytes
     init(self, data: bytes | bytearray | None = None)
-    def decode(self, data: ReadableBuffer) -> None
-    def encode(self, out: SupportsWrite[str]) -> None
+    def decode(self, data: ReadableBuffer)
+    def encode(self, out: SupportsWrite[str])
     override def __eq__(self, other: object) -> bool
     __hash__: ClassVar[None]
 
@@ -160,8 +160,8 @@ final WRAPPERS: (type[DateTime], type[Binary])  # undocumented
 
 class ExpatParser:  # undocumented
     init(self, target: Unmarshaller)
-    def feed(self, data: str | ReadableBuffer) -> None
-    def close(self) -> None
+    def feed(self, data: str | ReadableBuffer)
+    def close(self)
 
 private type WriteCallback = (str) -> object
 
@@ -182,20 +182,20 @@ class Marshaller:
     allow_none: bool
     init(self, encoding: str | None = None, allow_none: bool = False)
     def dumps(self, values: Fault | Iterable[_Marshallable]) -> str
-    def __dump(self, value: _Marshallable, write: WriteCallback) -> None  # undocumented
-    def dump_nil(self, value: None, write: WriteCallback) -> None
-    def dump_bool(self, value: bool, write: WriteCallback) -> None
-    def dump_long(self, value: int, write: WriteCallback) -> None
-    def dump_int(self, value: int, write: WriteCallback) -> None
-    def dump_double(self, value: float, write: WriteCallback) -> None
-    def dump_unicode(self, value: str, write: WriteCallback, escape: (str) -> str = ...) -> None
-    def dump_bytes(self, value: ReadableBuffer, write: WriteCallback) -> None
-    def dump_array(self, value: Iterable[_Marshallable], write: WriteCallback) -> None
+    def __dump(self, value: _Marshallable, write: WriteCallback)  # undocumented
+    def dump_nil(self, value: None, write: WriteCallback)
+    def dump_bool(self, value: bool, write: WriteCallback)
+    def dump_long(self, value: int, write: WriteCallback)
+    def dump_int(self, value: int, write: WriteCallback)
+    def dump_double(self, value: float, write: WriteCallback)
+    def dump_unicode(self, value: str, write: WriteCallback, escape: (str) -> str = ...)
+    def dump_bytes(self, value: ReadableBuffer, write: WriteCallback)
+    def dump_array(self, value: Iterable[_Marshallable], write: WriteCallback)
     def dump_struct(
         self, value: Mapping[str, _Marshallable], write: WriteCallback, escape: (str) -> str = ...
-    ) -> None
-    def dump_datetime(self, value: XMLDate, write: WriteCallback) -> None
-    def dump_instance(self, value: object, write: WriteCallback) -> None
+    )
+    def dump_datetime(self, value: XMLDate, write: WriteCallback)
+    def dump_instance(self, value: object, write: WriteCallback)
 
 class Unmarshaller:
     """Unmarshal an XML-RPC response, based on incoming XML event
@@ -221,32 +221,32 @@ class Unmarshaller:
     init(self, use_datetime: bool = False, use_builtin_types: bool = False)
     def close(self) -> (*: _Marshallable)
     def getmethodname(self) -> str | None
-    def xml(self, encoding: str, standalone: dynamic) -> None  # Standalone is ignored
-    def start(self, tag: str, attrs: dict[str, str]) -> None
-    def data(self, text: str) -> None
-    def end(self, tag: str) -> None
-    def end_dispatch(self, tag: str, data: str) -> None
-    def end_nil(self, data: str) -> None
-    def end_boolean(self, data: str) -> None
-    def end_int(self, data: str) -> None
-    def end_double(self, data: str) -> None
-    def end_bigdecimal(self, data: str) -> None
-    def end_string(self, data: str) -> None
-    def end_array(self, data: str) -> None
-    def end_struct(self, data: str) -> None
-    def end_base64(self, data: str) -> None
-    def end_dateTime(self, data: str) -> None
-    def end_value(self, data: str) -> None
-    def end_params(self, data: str) -> None
-    def end_fault(self, data: str) -> None
-    def end_methodName(self, data: str) -> None
+    def xml(self, encoding: str, standalone: dynamic)  # Standalone is ignored
+    def start(self, tag: str, attrs: dict[str, str])
+    def data(self, text: str)
+    def end(self, tag: str)
+    def end_dispatch(self, tag: str, data: str)
+    def end_nil(self, data: str)
+    def end_boolean(self, data: str)
+    def end_int(self, data: str)
+    def end_double(self, data: str)
+    def end_bigdecimal(self, data: str)
+    def end_string(self, data: str)
+    def end_array(self, data: str)
+    def end_struct(self, data: str)
+    def end_base64(self, data: str)
+    def end_dateTime(self, data: str)
+    def end_value(self, data: str)
+    def end_params(self, data: str)
+    def end_fault(self, data: str)
+    def end_methodName(self, data: str)
 
 class _MultiCallMethod:  # undocumented
     __call_list: list[(str, (*: _Marshallable))]
     __name: str
     init(self, call_list: list[(str, _Marshallable)], name: str)
     def __getattr__(self, name: str) -> _MultiCallMethod
-    def __call__(self, *args: _Marshallable) -> None
+    def __call__(self, *args: _Marshallable)
 
 class MultiCallIterator:  # undocumented
     """Iterates over the results of a multicall. Exceptions are
@@ -384,12 +384,12 @@ class Transport:
     def getparser(self) -> (ExpatParser, Unmarshaller)
     def get_host_info(self, host: HostType) -> (str, list[(str, str)], dict[str, str])
     def make_connection(self, host: HostType) -> http.client.HTTPConnection
-    def close(self) -> None
+    def close(self)
     def send_request(
         self, host: HostType, handler: str, request_body: SizedBuffer, debug: bool
     ) -> http.client.HTTPConnection
-    def send_headers(self, connection: http.client.HTTPConnection, headers: list[(str, str)]) -> None
-    def send_content(self, connection: http.client.HTTPConnection, request_body: SizedBuffer) -> None
+    def send_headers(self, connection: http.client.HTTPConnection, headers: list[(str, str)])
+    def send_content(self, connection: http.client.HTTPConnection, request_body: SizedBuffer)
     def parse_response(self, response: http.client.HTTPResponse) -> (*: _Marshallable)
 
 class SafeTransport(Transport):
@@ -459,8 +459,8 @@ class ServerProxy:
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None
-    def __close(self) -> None  # undocumented
+    )
+    def __close(self)  # undocumented
     def __request(self, methodname: str, params: (*: _Marshallable)) -> (*: _Marshallable)  # undocumented
 
 Server = ServerProxy

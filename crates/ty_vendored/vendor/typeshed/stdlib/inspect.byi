@@ -189,7 +189,7 @@ class BlockFinder:
     indecorator: bool
     decoratorhasargs: bool
     last: int
-    def tokeneater(self, type: int, token: str, srowcol: (int, int), erowcol: (int, int), line: str) -> None
+    def tokeneater(self, type: int, token: str, srowcol: (int, int), erowcol: (int, int), line: str)
 
 CO_OPTIMIZED: Final = 1
 CO_NEWLOCALS: Final = 2
@@ -332,11 +332,11 @@ def isasyncgenfunction(obj: object) -> TypeGuard[(...) -> AsyncGeneratorType[dyn
 
 @type_check_only
 private protocol SupportsSet[in Input, in V]:
-    def __set__(self, instance: Input, value: V, /) -> None
+    def __set__(self, instance: Input, value: V, /)
 
 @type_check_only
 private protocol SupportsDelete[in Input]:
-    def __delete__(self, instance: Input, /) -> None
+    def __delete__(self, instance: Input, /)
 
 def isasyncgen(object: object) -> object is AsyncGeneratorType[object, Never]:
     """Return true if the object is an asynchronous generator."""
@@ -871,7 +871,7 @@ class BoundArguments:
     let kwargs: dict[str, dynamic]
     let signature: Signature
     init(self, signature: Signature, arguments: dict[str, dynamic])
-    def apply_defaults(self) -> None:
+    def apply_defaults(self):
         """Set default values for missing arguments.
 
         For variable-positional arguments (*args) the default is an

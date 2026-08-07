@@ -76,7 +76,7 @@ class EnvBuilder:
             upgrade_deps: bool = False,
         ) -> None
 
-    def create(self, env_dir: StrOrBytesPath) -> None:
+    def create(self, env_dir: StrOrBytesPath):
         """
         Create a virtual environment in a directory.
 
@@ -84,7 +84,7 @@ class EnvBuilder:
 
         """
 
-    def clear_directory(self, path: StrOrBytesPath) -> None  # undocumented
+    def clear_directory(self, path: StrOrBytesPath)  # undocumented
     def ensure_directories(self, env_dir: StrOrBytesPath) -> SimpleNamespace:
         """
         Create the directories for the environment.
@@ -93,7 +93,7 @@ class EnvBuilder:
         for use by subsequent logic.
         """
 
-    def create_configuration(self, context: SimpleNamespace) -> None:
+    def create_configuration(self, context: SimpleNamespace):
         """
         Create a configuration file indicating where the environment's Python
         was copied from, and whether the system site-packages should be made
@@ -105,14 +105,14 @@ class EnvBuilder:
 
     def symlink_or_copy(
         self, src: StrOrBytesPath, dst: StrOrBytesPath, relative_symlinks_ok: bool = False
-    ) -> None:  # undocumented
+    ):  # undocumented
         """
         Try symlinking a file, and if that fails, fall back to copying.
         (Unused on Windows, because we can't just copy a failed symlink file: we
         switch to a different set of files instead.)
         """
 
-    def setup_python(self, context: SimpleNamespace) -> None:
+    def setup_python(self, context: SimpleNamespace):
         """
         Set up a Python executable in the environment.
 
@@ -120,10 +120,10 @@ class EnvBuilder:
                         being processed.
         """
 
-    def _setup_pip(self, context: SimpleNamespace) -> None:  # undocumented
+    def _setup_pip(self, context: SimpleNamespace):  # undocumented
         """Installs or upgrades pip in a virtual environment"""
 
-    def setup_scripts(self, context: SimpleNamespace) -> None:
+    def setup_scripts(self, context: SimpleNamespace):
         """
         Set up scripts into the created environment from a directory.
 
@@ -135,7 +135,7 @@ class EnvBuilder:
         scripts to install.
         """
 
-    def post_setup(self, context: SimpleNamespace) -> None:
+    def post_setup(self, context: SimpleNamespace):
         """
         Hook for post-setup modification of the venv. Subclasses may install
         additional packages or scripts here, add activation shell scripts, etc.
@@ -156,7 +156,7 @@ class EnvBuilder:
                         being processed.
         """
 
-    def install_scripts(self, context: SimpleNamespace, path: str) -> None:
+    def install_scripts(self, context: SimpleNamespace, path: str):
         """
         Install scripts into the created environment from a directory.
 
@@ -170,9 +170,9 @@ class EnvBuilder:
                         specific values.
         """
 
-    def upgrade_dependencies(self, context: SimpleNamespace) -> None
+    def upgrade_dependencies(self, context: SimpleNamespace)
     if sys.version_info >= (3, 13):
-        def create_git_ignore_file(self, context: SimpleNamespace) -> None:
+        def create_git_ignore_file(self, context: SimpleNamespace):
             """
             Create a .gitignore file in the environment directory.
 
@@ -206,4 +206,4 @@ else:
     ) -> None:
         """Create a virtual environment in a directory."""
 
-def main(args: Sequence[str] | None = None) -> None
+def main(args: Sequence[str] | None = None)

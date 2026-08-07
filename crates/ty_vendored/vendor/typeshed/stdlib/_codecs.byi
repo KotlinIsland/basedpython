@@ -14,7 +14,7 @@ type _CharMap = dict[int, int] | _EncodingMap
 private type Handler = (UnicodeError) -> (str | bytes, int)
 private type SearchFunction = (str) -> (codecs.CodecInfo | None)
 
-def register(search_function: SearchFunction, /) -> None:
+def register(search_function: SearchFunction, /):
     """Register a codec search function.
 
     Search functions are expected to take one argument, the encoding
@@ -23,13 +23,13 @@ def register(search_function: SearchFunction, /) -> None:
     a CodecInfo object).
     """
 
-def unregister(search_function: SearchFunction, /) -> None:
+def unregister(search_function: SearchFunction, /):
     """Unregister a codec search function and clear the registry's cache.
 
     If the search function is not registered, do nothing.
     """
 
-def register_error(errors: str, handler: Handler, /) -> None:
+def register_error(errors: str, handler: Handler, /):
     """Register the specified error handler under the name errors.
 
     handler must be a callable object, that will be called with an exception

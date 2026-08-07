@@ -501,7 +501,7 @@ def escape(pattern: AnyStr) -> AnyStr:
     Escape special characters in a string.
     """
 
-def purge() -> None:
+def purge():
     """Clear the regular expression caches"""
 
 if sys.version_info < (3, 13):

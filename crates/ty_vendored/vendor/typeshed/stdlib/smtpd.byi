@@ -94,17 +94,17 @@ class SMTPChannel(asynchat.async_chat):
     override def push(self, msg: str) -> None
     override def collect_incoming_data(self, data: bytes) -> None
     override def found_terminator(self) -> None
-    def smtp_HELO(self, arg: str) -> None
-    def smtp_NOOP(self, arg: str) -> None
-    def smtp_QUIT(self, arg: str) -> None
-    def smtp_MAIL(self, arg: str) -> None
-    def smtp_RCPT(self, arg: str) -> None
-    def smtp_RSET(self, arg: str) -> None
-    def smtp_DATA(self, arg: str) -> None
-    def smtp_EHLO(self, arg: str) -> None
-    def smtp_HELP(self, arg: str) -> None
-    def smtp_VRFY(self, arg: str) -> None
-    def smtp_EXPN(self, arg: str) -> None
+    def smtp_HELO(self, arg: str)
+    def smtp_NOOP(self, arg: str)
+    def smtp_QUIT(self, arg: str)
+    def smtp_MAIL(self, arg: str)
+    def smtp_RCPT(self, arg: str)
+    def smtp_RSET(self, arg: str)
+    def smtp_DATA(self, arg: str)
+    def smtp_EHLO(self, arg: str)
+    def smtp_HELP(self, arg: str)
+    def smtp_VRFY(self, arg: str)
+    def smtp_EXPN(self, arg: str)
 
 class SMTPServer(asyncore.dispatcher):
     channel_class: type[SMTPChannel]
@@ -120,7 +120,7 @@ class SMTPServer(asyncore.dispatcher):
         enable_SMTPUTF8: bool = False,
         decode_data: bool = False,
     )
-    def handle_accepted(self, conn: socket.socket, addr: dynamic) -> None
+    def handle_accepted(self, conn: socket.socket, addr: dynamic)
     def process_message(self, peer: _Address, mailfrom: str, rcpttos: list[str], data: bytes | str, **kwargs: dynamic) -> str | None:
         """Override this abstract method to handle messages from the client.
 

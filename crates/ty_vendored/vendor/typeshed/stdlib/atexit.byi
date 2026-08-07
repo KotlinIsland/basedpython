@@ -8,13 +8,13 @@ from collections.abc import Callable
 from typing import ParamSpec, TypeVar
 
 
-def _clear() -> None:
+def _clear():
     """Clear the list of previously registered exit functions."""
 
 def _ncallbacks() -> int:
     """Return the number of registered exit functions."""
 
-def _run_exitfuncs() -> None:
+def _run_exitfuncs():
     """Run all registered exit functions.
 
     If a callback raises an exception, it is logged with sys.unraisablehook.
@@ -30,7 +30,7 @@ def register[Parameters: (*: *, **: *), Element](func: (**Parameters) -> Element
     func is returned to facilitate usage as a decorator.
     """
 
-def unregister(func: (...) -> object, /) -> None:
+def unregister(func: (...) -> object, /):
     """Unregister an exit function which was previously registered using
     atexit.register
 

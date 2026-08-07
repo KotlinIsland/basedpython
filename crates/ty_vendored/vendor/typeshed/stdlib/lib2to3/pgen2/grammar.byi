@@ -80,10 +80,10 @@ class Grammar:
     tokens: dict[int, int]
     symbol2label: dict[str, int]
     start: int
-    def dump(self, filename: StrPath) -> None:
+    def dump(self, filename: StrPath):
         """Dump the grammar tables to a pickle file."""
 
-    def load(self, filename: StrPath) -> None:
+    def load(self, filename: StrPath):
         """Load the grammar tables from a pickle file."""
 
     def copy(self) -> Self:
@@ -91,7 +91,7 @@ class Grammar:
         Copy the grammar.
         """
 
-    def report(self) -> None:
+    def report(self):
         """Dump the grammar tables to standard output, for debugging."""
 
 opmap_raw: str

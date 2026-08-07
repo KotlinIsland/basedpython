@@ -27,7 +27,7 @@ class FixTupleParams(fixer_base.BaseFix):
     BM_compatible: ClassVar[True]
     PATTERN: ClassVar[str]
     override def transform(self, node, results)
-    def transform_lambda(self, node, results) -> None
+    def transform_lambda(self, node, results)
 
 def simplify_args(node)
 def find_params(node)

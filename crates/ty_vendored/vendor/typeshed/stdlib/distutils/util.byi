@@ -49,7 +49,7 @@ def change_root(new_root: StrPath, pathname: StrPath) -> str:
     two, which is tricky on DOS/Windows and Mac OS.
     """
 
-def check_environ() -> None:
+def check_environ():
     """Ensure that 'os.environ' has all the environment variables we
     guarantee that users can use in config files, command-line options,
     etc.  Currently this includes:
@@ -58,7 +58,7 @@ def check_environ() -> None:
              and OS (see 'get_platform()')
     """
 
-def subst_vars(s: str, local_vars: Mapping[str, str]) -> None:
+def subst_vars(s: str, local_vars: Mapping[str, str]):
     """Perform shell/Perl-style variable substitution on 'string'.  Every
     occurrence of '$' followed by a name is considered a variable, and
     variable is substituted by the value found in the 'local_vars'
@@ -85,7 +85,7 @@ def execute[*Args](
     msg: str | None = None,
     verbose: bool | 0 | 1 = 0,
     dry_run: bool | 0 | 1 = 0,
-) -> None:
+):
     """Perform some action that affects the outside world (eg.  by
     writing to the filesystem).  Such actions are special because they
     are disabled by the 'dry_run' flag.  This method takes care of all
@@ -112,7 +112,7 @@ def byte_compile(
     verbose: bool | 0 | 1 = 1,
     dry_run: bool | 0 | 1 = 0,
     direct: bool | None = None,
-) -> None:
+):
     """Byte-compile a collection of Python source files to .pyc
     files in a __pycache__ subdirectory.  'py_files' is a list
     of files to compile; any files that don't end in ".py" are silently
@@ -152,7 +152,7 @@ def run_2to3(
     fixer_names: Iterable[str] | None = None,
     options: Mapping[str, dynamic] | None = None,
     explicit: Unused = None,
-) -> None:
+):
     """Invoke 2to3 on a list of Python files.
     The files should all come from the build area, as the
     modification is done in-place. To reduce the build time,
@@ -184,4 +184,4 @@ class Mixin2to3:
     fixer_names: Iterable[str] | None
     options: Mapping[str, dynamic] | None
     explicit: Container[str] | None
-    def run_2to3(self, files: Iterable[str]) -> None
+    def run_2to3(self, files: Iterable[str])

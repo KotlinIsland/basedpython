@@ -12,7 +12,7 @@ class ApplyResult[in out Element]:
         self, pool: Pool, callback: ((Element) -> object) | None, error_callback: ((BaseException) -> object) | None
     )
     def get(self, timeout: float | None = None) -> Element
-    def wait(self, timeout: float | None = None) -> None
+    def wait(self, timeout: float | None = None)
     def ready(self) -> bool
     def successful(self) -> bool
     def __class_getitem__(cls, item: dynamic, /) -> GenericAlias:
@@ -122,14 +122,14 @@ class Pool:
         Asynchronous version of `starmap()` method.
         """
 
-    def close(self) -> None
-    def terminate(self) -> None
-    def join(self) -> None
+    def close(self)
+    def terminate(self)
+    def join(self)
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None
-    def __del__(self) -> None
+    )
+    def __del__(self)
 
 class ThreadPool(Pool):
     init(

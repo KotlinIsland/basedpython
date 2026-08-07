@@ -182,7 +182,7 @@ if sys.platform == "win32":
     if sys.version_info >= (3, 14):
         COPY_FILE_DIRECTORY: Final = 0x00000080
 
-    def CloseHandle(handle: int, /) -> None:
+    def CloseHandle(handle: int, /):
         """Close handle."""
 
     def ConnectNamedPipe(handle: int, overlapped: True) -> Overlapped
@@ -202,7 +202,7 @@ if sys.platform == "win32":
     def CreateFileMapping(
         file_handle: int, security_attributes: int, protect: int, max_size_high: int, max_size_low: int, name: str, /
     ) -> int
-    def CreateJunction(src_path: str, dst_path: str, /) -> None
+    def CreateJunction(src_path: str, dst_path: str, /)
     def CreateNamedPipe(
         name: str,
         open_mode: int,
@@ -269,7 +269,7 @@ if sys.platform == "win32":
         """Get the current Windows ANSI code page identifier."""
 
     if sys.version_info >= (3, 15):
-        def DeregisterEventSource(handle: int, /) -> None:
+        def DeregisterEventSource(handle: int, /):
             """Closes the specified event log.
 
             handle
@@ -327,7 +327,7 @@ if sys.platform == "win32":
               The name of the event source to register.
             """
 
-        def ReportEvent(handle: int, type: int, category: int, event_id: int, string: str, /) -> None:
+        def ReportEvent(handle: int, type: int, category: int, event_id: int, string: str, /):
             """Writes an entry at the end of the specified event log.
 
             handle
@@ -342,7 +342,7 @@ if sys.platform == "win32":
               A string to be inserted into the event message.
             """
 
-    def UnmapViewOfFile(address: int, /) -> None
+    def UnmapViewOfFile(address: int, /)
 
     def ReadFile(handle: int, size: int, overlapped: True) -> (Overlapped, int)
     def ReadFile(handle: int, size: int, overlapped: False = False) -> (bytes, int)
@@ -350,8 +350,8 @@ if sys.platform == "win32":
 
     def SetNamedPipeHandleState(
         named_pipe: int, mode: int | None, max_collection_count: int | None, collect_data_timeout: int | None, /
-    ) -> None
-    def TerminateProcess(handle: int, exit_code: int, /) -> None:
+    )
+    def TerminateProcess(handle: int, exit_code: int, /):
         """Terminate the specified process and all of its threads."""
 
     def VirtualQuerySize(address: int, /) -> int
@@ -364,7 +364,7 @@ if sys.platform == "win32":
         in milliseconds.
         """
 
-    def WaitNamedPipe(name: str, timeout: int, /) -> None
+    def WaitNamedPipe(name: str, timeout: int, /)
 
     def WriteFile(handle: int, buffer: ReadableBuffer, overlapped: True) -> (Overlapped, int)
     def WriteFile(handle: int, buffer: ReadableBuffer, overlapped: False = False) -> (int, int)
@@ -377,7 +377,7 @@ if sys.platform == "win32":
         """overlapped event handle"""
 
         def GetOverlappedResult(self, wait: bool, /) -> (int, int)
-        def cancel(self) -> None
+        def cancel(self)
         def getbuffer(self) -> bytes | None
 
     if sys.version_info >= (3, 13):
@@ -420,9 +420,9 @@ if sys.platform == "win32":
 
         def OpenEventW(desired_access: int, inherit_handle: bool, name: str) -> int
         def OpenMutexW(desired_access: int, inherit_handle: bool, name: str) -> int
-        def ReleaseMutex(mutex: int) -> None
-        def ResetEvent(event: int) -> None
-        def SetEvent(event: int) -> None
+        def ReleaseMutex(mutex: int)
+        def ResetEvent(event: int)
+        def SetEvent(event: int)
 
     def OpenFileMapping(desired_access: int, inherit_handle: bool, name: str, /) -> int
 

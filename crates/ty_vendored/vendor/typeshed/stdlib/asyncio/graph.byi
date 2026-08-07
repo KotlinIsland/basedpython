@@ -64,5 +64,5 @@ if sys.version_info >= (3, 14):
 
     def print_call_graph(
         future: Future[dynamic] | None = None, /, *, file: SupportsWrite[str] | None = None, depth: int = 1, limit: int | None = None
-    ) -> None:
+    ):
         """Print the async call graph for the current task or the provided Future."""

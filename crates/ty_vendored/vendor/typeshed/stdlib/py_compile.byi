@@ -102,4 +102,4 @@ def compile(
     it was previously.
     """
 
-def main() -> None
+def main()

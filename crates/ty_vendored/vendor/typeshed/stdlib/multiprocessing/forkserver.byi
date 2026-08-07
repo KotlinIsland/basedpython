@@ -41,7 +41,7 @@ class ForkServer:
         process data.
         """
 
-    def ensure_running(self) -> None:
+    def ensure_running(self):
         """Make sure that a fork server is running.
 
         This can be called from any process.  Note that usually a child
@@ -101,7 +101,7 @@ else:
         """Run forkserver."""
 
 def read_signed(fd: int) -> dynamic
-def write_signed(fd: int, n: int) -> None
+def write_signed(fd: int, n: int)
 
 _forkserver: ForkServer
 ensure_running = _forkserver.ensure_running

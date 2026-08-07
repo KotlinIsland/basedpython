@@ -3,10 +3,10 @@
 import sys
 from _typeshed import FileDescriptorLike
 
-def cancel_dump_traceback_later() -> None:
+def cancel_dump_traceback_later():
     """Cancel the previous call to dump_traceback_later()."""
 
-def disable() -> None:
+def disable():
     """Disable the fault handler."""
 
 if sys.version_info >= (3, 15):
@@ -24,7 +24,7 @@ else:
         """Dump the traceback of the current thread, or of all threads if all_threads is True, into file."""
 
 if sys.version_info >= (3, 14):
-    def dump_c_stack(file: FileDescriptorLike = sys.stderr) -> None:
+    def dump_c_stack(file: FileDescriptorLike = sys.stderr):
         """Dump the C stack of the current thread."""
 
 if sys.version_info >= (3, 15):
@@ -89,5 +89,5 @@ if sys.platform != "win32":
         def register(signum: int, file: FileDescriptorLike = sys.stderr, all_threads: bool = True, chain: bool = False) -> None:
             """Register a handler for the signal 'signum': dump the traceback of the current thread, or of all threads if all_threads is True, into file."""
 
-    def unregister(signum: int, /) -> None:
+    def unregister(signum: int, /):
         """Unregister the handler of the signal 'signum' registered by register()."""

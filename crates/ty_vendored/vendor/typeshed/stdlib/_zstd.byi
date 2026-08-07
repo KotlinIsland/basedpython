@@ -91,7 +91,7 @@ final class ZstdCompressor:
         object can still be used after this method is called.
         """
 
-    def set_pledged_input_size(self, size: int | None, /) -> None:
+    def set_pledged_input_size(self, size: int | None, /):
         """Set the uncompressed content size to be written into the frame header.
 
           size
@@ -227,7 +227,7 @@ def get_param_bounds(parameter: int, is_compress: bool) -> (int, int):
       True for CompressionParameter, False for DecompressionParameter.
     """
 
-def set_parameter_types(c_parameter_type: type[CompressionParameter], d_parameter_type: type[DecompressionParameter]) -> None:
+def set_parameter_types(c_parameter_type: type[CompressionParameter], d_parameter_type: type[DecompressionParameter]):
     """Set CompressionParameter and DecompressionParameter types for validity check.
 
     c_parameter_type

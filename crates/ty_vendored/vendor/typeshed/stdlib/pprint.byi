@@ -215,7 +215,7 @@ class PrettyPrinter:
             """
 
     def pformat(self, object: object) -> str
-    def pprint(self, object: object) -> None
+    def pprint(self, object: object)
     def isreadable(self, object: object) -> bool
     def isrecursive(self, object: object) -> bool
     def format(self, object: object, context: dict[int, int], maxlevels: int, level: int) -> (str, bool, bool):
@@ -226,7 +226,7 @@ class PrettyPrinter:
 
     def _format(
         self, object: object, stream: SupportsWrite[str], indent: int, allowance: int, context: dict[int, int], level: int
-    ) -> None
+    )
     def _pprint_dict(
         self,
         object: dict[object, object],
@@ -235,10 +235,10 @@ class PrettyPrinter:
         allowance: int,
         context: dict[int, int],
         level: int,
-    ) -> None
+    )
     def _pprint_list(
         self, object: list[object], stream: SupportsWrite[str], indent: int, allowance: int, context: dict[int, int], level: int
-    ) -> None
+    )
     def _pprint_tuple(
         self,
         object: (*: object),
@@ -247,13 +247,13 @@ class PrettyPrinter:
         allowance: int,
         context: dict[int, int],
         level: int,
-    ) -> None
+    )
     def _pprint_set(
         self, object: set[object], stream: SupportsWrite[str], indent: int, allowance: int, context: dict[int, int], level: int
-    ) -> None
+    )
     def _pprint_deque(
         self, object: deque[object], stream: SupportsWrite[str], indent: int, allowance: int, context: dict[int, int], level: int
-    ) -> None
+    )
     def _format_dict_items(
         self,
         items: list[(object, object)],
@@ -262,9 +262,9 @@ class PrettyPrinter:
         allowance: int,
         context: dict[int, int],
         level: int,
-    ) -> None
+    )
     def _format_items(
         self, items: list[object], stream: SupportsWrite[str], indent: int, allowance: int, context: dict[int, int], level: int
-    ) -> None
+    )
     def _repr(self, object: object, context: dict[int, int], level: int) -> str
     def _safe_repr(self, object: object, context: dict[int, int], maxlevels: int, level: int) -> (str, bool, bool)

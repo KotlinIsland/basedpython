@@ -106,12 +106,12 @@ class Filterer:
     """
 
     filters: list[_FilterType]
-    def addFilter(self, filter: _FilterType) -> None:
+    def addFilter(self, filter: _FilterType):
         """
         Add the specified filter to this handler.
         """
 
-    def removeFilter(self, filter: _FilterType) -> None:
+    def removeFilter(self, filter: _FilterType):
         """
         Remove the specified filter from this handler.
         """
@@ -186,12 +186,12 @@ class Manager:  # undocumented
         placeholder to now point to the logger.
         """
 
-    def setLoggerClass(self, klass: type[Logger]) -> None:
+    def setLoggerClass(self, klass: type[Logger]):
         """
         Set the class to be used when instantiating a logger with this Manager.
         """
 
-    def setLogRecordFactory(self, factory: (...) -> LogRecord) -> None:
+    def setLogRecordFactory(self, factory: (...) -> LogRecord):
         """
         Set the factory to be used when instantiating a log record with this
         Manager.
@@ -226,7 +226,7 @@ class Logger(Filterer):
         Initialize the logger with a name and an optional level.
         """
 
-    def setLevel(self, level: _Level) -> None:
+    def setLevel(self, level: _Level):
         """
         Set the logging level of this logger.  level must be an int or a str.
         """
@@ -271,7 +271,7 @@ class Logger(Filterer):
         stack_info: bool = False,
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
-    ) -> None:
+    ):
         """
         Log 'msg % args' with severity 'DEBUG'.
 
@@ -289,7 +289,7 @@ class Logger(Filterer):
         stack_info: bool = False,
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
-    ) -> None:
+    ):
         """
         Log 'msg % args' with severity 'INFO'.
 
@@ -307,7 +307,7 @@ class Logger(Filterer):
         stack_info: bool = False,
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
-    ) -> None:
+    ):
         """
         Log 'msg % args' with severity 'WARNING'.
 
@@ -335,7 +335,7 @@ class Logger(Filterer):
         stack_info: bool = False,
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
-    ) -> None:
+    ):
         """
         Log 'msg % args' with severity 'ERROR'.
 
@@ -353,7 +353,7 @@ class Logger(Filterer):
         stack_info: bool = False,
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
-    ) -> None:
+    ):
         """
         Convenience method for logging an ERROR with exception information.
         """
@@ -366,7 +366,7 @@ class Logger(Filterer):
         stack_info: bool = False,
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
-    ) -> None:
+    ):
         """
         Log 'msg % args' with severity 'CRITICAL'.
 
@@ -385,7 +385,7 @@ class Logger(Filterer):
         stack_info: bool = False,
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
-    ) -> None:
+    ):
         """
         Log 'msg % args' with the integer severity 'level'.
 
@@ -404,19 +404,19 @@ class Logger(Filterer):
         extra: Mapping[str, object] | None = None,
         stack_info: bool = False,
         stacklevel: int = 1,
-    ) -> None:  # undocumented
+    ):  # undocumented
         """
         Low-level logging routine which creates a LogRecord and then calls
         all the handlers of this logger to handle the record.
         """
 
     fatal = critical
-    def addHandler(self, hdlr: Handler) -> None:
+    def addHandler(self, hdlr: Handler):
         """
         Add the specified handler to this logger.
         """
 
-    def removeHandler(self, hdlr: Handler) -> None:
+    def removeHandler(self, hdlr: Handler):
         """
         Remove the specified handler from this logger.
         """
@@ -427,7 +427,7 @@ class Logger(Filterer):
         file name, line number and function name.
         """
 
-    def handle(self, record: LogRecord) -> None:
+    def handle(self, record: LogRecord):
         """
         Call the handlers for the specified record.
 
@@ -464,7 +464,7 @@ class Logger(Filterer):
         is checked for the existence of handlers.
         """
 
-    def callHandlers(self, record: LogRecord) -> None:  # undocumented
+    def callHandlers(self, record: LogRecord):  # undocumented
         """
         Pass a record to all relevant handlers.
 
@@ -505,33 +505,33 @@ class Handler(Filterer):
         """
 
     def get_name(self) -> str  # undocumented
-    def set_name(self, name: str) -> None  # undocumented
-    def createLock(self) -> None:
+    def set_name(self, name: str)  # undocumented
+    def createLock(self):
         """
         Acquire a thread lock for serializing access to the underlying I/O.
         """
 
-    def acquire(self) -> None:
+    def acquire(self):
         """
         Acquire the I/O thread lock.
         """
 
-    def release(self) -> None:
+    def release(self):
         """
         Release the I/O thread lock.
         """
 
-    def setLevel(self, level: _Level) -> None:
+    def setLevel(self, level: _Level):
         """
         Set the logging level of this handler.  level must be an int or a str.
         """
 
-    def setFormatter(self, fmt: Formatter | None) -> None:
+    def setFormatter(self, fmt: Formatter | None):
         """
         Set the formatter for this handler.
         """
 
-    def flush(self) -> None:
+    def flush(self):
         """
         Ensure all logging output has been flushed.
 
@@ -539,7 +539,7 @@ class Handler(Filterer):
         subclasses.
         """
 
-    def close(self) -> None:
+    def close(self):
         """
         Tidy up any resources used by the handler.
 
@@ -561,7 +561,7 @@ class Handler(Filterer):
         if it passed all filters, otherwise a false value is returned.
         """
 
-    def handleError(self, record: LogRecord) -> None:
+    def handleError(self, record: LogRecord):
         """
         Handle errors which occur during an emit() call.
 
@@ -582,7 +582,7 @@ class Handler(Filterer):
         for the module.
         """
 
-    def emit(self, record: LogRecord) -> None:
+    def emit(self, record: LogRecord):
         """
         Do whatever it takes to actually log the specified logging record.
 
@@ -944,7 +944,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
         **kwargs: object,
-    ) -> None:
+    ):
         """
         Delegate a debug call to the underlying logger.
         """
@@ -958,7 +958,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
         **kwargs: object,
-    ) -> None:
+    ):
         """
         Delegate an info call to the underlying logger.
         """
@@ -972,7 +972,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
         **kwargs: object,
-    ) -> None:
+    ):
         """
         Delegate a warning call to the underlying logger.
         """
@@ -997,7 +997,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
         **kwargs: object,
-    ) -> None:
+    ):
         """
         Delegate an error call to the underlying logger.
         """
@@ -1011,7 +1011,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
         **kwargs: object,
-    ) -> None:
+    ):
         """
         Delegate an exception call to the underlying logger.
         """
@@ -1025,7 +1025,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
         **kwargs: object,
-    ) -> None:
+    ):
         """
         Delegate a critical call to the underlying logger.
         """
@@ -1040,7 +1040,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         stacklevel: int = 1,
         extra: Mapping[str, object] | None = None,
         **kwargs: object,
-    ) -> None:
+    ):
         """
         Delegate a log call to the underlying logger, after adding
         contextual information from this adapter instance.
@@ -1056,7 +1056,7 @@ class LoggerAdapter[in out L: Logger | LoggerAdapter[dynamic]]:
         Get the effective level for the underlying logger.
         """
 
-    def setLevel(self, level: _Level) -> None:
+    def setLevel(self, level: _Level):
         """
         Set the specified level on the underlying logger.
         """
@@ -1128,7 +1128,7 @@ def debug(
     stack_info: bool = False,
     stacklevel: int = 1,
     extra: Mapping[str, object] | None = None,
-) -> None:
+):
     """
     Log a message with severity 'DEBUG' on the root logger. If the logger has
     no handlers, call basicConfig() to add a console handler with a pre-defined
@@ -1142,7 +1142,7 @@ def info(
     stack_info: bool = False,
     stacklevel: int = 1,
     extra: Mapping[str, object] | None = None,
-) -> None:
+):
     """
     Log a message with severity 'INFO' on the root logger. If the logger has
     no handlers, call basicConfig() to add a console handler with a pre-defined
@@ -1156,7 +1156,7 @@ def warning(
     stack_info: bool = False,
     stacklevel: int = 1,
     extra: Mapping[str, object] | None = None,
-) -> None:
+):
     """
     Log a message with severity 'WARNING' on the root logger. If the logger has
     no handlers, call basicConfig() to add a console handler with a pre-defined
@@ -1179,7 +1179,7 @@ def error(
     stack_info: bool = False,
     stacklevel: int = 1,
     extra: Mapping[str, object] | None = None,
-) -> None:
+):
     """
     Log a message with severity 'ERROR' on the root logger. If the logger has
     no handlers, call basicConfig() to add a console handler with a pre-defined
@@ -1193,7 +1193,7 @@ def critical(
     stack_info: bool = False,
     stacklevel: int = 1,
     extra: Mapping[str, object] | None = None,
-) -> None:
+):
     """
     Log a message with severity 'CRITICAL' on the root logger. If the logger
     has no handlers, call basicConfig() to add a console handler with a
@@ -1207,7 +1207,7 @@ def exception(
     stack_info: bool = False,
     stacklevel: int = 1,
     extra: Mapping[str, object] | None = None,
-) -> None:
+):
     """
     Log a message with severity 'ERROR' on the root logger, with exception
     information. If the logger has no handlers, basicConfig() is called to add
@@ -1222,7 +1222,7 @@ def log(
     stack_info: bool = False,
     stacklevel: int = 1,
     extra: Mapping[str, object] | None = None,
-) -> None:
+):
     """
     Log 'msg % args' with the integer severity 'level' on the root logger. If
     the logger has no handlers, call basicConfig() to add a console handler
@@ -1231,12 +1231,12 @@ def log(
 
 fatal = critical
 
-def disable(level: int = 50) -> None:
+def disable(level: int = 50):
     """
     Disable all logging calls of severity 'level' and below.
     """
 
-def addLevelName(level: int, levelName: str) -> None:
+def addLevelName(level: int, levelName: str):
     """
     Associate 'levelName' with 'level'.
 
@@ -1387,7 +1387,7 @@ def basicConfig(
     force: bool | None = False,
 ) -> None
 
-def shutdown(handlerList: Sequence[dynamic] = ...) -> None:  # handlerList is undocumented
+def shutdown(handlerList: Sequence[dynamic] = ...):  # handlerList is undocumented
     """
     Perform any cleanup actions in the logging system (e.g. flushing
     buffers).
@@ -1395,21 +1395,21 @@ def shutdown(handlerList: Sequence[dynamic] = ...) -> None:  # handlerList is un
     Should be called at application exit.
     """
 
-def setLoggerClass(klass: type[Logger]) -> None:
+def setLoggerClass(klass: type[Logger]):
     """
     Set the class to be used when instantiating a logger. The class should
     define __init__() such that only a name argument is required, and the
     __init__() should call Logger.__init__()
     """
 
-def captureWarnings(capture: bool) -> None:
+def captureWarnings(capture: bool):
     """
     If capture is true, redirect all warnings to the logging package.
     If capture is False, ensure that warnings are not redirected to logging
     but to their original destinations.
     """
 
-def setLogRecordFactory(factory: (...) -> LogRecord) -> None:
+def setLogRecordFactory(factory: (...) -> LogRecord):
     """
     Set the factory to be used when instantiating a log record.
 
@@ -1503,7 +1503,7 @@ class PlaceHolder:  # undocumented
         Initialize with the specified logger being a child of this placeholder.
         """
 
-    def append(self, alogger: Logger) -> None:
+    def append(self, alogger: Logger):
         """
         Add the specified logger as a child of this placeholder.
         """
@@ -1533,7 +1533,7 @@ class PercentStyle:  # undocumented
 
     init(self, fmt: str, *, defaults: Mapping[str, dynamic] | None = None)
     def usesTime(self) -> bool
-    def validate(self) -> None:
+    def validate(self):
         """Validate the input format, ensure it matches the correct style"""
 
     def format(self, record: dynamic) -> str

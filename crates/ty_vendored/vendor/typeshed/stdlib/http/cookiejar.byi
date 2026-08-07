@@ -60,27 +60,27 @@ class CookieJar:
     dots_re: ClassVar[Pattern[str]]  # undocumented
     magic_re: ClassVar[Pattern[str]]  # undocumented
     init(self, policy: CookiePolicy | None = None)
-    def add_cookie_header(self, request: Request) -> None:
+    def add_cookie_header(self, request: Request):
         """Add correct Cookie: header to request (urllib.request.Request object).
 
         The Cookie2 header is also added unless policy.hide_cookie2 is true.
 
         """
 
-    def extract_cookies(self, response: HTTPResponse, request: Request) -> None:
+    def extract_cookies(self, response: HTTPResponse, request: Request):
         """Extract cookies from response, where allowable given the request."""
 
-    def set_policy(self, policy: CookiePolicy) -> None
+    def set_policy(self, policy: CookiePolicy)
     def make_cookies(self, response: HTTPResponse, request: Request) -> Sequence[Cookie]:
         """Return sequence of Cookie objects extracted from response object."""
 
-    def set_cookie(self, cookie: Cookie) -> None:
+    def set_cookie(self, cookie: Cookie):
         """Set a cookie, without checking whether or not it should be set."""
 
-    def set_cookie_if_ok(self, cookie: Cookie, request: Request) -> None:
+    def set_cookie_if_ok(self, cookie: Cookie, request: Request):
         """Set a cookie if policy says it's OK to do so."""
 
-    def clear(self, domain: str | None = None, path: str | None = None, name: str | None = None) -> None:
+    def clear(self, domain: str | None = None, path: str | None = None, name: str | None = None):
         """Clear some cookies.
 
         Invoking this method without arguments will clear all cookies.  If
@@ -93,7 +93,7 @@ class CookieJar:
 
         """
 
-    def clear_session_cookies(self) -> None:
+    def clear_session_cookies(self):
         """Discard all session cookies.
 
         Note that the .save() method won't save session cookies anyway, unless
@@ -101,7 +101,7 @@ class CookieJar:
 
         """
 
-    def clear_expired_cookies(self) -> None:  # undocumented
+    def clear_expired_cookies(self):  # undocumented
         """Discard all expired cookies.
 
         You probably don't need to call this method: expired cookies are never
@@ -128,13 +128,13 @@ class FileCookieJar(CookieJar):
 
         """
 
-    def save(self, filename: str | None = None, ignore_discard: bool = False, ignore_expires: bool = False) -> None:
+    def save(self, filename: str | None = None, ignore_discard: bool = False, ignore_expires: bool = False):
         """Save cookies to a file."""
 
-    def load(self, filename: str | None = None, ignore_discard: bool = False, ignore_expires: bool = False) -> None:
+    def load(self, filename: str | None = None, ignore_discard: bool = False, ignore_expires: bool = False):
         """Load cookies from a file."""
 
-    def revert(self, filename: str | None = None, ignore_discard: bool = False, ignore_expires: bool = False) -> None:
+    def revert(self, filename: str | None = None, ignore_discard: bool = False, ignore_expires: bool = False):
         """Clear all cookies and reload cookies from a saved file.
 
         Raises LoadError (or OSError) if reversion is not successful; the
@@ -260,14 +260,14 @@ class DefaultCookiePolicy(CookiePolicy):
     def blocked_domains(self) -> (*: str):
         """Return the sequence of blocked domains (as a tuple)."""
 
-    def set_blocked_domains(self, blocked_domains: Sequence[str]) -> None:
+    def set_blocked_domains(self, blocked_domains: Sequence[str]):
         """Set the sequence of blocked domains."""
 
     def is_blocked(self, domain: str) -> bool
     def allowed_domains(self) -> (*: str) | None:
         """Return None, or the sequence of allowed domains (as a tuple)."""
 
-    def set_allowed_domains(self, allowed_domains: Sequence[str] | None) -> None:
+    def set_allowed_domains(self, allowed_domains: Sequence[str] | None):
         """Set the sequence of allowed domains, or None."""
 
     def is_not_allowed(self, domain: str) -> bool
@@ -343,5 +343,5 @@ class Cookie:
     def get_nonstandard_attr(self, name: str) -> str | None
     def get_nonstandard_attr[Element](self, name: str, default: Element) -> str | Element
 
-    def set_nonstandard_attr(self, name: str, value: str) -> None
+    def set_nonstandard_attr(self, name: str, value: str)
     def is_expired(self, now: int | None = None) -> bool

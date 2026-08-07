@@ -47,7 +47,7 @@ def create(config: types.SimpleNamespace | Configs | None = "isolated", *, reqre
     is 'isolated'.
     """
 
-def destroy(id: SupportsIndex, *, restrict: bool = False) -> None:
+def destroy(id: SupportsIndex, *, restrict: bool = False):
     """Destroy the identified interpreter.
 
     Attempting to destroy the current interpreter raises InterpreterError.
@@ -107,7 +107,7 @@ def call[R](
 
 def run_string(
     id: SupportsIndex, script: str | types.CodeType | (() -> object), shared: _SharedDict = {}, *, restrict: bool = False
-) -> None:
+):
     """Execute the provided string in the identified interpreter.
 
     (See _interpreters.exec().)
@@ -115,7 +115,7 @@ def run_string(
 
 def run_func(
     id: SupportsIndex, func: types.CodeType | (() -> object), shared: _SharedDict = {}, *, restrict: bool = False
-) -> None:
+):
     """Execute the body of the provided function in the identified interpreter.
 
     Code objects are also supported.  In both cases, closures and args
@@ -125,11 +125,11 @@ def run_func(
     (See _interpreters.exec().)
     """
 
-def set___main___attrs(id: SupportsIndex, updates: _SharedDict, *, restrict: bool = False) -> None:
+def set___main___attrs(id: SupportsIndex, updates: _SharedDict, *, restrict: bool = False):
     """Bind the given attributes in the interpreter's __main__ module."""
 
-def incref(id: SupportsIndex, *, implieslink: bool = False, restrict: bool = False) -> None
-def decref(id: SupportsIndex, *, restrict: bool = False) -> None
+def incref(id: SupportsIndex, *, implieslink: bool = False, restrict: bool = False)
+def decref(id: SupportsIndex, *, restrict: bool = False)
 def is_shareable(obj: object) -> bool:
     """Return True if the object's data may be shared between interpreters and False otherwise."""
 

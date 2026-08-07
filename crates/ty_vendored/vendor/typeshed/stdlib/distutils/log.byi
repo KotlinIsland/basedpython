@@ -11,18 +11,18 @@ FATAL: Final = 5
 class Log:
     init(self, threshold: int = 3)
     # Arbitrary msg args' type depends on the format method
-    def log(self, level: int, msg: str, *args: dynamic) -> None
-    def debug(self, msg: str, *args: dynamic) -> None
-    def info(self, msg: str, *args: dynamic) -> None
-    def warn(self, msg: str, *args: dynamic) -> None
-    def error(self, msg: str, *args: dynamic) -> None
-    def fatal(self, msg: str, *args: dynamic) -> None
+    def log(self, level: int, msg: str, *args: dynamic)
+    def debug(self, msg: str, *args: dynamic)
+    def info(self, msg: str, *args: dynamic)
+    def warn(self, msg: str, *args: dynamic)
+    def error(self, msg: str, *args: dynamic)
+    def fatal(self, msg: str, *args: dynamic)
 
-def log(level: int, msg: str, *args: dynamic) -> None
-def debug(msg: str, *args: dynamic) -> None
-def info(msg: str, *args: dynamic) -> None
-def warn(msg: str, *args: dynamic) -> None
-def error(msg: str, *args: dynamic) -> None
-def fatal(msg: str, *args: dynamic) -> None
+def log(level: int, msg: str, *args: dynamic)
+def debug(msg: str, *args: dynamic)
+def info(msg: str, *args: dynamic)
+def warn(msg: str, *args: dynamic)
+def error(msg: str, *args: dynamic)
+def fatal(msg: str, *args: dynamic)
 def set_threshold(level: int) -> int
-def set_verbosity(v: int) -> None
+def set_verbosity(v: int)

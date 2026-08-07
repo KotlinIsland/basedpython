@@ -85,17 +85,17 @@ class TextFile:
         the values returned by 'readline()'.
         """
 
-    def open(self, filename: str) -> None:
+    def open(self, filename: str):
         """Open a new file named 'filename'.  This overrides both the
         'filename' and 'file' arguments to the constructor.
         """
 
-    def close(self) -> None:
+    def close(self):
         """Close the current file and forget everything we know about it
         (filename, current line number).
         """
 
-    def warn(self, msg: str, line: list[int] | (int, int) | int | None = None) -> None:
+    def warn(self, msg: str, line: list[int] | (int, int) | int | None = None):
         """Print (to stderr) a warning message tied to the current logical
         line in the current file.  If the current logical line in the
         file spans multiple physical lines, the warning refers to the

@@ -12,7 +12,7 @@ class QueueError(RuntimeError):
 
 class QueueNotFoundError(QueueError)
 
-def bind(qid: SupportsIndex) -> None:
+def bind(qid: SupportsIndex):
     """Take a reference to the identified queue.
 
     The queue is not destroyed until there are no references left.
@@ -38,7 +38,7 @@ else:
         before the runtime is finalized.
         """
 
-def destroy(qid: SupportsIndex) -> None:
+def destroy(qid: SupportsIndex):
     """Clear and destroy the queue.
 
     Afterward attempts to use the queue will behave as though it never
@@ -80,7 +80,7 @@ else:
         Add the object's data to the queue.
         """
 
-def release(qid: SupportsIndex) -> None:
+def release(qid: SupportsIndex):
     """Release a reference to the queue.
 
     The queue is destroyed once there are no references left.

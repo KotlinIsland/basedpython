@@ -93,7 +93,7 @@ class LazyLoader(Loader):
     class def factory(cls, loader: Loader) -> (...) -> LazyLoader:
         """Construct a callable which returns the eager loader made lazy."""
 
-    def exec_module(self, module: types.ModuleType) -> None:
+    def exec_module(self, module: types.ModuleType):
         """Make the module load lazily."""
 
 def source_hash(source_bytes: ReadableBuffer) -> bytes:
@@ -138,7 +138,7 @@ if sys.version_info >= (3, 12):
         def __enter__(self) -> Self
         def __exit__(
             self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-        ) -> None
+        )
         let override: -1 | 1  # undocumented
 
 if sys.version_info >= (3, 14):

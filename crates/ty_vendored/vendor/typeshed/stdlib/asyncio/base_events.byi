@@ -61,8 +61,8 @@ class Server(AbstractServer):
         ) -> None
 
     if sys.version_info >= (3, 13):
-        def close_clients(self) -> None
-        def abort_clients(self) -> None
+        def close_clients(self)
+        def abort_clients(self)
 
     override def get_loop(self) -> AbstractEventLoop
     override def is_serving(self) -> bool
@@ -788,4 +788,4 @@ class BaseEventLoop(AbstractEventLoop):
         override async def shutdown_default_executor(self) -> None:
             """Schedule the shutdown of the default executor."""
 
-    def __del__(self) -> None
+    def __del__(self)

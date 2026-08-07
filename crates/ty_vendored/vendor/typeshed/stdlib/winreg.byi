@@ -51,7 +51,7 @@ from typing_extensions import Self
 
 if sys.platform == "win32":
     type _KeyType = HKEYType | int
-    def CloseKey(hkey: _KeyType, /) -> None:
+    def CloseKey(hkey: _KeyType, /):
         """Closes a previously opened registry key.
 
           hkey
@@ -113,7 +113,7 @@ if sys.platform == "win32":
         If the function fails, an OSError exception is raised.
         """
 
-    def DeleteKey(key: _KeyType, sub_key: str, /) -> None:
+    def DeleteKey(key: _KeyType, sub_key: str, /):
         """Deletes the specified key.
 
           key
@@ -129,7 +129,7 @@ if sys.platform == "win32":
         is removed.  If the function fails, an OSError exception is raised.
         """
 
-    def DeleteKeyEx(key: _KeyType, sub_key: str, access: int = 256, reserved: int = 0) -> None:
+    def DeleteKeyEx(key: _KeyType, sub_key: str, access: int = 256, reserved: int = 0):
         """Deletes the specified key (intended for 64-bit OS).
 
           key
@@ -155,7 +155,7 @@ if sys.platform == "win32":
         """
 
     if sys.version_info >= (3, 15):
-        def DeleteTree(key: _KeyType, sub_key: str | None = None, /) -> None:
+        def DeleteTree(key: _KeyType, sub_key: str | None = None, /):
             """Deletes the specified key and all its subkeys and values recursively.
 
               key
@@ -168,7 +168,7 @@ if sys.platform == "win32":
             all subkeys and values of the specified key are deleted.
             """
 
-    def DeleteValue(key: _KeyType, value: str, /) -> None:
+    def DeleteValue(key: _KeyType, value: str, /):
         """Removes a named value from a registry key.
 
         key
@@ -215,7 +215,7 @@ if sys.platform == "win32":
     def ExpandEnvironmentStrings(string: str, /) -> str:
         """Expand environment vars."""
 
-    def FlushKey(key: _KeyType, /) -> None:
+    def FlushKey(key: _KeyType, /):
         """Writes all the attributes of a key to the registry.
 
           key
@@ -232,7 +232,7 @@ if sys.platform == "win32":
         a FlushKey() call is required, it probably isn't.
         """
 
-    def LoadKey(key: _KeyType, sub_key: str, file_name: str, /) -> None:
+    def LoadKey(key: _KeyType, sub_key: str, file_name: str, /):
         """Insert data into the registry from a file.
 
           key
@@ -337,7 +337,7 @@ if sys.platform == "win32":
         The return value is a tuple of the value and the type_id.
         """
 
-    def SaveKey(key: _KeyType, file_name: str, /) -> None:
+    def SaveKey(key: _KeyType, file_name: str, /):
         """Saves the specified key, and all its subkeys to the specified file.
 
           key
@@ -356,7 +356,7 @@ if sys.platform == "win32":
         to the API.
         """
 
-    def SetValue(key: _KeyType, sub_key: str | None, type: int, value: str, /) -> None:
+    def SetValue(key: _KeyType, sub_key: str | None, type: int, value: str, /):
         """Associates a value with a specified key.
 
           key
@@ -443,7 +443,7 @@ if sys.platform == "win32":
         /,
     ) -> None
 
-    def DisableReflectionKey(key: _KeyType, /) -> None:
+    def DisableReflectionKey(key: _KeyType, /):
         """Disables registry reflection for 32bit processes running on a 64bit OS.
 
           key
@@ -456,7 +456,7 @@ if sys.platform == "win32":
         of any subkeys.
         """
 
-    def EnableReflectionKey(key: _KeyType, /) -> None:
+    def EnableReflectionKey(key: _KeyType, /):
         """Restores registry reflection for the specified disabled key.
 
           key
@@ -569,7 +569,7 @@ if sys.platform == "win32":
         def __exit__(
             self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None, /
         ) -> bool | None
-        def Close(self) -> None:
+        def Close(self):
             """Closes the underlying Windows handle.
 
             If the handle is already closed, no error is raised.

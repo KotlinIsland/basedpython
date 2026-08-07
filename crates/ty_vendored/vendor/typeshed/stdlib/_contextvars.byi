@@ -38,7 +38,7 @@ final class ContextVar[in out Element]:
         its previous value via the `ContextVar.reset()` method.
         """
 
-    def reset(self, token: Token[Element], /) -> None:
+    def reset(self, token: Token[Element], /):
         """Reset the context variable.
 
         The variable is reset to the value it had before the
@@ -62,7 +62,7 @@ final class Token[in out Element]:
 
         def __exit__(
             self, exc_type: type[BaseException] | None, exc_value: BaseException | None, traceback: TracebackType | None, /
-        ) -> None:
+        ):
             """Exit from Token context manager, restore the linked ContextVar."""
 
 def copy_context() -> Context

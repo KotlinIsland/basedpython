@@ -247,7 +247,7 @@ else:
         context: None = None,
     ) -> UrlopenRet
 
-def install_opener(opener: OpenerDirector | None) -> None
+def install_opener(opener: OpenerDirector | None)
 def build_opener(*handlers: BaseHandler | (() -> BaseHandler)) -> OpenerDirector:
     """Create an opener object from a list of handlers.
 
@@ -365,12 +365,12 @@ class Request:
     def get_method(self) -> str:
         """Return a string indicating the HTTP request method."""
 
-    def add_header(self, key: str, val: str) -> None
-    def add_unredirected_header(self, key: str, val: str) -> None
+    def add_header(self, key: str, val: str)
+    def add_unredirected_header(self, key: str, val: str)
     def has_header(self, header_name: str) -> bool
-    def remove_header(self, header_name: str) -> None
+    def remove_header(self, header_name: str)
     def get_full_url(self) -> str
-    def set_proxy(self, host: str, type: str) -> None
+    def set_proxy(self, host: str, type: str)
 
     def get_header(self, header_name: str) -> str | None
     def get_header[Element](self, header_name: str, default: Element) -> str | Element
@@ -380,16 +380,16 @@ class Request:
 
 class OpenerDirector:
     addheaders: list[(str, str)]
-    def add_handler(self, handler: BaseHandler) -> None
+    def add_handler(self, handler: BaseHandler)
     def open(self, fullurl: str | Request, data: DataType = None, timeout: float | None = ...) -> UrlopenRet
     def error(self, proto: str, *args: dynamic) -> UrlopenRet
-    def close(self) -> None
+    def close(self)
 
 class BaseHandler:
     handler_order: ClassVar[int]
     parent: OpenerDirector
-    def add_parent(self, parent: OpenerDirector) -> None
-    def close(self) -> None
+    def add_parent(self, parent: OpenerDirector)
+    def close(self)
     def __lt__(self, other: object) -> bool
 
 class HTTPDefaultErrorHandler(BaseHandler):
@@ -437,7 +437,7 @@ class ProxyHandler(BaseHandler):
     # TODO: add a method for every (common) proxy protocol
 
 class HTTPPasswordMgr:
-    def add_password(self, realm: str, uri: str | Sequence[str], user: str, passwd: str) -> None
+    def add_password(self, realm: str, uri: str | Sequence[str], user: str, passwd: str)
     def find_user_password(self, realm: str, authuri: str) -> (str | None, str | None)
     def is_suburi(self, base: str, test: str) -> bool:  # undocumented
         """Check if test is below base in a URI tree
@@ -456,7 +456,7 @@ class HTTPPasswordMgrWithPriorAuth(HTTPPasswordMgrWithDefaultRealm):
     override def add_password(
         self, realm: str | None, uri: str | Sequence[str], user: str, passwd: str, is_authenticated: bool = False
     ) -> None
-    def update_authenticated(self, uri: str | Sequence[str], is_authenticated: bool = False) -> None
+    def update_authenticated(self, uri: str | Sequence[str], is_authenticated: bool = False)
     def is_authenticated(self, authuri: str) -> bool | None
 
 class AbstractBasicAuthHandler:
@@ -464,7 +464,7 @@ class AbstractBasicAuthHandler:
     passwd: HTTPPasswordMgr
     add_password: (str, str | Sequence[str], str, str) -> None
     init(self, password_mgr: HTTPPasswordMgr | None = None)
-    def http_error_auth_reqed(self, authreq: str, host: str, req: Request, headers: HTTPMessage) -> None
+    def http_error_auth_reqed(self, authreq: str, host: str, req: Request, headers: HTTPMessage)
     def http_request(self, req: Request) -> Request  # undocumented
     def http_response(self, req: Request, response: HTTPResponse) -> HTTPResponse  # undocumented
     def https_request(self, req: Request) -> Request  # undocumented
@@ -481,8 +481,8 @@ class ProxyBasicAuthHandler(AbstractBasicAuthHandler, BaseHandler):
 
 class AbstractDigestAuthHandler:
     init(self, passwd: HTTPPasswordMgr | None = None)
-    def reset_retry_count(self) -> None
-    def http_error_auth_reqed(self, auth_header: str, host: str, req: Request, headers: HTTPMessage) -> None
+    def reset_retry_count(self)
+    def http_error_auth_reqed(self, auth_header: str, host: str, req: Request, headers: HTTPMessage)
     def retry_http_digest_auth(self, req: Request, auth: str) -> UrlopenRet | None
     def get_cnonce(self, nonce: str) -> str
     def get_authorization(self, req: Request, chal: Mapping[str, str]) -> str | None
@@ -522,7 +522,7 @@ class AbstractHTTPHandler(BaseHandler):  # undocumented
     else:
         def __init__(self, debuglevel: int = 0) -> None
 
-    def set_http_debuglevel(self, level: int) -> None
+    def set_http_debuglevel(self, level: int)
     def do_request_(self, request: Request) -> Request
     def do_open(self, http_class: HTTPConnectionProtocol, req: Request, **http_conn_args: dynamic) -> HTTPResponse:
         """Return an HTTPResponse object for the request, using http_class.
@@ -562,11 +562,11 @@ class ftpwrapper:  # undocumented
     init(
         self, user: str, passwd: str, host: str, port: int, dirs: str, timeout: float | None = None, persistent: bool = True
     )
-    def close(self) -> None
-    def endtransfer(self) -> None
-    def file_close(self) -> None
-    def init(self) -> None
-    def real_close(self) -> None
+    def close(self)
+    def endtransfer(self)
+    def file_close(self)
+    def init(self)
+    def real_close(self)
     def retrfile(self, file: str, type: str) -> (addclosehook, int | None)
 
 class FTPHandler(BaseHandler):
@@ -576,10 +576,10 @@ class FTPHandler(BaseHandler):
     ) -> ftpwrapper  # undocumented
 
 class CacheFTPHandler(FTPHandler):
-    def setTimeout(self, t: float) -> None
-    def setMaxConns(self, m: int) -> None
-    def check_cache(self) -> None  # undocumented
-    def clear_cache(self) -> None  # undocumented
+    def setTimeout(self, t: float)
+    def setMaxConns(self, m: int)
+    def check_cache(self)  # undocumented
+    def clear_cache(self)  # undocumented
 
 class UnknownHandler(BaseHandler):
     def unknown_open(self, req: Request) -> NoReturn
@@ -612,7 +612,7 @@ def urlretrieve(
     data file as well as the resulting HTTPMessage object.
     """
 
-def urlcleanup() -> None:
+def urlcleanup():
     """Clean up temporary files from urlretrieve calls."""
 
 if sys.version_info < (3, 14):
@@ -645,13 +645,13 @@ if sys.version_info < (3, 14):
             or (tempfilename, headers) for a remote object.
             """
 
-        def addheader(self, *args: (str, str)) -> None:  # undocumented
+        def addheader(self, *args: (str, str)):  # undocumented
             """Add a header to be used by the HTTP interface only
             e.g. u.addheader('Accept', 'sound/basic')
             """
 
-        def cleanup(self) -> None  # undocumented
-        def close(self) -> None  # undocumented
+        def cleanup(self)  # undocumented
+        def close(self)  # undocumented
         def http_error(
             self, url: str, fp: IO[bytes], errcode: int, errmsg: str, headers: HTTPMessage, data: bytes | None = None
         ) -> UrlopenRet:  # undocumented
@@ -684,10 +684,10 @@ if sys.version_info < (3, 14):
         def open_local_file(self, url: str) -> addinfourl:  # undocumented
             """Use local file."""
 
-        def open_unknown_proxy(self, proxy: str, fullurl: str, data: ReadableBuffer | None = None) -> None:  # undocumented
+        def open_unknown_proxy(self, proxy: str, fullurl: str, data: ReadableBuffer | None = None):  # undocumented
             """Overridable interface to open unknown URL type."""
 
-        def __del__(self) -> None
+        def __del__(self)
 
     @deprecated("Deprecated since Python 3.3; removed in Python 3.14. Use newer `urlopen` functions and methods.")
     class FancyURLopener(URLopener):

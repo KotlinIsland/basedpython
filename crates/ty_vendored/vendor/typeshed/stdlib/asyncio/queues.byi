@@ -36,9 +36,9 @@ class Queue[in out Element](_LoopBoundMixin):
     """
 
     init(self, maxsize: int = 0)
-    def _init(self, maxsize: int) -> None
+    def _init(self, maxsize: int)
     def _get(self) -> Element
-    def _put(self, item: Element) -> None
+    def _put(self, item: Element)
     def _format(self) -> str
     def qsize(self) -> int:
         """Number of items in the queue."""
@@ -64,7 +64,7 @@ class Queue[in out Element](_LoopBoundMixin):
         Raises QueueShutDown if the queue has been shut down.
         """
 
-    def put_nowait(self, item: Element) -> None:
+    def put_nowait(self, item: Element):
         """Put an item into the queue without blocking.
 
         If no free slot is immediately available, raise QueueFull.
@@ -101,7 +101,7 @@ class Queue[in out Element](_LoopBoundMixin):
         join() unblocks.
         """
 
-    def task_done(self) -> None:
+    def task_done(self):
         """Indicate that a formerly enqueued task is complete.
 
         Used by queue consumers. For each get() used to fetch a task,
@@ -124,7 +124,7 @@ class Queue[in out Element](_LoopBoundMixin):
         """
 
     if sys.version_info >= (3, 13):
-        def shutdown(self, immediate: bool = False) -> None:
+        def shutdown(self, immediate: bool = False):
             """Shut-down the queue, making queue gets and puts raise QueueShutDown.
 
             By default, gets will only raise once the queue is empty. Set

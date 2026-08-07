@@ -24,7 +24,7 @@ def create_tree(
     mode: int = 0o777,
     verbose: bool | 0 | 1 = 1,
     dry_run: bool | 0 | 1 = 0,
-) -> None:
+):
     """Create all the empty directories under 'base_dir' needed to put 'files'
     there.
 
@@ -65,7 +65,7 @@ def copy_tree(
     'update' and 'verbose' are the same as for 'copy_file'.
     """
 
-def remove_tree(directory: StrOrBytesPath, verbose: bool | 0 | 1 = 1, dry_run: bool | 0 | 1 = 0) -> None:
+def remove_tree(directory: StrOrBytesPath, verbose: bool | 0 | 1 = 1, dry_run: bool | 0 | 1 = 0):
     """Recursively remove an entire directory tree.
 
     Any errors are ignored (apart from being reported to stdout if 'verbose'

@@ -145,9 +145,9 @@ class Element[in out Tag: str | ElementCallable = str]:
     """A string of text directly after the end tag, or None"""
 
     init(self, tag: Tag, attrib: dict[str, str] = {}, **extra: str)
-    def append(self, subelement: Element[dynamic], /) -> None
-    def clear(self) -> None
-    def extend(self, elements: Iterable[Element[dynamic]], /) -> None
+    def append(self, subelement: Element[dynamic], /)
+    def clear(self)
+    def extend(self, elements: Iterable[Element[dynamic]], /)
     def find(self, path: str, namespaces: dict[str, str] | None = None) -> Element | None
     def findall(self, path: str, namespaces: dict[str, str] | None = None) -> list[Element]
 
@@ -157,7 +157,7 @@ class Element[in out Tag: str | ElementCallable = str]:
     def get(self, key: str, default: None = None) -> str | None
     def get[T](self, key: str, default: T) -> str | T
 
-    def insert(self, index: int, subelement: Element[dynamic], /) -> None
+    def insert(self, index: int, subelement: Element[dynamic], /)
     def items(self) -> ItemsView[str, str]
     def iter(self, tag: str | None = None) -> Generator[Element]
 
@@ -168,11 +168,11 @@ class Element[in out Tag: str | ElementCallable = str]:
     def keys(self) -> dict_keys[str, str]
     # makeelement returns the type of self in Python impl, but not in C impl
     def makeelement[OtherTag: str | ElementCallable = str](self, tag: OtherTag, attrib: dict[str, str], /) -> Element[OtherTag]
-    def remove(self, subelement: Element[dynamic], /) -> None
-    def set(self, key: str, value: str, /) -> None
+    def remove(self, subelement: Element[dynamic], /)
+    def set(self, key: str, value: str, /)
     def __copy__(self) -> Element[Tag]  # returns the type of self in Python impl, but not in C impl
     def __deepcopy__(self, memo: dynamic, /) -> Element  # Only exists in C impl
-    def __delitem__(self, key: SupportsIndex | slice, /) -> None:
+    def __delitem__(self, key: SupportsIndex | slice, /):
         """Delete self[key]."""
 
     def __getitem__(self, key: SupportsIndex, /) -> Element:
@@ -259,7 +259,7 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
     def getroot(self) -> Root:
         """Return root element of this tree."""
 
-    def _setroot(self, element: Element[dynamic]) -> None:
+    def _setroot(self, element: Element[dynamic]):
         """Replace root element of this tree.
 
         This will discard the current contents of the tree and replace it
@@ -352,7 +352,7 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
         method: "xml" | "html" | "text" | "c14n" | None = None,
         *,
         short_empty_elements: bool = True,
-    ) -> None:
+    ):
         """Write element tree to a file as XML.
 
         Arguments:
@@ -379,11 +379,11 @@ class ElementTree[in out Root: constraints (Element, Element | None) = Element |
 
         """
 
-    def write_c14n(self, file: FileWriteC14N) -> None
+    def write_c14n(self, file: FileWriteC14N)
 
 final HTML_EMPTY: set[str]
 
-def register_namespace(prefix: str, uri: str) -> None:
+def register_namespace(prefix: str, uri: str):
     """Register a namespace prefix.
 
     The registry is global, and any existing mapping for either the
@@ -465,7 +465,7 @@ def tostringlist(
     short_empty_elements: bool = True,
 ) -> list[dynamic]
 
-def dump(elem: Element[dynamic] | ElementTree[dynamic]) -> None:
+def dump(elem: Element[dynamic] | ElementTree[dynamic]):
     """Write element tree or element structure to sys.stdout.
 
     This function should be used for debugging only.
@@ -476,7 +476,7 @@ def dump(elem: Element[dynamic] | ElementTree[dynamic]) -> None:
 
     """
 
-def indent(tree: Element[dynamic] | ElementTree[dynamic], space: str = "  ", level: int = 0) -> None:
+def indent(tree: Element[dynamic] | ElementTree[dynamic], space: str = "  ", level: int = 0):
     """Indent an XML document by inserting newlines and indentation space
     after elements.
 
@@ -514,9 +514,9 @@ private type EventType = "start" | "end" | "comment" | "pi" | "start-ns" | "end-
 @type_check_only
 private protocol IterParseIterator[out EventT: Element[str] | Element[ElementCallable] | tuple[str, str] | None](Iterator[tuple[EventType, EventT]]):
     if sys.version_info >= (3, 13):
-        def close(self) -> None
+        def close(self)
     if sys.version_info >= (3, 11):
-        def __del__(self) -> None
+        def __del__(self)
 
 # See the comment for _EventT_co above for possible iterator types.
 def iterparse(source: FileRead, events: Iterable[EventType]) -> IterParseIterator[dynamic]:
@@ -546,10 +546,10 @@ private type EventQueue = (str,) | (str, (str, str)) | (str, None)
 
 class XMLPullParser[out EventT: Element[str] | Element[ElementCallable] | tuple[str, str] | None]:
     init(self, events: Iterable[EventType] | None = None, *, _parser: XMLParser[EventT] | None = None)
-    def feed(self, data: str | ReadableBuffer) -> None:
+    def feed(self, data: str | ReadableBuffer):
         """Feed encoded data to parser."""
 
-    def close(self) -> None:
+    def close(self):
         """Finish feeding data to parser.
 
         Unlike XMLParser, does not return the root element. Use
@@ -563,7 +563,7 @@ class XMLPullParser[out EventT: Element[str] | Element[ElementCallable] | tuple[
         retrieved from the iterator.
         """
 
-    def flush(self) -> None
+    def flush(self)
 
 def XML(text: str | ReadableBuffer, parser: XMLParser | None = None) -> Element:
     """Parse XML document from string constant.
@@ -610,7 +610,7 @@ def fromstringlist(sequence: Sequence[str | ReadableBuffer], parser: XMLParser |
 # TreeBuilder is called by client code (they could pass strs, bytes or whatever);
 # but we don't want to use a too-broad type, or it would be too hard to write
 # elementfactories.
-_ElementFactory: TypeAlias = (dynamic, dict[dynamic, dynamic]) -> Element
+type _ElementFactory = (dynamic, dict[dynamic, dynamic]) -> Element
 
 @disjoint_base
 class TreeBuilder:
@@ -628,7 +628,7 @@ class TreeBuilder:
     insert_pis: bool
 
     def close(self) -> Element
-    def data(self, data: str, /) -> None
+    def data(self, data: str, /)
     # tag and attrs are passed to the element_factory, so they could be anything
     # depending on what the particular factory supports.
     def start(self, tag: dynamic, attrs: dict[dynamic, dynamic], /) -> Element
@@ -675,12 +675,12 @@ class C14NWriterTarget:
         exclude_attrs: Iterable[str] | None = None,
         exclude_tags: Iterable[str] | None = None,
     )
-    def data(self, data: str) -> None
-    def start_ns(self, prefix: str, uri: str) -> None
-    def start(self, tag: str, attrs: Mapping[str, str]) -> None
-    def end(self, tag: str) -> None
-    def comment(self, text: str) -> None
-    def pi(self, target: str, data: str) -> None
+    def data(self, data: str)
+    def start_ns(self, prefix: str, uri: str)
+    def start(self, tag: str, attrs: Mapping[str, str])
+    def end(self, tag: str)
+    def comment(self, text: str)
+    def pi(self, target: str, data: str)
 
 # The target type is tricky, because the implementation doesn't
 # require any particular attribute to be present. This documents the attributes
@@ -702,5 +702,5 @@ class XMLParser[in out E = Element]:
     version: str
     init(self, *, target: Target | None = None, encoding: str | None = None)
     def close(self) -> E
-    def feed(self, data: str | ReadableBuffer, /) -> None
-    def flush(self) -> None
+    def feed(self, data: str | ReadableBuffer, /)
+    def flush(self)

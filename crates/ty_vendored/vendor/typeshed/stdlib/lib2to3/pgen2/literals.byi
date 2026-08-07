@@ -6,4 +6,4 @@ simple_escapes: dict[str, str]
 
 def escape(m: Match[str]) -> str
 def evalString(s: str) -> str
-def test() -> None
+def test()

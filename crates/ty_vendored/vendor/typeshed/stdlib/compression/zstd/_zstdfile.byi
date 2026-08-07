@@ -16,11 +16,11 @@ private type WriteTextMode = "wt" | "xt" | "at"
 
 @type_check_only
 private protocol FileBinaryRead(_streams._Reader):
-    def close(self) -> None
+    def close(self)
 
 @type_check_only
 private protocol FileBinaryWrite(SupportsWrite[bytes]):
-    def close(self) -> None
+    def close(self)
 
 class ZstdFile(_streams.BaseStream):
     """A file-like object providing transparent Zstandard (de)compression.

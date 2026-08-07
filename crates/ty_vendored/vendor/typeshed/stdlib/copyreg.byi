@@ -16,15 +16,15 @@ def pickle[Element](
     ob_type: type[Element],
     pickle_function: (Element) -> (str | _Reduce[Element]),
     constructor_ob: ((_Reduce[Element]) -> Element) | None = None,
-) -> None
-def constructor[Element](object: (_Reduce[Element]) -> Element) -> None
-def add_extension(module: Hashable, name: Hashable, code: SupportsInt) -> None:
+)
+def constructor[Element](object: (_Reduce[Element]) -> Element)
+def add_extension(module: Hashable, name: Hashable, code: SupportsInt):
     """Register an extension code."""
 
-def remove_extension(module: Hashable, name: Hashable, code: int) -> None:
+def remove_extension(module: Hashable, name: Hashable, code: int):
     """Unregister an extension code.  For testing only."""
 
-def clear_extension_cache() -> None
+def clear_extension_cache()
 
 type _DispatchTableType = dict[type, (dynamic) -> (str | _Reduce[dynamic])]  # imported by multiprocessing.reduction
 dispatch_table: _DispatchTableType  # undocumented

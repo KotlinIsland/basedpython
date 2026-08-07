@@ -29,8 +29,8 @@ if sys.version_info >= (3, 14):
         class def prepare(cls, initializer: () -> object, initargs: tuple[()]) -> (() -> Self, TaskFunc)
 
         init(self, initdata: Task)
-        def __del__(self) -> None
-        def run(self, task: Task) -> None
+        def __del__(self)
+        def run(self, task: Task)
 
     class BrokenInterpreterPool(BrokenThreadPool):
         """

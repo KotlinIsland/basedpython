@@ -122,7 +122,7 @@ protocol StreamReaderProtocol(FlowControlMixin):
         client_connected_cb: ClientConnectedCallback | None = None,
         loop: events.AbstractEventLoop | None = None,
     )
-    def __del__(self) -> None
+    def __del__(self)
 
 class StreamWriter:
     """Wraps a Transport.
@@ -142,11 +142,11 @@ class StreamWriter:
         loop: events.AbstractEventLoop,
     )
     let transport: transports.WriteTransport
-    def write(self, data: bytes | bytearray | memoryview) -> None
-    def writelines(self, data: Iterable[bytes | bytearray | memoryview]) -> None
-    def write_eof(self) -> None
+    def write(self, data: bytes | bytearray | memoryview)
+    def writelines(self, data: Iterable[bytes | bytearray | memoryview])
+    def write_eof(self)
     def can_write_eof(self) -> bool
-    def close(self) -> None
+    def close(self)
     def is_closing(self) -> bool
     async def wait_closed(self) -> None
     def get_extra_info(self, name: str, default: dynamic = None) -> dynamic
@@ -184,13 +184,13 @@ class StreamWriter:
 class StreamReader:
     init(self, limit: int = 65536, loop: events.AbstractEventLoop | None = None)
     def exception(self) -> Exception | None
-    def set_exception(self, exc: Exception) -> None
-    def set_transport(self, transport: transports.BaseTransport) -> None
-    def feed_eof(self) -> None
+    def set_exception(self, exc: Exception)
+    def set_transport(self, transport: transports.BaseTransport)
+    def feed_eof(self)
     def at_eof(self) -> bool:
         """Return True if the buffer is empty and 'feed_eof' was called."""
 
-    def feed_data(self, data: Iterable[SupportsIndex]) -> None
+    def feed_data(self, data: Iterable[SupportsIndex])
     async def readline(self) -> bytes:
         """Read chunk of data from the stream until newline (b'\\n') is found.
 

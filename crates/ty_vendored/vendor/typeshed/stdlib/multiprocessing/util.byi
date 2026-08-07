@@ -38,14 +38,14 @@ if sys.version_info >= (3, 14):
 final LOGGER_NAME: str
 final DEFAULT_LOGGING_FORMAT: str
 
-def sub_debug(msg: object, *args: object) -> None
-def debug(msg: object, *args: object) -> None
-def info(msg: object, *args: object) -> None
+def sub_debug(msg: object, *args: object)
+def debug(msg: object, *args: object)
+def info(msg: object, *args: object)
 
 if sys.version_info >= (3, 14):
-    def warn(msg: object, *args: object) -> None
+    def warn(msg: object, *args: object)
 
-def sub_warning(msg: object, *args: object) -> None
+def sub_warning(msg: object, *args: object)
 def get_logger() -> Logger:
     """
     Returns logger used by multiprocessing
@@ -61,7 +61,7 @@ def is_abstract_socket_namespace(address: str | bytes | None) -> bool
 final abstract_sockets_supported: bool
 
 def get_temp_dir() -> str
-def register_after_fork[Element](obj: Element, func: (Element) -> object) -> None
+def register_after_fork[Element](obj: Element, func: (Element) -> object)
 
 class Finalize[out R = dynamic]:
     """
@@ -101,7 +101,7 @@ class Finalize[out R = dynamic]:
         Run the callback unless it has already been called or cancelled
         """
 
-    def cancel(self) -> None:
+    def cancel(self):
         """
         Cancel finalization of the object
         """
@@ -120,11 +120,11 @@ class ForkAwareThreadLock:
     acquire: (bool, float) -> bool
     release: () -> None
     def __enter__(self) -> bool
-    def __exit__(self, *args: Unused) -> None
+    def __exit__(self, *args: Unused)
 
 class ForkAwareLocal(threading.local)
 
 final MAXFD: int
 
-def close_all_fds_except(fds: Iterable[int]) -> None
+def close_all_fds_except(fds: Iterable[int])
 def spawnv_passfds(path: bytes, args: Sequence[ConvertibleToInt], passfds: Sequence[int]) -> int

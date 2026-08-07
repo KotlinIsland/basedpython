@@ -29,25 +29,25 @@ def getfileinfo(name: str) -> FileInfoTuple
 class openrsrc:
     init(self, *args: dynamic)
     def read(self, *args: dynamic) -> bytes
-    def write(self, *args: dynamic) -> None
-    def close(self) -> None
+    def write(self, *args: dynamic)
+    def close(self)
 
 class BinHex:
     init(self, name_finfo_dlen_rlen: FileInfoTuple, ofp: FileHandleUnion)
-    def write(self, data: SizedBuffer) -> None
-    def close_data(self) -> None
-    def write_rsrc(self, data: SizedBuffer) -> None
-    def close(self) -> None
+    def write(self, data: SizedBuffer)
+    def close_data(self)
+    def write_rsrc(self, data: SizedBuffer)
+    def close(self)
 
-def binhex(inp: str, out: str) -> None:
+def binhex(inp: str, out: str):
     """binhex(infilename, outfilename): create binhex-encoded copy of a file"""
 
 class HexBin:
     init(self, ifp: FileHandleUnion)
     def read(self, *n: int) -> bytes
-    def close_data(self) -> None
+    def close_data(self)
     def read_rsrc(self, *n: int) -> bytes
-    def close(self) -> None
+    def close(self)
 
-def hexbin(inp: str, out: str) -> None:
+def hexbin(inp: str, out: str):
     """hexbin(infilename, outfilename) - Decode binhexed file"""

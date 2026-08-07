@@ -377,7 +377,7 @@ final class BinaryWriter:
     )
     let total_samples: int
 
-    def write_sample(self, stack_frames: list[InterpreterInfo], timestamp_us: int) -> None:
+    def write_sample(self, stack_frames: list[InterpreterInfo], timestamp_us: int):
         """Write a sample to the binary file.
 
         Arguments:
@@ -386,13 +386,13 @@ final class BinaryWriter:
                 time.monotonic() * 1e6)
         """
 
-    def finalize(self) -> None:
+    def finalize(self):
         """Finalize and close the binary file.
 
         Writes string/frame tables, footer, and updates header.
         """
 
-    def close(self) -> None:
+    def close(self):
         """Close the writer without finalizing (discards data)."""
 
     def __enter__(self) -> Self:
@@ -440,7 +440,7 @@ final class BinaryReader:
         samples reconstructed during replay.
         """
 
-    def close(self) -> None:
+    def close(self):
         """Close the reader and free resources."""
 
     def __enter__(self) -> Self:

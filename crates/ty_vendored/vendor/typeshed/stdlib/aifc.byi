@@ -160,11 +160,11 @@ class Aifc_read:
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None
-    def initfp(self, file: IO[bytes]) -> None
+    )
+    def initfp(self, file: IO[bytes])
     def getfp(self) -> IO[bytes]
-    def rewind(self) -> None
-    def close(self) -> None
+    def rewind(self)
+    def close(self)
     def tell(self) -> int
     def getnchannels(self) -> int
     def getnframes(self) -> int
@@ -175,39 +175,39 @@ class Aifc_read:
     def getparams(self) -> _aifc_params
     def getmarkers(self) -> list[Marker] | None
     def getmark(self, id: int) -> Marker
-    def setpos(self, pos: int) -> None
+    def setpos(self, pos: int)
     def readframes(self, nframes: int) -> bytes
 
 class Aifc_write:
     init(self, f: _File)
-    def __del__(self) -> None
+    def __del__(self)
     def __enter__(self) -> Self
     def __exit__(
         self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: TracebackType | None
-    ) -> None
-    def initfp(self, file: IO[bytes]) -> None
-    def aiff(self) -> None
-    def aifc(self) -> None
-    def setnchannels(self, nchannels: int) -> None
+    )
+    def initfp(self, file: IO[bytes])
+    def aiff(self)
+    def aifc(self)
+    def setnchannels(self, nchannels: int)
     def getnchannels(self) -> int
-    def setsampwidth(self, sampwidth: int) -> None
+    def setsampwidth(self, sampwidth: int)
     def getsampwidth(self) -> int
-    def setframerate(self, framerate: int) -> None
+    def setframerate(self, framerate: int)
     def getframerate(self) -> int
-    def setnframes(self, nframes: int) -> None
+    def setnframes(self, nframes: int)
     def getnframes(self) -> int
-    def setcomptype(self, comptype: bytes, compname: bytes) -> None
+    def setcomptype(self, comptype: bytes, compname: bytes)
     def getcomptype(self) -> bytes
     def getcompname(self) -> bytes
-    def setparams(self, params: (int, int, int, int, bytes, bytes)) -> None
+    def setparams(self, params: (int, int, int, int, bytes, bytes))
     def getparams(self) -> _aifc_params
-    def setmark(self, id: int, pos: int, name: bytes) -> None
+    def setmark(self, id: int, pos: int, name: bytes)
     def getmark(self, id: int) -> Marker
     def getmarkers(self) -> list[Marker] | None
     def tell(self) -> int
-    def writeframesraw(self, data: dynamic) -> None  # Actual type for data is Buffer Protocol
-    def writeframes(self, data: dynamic) -> None
-    def close(self) -> None
+    def writeframesraw(self, data: dynamic)  # Actual type for data is Buffer Protocol
+    def writeframes(self, data: dynamic)
+    def close(self)
 
 def open(f: _File, mode: "r" | "rb") -> Aifc_read
 def open(f: _File, mode: "w" | "wb") -> Aifc_write
