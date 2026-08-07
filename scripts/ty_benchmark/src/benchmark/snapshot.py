@@ -28,7 +28,7 @@ def normalize_output(output: str, cwd: Path) -> str:
 
     # Normalize unordered lists in error messages (e.g., '"name", "description"' vs '"description", "name"').
     # Sort quoted comma-separated items to make them deterministic.
-    def sort_quoted_items(match):
+    def sort_quoted_items(match: re.Match[str]):
         items = match.group(0)
         quoted_items = re.findall(r'"[^"]+"', items)
         if len(quoted_items) > 1:

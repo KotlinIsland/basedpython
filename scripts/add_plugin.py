@@ -16,7 +16,7 @@ import argparse
 from _utils import ROOT_DIR, dir_name, get_indent, pascal_case
 
 
-def main(*, plugin: str, url: str, prefix_code: str) -> None:
+def main(*, plugin: str, url: str, prefix_code: str):
     """Generate boilerplate for a new plugin."""
     # Create the test fixture folder.
     (ROOT_DIR / "crates/ruff_linter/resources/test/fixtures" / dir_name(plugin)).mkdir(

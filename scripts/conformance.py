@@ -180,7 +180,7 @@ class TyDiagnostic:
     location: Location
     source: Source
 
-    def __post_init__(self) -> None:
+    def __post_init__(self):
         # Remove check name prefix from description
         self.description = self.description.replace(f"{self.check_name}: ", "")
 

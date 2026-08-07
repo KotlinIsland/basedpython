@@ -19,7 +19,7 @@ from pathlib import Path
 from _utils import ROOT_DIR, dir_name, get_indent, pascal_case, snake_case
 
 
-def main(*, name: str, prefix: str, code: str, linter: str) -> None:
+def main(*, name: str, prefix: str, code: str, linter: str):
     """Generate boilerplate for a new rule."""
     # Create a test fixture.
     filestem = f"{prefix}{code}" if linter != "pylint" else snake_case(name)
@@ -154,7 +154,7 @@ pub(crate) fn {rule_name_snake}(checker: &mut Checker) {{}}
     _rustfmt(rules_mod)
 
 
-def _rustfmt(path: str | Path) -> None:
+def _rustfmt(path: str | Path):
     subprocess.run(["rustfmt", path])
 
 

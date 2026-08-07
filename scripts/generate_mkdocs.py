@@ -103,7 +103,7 @@ def clean_file_content(content: str, title: str) -> str:
     return f"# {title}\n\n" + content
 
 
-def generate_rule_metadata(rule_doc: Path) -> None:
+def generate_rule_metadata(rule_doc: Path):
     """Add frontmatter metadata containing a rule's code and description.
 
     For example:
@@ -171,7 +171,7 @@ def generate_rule_metadata(rule_doc: Path) -> None:
         f.writelines(lines)
 
 
-def main() -> None:
+def main():
     """Generate an MkDocs-compatible `docs` and `mkdocs.yml`."""
     subprocess.run(["cargo", "dev", "generate-docs"], check=True)
 

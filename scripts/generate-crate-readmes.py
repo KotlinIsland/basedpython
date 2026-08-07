@@ -76,7 +76,7 @@ def replace_generated_section(readme: str, generated_content: str) -> str:
     )
 
 
-def main() -> None:
+def main():
     result = subprocess.run(
         ["cargo", "metadata", "--format-version", "1"],
         capture_output=True,

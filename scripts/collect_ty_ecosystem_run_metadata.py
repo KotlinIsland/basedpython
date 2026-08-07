@@ -333,12 +333,12 @@ def render_metadata(metadata: dict[str, Any]) -> str:
     return json.dumps(metadata, indent=2, sort_keys=True) + "\n"
 
 
-def write_metadata(metadata: dict[str, Any], output: Path) -> None:
+def write_metadata(metadata: dict[str, Any], output: Path):
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(render_metadata(metadata))
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("run", help="Actions run ID or URL")
     parser.add_argument("projects", nargs="*", help="mypy-primer project names")

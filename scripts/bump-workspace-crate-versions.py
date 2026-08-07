@@ -21,7 +21,7 @@ import tomllib
 NO_BUMP_CRATES = {"ruff", "ruff_linter", "ruff_wasm"}
 
 
-def main() -> None:
+def main():
     # Pre-sync NO_BUMP_CRATES versions before running cargo metadata.
     #
     # Rooster updates crate versions but isn't workspace-aware, so it doesn't update

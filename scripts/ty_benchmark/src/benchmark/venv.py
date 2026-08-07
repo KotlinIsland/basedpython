@@ -58,9 +58,7 @@ class Venv:
 
         return Venv(project_name=project, project_path=parent)
 
-    def install(
-        self, pip_install_args: list[str], *, include_mypy: bool = False
-    ) -> None:
+    def install(self, pip_install_args: list[str], *, include_mypy: bool = False):
         """Installs the dependencies required to type check the project."""
 
         logging.debug(f"Installing dependencies: {', '.join(pip_install_args)}")

@@ -52,7 +52,7 @@ def _project_not_found(name: str, projects: list[Project]) -> NoReturn:
 
 
 class _FormatMap:
-    def __init__(self, **values: str | list[str] | None) -> None:
+    def __init__(self, **values: str | list[str] | None):
         self.values = values
 
     def __getitem__(self, key: str) -> str:
@@ -75,7 +75,7 @@ def get_ty_command(project: Project, *, ty_binary: str, venv_dir: Path) -> str:
     return f"{ty_cmd} --python {shlex.quote(str(venv_dir))} --output-format concise"
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("project", help="Name of a mypy-primer project")
     parser.add_argument(

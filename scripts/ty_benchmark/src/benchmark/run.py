@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 TOOL_CHOICES: Final = ["ty", "pyrefly", "mypy", "pyright"]
 
 
-def main() -> None:
+def main():
     """Run the benchmark."""
     parser = argparse.ArgumentParser(
         description="Benchmark ty against other packaging tools."

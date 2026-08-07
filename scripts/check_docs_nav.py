@@ -77,7 +77,7 @@ def main() -> int:
 
     problems: list[str] = []
 
-    def report(label: str, items: list[str]) -> None:
+    def report(label: str, items: list[str]):
         if items:
             problems.append(f"{label}:\n" + "\n".join(f"  - {i}" for i in items))
 

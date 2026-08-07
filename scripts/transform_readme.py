@@ -44,7 +44,7 @@ MK_DOCS = f"""
 """
 
 
-def main(target: str) -> None:
+def main(target: str):
     """Modify the README.md to support the given target."""
     with Path("README.md").open(encoding="utf8") as fp:
         content = fp.read()
